@@ -9,6 +9,8 @@ export type MessagingJournalStatus =
   | 'replied'
   | 'completed'
   | 'superseded'
+  | 'ignored'
+  | 'delivery_unknown'
   | 'failed';
 
 export interface MessagingJournalEntry {

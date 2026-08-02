@@ -116,8 +116,10 @@ describe('finalized output paths', () => {
     expect(finalizerStart).toBeGreaterThan(backgroundStart);
     expect(backgroundPath).toContain('responseText: completionCandidate');
     expect(backgroundPath).toContain('const completionText = finalizedBackground.text;');
-    expect(backgroundPath).toContain('? failBackgroundTask(');
-    expect(backgroundPath).toContain(': completeBackgroundTask(backgroundTaskId, completionText)');
+    expect(backgroundPath).toContain('? recordBackgroundTaskFailure(backgroundTaskId, {');
+    expect(backgroundPath).toContain('verificationFailure: true');
+    expect(backgroundPath).toContain(': completeBackgroundTask(backgroundTaskId, completionText, runningTask.leaseId)');
+    expect(backgroundPath).toContain("if (terminalTask?.status === 'queued')");
     expect(backgroundPath).not.toContain('finalText = finalizedBackground.text;');
 
     const cancelledResponses = Array.from(

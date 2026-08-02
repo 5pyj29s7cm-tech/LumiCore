@@ -694,6 +694,8 @@ export function prepareConversationActionTaskState(
     requestId: string;
     toolPolicy: ToolPolicy;
     forceResume?: boolean;
+    /** Canonical capability planning determined that this turn needs a ledger. */
+    forceTask?: boolean;
     now?: string;
   },
 ): { state: ConversationActionContinuationState | null; kind: 'new' | 'resume' | 'status' | 'conversation' } {
@@ -703,7 +705,7 @@ export function prepareConversationActionTaskState(
   const resume = Boolean(previous && previous.unfinished && (input.forceResume || followupIntent === 'execute'));
   if (followupIntent === 'status' && previous) return { state: previous, kind: 'status' };
   const contract = buildActionContract(userText);
-  const isAction = contract.applies && contract.kind !== 'none';
+  const isAction = (contract.applies && contract.kind !== 'none') || input.forceTask === true;
   if (!resume && !isAction) return { state: previous, kind: 'conversation' };
 
   const now = input.now || new Date().toISOString();

@@ -191,9 +191,17 @@ export interface OrchestrationContext {
   personalityId?: string;
   domain?: string;
   orgId?: string;
+  conversationId?: string;
+  turnId?: string;
+  requestId?: string;
   availableAgentIds?: string[];
   desktopRelay?: (toolName: string, args: Record<string, any>) => Promise<string>;
+  personalDesktopRelay?: (toolName: string, args: Record<string, any>) => Promise<string>;
   isCancelled?: () => boolean;
+  /** Entry-owned confirmation callback; workers may narrow authority but never replace it. */
+  requestConfirmation?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
+  /** The user is present on the foreground entry, but constitutional confirmation still applies. */
+  supervisedExternalCommits?: boolean;
   /** Exact routed execution policy from the parent turn. Workers may narrow it but never expand it. */
   toolPolicy?: ToolPolicy;
   /** Original routed task retained across decomposition so worker safety classification cannot lose source constraints. */
@@ -217,6 +225,13 @@ export interface OrchestrationContext {
   modelSelectionMode?: 'pinned' | 'prefer_with_fallback';
   /** Verified node receipts restored from the durable task ledger after a restart. */
   resumeNodeReceipts?: ModelGraphNodeReceipt[];
+  /** Persisted bounded recovery instruction. It may narrow/replan safe work but never expand policy. */
+  recoveryDirective?: {
+    revision: number;
+    strategy: 'retry_same_plan' | 'resume_verified_receipts' | 'replan_safe_path';
+    reason: string;
+    preservedReceiptIds: string[];
+  };
   desktopExecutionTracker?: DesktopExecutionTracker;
   /** Result selection is enforced by the compiled graph, never by prose aggregation. */
   arbitrationPolicy?: ModelExecutionGraph['arbitration'];
@@ -573,14 +588,20 @@ async function runDeterministicDesktopObservation(
       arguments: call.arguments,
       context: {
         userId: context.userId,
+        taskId: context.taskId,
+        conversationId: context.conversationId,
+        turnId: context.turnId,
+        requestId: context.requestId,
         domain: context.domain,
         orgId: context.orgId,
-        requestConfirmation: async (toolName, args) =>
-          canAutoApproveAction(toolName, args, { actionIntent: text }),
-        actionIntent: text,
+        requestConfirmation: context.requestConfirmation || (async (toolName, args) =>
+          canAutoApproveAction(toolName, args, { actionIntent: context.rootTaskText || text })),
+        actionIntent: context.rootTaskText || text,
         routedTaskText: context.rootTaskText || text,
         source: 'orchestrator',
         desktopRelay: context.desktopRelay,
+        personalDesktopRelay: context.personalDesktopRelay,
+        supervisedExternalCommits: context.supervisedExternalCommits,
         isCancelled: context.isCancelled,
         llmGetters,
         toolPolicy,
@@ -1012,7 +1033,18 @@ export async function decomposeTask(
   context: OrchestrationContext,
   llmGetters: LlmGetters,
 ): Promise<SubTask[]> {
-  const prompt = DECOMPOSE_PROMPT.replace('{task}', compactTaskForPlanning(text));
+  const recoveryDirective = context.recoveryDirective
+    ? [
+        `Durable recovery revision ${context.recoveryDirective.revision}: ${context.recoveryDirective.strategy}.`,
+        `Prior blocker: ${compactTaskForPlanning(context.recoveryDirective.reason, 700)}.`,
+        `Preserve verified receipt ids: ${context.recoveryDirective.preservedReceiptIds.slice(0, 30).join(', ') || 'none'}.`,
+        'Do not repeat prior side effects. A recovery plan may only narrow the original task and must remain within the original policy.',
+      ].join('\n')
+    : '';
+  const prompt = [
+    DECOMPOSE_PROMPT.replace('{task}', compactTaskForPlanning(text)),
+    recoveryDirective,
+  ].filter(Boolean).join('\n\n');
 
   try {
     const messages: NormalizedMessage[] = [{ role: 'user', content: prompt }];
@@ -1529,6 +1561,9 @@ async function executeWorkerTask(
       `You are worker agent "${currentAgent.name}" (${currentAgent.category}). You have tool access — use tools to complete the task, don't just describe what to do.`,
       `Task: ${compactTaskForPlanning(workerTaskText, 7000)}${retryHint}`,
       dependencyContext,
+      context.recoveryDirective
+        ? `Durable recovery revision ${context.recoveryDirective.revision}: ${context.recoveryDirective.strategy}. ${compactTaskForPlanning(context.recoveryDirective.reason, 700)}. Reuse verified receipts and do not repeat prior side effects.`
+        : '',
       'Context boundary: use only the task inputs and referenced paths. Do not inspect the clipboard, unrelated files, databases, usage logs, or unrelated application state unless the task explicitly requests that source.',
       modeDirective,
       memoryContext ? `Relevant memories:\n${memoryContext}` : '',
@@ -1551,14 +1586,20 @@ async function executeWorkerTask(
       const attemptAbort = new AbortController();
       const workerContext: ToolContext = {
         userId: context.userId,
+        taskId: context.taskId,
+        conversationId: context.conversationId,
+        turnId: context.turnId,
+        requestId: context.requestId,
         domain: context.domain,
         orgId: context.orgId,
-        requestConfirmation: async (toolName: string, args: Record<string, any>) =>
-          canAutoApproveAction(toolName, args, { actionIntent: subTask.description }),
-        actionIntent: subTask.description,
+        requestConfirmation: context.requestConfirmation || (async (toolName: string, args: Record<string, any>) =>
+          canAutoApproveAction(toolName, args, { actionIntent: context.rootTaskText || subTask.description })),
+        actionIntent: context.rootTaskText || subTask.description,
         routedTaskText: context.rootTaskText || subTask.description,
         source: 'orchestrator',
         desktopRelay: context.desktopRelay,
+        personalDesktopRelay: context.personalDesktopRelay,
+        supervisedExternalCommits: context.supervisedExternalCommits,
         isCancelled: () => attemptTimedOut || context.isCancelled?.() === true,
         llmGetters,
         toolPolicy: workerToolPolicy,

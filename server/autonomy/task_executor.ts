@@ -8,7 +8,6 @@ import {
   dequeue,
   markRunning,
   markCompleted,
-  markFailed,
   markCancelled,
   getRunningTask,
   heartbeatAutonomousTask,
@@ -16,6 +15,7 @@ import {
   isTaskPauseRequested,
   markPaused,
   requestPauseAutonomousTask,
+  recordAutonomousTaskFailure,
 } from './task_queue';
 import { getGateConfig, isAutonomousWorkAllowed, recordAutonomousTokens } from './safety_gate';
 import { runWithTools } from '../llm/adapter';
@@ -40,6 +40,7 @@ import {
   type LumiExecutionPipeline,
 } from '../cognition/execution_pipeline';
 import { sanitizeCapabilityExecutionPlan } from '../conversation/action_ledger';
+import { snapshotDurableToolRecords } from '../cognition/durable_task_recovery';
 
 interface LLMGetters {
   getDeepSeek: () => any;
@@ -86,20 +87,32 @@ export function isLocalBodyLearningTask(task: Pick<AutonomousTask, 'title' | 'de
     .test(`${task.title || ''}\n${task.description || ''}`);
 }
 
-export function buildAutonomousToolPolicy(task: Pick<AutonomousTask, 'title' | 'description'>, maxIterations: number) {
+export function buildAutonomousToolPolicy(
+  task: Pick<AutonomousTask, 'title' | 'description'> & Partial<Pick<AutonomousTask, 'executionPlan' | 'recovery'>>,
+  maxIterations: number,
+) {
+  const recoveryToolBoundary = task.recovery?.planRevisions?.length && task.executionPlan
+    ? Array.from(new Set(task.executionPlan.nodes
+        .map(node => node.toolName)
+        .filter((name): name is string => Boolean(name))))
+    : [];
+  const narrowForRecovery = (policy: typeof AUTONOMOUS_POLICY) => recoveryToolBoundary.length > 0
+    ? { ...policy, allowedTools: recoveryToolBoundary }
+    : policy;
   if (isLocalBodyLearningTask(task)) {
-    return {
+    return narrowForRecovery({
       allowedTools: LOCAL_BODY_LEARNING_TOOLS,
       requireConfirmation: [],
       forbiddenTools: AUTONOMOUS_POLICY.forbiddenTools,
       maxIterations: Math.min(maxIterations, 16),
-    };
+    });
   }
-  return { ...AUTONOMOUS_POLICY, maxIterations };
+  return narrowForRecovery({ ...AUTONOMOUS_POLICY, maxIterations });
 }
 
 export function buildAutonomousCapabilityPipeline(
-  task: Pick<AutonomousTask, 'id' | 'userId' | 'description' | 'source' | 'title'>,
+  task: Pick<AutonomousTask, 'id' | 'userId' | 'description' | 'source' | 'title'>
+    & Partial<Pick<AutonomousTask, 'executionPlan' | 'recovery'>>,
   maxIterations: number,
   registry: ToolRegistry = toolRegistry,
 ): LumiExecutionPipeline {
@@ -249,11 +262,9 @@ function upsertToolLedger(ledger: ToolExecutionRecord[], record: ToolExecutionRe
         && JSON.stringify(item.arguments || {}) === JSON.stringify(record.arguments || {})
       ));
   const normalized: ToolExecutionRecord = {
-    id: record.id,
-    name: record.name,
-    arguments: record.arguments || {},
+    ...record,
+    arguments: { ...(record.arguments || {}) },
     result: record.result || '',
-    error: record.error,
   };
   if (index >= 0) ledger[index] = normalized;
   else ledger.push(normalized);
@@ -353,13 +364,19 @@ export async function executeNextAutonomousTask(
   const running = markRunning(task.id);
   if (!running) return { executed: false };
   if (!running.leaseId) return { executed: false, taskId: task.id, result: 'Task lease was not created' };
+  let leaseLost = false;
   const leaseHeartbeat = setInterval(() => {
     const renewed = heartbeatAutonomousTask(task.id, running.leaseId!);
-    if (!renewed) clearInterval(leaseHeartbeat);
+    if (!renewed) {
+      leaseLost = true;
+      clearInterval(leaseHeartbeat);
+    }
   }, 20_000);
   if (typeof (leaseHeartbeat as any).unref === 'function') (leaseHeartbeat as any).unref();
   markLinkedPlanRunning(running);
   let releaseDesktopControlLease = () => undefined;
+  const toolLedger: ToolExecutionRecord[] = [];
+  let sideEffectClass = running.executionPlan?.risk.sideEffectClass;
 
   io.to(`user:${task.userId}:personal`).emit('autonomous:task_started', {
     taskId: task.id,
@@ -386,12 +403,16 @@ export async function executeNextAutonomousTask(
     releaseDesktopControlLease = () => desktopRelay.releaseControlLease('autonomous_task_complete');
 
     const executionPipeline = buildAutonomousCapabilityPipeline(running, maxIterations);
+    sideEffectClass = executionPipeline.executionPlan.risk.sideEffectClass;
     attachAutonomousExecutionPlan(
       running.id,
       sanitizeCapabilityExecutionPlan(executionPipeline.executionPlan, new Date().toISOString()),
+      running.leaseId,
     );
     checkpointAutonomousTask(running.id, {
       phase: 'planned',
+      receiptIds: running.checkpoint?.receiptIds,
+      receipts: running.checkpoint?.receipts,
       detail: `Capability plan persisted for attempt ${running.attempt || 1}`,
     }, running.leaseId);
     if (executionPipeline.executionPlan.risk.sideEffectClass === 'external_commit') {
@@ -409,9 +430,11 @@ export async function executeNextAutonomousTask(
       toolPolicy,
       isCancelled: () => isTaskCancellationRequested(task.id, task.userId)
         || isTaskPauseRequested(task.id, task.userId)
-        || isRealtimeUserActive(task.userId),
+        || isRealtimeUserActive(task.userId)
+        || leaseLost,
       autonomous: true,
       source: 'autonomous',
+      idempotencyKey: running.idempotencyKey,
     };
 
     const messages = [
@@ -419,6 +442,9 @@ export async function executeNextAutonomousTask(
         `You are Lumi executing an autonomous background task. You work independently without user interaction. Be efficient and direct. Current task mode: ${task.mode}.`,
         formatLumiConstitutionForPrompt(),
         executionPipeline.capabilityPlan.promptOverlay,
+        ...(running.recovery?.planRevisions?.length
+          ? [`This is durable recovery attempt ${running.attempt}. Follow the latest persisted recovery revision: ${running.recovery.planRevisions.at(-1)?.strategy}. Do not repeat any side effect from a prior receipt. If exact prior state cannot be reconciled, stop and report the blocker.`]
+          : []),
         'For concrete deliverables, define the work product with work_product_plan, verify it with work_product_verify or domain-specific verification tools, repair failed criteria, and only then mark the task complete. If confirmation or missing input blocks progress, report the blocker.',
         'For autonomous web learning, you may use public web_search, url_fetch, and authority_research. Treat them as observation: cite URLs, retrieval time, confidence, and uncertainty. Choose research topics from the user industry habits in the task context: common platforms, vocabulary, deliverable formats, verification standards, compliance boundaries, and repeated real workflows. Avoid generic trend learning unless it clearly improves that user’s industry workflow. For desktop AI/tool catalog learning, use desktop_ai_list_targets and desktop_ai_discovery_plan, then produce source-grounded candidate JSON for later registration. Do not use login-required, paid, captcha, QR/OTP, private, or account-authorization pages as completed sources. Do not call authority_research_save, desktop_ai_register_target, or other long-term knowledge/configuration writes unless the task itself contains explicit user authorization; otherwise produce source-grounded knowledge or target candidates for later absorption.',
         'For autonomous local machine/body learning, only use observation tools for OS info, top-level file/folder landmarks, launchable apps, active/running processes, idle/activity signals, and adapter inventory. Do not open apps or files, click, type, capture screenshots, run commands, read file contents, move/copy/delete files, or infer private facts from filenames. Produce a local body map with evidence, uncertainty, useful app/file landmarks, industry-relevant tools, and next exploration items that need user confirmation.',
@@ -427,7 +453,6 @@ export async function executeNextAutonomousTask(
       { role: 'user' as const, content: task.description },
     ];
 
-    const toolLedger: ToolExecutionRecord[] = [];
     const result = await runWithTools(
       messages,
       toolRegistry,
@@ -438,7 +463,14 @@ export async function executeNextAutonomousTask(
           checkpointAutonomousTask(running.id, {
             phase: 'tool_execution',
             iteration: toolLedger.length,
-            receiptIds: toolLedger.map(item => item.id).filter((id): id is string => Boolean(id)),
+            receiptIds: Array.from(new Set([
+              ...(running.checkpoint?.receiptIds || []),
+              ...toolLedger.map(item => item.id).filter((id): id is string => Boolean(id)),
+            ])),
+            receipts: [
+              ...(running.checkpoint?.receipts || []),
+              ...snapshotDurableToolRecords(toolLedger),
+            ],
             detail: `${toolLedger.length} terminal tool call(s) observed`,
           }, running.leaseId);
         }
@@ -490,45 +522,68 @@ export async function executeNextAutonomousTask(
     );
     if (!outcome.verified) {
       const failureReason = outcome.reason || 'Autonomous completion could not be verified.';
+      const receiptSnapshots = snapshotDurableToolRecords(toolLedger);
       checkpointAutonomousTask(task.id, {
         phase: 'failed_verification',
         receiptIds: toolLedger.map(item => item.id).filter((id): id is string => Boolean(id)),
+        receipts: receiptSnapshots,
         detail: failureReason,
       }, running.leaseId);
-      markFailed(task.id, failureReason);
-      markLinkedPlanFailed(task, failureReason);
-      io.to(`user:${task.userId}:personal`).emit('autonomous:task_failed', {
+      const settled = recordAutonomousTaskFailure(task.id, {
+        error: failureReason,
+        verificationFailure: true,
+        receiptSnapshots,
+        sideEffectClass: executionPipeline.executionPlan.risk.sideEffectClass,
+        leaseLost,
+      }, running.leaseId);
+      if (!settled) {
+        return { executed: true, taskId: task.id, result: 'Task lease was lost; stale completion was discarded.' };
+      }
+      const willRetry = settled.status === 'pending';
+      if (!willRetry) markLinkedPlanFailed(task, failureReason);
+      io.to(`user:${task.userId}:personal`).emit(willRetry ? 'autonomous:task_retry_scheduled' : 'autonomous:task_failed', {
         taskId: task.id,
         title: task.title,
         error: failureReason,
         result: outcome.text,
         toolCallsCount: toolCallCount,
         tokensUsed,
-        finalized: true,
-        blocked: true,
+        finalized: !willRetry,
+        blocked: !willRetry,
         verified: false,
         reason: outcome.reason,
+        status: settled.status,
+        nextAttemptAt: settled.nextAttemptAt,
+        diagnosis: settled.recovery?.diagnoses.at(-1),
         timestamp: new Date().toISOString(),
       });
       console.warn(
         `[AutoExecutor] Task "${task.title}" not marked complete: ${outcome.reason} `
         + `(${outcome.successfulToolRecords.length}/${toolCallCount} successful tools)`,
       );
-      return { executed: true, taskId: task.id, result: outcome.text || failureReason };
+      return {
+        executed: true,
+        taskId: task.id,
+        result: willRetry ? `Retry scheduled: ${settled.nextAttemptAt}` : outcome.text || failureReason,
+      };
     }
 
     const summary = outcome.text;
     checkpointAutonomousTask(task.id, {
       phase: 'verified',
       receiptIds: toolLedger.map(item => item.id).filter((id): id is string => Boolean(id)),
+      receipts: snapshotDurableToolRecords(toolLedger),
       detail: outcome.reason || 'Completion verified',
     }, running.leaseId);
-    markCompleted(task.id, summary, toolCallCount, tokensUsed, {
+    const completed = markCompleted(task.id, summary, toolCallCount, tokensUsed, {
       finalized: true,
       blocked: false,
       verified: true,
       verificationReason: outcome.reason,
-    });
+    }, running.leaseId);
+    if (!completed) {
+      return { executed: true, taskId: task.id, result: 'Task lease was lost; stale completion was discarded.' };
+    }
     markLinkedPlanCompleted(task, summary);
 
     io.to(`user:${task.userId}:personal`).emit('autonomous:task_completed', {
@@ -570,23 +625,51 @@ export async function executeNextAutonomousTask(
       });
       return { executed: true, taskId: task.id, result: 'Cancelled by user' };
     }
-    checkpointAutonomousTask(task.id, {
+    const checkpointed = checkpointAutonomousTask(task.id, {
       phase: 'failed',
+      receiptIds: Array.from(new Set([
+        ...(running.checkpoint?.receiptIds || []),
+        ...toolLedger.map(item => item.id).filter((id): id is string => Boolean(id)),
+      ])),
+      receipts: [
+        ...(running.checkpoint?.receipts || []),
+        ...snapshotDurableToolRecords(toolLedger),
+      ],
       detail: errorMsg,
     }, running.leaseId);
-    markFailed(task.id, errorMsg);
-    markLinkedPlanFailed(task, errorMsg);
+    if (!checkpointed) {
+      return { executed: true, taskId: task.id, result: 'Task lease was lost; stale failure was discarded.' };
+    }
+    const settled = recordAutonomousTaskFailure(task.id, {
+      error: errorMsg,
+      receiptSnapshots: checkpointed.checkpoint?.receipts || [],
+      sideEffectClass,
+      leaseLost,
+    }, running.leaseId);
+    if (!settled) {
+      return { executed: true, taskId: task.id, result: 'Task lease was lost; stale failure was discarded.' };
+    }
+    const willRetry = settled.status === 'pending';
+    if (!willRetry) markLinkedPlanFailed(task, errorMsg);
 
-    io.to(`user:${task.userId}:personal`).emit('autonomous:task_failed', {
+    io.to(`user:${task.userId}:personal`).emit(willRetry ? 'autonomous:task_retry_scheduled' : 'autonomous:task_failed', {
       taskId: task.id,
       title: task.title,
       error: errorMsg,
+      status: settled.status,
+      nextAttemptAt: settled.nextAttemptAt,
+      diagnosis: settled.recovery?.diagnoses.at(-1),
       timestamp: new Date().toISOString(),
     });
 
     console.warn(`[AutoExecutor] Task "${task.title}" failed:`, errorMsg);
-    return { executed: true, taskId: task.id, result: `Failed: ${errorMsg}` };
+    return {
+      executed: true,
+      taskId: task.id,
+      result: willRetry ? `Retry scheduled: ${settled.nextAttemptAt}` : `Failed: ${errorMsg}`,
+    };
   } finally {
+    clearInterval(leaseHeartbeat);
     releaseDesktopControlLease();
   }
 }

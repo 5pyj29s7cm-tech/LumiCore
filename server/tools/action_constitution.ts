@@ -1,4 +1,4 @@
-import { getGateConfig, isMessagingSendConfirmationRequired } from '../autonomy/safety_gate';
+import { getGateConfig } from '../autonomy/safety_gate';
 import type { CapabilityManifestEntry, SecurityLevel, ToolContext } from './types';
 
 export type ActionDomain = 'observe' | 'draft' | 'local_write' | 'local_state' | 'desktop_control' | 'external_app' | 'messaging' | 'system' | 'network' | 'destructive';
@@ -380,16 +380,6 @@ function isExplicitMessagingFileTransfer(toolName: string, context?: ToolContext
   const intent = String(context?.actionIntent || '').trim();
   return /(?:send|forward|share|transfer|发给|发送|转发|传给|分享到)/i.test(intent)
     && /(?:file|attachment|document|文件|附件|材料|通知|文书)/i.test(intent);
-}
-
-function canRunSupervisedExternalCommit(context?: ToolContext): boolean {
-  if (!context) return false;
-  if (context?.supervisedExternalCommits === true) return true;
-  if (context?.autonomous === true) return false;
-  const source = String(context?.source || '').toLowerCase();
-  if (['chat', 'voice', 'task', 'chat_preflight', 'chat_chainer', 'quick_command'].includes(source)) return true;
-  if (source.startsWith('chat_') || source.startsWith('voice_')) return true;
-  return isMessagingSendConfirmationRequired(context.userId) === false;
 }
 
 function getSensitiveClientAction(args: Record<string, any> = {}): string {

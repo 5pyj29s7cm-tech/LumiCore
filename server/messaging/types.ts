@@ -12,6 +12,9 @@ export interface IncomingMessage {
   chatId: string;          // conversation/group ID
   chatType: 'private' | 'group';
   threadId?: string;       // platform thread/topic/root-message ID
+  /** True only when the platform payload proves that this bot was mentioned. */
+  botMentioned?: boolean;
+  mentionedUserIds?: string[];
   messageId: string;       // platform message ID
   text: string;            // plain text content
   attachments?: IncomingAttachment[];
@@ -44,6 +47,7 @@ export interface IncomingAttachment {
 
 export interface OutgoingMessage {
   text: string;
+  idempotencyKey?: string;
   replyTo?: string;        // message ID to reply to
   buttons?: MessageButton[];
   card?: CardPayload;      // rich card (Feishu/Telegram)

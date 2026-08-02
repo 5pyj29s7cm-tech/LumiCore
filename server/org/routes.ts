@@ -14,8 +14,34 @@ import * as KB from './kb';
 import * as LegalCases from './legal_cases';
 import * as Templates from './templates';
 import * as Audit from './audit';
+import * as WorkRouting from './work_routing';
+import * as ResourceACL from './resource_acl';
 import { Server as SocketIOServer } from 'socket.io';
 import { getJwtSecret } from '../config/local_identity';
+
+function respondResourceAuthorizationError(res: Response, error: unknown): void {
+  const status = error instanceof ResourceACL.OrganizationResourceAuthorizationError
+    ? error.statusCode
+    : 500;
+  res.status(status).json({ error: error instanceof Error ? error.message : 'Organization resource authorization failed' });
+}
+
+function canReadOrganizationResource(input: {
+  orgId: string;
+  userId: string;
+  resourceType: ResourceACL.OrganizationResourceType;
+  resourceId: string;
+  ownerUserId?: string;
+}): boolean {
+  return ResourceACL.authorizeOrganizationResource({
+    orgId: input.orgId,
+    actorUserId: input.userId,
+    resourceType: input.resourceType,
+    resourceId: input.resourceId,
+    permission: 'read',
+    ownerUserId: input.ownerUserId,
+  }).allowed;
+}
 
 export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
   // ── Health / status ──────────────────────────────────────────────────
@@ -156,27 +182,335 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
     res.status(201).json(dept);
   });
 
+  // ── Positions and durable business routing ───────────────────────────
+
+  router.get('/org/org/:orgId/positions', requireAuth, requireOrgMember, (req: Request, res: Response) => {
+    res.json(WorkRouting.listOrganizationPositions(req.params.orgId, req.query.includeArchived === 'true'));
+  });
+
+  router.post('/org/org/:orgId/positions', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
+    const position = WorkRouting.createOrganizationPosition({
+      orgId: req.params.orgId,
+      actorUserId: req.user!.uid,
+      departmentId: req.body?.departmentId,
+      name: req.body?.name,
+      description: req.body?.description,
+      skillTags: req.body?.skillTags,
+      memberIds: req.body?.memberIds,
+      agentIds: req.body?.agentIds,
+      isManager: req.body?.isManager,
+    });
+    res.status(201).json(position);
+  });
+
+  router.put('/org/org/:orgId/positions/:positionId', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
+    const position = WorkRouting.updateOrganizationPosition({
+      ...req.body,
+      orgId: req.params.orgId,
+      actorUserId: req.user!.uid,
+      positionId: req.params.positionId,
+    });
+    if (!position) {
+      res.status(404).json({ error: 'Position not found' });
+      return;
+    }
+    res.json(position);
+  });
+
+  router.get('/org/org/:orgId/work-routing/rules', requireAuth, requireOrgMember, (req: Request, res: Response) => {
+    res.json(WorkRouting.listOrganizationWorkRoutingRules(req.params.orgId, req.query.includeDisabled === 'true'));
+  });
+
+  router.post('/org/org/:orgId/work-routing/rules', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
+    const rule = WorkRouting.createOrganizationWorkRoutingRule({
+      ...req.body,
+      orgId: req.params.orgId,
+      actorUserId: req.user!.uid,
+    });
+    res.status(201).json(rule);
+  });
+
+  router.put('/org/org/:orgId/work-routing/rules/:ruleId', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
+    const rule = WorkRouting.updateOrganizationWorkRoutingRule({
+      orgId: req.params.orgId,
+      actorUserId: req.user!.uid,
+      ruleId: req.params.ruleId,
+      updates: req.body || {},
+    });
+    if (!rule) {
+      res.status(404).json({ error: 'Routing rule not found' });
+      return;
+    }
+    res.json(rule);
+  });
+
+  router.get('/org/org/:orgId/work-items', requireAuth, requireOrgMember, (req: Request, res: Response) => {
+    const membership = EDB.getMember(req.params.orgId, req.user!.uid)!;
+    const requesterUserId = ['owner', 'admin'].includes(membership.role)
+      ? String(req.query.requesterUserId || '') || undefined
+      : req.user!.uid;
+    res.json(WorkRouting.listOrganizationWorkItems(req.params.orgId, {
+      status: req.query.status as WorkRouting.OrganizationWorkItemStatus | undefined,
+      requesterUserId,
+      taskId: String(req.query.taskId || '') || undefined,
+      limit: Number(req.query.limit) || undefined,
+    }));
+  });
+
+  router.get('/org/org/:orgId/work-items/:workItemId', requireAuth, requireOrgMember, (req: Request, res: Response) => {
+    const item = WorkRouting.getOrganizationWorkItem(req.params.orgId, req.params.workItemId);
+    if (!item) {
+      res.status(404).json({ error: 'Work item not found' });
+      return;
+    }
+    const membership = EDB.getMember(req.params.orgId, req.user!.uid)!;
+    const canRead = ['owner', 'admin'].includes(membership.role)
+      || item.requesterUserId === req.user!.uid
+      || item.assignedMemberId === req.user!.uid
+      || (item.collaboratorMemberIds || []).includes(req.user!.uid)
+      || item.humanOwnerUserId === req.user!.uid;
+    if (!canRead) {
+      res.status(403).json({ error: 'This work item is not assigned to the current member' });
+      return;
+    }
+    res.json(item);
+  });
+
+  router.get('/org/org/:orgId/work-approvals', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
+    res.json(WorkRouting.listOrganizationWorkApprovals(
+      req.params.orgId,
+      req.query.status as WorkRouting.OrganizationWorkApprovalStatus | undefined,
+    ));
+  });
+
+  router.post('/org/org/:orgId/work-approvals/:approvalId/decision', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
+    if (!['approve', 'reject'].includes(String(req.body?.decision || ''))) {
+      res.status(400).json({ error: 'decision must be approve or reject' });
+      return;
+    }
+    const result = WorkRouting.decideOrganizationWorkApproval({
+      orgId: req.params.orgId,
+      approvalId: req.params.approvalId,
+      actorUserId: req.user!.uid,
+      decision: req.body.decision,
+      reason: req.body.reason,
+    });
+    if (!result) {
+      res.status(404).json({ error: 'Approval not found' });
+      return;
+    }
+    res.json(result);
+  });
+
+  router.get('/org/org/:orgId/work-handoffs', requireAuth, requireOrgMember, (req: Request, res: Response) => {
+    const membership = EDB.getMember(req.params.orgId, req.user!.uid)!;
+    const all = WorkRouting.listOrganizationWorkHandoffs(
+      req.params.orgId,
+      String(req.query.workItemId || '') || undefined,
+    );
+    if (['owner', 'admin'].includes(membership.role)) {
+      res.json(all);
+      return;
+    }
+    res.json(all.filter(handoff => (
+      handoff.actorUserId === req.user!.uid
+      || handoff.from.memberId === req.user!.uid
+      || handoff.to.memberId === req.user!.uid
+    )));
+  });
+
+  router.post('/org/org/:orgId/work-items/:workItemId/handoffs', requireAuth, requireOrgRole('owner', 'admin', 'member'), (req: Request, res: Response) => {
+    const handoff = WorkRouting.requestOrganizationWorkHandoff({
+      orgId: req.params.orgId,
+      workItemId: req.params.workItemId,
+      actorUserId: req.user!.uid,
+      type: req.body?.type,
+      targetDepartmentId: req.body?.targetDepartmentId,
+      targetPositionId: req.body?.targetPositionId,
+      targetMemberId: req.body?.targetMemberId,
+      targetAgentIds: req.body?.targetAgentIds,
+      reason: req.body?.reason,
+    });
+    if (!handoff) {
+      res.status(404).json({ error: 'Work item not found' });
+      return;
+    }
+    res.status(201).json(handoff);
+  });
+
+  router.post('/org/org/:orgId/work-handoffs/:handoffId/decision', requireAuth, requireOrgRole('owner', 'admin', 'member'), (req: Request, res: Response) => {
+    if (!['accept', 'decline'].includes(String(req.body?.decision || ''))) {
+      res.status(400).json({ error: 'decision must be accept or decline' });
+      return;
+    }
+    const result = WorkRouting.decideOrganizationWorkHandoff({
+      orgId: req.params.orgId,
+      handoffId: req.params.handoffId,
+      actorUserId: req.user!.uid,
+      decision: req.body.decision,
+    });
+    if (!result) {
+      res.status(404).json({ error: 'Handoff not found' });
+      return;
+    }
+    res.json(result);
+  });
+
   // ── Knowledge Base ───────────────────────────────────────────────────
 
+  router.get('/org/org/:orgId/resources/:resourceType/:resourceId/policy', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
+    res.json(ResourceACL.getOrganizationResourcePolicy(req.params.orgId, req.params.resourceType, req.params.resourceId));
+  });
+
+  router.put('/org/org/:orgId/resources/:resourceType/:resourceId/policy', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
+    try {
+      res.json(ResourceACL.setOrganizationResourcePolicy({
+        orgId: req.params.orgId,
+        actorUserId: req.user!.uid,
+        resourceType: req.params.resourceType,
+        resourceId: req.params.resourceId,
+        ownerUserId: req.body?.ownerUserId,
+        classification: req.body?.classification,
+        departmentId: req.body?.departmentId,
+        grants: req.body?.grants,
+      }));
+    } catch (error) {
+      respondResourceAuthorizationError(res, error);
+    }
+  });
+
+  router.delete('/org/org/:orgId/resources/:resourceType/:resourceId/policy', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
+    try {
+      const removed = ResourceACL.removeOrganizationResourcePolicy({
+        orgId: req.params.orgId,
+        actorUserId: req.user!.uid,
+        resourceType: req.params.resourceType,
+        resourceId: req.params.resourceId,
+      });
+      if (!removed) {
+        res.status(404).json({ error: 'Resource policy not found' });
+        return;
+      }
+      res.json({ success: true });
+    } catch (error) {
+      respondResourceAuthorizationError(res, error);
+    }
+  });
+
+  router.get('/org/org/:orgId/credential-references', requireAuth, requireOrgMember, (req: Request, res: Response) => {
+    res.json(ResourceACL.listOrganizationCredentialReferences(req.params.orgId, req.user!.uid));
+  });
+
+  router.post('/org/org/:orgId/credential-references', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
+    try {
+      const reference = ResourceACL.createOrganizationCredentialReference({
+        ...(req.body || {}),
+        orgId: req.params.orgId,
+        actorUserId: req.user!.uid,
+        name: req.body?.name,
+        provider: req.body?.provider,
+        credentialRef: req.body?.credentialRef,
+        purpose: req.body?.purpose,
+        grants: req.body?.grants,
+      });
+      res.status(201).json(reference);
+    } catch (error) {
+      respondResourceAuthorizationError(res, error);
+    }
+  });
+
+  router.delete('/org/org/:orgId/credential-references/:credentialId', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
+    try {
+      const revoked = ResourceACL.revokeOrganizationCredentialReference({
+        orgId: req.params.orgId,
+        actorUserId: req.user!.uid,
+        credentialId: req.params.credentialId,
+      });
+      if (!revoked) {
+        res.status(404).json({ error: 'Credential reference not found' });
+        return;
+      }
+      res.json({ success: true });
+    } catch (error) {
+      respondResourceAuthorizationError(res, error);
+    }
+  });
+
+  router.get('/org/org/:orgId/devices', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
+    try {
+      res.json(ResourceACL.listOrganizationDevices(req.params.orgId, req.user!.uid));
+    } catch (error) {
+      respondResourceAuthorizationError(res, error);
+    }
+  });
+
+  router.put('/org/org/:orgId/devices/:deviceId', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
+    try {
+      const device = ResourceACL.updateOrganizationDevice({
+        orgId: req.params.orgId,
+        actorUserId: req.user!.uid,
+        deviceId: req.params.deviceId,
+        status: req.body?.status,
+        permissions: req.body?.permissions,
+        label: req.body?.label,
+      });
+      if (!device) {
+        res.status(404).json({ error: 'Organization device not found' });
+        return;
+      }
+      res.json(device);
+    } catch (error) {
+      respondResourceAuthorizationError(res, error);
+    }
+  });
+
   router.get('/org/kb/stats', requireAuth, requireOrgMember, (req: Request, res: Response) => {
-    res.json(KB.getStats(req.user!.orgId!));
+    const visible = new Set(KB.listArticles(req.user!.orgId!, undefined, req.user!.uid)
+      .filter(article => canReadOrganizationResource({
+        orgId: req.user!.orgId!,
+        userId: req.user!.uid,
+        resourceType: 'knowledge_article',
+        resourceId: article.id,
+        ownerUserId: article.authorId,
+      }))
+      .map(article => article.id));
+    res.json(KB.getStats(req.user!.orgId!, visible));
   });
 
   router.get('/org/kb/articles', requireAuth, requireOrgMember, (req: Request, res: Response) => {
     const articles = KB.listArticles(req.user!.orgId!, {
       category: req.query.category as string | undefined,
       status: req.query.status as string | undefined,
-    });
-    res.json(articles.map(article => ({
+    }, req.user!.uid);
+    res.json(articles.filter(article => canReadOrganizationResource({
+      orgId: req.user!.orgId!,
+      userId: req.user!.uid,
+      resourceType: 'knowledge_article',
+      resourceId: article.id,
+      ownerUserId: article.authorId,
+    })).map(article => ({
       ...article,
       ingestionManifest: KB.getArticleIngestionManifest(req.user!.orgId!, article.id),
     })));
   });
 
   router.get('/org/kb/articles/:articleId', requireAuth, requireOrgMember, (req: Request, res: Response) => {
-    const article = KB.getArticle(req.user!.orgId!, req.params.articleId);
+    const article = KB.getArticle(req.user!.orgId!, req.params.articleId, req.user!.uid);
     if (!article) {
       res.status(404).json({ error: 'Article not found' });
+      return;
+    }
+    try {
+      ResourceACL.assertOrganizationResourceAccess({
+        orgId: req.user!.orgId!,
+        actorUserId: req.user!.uid,
+        resourceType: 'knowledge_article',
+        resourceId: article.id,
+        permission: 'read',
+        ownerUserId: article.authorId,
+      });
+    } catch (error) {
+      respondResourceAuthorizationError(res, error);
       return;
     }
     res.json({
@@ -191,7 +525,30 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
       res.status(400).json({ error: 'title and content are required' });
       return;
     }
-    const article = KB.createArticle(req.user!.orgId!, req.user!.uid, { title, content, category, tags, status });
+    const article = KB.createArticle(
+      req.user!.orgId!,
+      req.user!.uid,
+      { title, content, category, tags, status },
+      { index: req.body?.index !== false },
+    );
+    if (req.body?.access) {
+      try {
+        ResourceACL.setOrganizationResourcePolicy({
+          orgId: req.user!.orgId!,
+          actorUserId: req.user!.uid,
+          resourceType: 'knowledge_article',
+          resourceId: article.id,
+          ownerUserId: req.user!.uid,
+          classification: req.body.access.classification,
+          departmentId: req.body.access.departmentId,
+          grants: req.body.access.grants,
+        });
+      } catch (error) {
+        KB.deleteArticle(req.user!.orgId!, req.user!.uid, article.id);
+        respondResourceAuthorizationError(res, error);
+        return;
+      }
+    }
     res.status(201).json({
       ...article,
       ingestionManifest: KB.getArticleIngestionManifest(req.user!.orgId!, article.id),
@@ -199,6 +556,24 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
   });
 
   router.put('/org/kb/articles/:articleId', requireAuth, requireOrgRole('owner', 'admin', 'member'), (req: Request, res: Response) => {
+    const current = KB.getArticle(req.user!.orgId!, req.params.articleId, req.user!.uid, 'write');
+    if (!current) {
+      res.status(404).json({ error: 'Article not found' });
+      return;
+    }
+    try {
+      ResourceACL.assertOrganizationResourceAccess({
+        orgId: req.user!.orgId!,
+        actorUserId: req.user!.uid,
+        resourceType: 'knowledge_article',
+        resourceId: current.id,
+        permission: 'write',
+        ownerUserId: current.authorId,
+      });
+    } catch (error) {
+      respondResourceAuthorizationError(res, error);
+      return;
+    }
     const article = KB.updateArticle(req.user!.orgId!, req.user!.uid, req.params.articleId, req.body);
     if (!article) {
       res.status(404).json({ error: 'Article not found' });
@@ -220,7 +595,7 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
   });
 
   router.post('/org/kb/articles/:articleId/index', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
-    KB.indexArticle(req.user!.orgId!, req.params.articleId).then(count => {
+    KB.indexArticle(req.user!.orgId!, req.params.articleId, req.user!.uid).then(count => {
       res.json({
         success: true,
         indexedChunks: count,
@@ -258,8 +633,19 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
       res.status(400).json({ error: 'query is required' });
       return;
     }
-    KB.searchKnowledgeBase(req.user!.orgId!, query, { limit: limit || 5, category, status, userId: req.user!.uid }).then(results => {
-      res.json(results);
+    const requestedLimit = Math.max(1, Math.min(Number(limit) || 5, 50));
+    KB.searchKnowledgeBase(req.user!.orgId!, query, { limit: 50, category, status, userId: req.user!.uid }).then(results => {
+      const articles = new Map(KB.listArticles(req.user!.orgId!, undefined, req.user!.uid).map(article => [article.id, article]));
+      res.json(results.filter(result => {
+        const article = articles.get(result.articleId);
+        return Boolean(article && canReadOrganizationResource({
+          orgId: req.user!.orgId!,
+          userId: req.user!.uid,
+          resourceType: 'knowledge_article',
+          resourceId: article.id,
+          ownerUserId: article.authorId,
+        }));
+      }).slice(0, requestedLimit));
     }).catch(err => {
       res.status(500).json({ error: err.message });
     });
@@ -270,24 +656,81 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
   router.get('/org/legal/cases', requireAuth, requireOrgMember, (req: Request, res: Response) => {
     const query = String(req.query.query || '');
     const limit = Math.min(parseInt(String(req.query.limit || '50'), 10) || 50, 200);
-    res.json({ cases: LegalCases.listCases(req.user!.orgId!, query, limit) });
+    res.json({ cases: LegalCases.listCases(req.user!.orgId!, query, 200, req.user!.uid)
+      .filter(caseFile => canReadOrganizationResource({
+        orgId: req.user!.orgId!,
+        userId: req.user!.uid,
+        resourceType: 'legal_case',
+        resourceId: caseFile.id,
+        ownerUserId: caseFile.createdBy,
+      }))
+      .slice(0, limit) });
   });
 
   router.get('/org/legal/cases/:caseId', requireAuth, requireOrgMember, (req: Request, res: Response) => {
-    const caseFile = LegalCases.getCase(req.user!.orgId!, req.params.caseId);
+    const caseFile = LegalCases.getCase(req.user!.orgId!, req.params.caseId, req.user!.uid);
     if (!caseFile) {
       res.status(404).json({ error: 'Legal case not found' });
+      return;
+    }
+    try {
+      ResourceACL.assertOrganizationResourceAccess({
+        orgId: req.user!.orgId!,
+        actorUserId: req.user!.uid,
+        resourceType: 'legal_case',
+        resourceId: caseFile.id,
+        permission: 'read',
+        ownerUserId: caseFile.createdBy,
+      });
+    } catch (error) {
+      respondResourceAuthorizationError(res, error);
       return;
     }
     res.json(caseFile);
   });
 
-  router.post('/org/legal/cases', requireAuth, requireOrgMember, (req: Request, res: Response) => {
+  router.post('/org/legal/cases', requireAuth, requireOrgRole('owner', 'admin', 'member'), (req: Request, res: Response) => {
     const caseFile = LegalCases.createCase(req.user!.orgId!, req.user!.uid, req.body || {});
+    if (req.body?.access) {
+      try {
+        ResourceACL.setOrganizationResourcePolicy({
+          orgId: req.user!.orgId!,
+          actorUserId: req.user!.uid,
+          resourceType: 'legal_case',
+          resourceId: caseFile.id,
+          ownerUserId: req.user!.uid,
+          classification: req.body.access.classification,
+          departmentId: req.body.access.departmentId,
+          grants: req.body.access.grants,
+        });
+      } catch (error) {
+        LegalCases.deleteCase(req.user!.orgId!, req.user!.uid, caseFile.id);
+        respondResourceAuthorizationError(res, error);
+        return;
+      }
+    }
     res.status(201).json(caseFile);
   });
 
-  router.put('/org/legal/cases/:caseId', requireAuth, requireOrgMember, (req: Request, res: Response) => {
+  router.put('/org/legal/cases/:caseId', requireAuth, requireOrgRole('owner', 'admin', 'member'), (req: Request, res: Response) => {
+    const current = LegalCases.getCase(req.user!.orgId!, req.params.caseId, req.user!.uid, 'write');
+    if (!current) {
+      res.status(404).json({ error: 'Legal case not found' });
+      return;
+    }
+    try {
+      ResourceACL.assertOrganizationResourceAccess({
+        orgId: req.user!.orgId!,
+        actorUserId: req.user!.uid,
+        resourceType: 'legal_case',
+        resourceId: current.id,
+        permission: 'write',
+        ownerUserId: current.createdBy,
+      });
+    } catch (error) {
+      respondResourceAuthorizationError(res, error);
+      return;
+    }
     const caseFile = LegalCases.updateCase(req.user!.orgId!, req.user!.uid, req.params.caseId, req.body || {});
     if (!caseFile) {
       res.status(404).json({ error: 'Legal case not found' });
@@ -305,7 +748,25 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
     res.json({ success: true, caseId: caseFile.id });
   });
 
-  router.post('/org/legal/cases/:caseId/materials', requireAuth, requireOrgMember, (req: Request, res: Response) => {
+  router.post('/org/legal/cases/:caseId/materials', requireAuth, requireOrgRole('owner', 'admin', 'member'), (req: Request, res: Response) => {
+    const current = LegalCases.getCase(req.user!.orgId!, req.params.caseId, req.user!.uid, 'write');
+    if (!current) {
+      res.status(404).json({ error: 'Legal case not found' });
+      return;
+    }
+    try {
+      ResourceACL.assertOrganizationResourceAccess({
+        orgId: req.user!.orgId!,
+        actorUserId: req.user!.uid,
+        resourceType: 'legal_case',
+        resourceId: current.id,
+        permission: 'write',
+        ownerUserId: current.createdBy,
+      });
+    } catch (error) {
+      respondResourceAuthorizationError(res, error);
+      return;
+    }
     const material = LegalCases.addMaterial(req.user!.orgId!, req.user!.uid, req.params.caseId, {
       type: req.body?.type || 'note',
       title: req.body?.title || '案件材料',

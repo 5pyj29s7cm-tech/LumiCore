@@ -10,7 +10,7 @@
 import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
-import { FeishuAdapter } from '../../../messaging/feishu';
+import { FeishuAdapter, isMessagingDeliveryUnknownError } from '../../../messaging/feishu';
 import type { FeishuConfig } from '../../../messaging/feishu';
 import type { IncomingAttachment, IncomingMessage, MessageHandler } from '../../../messaging/types';
 import { getMessagingConfig, updateMessagingConfig } from '../../../messaging/config';
@@ -19,23 +19,40 @@ import {
   createBindingCode,
   deleteBindingForUser,
   getBinding,
+  authorizeMessagingGroup,
+  listMessagingGroupAuthorizations,
+  revokeMessagingGroupAuthorization,
   listBindingsForUser,
   parseMessagingBindingCommand,
 } from '../../../messaging/bindings';
+import { evaluateMessagingIngress } from '../../../messaging/ingress_policy';
 import { readDB } from '../../../../db_layer';
 import { requireAuth } from '../../../middleware/auth';
 import { getDataPath } from '../../../config/data_path';
 import { parseDocument } from '../../../legal/parser';
 import { getMember } from '../../../org/db';
+import {
+  bindOrganizationWorkItemTask,
+  routeOrganizationWork,
+  setOrganizationWorkItemExecutionStatus,
+  type RouteOrganizationWorkResult,
+} from '../../../org/work_routing';
 import * as OrgKB from '../../../org/kb';
 import * as LegalCases from '../../../org/legal_cases';
 import { handleRemoteLegalNoticeIntake } from './legal_notice_intake';
 import { getUserPreferredLLMConfig } from '../../../llm/user_preferences';
 import {
   addMessage,
+  getConversationActionStatus,
+  getConversationModelExecutionRecovery,
   getMessagesByTokenBudget,
   getMessagesThroughExternalMessage,
   getOrCreateActiveConversation,
+  persistConversationExecutionPlan,
+  persistConversationModelExecutionResult,
+  prepareConversationActionExecution,
+  settleConversationActionExecutionRequest,
+  setConversationActionExecutionStatus,
 } from '../../../conversation/manager';
 import { acceptMessageOnce, completeMessageDelivery, releaseMessageDelivery } from '../../../messaging/delivery_ledger';
 import {
@@ -45,17 +62,20 @@ import {
 import { runWithTools } from '../../../llm/adapter';
 import { makeLLMCall, type NormalizedMessage } from '../../../llm/providers';
 import { toolRegistry } from '../../../tools/registry';
+import { executeToolCall } from '../../../tools/execution_engine';
+import type { ToolExecutionRecord } from '../../../tools/types';
 import { buildUnifiedLegalEntryPrompt } from '../../../cognition/legal_entry';
 import { finalizeLumiResponse } from '../../../cognition/result_finalizer';
 import { recordTokenUsage } from '../../../llm/token_tracker';
 import type { ToolPolicy } from '../../../personality/types';
 import { requestsOrganizationScope, resolvePersonalOrganizationScope } from '../../../messaging/personal_org_scope';
 import { buildLumiTurnDispatch, type LumiTurnDispatch } from '../../../cognition/turn_dispatch';
-import { buildLumiExecutionDecision, type LumiExecutionDecision } from '../../../cognition/execution_decision';
+import { buildLumiExecutionPipeline, type LumiExecutionPipeline } from '../../../cognition/execution_pipeline';
 import { buildLumiRuntimeCapabilityContext } from '../../../cognition/capability_context';
 import { buildInteractionModeOverlay } from '../../../cognition/turn_flow';
-import { buildLumiCapabilitySelection } from '../../../cognition/capability_selection';
+import { bindCapabilityExecutionPlanTask } from '../../../cognition/capability_execution_plan';
 import { buildDesktopExecutionStabilityPolicy } from '../../../cognition/desktop_execution_stability';
+import { createDesktopExecutionTracker, withDesktopExecutionReceipt } from '../../../desktop/execution_runtime';
 import { buildLumiOperatingKernelPrompt } from '../../../cognition/operating_kernel';
 import { getStoredOperationMode, saveStoredOperationMode } from '../../../cognition/operation_mode_store';
 import { isPureOperationModeSwitchRequest, type OperationMode } from '../../../cognition/operation_modes';
@@ -63,6 +83,14 @@ import { formatOperationModeSwitchResponse } from '../../../i18n/operation_mode_
 import { formatClientSelfPrompt } from '../../../client/self_model';
 import { buildResponseLanguageInstruction } from '../../../utils/language';
 import { canAutoApproveAction } from '../../../tools/action_constitution';
+import {
+  classifyComplexity,
+  isTerminalOrchestrationToolEvent,
+  runOrchestratedTask,
+  shouldAttemptOrchestration,
+} from '../../../agents/orchestrator';
+import { classifyConversationActionFollowupIntent } from '../../../cognition/action_continuation';
+import { coalesceToolExecutionRecords, taskReceiptsToRecords } from '../../../cognition/task_execution_ledger';
 import {
   persistExplicitRemoteRelationshipMemories,
   persistRemotePostTurnLearning,
@@ -198,6 +226,21 @@ export function messagingConversationAgentId(message: IncomingMessage): string {
   return `lumi:${message.platform}:${scope}`;
 }
 
+function resolveMentionedOrganizationMembers(message: IncomingMessage, orgId: string): string[] {
+  if (message.chatType !== 'group' || !orgId) return [];
+  if (!['feishu', 'wecom', 'wechat'].includes(message.platform)) return [];
+  const platform = message.platform as 'feishu' | 'wecom' | 'wechat';
+  const members = (message.mentionedUserIds || []).flatMap(platformUserId => {
+    if (!platformUserId || platformUserId === message.userId) return [];
+    const binding = getBinding(platform, platformUserId, message.chatId, 'group');
+    if (!binding || binding.orgId !== orgId) return [];
+    const membership = getMember(orgId, binding.lumiUserId);
+    if (!membership || membership.status !== 'active' || membership.role === 'viewer') return [];
+    return [binding.lumiUserId];
+  });
+  return Array.from(new Set(members));
+}
+
 function parsePersistedToolRecords(value: unknown): any[] {
   let current = value;
   for (let depth = 0; depth < 2 && typeof current === 'string' && current.trim(); depth += 1) {
@@ -312,6 +355,11 @@ export function persistBoundMessagingMessage(
     routeSequence: message.routeSequence,
     receivedAt: message.receivedAt,
     toolCalls: toolCalls?.length ? toolCalls : undefined,
+    // Remote ingress persists before routing so attachment download/queueing
+    // cannot lose the accepted turn. The shared executor creates the real task
+    // with its final policy and request lease; never create a placeholder task
+    // from this early write.
+    deferActionPreparation: role === 'user',
   });
   const update: MessagingConversationUpdate = {
     userId: message.boundUserId,
@@ -377,7 +425,11 @@ export function createMessagingRoutes(
         return res.status(400).json({ error: 'Missing challenge token' });
       }
 
-      const msg = adapter.parseEvent(body);
+      let msg = adapter.parseEvent(body);
+      if (msg?.chatType === 'group' && msg.botMentioned !== true) {
+        await adapter.ensureBotIdentity();
+        msg = adapter.parseEvent(body);
+      }
       if (!msg) {
         return res.json({ code: 0 });
       }
@@ -389,8 +441,7 @@ export function createMessagingRoutes(
       dispatchIncomingMessage(msg, {
         enrich: message => enrichFeishuAttachments(message, adapter),
         reply: async (message, text) => {
-          await adapter.replyMessage(message.messageId, text).catch(() =>
-            adapter.sendMessage(message.chatId, { text, platform: 'feishu' }));
+          return adapter.replyMessage(message.messageId, text);
         },
       }, options);
     } catch (err: any) {
@@ -408,17 +459,35 @@ export function createMessagingRoutes(
       const { chatId, text, card } = req.body;
       if (!chatId) return res.status(400).json({ error: 'chatId required' });
       if (!text && !card) return res.status(400).json({ error: 'text or card required' });
+      if (req.body?.confirmed !== true) {
+        return res.status(409).json({ error: 'Exact target and payload confirmation is required before sending' });
+      }
+      const idempotencyKey = String(req.body?.idempotencyKey || '').trim();
+      if (!/^[A-Za-z0-9._:@/-]{16,240}$/.test(idempotencyKey)) {
+        return res.status(400).json({ error: 'A stable idempotencyKey of 16-240 characters is required' });
+      }
 
       let messageId: string;
       if (card) {
-        messageId = await adapter.sendCard(chatId, card);
+        messageId = await adapter.sendCard(chatId, card, idempotencyKey);
       } else {
-        messageId = await adapter.sendMessage(chatId, { text, platform: 'feishu' });
+        messageId = await adapter.sendMessage(chatId, { text, platform: 'feishu', idempotencyKey });
       }
 
       res.json({ success: true, messageId });
     } catch (err: any) {
       console.error('[Feishu] Send error:', err.message);
+      if (isMessagingDeliveryUnknownError(err)) {
+        return res.status(202).json({
+          success: false,
+          status: 'unknown_outcome',
+          stopped: true,
+          error: err.message,
+        });
+      }
+      if (/idempotency key is already bound/i.test(String(err?.message || ''))) {
+        return res.status(409).json({ error: err.message });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -504,6 +573,52 @@ export function createMessagingRoutes(
     res.json({ success: ok });
   });
 
+  router.post('/feishu/groups/authorizations', requireAuth, (req, res) => {
+    try {
+      const orgId = bindingOrgId(req);
+      const authorization = authorizeMessagingGroup({
+        platform: 'feishu',
+        chatId: String(req.body?.chatId || ''),
+        orgId,
+        createdBy: req.user!.uid,
+        allowedPlatformUserIds: Array.isArray(req.body?.allowedPlatformUserIds)
+          ? req.body.allowedPlatformUserIds
+          : [],
+      });
+      res.json({ success: true, authorization });
+    } catch (err: any) {
+      res.status(403).json({ error: err?.message || 'Unable to authorize Feishu group' });
+    }
+  });
+
+  router.get('/feishu/groups/authorizations', requireAuth, (req, res) => {
+    try {
+      const orgId = String(req.user?.orgId || req.query?.orgId || '').trim();
+      const membership = getMember(orgId, req.user!.uid);
+      if (!membership || membership.status !== 'active') {
+        return res.status(403).json({ error: 'Active organization membership required' });
+      }
+      res.json({ authorizations: listMessagingGroupAuthorizations('feishu', orgId) });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Unable to list Feishu group authorizations' });
+    }
+  });
+
+  router.delete('/feishu/groups/authorizations/:authorizationId', requireAuth, (req, res) => {
+    try {
+      const orgId = String(req.user?.orgId || req.body?.orgId || '').trim();
+      const success = revokeMessagingGroupAuthorization({
+        platform: 'feishu',
+        authorizationId: String(req.params.authorizationId || ''),
+        orgId,
+        revokedBy: req.user!.uid,
+      });
+      res.json({ success });
+    } catch (err: any) {
+      res.status(403).json({ error: err?.message || 'Unable to revoke Feishu group authorization' });
+    }
+  });
+
   return router;
 }
 
@@ -552,6 +667,9 @@ function handleMessagingBindingCommand(msg: IncomingMessage): string | null {
   if (msg.platform !== 'feishu' && msg.platform !== 'wecom') return null;
   const command = parseMessagingBindingCommand(msg.text);
   if (!command) return null;
+  if (msg.chatType === 'group' && command.kind === 'bind') {
+    return 'For security, Lumi identity binding codes can only be used in a private chat with the bot. This group must be authorized separately by an organization owner or administrator.';
+  }
   if (command.kind === 'status') {
     const current = getBinding(msg.platform, msg.userId, msg.chatId, msg.chatType);
     if (!current) {
@@ -593,6 +711,15 @@ export function dispatchIncomingMessage(
   transport: IncomingMessageTransport,
   options?: MessagingRouteOptions,
 ): boolean {
+  const ingressDecision = evaluateMessagingIngress(message);
+  if (!ingressDecision.allowed) {
+    recordMessagingIngress(message);
+    updateMessagingJournal(message, {
+      status: 'ignored',
+      error: ingressDecision.reason,
+    });
+    return false;
+  }
   try {
     if (!acceptMessageOnce(message.platform, message.messageId)) {
       console.log(`[Messaging] Ignoring duplicate ${message.platform} message: ${message.messageId}`);
@@ -683,26 +810,7 @@ export function dispatchIncomingMessage(
           return;
         }
 
-        const legalNoticeReply = await handleRemoteLegalNoticeIntake(enrichedMessage);
-        if (legalNoticeReply) {
-          await deliverExchange(enrichedMessage, legalNoticeReply);
-          return;
-        }
         const routedMessage = enrichedMessage;
-
-        const remoteOrgReply = await handleRemoteOrgCommand(routedMessage);
-        if (remoteOrgReply) {
-          await deliverExchange(routedMessage, remoteOrgReply);
-          return;
-        }
-
-        if (options?.onMessage) {
-          const reply = await options.onMessage(routedMessage);
-          if (reply) {
-            await deliverExchange(routedMessage, reply.text);
-          }
-          return;
-        }
 
         const replyText = await processWithPersonality(routedMessage, options);
         if (!replyText) {
@@ -720,6 +828,14 @@ export function dispatchIncomingMessage(
       completeMessageDelivery(trackedMessage.platform, trackedMessage.messageId);
       updateMessagingJournal(trackedMessage, { status: finalJournalStatus });
     }).catch(async (err: any) => {
+      if (isMessagingDeliveryUnknownError(err)) {
+        completeMessageDelivery(trackedMessage.platform, trackedMessage.messageId);
+        updateMessagingJournal(trackedMessage, {
+          status: 'delivery_unknown',
+          error: err?.message || String(err),
+        });
+        return;
+      }
       releaseMessageDelivery(trackedMessage.platform, trackedMessage.messageId);
       updateMessagingJournal(trackedMessage, { status: 'failed', error: err?.message || String(err) });
       console.error(`[Messaging] ${trackedMessage.platform} route failed:`, err?.message || err);
@@ -784,10 +900,10 @@ function stripExtractionQuery(text: string, source: 'case' | 'kb' | 'any' = 'any
     .slice(0, 100);
 }
 
-function fallbackKnowledgeSearch(orgId: string, query: string, limit: number) {
+function fallbackKnowledgeSearch(orgId: string, userId: string, query: string, limit: number) {
   const q = query.trim().toLowerCase();
   if (!q) return [];
-  return OrgKB.listArticles(orgId, { status: 'published' })
+  return OrgKB.listArticles(orgId, { status: 'published' }, userId)
     .filter((article: any) => {
       const haystack = `${article.title || ''}\n${article.content || ''}\n${article.category || ''}`.toLowerCase();
       return haystack.includes(q);
@@ -801,11 +917,11 @@ function fallbackKnowledgeSearch(orgId: string, query: string, limit: number) {
     }));
 }
 
-async function searchOrgKnowledge(orgId: string, query: string, limit = 5) {
+async function searchOrgKnowledge(orgId: string, userId: string, query: string, limit = 5) {
   const q = query.trim();
   if (!q) return [];
-  const semantic = await OrgKB.searchKnowledgeBase(orgId, q, limit);
-  return semantic.length > 0 ? semantic : fallbackKnowledgeSearch(orgId, q, limit);
+  const semantic = await OrgKB.searchKnowledgeBase(orgId, q, { limit, userId });
+  return semantic.length > 0 ? semantic : fallbackKnowledgeSearch(orgId, userId, q, limit);
 }
 
 function formatKbExtraction(results: any[], query: string): string {
@@ -909,7 +1025,7 @@ async function handleRemoteExtractionCommand(msg: IncomingMessage, textAttachmen
   const wantsKbExtraction = /(提取|调取|获取|查看|查询|查找|整理|总结|摘要|列出|读取).*(知识库|资料库|文档库|制度|组织资料|组织文档)|(知识库|资料库|文档库|制度).*(提取|调取|获取|查看|整理|总结|摘要|资料|信息)/.test(requestText);
   if (wantsKbExtraction) {
     const query = stripExtractionQuery(requestText, 'kb') || requestText;
-    const results = await searchOrgKnowledge(msg.boundOrgId!, query, 6);
+    const results = await searchOrgKnowledge(msg.boundOrgId!, msg.boundUserId!, query, 6);
     return formatKbExtraction(results, query);
   }
 
@@ -917,8 +1033,8 @@ async function handleRemoteExtractionCommand(msg: IncomingMessage, textAttachmen
   if (wantsCaseExtraction) {
     const query = stripExtractionQuery(requestText, 'case');
     const cases = query
-      ? LegalCases.listCases(msg.boundOrgId!, query, 5)
-      : LegalCases.listCases(msg.boundOrgId!, '', 5);
+      ? LegalCases.listCases(msg.boundOrgId!, query, 5, msg.boundUserId)
+      : LegalCases.listCases(msg.boundOrgId!, '', 5, msg.boundUserId);
     if (cases.length === 0) {
       return query
         ? `没有找到“${query}”对应的组织案件。可以换一个案号、当事人、法院或案件名称再试。`
@@ -943,8 +1059,8 @@ async function handleRemoteExtractionCommand(msg: IncomingMessage, textAttachmen
     const query = stripExtractionQuery(requestText, 'any');
     if (!query) return null;
     const [kbResults, cases] = await Promise.all([
-      searchOrgKnowledge(msg.boundOrgId!, query, 4),
-      Promise.resolve(LegalCases.listCases(msg.boundOrgId!, query, 3)),
+      searchOrgKnowledge(msg.boundOrgId!, msg.boundUserId!, query, 4),
+      Promise.resolve(LegalCases.listCases(msg.boundOrgId!, query, 3, msg.boundUserId)),
     ]);
     if (kbResults.length === 0 && cases.length === 0) {
       return `没有从组织知识库或案件库里提取到“${query}”相关资料。`;
@@ -1023,13 +1139,13 @@ export async function handleRemoteOrgCommand(msg: IncomingMessage): Promise<stri
 
   if (/知识库|制度|资料|文档库/.test(requestText) && /(查|搜|找|检索|搜索)/.test(requestText)) {
     const query = requestText.replace(/(查|搜|找|检索|搜索)?\s*(组织)?\s*(知识库|制度|资料|文档库)/g, '').trim() || requestText;
-    const results = await searchOrgKnowledge(msg.boundOrgId, query, 5);
+    const results = await searchOrgKnowledge(msg.boundOrgId, msg.boundUserId, query, 5);
     return formatKbResults(results);
   }
 
   if (/(查|搜|找|检索|搜索).*(案件|案号|材料|卷宗)|案件.*(在哪|有没有|列表)/.test(requestText)) {
     const query = requestText.replace(/(查|搜|找|检索|搜索)?\s*(组织)?\s*(案件|案号|材料|卷宗)/g, '').trim();
-    const cases = LegalCases.listCases(msg.boundOrgId, query, 8);
+    const cases = LegalCases.listCases(msg.boundOrgId, query, 8, msg.boundUserId);
     return formatCaseResults(cases);
   }
 
@@ -1058,7 +1174,7 @@ export async function handleRemoteOrgCommand(msg: IncomingMessage): Promise<stri
       .map(item => `# ${item.fileName}\n\n${item.extractedText}`)
       .join('\n\n---\n\n');
     const target = extractCaseArchiveTarget(requestText);
-    const targetCases = target ? LegalCases.listCases(msg.boundOrgId, target, 3) : [];
+    const targetCases = target ? LegalCases.listCases(msg.boundOrgId, target, 3, msg.boundUserId) : [];
     if (targetCases.length > 0) {
       const targetCase = targetCases[0];
       for (const attachment of textAttachments) {
@@ -1072,7 +1188,7 @@ export async function handleRemoteOrgCommand(msg: IncomingMessage): Promise<stri
         });
       }
       updateCaseHintsFromText(msg.boundOrgId, msg.boundUserId, targetCase, combined);
-      const refreshed = LegalCases.getCase(msg.boundOrgId, targetCase.id) || targetCase;
+      const refreshed = LegalCases.getCase(msg.boundOrgId, targetCase.id, msg.boundUserId) || targetCase;
       return [
         `已把 ${textAttachments.length} 份${platformLabel}附件归档到已有案件。`,
         '',
@@ -1111,7 +1227,7 @@ export async function handleRemoteOrgCommand(msg: IncomingMessage): Promise<stri
         source: materialSource,
       });
     }
-    const refreshed = LegalCases.getCase(msg.boundOrgId, caseFile.id) || caseFile;
+    const refreshed = LegalCases.getCase(msg.boundOrgId, caseFile.id, msg.boundUserId) || caseFile;
     return [
       `已创建组织案件并归档 ${textAttachments.length} 份${platformLabel}附件。`,
       '',
@@ -1244,13 +1360,6 @@ export function enrichWeComAttachments(msg: IncomingMessage, adapter: WeComAdapt
   );
 }
 
-const UNBOUND_REMOTE_TOOL_POLICY: ToolPolicy = {
-  allowedTools: [],
-  requireConfirmation: [],
-  forbiddenTools: ['*'],
-  maxIterations: 0,
-};
-
 const ORGANIZATION_VIEWER_WRITE_TOOLS = [
   'legal_case_workspace',
   'legal_message_intake_to_case',
@@ -1261,9 +1370,9 @@ const ORGANIZATION_VIEWER_WRITE_TOOLS = [
   'feishu_send_file',
 ];
 
-export interface RemoteLumiExecutionPlan {
+export interface RemoteLumiExecutionPlan extends LumiExecutionPipeline {
+  /** Compatibility alias retained for route diagnostics and existing callers. */
   dispatch: LumiTurnDispatch;
-  execution: LumiExecutionDecision;
   source: string;
 }
 
@@ -1278,6 +1387,8 @@ export interface RemoteLumiExecutionPlanInput {
   canWriteOrganization: boolean;
   personalityToolPolicy?: ToolPolicy;
   dispatch?: LumiTurnDispatch;
+  actionTaskState?: import('../../../cognition/action_continuation').ConversationActionContinuationState | null;
+  taskId?: string;
 }
 
 function unauthenticatedRemoteDispatch(dispatch: LumiTurnDispatch): LumiTurnDispatch {
@@ -1308,16 +1419,6 @@ function unauthenticatedRemoteDispatch(dispatch: LumiTurnDispatch): LumiTurnDisp
   };
 }
 
-function restrictOrganizationViewerPolicy(policy: ToolPolicy): ToolPolicy {
-  return {
-    ...policy,
-    forbiddenTools: Array.from(new Set([
-      ...(policy.forbiddenTools || []),
-      ...ORGANIZATION_VIEWER_WRITE_TOOLS,
-    ])),
-  };
-}
-
 export function buildRemoteLumiExecutionPlan(input: RemoteLumiExecutionPlanInput): RemoteLumiExecutionPlan {
   const rawDispatch = input.dispatch || buildLumiTurnDispatch({
     userId: input.userId,
@@ -1331,29 +1432,32 @@ export function buildRemoteLumiExecutionPlan(input: RemoteLumiExecutionPlanInput
     targetIsLumi: true,
   });
   const dispatch = input.identityBound ? rawDispatch : unauthenticatedRemoteDispatch(rawDispatch);
-  const baseExecution = buildLumiExecutionDecision({
-    flow: dispatch.flow,
-    text: input.text,
-    toolDeclarations: toolRegistry.getToolDeclarations(),
-    toolRegistry,
+  const pipeline = buildLumiExecutionPipeline({
+    dispatch: {
+      userId: input.userId,
+      text: input.text,
+      channel: 'chat',
+      source: input.source,
+      category: input.domain === 'work' ? 'organization' : undefined,
+      domain: input.domain,
+      orgId: input.orgId,
+      operationMode: input.operationMode,
+      targetIsLumi: true,
+    },
+    prebuiltDispatch: dispatch,
+    registry: toolRegistry,
     personalityToolPolicy: input.personalityToolPolicy,
+    actionTaskState: input.actionTaskState,
     isSanctuary: !input.identityBound,
+    additionalForbiddenTools: input.domain === 'work' && !input.canWriteOrganization
+      ? ORGANIZATION_VIEWER_WRITE_TOOLS
+      : undefined,
+    decisionText: input.text,
+    traceText: input.text,
+    source: input.source,
+    taskId: input.taskId,
   });
-  const toolPolicy = !input.identityBound
-    ? UNBOUND_REMOTE_TOOL_POLICY
-    : input.domain === 'work' && !input.canWriteOrganization
-      ? restrictOrganizationViewerPolicy(baseExecution.toolPolicy)
-      : baseExecution.toolPolicy;
-  const execution = toolPolicy === baseExecution.toolPolicy
-    ? baseExecution
-    : {
-        ...baseExecution,
-        allowToolUse: input.identityBound && baseExecution.allowToolUse,
-        toolPolicy,
-        maxIterations: toolPolicy.maxIterations,
-      };
-
-  return { dispatch, execution, source: input.source };
+  return { ...pipeline, dispatch: pipeline.turnIntent, source: input.source };
 }
 
 function desktopRelayReportedSuccess(raw: string): boolean {
@@ -1379,6 +1483,7 @@ export async function processWithPersonality(
   const domain = isOrganizationBound ? 'work' as const : 'personal' as const;
   const orgId = isOrganizationBound ? msg.boundOrgId! : '';
   const source = `${msg.platform}_bot`;
+  const requestId = `${source}:${msg.messageId}`;
   const confirmationScope = {
     source,
     domain,
@@ -1419,7 +1524,7 @@ export async function processWithPersonality(
     ? options?.createPersonalDesktopRelay?.(effectiveUserId, source)
     : undefined;
   const conversationAgentId = messagingConversationAgentId(msg);
-  const conversation = isIdentityBound
+  let conversation = isIdentityBound
     ? getOrCreateActiveConversation(effectiveUserId, conversationAgentId, domain, orgId)
     : null;
   const priorMessages = conversation
@@ -1455,6 +1560,10 @@ export async function processWithPersonality(
 
   if (isIdentityBound && !msg.userMessagePersisted) {
     persistBoundMessagingMessage(msg, 'user', getDisplayText(msg), options?.onConversationUpdated);
+    // The early persistence call owns a fresh DB transaction. Reload the
+    // conversation so continuation/status planning sees the exact durable
+    // pointer that was accepted with this remote message.
+    conversation = getOrCreateActiveConversation(effectiveUserId, conversationAgentId, domain, orgId);
   }
   let explicitRemoteMemoryIds: string[] = [];
   if (isIdentityBound) {
@@ -1469,30 +1578,6 @@ export async function processWithPersonality(
   const directlyAppliedMode: OperationMode | null = provisionalPlan.dispatch.flow.autoPromoteToAssistant
     ? 'assistant'
     : provisionalPlan.dispatch.flow.requestedMode;
-  if (isIdentityBound && directlyAppliedMode) {
-    let modeSynced = false;
-    if (desktopRelay) {
-      try {
-        const raw = await desktopRelay('client_action', {
-          action: 'set_client_mode',
-          mode: directlyAppliedMode,
-          confirmed: directlyAppliedMode === 'meeting' || directlyAppliedMode === 'autonomous',
-        });
-        modeSynced = desktopRelayReportedSuccess(raw);
-      } catch (err: any) {
-        console.warn(`[Messaging] ${source} client mode sync failed:`, err?.message || err);
-      }
-    }
-    if (modeSynced) saveStoredOperationMode(effectiveUserId, directlyAppliedMode);
-
-    if (isPureOperationModeSwitchRequest(requestText, provisionalPlan.dispatch.flow.requestedMode)) {
-      const responseText = formatOperationModeSwitchResponse(directlyAppliedMode, modeSynced, requestText);
-      const correlated = correlateMessagingReply(msg, responseText);
-      if (correlated.superseded) return '';
-      persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
-      return correlated.text;
-    }
-  }
 
   // ── Build system prompt from Lumi personality ──
   let systemPrompt = '';
@@ -1556,21 +1641,160 @@ export async function processWithPersonality(
     canWriteOrganization,
     personalityToolPolicy: personality?.toolPolicy,
     dispatch: provisionalPlan.dispatch,
+    actionTaskState: conversation?.actionContinuationState,
   });
   const turnDispatch = executionPlan.dispatch;
   const turnFlow = turnDispatch.flow;
   const executionDecision = executionPlan.execution;
-  const capabilitySelection = buildLumiCapabilitySelection({
-    dispatch: turnDispatch,
-    execution: executionDecision,
-    text: routingText,
-  });
+  const capabilitySelection = executionPlan.capabilityPlan;
+  const actionFollowupIntent = classifyConversationActionFollowupIntent(
+    requestText,
+    conversation?.actionContinuationState,
+  );
+  const actionTaskExecution = isIdentityBound && conversation
+    ? prepareConversationActionExecution({
+        conversationId: conversation.id,
+        userId: effectiveUserId,
+        userText: requestText,
+        requestId,
+        toolPolicy: executionDecision.toolPolicy,
+        forceResume: Boolean(pendingConfirmation || actionFollowupIntent === 'execute'),
+        forceTask: executionPlan.capabilityPlan.taskLedgerRequired
+          || (isOrganizationBound && requestsOrganizationScope(requestText)),
+      })
+    : { state: null, kind: 'conversation' as const };
+  if (conversation && actionTaskExecution.state?.taskId) {
+    executionPlan.executionPlan = bindCapabilityExecutionPlanTask(
+      executionPlan.executionPlan,
+      actionTaskExecution.state.taskId,
+    );
+    persistConversationExecutionPlan({
+      conversationId: conversation.id,
+      userId: effectiveUserId,
+      plan: executionPlan.executionPlan,
+    });
+  }
+  if (isIdentityBound && conversation && actionFollowupIntent === 'status') {
+    const statusText = getConversationActionStatus(
+      conversation.id,
+      effectiveUserId,
+      requestText,
+      conversation.actionContinuationState,
+    );
+    const correlated = correlateMessagingReply(msg, statusText);
+    if (correlated.superseded) return '';
+    persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
+    return correlated.text;
+  }
+  let organizationWorkRoute: RouteOrganizationWorkResult | null = null;
+  const shouldRouteOrganizationWork = Boolean(
+    isOrganizationBound
+    && conversation
+    && actionTaskExecution.state?.taskId
+    && (
+      executionPlan.capabilityPlan.taskLedgerRequired
+      || requestsOrganizationScope(requestText)
+      || actionTaskExecution.kind === 'resume'
+    )
+    && !directlyAppliedMode
+    && executionPlan.normalizedIntent.operation !== 'status'
+    && executionPlan.normalizedIntent.operation !== 'explain',
+  );
+  if (shouldRouteOrganizationWork) {
+    try {
+      const mentionedMemberIds = resolveMentionedOrganizationMembers(msg, orgId);
+      organizationWorkRoute = routeOrganizationWork({
+        orgId,
+        requesterUserId: effectiveUserId,
+        source,
+        requestId,
+        idempotencyKey: `organization-work:${requestId}`,
+        text: routingText,
+        intentKind: executionPlan.normalizedIntent.kind,
+        operation: executionPlan.normalizedIntent.operation,
+        sideEffectClass: executionPlan.normalizedIntent.sideEffectClass,
+        conversationId: conversation!.id,
+        taskId: actionTaskExecution.state!.taskId,
+        platform: msg.platform,
+        targetMemberId: mentionedMemberIds[0],
+        targetMemberIds: mentionedMemberIds,
+      });
+      bindOrganizationWorkItemTask({
+        orgId,
+        workItemId: organizationWorkRoute.workItem.id,
+        conversationId: conversation!.id,
+        taskId: actionTaskExecution.state!.taskId,
+      });
+      const route = organizationWorkRoute.workItem;
+      systemPrompt += [
+        '',
+        '## Organization Business Route',
+        `Work item: ${route.id}. Status: ${route.status}.`,
+        `Department: ${route.departmentId || 'organization-default'}. Position: ${route.positionId || 'none'}.`,
+        `Primary member: ${route.assignedMemberId || 'none'}. Collaborators: ${(route.collaboratorMemberIds || []).join(', ') || 'none'}.`,
+        `Allowed organization worker agents for orchestration: ${route.assignedAgentIds.join(', ') || 'central Lumi only'}.`,
+        `Required skill tags: ${route.skillTags.join(', ') || 'none'}.`,
+        'Do not claim another department, member, position, skill, or worker handled the task unless this durable route or a later handoff receipt says so.',
+      ].join('\n');
+    } catch (error: any) {
+      const blocker = `Organization work routing failed: ${error?.message || error}`;
+      setConversationActionExecutionStatus(conversation!.id, effectiveUserId, 'blocked', { blocker, requestId });
+      settleConversationActionExecutionRequest(conversation!.id, effectiveUserId, requestId, blocker);
+      const response = `组织任务没有开始执行：${error?.message || '业务路由校验失败'}。请由组织管理员检查部门、岗位、成员、技能或智能体配置。`;
+      const correlated = correlateMessagingReply(msg, response);
+      if (!correlated.superseded) persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
+      return correlated.text;
+    }
+  }
+  if (organizationWorkRoute?.workItem.status === 'waiting_approval') {
+    const approvalId = organizationWorkRoute.approval?.id || organizationWorkRoute.workItem.approvalId || '';
+    const blocker = `Organization approval ${approvalId} is required before execution.`;
+    setConversationActionExecutionStatus(conversation!.id, effectiveUserId, 'blocked', { blocker, requestId });
+    settleConversationActionExecutionRequest(conversation!.id, effectiveUserId, requestId, blocker);
+    const response = `任务已完成组织路由，但尚未执行。工作项 ${organizationWorkRoute.workItem.id} 正在等待组织管理员审批（审批单 ${approvalId}）。审批通过后，在当前会话说“继续”即可恢复原任务。`;
+    const correlated = correlateMessagingReply(msg, response);
+    if (!correlated.superseded) persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
+    return correlated.text;
+  }
+  if (organizationWorkRoute?.workItem.status === 'waiting_human') {
+    const owner = organizationWorkRoute.workItem.humanOwnerUserId || organizationWorkRoute.workItem.assignedMemberId || '指定成员';
+    const blocker = `Organization work item is owned by human member ${owner}.`;
+    setConversationActionExecutionStatus(conversation!.id, effectiveUserId, 'blocked', { blocker, requestId });
+    settleConversationActionExecutionRequest(conversation!.id, effectiveUserId, requestId, blocker);
+    const response = `任务已转交给组织成员 ${owner}，Lumi 已停止自动执行。工作项：${organizationWorkRoute.workItem.id}。后续只有收到转派或退回智能体的持久回执后才会恢复。`;
+    const correlated = correlateMessagingReply(msg, response);
+    if (!correlated.superseded) persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
+    return correlated.text;
+  }
+  if (
+    conversation
+    && (executionDecision.allowToolUse || Boolean(directlyAppliedMode))
+    && (actionTaskExecution.kind === 'new' || actionTaskExecution.kind === 'resume')
+  ) {
+    setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'executing', { requestId });
+    if (organizationWorkRoute) {
+      setOrganizationWorkItemExecutionStatus({
+        orgId,
+        workItemId: organizationWorkRoute.workItem.id,
+        status: 'executing',
+        actorUserId: effectiveUserId,
+      });
+    }
+  }
+  const priorTaskRecords = actionTaskExecution.kind === 'resume'
+    ? taskReceiptsToRecords(actionTaskExecution.state?.receipts || [])
+    : [];
+  const taskAwareRecords = (records: ToolExecutionRecord[]) => (
+    coalesceToolExecutionRecords([...priorTaskRecords, ...records])
+  );
   const desktopExecutionPolicy = buildDesktopExecutionStabilityPolicy({
     channel: 'chat',
     text: routingText,
     flow: turnFlow,
     capabilitySelection,
+    capabilityExecutionPlan: executionPlan.executionPlan,
   });
+  const desktopExecutionTracker = createDesktopExecutionTracker(desktopExecutionPolicy.executionPlan);
 
   systemPrompt += `\n\n${turnDispatch.promptOverlay}`;
   systemPrompt += `\n\n${turnFlow.promptOverlay}`;
@@ -1611,13 +1835,286 @@ export async function processWithPersonality(
     })),
     { role: 'user', content: [msg.text, pendingConfirmationPrompt].filter(Boolean).join('\n\n') },
   ];
+  let pendingConfirmationCreatedThisTurn: ReturnType<typeof recordPendingConfirmation> | null = null;
+  const requestToolConfirmation = async (
+    toolName: string,
+    args: Record<string, any>,
+  ): Promise<boolean> => {
+    if (
+      pendingConfirmation
+      && consumePendingConfirmation(
+        effectiveUserId,
+        pendingConfirmation.id,
+        toolName,
+        args,
+        confirmationScope,
+      )
+    ) {
+      console.log(`[Messaging] Consumed one-time ${source} confirmation for "${toolName}".`);
+      return true;
+    }
+    if (canAutoApproveAction(toolName, args, { actionIntent: requestText })) return true;
+    if (pendingConfirmationCreatedThisTurn) return false;
+    const pending = recordPendingConfirmation(
+      effectiveUserId,
+      toolName,
+      args,
+      source,
+      {
+        ...confirmationScope,
+        taskId: actionTaskExecution.state?.taskId,
+        actionIntent: requestText,
+      },
+    );
+    pendingConfirmationCreatedThisTurn = pending;
+    if (conversation) {
+      setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'waiting_confirmation', {
+        assistantState: formatPendingConfirmationPrompt(pending),
+        requestId,
+      });
+    }
+    console.warn(`[Messaging] Tool "${toolName}" is waiting for scoped ${source} confirmation ${pending.id}.`);
+    return false;
+  };
+  const settleRemoteTask = (fallbackBlocker?: string) => {
+    if (!conversation || !actionTaskExecution.state?.taskId) return;
+    if (fallbackBlocker) {
+      settleConversationActionExecutionRequest(
+        conversation.id,
+        effectiveUserId,
+        requestId,
+        fallbackBlocker,
+      );
+    } else {
+      settleConversationActionExecutionRequest(conversation.id, effectiveUserId, requestId);
+    }
+  };
 
   try {
     const usageInteractionId = `messaging_${msg.platform}_${Date.now()}`;
     let responseText = '';
-    let toolRecords: any[] = [];
+    let toolRecords: ToolExecutionRecord[] = [];
+    const callbackReply = options?.onMessage ? await options.onMessage(msg) : null;
+    let deterministicEntryReply: string | null = callbackReply?.text || null;
+    if (deterministicEntryReply) responseText = deterministicEntryReply;
 
-    if (!executionDecision.allowToolUse) {
+    if (isIdentityBound && directlyAppliedMode && !deterministicEntryReply) {
+      const modeRecord = await executeToolCall({
+        registry: toolRegistry,
+        id: `${requestId}:client-mode`,
+        name: 'client_action',
+        arguments: {
+          action: 'set_client_mode',
+          mode: directlyAppliedMode,
+          // Confirmation authority comes from ToolContext/requestConfirmation,
+          // never from a model- or route-authored boolean argument.
+          confirmed: false,
+        },
+        context: {
+          userId: effectiveUserId,
+          taskId: actionTaskExecution.state?.taskId,
+          conversationId: conversation?.id,
+          turnId: msg.messageId,
+          requestId,
+          domain,
+          orgId,
+          actionIntent: requestText,
+          routedTaskText: routingText,
+          supervisedExternalCommits: true,
+          toolPolicy: executionDecision.toolPolicy,
+          source,
+          llmGetters: llm as any,
+          desktopRelay,
+          personalDesktopRelay,
+          desktopExecutionTracker,
+          isCancelled: () => newerMessageCancelsThisTurn(msg),
+          requestConfirmation: requestToolConfirmation,
+        },
+      });
+      toolRecords.push(modeRecord);
+      const modeSynced = !modeRecord.error && desktopRelayReportedSuccess(modeRecord.result);
+      if (modeSynced) saveStoredOperationMode(effectiveUserId, directlyAppliedMode);
+
+      if (isPureOperationModeSwitchRequest(requestText, provisionalPlan.dispatch.flow.requestedMode)) {
+        const candidate = pendingConfirmationCreatedThisTurn
+          ? formatPendingConfirmationPrompt(pendingConfirmationCreatedThisTurn)
+          : formatOperationModeSwitchResponse(directlyAppliedMode, modeSynced, requestText);
+        const finalizedMode = finalizeLumiResponse({
+          taskText: routingText,
+          responseText: candidate,
+          toolRecords: taskAwareRecords(toolRecords),
+          source,
+          flow: turnFlow,
+        });
+        const correlated = correlateMessagingReply(msg, finalizedMode.text);
+        if (correlated.superseded) {
+          settleRemoteTask('The remote turn was superseded by a newer user message.');
+          return '';
+        }
+        persistBoundMessagingMessage(
+          msg,
+          'assistant',
+          correlated.text,
+          options?.onConversationUpdated,
+          toolRecords,
+        );
+        if (pendingConfirmationCreatedThisTurn && conversation) {
+          setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'waiting_confirmation', {
+            assistantState: formatPendingConfirmationPrompt(pendingConfirmationCreatedThisTurn),
+            requestId,
+          });
+        }
+        settleRemoteTask();
+        return correlated.text;
+      }
+    }
+
+    if (!deterministicEntryReply && isOrganizationBound) {
+      deterministicEntryReply = await handleRemoteLegalNoticeIntake(msg)
+        || await handleRemoteOrgCommand(msg);
+      if (deterministicEntryReply) {
+        responseText = deterministicEntryReply;
+        toolRecords.push({
+          id: `${requestId}:organization-command`,
+          taskId: actionTaskExecution.state?.taskId,
+          turnId: msg.messageId,
+          requestId,
+          idempotencyKey: `${organizationWorkRoute?.workItem.id || requestId}:organization-command`,
+          name: 'organization_business_command',
+          arguments: {
+            source,
+            requestId,
+            workItemId: organizationWorkRoute?.workItem.id || '',
+          },
+          result: JSON.stringify({
+            ok: true,
+            verified: true,
+            status: 'completed',
+            verificationMethod: 'organization-server-transaction',
+            workItemId: organizationWorkRoute?.workItem.id || '',
+          }),
+          terminalVerification: {
+            status: 'verified',
+            strategy: 'terminal_receipt',
+            reason: 'The organization server transaction returned a verified local receipt.',
+          },
+          envelope: {
+            version: 1,
+            status: 'verified_success',
+            toolName: 'organization_business_command',
+            taskId: actionTaskExecution.state?.taskId || '',
+            turnId: msg.messageId,
+            requestId,
+            idempotencyKey: `${organizationWorkRoute?.workItem.id || requestId}:organization-command`,
+            targetIdentity: orgId,
+            completedAt: new Date().toISOString(),
+            result: {
+              workItemId: organizationWorkRoute?.workItem.id || '',
+              verificationMethod: 'organization-server-transaction',
+            },
+            verification: {
+              status: 'verified',
+              reason: 'The organization server transaction returned a verified local receipt.',
+            },
+          },
+        });
+      }
+    }
+    if (deterministicEntryReply && !responseText) responseText = deterministicEntryReply;
+
+    const orchestrationContext = {
+      userId: effectiveUserId,
+      personalityId: personality?.id || 'lumi',
+      domain,
+      orgId,
+      conversationId: conversation?.id,
+      turnId: msg.messageId,
+      requestId,
+      availableAgentIds: organizationWorkRoute?.workItem.assignedAgentIds.length
+        ? organizationWorkRoute.workItem.assignedAgentIds
+        : undefined,
+      desktopRelay,
+      personalDesktopRelay,
+      toolPolicy: executionDecision.toolPolicy,
+      rootTaskText: routingText,
+      taskId: actionTaskExecution.state?.taskId,
+      desktopExecutionTracker,
+      requestConfirmation: requestToolConfirmation,
+      supervisedExternalCommits: isIdentityBound,
+      isCancelled: () => newerMessageCancelsThisTurn(msg),
+    };
+    const complexity = classifyComplexity(routingText, orchestrationContext);
+    const shouldOrchestrate = isIdentityBound && shouldAttemptOrchestration({
+      channel: 'chat',
+      text: turnFlow.routeText,
+      complexity,
+      allowToolUse: executionDecision.allowToolUse,
+      clientActionOnly: turnFlow.clientActionOnlyTurn,
+      selfRepair: turnFlow.selfRepairTurn,
+      artifactFirst: turnFlow.workSurfaceRoute.artifactFirst,
+      directDesktop: turnFlow.workSurfaceRoute.directDesktop,
+      prefersSequentialWorkflow: turnFlow.workSurfaceRoute.artifactFirst
+        && !turnFlow.workSurfaceRoute.directDesktop,
+      capabilityLane: capabilitySelection.lane,
+      cognitionCategory: executionPlan.normalizedIntent.kind,
+    });
+    let usedOrchestrator = Boolean(deterministicEntryReply);
+    if (shouldOrchestrate && !usedOrchestrator) {
+      const recovery = conversation && actionTaskExecution.state?.taskId
+        ? getConversationModelExecutionRecovery({
+            conversationId: conversation.id,
+            userId: effectiveUserId,
+            taskId: actionTaskExecution.state.taskId,
+          })
+        : null;
+      const orchestrated = await runOrchestratedTask(
+        routingText,
+        {
+          ...orchestrationContext,
+          resumeNodeReceipts: recovery?.receipts,
+        },
+        {
+          ...userLLMPrefs,
+          conversationId: conversation?.id,
+          requestId,
+          interactionId: usageInteractionId,
+          source,
+        },
+        {
+          getDeepSeek: llm?.getDeepSeek || (() => null),
+          getGemini: llm?.getGemini || (() => null),
+          getOpenAI: llm?.getOpenAI,
+          getAnthropic: llm?.getAnthropic,
+          getQwen: llm?.getQwen,
+          getOllama: llm?.getOllama,
+          getLmStudio: llm?.getLmStudio,
+          getArk: llm?.getArk,
+          getXiaomi: llm?.getXiaomi,
+          getKimi: llm?.getKimi,
+          getGlm: llm?.getGlm,
+          getRelay: llm?.getRelay,
+        },
+        undefined,
+        record => {
+          if (!isTerminalOrchestrationToolEvent(record)) return;
+          toolRecords.push({ ...record, result: record.result || '' });
+        },
+      );
+      if (orchestrated) {
+        usedOrchestrator = true;
+        responseText = orchestrated.responseText;
+        if (conversation && actionTaskExecution.state?.taskId) {
+          persistConversationModelExecutionResult({
+            conversationId: conversation.id,
+            userId: effectiveUserId,
+            taskId: actionTaskExecution.state.taskId,
+            workflowResult: orchestrated.workflowResult,
+          });
+        }
+      }
+    }
+
+    if (!usedOrchestrator && !executionDecision.allowToolUse) {
       const response = await makeLLMCall(
         messages,
         [],
@@ -1639,7 +2136,7 @@ export async function processWithPersonality(
       if (response.usage) {
         recordTokenUsage(effectiveUserId, userLLMPrefs.provider, userLLMPrefs.model, response.usage, usageInteractionId, 'chat');
       }
-    } else {
+    } else if (!usedOrchestrator) {
       const result = await runWithTools(
         messages,
         toolRegistry,
@@ -1654,41 +2151,23 @@ export async function processWithPersonality(
         undefined,
         {
           userId: effectiveUserId,
+          taskId: actionTaskExecution.state?.taskId,
+          conversationId: conversation?.id,
+          turnId: msg.messageId,
+          requestId,
           domain,
           orgId,
           actionIntent: requestText,
+          routedTaskText: routingText,
           supervisedExternalCommits: isIdentityBound,
           toolPolicy: executionDecision.toolPolicy,
           source,
           llmGetters: llm as any,
           desktopRelay,
           personalDesktopRelay,
+          desktopExecutionTracker,
           isCancelled: () => newerMessageCancelsThisTurn(msg),
-          requestConfirmation: async (toolName, args) => {
-            if (
-              pendingConfirmation &&
-              consumePendingConfirmation(
-                effectiveUserId,
-                pendingConfirmation.id,
-                toolName,
-                args,
-                confirmationScope,
-              )
-            ) {
-              console.log(`[Messaging] Consumed one-time ${source} confirmation for "${toolName}".`);
-              return true;
-            }
-            if (canAutoApproveAction(toolName, args, { actionIntent: requestText })) return true;
-            const pending = recordPendingConfirmation(
-              effectiveUserId,
-              toolName,
-              args,
-              source,
-              confirmationScope,
-            );
-            console.warn(`[Messaging] Tool "${toolName}" is waiting for scoped ${source} confirmation ${pending.id}.`);
-            return false;
-          },
+          requestConfirmation: requestToolConfirmation,
         },
         llm?.getOllama,
         llm?.getLmStudio,
@@ -1699,21 +2178,90 @@ export async function processWithPersonality(
         llm?.getRelay,
       );
       responseText = result.text || '';
-      toolRecords = result.toolCalls || [];
+      toolRecords.push(...(result.toolCalls || []));
       for (const usage of result.usageRecords || []) {
         recordTokenUsage(effectiveUserId, usage.provider, usage.model, usage, usageInteractionId, 'chat');
       }
     }
 
-    const finalized = finalizeLumiResponse({
-      taskText: routingText,
-      responseText: responseText || '这次没有生成可用回复，请稍后重试。',
-      toolRecords,
-      source,
+    toolRecords = withDesktopExecutionReceipt(toolRecords, desktopExecutionTracker);
+    if (pendingConfirmationCreatedThisTurn) {
+      responseText = formatPendingConfirmationPrompt(pendingConfirmationCreatedThisTurn);
+    }
+    let finalized = callbackReply && organizationWorkRoute?.workItem.sideEffectClass !== 'external_commit'
+      ? { text: responseText || callbackReply.text, blocked: false as const }
+      : finalizeLumiResponse({
+          taskText: routingText,
+          responseText: responseText || '这次没有生成可用回复，请稍后重试。',
+          toolRecords: taskAwareRecords(toolRecords),
+          source,
+          flow: turnFlow,
+        });
+    const organizationVerifiedTerminalReceipt = taskAwareRecords(toolRecords).some(record => {
+      const verified = record.envelope?.status === 'verified_success'
+        || record.terminalVerification?.status === 'verified';
+      if (!verified) return false;
+      if (organizationWorkRoute?.workItem.sideEffectClass !== 'external_commit') return true;
+      return Boolean(record.capability?.sideEffects?.some(effect => (
+        effect.type === 'external_communication' || effect.type === 'external_state_change'
+      ))) || /(?:send|submit|publish|post|comment|reply|payment|purchase|sign)/i.test(record.name);
     });
+    const missingOrganizationExternalCommitReceipt = organizationWorkRoute?.workItem.sideEffectClass === 'external_commit'
+      && !organizationVerifiedTerminalReceipt;
+    if (missingOrganizationExternalCommitReceipt) {
+      finalized = {
+        text: /[\u3400-\u9fff]/u.test(routingText)
+          ? '这次外部提交还没有完成：没有收到可验证的终态回执，Lumi 已停止，且不会盲目重试。'
+          : 'The external commit is not complete: no verified terminal receipt was received, so Lumi stopped and will not retry blindly.',
+        blocked: true,
+        reason: 'The external commit has no verified terminal receipt.',
+      };
+    }
     const correlated = correlateMessagingReply(msg, finalized.text);
-    if (correlated.superseded) return '';
+    if (correlated.superseded) {
+      if (organizationWorkRoute) {
+        setOrganizationWorkItemExecutionStatus({
+          orgId,
+          workItemId: organizationWorkRoute.workItem.id,
+          status: 'cancelled',
+          actorUserId: effectiveUserId,
+          blocker: 'The remote turn was superseded by a newer user message.',
+        });
+      }
+      settleRemoteTask('The remote turn was superseded by a newer user message.');
+      return '';
+    }
     persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated, toolRecords);
+    if (pendingConfirmationCreatedThisTurn && conversation) {
+      setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'waiting_confirmation', {
+        assistantState: formatPendingConfirmationPrompt(pendingConfirmationCreatedThisTurn),
+        requestId,
+      });
+    }
+    if (organizationWorkRoute) {
+      const organizationStatus = pendingConfirmationCreatedThisTurn || finalized.blocked || missingOrganizationExternalCommitReceipt
+        ? 'blocked'
+        : 'completed';
+      const organizationBlocker = pendingConfirmationCreatedThisTurn
+        ? 'The user action confirmation is still pending.'
+        : missingOrganizationExternalCommitReceipt
+          ? 'The external commit has no verified terminal receipt.'
+          : finalized.reason;
+      setOrganizationWorkItemExecutionStatus({
+        orgId,
+        workItemId: organizationWorkRoute.workItem.id,
+        status: organizationStatus,
+        actorUserId: effectiveUserId,
+        blocker: organizationBlocker,
+      });
+      if (organizationStatus === 'blocked' && conversation) {
+        setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'blocked', {
+          blocker: organizationBlocker,
+          requestId,
+        });
+      }
+    }
+    settleRemoteTask();
     persistRemotePostTurnLearning({
       message: msg,
       responseText: correlated.text,
@@ -1728,10 +2276,32 @@ export async function processWithPersonality(
     console.warn(`[Messaging] ${msg.platform} model pipeline failed:`, err?.message || err);
     const fallback = '当前语言模型暂时不可用，这次处理没有完成，请稍后再试。';
     const correlated = correlateMessagingReply(msg, fallback);
-    if (correlated.superseded) return '';
+    if (correlated.superseded) {
+      if (organizationWorkRoute) {
+        setOrganizationWorkItemExecutionStatus({
+          orgId,
+          workItemId: organizationWorkRoute.workItem.id,
+          status: 'cancelled',
+          actorUserId: effectiveUserId,
+          blocker: 'The remote turn failed after it was superseded by a newer user message.',
+        });
+      }
+      settleRemoteTask('The remote turn failed after it was superseded by a newer user message.');
+      return '';
+    }
     if (isIdentityBound) {
       persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
     }
+    if (organizationWorkRoute) {
+      setOrganizationWorkItemExecutionStatus({
+        orgId,
+        workItemId: organizationWorkRoute.workItem.id,
+        status: 'blocked',
+        actorUserId: effectiveUserId,
+        blocker: err?.message || 'The remote model/tool pipeline failed before a terminal receipt was recorded.',
+      });
+    }
+    settleRemoteTask(err?.message || 'The remote model/tool pipeline failed before a terminal receipt was recorded.');
     return correlated.text;
   }
 }

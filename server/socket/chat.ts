@@ -112,7 +112,6 @@ import {
   cancelBackgroundTask,
   checkpointBackgroundTask,
   completeBackgroundTask,
-  failBackgroundTask,
   getBackgroundTask,
   heartbeatBackgroundTask,
   incrementBackgroundTaskToolCalls,
@@ -120,11 +119,13 @@ import {
   isBackgroundTaskPauseRequested,
   markBackgroundTaskRunning,
   pauseBackgroundTask,
+  recordBackgroundTaskFailure,
   registerBackgroundTask,
   requestCancelBackgroundTask,
   requestPauseBackgroundTask,
   resumeBackgroundTask,
 } from "../agents/background_tasks";
+import { snapshotDurableToolRecords } from "../cognition/durable_task_recovery";
 import { buildForegroundWeChatReadArgs, buildForegroundWeChatSendArgs, runNLChainer, shouldChainTask } from "../agents/nl_chainer";
 import { autoInstallForTask } from "../agents/auto_installer";
 import { searchKnowledgeBase } from "../org/kb";
@@ -3138,6 +3139,8 @@ export function registerChatHandler(
             };
 
             (async () => {
+              let backgroundLeaseHeartbeat: ReturnType<typeof setInterval> | null = null;
+              let backgroundLeaseLost = false;
               try {
                 const runningTask = markBackgroundTaskRunning(backgroundTaskId);
                 if (runningTask) emitTaskUpdate(runningTask);
@@ -3148,9 +3151,12 @@ export function registerChatHandler(
                   phase: 'orchestrating',
                   detail: `Started attempt ${runningTask.attempt}`,
                 }, runningTask.leaseId);
-                const backgroundLeaseHeartbeat = setInterval(() => {
+                backgroundLeaseHeartbeat = setInterval(() => {
                   const renewed = heartbeatBackgroundTask(backgroundTaskId, runningTask.leaseId!);
-                  if (!renewed) clearInterval(backgroundLeaseHeartbeat);
+                  if (!renewed) {
+                    backgroundLeaseLost = true;
+                    if (backgroundLeaseHeartbeat) clearInterval(backgroundLeaseHeartbeat);
+                  }
                 }, 15_000);
                 if (typeof (backgroundLeaseHeartbeat as any).unref === 'function') {
                   (backgroundLeaseHeartbeat as any).unref();
@@ -3183,7 +3189,8 @@ export function registerChatHandler(
                     availableAgentIds: backgroundTask.workers.map(worker => worker.id),
                     forceOrchestration: delegationDecision.reason === 'explicit_background_preference',
                     isCancelled: () => isBackgroundTaskCancellationRequested(backgroundTaskId)
-                      || isBackgroundTaskPauseRequested(backgroundTaskId),
+                      || isBackgroundTaskPauseRequested(backgroundTaskId)
+                      || backgroundLeaseLost,
                   },
                   { provider: activeProvider as any, model: activeModel, ...reasoningRoutePolicy },
                   llmGetters,
@@ -3191,18 +3198,17 @@ export function registerChatHandler(
                   (record, meta) => {
                     if (isTerminalOrchestrationToolEvent(record)) {
                       backgroundToolRecords.push({
-                        id: record.id,
-                        name: record.name,
-                        arguments: record.arguments || {},
+                        ...record,
+                        arguments: { ...(record.arguments || {}) },
                         result: record.result || '',
-                        error: record.error,
                       });
                     }
                     if (record.result !== undefined || record.error !== undefined) {
-                      const updatedTask = incrementBackgroundTaskToolCalls(backgroundTaskId);
+                      const updatedTask = incrementBackgroundTaskToolCalls(backgroundTaskId, runningTask.leaseId);
                       checkpointBackgroundTask(backgroundTaskId, {
                         phase: 'tool_execution',
                         receiptIds: backgroundToolRecords.map(item => item.id).filter((id): id is string => Boolean(id)),
+                        receipts: snapshotDurableToolRecords(backgroundToolRecords),
                         detail: `${backgroundToolRecords.length} terminal tool call(s) observed`,
                       }, runningTask.leaseId);
                       if (updatedTask) emitTaskUpdate(updatedTask);
@@ -3257,15 +3263,33 @@ export function registerChatHandler(
                 checkpointBackgroundTask(backgroundTaskId, {
                   phase: backgroundBlocked ? 'failed_verification' : 'verified',
                   receiptIds: backgroundToolRecords.map(item => item.id).filter((id): id is string => Boolean(id)),
+                  receipts: snapshotDurableToolRecords(backgroundToolRecords),
                   detail: finalizedBackground.reason || 'Completion verified',
                 }, runningTask.leaseId);
                 const terminalTask = backgroundBlocked
-                  ? failBackgroundTask(
-                      backgroundTaskId,
-                      finalizedBackground.reason || 'Missing verified background-task completion evidence.',
-                    )
-                  : completeBackgroundTask(backgroundTaskId, completionText);
+                  ? recordBackgroundTaskFailure(backgroundTaskId, {
+                      error: finalizedBackground.reason || 'Missing verified background-task completion evidence.',
+                      verificationFailure: true,
+                      toolRecords: backgroundToolRecords,
+                      leaseLost: backgroundLeaseLost,
+                    }, runningTask.leaseId)
+                  : completeBackgroundTask(backgroundTaskId, completionText, runningTask.leaseId);
                 if (terminalTask) emitTaskUpdate(terminalTask);
+                if (!terminalTask) return;
+                if (terminalTask?.status === 'queued') {
+                  emitBackground("agent:status", {
+                    status: "thinking",
+                    agentName: personality.name,
+                    phase: 'background',
+                    detail: `Safe retry scheduled for ${terminalTask.nextAttemptAt || 'the next recovery window'}`,
+                  });
+                  pushNotification(uid, {
+                    type: 'background_result',
+                    title: 'Background task retry scheduled',
+                    message: `Verification did not pass; retry after ${terminalTask.nextAttemptAt || 'backoff'}.`.slice(0, 180),
+                  });
+                  return;
+                }
                 if (terminalTask?.status === 'cancelled') {
                   const cancelText = `Background task cancelled: ${text.slice(0, 80)}`;
                   const deliver = isLatestUserTurn(executionScope, requestId);
@@ -3375,10 +3399,25 @@ export function registerChatHandler(
                 checkpointBackgroundTask(backgroundTaskId, {
                   phase: 'failed',
                   receiptIds: backgroundToolRecords.map(item => item.id).filter((id): id is string => Boolean(id)),
+                  receipts: snapshotDurableToolRecords(backgroundToolRecords),
                   detail: bgMessage,
                 }, currentTask?.leaseId);
-                const failedTask = failBackgroundTask(backgroundTaskId, errorText);
+                const failedTask = recordBackgroundTaskFailure(backgroundTaskId, {
+                  error: bgMessage,
+                  toolRecords: backgroundToolRecords,
+                  leaseLost: backgroundLeaseLost,
+                }, currentTask?.leaseId);
                 if (failedTask) emitTaskUpdate(failedTask);
+                if (!failedTask || failedTask.status === 'queued') {
+                  if (failedTask?.status === 'queued') {
+                    pushNotification(uid, {
+                      type: 'background_result',
+                      title: 'Background task retry scheduled',
+                      message: `${errorText} Retry after ${failedTask.nextAttemptAt || 'backoff'}.`.slice(0, 180),
+                    });
+                  }
+                  return;
+                }
                 const terminalBackgroundRecords: ToolExecutionRecord[] = backgroundToolRecords.length > 0
                   ? backgroundToolRecords
                   : [{
@@ -3422,6 +3461,8 @@ export function registerChatHandler(
                     message: CN_BACKGROUND_DELEGATION_MESSAGES.failedInTaskCenter,
                   });
                 }
+              } finally {
+                if (backgroundLeaseHeartbeat) clearInterval(backgroundLeaseHeartbeat);
               }
             })().catch((err) => {
               console.error('[BackgroundDelegation] Unhandled error:', err);

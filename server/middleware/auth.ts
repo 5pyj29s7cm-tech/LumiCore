@@ -18,6 +18,8 @@ export interface AuthUser {
   role: string;        // 'user' | 'admin'
   orgId?: string;      // set when acting in org context
   orgRole?: string;    // 'owner' | 'admin' | 'member' | 'viewer'
+  tokenType?: 'user' | 'organization_branch';
+  branchId?: string;
 }
 
 declare global {
@@ -45,6 +47,8 @@ function decodeToken(token: string): AuthUser | null {
       role: decoded.role || 'user',
       orgId: decoded.orgId,
       orgRole: decoded.orgRole,
+      tokenType: decoded.tokenType === 'organization_branch' ? 'organization_branch' : 'user',
+      branchId: decoded.tokenType === 'organization_branch' ? String(decoded.branchId || '') : undefined,
     };
   } catch {
     return null;
@@ -63,6 +67,10 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     res.status(401).json({ error: 'Invalid or expired token' });
     return;
   }
+  if (user.tokenType === 'organization_branch') {
+    res.status(403).json({ error: 'A user session is required for this operation.' });
+    return;
+  }
   if (user.orgId) {
     const membership = getMember(user.orgId, user.uid);
     if (!membership || membership.status !== 'active') {
@@ -75,12 +83,42 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   next();
 }
 
+/** Require a branch-scoped token. Branch tokens are rejected by requireAuth. */
+export function requireOrganizationBranchAuth(req: Request, res: Response, next: NextFunction): void {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: 'Organization branch authentication required' });
+    return;
+  }
+  const user = decodeToken(token);
+  if (!user) {
+    res.status(401).json({ error: 'Invalid or expired organization branch token' });
+    return;
+  }
+  if (user.tokenType !== 'organization_branch' || !user.orgId || !user.branchId) {
+    res.status(403).json({ error: 'A valid organization branch session is required.' });
+    return;
+  }
+  const membership = getMember(user.orgId, user.uid);
+  if (!membership || membership.status !== 'active') {
+    res.status(403).json({ error: 'Active organization membership required.' });
+    return;
+  }
+  user.orgRole = membership.role;
+  req.user = user;
+  next();
+}
+
 /** Optionally decode JWT. Sets req.user if valid, continues as anonymous if not. */
 export function optionalAuth(req: Request, res: Response, next: NextFunction): void {
   const token = extractToken(req);
   if (token) {
     const user = decodeToken(token);
     if (user) {
+      if (user.tokenType === 'organization_branch') {
+        next();
+        return;
+      }
       if (user.orgId) {
         const membership = getMember(user.orgId, user.uid);
         if (!membership || membership.status !== 'active') {

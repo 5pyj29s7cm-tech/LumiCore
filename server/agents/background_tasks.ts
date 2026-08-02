@@ -3,6 +3,16 @@ import { readDB, writeDB } from '../../db_layer';
 import type { TaskComplexity } from './orchestrator';
 import type { ToolPolicy } from '../personality/types';
 import type { UserLLMFallbackCandidate } from '../llm/user_preferences';
+import {
+  diagnoseDurableTaskFailure,
+  evaluateDurableResumeSafety,
+  isDurableTaskReady,
+  snapshotDurableToolRecords,
+  updateDurableTaskRecovery,
+  type DiagnoseDurableTaskFailureInput,
+  type DurableTaskReceiptSnapshot,
+  type DurableTaskRecoveryState,
+} from '../cognition/durable_task_recovery';
 
 export type BackgroundDelegationStatus =
   | 'queued'
@@ -12,6 +22,7 @@ export type BackgroundDelegationStatus =
   | 'cancelling'
   | 'completed'
   | 'failed'
+  | 'blocked'
   | 'cancelled';
 
 export interface BackgroundDelegationWorker {
@@ -46,6 +57,8 @@ export interface BackgroundDelegationCheckpoint {
   phase: string;
   completedNodeIds?: string[];
   receiptIds?: string[];
+  /** Redacted machine evidence used to prevent unsafe replay after restart. */
+  receipts?: DurableTaskReceiptSnapshot[];
   detail?: string;
   updatedAt: string;
 }
@@ -68,6 +81,8 @@ export interface BackgroundDelegationTask {
   pauseRequested: boolean;
   attempt: number;
   recoveryCount: number;
+  nextAttemptAt?: string;
+  recovery?: DurableTaskRecoveryState;
   leaseId?: string;
   leaseOwner?: string;
   leaseExpiresAt?: string;
@@ -132,12 +147,17 @@ function cloneTask(task: BackgroundDelegationTask): BackgroundDelegationTask {
       ...task.checkpoint,
       completedNodeIds: [...(task.checkpoint.completedNodeIds || [])],
       receiptIds: [...(task.checkpoint.receiptIds || [])],
+      receipts: task.checkpoint.receipts?.map(receipt => ({
+        ...receipt,
+        sideEffects: (receipt.sideEffects || []).map(effect => ({ ...effect })),
+      })),
     } : undefined,
+    recovery: task.recovery ? JSON.parse(JSON.stringify(task.recovery)) : undefined,
   };
 }
 
 function isTerminal(status: BackgroundDelegationStatus): boolean {
-  return status === 'completed' || status === 'failed' || status === 'cancelled';
+  return status === 'completed' || status === 'failed' || status === 'blocked' || status === 'cancelled';
 }
 
 function clearLease(task: BackgroundDelegationTask): void {
@@ -145,6 +165,14 @@ function clearLease(task: BackgroundDelegationTask): void {
   task.leaseOwner = undefined;
   task.leaseExpiresAt = undefined;
   task.heartbeatAt = undefined;
+}
+
+function hasLiveLease(task: BackgroundDelegationTask, leaseId?: string): boolean {
+  if (!leaseId) return true;
+  return task.status === 'running'
+    && task.leaseId === leaseId
+    && Boolean(task.leaseExpiresAt)
+    && new Date(task.leaseExpiresAt!).getTime() > Date.now();
 }
 
 function normalizeStoredTask(value: unknown): BackgroundDelegationTask | null {
@@ -190,10 +218,36 @@ export function recoverPersistedBackgroundTask(
     clearLease(task);
     return task;
   }
+  const nextRecoveryCount = task.recoveryCount + 1;
+  const hasPersistentReceiptLedger = Boolean(task.context?.conversationId && task.context?.actionTaskId);
+  const resumeSafety = evaluateDurableResumeSafety(task.checkpoint?.receipts, hasPersistentReceiptLedger);
+  if (!resumeSafety.allowed || nextRecoveryCount > 2) {
+    const reason = !resumeSafety.allowed
+      ? resumeSafety.reason
+      : 'Background task exceeded its restart recovery budget.';
+    const diagnosis = diagnoseDurableTaskFailure({
+      error: reason,
+      receiptSnapshots: task.checkpoint?.receipts,
+      attempt: task.attempt,
+      recoveryCount: nextRecoveryCount,
+      previous: task.recovery,
+      maxAttempts: 1,
+      now: new Date(recoveredAt),
+    });
+    task.status = 'blocked';
+    task.error = reason;
+    task.completedAt = recoveredAt;
+    task.updatedAt = recoveredAt;
+    task.recoveryCount = nextRecoveryCount;
+    task.lastRecoveredAt = recoveredAt;
+    task.recovery = updateDurableTaskRecovery(task.recovery, diagnosis, task.checkpoint?.receipts);
+    clearLease(task);
+    return task;
+  }
   task.status = 'queued';
   task.startedAt = undefined;
   task.updatedAt = recoveredAt;
-  task.recoveryCount += 1;
+  task.recoveryCount = nextRecoveryCount;
   task.lastRecoveredAt = recoveredAt;
   clearLease(task);
   return task;
@@ -250,6 +304,12 @@ export function registerBackgroundTask(input: RegisterBackgroundTaskInput): Back
   const id = input.id || `bg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const existing = tasks.get(id);
   if (existing) return cloneTask(existing);
+  if (input.idempotencyKey) {
+    const duplicate = Array.from(tasks.values()).find(task => (
+      task.userId === input.userId && task.idempotencyKey === input.idempotencyKey
+    ));
+    if (duplicate) return cloneTask(duplicate);
+  }
   const workers = (input.workers || []).slice(0, 8).map(worker => ({
     id: worker.id,
     name: String(worker.name || worker.id || 'Worker'),
@@ -299,6 +359,7 @@ export function claimBackgroundTask(id: string, input: BackgroundTaskLeaseInput 
   ensureHydrated();
   const task = tasks.get(id);
   if (!task || isTerminal(task.status) || task.status === 'paused' || task.status === 'pausing') return null;
+  if (!isDurableTaskReady(task.nextAttemptAt)) return null;
   if (task.cancelRequested || task.status === 'cancelling') return cancelBackgroundTask(id);
   const now = Date.now();
   const leaseExpired = !task.leaseExpiresAt || new Date(task.leaseExpiresAt).getTime() <= now;
@@ -309,6 +370,7 @@ export function claimBackgroundTask(id: string, input: BackgroundTaskLeaseInput 
   task.attempt += 1;
   task.startedAt = timestamp;
   task.updatedAt = timestamp;
+  task.nextAttemptAt = undefined;
   task.leaseId = input.leaseId || randomUUID();
   task.leaseOwner = input.owner || RUNTIME_OWNER;
   task.heartbeatAt = timestamp;
@@ -326,6 +388,7 @@ export function heartbeatBackgroundTask(id: string, leaseId: string, durationMs 
   const task = tasks.get(id);
   if (!task || task.status !== 'running' || task.leaseId !== leaseId) return null;
   const now = Date.now();
+  if (task.leaseExpiresAt && new Date(task.leaseExpiresAt).getTime() <= now) return null;
   task.heartbeatAt = new Date(now).toISOString();
   task.leaseExpiresAt = new Date(now + Math.max(5_000, durationMs)).toISOString();
   task.updatedAt = task.heartbeatAt;
@@ -340,18 +403,27 @@ export function checkpointBackgroundTask(
 ): BackgroundDelegationTask | null {
   ensureHydrated();
   const task = tasks.get(id);
-  if (!task || (leaseId && task.leaseId !== leaseId)) return null;
+  if (!task || !hasLiveLease(task, leaseId)) return null;
   const timestamp = nowIso();
-  task.checkpoint = { ...checkpoint, updatedAt: timestamp };
+  task.checkpoint = {
+    ...checkpoint,
+    completedNodeIds: [...(checkpoint.completedNodeIds || [])],
+    receiptIds: [...(checkpoint.receiptIds || [])],
+    receipts: checkpoint.receipts?.slice(-80).map(receipt => ({
+      ...receipt,
+      sideEffects: (receipt.sideEffects || []).map(effect => ({ ...effect })),
+    })),
+    updatedAt: timestamp,
+  };
   task.updatedAt = timestamp;
   persist();
   return cloneTask(task);
 }
 
-export function incrementBackgroundTaskToolCalls(id: string): BackgroundDelegationTask | null {
+export function incrementBackgroundTaskToolCalls(id: string, leaseId?: string): BackgroundDelegationTask | null {
   ensureHydrated();
   const task = tasks.get(id);
-  if (!task) return null;
+  if (!task || !hasLiveLease(task, leaseId)) return null;
   task.toolCallsCount += 1;
   task.updatedAt = nowIso();
   persist();
@@ -428,10 +500,11 @@ export function isBackgroundTaskCancellationRequested(id: string): boolean {
   return task?.cancelRequested === true || task?.status === 'cancelling' || task?.status === 'cancelled';
 }
 
-export function completeBackgroundTask(id: string, result: string): BackgroundDelegationTask | null {
+export function completeBackgroundTask(id: string, result: string, leaseId?: string): BackgroundDelegationTask | null {
   ensureHydrated();
   const task = tasks.get(id);
   if (!task) return null;
+  if (!hasLiveLease(task, leaseId)) return null;
   if (task.cancelRequested) return cancelBackgroundTask(id);
   if (task.pauseRequested) return pauseBackgroundTask(id);
   const timestamp = nowIso();
@@ -444,10 +517,11 @@ export function completeBackgroundTask(id: string, result: string): BackgroundDe
   return cloneTask(task);
 }
 
-export function failBackgroundTask(id: string, error: string): BackgroundDelegationTask | null {
+export function failBackgroundTask(id: string, error: string, leaseId?: string): BackgroundDelegationTask | null {
   ensureHydrated();
   const task = tasks.get(id);
   if (!task) return null;
+  if (!hasLiveLease(task, leaseId)) return null;
   if (task.cancelRequested) return cancelBackgroundTask(id);
   if (task.pauseRequested) return pauseBackgroundTask(id);
   const timestamp = nowIso();
@@ -456,6 +530,42 @@ export function failBackgroundTask(id: string, error: string): BackgroundDelegat
   task.updatedAt = timestamp;
   task.completedAt = timestamp;
   clearLease(task);
+  persist();
+  return cloneTask(task);
+}
+
+export function recordBackgroundTaskFailure(
+  id: string,
+  input: Omit<DiagnoseDurableTaskFailureInput, 'attempt' | 'recoveryCount' | 'previous'>,
+  leaseId?: string,
+): BackgroundDelegationTask | null {
+  ensureHydrated();
+  const task = tasks.get(id);
+  if (!task) return null;
+  if (!hasLiveLease(task, leaseId)) return null;
+  if (task.cancelRequested) return cancelBackgroundTask(id);
+  if (task.pauseRequested) return pauseBackgroundTask(id);
+  const receipts = input.receiptSnapshots || snapshotDurableToolRecords(input.toolRecords || []);
+  const diagnosis = diagnoseDurableTaskFailure({
+    ...input,
+    receiptSnapshots: receipts,
+    attempt: task.attempt,
+    recoveryCount: task.recoveryCount,
+    previous: task.recovery,
+  });
+  task.recovery = updateDurableTaskRecovery(task.recovery, diagnosis, receipts);
+  task.error = diagnosis.reason.slice(0, 500);
+  task.updatedAt = diagnosis.diagnosedAt;
+  clearLease(task);
+  if (diagnosis.decision === 'retry' || diagnosis.decision === 'replan') {
+    task.status = 'queued';
+    task.startedAt = undefined;
+    task.completedAt = undefined;
+    task.nextAttemptAt = diagnosis.nextAttemptAt;
+  } else {
+    task.status = diagnosis.decision === 'block' ? 'blocked' : 'failed';
+    task.completedAt = diagnosis.diagnosedAt;
+  }
   persist();
   return cloneTask(task);
 }

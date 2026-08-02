@@ -242,6 +242,15 @@ export function deleteOrg(orgId: string): boolean {
   // Cascade: remove memberships, departments, invitations
   db.orgMemberships = (db.orgMemberships || []).filter((m: OrgMembership) => m.orgId !== orgId);
   db.departments = (db.departments || []).filter((d: Department) => d.orgId !== orgId);
+  db.orgPositions = (db.orgPositions || []).filter((item: any) => item.orgId !== orgId);
+  db.orgWorkRoutingRules = (db.orgWorkRoutingRules || []).filter((item: any) => item.orgId !== orgId);
+  db.orgWorkItems = (db.orgWorkItems || []).filter((item: any) => item.orgId !== orgId);
+  db.orgWorkApprovals = (db.orgWorkApprovals || []).filter((item: any) => item.orgId !== orgId);
+  db.orgWorkHandoffs = (db.orgWorkHandoffs || []).filter((item: any) => item.orgId !== orgId);
+  db.orgResourcePolicies = (db.orgResourcePolicies || []).filter((item: any) => item.orgId !== orgId);
+  db.orgResourceGrants = (db.orgResourceGrants || []).filter((item: any) => item.orgId !== orgId);
+  db.orgCredentialReferences = (db.orgCredentialReferences || []).filter((item: any) => item.orgId !== orgId);
+  db.orgDevices = (db.orgDevices || []).filter((item: any) => item.orgId !== orgId);
   db.orgInvitations = (db.orgInvitations || []).filter((i: OrgInvitation) => i.orgId !== orgId);
   entWrite();
   return true;

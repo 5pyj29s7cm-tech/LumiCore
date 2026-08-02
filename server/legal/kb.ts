@@ -10,6 +10,27 @@ import { generateEmbedding, cosineSimilarity } from '../memory/store';
 import { chunkLegalText } from './parser';
 import { LUMI_EMBEDDING_MODEL } from './types';
 import { getStatuteAuthorityCheck, type StatuteAuthorityCheck } from './statute_authority_store';
+import { authorizeOrganizationResource, getOrganizationResourcePolicy } from '../org/resource_acl';
+
+function listAuthorizedLegalArticles(
+  orgId: string,
+  filters: { category?: string; status?: string },
+  actorUserId?: string,
+): EDB.KbArticle[] {
+  return EDB.listKbArticles(orgId, filters).filter(article => {
+    const { policy } = getOrganizationResourcePolicy(orgId, 'knowledge_article', article.id);
+    if (!policy) return true;
+    if (!actorUserId) return false;
+    return authorizeOrganizationResource({
+      orgId,
+      actorUserId,
+      resourceType: 'knowledge_article',
+      resourceId: article.id,
+      permission: 'read',
+      ownerUserId: article.authorId,
+    }).allowed;
+  });
+}
 
 // ── Legal Article Types ──────────────────────────────────────────────────
 
@@ -105,12 +126,13 @@ export async function searchSimilarCases(
   orgId: string,
   query: string,
   limit = 5,
+  actorUserId?: string,
 ): Promise<CaseResult[]> {
   const allEmbeddings = EDB.getAllKbEmbeddings(orgId);
   if (allEmbeddings.length === 0) return [];
 
   // Only search judgment-type articles
-  const judgmentArticles = EDB.listKbArticles(orgId, { category: 'legal_judgment' });
+  const judgmentArticles = listAuthorizedLegalArticles(orgId, { category: 'legal_judgment' }, actorUserId);
   const judgmentIds = new Set(judgmentArticles.map(a => a.id));
   const relevantEmbeddings = allEmbeddings.filter(e => judgmentIds.has(e.articleId));
   if (relevantEmbeddings.length === 0) return [];
@@ -615,6 +637,7 @@ export async function searchStatutes(
   orgId: string,
   query: string,
   limit = 5,
+  actorUserId?: string,
 ): Promise<StatuteResult[]> {
   const results: StatuteResult[] = [];
 
@@ -659,7 +682,7 @@ export async function searchStatutes(
   }
 
   // 2. Search local KB for statute articles
-  const statuteArticles = EDB.listKbArticles(orgId, { category: 'legal_statute' });
+  const statuteArticles = listAuthorizedLegalArticles(orgId, { category: 'legal_statute' }, actorUserId);
   if (statuteArticles.length > 0) {
     const allEmbeddings = EDB.getAllKbEmbeddings(orgId);
     const statuteIds = new Set(statuteArticles.map(a => a.id));
@@ -719,6 +742,7 @@ export interface CitationCheck {
 
 export interface CitationVerificationOptions {
   asOf?: string | Date;
+  actorUserId?: string;
 }
 
 function snapshotMetadata(snapshot?: StatuteVerificationSnapshot): Pick<CitationCheck, 'sourceUrl' | 'verifiedAt' | 'reviewAfter'> {
@@ -853,7 +877,7 @@ export function verifyCitation(
   // Check if it's a case number citation: (2024)京0105民初12345号
   const caseMatch = citation.match(/[（(]\d{4}[）)].*?[号字]/);
   if (caseMatch && orgId) {
-    const articles = EDB.listKbArticles(orgId, { category: 'legal_judgment' });
+    const articles = listAuthorizedLegalArticles(orgId, { category: 'legal_judgment' }, options.actorUserId);
     const found = articles.find(a => {
       try {
         const tags = JSON.parse(a.tags || '[]');

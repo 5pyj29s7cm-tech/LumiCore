@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { randomBytes, randomUUID } from 'crypto';
 import { getDataPath } from '../config/data_path';
-import { getMember, getOrgById } from '../org/db';
+import { getMember, getOrgById, logAudit } from '../org/db';
 import { parseCnMessagingBindingCommand } from '../regions/packs/cn/messaging';
 
 export type MessagingPlatformId = 'feishu' | 'wechat' | 'wecom';
@@ -31,6 +31,18 @@ export interface BindingCode {
   createdAt: string;
 }
 
+export interface MessagingGroupAuthorization {
+  id: string;
+  platform: Exclude<MessagingPlatformId, 'wechat'>;
+  chatId: string;
+  orgId: string;
+  createdBy: string;
+  allowedPlatformUserIds: string[];
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type MessagingBindingCommand =
   | { kind: 'bind'; code: string }
   | { kind: 'status' }
@@ -39,6 +51,7 @@ export type MessagingBindingCommand =
 interface StoreShape {
   bindings: MessagingBinding[];
   codes: BindingCode[];
+  groupAuthorizations: MessagingGroupAuthorization[];
 }
 
 const STORE_PATH = getDataPath(path.join('messaging', 'bindings.json'));
@@ -49,7 +62,7 @@ function now() {
 
 function readStore(): StoreShape {
   try {
-    if (!fs.existsSync(STORE_PATH)) return { bindings: [], codes: [] };
+    if (!fs.existsSync(STORE_PATH)) return { bindings: [], codes: [], groupAuthorizations: [] };
     const parsed = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
     return {
       bindings: Array.isArray(parsed?.bindings) ? parsed.bindings.map((item: any) => ({
@@ -62,9 +75,26 @@ function readStore(): StoreShape {
         orgId: String(item?.orgId || ''),
         domain: item?.domain === 'personal' || !item?.orgId ? 'personal' : 'work',
       })) : [],
+      groupAuthorizations: Array.isArray(parsed?.groupAuthorizations)
+        ? parsed.groupAuthorizations.filter((item: any) =>
+          item?.platform === 'feishu' || item?.platform === 'wecom'
+        ).map((item: any) => ({
+          id: String(item.id || randomUUID()),
+          platform: item.platform,
+          chatId: String(item.chatId || ''),
+          orgId: String(item.orgId || ''),
+          createdBy: String(item.createdBy || ''),
+          allowedPlatformUserIds: Array.isArray(item.allowedPlatformUserIds)
+            ? Array.from(new Set(item.allowedPlatformUserIds.map(String).filter(Boolean)))
+            : [],
+          enabled: item.enabled !== false,
+          createdAt: String(item.createdAt || now()),
+          updatedAt: String(item.updatedAt || item.createdAt || now()),
+        }))
+        : [],
     };
   } catch {
-    return { bindings: [], codes: [] };
+    return { bindings: [], codes: [], groupAuthorizations: [] };
   }
 }
 
@@ -151,6 +181,11 @@ export function consumeBindingCode(
 ): MessagingBinding | null {
   const store = readStore();
   pruneExpiredCodes(store);
+  // Binding codes are identity credentials. Never expose or consume them in a group.
+  if (chatType === 'group') {
+    writeStore(store);
+    return null;
+  }
   const normalized = code.trim().toUpperCase();
   const idx = store.codes.findIndex(item => item.platform === platform && item.code === normalized);
   if (idx < 0) {
@@ -198,17 +233,37 @@ export function getBinding(
   const store = readStore();
   if (chatType === 'group') {
     if (!chatId) return null;
-    return store.bindings
+    const authorization = store.groupAuthorizations.find(item =>
+      item.platform === platform
+      && item.chatId === chatId
+      && item.enabled
+      && (item.allowedPlatformUserIds.length === 0 || item.allowedPlatformUserIds.includes(platformUserId))
+    );
+    if (!authorization) return null;
+    const identity = store.bindings
       .filter(item =>
         item.platform === platform
         && item.platformUserId === platformUserId
-        && item.chatType === 'group'
-        && item.chatId === chatId
+        && item.chatType !== 'group'
       )
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] || null;
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    if (!identity) return null;
+    const membership = getMember(authorization.orgId, identity.lumiUserId);
+    if (!membership || membership.status !== 'active') return null;
+    return {
+      ...identity,
+      chatId,
+      chatType: 'group',
+      orgId: authorization.orgId,
+      domain: 'work',
+    };
   }
   const candidates = store.bindings
-    .filter(item => item.platform === platform && item.platformUserId === platformUserId)
+    .filter(item =>
+      item.platform === platform
+      && item.platformUserId === platformUserId
+      && item.chatType !== 'group'
+    )
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   if (chatId) {
     const exact = candidates.find(item => item.chatId === chatId);
@@ -222,6 +277,103 @@ export function getBinding(
 
 export function resetMessagingBindingsForTest(): void {
   try { fs.rmSync(STORE_PATH, { force: true }); } catch {}
+}
+
+export function authorizeMessagingGroup(input: {
+  platform: Exclude<MessagingPlatformId, 'wechat'>;
+  chatId: string;
+  orgId: string;
+  createdBy: string;
+  allowedPlatformUserIds?: string[];
+}): MessagingGroupAuthorization {
+  const chatId = String(input.chatId || '').trim();
+  const orgId = String(input.orgId || '').trim();
+  if (!chatId || !orgId) throw new Error('chatId and orgId are required');
+  if (!/^[A-Za-z0-9._:@/-]{6,240}$/.test(chatId)) {
+    throw new Error('The group chat identity is invalid for this platform');
+  }
+  const membership = getMember(orgId, input.createdBy);
+  if (!membership || membership.status !== 'active' || !['owner', 'admin'].includes(membership.role)) {
+    throw new Error('Only an active organization owner or administrator can authorize a group');
+  }
+  const store = readStore();
+  const timestamp = now();
+  const allowedPlatformUserIds = Array.from(new Set(
+    (input.allowedPlatformUserIds || []).map(value => String(value || '').trim()).filter(Boolean),
+  )).slice(0, 500);
+  const index = store.groupAuthorizations.findIndex(item =>
+    item.platform === input.platform && item.chatId === chatId
+  );
+  if (index >= 0 && store.groupAuthorizations[index].orgId !== orgId) {
+    throw new Error('This group is already authorized to another organization and must be explicitly revoked there first');
+  }
+  const authorization: MessagingGroupAuthorization = {
+    id: index >= 0 ? store.groupAuthorizations[index].id : randomUUID(),
+    platform: input.platform,
+    chatId,
+    orgId,
+    createdBy: input.createdBy,
+    allowedPlatformUserIds,
+    enabled: true,
+    createdAt: index >= 0 ? store.groupAuthorizations[index].createdAt : timestamp,
+    updatedAt: timestamp,
+  };
+  if (index >= 0) store.groupAuthorizations[index] = authorization;
+  else store.groupAuthorizations.push(authorization);
+  writeStore(store);
+  logAudit({
+    orgId,
+    userId: input.createdBy,
+    action: index >= 0 ? 'messaging.group.authorization.updated' : 'messaging.group.authorization.created',
+    resourceType: 'messaging_group_authorization',
+    resourceId: authorization.id,
+    details: {
+      platform: input.platform,
+      chatId,
+      allowedMemberCount: allowedPlatformUserIds.length,
+    },
+  });
+  return authorization;
+}
+
+export function listMessagingGroupAuthorizations(
+  platform: Exclude<MessagingPlatformId, 'wechat'>,
+  orgId: string,
+): MessagingGroupAuthorization[] {
+  return readStore().groupAuthorizations
+    .filter(item => item.platform === platform && item.orgId === orgId)
+    .map(item => ({ ...item, allowedPlatformUserIds: [...item.allowedPlatformUserIds] }));
+}
+
+export function revokeMessagingGroupAuthorization(input: {
+  platform: Exclude<MessagingPlatformId, 'wechat'>;
+  authorizationId: string;
+  orgId: string;
+  revokedBy: string;
+}): boolean {
+  const membership = getMember(input.orgId, input.revokedBy);
+  if (!membership || membership.status !== 'active' || !['owner', 'admin'].includes(membership.role)) {
+    throw new Error('Only an active organization owner or administrator can revoke a group');
+  }
+  const store = readStore();
+  const index = store.groupAuthorizations.findIndex(item =>
+    item.id === input.authorizationId
+    && item.platform === input.platform
+    && item.orgId === input.orgId
+  );
+  if (index < 0) return false;
+  const removed = store.groupAuthorizations[index];
+  store.groupAuthorizations.splice(index, 1);
+  writeStore(store);
+  logAudit({
+    orgId: input.orgId,
+    userId: input.revokedBy,
+    action: 'messaging.group.authorization.revoked',
+    resourceType: 'messaging_group_authorization',
+    resourceId: removed.id,
+    details: { platform: input.platform, chatId: removed.chatId },
+  });
+  return true;
 }
 
 export function listBindingsForUser(lumiUserId: string): MessagingBinding[] {

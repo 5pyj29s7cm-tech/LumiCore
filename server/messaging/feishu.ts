@@ -9,6 +9,10 @@
  *   5. Copy App ID + App Secret → .env as FEISHU_APP_ID / FEISHU_APP_SECRET
  */
 import crypto from 'crypto';
+import {
+  claimExternalCommitAttempt,
+  settleExternalCommitAttempt,
+} from '../tools/external_commit_journal';
 import type {
   MessageAdapter,
   IncomingMessage,
@@ -23,6 +27,20 @@ export interface FeishuConfig {
   appSecret: string;
   verificationToken?: string; // optional extra security
   transport?: 'long_connection' | 'webhook';
+  botOpenId?: string;
+}
+
+export class MessagingDeliveryUnknownError extends Error {
+  readonly messagingDeliveryUnknown = true;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'MessagingDeliveryUnknownError';
+  }
+}
+
+export function isMessagingDeliveryUnknownError(error: unknown): boolean {
+  return Boolean((error as any)?.messagingDeliveryUnknown);
 }
 
 export class FeishuAdapter implements MessageAdapter {
@@ -31,9 +49,12 @@ export class FeishuAdapter implements MessageAdapter {
   private tenantToken: string | null = null;
   private tokenExpiry: number = 0;
   private tokenPromise: Promise<string> | null = null;
+  private botOpenId = '';
+  private botIdentityPromise: Promise<string> | null = null;
 
   constructor(config: FeishuConfig) {
     this.config = config;
+    this.botOpenId = String(config.botOpenId || '');
   }
 
   // ── Reinitialize after config change ──
@@ -43,6 +64,31 @@ export class FeishuAdapter implements MessageAdapter {
     this.tenantToken = null;
     this.tokenExpiry = 0;
     this.tokenPromise = null;
+    this.botOpenId = String(config.botOpenId || '');
+    this.botIdentityPromise = null;
+  }
+
+  async ensureBotIdentity(): Promise<string> {
+    if (this.botOpenId) return this.botOpenId;
+    if (this.botIdentityPromise) return this.botIdentityPromise;
+    this.botIdentityPromise = (async () => {
+      const token = await this.getTenantToken();
+      const response = await fetch('https://open.feishu.cn/open-apis/bot/v3/info', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const body: any = await response.json().catch(() => ({}));
+      const openId = String(body?.bot?.open_id || body?.data?.bot?.open_id || '');
+      if (!response.ok || body?.code !== 0 || !openId) {
+        throw new Error(`Feishu bot identity error: ${body?.msg || body?.error || response.status}`);
+      }
+      this.botOpenId = openId;
+      return openId;
+    })();
+    try {
+      return await this.botIdentityPromise;
+    } finally {
+      this.botIdentityPromise = null;
+    }
   }
 
   // ── Token Management ──
@@ -108,9 +154,23 @@ export class FeishuAdapter implements MessageAdapter {
     if (!message) return null;
 
     const parsedContent = this.parseMessageContent(message.content);
+    const mentions = Array.isArray(message.mentions) ? message.mentions : [];
+    const mentionedUserIds = mentions.flatMap((mention: any) => [
+      mention?.id?.open_id,
+      mention?.open_id,
+    ]).filter(Boolean).map(String);
+    const botMentioned = message.chat_type !== 'group'
+      || Boolean(this.botOpenId && mentionedUserIds.includes(this.botOpenId));
+    const botMentionKeys = mentions
+      .filter((mention: any) => [mention?.id?.open_id, mention?.open_id].includes(this.botOpenId))
+      .map((mention: any) => String(mention?.key || ''))
+      .filter(Boolean);
     const attachments = this.parseAttachments(message.message_type, parsedContent);
     const textContent = message.message_type === 'text'
-      ? String(parsedContent.text || '').trim()
+      ? botMentionKeys.reduce(
+        (text, key) => text.replaceAll(key, ' '),
+        String(parsedContent.text || ''),
+      ).replace(/\s+/g, ' ').trim()
       : attachments.length > 0
         ? attachments.map(att => `[附件] ${att.fileName}`).join('\n')
         : '';
@@ -126,6 +186,8 @@ export class FeishuAdapter implements MessageAdapter {
       chatId,
       chatType: isGroup ? 'group' : 'private',
       threadId: message.thread_id || message.root_id || message.parent_id || undefined,
+      botMentioned,
+      mentionedUserIds,
       messageId: message.message_id || `${Date.now()}`,
       text: textContent,
       attachments: attachments.length > 0 ? attachments : undefined,
@@ -227,24 +289,25 @@ export class FeishuAdapter implements MessageAdapter {
       content: JSON.stringify({ text: message.text }),
     };
 
-    const res = await fetch('https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
+    const uuid = this.deliveryUuid(message.idempotencyKey || randomDeliverySeed());
+    return this.durableDelivery({
+      idempotencyKey: `feishu:send:${uuid}`,
+      toolName: 'feishu_send_message',
+      target: chatId,
+      payload: body,
+      execute: async () => {
+        const { data } = await this.deliveryRequest(
+          `https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id&uuid=${uuid}`,
+          token,
+          body,
+          'send',
+        );
+        return data.data.message_id;
       },
-      body: JSON.stringify(body),
     });
-
-    const data: any = await res.json();
-    if (data.code !== 0) {
-      console.error(`[Feishu] Send error:`, data.msg);
-      throw new Error(`Feishu send failed: ${data.msg}`);
-    }
-    return data.data?.message_id || '';
   }
 
-  async sendCard(chatId: string, card: CardPayload): Promise<string> {
+  async sendCard(chatId: string, card: CardPayload, idempotencyKey?: string): Promise<string> {
     const token = await this.getTenantToken();
     const feishuCard = {
       config: { wide_screen_mode: true },
@@ -276,21 +339,22 @@ export class FeishuAdapter implements MessageAdapter {
       content: JSON.stringify(feishuCard),
     };
 
-    const res = await fetch('https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
+    const uuid = this.deliveryUuid(idempotencyKey || randomDeliverySeed());
+    return this.durableDelivery({
+      idempotencyKey: `feishu:card:${uuid}`,
+      toolName: 'feishu_send_card',
+      target: chatId,
+      payload: body,
+      execute: async () => {
+        const { data } = await this.deliveryRequest(
+          `https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id&uuid=${uuid}`,
+          token,
+          body,
+          'card send',
+        );
+        return data.data.message_id;
       },
-      body: JSON.stringify(body),
     });
-
-    const data: any = await res.json();
-    if (data.code !== 0) {
-      console.error(`[Feishu] Card send error:`, data.msg);
-      throw new Error(`Feishu card send failed: ${data.msg}`);
-    }
-    return data.data?.message_id || '';
   }
 
   // ── Reply to specific message ──
@@ -302,20 +366,150 @@ export class FeishuAdapter implements MessageAdapter {
       msg_type: 'text',
     };
 
-    const res = await fetch(`https://open.feishu.cn/open-apis/im/v1/messages/${messageId}/reply`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
+    const uuid = this.deliveryUuid(`reply:${messageId}:${crypto.createHash('sha256').update(text).digest('hex')}`);
+    return this.durableDelivery({
+      idempotencyKey: `feishu:reply:${uuid}`,
+      toolName: 'feishu_reply_message',
+      target: messageId,
+      payload: body,
+      execute: async () => {
+        const { data } = await this.deliveryRequest(
+          `https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reply?uuid=${uuid}`,
+          token,
+          body,
+          'reply',
+        );
+        return data.data.message_id;
       },
-      body: JSON.stringify(body),
     });
-
-    const data: any = await res.json();
-    if (data.code !== 0) {
-      console.error(`[Feishu] Reply error:`, data.msg);
-      throw new Error(`Feishu reply failed: ${data.msg}`);
-    }
-    return data.data?.message_id || '';
   }
+
+  private deliveryUuid(seed: string): string {
+    return crypto.createHash('sha256').update(seed).digest('hex').slice(0, 32);
+  }
+
+  private async deliveryRequest(
+    url: string,
+    token: string,
+    body: Record<string, any>,
+    operation: string,
+  ): Promise<{ data: any }> {
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+      });
+    } catch (error: any) {
+      throw new MessagingDeliveryUnknownError(
+        `Feishu ${operation} result is unknown; automatic fallback send was stopped: ${error?.message || error}`,
+      );
+    }
+    let data: any;
+    try {
+      data = await response.json();
+    } catch (error: any) {
+      throw new MessagingDeliveryUnknownError(
+        `Feishu ${operation} returned an unreadable acknowledgement; automatic resend was stopped: ${error?.message || error}`,
+      );
+    }
+    if (!response.ok || data.code !== 0) {
+      if (response.status >= 500) {
+        throw new MessagingDeliveryUnknownError(
+          `Feishu ${operation} outcome is unknown after provider error ${response.status}; automatic resend was stopped`,
+        );
+      }
+      throw new Error(`Feishu ${operation} failed: ${data.msg || data.error || response.status}`);
+    }
+    if (!data.data?.message_id) {
+      throw new MessagingDeliveryUnknownError(
+        `Feishu ${operation} acknowledgement did not contain a message ID; automatic resend was stopped`,
+      );
+    }
+    return { data };
+  }
+
+  private async durableDelivery(input: {
+    idempotencyKey: string;
+    toolName: string;
+    target: string;
+    payload: Record<string, any>;
+    execute: () => Promise<string>;
+  }): Promise<string> {
+    const inputDigest = crypto.createHash('sha256')
+      .update(JSON.stringify({ target: input.target, payload: input.payload }))
+      .digest('hex');
+    const claimToken = crypto.randomUUID();
+    const timestamp = new Date().toISOString();
+    const claim = await claimExternalCommitAttempt({
+      idempotencyKey: input.idempotencyKey,
+      taskId: input.idempotencyKey,
+      userId: 'messaging-runtime',
+      toolName: input.toolName,
+      inputDigest,
+      state: 'running',
+      replayResult: '',
+      claimToken,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    if (!claim.claimed) {
+      if (claim.entry.inputDigest !== inputDigest) {
+        throw new Error('Feishu delivery idempotency key is already bound to a different target or payload');
+      }
+      if (claim.entry.state === 'verified') {
+        try {
+          const replay = JSON.parse(claim.entry.replayResult || '{}');
+          if (replay.messageId) return String(replay.messageId);
+        } catch {}
+      }
+      throw new MessagingDeliveryUnknownError(
+        'A prior Feishu delivery with the same idempotency key is running or unknown; automatic resend was stopped',
+      );
+    }
+
+    try {
+      const messageId = await input.execute();
+      const settled = await settleExternalCommitAttempt({
+        idempotencyKey: input.idempotencyKey,
+        claimToken,
+        state: 'verified',
+        replayResult: JSON.stringify({ messageId }),
+        updatedAt: new Date().toISOString(),
+      });
+      if (!settled) {
+        throw new MessagingDeliveryUnknownError(
+          'Feishu acknowledged delivery but its durable receipt could not be settled; automatic resend was stopped',
+        );
+      }
+      return messageId;
+    } catch (error: any) {
+      if (!isMessagingDeliveryUnknownError(error)) {
+        await settleExternalCommitAttempt({
+          idempotencyKey: input.idempotencyKey,
+          claimToken,
+          state: 'unknown',
+          replayResult: '',
+          updatedAt: new Date().toISOString(),
+        }).catch(() => false);
+      } else {
+        await settleExternalCommitAttempt({
+          idempotencyKey: input.idempotencyKey,
+          claimToken,
+          state: 'unknown',
+          replayResult: '',
+          updatedAt: new Date().toISOString(),
+        }).catch(() => false);
+      }
+      throw error;
+    }
+  }
+}
+
+function randomDeliverySeed(): string {
+  return crypto.randomUUID();
 }

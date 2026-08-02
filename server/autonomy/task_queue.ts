@@ -2,13 +2,25 @@
 import { randomUUID } from 'crypto';
 import { readDB, writeDB } from '../../db_layer';
 import type { PersistedCapabilityExecutionPlan } from '../conversation/action_ledger';
+import {
+  diagnoseDurableTaskFailure,
+  evaluateDurableResumeSafety,
+  isDurableTaskReady,
+  snapshotDurableToolRecords,
+  updateDurableTaskRecovery,
+  type DiagnoseDurableTaskFailureInput,
+  type DurableTaskReceiptSnapshot,
+  type DurableTaskRecoveryState,
+} from '../cognition/durable_task_recovery';
 
-export type AutonomousTaskStatus = 'pending' | 'running' | 'pausing' | 'paused' | 'completed' | 'failed' | 'cancelled';
+export type AutonomousTaskStatus = 'pending' | 'running' | 'pausing' | 'paused' | 'completed' | 'failed' | 'blocked' | 'cancelled';
 
 export interface AutonomousTaskCheckpoint {
   phase: string;
   iteration?: number;
   receiptIds?: string[];
+  /** Redacted machine evidence used only for replay-safety decisions. */
+  receipts?: DurableTaskReceiptSnapshot[];
   detail?: string;
   updatedAt: string;
 }
@@ -47,6 +59,8 @@ export interface AutonomousTask {
   leaseExpiresAt?: string;
   heartbeatAt?: string;
   idempotencyKey?: string;
+  nextAttemptAt?: string;
+  recovery?: DurableTaskRecoveryState;
   checkpoint?: AutonomousTaskCheckpoint;
   executionPlan?: PersistedCapabilityExecutionPlan;
 }
@@ -79,19 +93,32 @@ function clearLease(task: AutonomousTask): void {
   task.heartbeatAt = undefined;
 }
 
+function hasLiveLease(task: AutonomousTask, leaseId?: string): boolean {
+  if (!leaseId) return true;
+  return task.status === 'running'
+    && task.leaseId === leaseId
+    && Boolean(task.leaseExpiresAt)
+    && new Date(task.leaseExpiresAt!).getTime() > Date.now();
+}
+
 function cloneTask(task: AutonomousTask): AutonomousTask {
   return {
     ...task,
     checkpoint: task.checkpoint ? {
       ...task.checkpoint,
       receiptIds: [...(task.checkpoint.receiptIds || [])],
+      receipts: task.checkpoint.receipts?.map(receipt => ({
+        ...receipt,
+        sideEffects: (receipt.sideEffects || []).map(effect => ({ ...effect })),
+      })),
     } : undefined,
+    recovery: task.recovery ? JSON.parse(JSON.stringify(task.recovery)) : undefined,
     executionPlan: task.executionPlan ? JSON.parse(JSON.stringify(task.executionPlan)) : undefined,
   };
 }
 
 function isTerminal(status: AutonomousTaskStatus): boolean {
-  return status === 'completed' || status === 'failed' || status === 'cancelled';
+  return status === 'completed' || status === 'failed' || status === 'blocked' || status === 'cancelled';
 }
 
 function normalizeStoredTask(value: unknown): AutonomousTask | null {
@@ -131,10 +158,39 @@ export function recoverPersistedTask(task: AutonomousTask, recoveredAt = nowIso(
       clearLease(recovered);
       return recovered;
     }
+    const nextRecoveryCount = (recovered.recoveryCount || 0) + 1;
+    const resumeSafety = evaluateDurableResumeSafety(recovered.checkpoint?.receipts, false);
+    if (!resumeSafety.allowed || nextRecoveryCount > 2) {
+      const reason = !resumeSafety.allowed
+        ? resumeSafety.reason
+        : 'Autonomous task exceeded its restart recovery budget.';
+      const diagnosis = diagnoseDurableTaskFailure({
+        error: reason,
+        receiptSnapshots: recovered.checkpoint?.receipts,
+        sideEffectClass: recovered.executionPlan?.risk.sideEffectClass,
+        attempt: recovered.attempt || 0,
+        recoveryCount: nextRecoveryCount,
+        previous: recovered.recovery,
+        maxAttempts: 1,
+        now: new Date(recoveredAt),
+      });
+      recovered.status = 'blocked';
+      recovered.error = reason;
+      recovered.blocked = true;
+      recovered.finalized = true;
+      recovered.verified = false;
+      recovered.completedAt = recoveredAt;
+      recovered.updatedAt = recoveredAt;
+      recovered.recoveryCount = nextRecoveryCount;
+      recovered.lastRecoveredAt = recoveredAt;
+      recovered.recovery = updateDurableTaskRecovery(recovered.recovery, diagnosis, recovered.checkpoint?.receipts);
+      clearLease(recovered);
+      return recovered;
+    }
     recovered.status = 'pending';
     recovered.startedAt = undefined;
     recovered.updatedAt = recoveredAt;
-    recovered.recoveryCount = (recovered.recoveryCount || 0) + 1;
+    recovered.recoveryCount = nextRecoveryCount;
     recovered.lastRecoveredAt = recoveredAt;
     clearLease(recovered);
     return recovered;
@@ -205,6 +261,12 @@ export function enqueue(
   task: Omit<AutonomousTask, 'id' | 'createdAt' | 'updatedAt' | 'status'>,
 ): AutonomousTask | null {
   ensureHydrated();
+  if (task.idempotencyKey) {
+    const duplicate = [...queue, ...history].find(item => (
+      item.userId === task.userId && item.idempotencyKey === task.idempotencyKey
+    ));
+    if (duplicate) return cloneTask(duplicate);
+  }
   if (queue.filter(item => item.userId === task.userId && item.status === 'pending').length >= MAX_QUEUE_SIZE) return null;
   const timestamp = nowIso();
   const id = `autotask_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
@@ -226,7 +288,7 @@ export function enqueue(
 export function dequeue(userId?: string): AutonomousTask | null {
   ensureHydrated();
   const pending = queue
-    .filter(task => task.status === 'pending' && (!userId || task.userId === userId))
+    .filter(task => task.status === 'pending' && isDurableTaskReady(task.nextAttemptAt) && (!userId || task.userId === userId))
     .sort((a, b) => b.priority - a.priority || a.createdAt.localeCompare(b.createdAt));
   return pending[0] ? cloneTask(pending[0]) : null;
 }
@@ -235,6 +297,7 @@ export function claimAutonomousTask(id: string, input: AutonomousTaskLeaseInput 
   ensureHydrated();
   const task = findTask(id);
   if (!task || task.status === 'paused' || task.status === 'pausing' || isTerminal(task.status)) return null;
+  if (!isDurableTaskReady(task.nextAttemptAt)) return null;
   if (task.cancelRequestedAt) return markCancelled(id);
   const now = Date.now();
   const leaseExpired = !task.leaseExpiresAt || new Date(task.leaseExpiresAt).getTime() <= now;
@@ -243,6 +306,7 @@ export function claimAutonomousTask(id: string, input: AutonomousTaskLeaseInput 
   task.status = 'running';
   task.startedAt = timestamp;
   task.updatedAt = timestamp;
+  task.nextAttemptAt = undefined;
   task.attempt = (task.attempt || 0) + 1;
   task.leaseId = input.leaseId || randomUUID();
   task.leaseOwner = input.owner || RUNTIME_OWNER;
@@ -261,6 +325,7 @@ export function heartbeatAutonomousTask(id: string, leaseId: string, durationMs 
   const task = findTask(id);
   if (!task || task.status !== 'running' || task.leaseId !== leaseId) return null;
   const now = Date.now();
+  if (task.leaseExpiresAt && new Date(task.leaseExpiresAt).getTime() <= now) return null;
   task.heartbeatAt = new Date(now).toISOString();
   task.leaseExpiresAt = new Date(now + Math.max(5_000, durationMs)).toISOString();
   task.updatedAt = task.heartbeatAt;
@@ -275,9 +340,17 @@ export function checkpointAutonomousTask(
 ): AutonomousTask | null {
   ensureHydrated();
   const task = findTask(id);
-  if (!task || (leaseId && task.leaseId !== leaseId)) return null;
+  if (!task || !hasLiveLease(task, leaseId)) return null;
   const timestamp = nowIso();
-  task.checkpoint = { ...checkpoint, receiptIds: [...(checkpoint.receiptIds || [])], updatedAt: timestamp };
+  task.checkpoint = {
+    ...checkpoint,
+    receiptIds: [...(checkpoint.receiptIds || [])],
+    receipts: checkpoint.receipts?.slice(-80).map(receipt => ({
+      ...receipt,
+      sideEffects: (receipt.sideEffects || []).map(effect => ({ ...effect })),
+    })),
+    updatedAt: timestamp,
+  };
   task.updatedAt = timestamp;
   persist();
   return cloneTask(task);
@@ -286,10 +359,11 @@ export function checkpointAutonomousTask(
 export function attachAutonomousExecutionPlan(
   id: string,
   plan: PersistedCapabilityExecutionPlan,
+  leaseId?: string,
 ): AutonomousTask | null {
   ensureHydrated();
   const task = findTask(id);
-  if (!task) return null;
+  if (!task || !hasLiveLease(task, leaseId)) return null;
   task.executionPlan = plan;
   task.updatedAt = nowIso();
   persist();
@@ -302,10 +376,13 @@ export function markCompleted(
   toolCallsCount: number,
   tokensUsed: number,
   verification: Pick<AutonomousTask, 'finalized' | 'blocked' | 'verified' | 'verificationReason'> = {},
+  leaseId?: string,
 ): AutonomousTask | null {
   ensureHydrated();
   const task = findTask(id);
   if (!task) return null;
+  if (!hasLiveLease(task, leaseId)) return null;
+  if (verification.finalized !== true || verification.verified !== true || verification.blocked === true) return null;
   if (isTaskCancellationRequested(id)) return markCancelled(id);
   if (task.pauseRequestedAt) return markPaused(id);
   const timestamp = nowIso();
@@ -315,9 +392,9 @@ export function markCompleted(
   task.result = result;
   task.toolCallsCount = toolCallsCount;
   task.tokensUsed = tokensUsed;
-  task.finalized = verification.finalized === true;
-  task.blocked = verification.blocked === true;
-  task.verified = verification.verified === true;
+  task.finalized = true;
+  task.blocked = false;
+  task.verified = true;
   task.verificationReason = verification.verificationReason;
   clearLease(task);
   moveToHistory(task);
@@ -325,10 +402,11 @@ export function markCompleted(
   return cloneTask(task);
 }
 
-export function markFailed(id: string, error: string): AutonomousTask | null {
+export function markFailed(id: string, error: string, leaseId?: string): AutonomousTask | null {
   ensureHydrated();
   const task = findTask(id);
   if (!task) return null;
+  if (!hasLiveLease(task, leaseId)) return null;
   if (isTaskCancellationRequested(id)) return markCancelled(id, error);
   if (task.pauseRequestedAt) return markPaused(id);
   const timestamp = nowIso();
@@ -340,6 +418,51 @@ export function markFailed(id: string, error: string): AutonomousTask | null {
   moveToHistory(task);
   persist();
   return cloneTask(task);
+}
+
+export function recordAutonomousTaskFailure(
+  id: string,
+  input: Omit<DiagnoseDurableTaskFailureInput, 'attempt' | 'recoveryCount' | 'previous'>,
+  leaseId?: string,
+): AutonomousTask | null {
+  ensureHydrated();
+  const task = findTask(id);
+  if (!task) return null;
+  if (!hasLiveLease(task, leaseId)) return null;
+  if (isTaskCancellationRequested(id)) return markCancelled(id, compactFailure(input.error));
+  if (task.pauseRequestedAt) return markPaused(id);
+  const receipts = input.receiptSnapshots || snapshotDurableToolRecords(input.toolRecords || []);
+  const diagnosis = diagnoseDurableTaskFailure({
+    ...input,
+    receiptSnapshots: receipts,
+    attempt: task.attempt || 0,
+    recoveryCount: task.recoveryCount || 0,
+    previous: task.recovery,
+  });
+  task.recovery = updateDurableTaskRecovery(task.recovery, diagnosis, receipts);
+  task.error = diagnosis.reason;
+  task.verificationReason = diagnosis.reason;
+  task.verified = false;
+  task.blocked = diagnosis.decision === 'block' || diagnosis.decision === 'fail';
+  task.finalized = task.blocked;
+  task.updatedAt = diagnosis.diagnosedAt;
+  clearLease(task);
+  if (diagnosis.decision === 'retry' || diagnosis.decision === 'replan') {
+    task.status = 'pending';
+    task.startedAt = undefined;
+    task.completedAt = undefined;
+    task.nextAttemptAt = diagnosis.nextAttemptAt;
+  } else {
+    task.status = diagnosis.decision === 'block' ? 'blocked' : 'failed';
+    task.completedAt = diagnosis.diagnosedAt;
+    moveToHistory(task);
+  }
+  persist();
+  return cloneTask(task);
+}
+
+function compactFailure(error: unknown): string {
+  return String(error instanceof Error ? error.message : error || 'Task failed').replace(/\s+/g, ' ').trim().slice(0, 700);
 }
 
 export function requestPauseAutonomousTask(id: string, userId?: string): AutonomousTask | null {

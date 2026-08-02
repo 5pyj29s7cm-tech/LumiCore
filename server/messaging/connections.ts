@@ -192,14 +192,22 @@ export class MessagingConnectionManager {
     const adapter = new FeishuAdapter(feishu);
     const dispatcher = new Lark.EventDispatcher({}).register({
       'im.message.receive_v1': async (data: any) => {
-        const message = adapter.parseEvent(data);
+        let message = adapter.parseEvent(data);
+        if (message?.chatType === 'group' && message.botMentioned !== true) {
+          try {
+            await adapter.ensureBotIdentity();
+            message = adapter.parseEvent(data);
+          } catch (error: any) {
+            this.statuses.feishu.lastError = error?.message || String(error);
+            return;
+          }
+        }
         if (!message) return;
         this.statuses.feishu.lastMessageAt = new Date().toISOString();
         dispatchIncomingMessage(message, {
           enrich: incoming => enrichFeishuAttachments(incoming, adapter),
           reply: async (incoming, text) => {
-            await adapter.replyMessage(incoming.messageId, text).catch(() =>
-              adapter.sendMessage(incoming.chatId, { platform: 'feishu', text }));
+            return adapter.replyMessage(incoming.messageId, text);
           },
         }, this.routeOptions);
       },

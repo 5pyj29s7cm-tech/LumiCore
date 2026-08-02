@@ -49,22 +49,30 @@ export function attachOrgWs(server: SocketIOServer) {
     // ── Work domain sync push ─────────────────────────────────────────
 
     socket.on('org:sync', (data: { orgId: string; payload: any }) => {
-      // Branch pushes work data in real-time via WS instead of REST
-      // The server acknowledges receipt; full processing is async
+      // WebSocket delivery has no durable request identity or receipt lookup.
+      // Never acknowledge it as persisted: branches must use /branch/ingest.
       if (data.orgId === socket.data.orgId) {
-        socket.emit('org:sync:ack', { received: true, count: countSyncItems(data.payload) });
+        socket.emit('org:sync:ack', {
+          received: false,
+          persisted: false,
+          count: countSyncItems(data.payload),
+          error: 'Durable organization sync requires the branch ingest API and a batch receipt.',
+        });
       }
     });
 
     // ── KB cache invalidation request ─────────────────────────────────
 
     socket.on('org:kb:invalidate', (data: { orgId: string }) => {
-      if (data.orgId === socket.data.orgId) {
+      const liveMembership = data.orgId === socket.data.orgId ? getMember(data.orgId, userId) : null;
+      if (liveMembership?.status === 'active' && ['owner', 'admin'].includes(String(liveMembership.role || ''))) {
         // Notify all branches in the org to re-pull KB cache
-        io!.to(`org:${data.orgId}`).emit('org:kb:stale', {
+        broadcastToOrg(data.orgId, 'org:kb:stale', {
           orgId: data.orgId,
           timestamp: new Date().toISOString(),
         });
+      } else if (data.orgId === socket.data.orgId) {
+        socket.emit('org:kb:invalidate:denied', { error: 'Organization administrator access is required.' });
       }
     });
 
@@ -92,7 +100,19 @@ export function attachOrgWs(server: SocketIOServer) {
 
 export function broadcastToOrg(orgId: string, event: string, data: any) {
   if (!io) return;
-  io.to(`org:${orgId}`).emit(event, data);
+  const room = io.sockets.adapter.rooms.get(`org:${orgId}`);
+  if (!room) return;
+  for (const socketId of room) {
+    const socket = io.sockets.sockets.get(socketId);
+    if (!socket) continue;
+    const userId = String(socket.data?.userId || socket.data?.authenticatedUserId || '');
+    const membership = userId ? getMember(orgId, userId) : null;
+    if (!membership || membership.status !== 'active') {
+      socket.leave(`org:${orgId}`);
+      continue;
+    }
+    socket.emit(event, data);
+  }
 }
 
 export function broadcastToUser(userId: string, event: string, data: any) {

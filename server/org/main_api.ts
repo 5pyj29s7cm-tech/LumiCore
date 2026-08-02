@@ -1,29 +1,76 @@
 /**
- * Main Server Branch API — runs on the company Lumi server.
+ * Company-side organization branch API.
  *
- * Endpoints that employee branches call: register, sync work data,
- * download KB cache, heartbeat, fetch published templates.
- *
- * Mount under /api/branch on the company server.
+ * A user token is accepted only for registration. Registration returns an
+ * immutable organization- and branch-scoped token. Every later request must
+ * use that token so a branch cannot silently change organization or identity.
  */
-
-import { Router, Request, Response } from 'express';
-import { requireAuth, requireOrgMember } from '../middleware/auth';
+import { Router, Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
+import { requireAuth, requireOrganizationBranchAuth } from '../middleware/auth';
 import * as EDB from './db';
 import * as KB from './kb';
 import * as Templates from './templates';
-import { logAudit } from './db';
+import { getJwtSecret } from '../config/local_identity';
+import {
+  BranchSyncValidationError,
+  getBranchSyncReceipt,
+  persistBranchRegistration,
+  persistBranchSyncBatch,
+} from './branch_sync';
+import {
+  authorizeOrganizationDevice,
+  authorizeOrganizationResource,
+  OrganizationResourceAuthorizationError,
+  type OrganizationDevicePermission,
+} from './resource_acl';
 
-// Track connected branches for heartbeat
-const branchHeartbeats = new Map<string, string>(); // userId -> last heartbeat ISO
+const branchHeartbeats = new Map<string, string>(); // orgId:branchId -> last heartbeat ISO
+
+function validBranchId(value: unknown): string {
+  const branchId = String(value || '').trim();
+  return /^[A-Za-z0-9._:@/-]{8,240}$/.test(branchId) ? branchId : '';
+}
+
+function branchHeartbeatKey(req: Request): string {
+  return `${req.user!.orgId}:${req.user!.branchId}`;
+}
+
+function requireBranchSession(req: Request, res: Response, next: NextFunction): void {
+  if (
+    req.user?.tokenType !== 'organization_branch'
+    || !req.user.orgId
+    || !validBranchId(req.user.branchId)
+  ) {
+    res.status(403).json({ error: 'A valid organization branch session is required.' });
+    return;
+  }
+  next();
+}
+
+function requireBranchDevicePermission(permission: OrganizationDevicePermission) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    try {
+      authorizeOrganizationDevice({
+        orgId: req.user!.orgId!,
+        branchId: req.user!.branchId!,
+        userId: req.user!.uid,
+        permission,
+      });
+      next();
+    } catch (error: any) {
+      res.status(error instanceof OrganizationResourceAuthorizationError ? error.statusCode : 500)
+        .json({ error: error?.message || 'Organization device authorization failed' });
+    }
+  };
+}
 
 export function mountBranchRoutes(router: Router) {
-  // ── Branch registration ──────────────────────────────────────────────
-
-  router.post('/branch/register', requireAuth, (req: Request, res: Response) => {
-    const { orgId } = req.body;
-    if (!orgId) {
-      res.status(400).json({ error: 'orgId is required' });
+  router.post('/branch/register', requireAuth, async (req: Request, res: Response) => {
+    const orgId = String(req.body?.orgId || '').trim();
+    const branchId = validBranchId(req.body?.branchId);
+    if (!orgId || !branchId) {
+      res.status(400).json({ error: 'orgId and a stable branchId are required' });
       return;
     }
 
@@ -33,15 +80,30 @@ export function mountBranchRoutes(router: Router) {
       return;
     }
 
-    branchHeartbeats.set(req.user!.uid, new Date().toISOString());
+    try {
+      await persistBranchRegistration({ orgId, branchId, userId: req.user!.uid });
+    } catch (error: any) {
+      const status = error instanceof BranchSyncValidationError || error instanceof OrganizationResourceAuthorizationError
+        ? error.statusCode
+        : 500;
+      res.status(status).json({ error: error?.message || 'Branch registration could not be persisted' });
+      return;
+    }
 
-    logAudit({
-      orgId,
-      userId: req.user!.uid,
-      action: 'branch.register',
-      resourceType: 'branch',
-      resourceId: req.user!.uid,
-    });
+    const branchToken = jwt.sign(
+      {
+        uid: req.user!.uid,
+        username: req.user!.username,
+        role: req.user!.role || 'user',
+        orgId,
+        orgRole: membership.role,
+        tokenType: 'organization_branch',
+        branchId,
+      },
+      getJwtSecret(),
+      { expiresIn: '7d' },
+    );
+    branchHeartbeats.set(`${orgId}:${branchId}`, new Date().toISOString());
 
     res.json({
       success: true,
@@ -53,109 +115,116 @@ export function mountBranchRoutes(router: Router) {
         role: membership.role,
         departmentId: membership.departmentId,
       },
+      branchId,
+      branchToken,
       serverTime: new Date().toISOString(),
     });
   });
 
-  // ── Work data sync (receive from branches) ───────────────────────────
-
-  router.post('/branch/sync', requireAuth, (req: Request, res: Response) => {
-    const { memories, interactions, agents } = req.body;
-
-    let synced = 0;
-
-    // Accept work-domain memories
-    if (Array.isArray(memories)) {
-      for (const mem of memories) {
-        // Store on company server with work domain marker
-        // The company server's own DB stores a copy
-        synced++;
-      }
+  router.post('/branch/ingest', requireOrganizationBranchAuth, requireBranchSession, requireBranchDevicePermission('sync_write'), async (req: Request, res: Response) => {
+    try {
+      const receipt = await persistBranchSyncBatch({
+        payload: req.body || {},
+        authenticatedUserId: req.user!.uid,
+        authenticatedOrgId: req.user!.orgId!,
+        authenticatedBranchId: req.user!.branchId!,
+      });
+      branchHeartbeats.set(branchHeartbeatKey(req), new Date().toISOString());
+      res.json({ success: true, synced: receipt.accepted, receipt });
+    } catch (error: any) {
+      const status = error instanceof BranchSyncValidationError || error instanceof OrganizationResourceAuthorizationError
+        ? error.statusCode
+        : 500;
+      res.status(status).json({
+        success: false,
+        error: error?.message || 'Branch sync persistence failed',
+      });
     }
-
-    if (Array.isArray(interactions)) {
-      for (const interaction of interactions) {
-        synced++;
-      }
-    }
-
-    if (Array.isArray(agents)) {
-      for (const agent of agents) {
-        synced++;
-      }
-    }
-
-    logAudit({
-      orgId: req.user!.orgId || '',
-      userId: req.user!.uid,
-      action: 'branch.sync',
-      resourceType: 'branch',
-      resourceId: req.user!.uid,
-      details: { synced },
-    });
-
-    res.json({ success: true, synced });
   });
 
-  // ── KB cache distribution ────────────────────────────────────────────
-
-  router.get('/branch/kb-cache', requireAuth, (req: Request, res: Response) => {
-    if (!req.user!.orgId) {
-      res.status(400).json({ error: 'No org context' });
-      return;
+  router.get('/branch/ingest/receipts/:batchId', requireOrganizationBranchAuth, requireBranchSession, requireBranchDevicePermission('sync_write'), (req: Request, res: Response) => {
+    try {
+      const receipt = getBranchSyncReceipt({
+        orgId: req.user!.orgId!,
+        branchId: req.user!.branchId!,
+        batchId: String(req.params.batchId || ''),
+      });
+      if (!receipt) {
+        res.status(404).json({ found: false });
+        return;
+      }
+      res.json({ found: true, receipt });
+    } catch (error: any) {
+      const status = error instanceof BranchSyncValidationError ? error.statusCode : 500;
+      res.status(status).json({ error: error?.message || 'Unable to read branch sync receipt' });
     }
+  });
 
-    const articles = EDB.listKbArticles(req.user!.orgId, { status: 'published' });
+  router.get('/branch/kb-cache', requireOrganizationBranchAuth, requireBranchSession, requireBranchDevicePermission('kb_read'), (req: Request, res: Response) => {
+    const articles = EDB.listKbArticles(req.user!.orgId!, { status: 'published' })
+      .filter(article => authorizeOrganizationResource({
+        orgId: req.user!.orgId!,
+        actorUserId: req.user!.uid,
+        branchId: req.user!.branchId,
+        resourceType: 'knowledge_article',
+        resourceId: article.id,
+        permission: 'read',
+        ownerUserId: article.authorId,
+      }).allowed);
     res.json({
-      articles: articles.map(a => ({
-        id: a.id,
-        title: a.title,
-        content: a.content,
-        category: a.category,
-        tags: a.tags,
+      articles: articles.map(article => ({
+        id: article.id,
+        title: article.title,
+        content: article.content,
+        category: article.category,
+        tags: article.tags,
       })),
       updatedAt: new Date().toISOString(),
     });
   });
 
-  // ── Heartbeat / status ───────────────────────────────────────────────
-
-  router.get('/branch/status', requireAuth, (req: Request, res: Response) => {
-    branchHeartbeats.set(req.user!.uid, new Date().toISOString());
+  router.get('/branch/status', requireOrganizationBranchAuth, requireBranchSession, requireBranchDevicePermission('status_read'), (req: Request, res: Response) => {
+    branchHeartbeats.set(branchHeartbeatKey(req), new Date().toISOString());
+    const orgPrefix = `${req.user!.orgId}:`;
     res.json({
       status: 'ok',
       serverTime: new Date().toISOString(),
-      connectedBranches: branchHeartbeats.size,
+      branchId: req.user!.branchId,
+      orgId: req.user!.orgId,
+      connectedBranches: [...branchHeartbeats.keys()].filter(key => key.startsWith(orgPrefix)).length,
     });
   });
 
-  // ── Published templates (for branch browsing) ─────────────────────────
-
-  router.get('/branch/templates', requireAuth, (req: Request, res: Response) => {
-    if (!req.user!.orgId) {
-      res.status(400).json({ error: 'No org context' });
-      return;
-    }
-    const all = Templates.listTemplates(req.user!.orgId, { status: 'published' });
-    res.json(all);
+  router.get('/branch/templates', requireOrganizationBranchAuth, requireBranchSession, requireBranchDevicePermission('template_read'), (req: Request, res: Response) => {
+    res.json(Templates.listTemplates(req.user!.orgId!, { status: 'published' }));
   });
 
-  // ── KB search (branch delegates to central server) ────────────────────
-
-  router.post('/branch/kb/search', requireAuth, (req: Request, res: Response) => {
-    const { query, limit } = req.body;
-    if (!query || !req.user!.orgId) {
-      res.status(400).json({ error: 'query and org context are required' });
+  router.post('/branch/kb/search', requireOrganizationBranchAuth, requireBranchSession, requireBranchDevicePermission('kb_read'), (req: Request, res: Response) => {
+    const query = String(req.body?.query || '').trim();
+    const limit = Math.max(1, Math.min(Number(req.body?.limit) || 5, 50));
+    if (!query) {
+      res.status(400).json({ error: 'query is required' });
       return;
     }
-
-    KB.searchKnowledgeBase(req.user!.orgId, query, { limit: limit || 5, userId: req.user!.uid })
-      .then(results => res.json(results))
-      .catch(err => res.status(500).json({ error: err.message }));
+    KB.searchKnowledgeBase(req.user!.orgId!, query, { limit: 50, userId: req.user!.uid })
+      .then(results => {
+        const articles = new Map(EDB.listKbArticles(req.user!.orgId!).map(article => [article.id, article]));
+        res.json(results.filter(result => {
+          const article = articles.get(result.articleId);
+          return Boolean(article && authorizeOrganizationResource({
+            orgId: req.user!.orgId!,
+            actorUserId: req.user!.uid,
+            branchId: req.user!.branchId,
+            resourceType: 'knowledge_article',
+            resourceId: article.id,
+            permission: 'read',
+            ownerUserId: article.authorId,
+          }).allowed);
+        }).slice(0, limit));
+      })
+      .catch(error => res.status(500).json({ error: error.message }));
   });
 }
-
-// ── WebSocket branch helpers ────────────────────────────────────────────
 
 export function getConnectedBranchCount(): number {
   return branchHeartbeats.size;
@@ -165,6 +234,6 @@ export function getBranchHeartbeats(): ReadonlyMap<string, string> {
   return branchHeartbeats;
 }
 
-export function removeBranchHeartbeat(userId: string): void {
-  branchHeartbeats.delete(userId);
+export function removeBranchHeartbeat(identity: string): void {
+  branchHeartbeats.delete(identity);
 }

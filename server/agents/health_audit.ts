@@ -7,6 +7,7 @@ import { personalityRegistry } from '../personality/registry';
 import { loadKeys } from '../config/keys';
 import { readDB } from '../../db_layer';
 import { getMarketplaceSkills } from '../marketplace/registry';
+import { getDurableTaskHealthSnapshot } from '../cognition/durable_task_diagnostics';
 
 export interface HealthReport {
   timestamp: string;
@@ -129,6 +130,17 @@ export function runHealthAudit(
     });
   } catch {
     checks.push({ name: 'Agent Team', status: 'warn', detail: 'Unknown' });
+  }
+
+  // 7. Durable task recovery and blockers
+  const durableTasks = getDurableTaskHealthSnapshot(userId, { domain, orgId });
+  checks.push({
+    name: 'Durable Task Runtime',
+    status: durableTasks.blocked > 0 ? 'error' : durableTasks.failed > 0 ? 'warn' : 'ok',
+    detail: `${durableTasks.active} active, ${durableTasks.retryScheduled} retry scheduled, ${durableTasks.blocked} blocked, ${durableTasks.failed} failed`,
+  });
+  if (durableTasks.blocked > 0) {
+    recommendations.push('Inspect the durable task diagnosis before resuming; unknown external outcomes and unverified side effects must not be replayed automatically.');
   }
 
   // Overall assessment

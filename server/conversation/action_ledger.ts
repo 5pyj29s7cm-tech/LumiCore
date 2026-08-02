@@ -226,15 +226,24 @@ export function syncConversationActionTaskLedger(
     ? latestParentTask(tasks, input.conversation.id, state.taskId)
     : undefined;
   const parentContext = parent ? parseObject(parent.context) : {};
+  const currentContext = parseObject(task?.context);
   const parentState = normalizeConversationActionState(parentContext.actionState);
   const context = {
     ...parentContext,
-    sourceTaskId: parent?.id || parentContext.sourceTaskId || '',
+    // Execution/model plans are attached independently from action-state
+    // updates. Preserve the current task context on every later status or
+    // receipt sync instead of accidentally erasing the semantic plan.
+    ...currentContext,
+    sourceTaskId: parent?.id || currentContext.sourceTaskId || parentContext.sourceTaskId || '',
     inheritedArtifacts: Array.from(new Set([
       ...(Array.isArray(parentContext.inheritedArtifacts) ? parentContext.inheritedArtifacts : []),
+      ...(Array.isArray(currentContext.inheritedArtifacts) ? currentContext.inheritedArtifacts : []),
       ...(parentState?.sourcePaths || []),
     ])).slice(0, 20),
-    inheritedReceipts: parentState?.receipts || parentContext.inheritedReceipts || [],
+    inheritedReceipts: parentState?.receipts
+      || currentContext.inheritedReceipts
+      || parentContext.inheritedReceipts
+      || [],
     actionState: sanitizeState(state),
   };
   const completed = state.status === 'completed' || !state.unfinished;

@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { buildAutonomousCapabilityPipeline } from '../server/autonomy/task_executor';
+import { buildAutonomousCapabilityPipeline, buildAutonomousToolPolicy } from '../server/autonomy/task_executor';
 import { registerAllTools } from '../server/tools/definitions';
 import { ToolRegistry } from '../server/tools/registry';
 
@@ -46,5 +46,24 @@ describe('autonomous capability planning entrance', () => {
       failClosed: true,
     });
     expect(pipeline.executionPlan.risk.confirmationBinding?.taskId).toBe('autotask-external-1');
+  });
+
+  it('keeps a recovery attempt inside the capabilities persisted by its prior plan', () => {
+    const policy = buildAutonomousToolPolicy({
+      title: 'Resume a read task',
+      description: 'Read the same target after a provider timeout',
+      executionPlan: {
+        nodes: [
+          { toolName: 'url_fetch' },
+          { toolName: 'web_search' },
+          { toolName: undefined },
+        ],
+      } as any,
+      recovery: {
+        planRevisions: [{ revision: 1, strategy: 'retry_same_plan' }],
+      } as any,
+    }, 30);
+    expect(policy.allowedTools).toEqual(['url_fetch', 'web_search']);
+    expect(policy.allowedTools).not.toContain('*');
   });
 });

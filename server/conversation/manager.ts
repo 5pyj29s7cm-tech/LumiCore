@@ -427,6 +427,7 @@ export function prepareConversationActionExecution(input: {
   requestId: string;
   toolPolicy: ToolPolicy;
   forceResume?: boolean;
+  forceTask?: boolean;
 }): ReturnType<typeof prepareConversationActionTaskState> {
   const db = readDB();
   const conversation = (db.conversations || []).find((item: Conversation) => (
@@ -837,9 +838,20 @@ export function addMessage(msg: {
         const pendingFollowupIntent = classifyRecentActionFollowupIntent(pending.userText);
         const pendingContract = buildActionContract(pending.userText);
         const pendingNormalizedIntent = normalizeActionIntent(pending.userText);
+        const toolRecordsBelongToActiveTask = Boolean(
+          conv.actionContinuationState?.taskId
+          && normalizedToolCalls?.some((record: any) => (
+            record?.taskId === conv.actionContinuationState?.taskId
+            || (
+              conv.actionContinuationState?.activeRequestId
+              && record?.requestId === conv.actionContinuationState.activeRequestId
+            )
+          )),
+        );
         const pendingExpectsExecution = pendingFollowupIntent === 'execute'
           || (pendingContract.applies && pendingContract.kind !== 'none')
-          || ['client_navigation', 'client_state', 'external_ai_history', 'messaging_read'].includes(pendingNormalizedIntent.kind);
+          || ['client_navigation', 'client_state', 'external_ai_history', 'messaging_read'].includes(pendingNormalizedIntent.kind)
+          || toolRecordsBelongToActiveTask;
         const pendingAgeMs = Date.now() - new Date(pending.updatedAt).getTime();
         if (
           pendingExpectsExecution

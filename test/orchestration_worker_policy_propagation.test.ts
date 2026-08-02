@@ -248,6 +248,7 @@ describe('orchestrator worker ToolPolicy propagation', () => {
 
   it('passes the exact desktop-observation parent boundary into the actual worker context', async () => {
     const agent = internalAgent();
+    const requestConfirmation = vi.fn(async () => true);
     const rootTaskText = '\u7ec4\u5efa\u56e2\u961f\uff0c\u5206\u4e24\u6b65\u6267\u884c\uff1a\u5148\u67e5\u770b\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\uff0c\u518d\u5217\u51fa\u684c\u9762\u6587\u4ef6\uff0c\u6700\u540e\u6309\u771f\u5b9e\u7ed3\u679c\u6c47\u62a5\u3002';
     const allowedTools = ['desktop_active_window', 'desktop_list_files'];
     const forbiddenTools = mocks.declarations
@@ -267,7 +268,13 @@ describe('orchestrator worker ToolPolicy propagation', () => {
       {
         userId: 'voice-desktop-observation-user',
         domain: 'personal',
+        taskId: 'task-remote-shared-ledger',
+        conversationId: 'conversation-remote-shared-ledger',
+        turnId: 'turn-remote-shared-ledger',
+        requestId: 'request-remote-shared-ledger',
         rootTaskText,
+        requestConfirmation,
+        supervisedExternalCommits: true,
         toolPolicy: {
           allowedTools,
           requireConfirmation: [],
@@ -285,6 +292,15 @@ describe('orchestrator worker ToolPolicy propagation', () => {
     const maxIterations = call[4] as number;
     const toolContext = call[11] as any;
     expect(toolContext.routedTaskText).toBe(rootTaskText);
+    expect(toolContext.actionIntent).toBe(rootTaskText);
+    expect(toolContext).toMatchObject({
+      taskId: 'task-remote-shared-ledger',
+      conversationId: 'conversation-remote-shared-ledger',
+      turnId: 'turn-remote-shared-ledger',
+      requestId: 'request-remote-shared-ledger',
+      supervisedExternalCommits: true,
+    });
+    expect(toolContext.requestConfirmation).toBe(requestConfirmation);
     expect(toolContext.toolPolicy.allowedTools).toEqual(allowedTools);
     expect(toolContext.toolPolicy.forbiddenTools).toEqual(expect.arrayContaining([
       'get_active_window_info',
@@ -343,7 +359,9 @@ describe('orchestrator worker ToolPolicy propagation', () => {
     expect(messages[0].content).toContain('do not execute sibling steps');
     expect(messages[0].content).toContain('桌面上有一张叫设计草稿.jpg');
     expect(toolContext.source).toBe('orchestrator');
-    expect(toolContext.actionIntent).toBe('提取几何并继续绘制。');
+    // Risk and confirmation stay bound to the user's root instruction; a
+    // decomposed worker description cannot become a new authorization source.
+    expect(toolContext.actionIntent).toBe('桌面上有一张叫设计草稿.jpg的图片，把它画到 AutoCAD 里。');
     expect(toolContext.toolPolicy.allowedTools).toEqual(expect.arrayContaining([
       'desktop_list_files',
       'floorplan_extract_geometry',

@@ -6,6 +6,7 @@ import { getUserPreferredLLMConfig } from "../llm/user_preferences";
 import { executeExternalAgent, validateExternalCommand } from "../agents/external_runtime";
 import { requireAuth, resolveDomain, type AuthUser } from "../middleware/auth";
 import { isAudioTranscriptionUnavailable, transcribeAudioFile } from "../stt/file_transcription";
+import * as ResourceACL from '../org/resource_acl';
 
 const asyncHandler = (fn: (req: Request, res: Response, next?: NextFunction) => Promise<any>) =>
   (req: Request, res: Response, next: NextFunction) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -64,10 +65,30 @@ function canCreateAgent(user: AuthUser): boolean {
   return !user.orgId || ['owner', 'admin', 'member'].includes(String(user.orgRole || ''));
 }
 
-function canManageAgent(agent: any, user: AuthUser): boolean {
+function canManageAgent(agent: any, user: AuthUser, permission: 'write' | 'admin' = 'write'): boolean {
   if (!agentMatchesScope(agent, user)) return false;
   if (!user.orgId) return !agent.ownerUid || agent.ownerUid === user.uid;
-  return ['owner', 'admin'].includes(String(user.orgRole || '')) || agent.ownerUid === user.uid;
+  return ResourceACL.authorizeOrganizationResource({
+    orgId: user.orgId,
+    actorUserId: user.uid,
+    resourceType: 'agent',
+    resourceId: agent.id,
+    permission,
+    ownerUserId: agent.ownerUid,
+  }).allowed;
+}
+
+function canUseOrganizationAgent(agent: any, user: AuthUser, permission: 'read' | 'execute'): boolean {
+  if (!agentMatchesScope(agent, user)) return false;
+  if (!user.orgId) return true;
+  return ResourceACL.authorizeOrganizationResource({
+    orgId: user.orgId,
+    actorUserId: user.uid,
+    resourceType: 'agent',
+    resourceId: agent.id,
+    permission,
+    ownerUserId: agent.ownerUid,
+  }).allowed;
 }
 
 function interactionMatchesUserScope(interaction: any, user: AuthUser): boolean {
@@ -132,7 +153,10 @@ export function mountAgentRoutes(
     try {
       const { id } = req.params; const db = readDB();
       const isDefault = ['lumi', 'lumi_default', 'scholar_default', 'founder_default', 'incubated'].includes(id);
-      if (!isDefault && !findScopedAgent(db, req.user!, id)) return res.status(404).json({ error: "Agent not found" });
+      if (!isDefault) {
+        const agent = findScopedAgent(db, req.user!, id);
+        if (!agent || !canUseOrganizationAgent(agent, req.user!, 'read')) return res.status(404).json({ error: "Agent not found" });
+      }
       const dc = resolveDomain(req.user!);
       const conv = getActiveConversation(req.user!.uid, id, dc.domain, dc.orgId);
       const msgs = conv ? getMessages(conv.id, 100) : [];
@@ -152,7 +176,10 @@ export function mountAgentRoutes(
     try {
       const { id } = req.params; const { messages } = req.body;
       const db = readDB(); const isDefault = ['lumi', 'lumi_default', 'scholar_default', 'founder_default', 'incubated'].includes(id);
-      if (!isDefault && !findScopedAgent(db, req.user!, id)) return res.status(404).json({ error: "Agent not found" });
+      if (!isDefault) {
+        const agent = findScopedAgent(db, req.user!, id);
+        if (!agent || !canUseOrganizationAgent(agent, req.user!, 'execute')) return res.status(404).json({ error: "Agent not found" });
+      }
       const dc = resolveDomain(req.user!);
       const conv = getOrCreateActiveConversation(req.user!.uid, id, dc.domain, dc.orgId);
       if (Array.isArray(messages)) for (const msg of messages) addMessage({ userId: req.user!.uid, agentId: id, conversationId: conv.id, role: msg.role || 'user', content: msg.content || '', domain: dc.domain, orgId: dc.orgId });
@@ -162,7 +189,9 @@ export function mountAgentRoutes(
 
   router.get("/agents", requireAuth, (req, res) => {
     try {
-      res.json((readDB().agents || []).filter((a: any) => agentMatchesScope(a, req.user!)));
+      res.json((readDB().agents || []).filter((a: any) => (
+        agentMatchesScope(a, req.user!) && canUseOrganizationAgent(a, req.user!, 'read')
+      )));
     }
     catch (err: any) { res.status(500).json({ error: err.message }); }
   });
@@ -210,7 +239,28 @@ export function mountAgentRoutes(
         allowCrossPollination: !isSanctuary,
         healthStatus: runtimeKind === 'external' ? 'untested' : 'online',
       };
-      db.agents.push(agent); writeDB(db); res.json(agent);
+      db.agents.push(agent);
+      writeDB(db);
+      if (dc.orgId && req.body?.access) {
+        try {
+          ResourceACL.setOrganizationResourcePolicy({
+            orgId: dc.orgId,
+            actorUserId: req.user!.uid,
+            resourceType: 'agent',
+            resourceId: agent.id,
+            ownerUserId: req.user!.uid,
+            classification: req.body.access.classification,
+            departmentId: req.body.access.departmentId,
+            grants: req.body.access.grants,
+          });
+        } catch (error: any) {
+          db.agents = db.agents.filter((candidate: any) => candidate.id !== agent.id);
+          writeDB(db);
+          return res.status(error instanceof ResourceACL.OrganizationResourceAuthorizationError ? error.statusCode : 500)
+            .json({ error: error?.message || 'Agent resource policy could not be created' });
+        }
+      }
+      res.json(agent);
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
@@ -218,7 +268,7 @@ export function mountAgentRoutes(
     const { id } = req.params;
     const db = readDB();
     const agent = findScopedAgent(db, req.user!, id);
-    if (!agent) return res.status(404).json({ error: "Agent not found or unauthorized" });
+    if (!agent || !canUseOrganizationAgent(agent, req.user!, 'execute')) return res.status(404).json({ error: "Agent not found or unauthorized" });
     if (agent.runtime !== 'external') return res.status(400).json({ error: "Only external agents can be tested" });
 
     const command = String(req.body?.externalCommand || agent.externalCommand || '').trim();
@@ -257,7 +307,7 @@ export function mountAgentRoutes(
     try {
       const { id } = req.params;
       const db = readDB();
-      const idx = db.agents.findIndex((a: any) => a.id === id && canManageAgent(a, req.user!));
+      const idx = db.agents.findIndex((a: any) => a.id === id && canManageAgent(a, req.user!, 'admin'));
       if (idx === -1) return res.status(404).json({ error: "Agent not found or unauthorized" });
       const agent = db.agents[idx];
       const previousRuntime = agent.runtime;
@@ -323,7 +373,16 @@ export function mountAgentRoutes(
       if (db.interactions) db.interactions = db.interactions.filter((i: any) => i.agentId !== id || !sameScope(i));
       if (db.memories) db.memories = db.memories.filter((m: any) => m.agentId !== id || !sameScope(m));
       if (db.conversations) db.conversations = db.conversations.filter((c: any) => c.agentId !== id || !sameScope(c));
-      writeDB(db); res.json({ success: true });
+      writeDB(db);
+      if (dc.orgId) {
+        ResourceACL.removeOrganizationResourcePolicy({
+          orgId: dc.orgId,
+          actorUserId: req.user!.uid,
+          resourceType: 'agent',
+          resourceId: id,
+        });
+      }
+      res.json({ success: true });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 

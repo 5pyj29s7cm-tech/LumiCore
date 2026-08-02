@@ -5,6 +5,7 @@ import type { IncomingMessage } from '../server/messaging/types';
 
 let bindings: typeof import('../server/messaging/bindings');
 let delivery: typeof import('../server/messaging/delivery_ledger');
+let ingressPolicy: typeof import('../server/messaging/ingress_policy');
 let routes: typeof import('../server/messaging/routes');
 let wechatRoutes: typeof import('../server/messaging/wechat-routes');
 let connections: typeof import('../server/messaging/connections');
@@ -51,9 +52,10 @@ describe('messaging long connections and organization routing', () => {
   beforeAll(async () => {
     const app = await makeApp();
     cleanup = app.cleanup;
-    [bindings, delivery, routes, wechatRoutes, connections, messagingConfig, orgDb] = await Promise.all([
+    [bindings, delivery, ingressPolicy, routes, wechatRoutes, connections, messagingConfig, orgDb] = await Promise.all([
       import('../server/messaging/bindings'),
       import('../server/messaging/delivery_ledger'),
+      import('../server/messaging/ingress_policy'),
       import('../server/messaging/routes'),
       import('../server/messaging/wechat-routes'),
       import('../server/messaging/connections'),
@@ -70,6 +72,7 @@ describe('messaging long connections and organization routing', () => {
   beforeEach(() => {
     bindings.resetMessagingBindingsForTest();
     delivery.resetDeliveryLedgerForTest();
+    ingressPolicy.resetMessagingIngressPolicyForTest();
   });
 
   afterAll(() => {
@@ -188,22 +191,43 @@ describe('messaging long connections and organization routing', () => {
 
     const privateCode = bindings.createBindingCode('feishu', lumiUserId, orgA.id);
     bindings.consumeBindingCode('feishu', privateCode.code, platformUserId, 'oc-private', 'private');
-    const groupCode = bindings.createBindingCode('feishu', lumiUserId, orgB.id);
-    bindings.consumeBindingCode('feishu', groupCode.code, platformUserId, 'oc-group-b', 'group');
+    bindings.authorizeMessagingGroup({
+      platform: 'feishu',
+      chatId: 'oc-group-b',
+      orgId: orgB.id,
+      createdBy: lumiUserId,
+    });
 
     const privateMessage = await captureRoutedMessage(incoming({ userId: platformUserId, chatId: 'oc-private' }));
-    const groupMessage = await captureRoutedMessage(incoming({ userId: platformUserId, chatId: 'oc-group-b', chatType: 'group' }));
-    const groupPeerMessage = await captureRoutedMessage(incoming({ userId: `group-peer-${suffix}`, chatId: 'oc-group-b', chatType: 'group' }));
-    const unboundGroup = await captureRoutedMessage(incoming({ userId: platformUserId, chatId: 'oc-group-unbound', chatType: 'group' }));
+    const groupMessage = await captureRoutedMessage(incoming({
+      userId: platformUserId,
+      chatId: 'oc-group-b',
+      chatType: 'group',
+      botMentioned: true,
+    }));
 
     expect(privateMessage.boundOrgId).toBe(orgA.id);
     expect(groupMessage.boundOrgId).toBe(orgB.id);
-    expect(groupPeerMessage.boundOrgId).toBeUndefined();
-    expect(unboundGroup.boundOrgId).toBeUndefined();
+    expect(routes.dispatchIncomingMessage(incoming({
+      userId: `group-peer-${suffix}`,
+      chatId: 'oc-group-b',
+      chatType: 'group',
+      botMentioned: true,
+    }), { enrich: async value => value, reply: async () => undefined })).toBe(false);
+    expect(routes.dispatchIncomingMessage(incoming({
+      userId: platformUserId,
+      chatId: 'oc-group-unbound',
+      chatType: 'group',
+      botMentioned: true,
+    }), { enrich: async value => value, reply: async () => undefined })).toBe(false);
 
     orgDb.removeMember(orgB.id, lumiUserId);
-    const revoked = await captureRoutedMessage(incoming({ userId: platformUserId, chatId: 'oc-group-b', chatType: 'group' }));
-    expect(revoked.boundOrgId).toBeUndefined();
+    expect(routes.dispatchIncomingMessage(incoming({
+      userId: platformUserId,
+      chatId: 'oc-group-b',
+      chatType: 'group',
+      botMentioned: true,
+    }), { enrich: async value => value, reply: async () => undefined })).toBe(false);
   });
 
   it('isolates bindings for multiple members in the same group', () => {
@@ -214,18 +238,25 @@ describe('messaging long connections and organization routing', () => {
     const orgB = orgDb.createOrg('Group B', `group-b-${suffix}`, lumiUserB);
     orgDb.addMember(orgA.id, lumiUserA, 'owner');
     orgDb.addMember(orgB.id, lumiUserB, 'owner');
+    orgDb.addMember(orgA.id, lumiUserB, 'member');
 
     const first = bindings.createBindingCode('wecom', lumiUserA, orgA.id);
-    bindings.consumeBindingCode('wecom', first.code, 'member-a', 'shared-group', 'group');
+    bindings.consumeBindingCode('wecom', first.code, 'member-a', 'private-a', 'private');
     const second = bindings.createBindingCode('wecom', lumiUserB, orgB.id);
-    bindings.consumeBindingCode('wecom', second.code, 'member-b', 'shared-group', 'group');
+    bindings.consumeBindingCode('wecom', second.code, 'member-b', 'private-b', 'private');
+    bindings.authorizeMessagingGroup({
+      platform: 'wecom',
+      chatId: 'shared-group',
+      orgId: orgA.id,
+      createdBy: lumiUserA,
+    });
 
     expect(bindings.getBinding('wecom', 'member-a', 'shared-group', 'group')?.orgId).toBe(orgA.id);
-    expect(bindings.getBinding('wecom', 'member-b', 'shared-group', 'group')?.orgId).toBe(orgB.id);
+    expect(bindings.getBinding('wecom', 'member-b', 'shared-group', 'group')?.orgId).toBe(orgA.id);
     expect(bindings.getBinding('wecom', 'member-c', 'shared-group', 'group')).toBeNull();
     expect(bindings.getBinding('wecom', 'member-a', 'private-chat', 'private')).toBeNull();
-    expect(bindings.listBindingsForUser(lumiUserA).filter((item: any) => item.chatId === 'shared-group')).toHaveLength(1);
-    expect(bindings.listBindingsForUser(lumiUserB).filter((item: any) => item.chatId === 'shared-group')).toHaveLength(1);
+    expect(bindings.listBindingsForUser(lumiUserA).filter((item: any) => item.chatType === 'group')).toHaveLength(0);
+    expect(bindings.listBindingsForUser(lumiUserB).filter((item: any) => item.chatType === 'group')).toHaveLength(0);
   });
 
   it('routes simultaneous Feishu group messages to each member without identity crossover', async () => {
@@ -238,12 +269,18 @@ describe('messaging long connections and organization routing', () => {
 
     const ownerCode = bindings.createBindingCode('feishu', ownerId, org.id);
     const memberCode = bindings.createBindingCode('feishu', memberId, org.id);
-    bindings.consumeBindingCode('feishu', ownerCode.code, 'ou-owner', 'oc-concurrent', 'group');
-    bindings.consumeBindingCode('feishu', memberCode.code, 'ou-member', 'oc-concurrent', 'group');
+    bindings.consumeBindingCode('feishu', ownerCode.code, 'ou-owner', 'oc-owner-private', 'private');
+    bindings.consumeBindingCode('feishu', memberCode.code, 'ou-member', 'oc-member-private', 'private');
+    bindings.authorizeMessagingGroup({
+      platform: 'feishu',
+      chatId: 'oc-concurrent',
+      orgId: org.id,
+      createdBy: ownerId,
+    });
 
     const [ownerMessage, memberMessage] = await Promise.all([
-      captureRoutedMessage(incoming({ userId: 'ou-owner', chatId: 'oc-concurrent', chatType: 'group', threadId: 'thread-shared' })),
-      captureRoutedMessage(incoming({ userId: 'ou-member', chatId: 'oc-concurrent', chatType: 'group', threadId: 'thread-shared' })),
+      captureRoutedMessage(incoming({ userId: 'ou-owner', chatId: 'oc-concurrent', chatType: 'group', threadId: 'thread-shared', botMentioned: true })),
+      captureRoutedMessage(incoming({ userId: 'ou-member', chatId: 'oc-concurrent', chatType: 'group', threadId: 'thread-shared', botMentioned: true })),
     ]);
 
     expect(ownerMessage).toMatchObject({ boundUserId: ownerId, boundOrgId: org.id });
@@ -490,6 +527,8 @@ describe('messaging long connections and organization routing', () => {
 
   it('applies a personal WeChat mode switch through the scoped desktop relay without an LLM round trip', async () => {
     const userId = `wechat-mode-${Date.now()}-${Math.random()}`;
+    const { updateClientState } = await import('../server/client/self_model');
+    updateClientState(userId, { platform: 'desktop', mode: 'assistant' });
     const calls: Array<{ name: string; args: Record<string, any> }> = [];
     const scopes: Array<{ userId: string; source: string; domain: string; orgId: string }> = [];
     const message = incoming({
@@ -505,6 +544,9 @@ describe('messaging long connections and organization routing', () => {
         scopes.push({ userId: relayUserId, source, domain, orgId });
         return async (name, args) => {
           calls.push({ name, args });
+          if (args.action === 'set_client_mode') {
+            updateClientState(userId, { platform: 'desktop', mode: args.mode });
+          }
           return JSON.stringify({ ok: true, action: args.action, mode: args.mode });
         };
       },
@@ -512,12 +554,112 @@ describe('messaging long connections and organization routing', () => {
 
     expect(reply).toBe('已切到自主模式。');
     expect(scopes).toEqual([{ userId, source: 'wechat_bot', domain: 'personal', orgId: '' }]);
-    expect(calls).toEqual([{
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toEqual({
       name: 'client_action',
-      args: { action: 'set_client_mode', mode: 'autonomous', confirmed: true },
-    }]);
+      args: expect.objectContaining({ action: 'set_client_mode', mode: 'autonomous', confirmed: false }),
+    });
+    expect(calls[1]).toEqual({
+      name: 'client_action',
+      args: { action: 'refresh_client_state' },
+    });
     const { getStoredOperationMode } = await import('../server/cognition/operation_mode_store');
     expect(getStoredOperationMode(userId)).toBe('autonomous');
+  });
+
+  it('persists remote execution plans and answers later status turns from the durable receipt ledger', async () => {
+    const userId = `wechat-ledger-${Date.now()}-${Math.random()}`;
+    const { updateClientState } = await import('../server/client/self_model');
+    const { readDB } = await import('../db_layer');
+    updateClientState(userId, { platform: 'desktop', mode: 'assistant' });
+    const first = incoming({
+      platform: 'wechat',
+      userId: `wx-${userId}`,
+      chatId: `wx-${userId}`,
+      boundUserId: userId,
+      messageId: `mode-ledger-${Date.now()}`,
+      text: '\u5207\u6362\u5230\u81ea\u4e3b\u6a21\u5f0f',
+    });
+    const createScopedDesktopRelay = () => async (_name: string, args: Record<string, any>) => {
+      if (args.action === 'set_client_mode') {
+        updateClientState(userId, { platform: 'desktop', mode: args.mode });
+      }
+      return JSON.stringify({ ok: true, action: args.action, mode: args.mode });
+    };
+
+    expect(await routes.processWithPersonality(first, { createScopedDesktopRelay })).toBe('\u5df2\u5207\u5230\u81ea\u4e3b\u6a21\u5f0f\u3002');
+    const afterExecution: any = readDB();
+    const tasks = (afterExecution.conversationActionTasks || []).filter((item: any) => item.userId === userId);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({ status: 'completed', completionSource: 'tool_receipt' });
+    const taskContext = JSON.parse(tasks[0].context);
+    expect(taskContext.executionPlan).toMatchObject({
+      taskId: tasks[0].id,
+      decisionAuthority: 'semantic_planner',
+      scriptAuthority: 'adapter_only',
+    });
+    const receipts = (afterExecution.conversationActionReceipts || [])
+      .filter((item: any) => item.taskId === tasks[0].id);
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({
+      toolName: 'client_action',
+      requestId: `wechat_bot:${first.messageId}`,
+      outcome: 'verified_success',
+    });
+
+    const status = incoming({
+      platform: 'wechat',
+      userId: `wx-${userId}`,
+      chatId: `wx-${userId}`,
+      boundUserId: userId,
+      messageId: `status-ledger-${Date.now()}`,
+      text: '\u521a\u624d\u90a3\u4e2a\u4efb\u52a1\u5b8c\u6210\u4e86\u5417',
+    });
+    const statusReply = await routes.processWithPersonality(status, {
+      createScopedDesktopRelay,
+      llmGetters: {
+        getDeepSeek: () => { throw new Error('status query must not call a model'); },
+        getGemini: () => { throw new Error('status query must not call a model'); },
+      },
+    });
+    expect(statusReply).toContain('\u5df2\u5b8c\u6210');
+    const afterStatus: any = readDB();
+    expect((afterStatus.conversationActionTasks || []).filter((item: any) => item.userId === userId)).toHaveLength(1);
+    expect((afterStatus.conversationActionReceipts || []).filter((item: any) => item.taskId === tasks[0].id)).toHaveLength(1);
+  });
+
+  it('uses the exact shared normalized intent and tool policy for remote and local chat entrances', async () => {
+    const { buildLumiExecutionPipeline } = await import('../server/cognition/execution_pipeline');
+    const { toolRegistry } = await import('../server/tools/registry');
+    const text = '\u770b\u4e00\u4e0b\u5f20\u52c7\u6700\u8fd1\u7ed9\u6211\u53d1\u4ec0\u4e48\u6d88\u606f\u4e86';
+    const remote = routes.buildRemoteLumiExecutionPlan({
+      userId: 'pipeline-equivalence-user',
+      text,
+      source: 'feishu_bot',
+      domain: 'personal',
+      orgId: '',
+      operationMode: 'assistant',
+      identityBound: true,
+      canWriteOrganization: true,
+    });
+    const local = buildLumiExecutionPipeline({
+      dispatch: {
+        userId: 'pipeline-equivalence-user',
+        text,
+        channel: 'chat',
+        source: 'chat',
+        domain: 'personal',
+        orgId: '',
+        operationMode: 'assistant',
+        targetIsLumi: true,
+      },
+      registry: toolRegistry,
+      source: 'chat',
+    });
+    expect(remote.normalizedIntent).toEqual(local.normalizedIntent);
+    expect(remote.execution.toolPolicy).toEqual(local.execution.toolPolicy);
+    expect(remote.execution.toolRoute?.toolNames).toEqual(local.execution.toolRoute?.toolNames);
+    expect(remote.normalizedIntent.operation).toBe('read');
   });
 
   it('keeps attachment processing instructions out of the synchronized chat history', async () => {

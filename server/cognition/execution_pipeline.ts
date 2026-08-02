@@ -49,15 +49,72 @@ export interface LumiExecutionPipeline {
 
 export interface BuildLumiExecutionPipelineInput {
   dispatch: LumiTurnDispatchInput;
+  /**
+   * A caller may precompute the dispatch when it needs to apply a channel
+   * identity boundary before the rest of the shared pipeline runs. The
+   * normalized intent, capability plan, policy and execution plan are still
+   * produced here; callers must not rebuild those pieces independently.
+   */
+  prebuiltDispatch?: LumiTurnDispatch;
   registry: ToolRegistry;
   personalityToolPolicy?: ToolPolicy;
   actionTaskState?: ConversationActionContinuationState | null;
   isSanctuary?: boolean;
+  /** Additional channel/role denies, applied after all semantic adapters. */
+  additionalForbiddenTools?: string[];
   decisionText?: string;
   traceText?: string;
   source?: string;
   /** Durable task identity supplied by non-conversation entrances such as scheduler/agent execution. */
   taskId?: string;
+}
+
+function applyAdditionalForbiddenTools(
+  execution: LumiExecutionDecision,
+  forbiddenTools: string[] | undefined,
+): LumiExecutionDecision {
+  const additions = Array.from(new Set((forbiddenTools || []).filter(Boolean)));
+  if (additions.length === 0) return execution;
+  const forbidden = new Set([...(execution.toolPolicy.forbiddenTools || []), ...additions]);
+  const blockAll = forbidden.has('*');
+  const restrictPolicy = (policy: ToolPolicy | null): ToolPolicy | null => policy && ({
+    ...policy,
+    allowedTools: blockAll
+      ? []
+      : (policy.allowedTools || []).filter(name => !forbidden.has(name)),
+    requireConfirmation: (policy.requireConfirmation || []).filter(name => !forbidden.has(name)),
+    forbiddenTools: Array.from(forbidden),
+    maxIterations: blockAll ? 0 : policy.maxIterations,
+  });
+  const toolPolicy = restrictPolicy(execution.toolPolicy)!;
+  const toolRoute = execution.toolRoute
+    ? {
+        ...execution.toolRoute,
+        toolNames: blockAll
+          ? []
+          : execution.toolRoute.toolNames.filter(name => !forbidden.has(name)),
+        reasons: Array.from(new Set([
+          ...execution.toolRoute.reasons,
+          'the entry identity/role boundary removed forbidden tools',
+        ])),
+      }
+    : null;
+  return {
+    ...execution,
+    allowToolUse: blockAll ? false : execution.allowToolUse,
+    baseToolPolicy: restrictPolicy(execution.baseToolPolicy)!,
+    selfRepairToolPolicy: restrictPolicy(execution.selfRepairToolPolicy),
+    clientActionToolPolicy: restrictPolicy(execution.clientActionToolPolicy),
+    toolRoute,
+    toolPolicy,
+    maxIterations: blockAll ? 0 : execution.maxIterations,
+    promptOverlay: [
+      execution.promptOverlay,
+      additions.length
+        ? `Entry authorization boundary forbids: ${additions.join(', ')}.`
+        : '',
+    ].filter(Boolean).join('\n'),
+  };
 }
 
 function applySelectedWorkflowAdapterPolicy(
@@ -137,7 +194,7 @@ function applySelectedWorkflowAdapterPolicy(
 export function buildLumiExecutionPipeline(
   input: BuildLumiExecutionPipelineInput,
 ): LumiExecutionPipeline {
-  const turnIntent = buildLumiTurnDispatch(input.dispatch);
+  const turnIntent = input.prebuiltDispatch || buildLumiTurnDispatch(input.dispatch);
   const decisionText = input.decisionText || turnIntent.flow.routeText;
   const normalizedIntent = normalizeActionIntent(decisionText);
   const legacyExecution = buildLumiExecutionDecision({
@@ -155,12 +212,15 @@ export function buildLumiExecutionPipeline(
     execution: legacyExecution,
     manifest: unrestrictedManifest,
   });
-  const execution = applySelectedWorkflowAdapterPolicy(
-    applyLumiRoutingShadowGuard(legacyExecution, shadowComparison),
-    turnIntent,
-    input.registry,
-    input.personalityToolPolicy,
-    input.isSanctuary,
+  const execution = applyAdditionalForbiddenTools(
+    applySelectedWorkflowAdapterPolicy(
+      applyLumiRoutingShadowGuard(legacyExecution, shadowComparison),
+      turnIntent,
+      input.registry,
+      input.personalityToolPolicy,
+      input.isSanctuary,
+    ),
+    input.additionalForbiddenTools,
   );
   const selection = buildLumiCapabilitySelection({
     dispatch: turnIntent,

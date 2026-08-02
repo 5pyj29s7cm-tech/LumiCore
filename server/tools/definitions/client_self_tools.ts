@@ -23,6 +23,8 @@ import {
   safeRuntimeError,
   sanitizeDiagnosticValue,
 } from '../../client/diagnostic_sanitizer';
+import { getDurableTaskHealthSnapshot } from '../../cognition/durable_task_diagnostics';
+import { getAdapterResilienceSnapshot } from '../adapter_resilience';
 
 const ACTIONS = Array.from(new Set([
   'set_client_mode',
@@ -429,6 +431,8 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
       const isWork = context?.domain === 'work' && Boolean(context?.orgId);
       return JSON.stringify(sanitizeDiagnosticValue({
         report: getClientHealthReport(userId, scope),
+        durableTasks: getDurableTaskHealthSnapshot(userId, scope),
+        adapterResilience: getAdapterResilienceSnapshot(),
         skillRuntimeFindings: getSkillRuntimeFindings(),
         autonomyGate: isWork ? null : getAutonomyDiagnosticPolicy(userId),
         autonomyWorkflows: isWork ? [] : getAutonomyWorkflowDiagnostics(userId),

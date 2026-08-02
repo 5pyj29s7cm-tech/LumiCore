@@ -37,7 +37,7 @@ describe('cross-workspace messaging file transfer', () => {
     const orgId = createOrg('File Transfer Org', `file-transfer-${suffix}`, userId).id;
     addMember(orgId, userId, 'owner');
     const code = createBindingCode('feishu', userId, orgId);
-    const binding = consumeBindingCode('feishu', code.code, 'ou-file-owner', 'oc-file-target', 'group')!;
+    const binding = consumeBindingCode('feishu', code.code, 'ou-file-owner', 'oc-file-target', 'private')!;
     const filePath = path.join(os.tmpdir(), `lumi-file-transfer-${suffix}.txt`);
     fs.writeFileSync(filePath, 'court evidence file', 'utf8');
 
@@ -48,7 +48,7 @@ describe('cross-workspace messaging file transfer', () => {
 
     try {
       expect(listFeishuFileTargets(userId, orgId)).toEqual([
-        expect.objectContaining({ bindingId: binding.id, orgId, chatId: 'oc-file-target', chatType: 'group' }),
+        expect.objectContaining({ bindingId: binding.id, orgId, chatId: 'oc-file-target', chatType: 'private' }),
       ]);
       const result = await sendLocalFileToFeishu({
         userId,

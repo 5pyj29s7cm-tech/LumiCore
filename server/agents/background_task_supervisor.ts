@@ -4,12 +4,12 @@ import {
   checkpointBackgroundTask,
   claimBackgroundTask,
   completeBackgroundTask,
-  failBackgroundTask,
   heartbeatBackgroundTask,
   isBackgroundTaskCancellationRequested,
   isBackgroundTaskPauseRequested,
   listBackgroundTasks,
   pauseBackgroundTask,
+  recordBackgroundTaskFailure,
   type BackgroundDelegationTask,
 } from './background_tasks';
 import {
@@ -29,6 +29,7 @@ import {
 } from '../conversation/manager';
 import { pushNotification } from '../routes/notifications';
 import { CN_BACKGROUND_DELEGATION_MESSAGES } from '../regions/packs/cn/background_delegation_messages';
+import { isDurableTaskReady, snapshotDurableToolRecords } from '../cognition/durable_task_recovery';
 
 const DEFAULT_POLL_MS = 1_000;
 const DEFAULT_CONCURRENCY = 2;
@@ -95,15 +96,20 @@ async function executeRecoveredTask(
   emitTask(io, claimed);
 
   const leaseId = claimed.leaseId;
+  let leaseLost = false;
   const heartbeat = setInterval(() => {
     const renewed = heartbeatBackgroundTask(claimed.id, leaseId, 45_000);
-    if (!renewed) clearInterval(heartbeat);
+    if (!renewed) {
+      leaseLost = true;
+      clearInterval(heartbeat);
+    }
   }, 15_000);
   if (typeof (heartbeat as any).unref === 'function') (heartbeat as any).unref();
 
   const toolRecords: ToolExecutionRecord[] = [];
   try {
     const context = claimed.context || {};
+    const recoveryDirective = claimed.recovery?.planRevisions.at(-1);
     const modelRecovery = context.conversationId && context.actionTaskId
       ? getConversationModelExecutionRecovery({
           conversationId: context.conversationId,
@@ -127,10 +133,12 @@ async function executeRecoveredTask(
         toolPolicy: context.toolPolicy,
         taskId: context.actionTaskId || claimed.id,
         resumeNodeReceipts: modelRecovery?.receipts,
+        recoveryDirective,
         availableAgentIds: claimed.workers.map(worker => worker.id).filter((id): id is string => Boolean(id)),
         forceOrchestration: context.forceOrchestration !== false,
         isCancelled: () => isBackgroundTaskCancellationRequested(claimed.id)
-          || isBackgroundTaskPauseRequested(claimed.id),
+          || isBackgroundTaskPauseRequested(claimed.id)
+          || leaseLost,
       },
       {
         provider: (context.provider || 'auto') as any,
@@ -151,15 +159,14 @@ async function executeRecoveredTask(
       (record) => {
         if (!isTerminalOrchestrationToolEvent(record)) return;
         toolRecords.push({
-          id: record.id,
-          name: record.name,
-          arguments: record.arguments || {},
+          ...record,
+          arguments: { ...(record.arguments || {}) },
           result: record.result || '',
-          error: record.error,
         });
         checkpointBackgroundTask(claimed.id, {
           phase: 'tool_execution',
           receiptIds: toolRecords.map(item => item.id),
+          receipts: snapshotDurableToolRecords(toolRecords),
           detail: `${toolRecords.length} terminal tool call(s) observed`,
         }, leaseId);
       },
@@ -193,12 +200,27 @@ async function executeRecoveredTask(
     checkpointBackgroundTask(claimed.id, {
       phase: finalized.blocked ? 'failed_verification' : 'verified',
       receiptIds: toolRecords.map(item => item.id),
+      receipts: snapshotDurableToolRecords(toolRecords),
       detail: finalized.reason || 'Final response verified',
     }, leaseId);
     const settled = finalized.blocked
-      ? failBackgroundTask(claimed.id, finalized.reason || 'Missing verified completion evidence.')
-      : completeBackgroundTask(claimed.id, finalized.text);
+      ? recordBackgroundTaskFailure(claimed.id, {
+          error: finalized.reason || 'Missing verified completion evidence.',
+          verificationFailure: true,
+          toolRecords,
+          leaseLost,
+        }, leaseId)
+      : completeBackgroundTask(claimed.id, finalized.text, leaseId);
     if (!settled) throw new Error('Recovered task state could not be settled.');
+    if (settled.status === 'queued') {
+      emitTask(io, settled);
+      pushNotification(claimed.userId, {
+        type: 'background_result',
+        title: 'Background task recovery scheduled',
+        message: `Verification did not pass; Lumi will retry safely after ${settled.nextAttemptAt || 'the backoff window'}.`.slice(0, 180),
+      });
+      return;
+    }
     persistResult(claimed, finalized.text, toolRecords, finalized.blocked);
     emitTask(io, settled);
     io.to(roomFor(claimed)).emit('agent:response', {
@@ -233,8 +255,21 @@ async function executeRecoveredTask(
     }
     const message = error instanceof Error ? error.message : String(error || 'Unknown error');
     const failureText = formatBackgroundDelegationFailure(error, /[\u3400-\u9fff]/u.test(claimed.prompt));
-    const failed = failBackgroundTask(claimed.id, failureText);
-    if (failed) emitTask(io, failed);
+    const failed = recordBackgroundTaskFailure(claimed.id, {
+      error: message,
+      toolRecords,
+      leaseLost,
+    }, leaseId);
+    if (!failed) return;
+    emitTask(io, failed);
+    if (failed.status === 'queued') {
+      pushNotification(claimed.userId, {
+        type: 'background_result',
+        title: 'Background task retry scheduled',
+        message: `${failureText} Retry after ${failed.nextAttemptAt || 'backoff'}.`.slice(0, 180),
+      });
+      return;
+    }
     persistResult(claimed, failureText, toolRecords, true);
     pushNotification(claimed.userId, {
       type: 'background_error',
@@ -264,6 +299,7 @@ export function startDurableBackgroundTaskSupervisor(
     try {
       const candidates = listBackgroundTasks()
         .filter(task => task.status === 'queued')
+        .filter(task => isDurableTaskReady(task.nextAttemptAt))
         .filter(task => Date.now() - new Date(task.updatedAt).getTime() >= claimAgeMs)
         .filter(task => !active.has(task.id))
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt));

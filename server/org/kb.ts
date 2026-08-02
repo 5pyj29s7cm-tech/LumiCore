@@ -8,6 +8,13 @@ import { generateEmbedding, cosineSimilarity } from '../memory/store';
 import { generateConfiguredEmbedding } from '../llm/embedding_provider';
 import { getRerankSelection, rerankConfiguredDocuments } from '../llm/rerank_provider';
 import {
+  assertOrganizationResourceAccess,
+  authorizeOrganizationResource,
+  getOrganizationResourcePolicy,
+  removeOrganizationResourcePolicy,
+  type OrganizationResourcePermission,
+} from './resource_acl';
+import {
   buildKnowledgeIngestionManifest,
   chunkKnowledgeText,
   evaluateKnowledgeManifest,
@@ -100,14 +107,35 @@ function hashArticleRevision(content: string): string {
 
 // Article CRUD
 
-export function listArticles(orgId: string, filters?: { category?: string; status?: string }) {
+function canAccessArticle(
+  orgId: string,
+  article: EDB.KbArticle,
+  actorUserId?: string,
+  permission: OrganizationResourcePermission = 'read',
+): boolean {
+  const { policy } = getOrganizationResourcePolicy(orgId, 'knowledge_article', article.id);
+  if (!policy) return true;
+  if (!actorUserId) return false;
+  return authorizeOrganizationResource({
+    orgId,
+    actorUserId,
+    resourceType: 'knowledge_article',
+    resourceId: article.id,
+    permission,
+    ownerUserId: article.authorId,
+  }).allowed;
+}
+
+export function listArticles(orgId: string, filters?: { category?: string; status?: string }, actorUserId?: string) {
   return EDB.listKbArticles(orgId, filters)
+    .filter(article => canAccessArticle(orgId, article, actorUserId, 'read'))
     .slice()
     .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
 }
 
-export function getArticle(orgId: string, articleId: string) {
-  return EDB.getKbArticle(orgId, articleId);
+export function getArticle(orgId: string, articleId: string, actorUserId?: string, permission: OrganizationResourcePermission = 'read') {
+  const article = EDB.getKbArticle(orgId, articleId);
+  return article && canAccessArticle(orgId, article, actorUserId, permission) ? article : undefined;
 }
 
 export function createArticle(
@@ -126,7 +154,7 @@ export function createArticle(
     details: { title: article.title, category: article.category, status: article.status },
   });
   if (options.index !== false) {
-    indexArticle(orgId, article.id).catch(err => {
+    indexArticle(orgId, article.id, authorId).catch(err => {
       console.error(`[KB] Failed to index article ${article.id}:`, err.message);
     });
   }
@@ -140,6 +168,13 @@ export function updateArticle(
   updates: { title?: string; content?: string; category?: string; tags?: string[]; status?: 'draft' | 'published' | 'archived' },
   options: ArticleMutationOptions = {},
 ) {
+  const current = EDB.getKbArticle(orgId, articleId);
+  if (current && getOrganizationResourcePolicy(orgId, 'knowledge_article', articleId).policy) {
+    assertOrganizationResourceAccess({
+      orgId, actorUserId: userId, resourceType: 'knowledge_article', resourceId: articleId,
+      permission: 'write', ownerUserId: current.authorId,
+    });
+  }
   const dbUpdates: any = normalizeArticleInput(updates);
   if (updates.tags) dbUpdates.tags = JSON.stringify(normalizeTags(updates.tags));
   const article = EDB.updateKbArticle(orgId, articleId, dbUpdates);
@@ -162,7 +197,7 @@ export function updateArticle(
         );
       }
       if (options.index !== false) {
-        indexArticle(orgId, articleId).catch(err => {
+        indexArticle(orgId, articleId, userId).catch(err => {
           console.error(`[KB] Failed to re-index article ${articleId}:`, err.message);
         });
       }
@@ -172,8 +207,21 @@ export function updateArticle(
 }
 
 export function deleteArticle(orgId: string, userId: string, articleId: string) {
+  const current = EDB.getKbArticle(orgId, articleId);
+  if (current && getOrganizationResourcePolicy(orgId, 'knowledge_article', articleId).policy) {
+    assertOrganizationResourceAccess({
+      orgId, actorUserId: userId, resourceType: 'knowledge_article', resourceId: articleId,
+      permission: 'write', ownerUserId: current.authorId,
+    });
+  }
   const result = EDB.deleteKbArticle(orgId, articleId);
   if (result) {
+    removeOrganizationResourcePolicy({
+      orgId,
+      actorUserId: userId,
+      resourceType: 'knowledge_article',
+      resourceId: articleId,
+    });
     logAudit({
       orgId,
       userId,
@@ -187,9 +235,11 @@ export function deleteArticle(orgId: string, userId: string, articleId: string) 
 
 // Stats
 
-export function getStats(orgId: string): KnowledgeStats {
-  const articles = listArticles(orgId);
-  const allEmbeddings = EDB.getAllKbEmbeddings(orgId);
+export function getStats(orgId: string, visibleArticleIds?: ReadonlySet<string>): KnowledgeStats {
+  const articles = (visibleArticleIds ? EDB.listKbArticles(orgId) : listArticles(orgId))
+    .filter(article => !visibleArticleIds || visibleArticleIds.has(article.id));
+  const allEmbeddings = EDB.getAllKbEmbeddings(orgId)
+    .filter(embedding => !visibleArticleIds || visibleArticleIds.has(embedding.articleId));
   const embeddingsByArticle = new Map<string, EDB.KbEmbedding[]>();
   for (const embedding of allEmbeddings) {
     const list = embeddingsByArticle.get(embedding.articleId) || [];
@@ -263,8 +313,8 @@ const CHUNK_OVERLAP = 120;
 
 const articleIndexGenerations = new Map<string, number>();
 
-export async function indexArticle(orgId: string, articleId: string): Promise<number> {
-  const article = EDB.getKbArticle(orgId, articleId);
+export async function indexArticle(orgId: string, articleId: string, actorUserId?: string): Promise<number> {
+  const article = getArticle(orgId, articleId, actorUserId, 'write');
   if (!article) return 0;
   const generation = (articleIndexGenerations.get(articleId) || 0) + 1;
   articleIndexGenerations.set(articleId, generation);
@@ -418,7 +468,7 @@ export async function verifyArticleKnowledge(
   userId: string,
   cases: KnowledgeGoldenCaseDefinition[],
 ): Promise<KnowledgeIngestionManifest> {
-  const article = EDB.getKbArticle(orgId, articleId);
+  const article = getArticle(orgId, articleId, userId, 'write');
   if (!article) throw new Error('Knowledge article not found.');
   const manifest = getArticleIngestionManifest(orgId, articleId);
   if (!manifest) throw new Error('Knowledge article has no ingestion manifest.');
@@ -482,7 +532,7 @@ export async function searchKnowledgeBase(
     category: options.category,
     status: options.status,
   };
-  const articles = listArticles(orgId, articleFilters);
+  const articles = listArticles(orgId, articleFilters, options.userId);
   if (articles.length === 0) return [];
 
   const articleById = new Map(articles.map(article => [article.id, article]));

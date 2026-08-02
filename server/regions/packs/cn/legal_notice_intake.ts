@@ -85,8 +85,8 @@ function findOrCreateCaseFromNotice(params: {
   const explicitTarget = extractCaseTarget(params.message);
 
   let caseFile: LegalCases.OrgLegalCaseFile | null = null;
-  if (explicitTarget) caseFile = LegalCases.listCases(params.orgId, explicitTarget, 1)[0] || null;
-  if (!caseFile && hints.caseNumber) caseFile = LegalCases.listCases(params.orgId, hints.caseNumber, 1)[0] || null;
+  if (explicitTarget) caseFile = LegalCases.listCases(params.orgId, explicitTarget, 1, params.userId)[0] || null;
+  if (!caseFile && hints.caseNumber) caseFile = LegalCases.listCases(params.orgId, hints.caseNumber, 1, params.userId)[0] || null;
 
   if (!caseFile) {
     caseFile = LegalCases.createCase(params.orgId, params.userId, {
@@ -175,7 +175,7 @@ function caseCandidates(userId: string, content: string): PendingLegalNoticeCand
   const seen = new Set<string>();
   for (const org of writableOrganizations(userId)) {
     for (const query of queries) {
-      let matches = LegalCases.listCases(org.id, query, 20);
+      let matches = LegalCases.listCases(org.id, query, 20, userId);
       if (hints.caseNumber) {
         const normalizedCaseNumber = normalizeCaseIdentity(hints.caseNumber);
         const exact = matches.filter(item => normalizeCaseIdentity(item.caseNumber) === normalizedCaseNumber);
@@ -241,7 +241,7 @@ function selectPendingCandidate(pending: PendingLegalNotice, reply: string): Pen
 
     const caseMatches: PendingLegalNoticeCandidate[] = [];
     for (const candidate of pending.candidates) {
-      for (const caseFile of LegalCases.listCases(candidate.orgId, query, 10)) {
+      for (const caseFile of LegalCases.listCases(candidate.orgId, query, 10, pending.userId)) {
         caseMatches.push({
           orgId: candidate.orgId,
           orgName: candidate.orgName,
@@ -398,7 +398,7 @@ async function runOrganizationLegalIntake(
       source: `${msg.platform}-legal-notice-intake`,
     });
     const caseId = parseCaseId(report) || target.caseId || '';
-    const caseFile = caseId ? LegalCases.getCase(target.orgId, caseId) : null;
+    const caseFile = caseId ? LegalCases.getCase(target.orgId, caseId, userId) : null;
     const reminderCount = caseFile
       ? createCaseAlerts({ userId, orgId: target.orgId, caseFile, content: `${messageText}\n${report}` })
       : 0;
@@ -431,7 +431,7 @@ async function runOrganizationLegalIntake(
     domain: 'work',
     source: `${msg.platform}-legal-notice-intake`,
   });
-  const refreshed = LegalCases.getCase(target.orgId, caseFile.id) || caseFile;
+  const refreshed = LegalCases.getCase(target.orgId, caseFile.id, userId) || caseFile;
   const reminderCount = createCaseAlerts({ userId, orgId: target.orgId, caseFile: refreshed, content: `${messageText}\n${report}` });
   return [
     `已收到${platformLabel(msg.platform)}转发的法院短信链接，并写入案件。`,

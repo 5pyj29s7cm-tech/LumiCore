@@ -93,6 +93,21 @@ const PERFORMANCE_INDEX_SQL = [
   `CREATE INDEX IF NOT EXISTS idx_canvas_sessions_org ON canvas_sessions(orgId, userId)`,
   `CREATE INDEX IF NOT EXISTS idx_org_memberships_user_status ON org_memberships(userId, status)`,
   `CREATE INDEX IF NOT EXISTS idx_org_memberships_org_status ON org_memberships(orgId, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_org_positions_org_status ON org_positions(orgId, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_org_work_rules_org_enabled ON org_work_routing_rules(orgId, enabled, priority)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_org_work_items_idempotency ON org_work_items(orgId, idempotencyKey)`,
+  `CREATE INDEX IF NOT EXISTS idx_org_work_items_org_status ON org_work_items(orgId, status, updatedAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_org_work_items_task ON org_work_items(orgId, taskId)`,
+  `CREATE INDEX IF NOT EXISTS idx_org_work_approvals_org_status ON org_work_approvals(orgId, status, updatedAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_org_work_approvals_item ON org_work_approvals(orgId, workItemId)`,
+  `CREATE INDEX IF NOT EXISTS idx_org_work_handoffs_item ON org_work_handoffs(orgId, workItemId, updatedAt)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_org_resource_policy_identity ON org_resource_policies(orgId, resourceType, resourceId)`,
+  `CREATE INDEX IF NOT EXISTS idx_org_resource_policies_scope ON org_resource_policies(orgId, resourceType, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_org_resource_grants_resource ON org_resource_grants(orgId, resourceType, resourceId)`,
+  `CREATE INDEX IF NOT EXISTS idx_org_resource_grants_subject ON org_resource_grants(orgId, subjectType, subjectId)`,
+  `CREATE INDEX IF NOT EXISTS idx_org_credential_references_org_status ON org_credential_references(orgId, status)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_org_devices_branch ON org_devices(branchId)`,
+  `CREATE INDEX IF NOT EXISTS idx_org_devices_org_status ON org_devices(orgId, status, updatedAt)`,
   `CREATE INDEX IF NOT EXISTS idx_org_kb_articles_org_category ON org_kb_articles(orgId, category, status)`,
   `CREATE INDEX IF NOT EXISTS idx_org_kb_embeddings_article ON org_kb_embeddings(articleId)`,
   `CREATE INDEX IF NOT EXISTS idx_notifications_user_ts ON notifications(userId, timestamp)`,
@@ -267,6 +282,46 @@ function parseJsonSetting<T>(settings: any[], key: string, fallback: T): T {
   }
 }
 
+function parseJsonArrayValue(value: unknown): any[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string' || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function parsePayloadRows(rows: any[]): any[] {
+  return (rows || []).flatMap((row: any) => {
+    try {
+      const payload = JSON.parse(row.payload || '{}');
+      return payload && typeof payload === 'object' && !Array.isArray(payload)
+        ? [{
+            ...payload,
+            id: row.id,
+            orgId: row.orgId,
+            ...(row.status !== undefined ? { status: row.status } : {}),
+            ...(row.enabled !== undefined ? { enabled: Boolean(row.enabled) } : {}),
+            ...(row.priority !== undefined ? { priority: Number(row.priority) || 0 } : {}),
+            ...(row.idempotencyKey !== undefined ? { idempotencyKey: row.idempotencyKey } : {}),
+            ...(row.requestId !== undefined ? { requestId: row.requestId } : {}),
+            ...(row.source !== undefined ? { source: row.source } : {}),
+            ...(row.requesterUserId !== undefined ? { requesterUserId: row.requesterUserId } : {}),
+            ...(row.conversationId !== undefined ? { conversationId: row.conversationId } : {}),
+            ...(row.taskId !== undefined ? { taskId: row.taskId } : {}),
+            ...(row.workItemId !== undefined ? { workItemId: row.workItemId } : {}),
+            createdAt: row.createdAt || payload.createdAt,
+            updatedAt: row.updatedAt || payload.updatedAt,
+          }]
+        : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
 function settingsRowsWithSystemState(): any[][] {
   const settings = Array.isArray(memoryDB?.settings) ? memoryDB.settings : [];
   const rows = settings
@@ -405,6 +460,8 @@ function migrateSchema(): Promise<void> {
     // Add runtime + externalCommand to agents
     db!.run("ALTER TABLE agents ADD COLUMN runtime TEXT DEFAULT 'internal'", onAlter);
     db!.run("ALTER TABLE agents ADD COLUMN externalCommand TEXT DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE agents ADD COLUMN skillTags TEXT NOT NULL DEFAULT '[]'", onAlter);
+    db!.run("ALTER TABLE agents ADD COLUMN knowledgeDomains TEXT NOT NULL DEFAULT '[]'", onAlter);
     // Add agentId to memories for agent-private memory
     db!.run("ALTER TABLE memories ADD COLUMN agentId TEXT DEFAULT ''", onAlter);
     // Add location to memories for spatial context
@@ -540,8 +597,12 @@ function createTables(): Promise<void> {
         memoryScope TEXT DEFAULT 'shared',
         autonomyLevel TEXT DEFAULT 'reactive',
         runtimeConfig TEXT DEFAULT '{}',
+        runtime TEXT DEFAULT 'internal',
+        externalCommand TEXT DEFAULT '',
         domain TEXT DEFAULT 'personal',
-        orgId TEXT DEFAULT ''
+        orgId TEXT DEFAULT '',
+        skillTags TEXT NOT NULL DEFAULT '[]',
+        knowledgeDomains TEXT NOT NULL DEFAULT '[]'
       );
 
       CREATE TABLE IF NOT EXISTS interactions (
@@ -874,6 +935,108 @@ function createTables(): Promise<void> {
         UNIQUE(orgId, userId)
       );
 
+      CREATE TABLE IF NOT EXISTS org_positions (
+        id TEXT PRIMARY KEY,
+        orgId TEXT NOT NULL,
+        departmentId TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        payload TEXT NOT NULL DEFAULT '{}',
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS org_work_routing_rules (
+        id TEXT PRIMARY KEY,
+        orgId TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        priority INTEGER NOT NULL DEFAULT 0,
+        payload TEXT NOT NULL DEFAULT '{}',
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS org_work_items (
+        id TEXT PRIMARY KEY,
+        orgId TEXT NOT NULL,
+        idempotencyKey TEXT NOT NULL,
+        requestId TEXT NOT NULL,
+        source TEXT NOT NULL,
+        requesterUserId TEXT NOT NULL,
+        conversationId TEXT NOT NULL DEFAULT '',
+        taskId TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}',
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        UNIQUE(orgId, idempotencyKey)
+      );
+
+      CREATE TABLE IF NOT EXISTS org_work_approvals (
+        id TEXT PRIMARY KEY,
+        orgId TEXT NOT NULL,
+        workItemId TEXT NOT NULL,
+        status TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}',
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS org_work_handoffs (
+        id TEXT PRIMARY KEY,
+        orgId TEXT NOT NULL,
+        workItemId TEXT NOT NULL,
+        status TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}',
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS org_resource_policies (
+        id TEXT PRIMARY KEY,
+        orgId TEXT NOT NULL,
+        resourceType TEXT NOT NULL,
+        resourceId TEXT NOT NULL,
+        classification TEXT NOT NULL DEFAULT 'organization',
+        status TEXT NOT NULL DEFAULT 'active',
+        payload TEXT NOT NULL DEFAULT '{}',
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        UNIQUE(orgId, resourceType, resourceId)
+      );
+
+      CREATE TABLE IF NOT EXISTS org_resource_grants (
+        id TEXT PRIMARY KEY,
+        orgId TEXT NOT NULL,
+        resourceType TEXT NOT NULL,
+        resourceId TEXT NOT NULL,
+        subjectType TEXT NOT NULL,
+        subjectId TEXT NOT NULL,
+        effect TEXT NOT NULL DEFAULT 'allow',
+        payload TEXT NOT NULL DEFAULT '{}',
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS org_credential_references (
+        id TEXT PRIMARY KEY,
+        orgId TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        payload TEXT NOT NULL DEFAULT '{}',
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS org_devices (
+        id TEXT PRIMARY KEY,
+        orgId TEXT NOT NULL,
+        branchId TEXT NOT NULL UNIQUE,
+        userId TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        payload TEXT NOT NULL DEFAULT '{}',
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS org_invitations (
         id TEXT PRIMARY KEY,
         orgId TEXT NOT NULL,
@@ -1071,6 +1234,15 @@ async function loadMemoryDB(): Promise<void> {
   const organizations = await query<any>('SELECT * FROM organizations');
   const departments = await query<any>('SELECT * FROM departments');
   const orgMemberships = await query<any>('SELECT * FROM org_memberships');
+  const orgPositionsRaw = await query<any>('SELECT * FROM org_positions');
+  const orgWorkRoutingRulesRaw = await query<any>('SELECT * FROM org_work_routing_rules');
+  const orgWorkItemsRaw = await query<any>('SELECT * FROM org_work_items');
+  const orgWorkApprovalsRaw = await query<any>('SELECT * FROM org_work_approvals');
+  const orgWorkHandoffsRaw = await query<any>('SELECT * FROM org_work_handoffs');
+  const orgResourcePoliciesRaw = await query<any>('SELECT * FROM org_resource_policies');
+  const orgResourceGrantsRaw = await query<any>('SELECT * FROM org_resource_grants');
+  const orgCredentialReferencesRaw = await query<any>('SELECT * FROM org_credential_references');
+  const orgDevicesRaw = await query<any>('SELECT * FROM org_devices');
   const orgInvitations = await query<any>('SELECT * FROM org_invitations');
   const orgKbArticles = await query<any>('SELECT * FROM org_kb_articles');
   const orgKbEmbeddings = await query<any>('SELECT * FROM org_kb_embeddings');
@@ -1113,6 +1285,8 @@ async function loadMemoryDB(): Promise<void> {
     runtimeConfig: a.runtimeConfig || '{}',
     domain: a.domain || 'personal',
     orgId: a.orgId || '',
+    skillTags: parseJsonArrayValue(a.skillTags).map(item => String(item || '').trim()).filter(Boolean),
+    knowledgeDomains: parseJsonArrayValue(a.knowledgeDomains).map(item => String(item || '').trim()).filter(Boolean),
   }));
 
   const interactions = interactionsRaw.map((i: any) => ({
@@ -1309,6 +1483,15 @@ async function loadMemoryDB(): Promise<void> {
     organizations: organizations || [],
     departments: departments || [],
     orgMemberships: orgMemberships || [],
+    orgPositions: parsePayloadRows(orgPositionsRaw),
+    orgWorkRoutingRules: parsePayloadRows(orgWorkRoutingRulesRaw),
+    orgWorkItems: parsePayloadRows(orgWorkItemsRaw),
+    orgWorkApprovals: parsePayloadRows(orgWorkApprovalsRaw),
+    orgWorkHandoffs: parsePayloadRows(orgWorkHandoffsRaw),
+    orgResourcePolicies: parsePayloadRows(orgResourcePoliciesRaw),
+    orgResourceGrants: parsePayloadRows(orgResourceGrantsRaw),
+    orgCredentialReferences: parsePayloadRows(orgCredentialReferencesRaw),
+    orgDevices: parsePayloadRows(orgDevicesRaw),
     orgInvitations: orgInvitations || [],
     orgKbArticles: orgKbArticles || [],
     orgKbEmbeddings: orgKbEmbeddings || [],
@@ -1595,9 +1778,9 @@ async function persistMemoryDB(): Promise<void> {
     },
     {
       name: 'agents',
-      createSQL: `CREATE TABLE _temp_agents (id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL, config TEXT NOT NULL, createdAt TEXT NOT NULL, userId TEXT, status TEXT DEFAULT 'active', personalityId TEXT DEFAULT 'lumi', modelPreference TEXT DEFAULT '', memoryScope TEXT DEFAULT 'shared', autonomyLevel TEXT DEFAULT 'reactive', runtimeConfig TEXT DEFAULT '{}', runtime TEXT DEFAULT 'internal', externalCommand TEXT DEFAULT '', domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '')`,
-      insertSQL: `INSERT INTO _temp_agents (id, name, category, config, createdAt, userId, status, personalityId, modelPreference, memoryScope, autonomyLevel, runtimeConfig, runtime, externalCommand, domain, orgId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => memoryDB.agents.map((a: any) => [a.id, a.name, a.category, a.data || a.config || '{}', a.createdAt, a.ownerUid || a.userId || null, a.status || 'active', a.personalityId || 'lumi', a.modelPreference || '', a.memoryScope || 'shared', a.autonomyLevel || 'reactive', a.runtimeConfig || '{}', a.runtime || 'internal', a.externalCommand || '', a.domain || 'personal', a.orgId || '']),
+      createSQL: `CREATE TABLE _temp_agents (id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL, config TEXT NOT NULL, createdAt TEXT NOT NULL, userId TEXT, status TEXT DEFAULT 'active', personalityId TEXT DEFAULT 'lumi', modelPreference TEXT DEFAULT '', memoryScope TEXT DEFAULT 'shared', autonomyLevel TEXT DEFAULT 'reactive', runtimeConfig TEXT DEFAULT '{}', runtime TEXT DEFAULT 'internal', externalCommand TEXT DEFAULT '', domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '', skillTags TEXT NOT NULL DEFAULT '[]', knowledgeDomains TEXT NOT NULL DEFAULT '[]')`,
+      insertSQL: `INSERT INTO _temp_agents (id, name, category, config, createdAt, userId, status, personalityId, modelPreference, memoryScope, autonomyLevel, runtimeConfig, runtime, externalCommand, domain, orgId, skillTags, knowledgeDomains) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => memoryDB.agents.map((a: any) => [a.id, a.name, a.category, a.data || a.config || '{}', a.createdAt, a.ownerUid || a.userId || null, a.status || 'active', a.personalityId || 'lumi', a.modelPreference || '', a.memoryScope || 'shared', a.autonomyLevel || 'reactive', a.runtimeConfig || '{}', a.runtime || 'internal', a.externalCommand || '', a.domain || 'personal', a.orgId || '', JSON.stringify(Array.isArray(a.skillTags) ? a.skillTags : []), JSON.stringify(Array.isArray(a.knowledgeDomains) ? a.knowledgeDomains : [])]),
     },
     {
       name: 'interactions',
@@ -1907,6 +2090,60 @@ async function persistMemoryDB(): Promise<void> {
       createSQL: `CREATE TABLE _temp_org_memberships (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, userId TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'member', departmentId TEXT, status TEXT NOT NULL DEFAULT 'active', invitedBy TEXT, joinedAt TEXT, createdAt TEXT NOT NULL, UNIQUE(orgId, userId))`,
       insertSQL: `INSERT INTO _temp_org_memberships (id, orgId, userId, role, departmentId, status, invitedBy, joinedAt, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       rows: () => (memoryDB.orgMemberships || []).map((m: any) => [m.id, m.orgId, m.userId, m.role || 'member', m.departmentId || null, m.status || 'active', m.invitedBy || null, m.joinedAt || null, m.createdAt]),
+    },
+    {
+      name: 'org_positions',
+      createSQL: `CREATE TABLE _temp_org_positions (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, departmentId TEXT, status TEXT NOT NULL DEFAULT 'active', payload TEXT NOT NULL DEFAULT '{}', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
+      insertSQL: `INSERT INTO _temp_org_positions (id, orgId, departmentId, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.orgPositions || []).map((item: any) => [item.id, item.orgId, item.departmentId || null, item.status || 'active', JSON.stringify(item), item.createdAt, item.updatedAt]),
+    },
+    {
+      name: 'org_work_routing_rules',
+      createSQL: `CREATE TABLE _temp_org_work_routing_rules (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, priority INTEGER NOT NULL DEFAULT 0, payload TEXT NOT NULL DEFAULT '{}', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
+      insertSQL: `INSERT INTO _temp_org_work_routing_rules (id, orgId, enabled, priority, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.orgWorkRoutingRules || []).map((item: any) => [item.id, item.orgId, item.enabled === false ? 0 : 1, Number(item.priority) || 0, JSON.stringify(item), item.createdAt, item.updatedAt]),
+    },
+    {
+      name: 'org_work_items',
+      createSQL: `CREATE TABLE _temp_org_work_items (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, idempotencyKey TEXT NOT NULL, requestId TEXT NOT NULL, source TEXT NOT NULL, requesterUserId TEXT NOT NULL, conversationId TEXT NOT NULL DEFAULT '', taskId TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, UNIQUE(orgId, idempotencyKey))`,
+      insertSQL: `INSERT INTO _temp_org_work_items (id, orgId, idempotencyKey, requestId, source, requesterUserId, conversationId, taskId, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.orgWorkItems || []).map((item: any) => [item.id, item.orgId, item.idempotencyKey, item.requestId, item.source, item.requesterUserId, item.conversationId || '', item.taskId || '', item.status, JSON.stringify(item), item.createdAt, item.updatedAt]),
+    },
+    {
+      name: 'org_work_approvals',
+      createSQL: `CREATE TABLE _temp_org_work_approvals (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, workItemId TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
+      insertSQL: `INSERT INTO _temp_org_work_approvals (id, orgId, workItemId, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.orgWorkApprovals || []).map((item: any) => [item.id, item.orgId, item.workItemId, item.status, JSON.stringify(item), item.createdAt, item.updatedAt]),
+    },
+    {
+      name: 'org_work_handoffs',
+      createSQL: `CREATE TABLE _temp_org_work_handoffs (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, workItemId TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
+      insertSQL: `INSERT INTO _temp_org_work_handoffs (id, orgId, workItemId, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.orgWorkHandoffs || []).map((item: any) => [item.id, item.orgId, item.workItemId, item.status, JSON.stringify(item), item.createdAt, item.updatedAt]),
+    },
+    {
+      name: 'org_resource_policies',
+      createSQL: `CREATE TABLE _temp_org_resource_policies (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, resourceType TEXT NOT NULL, resourceId TEXT NOT NULL, classification TEXT NOT NULL DEFAULT 'organization', status TEXT NOT NULL DEFAULT 'active', payload TEXT NOT NULL DEFAULT '{}', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, UNIQUE(orgId, resourceType, resourceId))`,
+      insertSQL: `INSERT INTO _temp_org_resource_policies (id, orgId, resourceType, resourceId, classification, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.orgResourcePolicies || []).map((item: any) => [item.id, item.orgId, item.resourceType, item.resourceId, item.classification || 'organization', item.status || 'active', JSON.stringify(item), item.createdAt, item.updatedAt]),
+    },
+    {
+      name: 'org_resource_grants',
+      createSQL: `CREATE TABLE _temp_org_resource_grants (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, resourceType TEXT NOT NULL, resourceId TEXT NOT NULL, subjectType TEXT NOT NULL, subjectId TEXT NOT NULL, effect TEXT NOT NULL DEFAULT 'allow', payload TEXT NOT NULL DEFAULT '{}', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
+      insertSQL: `INSERT INTO _temp_org_resource_grants (id, orgId, resourceType, resourceId, subjectType, subjectId, effect, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.orgResourceGrants || []).map((item: any) => [item.id, item.orgId, item.resourceType, item.resourceId, item.subjectType, item.subjectId, item.effect || 'allow', JSON.stringify(item), item.createdAt, item.updatedAt]),
+    },
+    {
+      name: 'org_credential_references',
+      createSQL: `CREATE TABLE _temp_org_credential_references (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', payload TEXT NOT NULL DEFAULT '{}', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
+      insertSQL: `INSERT INTO _temp_org_credential_references (id, orgId, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.orgCredentialReferences || []).map((item: any) => [item.id, item.orgId, item.status || 'active', JSON.stringify(item), item.createdAt, item.updatedAt]),
+    },
+    {
+      name: 'org_devices',
+      createSQL: `CREATE TABLE _temp_org_devices (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, branchId TEXT NOT NULL UNIQUE, userId TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', payload TEXT NOT NULL DEFAULT '{}', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
+      insertSQL: `INSERT INTO _temp_org_devices (id, orgId, branchId, userId, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.orgDevices || []).map((item: any) => [item.id, item.orgId, item.branchId, item.userId, item.status || 'active', JSON.stringify(item), item.createdAt, item.updatedAt]),
     },
     {
       name: 'org_invitations',

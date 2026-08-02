@@ -546,10 +546,10 @@ function evaluateLegalReasoningGate(args: Record<string, any>, sourceText: strin
   };
 }
 
-function findArchivedLegalReasoningGateText(args: Record<string, any>, orgId: string): string {
+function findArchivedLegalReasoningGateText(args: Record<string, any>, orgId: string, userId?: string): string {
   const caseId = textArg(args, 'caseId');
   if (!caseId) return '';
-  const caseFile = LegalCases.getCase(orgId, caseId);
+  const caseFile = LegalCases.getCase(orgId, caseId, userId);
   if (!caseFile) return '';
   const material = (caseFile.materials || []).find(item => {
     const haystack = `${item.title}\n${item.content || ''}`;
@@ -910,7 +910,7 @@ function appendLegalCaseMaterial(args: {
   localPath?: string;
 }): LegalCases.OrgLegalCaseMaterial | null {
   if (!args.caseId) return null;
-  const caseFile = LegalCases.getCase(args.orgId, args.caseId);
+  const caseFile = LegalCases.getCase(args.orgId, args.caseId, args.userId, 'write');
   if (!caseFile) return null;
   return LegalCases.addMaterial(args.orgId, args.userId, args.caseId, {
     type: args.type,
@@ -939,9 +939,9 @@ function archiveLegalReportToCase(args: Record<string, any>, params: {
   const shouldArchive = args.persistCase === true || !!explicitCaseId || !!explicitCaseName;
   if (!shouldArchive) return '- 案件空间：未归档（未提供 caseId/caseName；设置 persistCase=true 可创建案件）';
 
-  let caseFile = explicitCaseId ? LegalCases.getCase(params.orgId, explicitCaseId) : null;
+  let caseFile = explicitCaseId ? LegalCases.getCase(params.orgId, explicitCaseId, params.userId, 'write') : null;
   if (!caseFile && explicitCaseName) {
-    caseFile = LegalCases.listCases(params.orgId, explicitCaseName, 1)[0] || null;
+    caseFile = LegalCases.listCases(params.orgId, explicitCaseName, 1, params.userId)[0] || null;
   }
   if (!caseFile && explicitCaseId && !explicitCaseName && args.persistCase !== true) {
     return '- 案件空间：未归档（caseId 不存在或无权限）';
@@ -1294,8 +1294,8 @@ async function meetingMinutesToCaseHandler(args: Record<string, any>, context?: 
   let caseFile: LegalCases.OrgLegalCaseFile | null = null;
   if (persist) {
     const explicitCaseId = textArg(args, 'caseId');
-    caseFile = explicitCaseId ? LegalCases.getCase(orgId, explicitCaseId) : null;
-    if (!caseFile) caseFile = LegalCases.listCases(orgId, caseName, 1)[0] || null;
+    caseFile = explicitCaseId ? LegalCases.getCase(orgId, explicitCaseId, userId, 'write') : null;
+    if (!caseFile) caseFile = LegalCases.listCases(orgId, caseName, 1, userId)[0] || null;
     if (!caseFile) {
       caseFile = LegalCases.createCase(orgId, userId, {
         title: caseName,
@@ -1509,8 +1509,8 @@ async function reasoningMatrixHandler(args: Record<string, any>, context?: any):
   let archiveLine = '- 案件空间：未归档（persistCase=false）';
   if (persist) {
     const explicitCaseId = textArg(args, 'caseId');
-    caseFile = explicitCaseId ? LegalCases.getCase(orgId, explicitCaseId) : null;
-    if (!caseFile) caseFile = LegalCases.listCases(orgId, caseName, 1)[0] || null;
+    caseFile = explicitCaseId ? LegalCases.getCase(orgId, explicitCaseId, userId, 'write') : null;
+    if (!caseFile) caseFile = LegalCases.listCases(orgId, caseName, 1, userId)[0] || null;
     if (!caseFile) {
       caseFile = LegalCases.createCase(orgId, userId, {
         title: caseName,
@@ -1573,9 +1573,9 @@ async function caseWorkspaceHandler(args: Record<string, any>, context?: any): P
   let caseFile: LegalCases.OrgLegalCaseFile | null = null;
   if (persist) {
     const explicitCaseId = textArg(args, 'caseId');
-    caseFile = explicitCaseId ? LegalCases.getCase(orgId, explicitCaseId) : null;
+    caseFile = explicitCaseId ? LegalCases.getCase(orgId, explicitCaseId, userId, 'write') : null;
     if (!caseFile) {
-      caseFile = LegalCases.listCases(orgId, caseName, 1)[0] || null;
+      caseFile = LegalCases.listCases(orgId, caseName, 1, userId)[0] || null;
     }
     const patch = {
       title: caseName,
@@ -1599,7 +1599,7 @@ async function caseWorkspaceHandler(args: Record<string, any>, context?: any): P
         source: 'tool',
       });
     }
-    caseFile = LegalCases.getCase(orgId, caseFile.id) || caseFile;
+    caseFile = LegalCases.getCase(orgId, caseFile.id, userId) || caseFile;
   }
 
   const caseIdLine = caseFile ? `- 案件ID：${caseFile.id}` : '- 案件ID：未持久化（persistCase=false）';
@@ -1696,6 +1696,7 @@ ${queries.map((query, index) => `${index + 1}. ${query}`).join('\n')}
 
 async function caseWorkflowStatusHandler(args: Record<string, any>, context?: any): Promise<string> {
   const orgId = legalWorkspaceId(args, context);
+  const userId = textArg(args, 'userId') || context?.userId || 'system';
   const caseName = textArg(args, 'caseName') || textArg(args, 'title') || textArg(args, 'query');
   const caseId = textArg(args, 'caseId');
   const role = roleLabel(textArg(args, 'role'));
@@ -1707,9 +1708,9 @@ async function caseWorkflowStatusHandler(args: Record<string, any>, context?: an
   const evidence = textArg(args, 'evidence');
   const stage = normalizeLegalCaseStage(textArg(args, 'stage'));
 
-  let caseFile = caseId ? LegalCases.getCase(orgId, caseId) : null;
+  let caseFile = caseId ? LegalCases.getCase(orgId, caseId, userId) : null;
   if (!caseFile && caseName) {
-    caseFile = LegalCases.listCases(orgId, caseName, 1)[0] || null;
+    caseFile = LegalCases.listCases(orgId, caseName, 1, userId)[0] || null;
   }
 
   const hasInlineMaterial = [
@@ -1821,13 +1822,13 @@ async function legalMessageIntakeToCaseHandler(args: Record<string, any>, contex
   const hints = LegalCases.extractLegalCaseHints(messageText);
   const specificCourt = extractSpecificCourtFromLegalMessage(messageText);
   if (specificCourt) hints.court = specificCourt;
-  let caseFile = textArg(args, 'caseId') ? LegalCases.getCase(orgId, textArg(args, 'caseId')) : null;
+  let caseFile = textArg(args, 'caseId') ? LegalCases.getCase(orgId, textArg(args, 'caseId'), userId, 'write') : null;
   const explicitCaseName = textArg(args, 'caseName') || textArg(args, 'title') || extractCaseNameFromLegalMessage(messageText);
   if (!caseFile && explicitCaseName) {
-    caseFile = LegalCases.listCases(orgId, explicitCaseName, 1)[0] || null;
+    caseFile = LegalCases.listCases(orgId, explicitCaseName, 1, userId)[0] || null;
   }
   if (!caseFile && hints.caseNumber) {
-    caseFile = LegalCases.listCases(orgId, hints.caseNumber, 1)[0] || null;
+    caseFile = LegalCases.listCases(orgId, hints.caseNumber, 1, userId)[0] || null;
   }
 
   const persistCase = args.persistCase !== false;
@@ -1906,7 +1907,7 @@ async function legalMessageIntakeToCaseHandler(args: Record<string, any>, contex
         if (attachmentMaterial?.id) attachmentMaterialIds.push(attachmentMaterial.id);
       }
     }
-    caseFile = LegalCases.getCase(orgId, caseFile.id) || caseFile;
+    caseFile = LegalCases.getCase(orgId, caseFile.id, userId) || caseFile;
   }
 
   let linkLine = urls.length ? `已识别 ${urls.length} 个链接，暂未处理。` : '未识别链接。';
@@ -1957,7 +1958,7 @@ async function legalMessageIntakeToCaseHandler(args: Record<string, any>, contex
       } else {
         linkLine = '链接已调用处理工具，结果已记录；请查看案件材料中的链接处理报告。';
       }
-      if (caseFile) caseFile = LegalCases.getCase(orgId, caseFile.id) || caseFile;
+      if (caseFile) caseFile = LegalCases.getCase(orgId, caseFile.id, userId) || caseFile;
     } catch (err: any) {
       linkLine = `链接处理未完成：${err?.message || String(err)}`;
     }
@@ -2439,7 +2440,8 @@ async function searchCaseHandler(args: Record<string, any>, context?: any): Prom
 
   // Search local KB
   const orgId = legalWorkspaceId(args, context);
-  const localResults = await searchSimilarCases(orgId, query, limit);
+  const userId = textArg(args, 'userId') || context?.userId || 'system';
+  const localResults = await searchSimilarCases(orgId, query, limit, userId);
 
   if (localResults.length > 0) {
     const lines = localResults.map((r, i) =>
@@ -2459,7 +2461,8 @@ async function searchStatuteHandler(args: Record<string, any>, context?: any): P
   if (!query) return '请提供法条名称或关键词（query参数）';
 
   const orgId = legalWorkspaceId(args, context);
-  const results = await searchStatutes(orgId, query);
+  const userId = textArg(args, 'userId') || context?.userId || 'system';
+  const results = await searchStatutes(orgId, query, 5, userId);
   const externalResults = await searchLegalAuthorityDatabase({
     query,
     type: 'law',
@@ -2670,7 +2673,7 @@ async function reviewContractHandler(args: Record<string, any>, context?: any): 
   const caseResults: string[] = [];
 
   for (const kw of riskKeywords.slice(0, 3)) {
-    const cases = await searchSimilarCases(orgId, kw, 3);
+    const cases = await searchSimilarCases(orgId, kw, 3, userId);
     for (const c of cases) {
       caseResults.push(`- ${c.title} (${c.caseNumber || 'N/A'}): ${c.chunk.slice(0, 150)}`);
     }
@@ -2958,14 +2961,15 @@ async function equityPenetrationHandler(args: Record<string, any>, context?: any
 async function caseStrategyHandler(args: Record<string, any>, context?: any): Promise<string> {
   const facts = args.facts as string;
   const orgId = legalWorkspaceId(args, context);
+  const userId = textArg(args, 'userId') || context?.userId || 'system';
   const caseName = textArg(args, 'caseName') || '诉讼策略分析';
   const caseType = textArg(args, 'caseType') || '诉讼策略';
   if (!facts) return '请提供案件事实描述（facts参数）';
 
   // Search similar cases
-  const similarCases = await searchSimilarCases(orgId, facts, 5);
+  const similarCases = await searchSimilarCases(orgId, facts, 5, userId);
   // Search relevant statutes
-  const statutes = await searchStatutes(orgId, facts, 5);
+  const statutes = await searchStatutes(orgId, facts, 5, userId);
 
   const caseRefs = similarCases.map(c =>
     `- ${c.title} (${c.caseNumber || 'N/A'}, ${c.court || ''}, 相似度: ${c.score})`,
@@ -5005,9 +5009,9 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
     'delivery_package',
   );
 
-  const archivedReasoning = findArchivedLegalReasoningGateText(args, orgId);
+  const archivedReasoning = findArchivedLegalReasoningGateText(args, orgId, userId);
   const reasoningArgs = archivedReasoning ? { ...args, archivedReasoning } : args;
-  const caseFileForDeliveryGate = caseId ? LegalCases.getCase(orgId, caseId) : null;
+  const caseFileForDeliveryGate = caseId ? LegalCases.getCase(orgId, caseId, userId) : null;
   const citationGateArgs = {
     ...args,
     caseName,
@@ -5563,8 +5567,8 @@ interface LegalReceiptProfile {
   classify?: (content: string, args: Record<string, any>) => { ok: boolean; status: string };
 }
 
-function legalCaseSnapshot(orgId: string): Map<string, string> {
-  return new Map(LegalCases.listCases(orgId, '', 200).map(caseFile => [
+function legalCaseSnapshot(orgId: string, userId?: string): Map<string, string> {
+  return new Map(LegalCases.listCases(orgId, '', 200, userId).map(caseFile => [
     caseFile.id,
     JSON.stringify({
       updatedAt: caseFile.updatedAt,
@@ -5615,10 +5619,11 @@ function shouldExpectCaseMutation(args: Record<string, any>, mode?: LegalReceipt
 function withLegalReceipt(handler: LegalToolHandler, profile: LegalReceiptProfile): LegalToolHandler {
   return async (args, context) => {
     const orgId = legalWorkspaceId(args, context);
-    const beforeCases = legalCaseSnapshot(orgId);
+    const userId = textArg(args, 'userId') || context?.userId || 'system';
+    const beforeCases = legalCaseSnapshot(orgId, userId);
     const beforeArticles = legalArticleIds(orgId);
     const content = await handler(args, context);
-    const afterCases = legalCaseSnapshot(orgId);
+    const afterCases = legalCaseSnapshot(orgId, userId);
     const afterArticles = legalArticleIds(orgId);
     const changedCaseIds = changedLegalCaseIds(beforeCases, afterCases);
     const articleIds = Array.from(afterArticles).filter(id => !beforeArticles.has(id));

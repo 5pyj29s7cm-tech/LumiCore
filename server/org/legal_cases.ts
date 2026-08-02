@@ -3,6 +3,13 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 import { getDataPath } from '../config/data_path';
 import * as EDB from './db';
+import {
+  assertOrganizationResourceAccess,
+  authorizeOrganizationResource,
+  getOrganizationResourcePolicy,
+  removeOrganizationResourcePolicy,
+  type OrganizationResourcePermission,
+} from './resource_acl';
 
 export type LegalCaseStage = 'consultation' | 'filing' | 'trial' | 'judgment' | 'enforcement' | 'closed';
 export type LegalCaseMaterialType = 'consultation' | 'evidence' | 'pleading' | 'judgment' | 'contract' | 'note';
@@ -300,9 +307,27 @@ export function extractLegalCaseHints(text: string): Partial<Pick<OrgLegalCaseFi
   return hints;
 }
 
-export function listCases(orgId: string, query = '', limit = 50): OrgLegalCaseFile[] {
+function canAccessCase(
+  caseFile: OrgLegalCaseFile,
+  actorUserId?: string,
+  permission: OrganizationResourcePermission = 'read',
+): boolean {
+  const { policy } = getOrganizationResourcePolicy(caseFile.orgId, 'legal_case', caseFile.id);
+  if (!policy) return true;
+  if (!actorUserId) return false;
+  return authorizeOrganizationResource({
+    orgId: caseFile.orgId,
+    actorUserId,
+    resourceType: 'legal_case',
+    resourceId: caseFile.id,
+    permission,
+    ownerUserId: caseFile.createdBy,
+  }).allowed;
+}
+
+export function listCases(orgId: string, query = '', limit = 50, actorUserId?: string): OrgLegalCaseFile[] {
   const q = query.trim().toLowerCase();
-  let cases = readStore().cases.filter(item => item.orgId === orgId);
+  let cases = readStore().cases.filter(item => item.orgId === orgId && canAccessCase(item, actorUserId, 'read'));
   if (q) {
     cases = cases.filter(item => {
       const haystack = [
@@ -323,8 +348,14 @@ export function listCases(orgId: string, query = '', limit = 50): OrgLegalCaseFi
     .slice(0, Math.max(1, Math.min(limit, 200)));
 }
 
-export function getCase(orgId: string, caseId: string): OrgLegalCaseFile | null {
-  return readStore().cases.find(item => item.orgId === orgId && item.id === caseId) || null;
+export function getCase(
+  orgId: string,
+  caseId: string,
+  actorUserId?: string,
+  permission: OrganizationResourcePermission = 'read',
+): OrgLegalCaseFile | null {
+  const caseFile = readStore().cases.find(item => item.orgId === orgId && item.id === caseId) || null;
+  return caseFile && canAccessCase(caseFile, actorUserId, permission) ? caseFile : null;
 }
 
 export function createCase(orgId: string, userId: string, input: Partial<OrgLegalCaseFile>): OrgLegalCaseFile {
@@ -369,6 +400,12 @@ export function updateCase(orgId: string, userId: string, caseId: string, patch:
   const idx = store.cases.findIndex(item => item.orgId === orgId && item.id === caseId);
   if (idx < 0) return null;
   const current = store.cases[idx];
+  if (getOrganizationResourcePolicy(orgId, 'legal_case', caseId).policy) {
+    assertOrganizationResourceAccess({
+      orgId, actorUserId: userId, resourceType: 'legal_case', resourceId: caseId,
+      permission: 'write', ownerUserId: current.createdBy,
+    });
+  }
   const next: OrgLegalCaseFile = {
     ...current,
     ...patch,
@@ -395,8 +432,21 @@ export function deleteCase(orgId: string, userId: string, caseId: string): OrgLe
   const store = readStore();
   const index = store.cases.findIndex(item => item.orgId === orgId && item.id === caseId);
   if (index < 0) return null;
+  const current = store.cases[index];
+  if (getOrganizationResourcePolicy(orgId, 'legal_case', caseId).policy) {
+    assertOrganizationResourceAccess({
+      orgId, actorUserId: userId, resourceType: 'legal_case', resourceId: caseId,
+      permission: 'write', ownerUserId: current.createdBy,
+    });
+  }
   const [deleted] = store.cases.splice(index, 1);
   writeStore(store);
+  removeOrganizationResourcePolicy({
+    orgId,
+    actorUserId: userId,
+    resourceType: 'legal_case',
+    resourceId: caseId,
+  });
   EDB.logAudit({
     orgId,
     userId,
@@ -418,7 +468,7 @@ export function addMaterial(
   caseId: string,
   material: Omit<OrgLegalCaseMaterial, 'id' | 'createdBy' | 'createdAt'>,
 ): OrgLegalCaseMaterial | null {
-  const current = getCase(orgId, caseId);
+  const current = getCase(orgId, caseId, userId, 'write');
   if (!current) return null;
   const nextMaterial: OrgLegalCaseMaterial = {
     id: randomUUID(),
