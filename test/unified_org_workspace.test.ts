@@ -45,7 +45,7 @@ describe('unified organization workspace boundary', () => {
     const desktopUi = read('src/components/DesktopUI.tsx');
 
     expect(desktopUi).toContain('lumi-shell-topbar absolute top-0 inset-x-0 h-10');
-    expect(desktopUi).toContain('fixed inset-x-0 bottom-0 top-10 z-[90] bg-celestial-deep overflow-auto');
+    expect(desktopUi).toContain('lumi-below-topbar fixed inset-x-0 bottom-0 z-[90] bg-celestial-deep overflow-auto');
     expect(desktopUi).not.toContain('fixed inset-0 z-[220] bg-celestial-deep overflow-auto');
   });
 });

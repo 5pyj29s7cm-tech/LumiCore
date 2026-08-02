@@ -61,8 +61,22 @@ struct DesktopWidgetState {
     was_maximized: bool,
 }
 
+#[derive(Default)]
+struct CompactWindowState {
+    enabled: bool,
+    previous_size: Option<tauri::PhysicalSize<u32>>,
+    previous_position: Option<tauri::PhysicalPosition<i32>>,
+    was_fullscreen: bool,
+    was_maximized: bool,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DesktopWidgetMode {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CompactWindowMode {
     pub enabled: bool,
 }
 
@@ -2542,9 +2556,9 @@ fn set_wallpaper_mode(
         }
         let _ = window.set_skip_taskbar(false);
         let _ = window.set_resizable(true);
-        let _ = window.set_min_size(Some(tauri::PhysicalSize::new(
-            DEFAULT_MAIN_MIN_WIDTH,
-            DEFAULT_MAIN_MIN_HEIGHT,
+        let _ = window.set_min_size(Some(tauri::LogicalSize::new(
+            DEFAULT_MAIN_MIN_WIDTH as f64,
+            DEFAULT_MAIN_MIN_HEIGHT as f64,
         )));
 
         if let Some((previous_size, previous_position, was_fullscreen, was_maximized)) = restore {
@@ -2579,8 +2593,8 @@ const DESKTOP_WIDGET_HEIGHT: u32 = 285;
 const DESKTOP_WIDGET_MIN_WIDTH: u32 = 210;
 const DESKTOP_WIDGET_MIN_HEIGHT: u32 = 250;
 const DESKTOP_WIDGET_MARGIN: i32 = 18;
-const DEFAULT_MAIN_MIN_WIDTH: u32 = 960;
-const DEFAULT_MAIN_MIN_HEIGHT: u32 = 640;
+const DEFAULT_MAIN_MIN_WIDTH: u32 = 520;
+const DEFAULT_MAIN_MIN_HEIGHT: u32 = 460;
 
 fn place_window_in_desktop_corner(window: &tauri::WebviewWindow) -> Result<(), String> {
     let maybe_monitor = window
@@ -2685,9 +2699,9 @@ fn exit_desktop_widget_impl(
         eprintln!("[LumiOS] desktop widget restore resizable failed: {}", e);
     }
     window
-        .set_min_size(Some(tauri::PhysicalSize::new(
-            DEFAULT_MAIN_MIN_WIDTH,
-            DEFAULT_MAIN_MIN_HEIGHT,
+        .set_min_size(Some(tauri::LogicalSize::new(
+            DEFAULT_MAIN_MIN_WIDTH as f64,
+            DEFAULT_MAIN_MIN_HEIGHT as f64,
         )))
         .map_err(|e| e.to_string())?;
 
@@ -2749,6 +2763,180 @@ fn get_desktop_widget_mode(
 ) -> Result<DesktopWidgetMode, String> {
     let enabled = state.lock().map_err(|e| e.to_string())?.enabled;
     Ok(DesktopWidgetMode { enabled })
+}
+
+fn compact_window_metrics(window: &tauri::WebviewWindow) -> (u32, u32, u32, u32, i32) {
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten());
+    let (work_width, work_height) = monitor
+        .as_ref()
+        .map(|monitor| {
+            let scale_factor = monitor.scale_factor().max(0.1);
+            let work_area = monitor.work_area();
+            (
+                work_area.size.width as f64 / scale_factor,
+                work_area.size.height as f64 / scale_factor,
+            )
+        })
+        .unwrap_or((1920.0, 1040.0));
+    let margin = ((work_width.min(work_height) * 0.02).round() as i32).clamp(12, 24);
+    let available_width = (work_width - margin as f64 * 2.0).max(360.0);
+    let available_height = (work_height - margin as f64 * 2.0).max(320.0);
+    let min_width = 520.0_f64.min(available_width);
+    let min_height = 460.0_f64.min(available_height);
+    let preset_min_width = 680.0_f64.min(available_width);
+    let preset_min_height = 560.0_f64.min(available_height);
+    let width = 1280.0_f64.min(available_width).max(preset_min_width);
+    let height = 820.0_f64.min(available_height).max(preset_min_height);
+    (
+        width.round() as u32,
+        height.round() as u32,
+        min_width.round() as u32,
+        min_height.round() as u32,
+        margin,
+    )
+}
+
+fn apply_compact_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    let (width, height, min_width, min_height, _margin) = compact_window_metrics(window);
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten());
+
+    let _ = window.show();
+    let _ = window.set_fullscreen(false);
+    let _ = window.unmaximize();
+    let _ = window.set_always_on_top(false);
+    let _ = window.set_skip_taskbar(false);
+    window.set_resizable(true).map_err(|e| e.to_string())?;
+    window
+        .set_min_size(Some(tauri::LogicalSize::new(min_width as f64, min_height as f64)))
+        .map_err(|e| e.to_string())?;
+    window
+        .set_size(tauri::LogicalSize::new(width as f64, height as f64))
+        .map_err(|e| e.to_string())?;
+
+    if let Some(monitor) = monitor {
+        let scale_factor = monitor.scale_factor().max(0.1);
+        let work_area = monitor.work_area();
+        let physical_width = (width as f64 * scale_factor).round() as i32;
+        let physical_height = (height as f64 * scale_factor).round() as i32;
+        let x = work_area.position.x + (work_area.size.width as i32 - physical_width) / 2;
+        let y = work_area.position.y + (work_area.size.height as i32 - physical_height) / 2;
+        window
+            .set_position(tauri::PhysicalPosition::new(x, y))
+            .map_err(|e| e.to_string())?;
+    } else {
+        window.center().map_err(|e| e.to_string())?;
+    }
+    let _ = window.set_focus();
+    Ok(())
+}
+
+fn enter_compact_window_impl(
+    window: &tauri::WebviewWindow,
+    state: &Mutex<CompactWindowState>,
+) -> Result<CompactWindowMode, String> {
+    let already_enabled = state.lock().map_err(|e| e.to_string())?.enabled;
+    let restore_snapshot = (!already_enabled).then(|| {
+        (
+            window.outer_size().ok(),
+            window.outer_position().ok(),
+            window.is_fullscreen().unwrap_or(false),
+            window.is_maximized().unwrap_or(false),
+        )
+    });
+    apply_compact_window(window)?;
+    let mut compact = state.lock().map_err(|e| e.to_string())?;
+    if let Some((size, position, fullscreen, maximized)) = restore_snapshot {
+        compact.previous_size = size;
+        compact.previous_position = position;
+        compact.was_fullscreen = fullscreen;
+        compact.was_maximized = maximized;
+    }
+    compact.enabled = true;
+    Ok(CompactWindowMode { enabled: true })
+}
+
+fn exit_compact_window_impl(
+    window: &tauri::WebviewWindow,
+    state: &Mutex<CompactWindowState>,
+) -> Result<CompactWindowMode, String> {
+    let (previous_size, previous_position, was_fullscreen, was_maximized) = {
+        let mut compact = state.lock().map_err(|e| e.to_string())?;
+        if !compact.enabled {
+            return Ok(CompactWindowMode { enabled: false });
+        }
+        compact.enabled = false;
+        (
+            compact.previous_size.take(),
+            compact.previous_position.take(),
+            compact.was_fullscreen,
+            compact.was_maximized,
+        )
+    };
+
+    let _ = window.show();
+    window.set_resizable(true).map_err(|e| e.to_string())?;
+    window
+        .set_min_size(Some(tauri::LogicalSize::new(
+            DEFAULT_MAIN_MIN_WIDTH as f64,
+            DEFAULT_MAIN_MIN_HEIGHT as f64,
+        )))
+        .map_err(|e| e.to_string())?;
+    if was_fullscreen {
+        window.set_fullscreen(true).map_err(|e| e.to_string())?;
+    } else {
+        let _ = window.set_fullscreen(false);
+        if let Some(size) = previous_size {
+            let _ = window.set_size(size);
+        } else {
+            let _ = window.set_size(tauri::LogicalSize::new(1280.0, 820.0));
+        }
+        if let Some(position) = previous_position {
+            let _ = window.set_position(position);
+        } else {
+            let _ = window.center();
+        }
+        if was_maximized {
+            let _ = window.maximize();
+        }
+    }
+    let _ = window.set_focus();
+    Ok(CompactWindowMode { enabled: false })
+}
+
+#[tauri::command]
+fn toggle_compact_window_mode(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Mutex<CompactWindowState>>,
+) -> Result<CompactWindowMode, String> {
+    if state.lock().map_err(|e| e.to_string())?.enabled {
+        exit_compact_window_impl(&window, &state)
+    } else {
+        enter_compact_window_impl(&window, &state)
+    }
+}
+
+#[tauri::command]
+fn exit_compact_window_mode(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Mutex<CompactWindowState>>,
+) -> Result<CompactWindowMode, String> {
+    exit_compact_window_impl(&window, &state)
+}
+
+#[tauri::command]
+fn get_compact_window_mode(
+    state: tauri::State<'_, Mutex<CompactWindowState>>,
+) -> Result<CompactWindowMode, String> {
+    let enabled = state.lock().map_err(|e| e.to_string())?.enabled;
+    Ok(CompactWindowMode { enabled })
 }
 
 #[tauri::command]
@@ -4221,6 +4409,7 @@ pub fn run() {
         .manage(Mutex::new(WallpaperState::default()))
         .manage(Mutex::new(ResidentState { close_to_background: started_in_background, started_in_background, force_quit: false }))
         .manage(Mutex::new(DesktopWidgetState::default()))
+        .manage(Mutex::new(CompactWindowState::default()))
         .on_page_load(move |webview, payload| {
             if !started_in_background
                 && matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
@@ -4248,6 +4437,9 @@ pub fn run() {
             exit_desktop_widget_mode,
             toggle_desktop_widget_mode,
             get_desktop_widget_mode,
+            toggle_compact_window_mode,
+            exit_compact_window_mode,
+            get_compact_window_mode,
             minimize_window,
             toggle_maximize_window,
             close_window,

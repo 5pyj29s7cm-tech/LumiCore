@@ -544,7 +544,7 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
           animate={{ clipPath: 'circle(150% at 50% 95%)', opacity: 1 }}
           exit={{ clipPath: 'circle(0% at 50% 95%)', opacity: 0 }}
           transition={{ duration: 0.75, ease: [0.25, 0.1, 0.25, 1] }}
-          className="fixed inset-0 z-[200]"
+          className="lumi-below-topbar fixed inset-x-0 bottom-0 z-[90]"
           style={{
             background: 'radial-gradient(ellipse at 50% 30%, #0f0f23 0%, #080812 40%, #020205 100%)',
           }}

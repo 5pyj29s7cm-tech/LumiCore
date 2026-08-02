@@ -1393,6 +1393,10 @@ body,
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
 }
 
+.lumi-below-topbar {
+  top: 40px;
+}
+
 .lumi-shell-topbar-left,
 .lumi-shell-topbar-right {
   min-width: 0;
@@ -1415,6 +1419,10 @@ body,
   height: 36px;
   gap: 8px;
   padding-inline: 10px;
+}
+
+[data-ui-density="compact"] .lumi-below-topbar {
+  top: 36px;
 }
 
 [data-ui-density="compact"] .lumi-shell-topbar-left,
@@ -1472,6 +1480,10 @@ body,
   height: 34px;
   gap: 4px;
   padding-inline: 6px;
+}
+
+[data-ui-density="tight"] .lumi-below-topbar {
+  top: 34px;
 }
 
 [data-ui-density="tight"] .lumi-shell-topbar-left,
@@ -1547,6 +1559,170 @@ body,
   padding: 10px;
 }
 
+[data-compact-window="true"] .lumi-desktop-grid {
+  overflow: hidden;
+  padding: 46px 12px 64px;
+}
+
+[data-compact-window="true"] .lumi-desktop-grid-layout {
+  display: grid;
+  grid-template-columns: 350px minmax(0, 1fr) 320px;
+  gap: 12px;
+  height: 100%;
+}
+
+[data-compact-window="true"] .lumi-desktop-icon-canvas {
+  grid-column: 1;
+  width: 350px;
+  min-height: 190px !important;
+}
+
+[data-compact-window="true"] .lumi-desktop-widget-rail {
+  display: flex;
+  grid-column: 3;
+  width: 320px !important;
+  max-height: calc(100vh - 116px);
+  gap: 12px;
+  overflow-y: auto;
+  padding-right: 2px;
+  position: relative;
+  z-index: 20;
+}
+
+[data-compact-window="true"] .desktop-icon {
+  width: 76px;
+  gap: 4px;
+  padding: 6px;
+}
+
+[data-compact-window="true"] .desktop-icon-img {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+}
+
+[data-compact-window="true"] .lumi-core-stage {
+  inset: 34px 320px 58px 350px;
+}
+
+[data-compact-window="true"] .lumi-core-entity {
+  zoom: 0.72;
+}
+
+[data-compact-window="true"] .lumi-core-secondary {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+[data-compact-window="true"] .lumi-chat-root {
+  background: #02050a !important;
+}
+
+[data-compact-window="true"] .lumi-dock {
+  right: 8px !important;
+  bottom: 8px !important;
+  left: 8px !important;
+  width: auto;
+  height: 48px !important;
+  max-width: none;
+  justify-content: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  translate: none !important;
+  transform: none !important;
+}
+
+[data-ui-density="mini"] .lumi-shell-topbar {
+  height: 34px;
+  grid-template-columns: auto minmax(56px, 1fr) auto;
+  gap: 2px;
+  padding-inline: 4px;
+}
+
+[data-ui-density="mini"] .lumi-below-topbar {
+  top: 34px;
+}
+
+[data-ui-density="mini"] .lumi-shell-topbar-left,
+[data-ui-density="mini"] .lumi-shell-topbar-right {
+  gap: 2px;
+}
+
+[data-ui-density="mini"] .lumi-shell-brand-label,
+[data-ui-density="mini"] .lumi-shell-optional,
+[data-ui-density="mini"] .lumi-shell-tutorial,
+[data-ui-density="mini"] .lumi-shell-status-actions,
+[data-ui-density="mini"] .lumi-shell-clock {
+  display: none;
+}
+
+[data-ui-density="mini"] .lumi-shell-window-controls {
+  gap: 0;
+  margin-left: 0;
+}
+
+[data-ui-density="mini"] .lumi-shell-window-controls > button {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+}
+
+[data-ui-density="mini"] .lumi-work-mode-switch {
+  height: 28px;
+}
+
+[data-ui-density="mini"] .lumi-work-mode-switch button {
+  min-width: 28px;
+  height: 26px;
+  padding-inline: 6px;
+}
+
+[data-ui-density="mini"] .lumi-work-mode-label {
+  display: none;
+}
+
+[data-ui-density="mini"] .lumi-dock {
+  bottom: 4px;
+  height: 40px;
+  max-width: calc(100vw - 8px);
+  gap: 2px;
+  padding-inline: 4px;
+}
+
+[data-ui-density="mini"] .lumi-dock > button {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+}
+
+[data-ui-density="mini"] .lumi-dock-separator {
+  height: 22px;
+  margin-inline: 1px;
+}
+
+[data-ui-density="mini"] .os-window-header {
+  height: 34px;
+  padding-inline: 6px;
+}
+
+[data-ui-density="mini"] .os-window-header button {
+  width: 26px;
+  height: 26px;
+}
+
+[data-ui-density="mini"] .os-window-body {
+  padding: 8px;
+}
+
+[data-ui-density="mini"] .lumi-control-center {
+  right: 4px;
+  top: 38px;
+  width: min(340px, calc(100vw - 8px));
+  max-height: calc(100dvh - 42px);
+  padding: 12px;
+}
+
 [data-ui-density="compact"] .lumi-control-center,
 [data-ui-density="tight"] .lumi-control-center {
   right: 8px;
@@ -1562,5 +1738,137 @@ body,
 
   .lumi-onboarding-content {
     padding-bottom: 20px;
+  }
+}
+
+@media (max-width: 1099px) {
+  [data-compact-window="true"] .lumi-desktop-grid {
+    overflow-y: auto;
+  }
+
+  [data-compact-window="true"] .lumi-desktop-grid-layout {
+    display: block;
+    min-height: calc(200vh - 116px);
+  }
+
+  [data-compact-window="true"] .lumi-desktop-icon-canvas {
+    width: 300px;
+  }
+
+  [data-compact-window="true"] .lumi-core-stage {
+    inset: 34px 0 56px 300px;
+  }
+
+  [data-compact-window="true"] .lumi-desktop-widget-rail {
+    width: 100% !important;
+    max-height: none;
+    margin-top: calc(100vh - 250px);
+    padding: 0 4px 72px;
+  }
+}
+
+@media (max-width: 820px), (max-height: 700px) {
+  [data-compact-window="true"] .lumi-desktop-icon-canvas {
+    width: 260px;
+  }
+
+  [data-compact-window="true"] .lumi-core-stage {
+    inset: 34px 0 56px 260px;
+  }
+
+  [data-compact-window="true"] .lumi-core-entity {
+    zoom: 0.6;
+  }
+
+  [data-compact-window="true"] .lumi-core-secondary {
+    gap: 4px;
+    margin-top: 6px;
+  }
+
+  .lumi-org-sidebar {
+    width: 64px;
+  }
+
+  .lumi-org-sidebar [class*="sm:block"],
+  .lumi-org-sidebar [class*="sm:inline"] {
+    display: none;
+  }
+
+  .lumi-org-sidebar [class*="sm:justify-start"] {
+    justify-content: center;
+  }
+
+  .lumi-org-sidebar [class*="sm:px-3"] {
+    padding-inline: 8px;
+  }
+
+  .lumi-chat-layout {
+    gap: 6px;
+    padding: 0 6px 6px;
+  }
+
+  .lumi-chat-layout > * {
+    margin-top: 0 !important;
+  }
+
+  .lumi-chat-toolbar {
+    min-height: 38px;
+    padding: 4px 2px 0;
+  }
+
+  .lumi-chat-toolbar > button {
+    width: 34px;
+    height: 34px;
+    border-radius: 11px;
+  }
+
+  .lumi-chat-toolbar-actions {
+    gap: 4px;
+  }
+
+  .lumi-chat-voice-picker,
+  .lumi-chat-agent-mark,
+  .lumi-chat-agent-identity,
+  .lumi-chat-history-search {
+    display: none;
+  }
+
+  .lumi-chat-panel {
+    border-radius: 18px;
+  }
+
+  .lumi-chat-panel-header {
+    min-height: 38px;
+    padding: 8px 10px;
+  }
+
+  .lumi-chat-panel-header > div:first-child {
+    min-width: 0;
+    gap: 6px;
+  }
+
+  .lumi-chat-composer {
+    padding: 8px;
+  }
+
+  .lumi-chat-composer-row {
+    gap: 6px;
+  }
+
+  .lumi-chat-composer-row input {
+    height: 44px;
+    padding-block: 8px;
+  }
+
+  .lumi-chat-attachment-button {
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+  }
+
+  .lumi-chat-send {
+    height: 44px;
+    border-radius: 14px;
+    padding-inline: 12px;
   }
 }

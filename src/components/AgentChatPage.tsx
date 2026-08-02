@@ -2305,7 +2305,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 10, scale: 0.99 }}
           transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
-          className="lumi-work-surface fixed inset-0 z-[210] flex flex-col"
+          className="lumi-chat-root lumi-below-topbar lumi-work-surface fixed inset-x-0 bottom-0 z-[90] flex flex-col"
           style={{
             background: chatAccentTheme.background,
             '--color-celestial-saturn': chatAccentTheme.saturn,
@@ -2361,16 +2361,16 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           </motion.div>
         )}
       </AnimatePresence>
-    <div className="flex-1 max-w-[90rem] mx-auto w-full space-y-4 md:space-y-8 pb-32 md:pb-0 overflow-hidden flex flex-col">
-      <div className="flex items-center justify-between px-4 md:px-0 pt-6 flex-shrink-0">
+    <div className="lumi-chat-layout flex-1 max-w-[90rem] mx-auto w-full space-y-4 md:space-y-8 pb-32 md:pb-0 overflow-hidden flex flex-col">
+      <div className="lumi-chat-toolbar flex items-center justify-between px-4 md:px-0 pt-6 flex-shrink-0">
         <button
           onClick={onClose}
           className="w-10 h-10 flex items-center justify-center bg-black/40 backdrop-blur-xl border border-white/[0.08] rounded-2xl text-white/40 hover:text-white hover:border-white/20 transition-all"
         >
           <ArrowLeft size={18} />
         </button>
-        <div className="flex items-center gap-3">
-          <div className="relative">
+        <div className="lumi-chat-toolbar-actions flex min-w-0 items-center gap-3">
+          <div className="lumi-chat-voice-picker relative">
             <Button
               variant="ghost"
               size="sm"
@@ -2436,10 +2436,10 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           >
             <FileText className="h-4 w-4 md:h-5 md:w-5" />
           </button>
-          <div className="w-8 h-8 md:w-10 md:h-10 rounded-xl bg-celestial-saturn/20 flex items-center justify-center text-celestial-saturn border border-celestial-saturn/20">
+          <div className="lumi-chat-agent-mark w-8 h-8 md:w-10 md:h-10 rounded-xl bg-celestial-saturn/20 flex items-center justify-center text-celestial-saturn border border-celestial-saturn/20">
             <Ghost className="w-4 h-4 md:w-5 md:h-5" />
           </div>
-          <div className="min-w-0 text-right sm:text-left">
+          <div className="lumi-chat-agent-identity min-w-0 text-right sm:text-left">
             <div className="flex max-w-[52vw] flex-wrap items-center justify-end gap-1.5 sm:max-w-none sm:justify-start">
               <h2 className="min-w-0 truncate text-base font-bold tracking-tight md:text-xl">
                 {agentName}
@@ -2473,11 +2473,11 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
 
         {/* Chat Panel */}
         <div
-          className="flex-1 flex flex-col glass rounded-[2.5rem] md:rounded-[3rem] border overflow-hidden shadow-2xl min-w-0"
+          className="lumi-chat-panel flex-1 flex flex-col glass rounded-[2.5rem] md:rounded-[3rem] border overflow-hidden shadow-2xl min-w-0"
           style={chatPanelStyle}
         >
           <div
-            className="p-4 md:p-6 border-b flex items-center justify-between"
+            className="lumi-chat-panel-header p-4 md:p-6 border-b flex items-center justify-between"
             style={chatHeaderStyle}
           >
             <div className="flex items-center gap-3">
@@ -2503,7 +2503,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
                 </div>
               )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="lumi-chat-history-search flex items-center gap-2">
               <div className="relative">
                 <input
                   type="text"
@@ -2759,7 +2759,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           </div>
 
           <div
-            className="p-6 border-t"
+            className="lumi-chat-composer p-6 border-t"
             style={chatInputPanelStyle}
           >
             {pendingAttachments.length > 0 && (
@@ -2815,14 +2815,14 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
                 />
               </div>
             )}
-            <form onSubmit={handleSendMessage} className="relative flex gap-3">
+            <form onSubmit={handleSendMessage} className="lumi-chat-composer-row relative flex gap-3">
               <div ref={attachmentMenuRef} className="relative shrink-0">
                 <Button
                   type="button"
                   onClick={() => setShowAttachmentMenu(value => !value)}
                   disabled={isTyping || isOptimizing}
                   variant="ghost"
-                  className={`h-12 w-12 shrink-0 rounded-2xl border bg-black/30 p-0 transition-all disabled:opacity-40 ${
+                  className={`lumi-chat-attachment-button h-12 w-12 shrink-0 rounded-2xl border bg-black/30 p-0 transition-all disabled:opacity-40 ${
                     showAttachmentMenu
                       ? 'border-celestial-saturn/35 bg-celestial-saturn/10 text-celestial-saturn'
                       : 'border-white/10 text-white/45 hover:border-celestial-saturn/30 hover:bg-celestial-saturn/10 hover:text-celestial-saturn'
@@ -2921,7 +2921,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
                 <Button
                   type="button"
                   onClick={cancelActiveChat}
-                  className="bg-red-500 text-white rounded-2xl px-6 hover:scale-105 transition-transform"
+                  className="lumi-chat-send bg-red-500 text-white rounded-2xl px-6 hover:scale-105 transition-transform"
                 >
                   <Square size={20} />
                 </Button>
@@ -2929,7 +2929,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
                 <Button
                   type="submit"
                   disabled={!hasDraftText && pendingAttachments.length === 0}
-                  className="bg-celestial-saturn text-black rounded-2xl px-6 hover:scale-105 transition-transform disabled:opacity-50 disabled:hover:scale-100"
+                  className="lumi-chat-send bg-celestial-saturn text-black rounded-2xl px-6 hover:scale-105 transition-transform disabled:opacity-50 disabled:hover:scale-100"
                   style={{
                     backgroundColor: chatAccentTheme.saturn,
                     boxShadow: `0 12px 34px ${chatAccentTheme.panelBorder}`,
@@ -2947,7 +2947,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
               initial={{ opacity: 0, x: 40 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.5, ease: [0.25, 0.1, 0.25, 1], delay: 0.15 }}
-              className="w-96 flex-shrink-0 space-y-4 overflow-y-auto custom-scrollbar">
+              className="hidden w-80 flex-shrink-0 space-y-4 overflow-y-auto custom-scrollbar xl:block 2xl:w-96">
           <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, ease: [0.25, 0.1, 0.25, 1], delay: 0.16 }}>
           <GlassCard className="p-5 rounded-[2rem] space-y-4 border-emerald-400/20" hoverEffect={false}>
             <div className="flex items-center justify-between gap-3">

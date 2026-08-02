@@ -1662,6 +1662,7 @@ export function DesktopUI({
   const [time, setTime] = useState(new Date());
   const [isWallpaperMode, setIsWallpaperMode] = useState(false);
   const [isDesktopWidgetMode, setIsDesktopWidgetMode] = useState(false);
+  const [isCompactWindowMode, setIsCompactWindowMode] = useState(false);
   const isWallpaperModeRef = useRef(false);
   const closeToBackgroundSyncRef = useRef(false);
   const desktopWidgetFallbackRef = useRef<DesktopWidgetFallbackState | null>(null);
@@ -1761,11 +1762,23 @@ export function DesktopUI({
       await invoke('minimize_window');
     } catch {}
   };
+  const handleTopbarPointerDown = async (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || !isTauri) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('button, a, input, textarea, select, [role="button"], [data-no-window-drag="true"]')) return;
+    try {
+      const windowApi = await import('@tauri-apps/api/window');
+      await windowApi.getCurrentWindow().startDragging();
+    } catch {}
+  };
   const handleWindowMaximize = async () => {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('toggle_maximize_window');
-    } catch {}
+      const status = await invoke<{ enabled?: boolean }>('toggle_compact_window_mode');
+      setIsCompactWindowMode(Boolean(status?.enabled));
+    } catch (err: any) {
+      toast.error(err?.message || desktopWorkflowCopy(lang).common.windowControlFailed);
+    }
   };
   const handleWindowClose = async () => {
     try {
@@ -1780,8 +1793,14 @@ export function DesktopUI({
     const syncWidgetMode = async () => {
       try {
         const { invoke } = await import('@tauri-apps/api/core');
-        const status = await invoke<{ enabled?: boolean }>('get_desktop_widget_mode');
-        if (!disposed) setIsDesktopWidgetMode(Boolean(status?.enabled));
+        const [widgetStatus, compactStatus] = await Promise.all([
+          invoke<{ enabled?: boolean }>('get_desktop_widget_mode'),
+          invoke<{ enabled?: boolean }>('get_compact_window_mode'),
+        ]);
+        if (!disposed) {
+          setIsDesktopWidgetMode(Boolean(widgetStatus?.enabled));
+          setIsCompactWindowMode(Boolean(compactStatus?.enabled));
+        }
       } catch {}
     };
     void syncWidgetMode();
@@ -4446,6 +4465,7 @@ export function DesktopUI({
       data-appearance={resolvedAppearanceMode}
       data-view-mode={viewMode}
       data-ui-density={desktopChrome.density}
+      data-compact-window={isCompactWindowMode ? 'true' : 'false'}
       onContextMenu={handleShellContextMenu}
       className={`fixed inset-0 overflow-hidden cursor-default select-none transition-all duration-1000 ${resolvedAppearanceMode === 'light' ? 'lumi-light-shell' : 'lumi-dark-shell'} ${
       isWallpaperMode ? 'bg-transparent pointer-events-none' :
@@ -4642,7 +4662,9 @@ export function DesktopUI({
       <div className="fixed inset-0 z-[100] pointer-events-none">
         {/* Top Status Bar */}
         <div
+          data-tauri-drag-region
           data-theme-scope={viewMode === 'world' ? 'dark' : undefined}
+          onPointerDown={(event) => void handleTopbarPointerDown(event)}
           className={`lumi-shell-topbar absolute top-0 inset-x-0 h-10 glass-dark border-b border-white/5 flex items-center px-6 pointer-events-auto backdrop-blur-md transition-all duration-1000 ${isWallpaperMode ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
         >
           <div className="lumi-shell-topbar-left flex min-w-0 items-center gap-6">
@@ -4749,7 +4771,13 @@ export function DesktopUI({
               <button
                 onClick={handleWindowMaximize}
                 className="w-7 h-7 rounded-lg flex items-center justify-center text-white/55 hover:text-white hover:bg-white/10 transition-colors"
-                title={uiMessage('desktop-ui.maximize.17e771fac7', (lang === 'zh') ? 'zh' : 'en')}
+                title={uiMessage(
+                  isCompactWindowMode
+                    ? 'desktop-ui.maximize.17e771fac7'
+                    : 'desktop-ui.compact-window.6b67a41d2e',
+                  (lang === 'zh') ? 'zh' : 'en',
+                )}
+                aria-pressed={isCompactWindowMode}
               >
                 <Square size={12} />
               </button>
@@ -4816,7 +4844,11 @@ export function DesktopUI({
         {/* Bottom Taskbar / Dock */}
         <div
           data-theme-scope={viewMode === 'world' ? 'dark' : undefined}
-          className={`lumi-dock absolute bottom-6 left-1/2 -translate-x-1/2 z-50 h-16 max-w-[calc(100vw-2rem)] overflow-x-auto overflow-y-hidden px-4 glass-dark rounded-[2.5rem] border border-white/10 flex items-center gap-2 shadow-2xl backdrop-blur-2xl transition-all duration-1000 ${isWallpaperMode ? 'opacity-0 pointer-events-none' : 'opacity-100 pointer-events-auto'}`}
+          className={`lumi-dock absolute bottom-6 left-1/2 -translate-x-1/2 z-50 h-16 max-w-[calc(100vw-2rem)] overflow-x-auto overflow-y-hidden px-4 glass-dark rounded-[2.5rem] border border-white/10 flex items-center gap-2 shadow-2xl backdrop-blur-2xl transition-all duration-1000 ${
+            isWallpaperMode || chatOpen || knowledgeOpen || activeTab === 'org'
+              ? 'opacity-0 pointer-events-none'
+              : 'opacity-100 pointer-events-auto'
+          }`}
         >
           <button 
             onClick={() => setViewMode(viewMode === 'personal' ? 'world' : 'personal')}
@@ -4918,16 +4950,16 @@ export function DesktopUI({
           scale: personalScale,
           opacity: personalOpacity,
         }}
-        className={`absolute inset-0 z-[15] flex flex-col ${viewMode === 'world' ? 'pointer-events-none' : ''}`}
+        className={`lumi-personal-surface absolute inset-0 z-[15] flex flex-col ${viewMode === 'world' ? 'pointer-events-none' : ''}`}
       >
         <div className="relative w-full h-full pointer-events-auto">
           {/* Central Interactive Entity */}
-          <div className="absolute inset-0 flex items-center justify-center z-[15] pointer-events-none">
+          <div className="lumi-core-stage absolute inset-0 flex items-center justify-center z-[15] pointer-events-none">
         <motion.div 
           initial={{ scale: 0.8, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           transition={{ duration: 2, ease: "easeOut" }}
-          className="relative pointer-events-auto scale-[0.82] opacity-95 transition-all"
+          className="lumi-core-entity relative pointer-events-auto scale-[0.82] opacity-95 transition-all"
         >
           <div className="lumi-core-shell relative flex flex-col items-center">
             {selectedPet ? (
@@ -5056,7 +5088,7 @@ export function DesktopUI({
               </>
             )}
 
-            <div className={`flex flex-col items-center gap-4 mt-8 transition-all duration-1000 ${isWallpaperMode ? 'opacity-0 blur-sm pointer-events-none' : 'opacity-100'}`}>
+            <div className={`lumi-core-secondary flex flex-col items-center gap-4 mt-8 transition-all duration-1000 ${isWallpaperMode ? 'opacity-0 blur-sm pointer-events-none' : 'opacity-100'}`}>
               <VoicePicker t={t} />
 
               <motion.div
@@ -5110,9 +5142,9 @@ export function DesktopUI({
       </div>
 
       {/* Desktop Grid & Widgets */}
-      <div className={`relative z-10 w-full h-full overflow-y-auto custom-scrollbar px-3 pb-24 pt-14 transition-all duration-1000 sm:px-6 sm:pt-16 md:p-12 md:pt-20 lg:p-16 ${isWallpaperMode ? 'opacity-0 blur-sm pointer-events-none' : 'opacity-100'}`}>
-        <div className="flex flex-col xl:flex-row justify-between items-start gap-6 xl:gap-12">
-            <div className="relative flex-1 w-full" style={{ margin: 0, padding: 0, minHeight: desktopIconAreaHeight }}>
+      <div className={`lumi-desktop-grid relative z-10 w-full h-full overflow-y-auto custom-scrollbar px-3 pb-24 pt-14 transition-all duration-1000 sm:px-6 sm:pt-16 md:p-12 md:pt-20 lg:p-16 ${isWallpaperMode ? 'opacity-0 blur-sm pointer-events-none' : 'opacity-100'}`}>
+        <div className="lumi-desktop-grid-layout flex flex-col xl:flex-row justify-between items-start gap-6 xl:gap-12">
+            <div className="lumi-desktop-icon-canvas relative flex-1 w-full" style={{ margin: 0, padding: 0, minHeight: desktopIconAreaHeight }}>
               {desktopIcons.map((def, i) => {
                 const { x, y } = getDefaultDesktopIconPosition(i);
                 const label = (t as any)[def.labelKey] || def.labelKey;
@@ -5148,7 +5180,7 @@ export function DesktopUI({
               })}
             </div>
 
-            <div className="flex flex-col gap-6 w-full lg:w-96">
+            <div className="lumi-desktop-widget-rail flex flex-col gap-6 w-full lg:w-96">
               {/* Modern Widgets Grid */}
               <ThemeWidget
                 t={t}
@@ -5762,7 +5794,7 @@ export function DesktopUI({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.3 }}
-            className="fixed inset-x-0 bottom-0 top-10 z-[90] bg-celestial-deep overflow-auto"
+            className="lumi-below-topbar fixed inset-x-0 bottom-0 z-[90] bg-celestial-deep overflow-auto"
           >
             <Suspense fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
               <OrgPortal

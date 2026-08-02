@@ -3,7 +3,7 @@ export type ViewportSize = {
   height: number;
 };
 
-export type DesktopDensity = 'comfortable' | 'compact' | 'tight';
+export type DesktopDensity = 'comfortable' | 'compact' | 'tight' | 'mini';
 
 export type DesktopChromeMetrics = {
   density: DesktopDensity;
@@ -23,13 +23,47 @@ export type DesktopWindowBounds = DesktopChromeMetrics & {
   height: number;
 };
 
+export type CompactClientWindowMetrics = {
+  width: number;
+  height: number;
+  minWidth: number;
+  minHeight: number;
+  margin: number;
+};
+
 const finiteViewportDimension = (value: number, fallback: number) => (
   Number.isFinite(value) && value > 0 ? Math.round(value) : fallback
 );
 
+const clamp = (value: number, minimum: number, maximum: number) => (
+  Math.min(maximum, Math.max(minimum, value))
+);
+
+/** Resolve the normal (non-widget) compact client size in logical pixels. */
+export function getCompactClientWindowMetrics(workArea: ViewportSize): CompactClientWindowMetrics {
+  const workWidth = finiteViewportDimension(workArea.width, 1920);
+  const workHeight = finiteViewportDimension(workArea.height, 1040);
+  const margin = Math.max(12, Math.min(24, Math.round(Math.min(workWidth, workHeight) * 0.02)));
+  const availableWidth = Math.max(360, workWidth - margin * 2);
+  const availableHeight = Math.max(320, workHeight - margin * 2);
+  const minWidth = Math.min(520, availableWidth);
+  const minHeight = Math.min(460, availableHeight);
+  const presetMinWidth = Math.min(680, availableWidth);
+  const presetMinHeight = Math.min(560, availableHeight);
+
+  return {
+    width: clamp(1280, presetMinWidth, availableWidth),
+    height: clamp(820, presetMinHeight, availableHeight),
+    minWidth,
+    minHeight,
+    margin,
+  };
+}
+
 export function getDesktopDensity(viewport: ViewportSize): DesktopDensity {
   const width = finiteViewportDimension(viewport.width, 1280);
   const height = finiteViewportDimension(viewport.height, 820);
+  if (width < 680 || height < 540) return 'mini';
   if (width < 1040 || height < 680) return 'tight';
   if (width < 1280 || height < 760) return 'compact';
   return 'comfortable';
@@ -39,10 +73,10 @@ export function getDesktopChromeMetrics(viewport: ViewportSize): DesktopChromeMe
   const width = finiteViewportDimension(viewport.width, 1280);
   const height = finiteViewportDimension(viewport.height, 820);
   const density = getDesktopDensity({ width, height });
-  const safeInset = density === 'tight' ? 6 : density === 'compact' ? 10 : 16;
+  const safeInset = density === 'mini' ? 4 : density === 'tight' ? 6 : density === 'compact' ? 10 : 16;
   // These match the responsive top bar and dock dimensions in index.css.
-  const topInset = density === 'tight' ? 42 : density === 'compact' ? 44 : 48;
-  const bottomInset = density === 'tight' ? 58 : density === 'compact' ? 72 : 96;
+  const topInset = density === 'mini' ? 34 : density === 'tight' ? 42 : density === 'compact' ? 44 : 48;
+  const bottomInset = density === 'mini' ? 48 : density === 'tight' ? 58 : density === 'compact' ? 72 : 96;
 
   return {
     density,
@@ -97,11 +131,12 @@ export function resolveDesktopWindowBounds(
 export function getDesktopIconLayout(viewport: ViewportSize) {
   const density = getDesktopDensity(viewport);
   const compact = density !== 'comfortable';
-  const tight = density === 'tight';
-  const startX = compact ? 8 : 40;
+  const mini = density === 'mini';
+  const tight = density === 'tight' || mini;
+  const startX = mini ? 4 : compact ? 8 : 40;
   const startY = compact ? 4 : 0;
-  const cellWidth = tight ? 84 : compact ? 94 : 130;
-  const cellHeight = tight ? 90 : compact ? 98 : 120;
+  const cellWidth = mini ? 76 : tight ? 84 : compact ? 94 : 130;
+  const cellHeight = mini ? 82 : tight ? 90 : compact ? 98 : 120;
   const widgetReserve = density === 'comfortable' && viewport.width >= 1280 ? 430 : 0;
   const availableWidth = Math.max(cellWidth, viewport.width - startX * 2 - widgetReserve);
   const columns = Math.max(2, Math.min(tight ? 3 : 4, Math.floor(availableWidth / cellWidth)));
