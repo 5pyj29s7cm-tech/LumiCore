@@ -29,9 +29,7 @@ function formatImages(images: string[]): string {
   }).join('\n\n');
 }
 
-const WRAP_HEADER = `import matplotlib
-matplotlib.use('Agg')
-import os
+const WRAP_HEADER = `import os
 os.environ['MPLBACKEND'] = 'Agg'
 _output_dir = r"${OUTPUT_DIR.replace(/\\/g, '\\\\')}"
 os.chdir(_output_dir)
@@ -110,11 +108,11 @@ export function registerPythonTools(registry: ToolRegistry): void {
   registry.register({
     name: 'python_exec',
     description:
-      'Execute Python 3.10 code with matplotlib, seaborn, plotly, pandas, and Pillow available. Use this to generate charts, plots, data visualizations, statistical graphics, and image processing. To display a chart in chat, save it with `plt.savefig(\'filename.png\')` — saved images are automatically captured and shown. The matplotlib backend is already set to Agg (no GUI needed). Working directory is lumi_output/. Use `plt.savefig(\'chart.png\', dpi=100, bbox_inches=\'tight\')` for best results. For plotly, use `fig.write_image(\'chart.png\')` or `fig.write_html(\'chart.html\')`.',
+      'Execute Python 3.10 code in the active Python environment. Common libraries such as matplotlib, seaborn, plotly, pandas, and Pillow can be used when installed. Use this to generate charts, plots, data visualizations, statistical graphics, and image processing. To display a chart in chat, save it with `plt.savefig(\'filename.png\')` — saved images are automatically captured and shown. The matplotlib backend is configured as Agg (no GUI needed) without importing matplotlib for non-plotting tasks. Working directory is lumi_output/. Use `plt.savefig(\'chart.png\', dpi=100, bbox_inches=\'tight\')` for best results. For plotly, use `fig.write_image(\'chart.png\')` or `fig.write_html(\'chart.html\')`.',
     parameters: {
       type: 'object',
       properties: {
-        code: { type: 'string', description: 'Python code to execute. Import what you need — matplotlib, seaborn, pandas, plotly, and PIL are available.' },
+        code: { type: 'string', description: 'Python code to execute. Import the libraries you need; availability follows the active Python environment.' },
         timeout: { type: 'number', description: 'Timeout in milliseconds (default 30000, max 120000).' },
       },
       required: ['code'],
@@ -154,7 +152,7 @@ export function registerPythonTools(registry: ToolRegistry): void {
   registry.register({
     name: 'python_pip_install',
     description:
-      'Install a Python package via pip. Use this when the user needs a library that is not already available (matplotlib, seaborn, plotly, pandas, and Pillow are pre-installed).',
+      'Install a Python package via pip into the active Python environment. Use this when the user needs a library that is not already available.',
     parameters: {
       type: 'object',
       properties: {

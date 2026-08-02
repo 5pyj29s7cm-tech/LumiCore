@@ -78,8 +78,11 @@ jobs:
           "TAURI_BUNDLE_WINDOWS_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "LUMI_RELEASE_TAURI_CONFIG=$publicConfigPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Download packaged Node.js runtime
-        run: node scripts/download-node-binary.mjs
+      - name: Prepare desktop resources for Rust release check
+        env:
+          LUMI_RELEASE_CHANNEL: ${{ inputs.channel }}
+          LUMI_DESKTOP_WITH_LOCAL_VOICE: ${{ inputs.include_local_voice == 'true' && '1' || '0' }}
+        run: npm run build:desktop
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
