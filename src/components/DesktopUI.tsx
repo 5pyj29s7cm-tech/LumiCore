@@ -5762,7 +5762,7 @@ export function DesktopUI({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.3 }}
-            className="fixed inset-0 z-[220] bg-celestial-deep overflow-auto"
+            className="fixed inset-x-0 bottom-0 top-10 z-[90] bg-celestial-deep overflow-auto"
           >
             <Suspense fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
               <OrgPortal
