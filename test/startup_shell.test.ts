@@ -127,6 +127,9 @@ describe('desktop startup shell', () => {
     expect(windowsWorkflow).not.toContain("Set-Content -LiteralPath $configPath");
     expect(windowsWorkflow).toContain("always() && !cancelled() && hashFiles('src-tauri/target/release/bundle/nsis/*.exe') != ''");
     expect(windowsWorkflow).toContain("name: lumi-os-windows-${{ inputs.channel || 'internal' }}-${{ github.sha }}");
+    expect(windowsWorkflow).toContain("LUMI_COLD_START_BASELINE_MS: ${{ inputs.channel == 'public' && vars.LUMI_COLD_START_BASELINE_MS || '' }}");
+    expect(windowsWorkflow).toContain("$env:LUMI_RELEASE_CHANNEL -eq 'public'");
+    expect(windowsWorkflow).toContain('npm run stress:lifecycle');
     expect(windowsWorkflow).not.toContain('Upload unverified internal installer');
     expect(windowsWorkflow).not.toContain('lumi-os-windows-internal-unverified');
     const reliabilityWorkflow = fs.readFileSync(path.join(process.cwd(), '.github/workflows/reliability-windows.yml'), 'utf8');

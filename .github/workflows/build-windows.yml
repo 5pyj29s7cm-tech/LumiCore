@@ -125,11 +125,14 @@ jobs:
       - name: Packaged backend smoke
         run: npm run smoke:packaged
 
-      - name: 50-run lifecycle and cold-start P95 gate
+      - name: 50-run lifecycle reliability and cold-start measurement
         env:
-          LUMI_COLD_START_BASELINE_MS: ${{ vars.LUMI_COLD_START_BASELINE_MS }}
+          LUMI_RELEASE_CHANNEL: ${{ inputs.channel || 'internal' }}
+          LUMI_COLD_START_BASELINE_MS: ${{ inputs.channel == 'public' && vars.LUMI_COLD_START_BASELINE_MS || '' }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:LUMI_COLD_START_BASELINE_MS)) { throw 'LUMI_COLD_START_BASELINE_MS repository variable is required' }
+          if ($env:LUMI_RELEASE_CHANNEL -eq 'public' -and [string]::IsNullOrWhiteSpace($env:LUMI_COLD_START_BASELINE_MS)) {
+            throw 'LUMI_COLD_START_BASELINE_MS repository variable is required for a public candidate'
+          }
           npm run stress:lifecycle
 
       - name: Clean-user installer lifecycle smoke

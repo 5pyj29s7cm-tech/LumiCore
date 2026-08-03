@@ -33,7 +33,8 @@ The mandatory workflow is silent isolated install, first launch out of loading s
 
 ## Reliability evidence
 
-- RC1: `npm run stress:lifecycle` on the fixed Windows reference image. Evidence must cover at least 50 starts, zero forced/orphan processes, and cold-start P95 no greater than 75% of the recorded baseline.
+- Internal candidate: `npm run stress:lifecycle` must cover at least 50 starts with zero forced/orphan processes. Cold-start P95 is recorded for regression analysis but the one-time 25% improvement target does not block an internal artifact on a shared GitHub runner.
+- Public candidate: run `npm run stress:lifecycle` on the fixed Windows reference image with `LUMI_COLD_START_BASELINE_MS`. Evidence must cover at least 50 starts, zero forced/orphan processes, and cold-start P95 no greater than 75% of the recorded baseline.
 - Public candidate: run the `Windows 24-hour Reliability` workflow on the labeled reference runner. Evidence must show 24 hours, zero backend restarts, zero MCP consecutive crashes, a clean database, zero unhandled exceptions, and the candidate build ID.
 - `npm run release:check -- --strict-publish` consumes both JSON reports and rejects stale-commit evidence.
 
