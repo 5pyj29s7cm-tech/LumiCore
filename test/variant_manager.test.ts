@@ -86,6 +86,7 @@ describe('Lumi variant manager', () => {
     expect(manager).toContain("assertClean(coreRoot, 'Lumi main worktree')");
     expect(manager).toContain("repository.private !== true");
     expect(manager).toContain("body: JSON.stringify({ enabled: false })");
+    expect(manager).toContain("['/d', '/s', '/c', 'code.cmd', ...args]");
     expect(manager).toContain("['worktree', 'add', '-b'");
     expect(manager).toContain("['merge', '--no-edit', 'main']");
     expect(manager).toContain("['cherry-pick', ...resolved]");

@@ -5,7 +5,6 @@ import readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 
 const GIT = 'git';
-const CODE = process.platform === 'win32' ? 'code.cmd' : 'code';
 const RESERVED_VARIANT_IDS = new Set(['main', 'master', 'origin', 'upstream']);
 
 function run(command, args, options = {}) {
@@ -42,6 +41,13 @@ function runNpm(args, options = {}) {
     return run(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'npm.cmd', ...args], options);
   }
   return run('npm', args, options);
+}
+
+function runCode(args, options = {}) {
+  if (process.platform === 'win32') {
+    return run(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'code.cmd', ...args], options);
+  }
+  return run('code', args, options);
 }
 
 function samePath(first, second) {
@@ -403,7 +409,7 @@ async function createVariant(rawOptions) {
     git(paths.worktree, ['push', '-u', paths.remote, 'HEAD:main'], { inherit: true });
   }
   if (!options['skip-open']) {
-    const opened = run(CODE, ['-n', paths.workspace], { cwd: paths.worktree, allowFailure: true });
+    const opened = runCode(['-n', paths.workspace], { cwd: paths.worktree, allowFailure: true });
     if (!opened.ok) console.warn(`VS Code could not be opened automatically. Open ${paths.workspace} manually.`);
   }
   console.log(JSON.stringify({
