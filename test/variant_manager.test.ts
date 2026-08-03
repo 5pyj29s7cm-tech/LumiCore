@@ -116,7 +116,8 @@ describe('Lumi variant manager', () => {
       git(mainRepository, 'config', 'user.name', 'Lumi Variant Test');
       git(mainRepository, 'config', 'user.email', 'variant-test@localhost');
       fs.writeFileSync(path.join(mainRepository, 'core.txt'), 'baseline\n', 'utf8');
-      fs.writeFileSync(path.join(mainRepository, 'package.json'), '{"private":true}\n', 'utf8');
+      fs.writeFileSync(path.join(mainRepository, 'package.json'), '{"name":"variant-test","version":"1.0.0","private":true}\n', 'utf8');
+      fs.writeFileSync(path.join(mainRepository, 'package-lock.json'), '{"name":"variant-test","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"variant-test","version":"1.0.0"}}}\n', 'utf8');
       git(mainRepository, 'add', '.');
       git(mainRepository, 'commit', '-m', 'initial core');
       git(mainRepository, 'remote', 'add', 'origin', mainOrigin);
@@ -129,7 +130,6 @@ describe('Lumi variant manager', () => {
         '--name', 'Lumi Test Client',
         '--id', 'test-client',
         '--repo', childOrigin,
-        '--skip-install',
         '--skip-open',
       ]);
 

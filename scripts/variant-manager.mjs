@@ -5,7 +5,6 @@ import readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 
 const GIT = 'git';
-const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const CODE = process.platform === 'win32' ? 'code.cmd' : 'code';
 const RESERVED_VARIANT_IDS = new Set(['main', 'master', 'origin', 'upstream']);
 
@@ -32,6 +31,17 @@ function run(command, args, options = {}) {
 
 function git(cwd, args, options = {}) {
   return run(GIT, args, { ...options, cwd });
+}
+
+function runNpm(args, options = {}) {
+  const npmExecPath = String(process.env.npm_execpath || '').trim();
+  if (npmExecPath && fs.existsSync(npmExecPath)) {
+    return run(process.execPath, [npmExecPath, ...args], options);
+  }
+  if (process.platform === 'win32') {
+    return run(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'npm.cmd', ...args], options);
+  }
+  return run('npm', args, options);
 }
 
 function samePath(first, second) {
@@ -313,14 +323,14 @@ async function promptFor(options, fields) {
 
 function installDependencies(worktree, skipInstall) {
   if (skipInstall || fs.existsSync(path.join(worktree, 'node_modules'))) return;
-  run(NPM, ['ci'], { cwd: worktree, inherit: true });
+  runNpm(['ci'], { cwd: worktree, inherit: true });
 }
 
 function verifyVariant(worktree, skipVerify) {
   if (skipVerify) return;
   installDependencies(worktree, false);
-  run(NPM, ['run', 'lint'], { cwd: worktree, inherit: true });
-  run(NPM, ['test', '--', '--run'], { cwd: worktree, inherit: true });
+  runNpm(['run', 'lint'], { cwd: worktree, inherit: true });
+  runNpm(['test', '--', '--run'], { cwd: worktree, inherit: true });
 }
 
 async function createVariant(rawOptions) {
