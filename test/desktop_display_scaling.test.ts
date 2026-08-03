@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   getCompactClientWindowMetrics,
+  getDesktopDockPositionClassName,
   getDesktopChromeMetrics,
   getDesktopDensity,
   resolveDesktopWindowBounds,
+  shouldUseCompactDesktopLayout,
   type ViewportSize,
 } from '../src/lib/desktopLayout';
 
@@ -73,5 +75,21 @@ describe('desktop display scaling layout', () => {
       minWidth: 520,
       minHeight: 460,
     });
+  });
+
+  it.each([
+    [{ width: 1920, height: 1080 }, false],
+    [{ width: 1366, height: 768 }, false],
+    [{ width: 1280, height: 820 }, true],
+    [{ width: 1098, height: 696 }, true],
+    [{ width: 520, height: 460 }, true],
+  ] as const)('derives compact composition from the rendered viewport at %o', (viewport, expected) => {
+    expect(shouldUseCompactDesktopLayout(viewport)).toBe(expected);
+  });
+
+  it('never carries the centered translate class into compact Dock positioning', () => {
+    expect(getDesktopDockPositionClassName(true)).toBe('left-2 right-2');
+    expect(getDesktopDockPositionClassName(true)).not.toContain('translate');
+    expect(getDesktopDockPositionClassName(false)).toBe('left-1/2 -translate-x-1/2');
   });
 });

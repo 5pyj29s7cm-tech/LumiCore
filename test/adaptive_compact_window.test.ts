@@ -16,6 +16,11 @@ describe('adaptive compact client window', () => {
     }
   });
 
+  it('runs the compiled compact-layout gate for every normal Tauri build', () => {
+    const config = JSON.parse(source('src-tauri/tauri.conf.json'));
+    expect(config.build.beforeBuildCommand).toBe('npm run build:desktop');
+  });
+
   it('uses a DPI-aware native compact-window toggle with durable restore state', () => {
     const rust = source('src-tauri/src/lib.rs');
 
@@ -40,7 +45,8 @@ describe('adaptive compact client window', () => {
     expect(desktop).toContain('data-tauri-drag-region');
     expect(desktop).toContain('getCurrentWindow().startDragging()');
     expect(desktop).toContain('onPointerDown={(event) => void handleTopbarPointerDown(event)}');
-    expect(desktop).toContain('data-compact-window={isCompactWindowMode');
+    expect(desktop).toContain('data-compact-layout={isCompactDesktopLayout');
+    expect(desktop).toContain('getDesktopDockPositionClassName(isCompactDesktopLayout)');
     expect(desktop).toContain('<Square size={12} />');
     expect(desktop).toContain("isWallpaperMode || chatOpen || knowledgeOpen || activeTab === 'org'");
     expect(desktop).toContain('aria-pressed={isCompactWindowMode}');
@@ -59,14 +65,19 @@ describe('adaptive compact client window', () => {
     expect(knowledge).toContain('lumi-below-topbar fixed inset-x-0 bottom-0 z-[90]');
     expect(org).toContain('lumi-org-sidebar');
     expect(desktop).toContain('lumi-desktop-widget-rail');
-    expect(css).toContain('[data-compact-window="true"] .lumi-desktop-widget-rail');
+    expect(css).toContain('[data-compact-layout="true"] .lumi-desktop-widget-rail');
     expect(css).toContain('grid-template-columns: 350px minmax(0, 1fr) 320px');
     expect(css).toContain('max-height: calc(100vh - 116px)');
-    expect(css).not.toMatch(/\[data-compact-window="true"\] \.lumi-desktop-widget-rail \{\s*display: none/);
-    expect(css).toContain('[data-compact-window="true"] .lumi-core-stage');
-    expect(css).toMatch(/\[data-compact-window="true"\] \.lumi-core-secondary \{[\s\S]*?display: flex/);
-    expect(css).toContain('[data-compact-window="true"] .lumi-dock');
-    expect(css).toContain('translate: none !important');
+    expect(css).not.toMatch(/\[data-compact-layout="true"\] \.lumi-desktop-widget-rail \{\s*display: none/);
+    expect(css).toContain('[data-compact-layout="true"] .lumi-core-stage');
+    expect(css).toMatch(/\[data-compact-layout="true"\] \.lumi-core-secondary \{[\s\S]*?display: flex/);
+    expect(css).toContain('[data-compact-layout="true"] .lumi-dock');
+    expect(css).toContain('justify-content: safe center');
+    expect(css).not.toContain('translate: none !important');
+    expect(css).not.toContain('min-height: calc(200vh - 116px)');
+    expect(css).not.toContain('margin-top: calc(100vh - 250px)');
+    expect(css).toContain('grid-template-columns: 260px minmax(0, 1fr) 280px');
+    expect(css).toContain('grid-template-rows: minmax(360px, calc(100dvh - 110px)) auto');
     expect(css).toContain('[data-ui-density="mini"] .lumi-shell-topbar');
     expect(css).toContain('@media (max-width: 820px), (max-height: 700px)');
   });

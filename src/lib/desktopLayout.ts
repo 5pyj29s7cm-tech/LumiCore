@@ -69,6 +69,23 @@ export function getDesktopDensity(viewport: ViewportSize): DesktopDensity {
   return 'comfortable';
 }
 
+/**
+ * Drive the desktop composition from the rendered viewport instead of the
+ * native compact-window toggle. This keeps manual resize and DPI changes from
+ * leaving the shell in a layout that no longer matches its actual size.
+ */
+export function shouldUseCompactDesktopLayout(viewport: ViewportSize): boolean {
+  const width = finiteViewportDimension(viewport.width, 1280);
+  const height = finiteViewportDimension(viewport.height, 820);
+  return getDesktopDensity({ width, height }) !== 'comfortable'
+    || (width <= 1320 && height <= 860);
+}
+
+/** Keep compact Dock positioning free of transform/translate overrides. */
+export function getDesktopDockPositionClassName(compactLayout: boolean): string {
+  return compactLayout ? 'left-2 right-2' : 'left-1/2 -translate-x-1/2';
+}
+
 export function getDesktopChromeMetrics(viewport: ViewportSize): DesktopChromeMetrics {
   const width = finiteViewportDimension(viewport.width, 1280);
   const height = finiteViewportDimension(viewport.height, 820);

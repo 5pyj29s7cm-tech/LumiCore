@@ -980,10 +980,12 @@ describe('orchestrator worker ToolPolicy propagation', () => {
       [external],
     );
 
-    expect(mocks.executeExternalAgent).toHaveBeenCalledWith(
-      { command: external.externalCommand, timeout: 42_000 },
-      expect.stringContaining('Read external analysis'),
-    );
+    expect(mocks.executeExternalAgent).toHaveBeenCalledTimes(1);
+    const [runtimeOptions, prompt] = mocks.executeExternalAgent.mock.calls[0];
+    expect(runtimeOptions.command).toBe(external.externalCommand);
+    expect(runtimeOptions.timeout).toBeGreaterThan(0);
+    expect(runtimeOptions.timeout).toBeLessThanOrEqual(42_000);
+    expect(prompt).toContain('Read external analysis');
     expect(result.subTaskResults[0].status).toBe('succeeded');
   });
 

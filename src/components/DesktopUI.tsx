@@ -121,9 +121,11 @@ import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 import { desktopWorkflowCopy } from '../i18n/locales/desktopWorkflows';
 import { chatAttachmentRequestMatchesScope, type ChatAttachmentRequest } from '@/lib/chatAttachmentReferences';
 import {
+  getDesktopDockPositionClassName,
   getDesktopChromeMetrics,
   getDesktopIconLayout,
   resolveDesktopWindowBounds,
+  shouldUseCompactDesktopLayout,
   type ViewportSize,
 } from '@/lib/desktopLayout';
 
@@ -1675,6 +1677,8 @@ export function DesktopUI({
   const wallpaperInputRef = React.useRef<HTMLInputElement>(null);
   const desktopChrome = useMemo(() => getDesktopChromeMetrics(viewport), [viewport]);
   const desktopIconLayout = useMemo(() => getDesktopIconLayout(viewport), [viewport]);
+  const isCompactDesktopLayout = useMemo(() => shouldUseCompactDesktopLayout(viewport), [viewport]);
+  const dockPositionClassName = getDesktopDockPositionClassName(isCompactDesktopLayout);
   const desktopIconColumns = 3;
 
   useEffect(() => {
@@ -4465,7 +4469,7 @@ export function DesktopUI({
       data-appearance={resolvedAppearanceMode}
       data-view-mode={viewMode}
       data-ui-density={desktopChrome.density}
-      data-compact-window={isCompactWindowMode ? 'true' : 'false'}
+      data-compact-layout={isCompactDesktopLayout ? 'true' : 'false'}
       onContextMenu={handleShellContextMenu}
       className={`fixed inset-0 overflow-hidden cursor-default select-none transition-all duration-1000 ${resolvedAppearanceMode === 'light' ? 'lumi-light-shell' : 'lumi-dark-shell'} ${
       isWallpaperMode ? 'bg-transparent pointer-events-none' :
@@ -4844,7 +4848,7 @@ export function DesktopUI({
         {/* Bottom Taskbar / Dock */}
         <div
           data-theme-scope={viewMode === 'world' ? 'dark' : undefined}
-          className={`lumi-dock absolute bottom-6 left-1/2 -translate-x-1/2 z-50 h-16 max-w-[calc(100vw-2rem)] overflow-x-auto overflow-y-hidden px-4 glass-dark rounded-[2.5rem] border border-white/10 flex items-center gap-2 shadow-2xl backdrop-blur-2xl transition-all duration-1000 ${
+          className={`lumi-dock absolute bottom-6 ${dockPositionClassName} z-50 h-16 max-w-[calc(100vw-2rem)] overflow-x-auto overflow-y-hidden px-4 glass-dark rounded-[2.5rem] border border-white/10 flex items-center gap-2 shadow-2xl backdrop-blur-2xl transition-all duration-1000 ${
             isWallpaperMode || chatOpen || knowledgeOpen || activeTab === 'org'
               ? 'opacity-0 pointer-events-none'
               : 'opacity-100 pointer-events-auto'

@@ -133,6 +133,7 @@ jobs:
           npm run stress:lifecycle
 
       - name: Clean-user installer lifecycle smoke
+        if: ${{ always() && !cancelled() && hashFiles('src-tauri/target/release/bundle/nsis/*.exe') != '' }}
         run: npm run smoke:installer:win
 
       - name: Generate checksums, manifest and release-out bundle
@@ -167,14 +168,3 @@ jobs:
             src-tauri/target/release/bundle/release-manifest.json
             release-out/**
           if-no-files-found: error
-
-      - name: Upload unverified internal installer after a failed validation gate
-        if: ${{ failure() && inputs.channel != 'public' && hashFiles('src-tauri/target/release/bundle/nsis/*.exe') != '' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: lumi-os-windows-internal-unverified-${{ github.sha }}
-          path: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/nsis/*.sig
-          if-no-files-found: error
-          retention-days: 7

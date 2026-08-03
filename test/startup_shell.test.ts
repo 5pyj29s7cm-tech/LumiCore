@@ -125,6 +125,10 @@ describe('desktop startup shell', () => {
     expect(windowsWorkflow).toContain('createUpdaterArtifacts');
     expect(windowsWorkflow).toContain('npx tauri build --config $env:LUMI_RELEASE_TAURI_CONFIG');
     expect(windowsWorkflow).not.toContain("Set-Content -LiteralPath $configPath");
+    expect(windowsWorkflow).toContain("always() && !cancelled() && hashFiles('src-tauri/target/release/bundle/nsis/*.exe') != ''");
+    expect(windowsWorkflow).toContain("name: lumi-os-windows-${{ inputs.channel || 'internal' }}-${{ github.sha }}");
+    expect(windowsWorkflow).not.toContain('Upload unverified internal installer');
+    expect(windowsWorkflow).not.toContain('lumi-os-windows-internal-unverified');
     const reliabilityWorkflow = fs.readFileSync(path.join(process.cwd(), '.github/workflows/reliability-windows.yml'), 'utf8');
     expect(reliabilityWorkflow).toContain('--duration-hours 24');
     expect(reliabilityWorkflow).toContain('LUMI_TTS_RELIABILITY_FIXTURE_DIR');

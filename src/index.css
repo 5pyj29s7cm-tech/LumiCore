@@ -1559,25 +1559,25 @@ body,
   padding: 10px;
 }
 
-[data-compact-window="true"] .lumi-desktop-grid {
+[data-compact-layout="true"] .lumi-desktop-grid {
   overflow: hidden;
   padding: 46px 12px 64px;
 }
 
-[data-compact-window="true"] .lumi-desktop-grid-layout {
+[data-compact-layout="true"] .lumi-desktop-grid-layout {
   display: grid;
   grid-template-columns: 350px minmax(0, 1fr) 320px;
   gap: 12px;
   height: 100%;
 }
 
-[data-compact-window="true"] .lumi-desktop-icon-canvas {
+[data-compact-layout="true"] .lumi-desktop-icon-canvas {
   grid-column: 1;
   width: 350px;
   min-height: 190px !important;
 }
 
-[data-compact-window="true"] .lumi-desktop-widget-rail {
+[data-compact-layout="true"] .lumi-desktop-widget-rail {
   display: flex;
   grid-column: 3;
   width: 320px !important;
@@ -1589,48 +1589,44 @@ body,
   z-index: 20;
 }
 
-[data-compact-window="true"] .desktop-icon {
+[data-compact-layout="true"] .desktop-icon {
   width: 76px;
   gap: 4px;
   padding: 6px;
 }
 
-[data-compact-window="true"] .desktop-icon-img {
+[data-compact-layout="true"] .desktop-icon-img {
   width: 44px;
   height: 44px;
   border-radius: 14px;
 }
 
-[data-compact-window="true"] .lumi-core-stage {
+[data-compact-layout="true"] .lumi-core-stage {
   inset: 34px 320px 58px 350px;
 }
 
-[data-compact-window="true"] .lumi-core-entity {
+[data-compact-layout="true"] .lumi-core-entity {
   zoom: 0.72;
 }
 
-[data-compact-window="true"] .lumi-core-secondary {
+[data-compact-layout="true"] .lumi-core-secondary {
   display: flex;
   gap: 8px;
   margin-top: 12px;
 }
 
-[data-compact-window="true"] .lumi-chat-root {
+[data-compact-layout="true"] .lumi-chat-root {
   background: #02050a !important;
 }
 
-[data-compact-window="true"] .lumi-dock {
-  right: 8px !important;
+[data-compact-layout="true"] .lumi-dock {
   bottom: 8px !important;
-  left: 8px !important;
   width: auto;
   height: 48px !important;
   max-width: none;
-  justify-content: center;
+  justify-content: safe center;
   overflow-x: auto;
   overflow-y: hidden;
-  translate: none !important;
-  transform: none !important;
 }
 
 [data-ui-density="mini"] .lumi-shell-topbar {
@@ -1742,45 +1738,66 @@ body,
 }
 
 @media (max-width: 1099px) {
-  [data-compact-window="true"] .lumi-desktop-grid {
+  [data-compact-layout="true"] .lumi-desktop-grid-layout {
+    grid-template-columns: 260px minmax(0, 1fr) 280px;
+    gap: 8px;
+    min-height: 0;
+  }
+
+  [data-compact-layout="true"] .lumi-desktop-icon-canvas {
+    width: 260px;
+  }
+
+  [data-compact-layout="true"] .lumi-core-stage {
+    inset: 34px 280px 56px 260px;
+  }
+
+  [data-compact-layout="true"] .lumi-desktop-widget-rail {
+    width: 280px !important;
+    max-height: calc(100dvh - 110px);
+    margin-top: 0;
+    padding: 0 2px 0 0;
+  }
+}
+
+@media (max-width: 820px) {
+  [data-compact-layout="true"] .lumi-desktop-grid {
     overflow-y: auto;
   }
 
-  [data-compact-window="true"] .lumi-desktop-grid-layout {
-    display: block;
-    min-height: calc(200vh - 116px);
+  [data-compact-layout="true"] .lumi-desktop-grid-layout {
+    grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+    grid-template-rows: minmax(360px, calc(100dvh - 110px)) auto;
+    height: auto;
+    min-height: 100%;
   }
 
-  [data-compact-window="true"] .lumi-desktop-icon-canvas {
-    width: 300px;
+  [data-compact-layout="true"] .lumi-desktop-icon-canvas {
+    grid-column: 1;
+    grid-row: 1;
+    width: 260px;
   }
 
-  [data-compact-window="true"] .lumi-core-stage {
-    inset: 34px 0 56px 300px;
+  [data-compact-layout="true"] .lumi-core-stage {
+    inset: 34px 0 56px 260px;
   }
 
-  [data-compact-window="true"] .lumi-desktop-widget-rail {
+  [data-compact-layout="true"] .lumi-desktop-widget-rail {
+    grid-column: 1 / -1;
+    grid-row: 2;
     width: 100% !important;
     max-height: none;
-    margin-top: calc(100vh - 250px);
-    padding: 0 4px 72px;
+    margin-top: 0;
+    padding: 12px 4px 72px;
   }
 }
 
 @media (max-width: 820px), (max-height: 700px) {
-  [data-compact-window="true"] .lumi-desktop-icon-canvas {
-    width: 260px;
-  }
-
-  [data-compact-window="true"] .lumi-core-stage {
-    inset: 34px 0 56px 260px;
-  }
-
-  [data-compact-window="true"] .lumi-core-entity {
+  [data-compact-layout="true"] .lumi-core-entity {
     zoom: 0.6;
   }
 
-  [data-compact-window="true"] .lumi-core-secondary {
+  [data-compact-layout="true"] .lumi-core-secondary {
     gap: 4px;
     margin-top: 6px;
   }
