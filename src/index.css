@@ -1284,12 +1284,20 @@ html[data-mode="light"] [data-theme-scope="dark"] [class*="border-white\\/20"] {
 .markdown-body img { max-width: 100%; max-height: 480px; border-radius: 0.5rem; border: 1px solid rgba(255,255,255,0.1); margin: 0.5rem 0; }
 
 .chat-message-markdown {
-  line-height: 1.72;
+  line-height: 1.78;
   overflow-wrap: anywhere;
 }
 
 .chat-message-markdown p {
-  margin: 0.45rem 0;
+  margin: 0.58rem 0;
+}
+
+.chat-message-markdown-agent {
+  line-height: 1.86;
+}
+
+.chat-message-markdown-agent p {
+  margin: 0.78rem 0;
 }
 
 .chat-message-markdown p:first-child {
@@ -1308,31 +1316,31 @@ html[data-mode="light"] [data-theme-scope="dark"] [class*="border-white\\/20"] {
 }
 
 .chat-message-markdown h1 {
-  font-size: 1.08rem;
+  font-size: 1.12rem;
   line-height: 1.35;
-  margin: 0.15rem 0 0.65rem;
+  margin: 0.25rem 0 0.8rem;
 }
 
 .chat-message-markdown h2 {
-  font-size: 1rem;
+  font-size: 1.04rem;
   line-height: 1.4;
-  margin: 0.9rem 0 0.35rem;
+  margin: 1.25rem 0 0.48rem;
 }
 
 .chat-message-markdown h3 {
-  font-size: 0.93rem;
+  font-size: 0.96rem;
   line-height: 1.45;
-  margin: 0.75rem 0 0.25rem;
+  margin: 1rem 0 0.38rem;
 }
 
 .chat-message-markdown ul,
 .chat-message-markdown ol {
-  margin: 0.45rem 0 0.65rem;
-  padding-left: 1.15rem;
+  margin: 0.68rem 0 0.88rem;
+  padding-left: 1.3rem;
 }
 
 .chat-message-markdown li {
-  margin: 0.22rem 0;
+  margin: 0.38rem 0;
   padding-left: 0.12rem;
 }
 

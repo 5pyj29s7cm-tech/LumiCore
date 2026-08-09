@@ -3,6 +3,7 @@ import {
   clearAllPendingConfirmationsForTests,
   consumePendingConfirmation,
   formatPendingConfirmationPrompt,
+  formatPendingConfirmationRequest,
   getPendingConfirmation,
   isExplicitConfirmationReply,
   recordPendingConfirmation,
@@ -61,6 +62,11 @@ describe('One-time pending tool confirmations', () => {
     expect(prompt).not.toContain('super-secret-password');
     expect(pending.exactArgs.password).toBe('super-secret-password');
     expect(pending.safeArgs.password).toBe('[redacted]');
+
+    const request = formatPendingConfirmationRequest(pending);
+    expect(request).toContain('Confirmation is required');
+    expect(request).toContain('[redacted]');
+    expect(request).not.toContain('super-secret-password');
   });
 
   it('keeps the original action context for deterministic continuation', () => {

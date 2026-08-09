@@ -56,6 +56,19 @@ export interface MergeChatAttachmentsResult {
   overflowCount: number;
 }
 
+type PersistedChatAttachmentReference = Omit<ChatAttachmentReference, 'preview'> & {
+  preview?: string | null;
+};
+
+interface PersistedChatAttachmentContext {
+  version: 1;
+  savedAt: number;
+  expiresAt: number;
+  attachments: PersistedChatAttachmentReference[];
+}
+
+export const CHAT_ATTACHMENT_CONTEXT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
 function normalizeReferencePath(value: string): string {
   return value.trim().replace(/\\/g, '/').replace(/\/{2,}/g, '/').toLowerCase();
 }
@@ -157,4 +170,53 @@ export function mergeChatAttachmentReferences(
   }
 
   return { attachments, added, duplicateCount, overflowCount };
+}
+
+/**
+ * Keeps durable references available when the desktop client is reopened.
+ * Extracted text, transcripts, and previews are deliberately not copied into
+ * localStorage; the scoped file id/path remains the source of truth.
+ */
+export function serializeChatAttachmentContext(
+  attachments: ChatAttachmentReference[],
+  now = Date.now(),
+): string {
+  const persisted: PersistedChatAttachmentReference[] = attachments
+    .filter(item => Boolean(item.path || item.fileId))
+    .slice(0, MAX_CHAT_ATTACHMENTS)
+    .map(item => ({
+      ...item,
+      content: null,
+      transcript: null,
+      preview: null,
+      transcriptionError: null,
+    }));
+  const context: PersistedChatAttachmentContext = {
+    version: 1,
+    savedAt: now,
+    expiresAt: now + CHAT_ATTACHMENT_CONTEXT_TTL_MS,
+    attachments: persisted,
+  };
+  return JSON.stringify(context);
+}
+
+export function parseChatAttachmentContext(value?: string | null, now = Date.now()): ChatAttachmentReference[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (
+      !parsed
+      || parsed.version !== 1
+      || !Number.isFinite(Number(parsed.expiresAt))
+      || Number(parsed.expiresAt) <= now
+      || !Array.isArray(parsed.attachments)
+    ) return [];
+    return parsed.attachments
+      .filter(item => item && typeof item === 'object' && String(item.fileName || '').trim())
+      .map(item => createChatAttachmentReference(item as ChatFileReferenceInput))
+      .filter(item => Boolean(item.path || item.fileId))
+      .slice(0, MAX_CHAT_ATTACHMENTS);
+  } catch {
+    return [];
+  }
 }

@@ -490,7 +490,9 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
   const handleCloseConversation = useCallback(async (convId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     try {
-      await fetch(`/api/conversations/${encodeURIComponent(convId)}/close`, { method: 'POST' });
+      const response = await fetch(`/api/conversations/${encodeURIComponent(convId)}/close`, { method: 'POST' });
+      if (!response.ok) return;
+      window.dispatchEvent(new CustomEvent('lumi:conversation-closed', { detail: { conversationId: convId } }));
       if (activeConvIdRef.current === convId) {
         setActiveConvId(null);
         setMessages([]);

@@ -5,6 +5,7 @@ import {
   addMember,
   createDepartment,
   createOrg,
+  updateMemberRole,
 } from '../server/org/db';
 import {
   createOrganizationPosition,
@@ -138,7 +139,36 @@ describe('durable organization business routing', () => {
     expect(first.workItem.skillTags).toContain('contract-review');
   });
 
-  it('binds external commits to immutable organization approval and resumes the same task without duplication', () => {
+  it('does not invent an approval for an external commit without an explicit approval rule', () => {
+    const routed = routeOrganizationWork({
+      orgId,
+      requesterUserId: memberB,
+      source: 'feishu_bot',
+      platform: 'feishu',
+      requestId: `feishu:${suffix}:default-no-approval`,
+      text: 'Publish this ordinary organization notice externally.',
+      intentKind: 'public_publish',
+      operation: 'mutate',
+      sideEffectClass: 'external_commit',
+      taskId: `task-${suffix}:default-no-approval`,
+      targetAgentIds: [legalAgentId],
+    });
+
+    expect(routed.approval).toBeNull();
+    expect(routed.workItem).toMatchObject({ status: 'assigned', approvalId: null });
+  });
+
+  it('binds explicitly configured approvals to an immutable work item and resumes without duplication', () => {
+    createOrganizationWorkRoutingRule({
+      orgId,
+      actorUserId: ownerId,
+      name: 'Explicit administrator approval route',
+      priority: 100,
+      platforms: ['feishu'],
+      keywords: ['approval-required'],
+      agentIds: [legalAgentId],
+      approvalMode: 'admin',
+    });
     const routed = routeOrganizationWork({
       orgId,
       requesterUserId: memberA,
@@ -146,13 +176,12 @@ describe('durable organization business routing', () => {
       platform: 'feishu',
       requestId: `feishu:${suffix}:approval`,
       idempotencyKey: `feishu-work-${suffix}:approval`,
-      text: 'Publish the approved notice externally.',
+      text: 'Publish this approval-required notice externally.',
       intentKind: 'public_publish',
       operation: 'mutate',
       sideEffectClass: 'external_commit',
       conversationId: `conversation-${suffix}`,
       taskId: `task-${suffix}:approval`,
-      targetAgentIds: [legalAgentId],
     });
     expect(routed.workItem.status).toBe('waiting_approval');
     expect(routed.approval).toMatchObject({
@@ -187,6 +216,66 @@ describe('durable organization business routing', () => {
     expect(continued.workItem.id).toBe(routed.workItem.id);
     expect(continued.workItem.status).toBe('assigned');
     expect(listOrganizationWorkItems(orgId, { taskId: `task-${suffix}:approval` })).toHaveLength(1);
+  });
+
+  it('does not require an organization administrator to approve their own routed request', () => {
+    const routed = routeOrganizationWork({
+      orgId,
+      requesterUserId: ownerId,
+      source: 'feishu_bot',
+      platform: 'feishu',
+      requestId: `feishu:${suffix}:owner-self-approval`,
+      text: 'Publish this approval-required owner notice externally.',
+      intentKind: 'public_publish',
+      operation: 'mutate',
+      sideEffectClass: 'external_commit',
+      conversationId: `conversation-${suffix}-owner`,
+      taskId: `task-${suffix}:owner-self-approval`,
+    });
+
+    expect(routed.approval).toBeNull();
+    expect(routed.workItem).toMatchObject({
+      requesterUserId: ownerId,
+      status: 'assigned',
+      approvalId: null,
+    });
+    expect(listOrganizationWorkApprovals(orgId).some(item => item.workItemId === routed.workItem.id)).toBe(false);
+  });
+
+  it('releases a legacy self-approval when the requester is now an organization administrator', () => {
+    const legacyAdminId = `routing-legacy-admin-${suffix}`;
+    addMember(orgId, legacyAdminId, 'member');
+    const routed = routeOrganizationWork({
+      orgId,
+      requesterUserId: legacyAdminId,
+      source: 'feishu_bot',
+      platform: 'feishu',
+      requestId: `feishu:${suffix}:legacy-self-approval`,
+      text: 'Publish this approval-required legacy organization notice externally.',
+      intentKind: 'public_publish',
+      operation: 'mutate',
+      sideEffectClass: 'external_commit',
+      taskId: `task-${suffix}:legacy-self-approval`,
+    });
+    expect(routed.workItem.status).toBe('waiting_approval');
+    expect(routed.approval?.status).toBe('pending');
+    updateMemberRole(orgId, legacyAdminId, 'admin');
+
+    const continued = routeOrganizationWork({
+      orgId,
+      requesterUserId: legacyAdminId,
+      source: 'feishu_bot',
+      requestId: `feishu:${suffix}:legacy-self-approval-continue`,
+      text: 'continue',
+      intentKind: 'none',
+      operation: 'read',
+      sideEffectClass: 'none',
+      taskId: routed.workItem.taskId,
+    });
+
+    expect(continued.created).toBe(false);
+    expect(continued.workItem).toMatchObject({ id: routed.workItem.id, status: 'assigned' });
+    expect(continued.approval).toMatchObject({ status: 'approved', decidedBy: legacyAdminId });
   });
 
   it('stops agents for accepted human takeover and can explicitly return the item to an agent', () => {
@@ -290,13 +379,13 @@ describe('durable organization business routing', () => {
       orgId,
       requesterUserId: memberA,
       source: 'feishu_bot',
+      platform: 'feishu',
       requestId: `feishu:${suffix}:approval-expiry`,
-      text: 'Publish this target-changing notice.',
+      text: 'Publish this approval-required target-changing notice.',
       intentKind: 'public_publish',
       operation: 'mutate',
       sideEffectClass: 'external_commit',
       taskId: `task-${suffix}:approval-expiry`,
-      targetAgentIds: [legalAgentId],
     });
     const handoff = requestOrganizationWorkHandoff({
       orgId,

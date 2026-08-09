@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { formatPendingConfirmationRequestMessage } from '../i18n/confirmation_messages';
 
 export interface PendingToolConfirmation {
   id: string;
@@ -212,6 +213,11 @@ export function formatPendingConfirmationPrompt(pending: PendingToolConfirmation
     `Payload digest: ${pending.payloadDigest}`,
     `Arguments (secrets redacted): ${JSON.stringify(pending.safeArgs)}`,
   ].join('\n');
+}
+
+/** User-facing request shown before an external or otherwise sensitive action starts. */
+export function formatPendingConfirmationRequest(pending: PendingToolConfirmation): string {
+  return formatPendingConfirmationRequestMessage(pending);
 }
 
 export function clearAllPendingConfirmationsForTests(): void {

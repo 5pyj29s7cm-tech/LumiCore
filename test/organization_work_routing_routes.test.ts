@@ -87,6 +87,7 @@ describe('organization work routing REST authorization', () => {
         keywords: ['operations-task'],
         positionId: position.id,
         priority: 10,
+        approvalMode: 'admin',
       }),
     });
     expect(ruleResponse.status).toBe(201);

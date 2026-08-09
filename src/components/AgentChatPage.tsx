@@ -35,6 +35,8 @@ import {
   chatAttachmentRequestMatchesScope,
   createChatAttachmentReference,
   mergeChatAttachmentReferences,
+  parseChatAttachmentContext,
+  serializeChatAttachmentContext,
   type ChatAttachmentReference,
   type ChatAttachmentRequest,
 } from '@/lib/chatAttachmentReferences';
@@ -111,14 +113,6 @@ function getDisplayText(message: any): string {
   return String(message.text);
 }
 
-const RECENT_ATTACHMENT_CONTEXT_TTL_MS = 15 * 60 * 1000;
-
-function messageTimestampMs(message: any): number | null {
-  const value = message?.timestamp || message?.createdAt || message?.time;
-  const parsed = value ? new Date(value).getTime() : Number.NaN;
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
 const ASSISTANT_HISTORY_NOISE_RE =
   /我还没有真正开始读取或审查|我还不能说这件事已经完成|没有记录到成功的工具执行|真正读取时|Completion claim|Maximum tool call iterations|Action Constitution|local_write action requires confirmation|已经落到(?:桌面|电脑|文件)|结果包已经|交付包已经|真实接管|WPS\s*表格|剪映已打开|微信已打开|文件生成也卡在权限确认|工具调用一直在跑/i;
 
@@ -129,26 +123,22 @@ function shouldOmitAssistantHistoryMessage(message: any, text: string): boolean 
   return isAssistantLike && ASSISTANT_HISTORY_NOISE_RE.test(text);
 }
 
-function buildChatHistoryPayload(messages: any[], options?: { sinceMs?: number }) {
-  const scopedMessages = typeof options?.sinceMs === 'number'
-    ? messages.filter((m) => {
-      const timestamp = messageTimestampMs(m);
-      return timestamp !== null && timestamp >= options.sinceMs!;
-    })
-    : messages;
+function stripStoredAttachmentSummary(value: string): string {
+  return String(value || '')
+    .replace(/\n{0,2}\[Attachments\][\s\S]*$/i, '')
+    .trim();
+}
 
-  return scopedMessages.flatMap((m) => {
+function buildChatHistoryPayload(messages: any[]) {
+  return messages.flatMap((m) => {
     const text = getDisplayText(m).trim();
-    const attachmentSummary = Array.isArray(m.attachments) && m.attachments.length > 0
-      ? `\n\n[Previous attachments omitted. Ask for a current attachment or exact local path before using file tools.]`
-      : '';
-    if (!text && !attachmentSummary) return [];
+    if (!text) return [];
     if (m.type === 'tool') return [];
     if (['error', 'proactive'].includes(m.source)) return [];
     if (/^(Request failed|请求失败|出错了|Failed to route)/i.test(text)) return [];
     if (shouldOmitAssistantHistoryMessage(m, text)) return [];
     if (m.type === 'agent') return [{ role: 'assistant', content: text }];
-    if (m.type === 'user' || m.type === 'file_context') return [{ role: 'user', content: `${text}${attachmentSummary}`.trim() }];
+    if (m.type === 'user' || m.type === 'file_context') return [{ role: 'user', content: text }];
     return [];
   }).slice(-80);
 }
@@ -188,16 +178,6 @@ function serializeChatAttachment(item: ChatAttachment): ChatAttachment {
     transcriptionProvider: item.transcriptionProvider || '',
     transcriptionModel: item.transcriptionModel || '',
   };
-}
-
-function shouldReuseRecentAttachmentContext(text: string): boolean {
-  const clean = text.trim();
-  if (!clean) return false;
-  const hasReference = /刚才|刚刚|上面|前面|这个|这份|它|附件|文件|录音|音频|语音|转写|文本|笔录|记录|纪要|材料|文稿|\b(?:this|that|attachment|file|audio|recording|transcript|notes?)\b/iu.test(clean);
-  const hasAction = /整理|做成|生成|转成|保存|导出|写成|形成|归纳|总结|提炼|分析|笔录|材料|\b(?:summari[sz]e|make|create|generate|save|export|write|format|turn)\b/iu.test(clean);
-  const shortArtifactRequest = clean.length <= 40 &&
-    /^(?:帮我|给我|把它|把这个|这个|这份|刚才的|刚刚的|上面的|前面的)?\s*(?:整理|做成|生成|转成|保存成|导出成|写成|形成|归纳|总结|提炼).{0,16}(?:文本|文字|txt|md|笔录|记录|纪要|材料|文稿|文件)\s*$/iu.test(clean);
-  return shortArtifactRequest || (hasReference && hasAction);
 }
 
 function getSelectedTextWithin(container?: HTMLElement | null): string {
@@ -545,6 +525,12 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const [optimizationProgress, setOptimizationProgress] = useState(0);
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
   const pendingAttachmentsRef = useRef<ChatAttachment[]>([]);
+  const [conversationAttachments, setConversationAttachments] = useState<ChatAttachment[]>([]);
+  const conversationAttachmentsRef = useRef<ChatAttachment[]>([]);
+  const attachmentConversationIdRef = useRef('');
+  const [attachmentContextStorageKey, setAttachmentContextStorageKey] = useState('');
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const nativeDropHandledAtRef = useRef(0);
   const [knowledgeFiles, setKnowledgeFiles] = useState<FileEntry[]>([]);
   const [knowledgeLoading, setKnowledgeLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -566,8 +552,6 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const currentRequestNeedsEvidenceRef = useRef(false);
   const currentResponseFinalizationRef = useRef<ChatResponseFinalization | null>(null);
   const messagesRef = useRef<any[]>([]);
-  const recentAttachmentContextRef = useRef<ChatAttachment[]>([]);
-  const recentAttachmentContextSinceRef = useRef(0);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -692,6 +676,52 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const agentName = agent?.name || (t.lumiEssence || 'Lumi Essence');
   const agentCategory = agent?.category || (t.friend || 'friend');
   const agentId = agent?.id || 'lumi';
+  const attachmentContextStoragePrefix = `lumi_chat_attachment_context:${user?.id || user?.username || 'anonymous'}:${buildChatConversationScopeKey(agentId, activeDomain, activeOrgId)}`;
+  const bindAttachmentContextToConversation = useCallback((
+    conversationId: string,
+    options: { carryCurrent?: boolean } = {},
+  ) => {
+    const nextConversationId = String(conversationId || '').trim();
+    if (!nextConversationId) {
+      attachmentConversationIdRef.current = '';
+      setAttachmentContextStorageKey('');
+      conversationAttachmentsRef.current = [];
+      setConversationAttachments([]);
+      return;
+    }
+    if (attachmentConversationIdRef.current === nextConversationId) return;
+    const nextStorageKey = `${attachmentContextStoragePrefix}:${nextConversationId}`;
+    let nextAttachments = options.carryCurrent ? conversationAttachmentsRef.current : [];
+    if (!options.carryCurrent) {
+      try {
+        nextAttachments = parseChatAttachmentContext(localStorage.getItem(nextStorageKey));
+        if (nextAttachments.length === 0) localStorage.removeItem(nextStorageKey);
+      } catch {
+        nextAttachments = [];
+      }
+    }
+    attachmentConversationIdRef.current = nextConversationId;
+    setAttachmentContextStorageKey(nextStorageKey);
+    conversationAttachmentsRef.current = nextAttachments;
+    setConversationAttachments(nextAttachments);
+    if (options.carryCurrent && nextAttachments.length > 0) {
+      try {
+        localStorage.setItem(nextStorageKey, serializeChatAttachmentContext(nextAttachments));
+      } catch {}
+    }
+  }, [attachmentContextStoragePrefix]);
+  useEffect(() => {
+    const onConversationClosed = (event: Event) => {
+      const closedConversationId = String((event as CustomEvent<{ conversationId?: string }>).detail?.conversationId || '');
+      if (!closedConversationId || closedConversationId !== attachmentConversationIdRef.current) return;
+      try {
+        localStorage.removeItem(`${attachmentContextStoragePrefix}:${closedConversationId}`);
+      } catch {}
+      bindAttachmentContextToConversation('');
+    };
+    window.addEventListener('lumi:conversation-closed', onConversationClosed);
+    return () => window.removeEventListener('lumi:conversation-closed', onConversationClosed);
+  }, [attachmentContextStoragePrefix, bindAttachmentContextToConversation]);
   const scopedConversationUrl = useCallback((path: string) => {
     const separator = path.includes('?') ? '&' : '?';
     return `${path}${separator}domain=${encodeURIComponent(activeDomain)}&agentId=${encodeURIComponent(agentId)}`;
@@ -1039,7 +1069,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       const baseId = m.id || `persisted-${index}`;
       const timestamp = m.timestamp || m.createdAt || new Date().toISOString();
       const role = m.role || '';
-      const userText = role === 'assistant' ? '' : (m.content || m.message || '');
+      const userText = role === 'assistant' ? '' : stripStoredAttachmentSummary(m.content || m.message || '');
       const assistantText = role === 'assistant'
         ? (m.content || m.message || m.response || '')
         : (m.response || '');
@@ -1079,16 +1109,20 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     if (!agentId || isFounder) return;
 
     // On agent/domain switch, reset and reload
-    const conversationScopeKey = buildChatConversationScopeKey(agentId, activeDomain, activeOrgId);
+    const conversationScopeKey = `${user?.id || user?.username || 'anonymous'}:${buildChatConversationScopeKey(agentId, activeDomain, activeOrgId)}`;
     if (conversationScopeKey !== lastConversationScopeRef.current) {
       lastConversationScopeRef.current = conversationScopeKey;
       initialLoadDoneRef.current = false;
+      try {
+        // Remove the pre-fix scope-only key, which could contain plaintext and
+        // could incorrectly survive into a different conversation.
+        localStorage.removeItem(attachmentContextStoragePrefix);
+      } catch {}
       setMessages([]);
       messagesRef.current = [];
       setPendingAttachments([]);
       pendingAttachmentsRef.current = [];
-      recentAttachmentContextRef.current = [];
-      recentAttachmentContextSinceRef.current = 0;
+      bindAttachmentContextToConversation('');
     }
 
     // Only load once; do not overwrite live conversation.
@@ -1101,6 +1135,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
         .then(async (data) => {
           const conv = data.activeConversation;
           if (conv) {
+            bindAttachmentContextToConversation(conv.id);
             const msgRes = await fetch(scopedConversationUrl(`/api/conversations/${conv.id}/messages?limit=${CHAT_HISTORY_LIMIT}`));
             const msgData = await msgRes.json();
             if (msgData.messages && Array.isArray(msgData.messages)) {
@@ -1109,7 +1144,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           }
         })
         .catch(() => {});
-  }, [activeDomain, activeOrgId, agentId, isFounder, normalizePersistedMessages, scopedConversationUrl]);
+  }, [activeDomain, activeOrgId, agentId, attachmentContextStoragePrefix, bindAttachmentContextToConversation, isFounder, normalizePersistedMessages, scopedConversationUrl, user?.id, user?.username]);
 
   useEffect(() => {
     const query = searchQuery.trim();
@@ -1489,8 +1524,19 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     // conversation_updated: only reload for non-text-chat channels (voice, etc.)
     // Text chat state is managed live via agent:chunk/agent:response; API reload here
     // would replace messages with different ids, causing React to remount & re-animate them.
-    const onConversationUpdated = (data: { conversationId: string; agentId: string; source?: string }) => {
+    const onConversationUpdated = (data: {
+      conversationId: string;
+      agentId: string;
+      source?: string;
+      rolledOver?: boolean;
+      previousConversationId?: string;
+    }) => {
       if (data.agentId !== agentId) return;
+      if (data.conversationId && data.conversationId !== attachmentConversationIdRef.current) {
+        bindAttachmentContextToConversation(data.conversationId, {
+          carryCurrent: data.rolledOver === true || !attachmentConversationIdRef.current,
+        });
+      }
       const isExternalMessagingSync = /^(wechat|feishu|wecom)_bot$/.test(String(data.source || ''));
       if (data.source === 'chat' || (textChatActiveRef.current && !isExternalMessagingSync)) return;
       if (streamingMsgId.current) streamingMsgId.current = null;
@@ -1601,6 +1647,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     activeOrgId,
     agentId,
     agentName,
+    bindAttachmentContextToConversation,
     clearChatProgress,
     clearPersistedExecution,
     finishChatProgress,
@@ -1719,38 +1766,52 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       .filter(item => item.path || item.transcript || item.content || item.preview)
       .map(serializeChatAttachment);
     if (reusable.length === 0) return;
-    recentAttachmentContextRef.current = reusable;
-    recentAttachmentContextSinceRef.current = Date.now();
-  }, []);
+    const merged = mergeChatAttachmentReferences(conversationAttachmentsRef.current, reusable).attachments;
+    conversationAttachmentsRef.current = merged;
+    setConversationAttachments(merged);
+    if (attachmentContextStorageKey) {
+      try {
+        localStorage.setItem(attachmentContextStorageKey, serializeChatAttachmentContext(merged));
+      } catch {}
+    }
+  }, [attachmentContextStorageKey]);
+
+  const clearConversationAttachmentContext = useCallback(() => {
+    conversationAttachmentsRef.current = [];
+    setConversationAttachments([]);
+    if (attachmentContextStorageKey) {
+      try {
+        localStorage.removeItem(attachmentContextStorageKey);
+      } catch {}
+    }
+    toast.success(uiMessage('agent-chat-page.session-materials-cleared.53bea199b2'));
+  }, [attachmentContextStorageKey]);
 
   const sendText = async (text: string, attachments: ChatAttachment[] = pendingAttachments) => {
     const trimmedText = text.trim();
     const directAttachments = attachments.map(serializeChatAttachment);
-    const recentContextIsFresh =
-      recentAttachmentContextRef.current.length > 0 &&
-      Date.now() - recentAttachmentContextSinceRef.current <= RECENT_ATTACHMENT_CONTEXT_TTL_MS;
-    const reusedRecentAttachmentContext =
-      directAttachments.length === 0 &&
-      recentContextIsFresh &&
-      shouldReuseRecentAttachmentContext(trimmedText);
-    const outgoingAttachments = reusedRecentAttachmentContext
-      ? recentAttachmentContextRef.current.map(serializeChatAttachment)
-      : directAttachments;
+    const attachmentMerge = mergeChatAttachmentReferences(
+      conversationAttachmentsRef.current.map(serializeChatAttachment),
+      directAttachments,
+    );
+    const outgoingAttachments = attachmentMerge.attachments;
+    const reusedConversationAttachmentContext =
+      conversationAttachmentsRef.current.length > 0 && directAttachments.length === 0;
+    if (attachmentMerge.overflowCount > 0) {
+      toast.error(formatUiMessage('agent-chat-page.up-to-value0-files-can.349aa29325', { value0: MAX_CHAT_ATTACHMENTS }));
+    }
     if ((!trimmedText && outgoingAttachments.length === 0) || !user) return;
     const outgoingText = trimmedText || uiMessage('agent-chat-page.please-review-these-attachments.6b61a7fa38');
 
     const userMsg = {
       id: makeChatMessageId('user'),
       text: outgoingText,
-      attachments: outgoingAttachments,
+      attachments: directAttachments,
       userName: user.displayName || user.username || (t.chatUserFallback || 'User'),
       timestamp: new Date().toISOString(),
       type: 'user'
     };
     const priorMessages = messagesRef.current.length > 0 ? messagesRef.current : messages;
-    const historySinceMs = outgoingAttachments.length > 0 && recentAttachmentContextSinceRef.current > 0
-      ? Math.max(0, recentAttachmentContextSinceRef.current - 1000)
-      : undefined;
     textChatActiveRef.current = true;
     seenWorkflowToolEvents.current.clear();
     currentRequestHadToolRef.current = false;
@@ -1758,8 +1819,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     currentResponseFinalizationRef.current = null;
     clearChatProgress();
     pushChatProgress(
-      reusedRecentAttachmentContext
-        ? (uiMessage('agent-chat-page.i-am-using-the-recent.10f9fdc1e9', (isZh) ? 'zh' : 'en'))
+      reusedConversationAttachmentContext
+        ? uiMessage('agent-chat-page.using-session-materials.66f4979b61', (isZh) ? 'zh' : 'en')
         : outgoingAttachments.length > 0
         ? (uiMessage('agent-chat-page.i-am-checking-your-attachments.79cfe8a290', (isZh) ? 'zh' : 'en'))
         : (uiMessage('agent-chat-page.i-am-checking-your-request.05a5e81231', (isZh) ? 'zh' : 'en')),
@@ -1892,7 +1953,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     const chatPayload = {
       text: outgoingText,
       attachments: outgoingAttachments,
-      history: buildChatHistoryPayload(priorMessages, { sinceMs: historySinceMs }),
+      history: buildChatHistoryPayload(priorMessages),
       personalityId: 'lumi',
       category: agentCategory,
       agentId,
@@ -2044,13 +2105,22 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     incoming: ChatAttachment[],
     options: { announce?: boolean } = {},
   ) => {
-    const result = mergeChatAttachmentReferences(pendingAttachmentsRef.current, incoming);
+    const occupied = mergeChatAttachmentReferences(
+      conversationAttachmentsRef.current,
+      pendingAttachmentsRef.current,
+    ).attachments;
+    const availability = mergeChatAttachmentReferences(occupied, incoming);
+    const pendingMerge = mergeChatAttachmentReferences(pendingAttachmentsRef.current, availability.added);
+    const result = {
+      ...pendingMerge,
+      duplicateCount: availability.duplicateCount,
+      overflowCount: availability.overflowCount,
+    };
     if (result.added.length > 0) {
       pendingAttachmentsRef.current = result.attachments;
       setPendingAttachments(result.attachments);
     }
     if (result.added.length > 0) {
-      rememberAttachmentContext(result.added);
       if (options.announce !== false) {
         toast.success(uiMessage('agent-chat-page.attached-to-this-message.d0b87d258c'));
       }
@@ -2061,7 +2131,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       toast.error(formatUiMessage('agent-chat-page.up-to-value0-files-can.349aa29325', { value0: MAX_CHAT_ATTACHMENTS }));
     }
     return result;
-  }, [rememberAttachmentContext]);
+  }, []);
 
   useEffect(() => {
     if (!isOpen || !attachmentRequest?.requestId) return;
@@ -2076,9 +2146,68 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     onAttachmentRequestConsumed?.(attachmentRequest.requestId);
   }, [activeDomain, activeOrgId, appendPendingAttachments, attachmentRequest, isOpen, onAttachmentRequestConsumed]);
 
-  const uploadChatAttachments = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    const remainingSlots = MAX_CHAT_ATTACHMENTS - pendingAttachmentsRef.current.length;
+  const mapImportedFilesToAttachments = useCallback((files: any[]): ChatAttachment[] => (
+    files.map((f: any) => {
+      const fileName = f.name || f.displayName || f.id || 'attachment';
+      const mimeType = f.mimeType || '';
+      const kind: ChatAttachment['kind'] =
+        f.kind === 'image' || isImageFileName(fileName, mimeType) ? 'image' :
+        f.kind === 'audio' || isAudioFileName(fileName, mimeType) ? 'audio' :
+        'file';
+      const transcript = kind === 'audio'
+        ? extractAudioTranscript(f.transcript || f.content || f.preview || null)
+        : null;
+      return createChatAttachmentReference({
+        fileId: f.id || fileName,
+        fileName,
+        path: f.path,
+        content: f.content || null,
+        preview: f.preview || null,
+        mimeType,
+        rawSize: f.rawSize || f.size || 0,
+        kind,
+        downloadUrl: f.id ? scopedFileUrl(`/api/files/download/${encodeURIComponent(f.id)}?inline=1`) : undefined,
+        transcript,
+        transcriptionStatus: f.extractionStatus || (transcript ? 'indexed' : ''),
+        transcriptionError: f.extractionError || f.syncError || null,
+        transcriptionProvider: f.extractionProvider || undefined,
+        transcriptionModel: f.extractionModel || undefined,
+      });
+    })
+  ), [scopedFileUrl]);
+
+  const acceptImportedChatFiles = useCallback((files: any[], skippedCount = 0) => {
+    const attachments = mapImportedFilesToAttachments(files);
+    const mergeResult = appendPendingAttachments(attachments, { announce: false });
+    const addedAttachments = mergeResult.added;
+    setOptimizationProgress(100);
+    window.setTimeout(() => { setIsOptimizing(false); setOptimizationProgress(0); }, 500);
+    const audioTranscripts = addedAttachments
+      .filter(item => item.kind === 'audio' && item.transcript)
+      .map(item => `${item.fileName}:\n${item.transcript}`);
+    if (audioTranscripts.length > 0) {
+      const current = draftTextRef.current.trim();
+      setDraftText([current, audioTranscripts.join('\n\n')].filter(Boolean).join('\n\n'));
+      toast.success(uiMessage('agent-chat-page.audio-transcript-inserted-into-the.cd2c9c3972'));
+    } else if (addedAttachments.some(item => item.kind === 'audio' && item.transcriptionError)) {
+      const failed = addedAttachments.find(item => item.kind === 'audio' && item.transcriptionError);
+      toast.error(failed?.transcriptionError || uiMessage('agent-chat-page.audio-transcription-failed.becab97e32'));
+    } else if (addedAttachments.length > 0) {
+      toast.success(uiMessage('agent-chat-page.attached-to-this-message.d0b87d258c'));
+    }
+    if (skippedCount > 0) {
+      toast.info(formatUiMessage('agent-chat-page.some-dropped-files-skipped.d3df0abf37', { value0: skippedCount }));
+    }
+    notifyKnowledgeUpdated(attachments.map(item => ({ id: item.path || item.fileName, name: item.fileName, displayName: item.fileName })));
+  }, [appendPendingAttachments, mapImportedFilesToAttachments, notifyKnowledgeUpdated, setDraftText]);
+
+  const uploadChatAttachments = useCallback(async (files: FileList | null) => {
+    if (!files || files.length === 0 || isOptimizing) return;
+    const occupiedCount = mergeChatAttachmentReferences(
+      conversationAttachmentsRef.current,
+      pendingAttachmentsRef.current,
+    ).attachments.length;
+    const remainingSlots = MAX_CHAT_ATTACHMENTS - occupiedCount;
     if (remainingSlots <= 0) {
       toast.error(formatUiMessage('agent-chat-page.up-to-value0-files-can.349aa29325', { value0: MAX_CHAT_ATTACHMENTS }));
       return;
@@ -2100,52 +2229,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       const res = await fetch('/api/files/upload', { method: 'POST', body: formData, credentials: 'include' });
       if (res.ok) {
         const d = await res.json();
-        const attachments: ChatAttachment[] = (d.files || []).map((f: any) => {
-          const fileName = f.name || f.displayName || f.id || 'attachment';
-          const mimeType = f.mimeType || '';
-          const kind: ChatAttachment['kind'] =
-            f.kind === 'image' || isImageFileName(fileName, mimeType) ? 'image' :
-            f.kind === 'audio' || isAudioFileName(fileName, mimeType) ? 'audio' :
-            'file';
-          const transcript = kind === 'audio'
-            ? extractAudioTranscript(f.transcript || f.content || f.preview || null)
-            : null;
-          return {
-            id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            fileName,
-            path: f.path,
-            content: f.content || null,
-            preview: f.preview || null,
-            mimeType,
-            size: f.rawSize || f.size || 0,
-            kind,
-            fileId: f.id || fileName,
-            downloadUrl: f.id ? scopedFileUrl(`/api/files/download/${encodeURIComponent(f.id)}?inline=1`) : undefined,
-            transcript,
-            transcriptionStatus: f.extractionStatus || (transcript ? 'indexed' : ''),
-            transcriptionError: f.extractionError || f.syncError || null,
-            transcriptionProvider: f.extractionProvider || undefined,
-            transcriptionModel: f.extractionModel || undefined,
-          };
-        });
-        const mergeResult = appendPendingAttachments(attachments, { announce: false });
-        const addedAttachments = mergeResult.added;
-        setOptimizationProgress(100);
-        setTimeout(() => { setIsOptimizing(false); setOptimizationProgress(0); }, 500);
-        const audioTranscripts = addedAttachments
-          .filter(item => item.kind === 'audio' && item.transcript)
-          .map(item => `${item.fileName}:\n${item.transcript}`);
-        if (audioTranscripts.length > 0) {
-          const current = draftTextRef.current.trim();
-          setDraftText([current, audioTranscripts.join('\n\n')].filter(Boolean).join('\n\n'));
-          toast.success(uiMessage('agent-chat-page.audio-transcript-inserted-into-the.cd2c9c3972'));
-        } else if (addedAttachments.some(item => item.kind === 'audio' && item.transcriptionError)) {
-          const failed = addedAttachments.find(item => item.kind === 'audio' && item.transcriptionError);
-          toast.error(failed?.transcriptionError || uiMessage('agent-chat-page.audio-transcription-failed.becab97e32'));
-        } else if (addedAttachments.length > 0) {
-          toast.success(uiMessage('agent-chat-page.attached-to-this-message.d0b87d258c'));
-        }
-        notifyKnowledgeUpdated(attachments.map(item => ({ id: item.path || item.fileName, name: item.fileName, displayName: item.fileName })));
+        acceptImportedChatFiles(d.files || []);
       } else {
         setIsOptimizing(false);
         setOptimizationProgress(0);
@@ -2161,6 +2245,89 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       setOptimizationProgress(0);
       toast.error(t.chatConnError || 'Connection error during upload');
     }
+  }, [acceptImportedChatFiles, activeDomain, activeOrgId, isOptimizing, t.chatConnError, t.uploadFailed]);
+
+  const importChatAttachmentPaths = useCallback(async (paths: string[]) => {
+    const uniquePaths = [...new Set(paths.map(item => String(item || '').trim()).filter(Boolean))];
+    if (uniquePaths.length === 0 || isOptimizing) return;
+    const occupiedCount = mergeChatAttachmentReferences(
+      conversationAttachmentsRef.current,
+      pendingAttachmentsRef.current,
+    ).attachments.length;
+    const remainingSlots = MAX_CHAT_ATTACHMENTS - occupiedCount;
+    if (remainingSlots <= 0) {
+      toast.error(formatUiMessage('agent-chat-page.up-to-value0-files-can.349aa29325', { value0: MAX_CHAT_ATTACHMENTS }));
+      return;
+    }
+    setIsOptimizing(true);
+    setOptimizationProgress(30);
+    try {
+      const importPaths = uniquePaths.slice(0, remainingSlots);
+      const res = await fetch(scopedFileUrl('/api/files/import-paths'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Lumi-Desktop-Import': 'file-drop' },
+        body: JSON.stringify({ paths: importPaths }),
+        credentials: 'include',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || t.uploadFailed || 'Upload failed');
+      acceptImportedChatFiles(data.files || [], (data.skipped || []).length + Math.max(0, uniquePaths.length - importPaths.length));
+    } catch (error: any) {
+      setIsOptimizing(false);
+      setOptimizationProgress(0);
+      toast.error(error?.message || t.chatConnError || 'Connection error during upload');
+    }
+  }, [acceptImportedChatFiles, isOptimizing, scopedFileUrl, t.chatConnError, t.uploadFailed]);
+
+  useEffect(() => {
+    if (!isOpen || typeof window === 'undefined' || !(window as any).__TAURI_INTERNALS__) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    const setupDropListener = async () => {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        if (cancelled) return;
+        unlisten = await getCurrentWindow().onDragDropEvent((event: any) => {
+          const payload = event?.payload;
+          if (payload?.type === 'enter' || payload?.type === 'over') {
+            setIsDraggingFiles(true);
+            return;
+          }
+          if (payload?.type === 'drop') {
+            nativeDropHandledAtRef.current = Date.now();
+            setIsDraggingFiles(false);
+            void importChatAttachmentPaths(Array.isArray(payload.paths) ? payload.paths : []);
+            return;
+          }
+          setIsDraggingFiles(false);
+        });
+        if (cancelled) unlisten?.();
+      } catch {}
+    };
+    void setupDropListener();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [importChatAttachmentPaths, isOpen]);
+
+  const handleChatDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDraggingFiles(true);
+  };
+
+  const handleChatDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    const nextTarget = event.relatedTarget as Node | null;
+    if (!nextTarget || !event.currentTarget.contains(nextTarget)) setIsDraggingFiles(false);
+  };
+
+  const handleChatDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDraggingFiles(false);
+    if (Date.now() - nativeDropHandledAtRef.current < 700) return;
+    void uploadChatAttachments(event.dataTransfer.files);
   };
 
   const removePendingAttachment = (id: string) => {
@@ -2169,10 +2336,6 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       pendingAttachmentsRef.current = next;
       return next;
     });
-    recentAttachmentContextRef.current = recentAttachmentContextRef.current.filter(item => item.id !== id);
-    if (recentAttachmentContextRef.current.length === 0) {
-      recentAttachmentContextSinceRef.current = 0;
-    }
   };
 
   const referenceChatFile = useCallback((item: ChatFilePanelItem) => {
@@ -2306,6 +2469,10 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           exit={{ opacity: 0, y: 10, scale: 0.99 }}
           transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
           className="lumi-chat-root lumi-below-topbar lumi-work-surface fixed inset-x-0 bottom-0 z-[90] flex flex-col"
+          onDragEnter={handleChatDragOver}
+          onDragOver={handleChatDragOver}
+          onDragLeave={handleChatDragLeave}
+          onDrop={handleChatDrop}
           style={{
             background: chatAccentTheme.background,
             '--color-celestial-saturn': chatAccentTheme.saturn,
@@ -2321,8 +2488,28 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
         className="hidden"
         multiple
         accept={CHAT_ATTACHMENT_ACCEPT}
-        onChange={(e) => { uploadChatAttachments(e.target.files); e.target.value = ''; }}
+        onChange={(e) => { void uploadChatAttachments(e.target.files); e.target.value = ''; }}
       />
+      <AnimatePresence>
+        {isDraggingFiles && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="pointer-events-none absolute inset-4 z-[225] flex items-center justify-center rounded-[2rem] border-2 border-dashed border-cyan-200/55 bg-[#07131a]/90 shadow-[0_0_70px_rgba(34,211,238,0.18)] backdrop-blur-xl"
+          >
+            <div className="flex flex-col items-center gap-3 text-center">
+              <span className="flex h-16 w-16 items-center justify-center rounded-3xl border border-cyan-200/25 bg-cyan-200/10 text-cyan-100">
+                <Upload size={30} />
+              </span>
+              <div>
+                <div className="text-base font-bold text-white/90">{uiMessage('agent-chat-page.drop-files-to-chat.5ea87cc147')}</div>
+                <div className="mt-1 text-xs text-white/48">{uiMessage('agent-chat-page.dropped-files-become-session-materials.193cb17bd7')}</div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       <AnimatePresence>
         {showWeChatSettings && (
           <motion.div
@@ -2669,10 +2856,10 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
                     </div>
                   )}
 
-                  <div data-chat-message-bubble className={`relative group select-text text-sm leading-relaxed ${
+                  <div data-chat-message-bubble className={`relative group select-text leading-relaxed ${
                     msg.type === 'agent'
-                      ? 'max-w-[92%] md:max-w-[84%] rounded-[1.5rem] rounded-tl-none border border-white/10 bg-white/[0.055] p-5 text-white/85 shadow-xl shadow-black/10 md:p-6'
-                      : 'max-w-[85%] rounded-3xl rounded-tr-none border border-white/10 bg-white/5 p-5 text-white/80'
+                      ? 'max-w-[92%] text-[15px] md:max-w-[80%] xl:max-w-[76%] rounded-[1.5rem] rounded-tl-none border border-white/10 bg-white/[0.055] p-5 text-white/85 shadow-xl shadow-black/10 md:p-6'
+                      : 'max-w-[85%] text-sm rounded-3xl rounded-tr-none border border-white/10 bg-white/5 p-5 text-white/80'
                   }`}
                     style={{
                       background: msg.type === 'agent' ? chatAccentTheme.agentBubble : chatAccentTheme.userBubble,
@@ -2762,6 +2949,24 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
             className="lumi-chat-composer p-6 border-t"
             style={chatInputPanelStyle}
           >
+            {conversationAttachments.length > 0 && (
+              <div className="mb-3 flex items-center justify-between gap-3 rounded-2xl border border-cyan-200/15 bg-cyan-200/[0.055] px-3.5 py-2.5">
+                <div className="flex min-w-0 items-center gap-2.5 text-xs text-cyan-50/72">
+                  <Briefcase size={14} className="shrink-0 text-cyan-200/70" />
+                  <span className="truncate">
+                    {formatUiMessage('agent-chat-page.session-materials-active.f044bfab71', { value0: conversationAttachments.length })}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={clearConversationAttachmentContext}
+                  className="shrink-0 rounded-lg px-2 py-1 text-[11px] text-white/38 transition-colors hover:bg-white/[0.07] hover:text-white/70"
+                  title={uiMessage('agent-chat-page.clear-session-materials.d06ef7bb05')}
+                >
+                  {uiMessage('agent-chat-page.clear.25b4e5dc64')}
+                </button>
+              </div>
+            )}
             {pendingAttachments.length > 0 && (
               <div className="mb-3 flex flex-wrap gap-2">
                 {pendingAttachments.map(item => (

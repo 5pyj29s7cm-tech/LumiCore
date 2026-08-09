@@ -59,6 +59,7 @@ import {
   recordMessagingIngress,
   updateMessagingJournal,
 } from '../../../messaging/message_journal';
+import { applyRemoteAttachmentContext } from '../../../messaging/attachment_context';
 import { runWithTools } from '../../../llm/adapter';
 import { makeLLMCall, type NormalizedMessage } from '../../../llm/providers';
 import { toolRegistry } from '../../../tools/registry';
@@ -99,6 +100,7 @@ import {
   clearPendingConfirmation,
   consumePendingConfirmation,
   formatPendingConfirmationPrompt,
+  formatPendingConfirmationRequest,
   getPendingConfirmation,
   isConfirmationCancellation,
   isExplicitConfirmationReply,
@@ -199,17 +201,42 @@ export function correlateMessagingReply(
   message: IncomingMessage,
   reply: string,
 ): { text: string; superseded: boolean; delayed: boolean } {
+  const readableReply = formatRemoteReplyForReadability(reply);
   const activity = newerMessageActivity(message);
-  if (!activity) return { text: reply, superseded: false, delayed: false };
+  if (!activity) return { text: readableReply, superseded: false, delayed: false };
   if (newerMessageCancelsThisTurn(message)) {
     return { text: '', superseded: true, delayed: true };
   }
   const original = getRequestText(message).replace(/\s+/g, ' ').trim().slice(0, 72);
-  if (!original) return { text: reply, superseded: false, delayed: true };
+  if (!original) return { text: readableReply, superseded: false, delayed: true };
   const prefix = /[\u3400-\u9fff]/u.test(original)
     ? `\u5173\u4e8e\u4f60\u5148\u524d\u7684\u8fd9\u6761\u6d88\u606f\uff1a\u300c${original}\u300d`
     : `Regarding your earlier message: "${original}"`;
-  return { text: `${prefix}\n\n${reply}`.trim(), superseded: false, delayed: true };
+  return { text: `${prefix}\n\n${readableReply}`.trim(), superseded: false, delayed: true };
+}
+
+export function formatRemoteReplyForReadability(value: string): string {
+  const text = String(value || '').replace(/\r\n/g, '\n').trim();
+  if (!text) return '';
+  const paragraphs = text.split(/\n{2,}/).flatMap(paragraph => {
+    const clean = paragraph.trim();
+    if (clean.length <= 120 || /```|^\s*(?:[-*+] |\d+[.)] )/m.test(clean)) return clean ? [clean] : [];
+    const sentences = clean.split(/(?<=[。！？!?；;])\s*/u).filter(Boolean);
+    if (sentences.length < 2) return [clean];
+    const chunks: string[] = [];
+    let chunk = '';
+    for (const sentence of sentences) {
+      if (chunk && (chunk.length + sentence.length > 150 || chunk.split(/[。！？!?；;]/u).length > 3)) {
+        chunks.push(chunk.trim());
+        chunk = sentence;
+      } else {
+        chunk += sentence;
+      }
+    }
+    if (chunk.trim()) chunks.push(chunk.trim());
+    return chunks;
+  });
+  return paragraphs.join('\n\n');
 }
 
 function messageRouteKey(message: IncomingMessage): string {
@@ -784,12 +811,12 @@ export function dispatchIncomingMessage(
         : transport.enrich(routeBaseMessage);
       await enqueueMessageRoute(routeBaseMessage, async () => {
         const enriched = await enrichment;
-        const enrichedMessage: IncomingMessage = {
+        const enrichedMessage: IncomingMessage = applyRemoteAttachmentContext({
           ...enriched,
           receivedAt: routeBaseMessage.receivedAt,
           routeSequence: routeBaseMessage.routeSequence,
           userMessagePersisted,
-        };
+        });
         const deliverExchange = async (target: IncomingMessage, reply: string): Promise<void> => {
           const correlated = correlateMessagingReply(target, reply);
           if (correlated.superseded) {
@@ -1503,7 +1530,7 @@ export async function processWithPersonality(
   const canWriteOrganization = organizationMembership?.status === 'active' && organizationMembership.role !== 'viewer';
   const routingText = [
     requestText,
-    ...(msg.attachments || []).flatMap(attachment => [attachment.fileName, attachment.extractedText || '']),
+    ...(msg.attachments || []).flatMap(attachment => [attachment.fileName, attachment.localPath || '', attachment.extractedText || '']),
     pendingConfirmationPrompt,
   ].filter(Boolean).join('\n');
   const operationMode = isIdentityBound ? getStoredOperationMode(effectiveUserId) : 'chat';
@@ -1619,6 +1646,12 @@ export async function processWithPersonality(
     systemPrompt += `\n\nThis ${remotePlatformLabel(msg.platform)} user is bound to personal Lumi, and this turn remains in the personal domain. Use the user's personal identity, personality, and conversation memory, and synchronize the turn with personal Lumi chat. Personal Lumi may enter an authorized organization only when the user explicitly selects one, the task resolves to one organization, or an existing organization session scope is retained. No organization scope was resolved for this turn, so do not access or claim access to organization data.`;
   } else {
     systemPrompt += `\n\nThis ${remotePlatformLabel(msg.platform)} user has no verified Lumi identity binding. You may analyze text and attachments supplied in this turn, but do not claim access to organization knowledge, organization cases, or private local data. Only the server binding record can confirm identity; never declare a successful binding merely because the user says it is bound or asks for confirmation.`;
+  }
+  const attachmentContext = msg.raw?.lumiAttachmentContext;
+  if (attachmentContext?.cleared) {
+    systemPrompt += '\n\nThe user just cleared the material context for this exact remote conversation. Confirm it briefly. Do not use or mention any earlier attachments.';
+  } else if (attachmentContext?.totalCount > 0) {
+    systemPrompt += `\n\nRemote material continuity: ${attachmentContext.totalCount} verified locally cached attachment(s) are available in this exact member/chat/thread scope, including ${attachmentContext.carriedCount || 0} carried from earlier turns. Use them for follow-up questions without asking the user to upload again. Never carry them into another member, organization, chat, or thread. If this turn added new files, briefly tell the user once that the materials will remain available in this conversation and can be cleared by sending “清除会话材料”.`;
   }
 
   const legalOverlay = buildUnifiedLegalEntryPrompt({
@@ -1819,6 +1852,7 @@ export async function processWithPersonality(
   systemPrompt += '\n\nRemote continuity rule: prior assistant statements about installed tool counts, missing desktop access, or mode availability are conversational history, not runtime evidence. Use the current capability map, client state, scoped relay, and actual tool results as the source of truth.';
   systemPrompt += '\nRemote embodiment rule: WeChat, Feishu, and WeCom are transport channels into the same Lumi runtime. Do not claim that a remote channel inherently cannot reach the desktop. A no-client result for one data scope proves only that the scoped device route did not match; report that exact fact and check the personal/work scope before inferring that the desktop client is offline.';
   systemPrompt += '\nRemote memory rule: authenticated personal remote chat participates in the same personal memory system. Organization turns remain organization-scoped. Do not ask the user to repeat an explicit relationship or trust statement merely to make it memorable, and do not claim a memory was stored unless the memory pipeline accepted it.';
+  systemPrompt += '\nRemote reply layout rule: make replies easy to scan in mobile chat. Use short paragraphs of 2-4 sentences separated by a blank line. For multiple points, use brief numbered labels or bullet lines. Do not send a dense wall of text.';
   if (explicitRemoteMemoryIds.length > 0) {
     systemPrompt += '\nCurrent-turn memory receipt: the explicit personal relationship/trust statement was accepted into durable personal memory. You may acknowledge that fact naturally; do not expose internal memory IDs.';
   }
@@ -1869,7 +1903,7 @@ export async function processWithPersonality(
     pendingConfirmationCreatedThisTurn = pending;
     if (conversation) {
       setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'waiting_confirmation', {
-        assistantState: formatPendingConfirmationPrompt(pending),
+        assistantState: formatPendingConfirmationRequest(pending),
         requestId,
       });
     }
@@ -1894,8 +1928,22 @@ export async function processWithPersonality(
     const usageInteractionId = `messaging_${msg.platform}_${Date.now()}`;
     let responseText = '';
     let toolRecords: ToolExecutionRecord[] = [];
-    const callbackReply = options?.onMessage ? await options.onMessage(msg) : null;
-    let deterministicEntryReply: string | null = callbackReply?.text || null;
+    let callbackReply: Awaited<ReturnType<MessageHandler>> | null = null;
+    const callbackBlockedForExternalCommit = Boolean(
+      options?.onMessage && organizationWorkRoute?.workItem.sideEffectClass === 'external_commit',
+    );
+    // The legacy handler returns only prose and cannot produce a canonical tool
+    // envelope. Never let it execute an external commit; those actions must go
+    // through the receipt-producing tool route and its exact confirmation gate.
+    if (options?.onMessage && !callbackBlockedForExternalCommit) {
+      callbackReply = await options.onMessage(msg);
+    }
+    let deterministicEntryReply: string | null = callbackReply?.text
+      || (callbackBlockedForExternalCommit
+        ? (/[㐀-鿿]/u.test(routingText)
+          ? '外部提交已停止：旧消息回调不能生成统一工具回执，请改由受确认和回执约束的工具执行。'
+          : 'The external commit was stopped because the legacy message callback cannot produce a canonical tool receipt. Use the confirmed tool route instead.')
+        : null);
     if (deterministicEntryReply) responseText = deterministicEntryReply;
 
     if (isIdentityBound && directlyAppliedMode && !deterministicEntryReply) {
@@ -1937,7 +1985,7 @@ export async function processWithPersonality(
 
       if (isPureOperationModeSwitchRequest(requestText, provisionalPlan.dispatch.flow.requestedMode)) {
         const candidate = pendingConfirmationCreatedThisTurn
-          ? formatPendingConfirmationPrompt(pendingConfirmationCreatedThisTurn)
+          ? formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn)
           : formatOperationModeSwitchResponse(directlyAppliedMode, modeSynced, requestText);
         const finalizedMode = finalizeLumiResponse({
           taskText: routingText,
@@ -1960,7 +2008,7 @@ export async function processWithPersonality(
         );
         if (pendingConfirmationCreatedThisTurn && conversation) {
           setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'waiting_confirmation', {
-            assistantState: formatPendingConfirmationPrompt(pendingConfirmationCreatedThisTurn),
+            assistantState: formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn),
             requestId,
           });
         }
@@ -2186,7 +2234,7 @@ export async function processWithPersonality(
 
     toolRecords = withDesktopExecutionReceipt(toolRecords, desktopExecutionTracker);
     if (pendingConfirmationCreatedThisTurn) {
-      responseText = formatPendingConfirmationPrompt(pendingConfirmationCreatedThisTurn);
+      responseText = formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn);
     }
     let finalized = callbackReply && organizationWorkRoute?.workItem.sideEffectClass !== 'external_commit'
       ? { text: responseText || callbackReply.text, blocked: false as const }
@@ -2207,6 +2255,7 @@ export async function processWithPersonality(
       ))) || /(?:send|submit|publish|post|comment|reply|payment|purchase|sign)/i.test(record.name);
     });
     const missingOrganizationExternalCommitReceipt = organizationWorkRoute?.workItem.sideEffectClass === 'external_commit'
+      && !pendingConfirmationCreatedThisTurn
       && !organizationVerifiedTerminalReceipt;
     if (missingOrganizationExternalCommitReceipt) {
       finalized = {
@@ -2234,7 +2283,7 @@ export async function processWithPersonality(
     persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated, toolRecords);
     if (pendingConfirmationCreatedThisTurn && conversation) {
       setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'waiting_confirmation', {
-        assistantState: formatPendingConfirmationPrompt(pendingConfirmationCreatedThisTurn),
+        assistantState: formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn),
         requestId,
       });
     }

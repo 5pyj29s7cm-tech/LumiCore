@@ -419,7 +419,7 @@ export function createOrganizationWorkRoutingRule(input: {
     memberId,
     agentIds,
     approvalMode: input.approvalMode === 'admin' ? 'admin' : 'none',
-    requireApprovalForExternalCommit: input.requireApprovalForExternalCommit !== false,
+    requireApprovalForExternalCommit: input.requireApprovalForExternalCommit === true,
     createdBy: input.actorUserId,
     revision: 1,
     createdAt: timestamp,
@@ -596,8 +596,32 @@ function createApproval(db: any, workItem: OrganizationWorkItem): OrganizationWo
   return approval;
 }
 
+function bypassRedundantSelfApproval(input: {
+  orgId: string;
+  requesterUserId: string;
+  requesterRole: string;
+  workItem: OrganizationWorkItem;
+  approval: OrganizationWorkApproval | null;
+}): { workItem: OrganizationWorkItem; approval: OrganizationWorkApproval | null } {
+  const canBypass = ['owner', 'admin'].includes(input.requesterRole)
+    && input.workItem.status === 'waiting_approval'
+    && input.approval?.status === 'pending'
+    && input.approval.requestedBy === input.requesterUserId;
+  if (!canBypass || !input.approval) {
+    return { workItem: input.workItem, approval: input.approval };
+  }
+  const decision = decideOrganizationWorkApproval({
+    orgId: input.orgId,
+    approvalId: input.approval.id,
+    actorUserId: input.requesterUserId,
+    decision: 'approve',
+    reason: 'Redundant self-approval bypassed for an organization administrator.',
+  });
+  return decision || { workItem: input.workItem, approval: input.approval };
+}
+
 export function routeOrganizationWork(input: RouteOrganizationWorkInput): RouteOrganizationWorkResult {
-  assertActiveMember(input.orgId, input.requesterUserId, true);
+  const requesterMembership = assertActiveMember(input.orgId, input.requesterUserId, true);
   const db = readDB();
   ensureTables(db);
   const requestId = normalizeText(input.requestId, 240);
@@ -608,13 +632,20 @@ export function routeOrganizationWork(input: RouteOrganizationWorkInput): RouteO
     item.orgId === input.orgId && item.idempotencyKey === idempotencyKey
   ));
   if (existing) {
-    const approval = existing.approvalId
+    const existingApproval = existing.approvalId
       ? (db.orgWorkApprovals as OrganizationWorkApproval[]).find(item => item.id === existing.approvalId && item.orgId === input.orgId) || null
       : null;
     const routingRule = existing.routingRuleId
       ? (db.orgWorkRoutingRules as OrganizationWorkRoutingRule[]).find(item => item.id === existing.routingRuleId && item.orgId === input.orgId) || null
       : null;
-    return { workItem: existing, approval, routingRule, created: false };
+    const { workItem, approval } = bypassRedundantSelfApproval({
+      orgId: input.orgId,
+      requesterUserId: input.requesterUserId,
+      requesterRole: requesterMembership.role,
+      workItem: existing,
+      approval: existingApproval,
+    });
+    return { workItem, approval, routingRule, created: false };
   }
   const taskId = normalizeText(input.taskId, 180);
   const existingTask = taskId
@@ -625,13 +656,20 @@ export function routeOrganizationWork(input: RouteOrganizationWorkInput): RouteO
       ))
     : null;
   if (existingTask) {
-    const approval = existingTask.approvalId
+    const existingApproval = existingTask.approvalId
       ? (db.orgWorkApprovals as OrganizationWorkApproval[]).find(item => item.id === existingTask.approvalId && item.orgId === input.orgId) || null
       : null;
     const routingRule = existingTask.routingRuleId
       ? (db.orgWorkRoutingRules as OrganizationWorkRoutingRule[]).find(item => item.id === existingTask.routingRuleId && item.orgId === input.orgId) || null
       : null;
-    return { workItem: existingTask, approval, routingRule, created: false };
+    const { workItem, approval } = bypassRedundantSelfApproval({
+      orgId: input.orgId,
+      requesterUserId: input.requesterUserId,
+      requesterRole: requesterMembership.role,
+      workItem: existingTask,
+      approval: existingApproval,
+    });
+    return { workItem, approval, routingRule, created: false };
   }
 
   const agents = organizationAgents(db, input.orgId);
@@ -706,8 +744,10 @@ export function routeOrganizationWork(input: RouteOrganizationWorkInput): RouteO
     createdAt: timestamp,
     updatedAt: timestamp,
   };
-  const approvalRequired = routingRule?.approvalMode === 'admin'
-    || (workItem.sideEffectClass === 'external_commit' && routingRule?.requireApprovalForExternalCommit !== false);
+  const approvalPolicyMatched = routingRule?.approvalMode === 'admin'
+    || (workItem.sideEffectClass === 'external_commit' && routingRule?.requireApprovalForExternalCommit === true);
+  const requesterIsAdministrator = ['owner', 'admin'].includes(requesterMembership.role);
+  const approvalRequired = approvalPolicyMatched && !requesterIsAdministrator;
   const approval = approvalRequired ? createApproval(db, workItem) : null;
   db.orgWorkItems.push(workItem);
   writeDB(db);
@@ -728,6 +768,8 @@ export function routeOrganizationWork(input: RouteOrganizationWorkInput): RouteO
       assignedAgentIds,
       routingRuleId: workItem.routingRuleId,
       approvalId: workItem.approvalId,
+      approvalBypassed: approvalPolicyMatched && requesterIsAdministrator,
+      approvalBypassReason: approvalPolicyMatched && requesterIsAdministrator ? 'requester_is_organization_administrator' : '',
       textDigest: workItem.textDigest,
     },
   });

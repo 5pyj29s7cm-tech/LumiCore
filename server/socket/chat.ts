@@ -175,7 +175,7 @@ function stripHistoricalAttachmentBlocks(value: string): string {
   const text = String(value || '').trim();
   if (!text) return '';
   return text
-    .replace(/\n{0,2}\[Attachments\][\s\S]*$/i, '\n\n[Previous attachments omitted. Ask for a current attachment or exact local path before using file tools.]')
+    .replace(/\n{0,2}\[Attachments\][\s\S]*$/i, '')
     .trim();
 }
 
@@ -333,47 +333,6 @@ function buildStoredAttachmentSummary(userText: string, attachments: ChatIncomin
     .map(item => `- ${item.fileName}${item.kind === 'image' ? ' (image)' : item.kind === 'audio' ? ' (audio)' : ''}`)
     .join('\n');
   return `${userText}\n\n[Attachments]\n${summary}`.trim();
-}
-
-function shouldBlockDetachedAttachmentFollowup(
-  userText: string,
-  attachments: ChatIncomingAttachment[],
-  history: any,
-): boolean {
-  const clean = String(userText || '').trim();
-  if (attachments.length > 0 || !clean || clean.length > 160) return false;
-  if (extractExplicitLocalPaths(clean).length > 0) return false;
-
-  const historyItems = Array.isArray(history) ? history : [];
-  const historyText = historyItems
-    .slice(-12)
-    .map((item: any) => String(item?.content || item?.message || item?.text || ''))
-    .join('\n');
-  const historyHasDetachedAttachment =
-    /\[Previous attachments omitted\]|\[Attachments\]|Current Turn Attachments/i.test(historyText);
-  const hasReference =
-    /刚才|刚刚|上面|前面|这个|这份|它|附件|文件|录音|音频|语音|转写|文本|笔录|记录|纪要|材料|文稿|\b(?:this|that|attachment|file|audio|recording|transcript|notes?)\b/iu.test(clean);
-  const hasAction =
-    /整理|做成|生成|转成|保存|导出|写成|形成|归纳|总结|提炼|分析|笔录|材料|\b(?:summari[sz]e|make|create|generate|save|export|write|format|turn)\b/iu.test(clean);
-  const shortArtifactRequest =
-    clean.length <= 40 &&
-    /^(?:帮我|给我|把它|把这个|这个|这份|刚才的|刚刚的|上面的|前面的)?\s*(?:整理|做成|生成|转成|保存成|导出成|写成|形成|归纳|总结|提炼).{0,16}(?:文本|文字|txt|md|笔录|记录|纪要|材料|文稿|文件)\s*$/iu.test(clean);
-
-  return shortArtifactRequest || (historyHasDetachedAttachment && hasReference && hasAction);
-}
-
-function buildDetachedAttachmentFollowupResponse(userText: string): string {
-  const isZh = /[\u3400-\u9fff]/.test(userText);
-  if (!isZh) {
-    return [
-      'I do not have the current attachment or transcript context in this turn, so I will not pretend that the file work has started.',
-      'Please attach/select the file again, or send the transcript text in the message. Then I will show the real read/write progress before reporting the result.',
-    ].join('\n');
-  }
-  return [
-    '我这轮没有收到要整理的附件或刚才的转写上下文，所以不能假装已经开始处理。',
-    '请重新上传、从右侧文件里选择那份音频/转写结果，或把转写文本发在这一条里。收到后我会先显示读取/沿用转写进度，再生成文本结果。',
-  ].join('\n');
 }
 
 function shouldAllowLocalFileWriteForTurn(userText: string, attachments: ChatIncomingAttachment[]): boolean {
@@ -810,6 +769,9 @@ function buildNaturalReplyStyleOverlay(source?: string): string {
     '- Never reveal hidden reasoning, chain-of-thought, private deliberation, or “I need to think/analyze” narration.',
     '- Give the final answer directly. Do not describe how you are deciding unless the user explicitly asks for reasoning.',
     '- If corrected for being verbose, reply with only the correction or confirmation.',
+    '- Make the answer easy to scan: use short paragraphs of 2-4 sentences and put a blank line between paragraphs.',
+    '- When the answer has multiple topics, use brief descriptive headings and compact bullet lists. Do not produce a single dense wall of text.',
+    '- Keep hierarchy restrained: lead with the outcome, then supporting details, then next actions when needed.',
     voiceLine,
   ].join('\n');
 }
@@ -1315,7 +1277,7 @@ export function registerChatHandler(
           emitAgent("agent:response", { text: responseText, agentName: "Lumi", finalized: true, blocked: false, reason: '' });
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'task_cancel' });
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'task_cancel' });
-          socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });
+          socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
           emitAgent("agent:status", { status: "idle" });
           releaseChatSession();
           return;
@@ -1339,20 +1301,6 @@ export function registerChatHandler(
         visibleUserText,
         conversation?.actionContinuationState,
       );
-
-      if (shouldBlockDetachedAttachmentFollowup(visibleUserText, attachments, history)) {
-        const responseText = buildDetachedAttachmentFollowupResponse(visibleUserText);
-        emitAgent("agent:status", { status: "responding", agentName: "Lumi" });
-        emitAgent("agent:response", { text: responseText, agentName: "Lumi", finalized: true, blocked: false, reason: '' });
-        if (conversationId) {
-          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, domain: resolvedDomain, orgId: resolvedOrgId });
-          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, domain: resolvedDomain, orgId: resolvedOrgId });
-          socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });
-        }
-        emitAgent("agent:status", { status: "idle" });
-        releaseChatSession();
-        return;
-      }
 
       const operationMode = (() => {
         if (typeof data.operationMode === 'string') return normalizeOperationMode(data.operationMode);
@@ -1403,7 +1351,7 @@ export function registerChatHandler(
         }
       }
       effectiveSystemPrompt += '\n\n' + buildNaturalReplyStyleOverlay(eventSource);
-      effectiveSystemPrompt += '\n\nFile handling rule: historical attachments or previous file names are not current files. Use file tools only with files attached in the current user turn, exact local paths stated in the current user message, or exact local paths preserved by the Recent action continuation context for the same unresolved task. If the user says "this file", "the attachment", or similar without a current attachment/path or a verified continuation path, ask them to reattach the file or provide the exact path before calling file tools.';
+      effectiveSystemPrompt += '\n\nFile handling rule: attachments supplied in this request may be newly added files or verified material carried forward by the client within this same conversation. Treat their copied local paths, extracted text, and transcripts as available conversation material and keep using them for follow-up questions. Ask the user to reattach only when no usable attachment/path is supplied or a supplied path is unreadable; never ask merely because the material first appeared in an earlier turn.';
       if (pendingConfirmationPrompt) {
         effectiveSystemPrompt += `\n\n${pendingConfirmationPrompt}`;
       }
@@ -1612,7 +1560,7 @@ export function registerChatHandler(
         emitAgent("agent:response", { text: statusText, agentName: personality.name, finalized: true, blocked: false, reason: '' });
         addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
         addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: statusText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'task_status' });
-        socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });
+        socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
         emitAgent("agent:status", { status: "idle" });
         releaseChatSession();
         return;
@@ -1627,7 +1575,7 @@ export function registerChatHandler(
         if (conversationId) {
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: recentFailureExplanation, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
-          socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });
+          socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
         }
         persistChatLearning(recentFailureExplanation, {
           sourceInteractionId: `${interactionId}_recent_failure_explanation`,
@@ -1751,7 +1699,7 @@ export function registerChatHandler(
           if (conversationId) {
             addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, mode: directlyAppliedMode, domain: resolvedDomain, orgId: resolvedOrgId });
             addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, personality: personality.id, mode: directlyAppliedMode, cognitiveIntent: finalizedMode.blocked ? 'work_product_guard' : undefined, domain: resolvedDomain, orgId: resolvedOrgId });
-            socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat_mode' });
+            socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat_mode', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
           }
           if (!finalizedMode.blocked) {
             persistChatLearning(responseText, {
@@ -1907,7 +1855,7 @@ export function registerChatHandler(
           reason: finalizedWorkflow.reason || '',
         });
         if (conversationId) {
-          socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: specialWorkflow.source });
+          socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: specialWorkflow.source, rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
         }
         if (!finalizedWorkflow.blocked) {
           persistChatLearning(workflowResponseText, {
@@ -2229,7 +2177,7 @@ export function registerChatHandler(
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: finalized.text, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: confirmationRecords, cognitiveIntent: finalized.blocked ? 'work_product_guard' : 'confirmation' });
           scheduleChatSummary(conversationId);
-          socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });
+          socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
         }
         persistChatTakeoverExecution(finalized.text, {
           toolRecords: confirmationRecords,
@@ -2372,6 +2320,8 @@ export function registerChatHandler(
             conversationId,
             agentId: conversationAgentId,
             source: 'workflow',
+            rolledOver: conversationTurn.rolledOver,
+            previousConversationId: conversationTurn.previousConversationId,
           });
         }
         if (!finalizedWorkflowQuick.blocked) {
@@ -2501,7 +2451,7 @@ export function registerChatHandler(
             }
             addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: quickResponseText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: quickToolRecords.length ? quickToolRecords : undefined, cognitiveIntent: quickFinalized.blocked ? 'work_product_guard' : undefined });
             scheduleChatSummary(conversationId);
-            socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });
+            socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
           }
           if (!quickFinalized.blocked) {
             persistChatLearning(quickResponseText, {
@@ -3104,7 +3054,7 @@ export function registerChatHandler(
                     toolCalls: toolCalls?.length ? toolCalls : undefined,
                     cognitiveIntent: guarded ? 'work_product_guard' : undefined,
                   });
-                  socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'background_delegation' });
+                  socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'background_delegation', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
                 }
                 if (deliverToConversation) {
                   const db = readDB();
@@ -3893,7 +3843,7 @@ export function registerChatHandler(
       });
       // Re-emit conversation_updated AFTER response so the client syncs from API with complete data
       if (conversationId) {
-        socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });
+        socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
       }
       emitAgent("agent:status", { status: "idle" });
 

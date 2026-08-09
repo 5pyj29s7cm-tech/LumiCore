@@ -4,6 +4,8 @@ import {
   chatAttachmentRequestMatchesScope,
   createChatAttachmentReference,
   mergeChatAttachmentReferences,
+  parseChatAttachmentContext,
+  serializeChatAttachmentContext,
 } from '../src/lib/chatAttachmentReferences';
 
 describe('chat attachment references', () => {
@@ -59,5 +61,31 @@ describe('chat attachment references', () => {
     expect(chatAttachmentRequestMatchesScope({ domain: 'work', orgId: 'org-a' }, 'work', 'org-a')).toBe(true);
     expect(chatAttachmentRequestMatchesScope({ domain: 'work', orgId: 'org-a' }, 'work', 'org-b')).toBe(false);
     expect(chatAttachmentRequestMatchesScope({ domain: 'work' }, 'work')).toBe(false);
+  });
+
+  it('restores verified conversation attachment context without persisting image data URLs', () => {
+    const attachment = createChatAttachmentReference({
+      fileId: 'evidence.pdf',
+      fileName: 'Evidence.pdf',
+      path: 'C:\\Lumi\\knowledge\\evidence.pdf',
+      content: 'extracted evidence',
+      preview: 'data:image/png;base64,too-large-to-persist',
+    });
+
+    const savedAt = Date.parse('2026-08-09T00:00:00.000Z');
+    const serialized = serializeChatAttachmentContext([attachment], savedAt);
+    const restored = parseChatAttachmentContext(serialized, savedAt + 1);
+
+    expect(restored).toHaveLength(1);
+    expect(restored[0]).toMatchObject({
+      fileName: 'Evidence.pdf',
+      path: 'C:\\Lumi\\knowledge\\evidence.pdf',
+      content: null,
+      transcript: null,
+      preview: null,
+    });
+    expect(serialized).not.toContain('extracted evidence');
+    expect(serialized).not.toContain('too-large-to-persist');
+    expect(parseChatAttachmentContext(serialized, savedAt + 31 * 24 * 60 * 60 * 1000)).toEqual([]);
   });
 });

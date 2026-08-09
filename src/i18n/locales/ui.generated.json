@@ -9134,5 +9134,37 @@
   "agent-chat-page.cancelling.7163e20e93": {
     "en": "Cancelling",
     "zh": "\u6b63\u5728\u53d6\u6d88"
+  },
+  "agent-chat-page.drop-files-to-chat.5ea87cc147": {
+    "en": "Drop to add files to this chat",
+    "zh": "\u677e\u5f00\u5373\u53ef\u6dfb\u52a0\u5230\u804a\u5929"
+  },
+  "agent-chat-page.dropped-files-become-session-materials.193cb17bd7": {
+    "en": "Files become session materials and stay available for follow-up questions",
+    "zh": "\u6587\u4ef6\u4f1a\u4fdd\u5b58\u4e3a\u672c\u4f1a\u8bdd\u6750\u6599\uff0c\u540e\u7eed\u95ee\u9898\u53ef\u7ee7\u7eed\u4f7f\u7528"
+  },
+  "agent-chat-page.session-materials-active.f044bfab71": {
+    "en": "{value0} material(s) available throughout this conversation",
+    "zh": "{value0} \u4efd\u6750\u6599\u6b63\u5728\u672c\u4f1a\u8bdd\u4e2d\u6301\u7eed\u4f7f\u7528"
+  },
+  "agent-chat-page.clear-session-materials.d06ef7bb05": {
+    "en": "Stop using these materials in this conversation",
+    "zh": "\u505c\u6b62\u5728\u672c\u4f1a\u8bdd\u4e2d\u4f7f\u7528\u8fd9\u4e9b\u6750\u6599"
+  },
+  "agent-chat-page.clear.25b4e5dc64": {
+    "en": "Clear",
+    "zh": "\u6e05\u9664"
+  },
+  "agent-chat-page.session-materials-cleared.53bea199b2": {
+    "en": "Session materials cleared",
+    "zh": "\u5df2\u6e05\u9664\u672c\u4f1a\u8bdd\u6750\u6599"
+  },
+  "agent-chat-page.some-dropped-files-skipped.d3df0abf37": {
+    "en": "{value0} dropped file(s) could not be imported",
+    "zh": "{value0} \u4e2a\u62d6\u5165\u7684\u6587\u4ef6\u672a\u80fd\u5bfc\u5165"
+  },
+  "agent-chat-page.using-session-materials.66f4979b61": {
+    "en": "I am continuing with the materials from this conversation...",
+    "zh": "\u6211\u6b63\u5728\u7ee7\u7eed\u4f7f\u7528\u672c\u4f1a\u8bdd\u7684\u6750\u6599\u2026\u2026"
   }
 }
