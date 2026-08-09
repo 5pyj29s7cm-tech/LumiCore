@@ -147,6 +147,7 @@ import {
   shouldForwardPreFinalizationProgress,
 } from "../cognition/response_delivery";
 import { normalizeSpeechCommand, speechCommandKey } from '../cognition/speech_normalization';
+import { isCurrentVoiceInputSource, isRepeatedVoiceFinal } from '../cognition/voice_input_guard';
 import { normalizeVoiceHistory } from './voice_history';
 export { normalizeVoiceHistory, normalizeVoiceHistoryRecord } from './voice_history';
 
@@ -238,6 +239,9 @@ interface AudioSession {
   /** Last command admitted to the execution lane; deduplicates repeated STT finals. */
   lastAcceptedCommandKey: string;
   lastAcceptedCommandAt: number;
+  /** Audio-chunk watermark for the accepted final; repeated provider finals
+   * without new microphone input must not start another turn. */
+  lastAcceptedCommandChunkAt: number;
   /** Requests whose remaining speech was stopped while their work kept running. */
   suppressedSpeechRequestIds: Set<string>;
 }
@@ -279,16 +283,22 @@ function bigramDiceSimilarity(a: string, b: string): number {
 }
 
 const MAX_ECHO_ENTRIES = 50;
-const recentTtsTexts: { text: string; until: number }[] = [];
+const recentTtsTexts: { text: string; until: number; scope: string }[] = [];
+
+function voiceEchoScope(session: Pick<AudioSession, 'userId' | 'sessionId'>): string {
+  return `${session.userId || 'anonymous'}:${session.sessionId || 'no-session'}`;
+}
 
 /** Record a TTS sentence for echo cancellation (shared with wake detector). */
-export function addEchoText(text: string): void {
-  recentTtsTexts.push({ text, until: Date.now() + 10000 });
+export function addEchoText(text: string, scope = ''): void {
+  const normalizedLength = normalizeEchoText(text).length;
+  const retentionMs = Math.min(45_000, Math.max(12_000, 8_000 + normalizedLength * 180));
+  recentTtsTexts.push({ text, scope, until: Date.now() + retentionMs });
   if (recentTtsTexts.length > MAX_ECHO_ENTRIES) recentTtsTexts.shift();
 }
 
 /** Check if a transcript matches recent TTS output (speaker → mic echo). */
-export function isEchoText(transcript: string, includeShortFragments = false): boolean {
+export function isEchoText(transcript: string, includeShortFragments = false, scope = ''): boolean {
   const now = Date.now();
   // Purge stale entries
   for (let i = recentTtsTexts.length - 1; i >= 0; i--) {
@@ -299,6 +309,7 @@ export function isEchoText(transcript: string, includeShortFragments = false): b
   if (tNorm.length < 2) return false;
   if (tNorm.length < 4 && !includeShortFragments) return false;
   for (const r of recentTtsTexts) {
+    if (scope && r.scope !== scope) continue;
     const recent = normalizeEchoText(r.text);
     if (!recent) continue;
     if (recent.includes(tNorm) || tNorm.includes(recent)) return true;
@@ -554,6 +565,7 @@ function getAudioSession(socket: Socket): AudioSession {
       sessionId: '',
       lastAcceptedCommandKey: '',
       lastAcceptedCommandAt: 0,
+      lastAcceptedCommandChunkAt: 0,
       suppressedSpeechRequestIds: new Set<string>(),
     };
   }
@@ -1072,7 +1084,7 @@ async function respondAlongsideActiveVoiceWork(
       || session.activeTurnRequestId !== workRequestId
     ) return;
     socket.emit('audio:status', { status: 'speaking', lane: 'conversation', requestId: workRequestId });
-    addEchoText(responseText);
+    addEchoText(responseText, voiceEchoScope(session));
     socket.emit('audio:response', {
       buffer: ttsResult.audioBuffer,
       volumeGain: computeVolumeGain(),
@@ -1269,6 +1281,7 @@ async function processVoiceInput(
       timestamp: userReceivedAt,
       domain: voiceScope.domain,
       orgId: voiceScope.orgId,
+      requestId,
       deferActionPreparation: true,
     });
     voiceUserMessagePersisted = true;
@@ -1665,6 +1678,7 @@ async function processVoiceInput(
       llmWasCalled: options.llmWasCalled === true,
       domain: voiceScope.domain,
       orgId: voiceScope.orgId,
+      requestId,
     });
     voiceAssistantMessagePersisted = true;
     scheduleVoiceSummary(conversationId);
@@ -2043,7 +2057,7 @@ async function processVoiceInput(
         });
         if (!speech.controller.signal.aborted && session.bgGeneration === speech.generation) {
           socket.emit("audio:status", { status: "speaking", requestId });
-          addEchoText(txt);
+          addEchoText(txt, voiceEchoScope(session));
           const volumeGain = computeVolumeGain();
           socket.emit("audio:response", { buffer: ttsResult.audioBuffer, volumeGain, requestId });
           const playbackMs = estimatePlaybackMs(ttsResult.audioBuffer, txt);
@@ -3609,6 +3623,9 @@ export function registerVoiceHandlers(
     session.sidecarHistory = [];
     session.inputQueue = [];
     session.lastChunkTime = 0;
+    session.lastAcceptedCommandKey = '';
+    session.lastAcceptedCommandAt = 0;
+    session.lastAcceptedCommandChunkAt = 0;
     session.userId = getUserId(socket);
     setRealtimeVoiceSessionActive(session.userId, socket.id, true);
     session.agentId = data.agentId || 'lumi';
@@ -3662,9 +3679,21 @@ export function registerVoiceHandlers(
       try {
         const language = sttProvider === 'qwen' ? 'zh' : 'zh-CN';
         session.sttSession = createStreamingSession({ provider: sttProvider, language, interimResults: true });
+        const callbackSttSession = session.sttSession;
+        const callbackSessionId = session.sessionId;
         resetSilenceTimer(session, socket);
 
         session.sttSession.onResult(async (result) => {
+          if (!isCurrentVoiceInputSource({
+            sessionActive: session.isActive,
+            currentSessionId: session.sessionId,
+            callbackSessionId,
+            currentSttSession: session.sttSession,
+            callbackSttSession,
+          })) {
+            logger.info(`[Audio] Ignored stale STT callback for session ${callbackSessionId}`);
+            return;
+          }
           const immediateText = String(result.text || '').trim();
           if (
             immediateText
@@ -3739,7 +3768,7 @@ export function registerVoiceHandlers(
 
             // TTS echo is not an authorization failure. Remove it before the
             // voiceprint gate so self speech cannot mutate the call state.
-            if (isEchoText(text, session.isSpeaking)) {
+            if (isEchoText(text, session.isSpeaking, voiceEchoScope(session))) {
               logger.info(`[Audio] Echo cancelled during speech (${text.length} chars)`);
               advanceVoiceprintUtterance(socket, session);
               return;
@@ -3759,12 +3788,14 @@ export function registerVoiceHandlers(
             const transcriptSpeakerMeta = getVoiceprintSpeakerMeta(session);
             advanceVoiceprintUtterance(socket, session);
             const commandKey = speechCommandKey(text);
-            const duplicateActiveFinal = Boolean(
-              commandKey
-              && commandKey === session.lastAcceptedCommandKey
-              && Date.now() - session.lastAcceptedCommandAt <= 2500
-              && (session.isProcessing || session.isSpeaking || Boolean(session.bargeinTimer))
-            );
+            const duplicateActiveFinal = isRepeatedVoiceFinal({
+              commandKey,
+              lastCommandKey: session.lastAcceptedCommandKey,
+              currentChunkAt: session.lastChunkTime,
+              lastAcceptedChunkAt: session.lastAcceptedCommandChunkAt,
+              lastAcceptedAt: session.lastAcceptedCommandAt,
+              laneActive: session.isProcessing || session.isSpeaking || Boolean(session.bargeinTimer),
+            });
             if (duplicateActiveFinal) {
               logger.info(`[Audio] Ignored duplicate final transcript (${text.length} chars)`);
               socket.emit('audio:confirm', { text });
@@ -3773,6 +3804,7 @@ export function registerVoiceHandlers(
             }
             session.lastAcceptedCommandKey = commandKey;
             session.lastAcceptedCommandAt = Date.now();
+            session.lastAcceptedCommandChunkAt = session.lastChunkTime;
             if (session.isProcessing || session.isSpeaking) {
               const activeWorkRunning = session.isBackgroundWork && session.activeWorkStatus !== 'completed';
               if (activeWorkRunning) {
@@ -3918,6 +3950,13 @@ export function registerVoiceHandlers(
         });
 
         session.sttSession.onError((err: Error) => {
+          if (!isCurrentVoiceInputSource({
+            sessionActive: session.isActive,
+            currentSessionId: session.sessionId,
+            callbackSessionId,
+            currentSttSession: session.sttSession,
+            callbackSttSession,
+          })) return;
           logger.error("[Audio STT Error]:", err);
           socket.emit("audio:error", { message: err.message });
         });
@@ -4203,7 +4242,7 @@ export function registerVoiceHandlers(
 
     try {
       ttsSpeakingCount++;
-      addEchoText(proactiveText);
+      addEchoText(proactiveText, voiceEchoScope(session));
       const result = await synthesizeSpeech(proactiveText, {
         provider: ttsProvider,
         voiceId: proactiveVoice.voiceId,

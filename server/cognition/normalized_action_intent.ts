@@ -81,15 +81,18 @@ function trimSlot(value: string): string {
 }
 
 function correctionOrExplanation(text: string): NormalizedActionIntent | null {
+  // A time-bounded activity question is a status lookup, even though phrases
+  // such as "做了什么" are superficially similar to an action complaint. i18n-allow: Reviewed input recognition.
+  if (/(?:昨天|今天|这两天|最近|从.{0,12}到.{0,12}|到现在|截至现在).{0,40}(?:做了|干了|执行了|处理了|完成了).{0,20}(?:什么|哪些|多少)/u.test(text)) return null;
   // i18n-allow: Chinese correction/authorization input recognition; not user-visible copy.
   const negativeAuthorization = // i18n-allow: Chinese correction/authorization input recognition; not user-visible copy.
     /(?:我|我们)?(?:没有|没|并没有|从没)(?:让|叫|要求|授权|同意)你.{0,80}(?:打开|发送|执行|操作|创建|删除)|(?:不是|并不是)(?:让|叫|要)你.{0,80}(?:打开|发送|执行|操作|创建|删除)/u;
   // i18n-allow: Chinese complaint input recognition; not user-visible copy.
   const actionComplaint = // i18n-allow: Chinese complaint input recognition; not user-visible copy.
-    /(?:你|lumi).{0,24}(?:刚才|刚刚|之前|上一轮)?[^。！？!?\n]{0,24}(?:打开|发送|发|执行|操作|做|画)[^。！？!?\n]{0,36}(?:什么东西|什么玩意|什么文件|什么内容|干什么|做什么|为什么|怎么回事)/iu;
+    /(?:你|lumi).{0,24}(?:刚才|刚刚|之前|上一轮)[^。！？!?\n]{0,24}(?:打开|发送|发|执行|操作|做|画)(?:了)?[^。！？!?\n]{0,36}(?:什么东西|什么玩意|什么文件|什么内容|干什么|做什么|为什么|怎么回事)/iu;
   // i18n-allow: Chinese terse-complaint input recognition; not user-visible copy.
   const terseComplaint = // i18n-allow: Chinese terse-complaint input recognition; not user-visible copy.
-    /^(?:(?:我操|卧槽|靠|妈的|搞什么|什么鬼)[，,\s]*)?(?:你)?(?:刚才|刚刚|之前)?[^。！？!?\n]{0,20}(?:打开|发送|执行|操作|做|画)了?[^。！？!?\n]{0,28}(?:什么|啥)[^。！？!?\n]*[啊呀呢吧。！？!?]*$/iu;
+    /^(?:(?:我操|卧槽|靠|妈的|搞什么|什么鬼)[，,\s]*)?(?:你|lumi)[^。！？!?\n]{0,20}(?:打开|发送|执行|操作|做|画)了[^。！？!?\n]{0,28}(?:什么|啥|为什么|怎么回事)[^。！？!?\n]*[啊呀呢吧。！？!?]*$/iu;
   if (!negativeAuthorization.test(text) && !actionComplaint.test(text) && !terseComplaint.test(text)) return null;
   return {
     kind: 'correction_explanation',
@@ -118,6 +121,22 @@ function statusQuery(text: string): NormalizedActionIntent | null {
       relation: 'status',
       confidence: 0.96,
       rule: 'client-state-query',
+    };
+  }
+
+  // i18n-allow: Chinese activity-history status recognition; not user-visible copy.
+  const activityHistory = /(?:昨天|今天|这两天|最近|从.{0,12}到.{0,12}|到现在|截至现在).{0,40}(?:做了|干了|执行了|处理了|完成了).{0,20}(?:什么|哪些|多少)/u;
+  if (activityHistory.test(text)) {
+    return {
+      kind: 'status_query',
+      operation: 'status',
+      subject: 'lumi',
+      target: 'activity_history',
+      payload: text,
+      sideEffectClass: 'none',
+      relation: 'status',
+      confidence: 0.97,
+      rule: 'activity-history-status-before-action',
     };
   }
 

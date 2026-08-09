@@ -85,6 +85,12 @@ describe('desktop execution stability policy', () => {
     expect(policy.promptOverlay).toContain('Actuation tools to prefer');
     expect(policy.promptOverlay).toContain('verify focus before typing');
     expect(policy.promptOverlay).toContain('If the target app is already running');
+    for (const toolName of policy.actuationTools.filter(name => name !== 'write_clipboard')) {
+      expect(
+        policy.executionPlan?.steps.some(step => step.allowedTools.includes(toolName)),
+        `${toolName} must be authorized by the compiled desktop plan`,
+      ).toBe(true);
+    }
   });
 
   it('also applies to browser/account work because login state is visible state', async () => {
@@ -148,6 +154,12 @@ describe('desktop execution stability policy', () => {
     expect(policy.actuationTools).not.toContain('keyboard_type');
     expect(policy.promptOverlay).toContain('Never type or paste until');
     expect(policy.promptOverlay).toContain('Do not repeat the same New/Blank selector');
+    for (const toolName of policy.actuationTools.filter(name => name !== 'write_clipboard')) {
+      expect(
+        policy.executionPlan?.steps.some(step => step.allowedTools.includes(toolName)),
+        `${toolName} must be authorized for the recovered current-app plan`,
+      ).toBe(true);
+    }
   });
 
   it('does not apply to ordinary conversation', async () => {

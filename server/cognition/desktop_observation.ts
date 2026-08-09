@@ -61,7 +61,7 @@ export function requiresActiveWindowObservation(input: string): boolean {
 
 export function requiresDesktopFileListingObservation(input: string): boolean {
   const text = String(input || '');
-  return /(?:\u5217\u51fa|\u67e5\u770b|\u663e\u793a|\u76d8\u70b9|\u7edf\u8ba1|\u6570\u4e00\u4e0b).{0,20}\u684c\u9762(?:\u4e0a|\u91cc|\u4e2d)?(?:\u7684)?(?:\u6587\u4ef6|\u6587\u4ef6\u5939|\u76ee\u5f55|\u6761\u76ee)|\u684c\u9762(?:\u4e0a|\u91cc|\u4e2d)?(?:\u7684)?(?:\u6587\u4ef6|\u6587\u4ef6\u5939|\u76ee\u5f55|\u6761\u76ee).{0,20}(?:\u5217\u51fa|\u67e5\u770b|\u663e\u793a|\u591a\u5c11|\u51e0\u4e2a|\u6570\u91cf|\u7edf\u8ba1)|\b(?:list|show|inspect|count)\b.{0,24}\bdesktop\b.{0,16}\b(?:files?|folders?|entries)\b|\bdesktop\b.{0,16}\b(?:files?|folders?|entries)\b.{0,24}\b(?:list|show|count|how\s+many)\b/iu.test(text);
+  return /(?:\u5217\u51fa|\u67e5\u770b|\u68c0\u67e5|\u770b\u4e00\u4e0b|\u770b\u4e0b|\u770b\u770b|\u663e\u793a|\u76d8\u70b9|\u7edf\u8ba1|\u6570\u4e00\u4e0b).{0,20}\u684c\u9762(?:\u4e0a|\u91cc|\u4e2d)?(?:\u7684)?(?:\u6587\u4ef6|\u6587\u4ef6\u5939|\u76ee\u5f55|\u6761\u76ee)|\u684c\u9762(?:\u4e0a|\u91cc|\u4e2d)?(?:\u7684)?(?:\u6587\u4ef6|\u6587\u4ef6\u5939|\u76ee\u5f55|\u6761\u76ee).{0,20}(?:\u5217\u51fa|\u67e5\u770b|\u68c0\u67e5|\u770b\u4e00\u4e0b|\u770b\u4e0b|\u770b\u770b|\u663e\u793a|\u591a\u5c11|\u51e0\u4e2a|\u6570\u91cf|\u7edf\u8ba1)|\b(?:list|show|inspect|check|count)\b.{0,24}\bdesktop\b.{0,16}\b(?:files?|folders?|entries)\b|\bdesktop\b.{0,16}\b(?:files?|folders?|entries)\b.{0,24}\b(?:list|show|inspect|check|count|how\s+many)\b/iu.test(text);
 }
 
 export function requiresRunningProcessObservation(input: string): boolean {

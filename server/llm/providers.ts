@@ -9,6 +9,7 @@ import {
 import { getUserPreferredVision } from './vision_preferences';
 import { getUserPreferredWorldModel } from './world_preferences';
 import { ensureLocalModelReady, runLocalModelInference, type LocalModelProvider } from './local_models';
+import { prepareLocalModelRequest } from './local_context_budget';
 import {
   modelRoutingErrorDigest,
   modelRoutingErrorReason,
@@ -941,11 +942,14 @@ export async function makeLLMCallDirect(
       : config.provider === 'deepseek'
         ? formatDeepSeekRequest
         : formatOpenAIRequest;
+    const localRequest = isLocal
+      ? prepareLocalModelRequest({ messages, toolDeclarations, maxTokens })
+      : null;
     const params: any = fmt({
       model: config.model,
-      messages,
+      messages: localRequest?.messages || messages,
       toolDeclarations,
-      maxTokens: maxTokens,
+      maxTokens: localRequest?.maxTokens || maxTokens,
       responseFormat: config.responseFormat,
       ...(isLocal ? {} : { userId: config.userId }),
     });
@@ -1189,11 +1193,14 @@ export async function makeLLMCallStreamingDirect(
       : config.provider === 'deepseek'
         ? formatDeepSeekRequest
         : formatOpenAIRequest;
+    const localRequest = isLocal
+      ? prepareLocalModelRequest({ messages, toolDeclarations, maxTokens })
+      : null;
     const params: any = fmt({
       model: config.model,
-      messages,
+      messages: localRequest?.messages || messages,
       toolDeclarations,
-      maxTokens: maxTokens,
+      maxTokens: localRequest?.maxTokens || maxTokens,
       ...(isLocal ? {} : { userId: config.userId }),
     });
     if (config.provider === 'xiaomi' || (config.provider === 'openai' && isReasoningModel(config.model))) {

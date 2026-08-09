@@ -51,7 +51,7 @@ export function buildToolExecutionEnvelope(
     durationMs?: number;
   } = {},
 ): ToolExecutionEnvelope {
-  const parsed = parseResult(record.result);
+  const parsed = record.receipt !== undefined ? record.receipt : parseResult(record.result);
   const payload = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
     ? parsed as Record<string, any>
     : {};
@@ -71,8 +71,11 @@ export function buildToolExecutionEnvelope(
     || payload.outcomeUnknown === true
   );
   const succeeded = toolRecordSucceeded(record);
+  const verificationRequired = record.capability?.verification.required === true;
+  const terminalVerified = !verificationRequired
+    || record.terminalVerification?.status === 'verified';
   const verificationStatus = record.terminalVerification?.status
-    || (succeeded ? 'verified' : 'failed');
+    || (succeeded && terminalVerified ? 'verified' : succeeded ? 'unverified' : 'failed');
 
   let status: ToolExecutionEnvelope['status'];
   if (waitingConfirmation) status = 'waiting_confirmation';
@@ -80,7 +83,7 @@ export function buildToolExecutionEnvelope(
   else if (forbidden) status = 'forbidden';
   else if (((timeout || unknownOutcome) && externalCommit) || unverifiedExternalResult) status = 'unknown_outcome';
   else if (timeout) status = 'timeout';
-  else status = succeeded ? 'verified_success' : 'failed';
+  else status = succeeded && terminalVerified ? 'verified_success' : 'failed';
 
   return {
     version: 1,

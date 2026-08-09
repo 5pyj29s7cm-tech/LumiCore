@@ -31,6 +31,9 @@ import {
   attachConversationModelExecutionGraph,
   loadConversationModelExecutionRecovery,
   migrateLegacyConversationActionLedger,
+  repairContradictoryConversationActionReceipts,
+  compactLegacyScheduledCapabilityExecutions,
+  archiveBoundConversationActionReceipts,
   syncConversationActionTaskLedger,
 } from './action_ledger';
 import type { CapabilityExecutionPlan } from '../cognition/capability_execution_plan';
@@ -76,6 +79,7 @@ export interface Conversation {
   pendingActionContinuation?: {
     userText: string;
     messageId: string;
+    requestId?: string;
     updatedAt: string;
   };
 }
@@ -619,6 +623,8 @@ export function recoverOrphanedConversationActionExecutions(
 ): number {
   const db = readDB();
   const migrated = migrateLegacyConversationActionLedger(db);
+  const repairedReceipts = repairContradictoryConversationActionReceipts(db);
+  const schedulerCompaction = compactLegacyScheduledCapabilityExecutions(db);
   let recovered = 0;
   for (const conversation of db.conversations || []) {
     const previous = normalizeConversationActionState(conversation.actionContinuationState);
@@ -647,7 +653,12 @@ export function recoverOrphanedConversationActionExecutions(
     });
     recovered += 1;
   }
-  if (migrated > 0 || recovered > 0) writeDB(db);
+  if (
+    migrated > 0
+    || repairedReceipts > 0
+    || schedulerCompaction.tasksRemoved > 0
+    || recovered > 0
+  ) writeDB(db);
   return recovered;
 }
 
@@ -706,6 +717,8 @@ export function addMessage(msg: {
   routeSequence?: number;
   receivedAt?: string;
   timestamp?: string;
+  /** Immutable foreground request identity used to reject late replies. */
+  requestId?: string;
   /**
    * Persist the accepted instruction before routing/tool selection finishes,
    * while leaving creation of the real task state to the foreground executor.
@@ -823,6 +836,7 @@ export function addMessage(msg: {
             conv.pendingActionContinuation = {
               userText,
               messageId: id,
+              requestId: msg.requestId,
               updatedAt: now,
             };
           }
@@ -835,12 +849,48 @@ export function addMessage(msg: {
         && conv.pendingActionContinuation
       ) {
         const pending = conv.pendingActionContinuation;
+        const activeTaskId = String(conv.actionContinuationState?.taskId || '');
+        const activeRequestId = String(conv.actionContinuationState?.activeRequestId || pending.requestId || '');
+        const records = normalizedToolCalls || [];
+        const staleRecords = records.filter((record: any) => (
+          (record?.taskId && activeTaskId && record.taskId !== activeTaskId)
+          || (record?.requestId && activeRequestId && record.requestId !== activeRequestId)
+        ));
+        if (staleRecords.length) {
+          archiveBoundConversationActionReceipts(db, {
+            conversationId: conv.id,
+            userId: conv.userId,
+            records: staleRecords,
+            turnId: msg.requestId,
+            now,
+          });
+        }
+        const currentToolRecords = records.filter(record => !staleRecords.includes(record));
+        const requestMismatch = Boolean(
+          pending.requestId
+          && msg.requestId
+          && pending.requestId !== msg.requestId,
+        );
+        // A superseded pipeline may still finish and persist its terminal
+        // reply. Archive its bound receipts above, but leave the newer turn's
+        // pending pointer and state untouched.
+        if (requestMismatch || (records.length > 0 && currentToolRecords.length === 0)) {
+          if (conv.actionContinuationState) {
+            syncConversationActionTaskLedger(db, {
+              conversation: conv,
+              state: conv.actionContinuationState,
+              now,
+            });
+          }
+          writeDB(db);
+          return id;
+        }
         const pendingFollowupIntent = classifyRecentActionFollowupIntent(pending.userText);
         const pendingContract = buildActionContract(pending.userText);
         const pendingNormalizedIntent = normalizeActionIntent(pending.userText);
         const toolRecordsBelongToActiveTask = Boolean(
           conv.actionContinuationState?.taskId
-          && normalizedToolCalls?.some((record: any) => (
+          && currentToolRecords.some((record: any) => (
             record?.taskId === conv.actionContinuationState?.taskId
             || (
               conv.actionContinuationState?.activeRequestId
@@ -855,7 +905,7 @@ export function addMessage(msg: {
         const pendingAgeMs = Date.now() - new Date(pending.updatedAt).getTime();
         if (
           pendingExpectsExecution
-          && normalizedToolCalls?.length
+          && currentToolRecords.length
           && Number.isFinite(pendingAgeMs)
           && pendingAgeMs >= 0
           && pendingAgeMs <= 30 * 60 * 1000
@@ -864,7 +914,7 @@ export function addMessage(msg: {
             previous: conv.actionContinuationState,
             userText: pending.userText,
             assistantText: msg.content,
-            toolCalls: normalizedToolCalls,
+            toolCalls: currentToolRecords,
             updatedAt: now,
             evidenceMessageId: id,
             requestId: conv.actionContinuationState?.activeRequestId,

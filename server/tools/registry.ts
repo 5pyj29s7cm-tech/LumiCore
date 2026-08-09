@@ -287,7 +287,11 @@ function inferCapabilityVerification(
     return {
       strategy: assurance === 'measured' ? 'measured' : 'terminal_receipt',
       required: true,
-      requiredFields: ['status'],
+      // Legacy/read-only adapters legitimately return arrays or native state
+      // objects without manufacturing a `status` property. A non-empty
+      // terminal receipt is sufficient for inferred observation contracts;
+      // tools needing stronger proof declare requiredFields explicitly.
+      requiredFields: [],
       successSignals: ['terminal tool receipt'],
       limitations: assurance === 'none'
         ? ['The receipt proves observation returned, not that the observed external state is complete.']
@@ -298,7 +302,11 @@ function inferCapabilityVerification(
     return {
       strategy: 'provider_ack',
       required: true,
-      requiredFields: ['status'],
+      // Inferred adapters may return sent/submitted/published=true plus a
+      // provider marker without manufacturing a synthetic status field. The
+      // provider_ack strategy validates that acknowledgement directly;
+      // explicit tool contracts can still require an exact status value.
+      requiredFields: [],
       successSignals: ['provider or target acknowledgement'],
       limitations: ['Draft creation, clipboard writes, and submit-button presses are not delivery acknowledgement.'],
     };

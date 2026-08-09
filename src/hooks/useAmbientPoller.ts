@@ -41,9 +41,11 @@ export function useAmbientPoller(socket: Socket | null) {
           && idle.idle_seconds <= 2
           && idle.idle_seconds < previousIdleSeconds;
         if (idleReset && !wasDesktopAutomationRecentlyActive()) {
+          const activityAt = new Date(Date.now() - Math.max(0, idle.idle_ms || 0)).toISOString();
           socket.emit('desktop:user_activity', {
             kind: 'physical_input',
             observedAt: new Date().toISOString(),
+            activityAt,
             previousIdleSeconds,
             idleSeconds: idle.idle_seconds,
           });
@@ -58,9 +60,11 @@ export function useAmbientPoller(socket: Socket | null) {
           && idle.idle_seconds <= 2
           && !wasDesktopAutomationRecentlyActive()
         ) {
+          const activityAt = new Date(Date.now() - Math.max(0, idle.idle_ms || 0)).toISOString();
           socket.emit('desktop:user_activity', {
             kind: 'physical_input_after_automation',
             observedAt: new Date().toISOString(),
+            activityAt,
             previousIdleSeconds,
             idleSeconds: idle.idle_seconds,
           });

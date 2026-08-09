@@ -221,7 +221,7 @@ export function normalizeConversationTaskReceipt(value: unknown): ConversationTa
   };
 }
 
-function parseResult(value: unknown): Record<string, any> | null {
+function parseResult(value: unknown): unknown {
   let parsed = value;
   for (let depth = 0; depth < 3 && typeof parsed === 'string' && parsed.trim(); depth += 1) {
     try {
@@ -230,9 +230,14 @@ function parseResult(value: unknown): Record<string, any> | null {
       break;
     }
   }
-  return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-    ? parsed as Record<string, any>
-    : null;
+  return parsed;
+}
+
+function structuredRecordPayload(record: ToolExecutionRecord): unknown {
+  const receipt = record.receipt !== undefined ? parseResult(record.receipt) : undefined;
+  if (receipt && typeof receipt === 'object') return receipt;
+  const result = parseResult(record.result);
+  return result && typeof result === 'object' ? result : null;
 }
 
 export function toolRecordSucceeded(record: ToolExecutionRecord): boolean {
@@ -240,8 +245,9 @@ export function toolRecordSucceeded(record: ToolExecutionRecord): boolean {
   if (record.terminalVerification?.status === 'failed') return false;
   const result = compact(record.result, 4000);
   if (!result) return false;
-  const payload = parseResult(record.result);
-  if (payload) {
+  const structuredPayload = structuredRecordPayload(record);
+  if (structuredPayload && !Array.isArray(structuredPayload)) {
+    const payload = structuredPayload as Record<string, any>;
     const verification = payload.verification && typeof payload.verification === 'object'
       ? payload.verification as Record<string, any>
       : {};
@@ -265,7 +271,13 @@ export function toolRecordSucceeded(record: ToolExecutionRecord): boolean {
       || TERMINAL_FAILURE_STATUSES.has(status)
       || compact(payload.error || verification.error, 400)
     ) return false;
+    // A structured terminal receipt is authoritative. Do not scan its JSON
+    // text for words such as `failed` after the structured value explicitly
+    // reported `failed: 0`; that production bug inverted verified client
+    // actions into failures.
+    return true;
   }
+  if (Array.isArray(structuredPayload)) return true;
   return !/(?:requires? (?:user )?confirmation|permission denied|not allowed|forbidden|timed out|(?:^|\b)(?:failed|error|blocked)(?:\b|:))/i.test(result);
 }
 
@@ -327,7 +339,10 @@ export function coalesceToolExecutionRecords(
 export function toolRecordFailureDetail(record: ToolExecutionRecord): string {
   const explicit = compact(record.error, 700);
   if (explicit) return explicit;
-  const payload = parseResult(record.result);
+  const structuredPayload = structuredRecordPayload(record);
+  const payload = structuredPayload && !Array.isArray(structuredPayload)
+    ? structuredPayload as Record<string, any>
+    : null;
   const verification = payload?.verification && typeof payload.verification === 'object'
     ? payload.verification as Record<string, any>
     : {};
@@ -402,7 +417,11 @@ export function recordsToTaskReceipts(
     name: compact(record.name, 160),
     arguments: stableValue(record.arguments || {}) as Record<string, unknown>,
     result: compact(record.result, 3000),
-    ...(record.receipt !== undefined ? { receipt: stableValue(record.receipt) } : {}),
+    ...(record.receipt !== undefined
+      ? { receipt: stableValue(record.receipt) }
+      : structuredRecordPayload(record) !== null
+        ? { receipt: stableValue(structuredRecordPayload(record)) }
+        : {}),
     error: toolRecordSucceeded(record) ? '' : toolRecordFailureDetail(record),
     outcome: !toolRecordSucceeded(record)
       ? 'failure'

@@ -224,7 +224,7 @@ export function extractSimpleDesktopOpenTarget(input: string): string {
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   if (/(?:然后|接着|随后|之后|以后|并且|同时|再(?:去|帮|给|用)?|打开后|启动后|运行后|\b(?:then|after|and\s+then)\b)/iu.test(target)) return '';
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-  if (/(?:画图|绘制|出图|生成|创建|新建|修改|编辑|保存|导出|登录|搜索|查找|发送|发布|播放|写入|执行脚本|运行脚本|问一下|问问|询问|回复|告诉|\b(?:draw|draft|create|generate|edit|save|export|login|search|send|publish|play|script|ask|reply|tell)\b)/iu.test(target)) return '';
+  if (/(?:画图|绘制|出图|生成|创建|新建|修改|编辑|保存|导出|登录|搜索|查找|发送|发布|播放|写入|执行脚本|运行脚本|问一下|问问|询问|回复|告诉|分析|总结|介绍|讲解|阅读|逐页|一页一页|\b(?:draw|draft|create|generate|edit|save|export|login|search|send|publish|play|script|ask|reply|tell|analy[sz]e|summari[sz]e|review|present)\b)/iu.test(target)) return '';
   return target;
 }
 
@@ -385,6 +385,9 @@ export function requiresAutoCadMcpPlayback(input: string): boolean {
 }
 
 function parseRecordJson(record: ToolExecutionRecord): Record<string, any> | null {
+  if (record.receipt && typeof record.receipt === 'object' && !Array.isArray(record.receipt)) {
+    return record.receipt as Record<string, any>;
+  }
   try {
     const parsed = JSON.parse(String(record.result || ''));
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, any> : null;

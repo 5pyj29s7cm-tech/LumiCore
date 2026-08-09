@@ -581,9 +581,17 @@ export function resolveDesktopApplicationIdentity(
   lane?: LumiCapabilityLane,
 ): ApplicationIdentity {
   const normalized = String(text || '').toLowerCase();
+  // i18n-allow: Reviewed multilingual local artifact target recognition; not user-visible copy.
+  const fileOrArtifactTarget = /(?:[a-z]:[\\/]|(?:^|[\\/])[^\\/]+\.(?:pdf|pptx?|docx?|xlsx?|dwg|dxf|txt|md|csv|zip)|\b(?:pdf|pptx?|docx?|xlsx?|dwg|dxf|file|folder|document|presentation|spreadsheet|drawing)\b|文件夹|文件|资料|文档|图纸|演示文稿)/iu.test(normalized);
+  // i18n-allow: Reviewed multilingual Lumi client-surface recognition; not user-visible copy.
+  const explicitLumiClientTarget = /(?:lumi\s*(?:os|客户端|client|界面|窗口)|聊天界面|客户端(?:的|里)?(?:知识库|设置|聊天|壁纸)|client_action)/iu.test(normalized);
   const explicit = DESKTOP_APPLICATION_REGISTRY
     .flatMap(application => application.aliases
       .filter(alias => desktopTextMatchesAlias(normalized, alias))
+      // A document or directory whose name contains "Lumi" is a local
+      // target, not the Lumi client. This production misclassification built
+      // a client-native plan and consequently forbade desktop_open.
+      .filter(() => application.family !== 'lumi' || !fileOrArtifactTarget || explicitLumiClientTarget)
       .map(alias => ({ application, aliasLength: alias.length })))
     .sort((left, right) => right.aliasLength - left.aliasLength)[0]?.application;
   if (explicit) return cloneApplicationIdentity(explicit);
@@ -746,11 +754,22 @@ export function desktopFingerprintMatchesRequestedTarget(
   const processName = normalizeProcessName(fingerprint.processName || '');
   const requested = explicitApplication || target;
   const requestedProcess = normalizeProcessName(requested);
-  if (processName && requestedProcess && !/[\\/]/.test(requested)) {
+  if (processName && requestedProcess && /^[A-Za-z0-9_.+-]+$/.test(requested.trim())) {
     return processName === requestedProcess;
   }
   const leaf = String(target || '').replace(/\\/g, '/').split('/').pop() || '';
-  const titleNeedle = leaf.replace(/\.[a-z0-9]{1,12}$/i, '').trim().toLowerCase();
+  const naturalLeaf = leaf
+    // i18n-allow: Reviewed Chinese folder-containment phrase recognition; not user-visible copy.
+    .split(/(?:文件夹)?(?:里的|中的|里|中)/u)
+    .filter(Boolean)
+    .pop() || leaf;
+  const titleNeedle = naturalLeaf
+    // i18n-allow: Reviewed Chinese desktop command-prefix recognition; not user-visible copy.
+    .replace(/^(?:请|帮我|现在|直接)?(?:打开|启动|运行|查看|读取)\s*/u, '')
+    .replace(/\.(?:pdf|pptx?|docx?|xlsx?|dwg|dxf|txt|md|csv)$/i, '')
+    .replace(/[。！？，,]+$/u, '')
+    .trim()
+    .toLowerCase();
   return Boolean(
     processName
     && titleNeedle.length >= 2
@@ -761,8 +780,25 @@ export function desktopFingerprintMatchesRequestedTarget(
 function toolsForLayer(layer: DesktopControlLayer, family: DesktopApplicationFamily): string[] {
   if (layer === 'client_native') return ['client_get_state', 'client_action'];
   if (layer === 'browser_dom') return ['mcp_playwright_browser_snapshot', 'mcp_playwright_browser_click', 'mcp_playwright_browser_type'];
-  if (layer === 'windows_uia') return ['desktop_active_window', 'desktop_ui_snapshot', 'desktop_ui_focus', 'desktop_ui_invoke', 'desktop_ui_click', 'desktop_ui_type'];
-  if (layer === 'vision') return ['desktop_capture_screen', 'computer_use'];
+  if (layer === 'windows_uia') return [
+    'desktop_active_window',
+    'desktop_ui_snapshot',
+    'desktop_ui_focus',
+    'desktop_ui_invoke',
+    'desktop_ui_click',
+    'desktop_ui_type',
+    'keyboard_press',
+    'desktop_keyboard_press',
+  ];
+  if (layer === 'vision') return [
+    'desktop_capture_screen',
+    'computer_use',
+    'mouse_move',
+    'mouse_click',
+    'mouse_drag',
+    'keyboard_type',
+    'keyboard_press',
+  ];
   if (family === 'cad') return ['cad_prepare_autocad_operations', 'cad_draw_floorplan_in_autocad', 'mcp_cad-drafting_autocad_new_document', 'mcp_cad-drafting_autocad_playback_file'];
   if (family === 'office') return ['wps_create_document_with_text', 'desktop_ui_snapshot', 'desktop_ui_type'];
   if (family === 'messaging') return ['wechat_read_recent_chat', 'wechat_send_message'];
@@ -778,6 +814,7 @@ export function buildDesktopExecutionPlan(input: {
   recoveredCurrentAppEdit?: boolean;
 }): DesktopExecutionPlan {
   const application = resolveDesktopApplicationIdentity(input.text, input.lane);
+  const requestedTarget = String(input.capabilityExecutionPlan?.intent.target || input.text || '').trim();
   const sideEffectClass = input.capabilityExecutionPlan?.risk.sideEffectClass || 'none';
   const operation = input.capabilityExecutionPlan?.intent.operation || 'mutate';
   const verificationProfile = desktopVerificationProfile({
@@ -859,7 +896,7 @@ export function buildDesktopExecutionPlan(input: {
     taskId,
     application,
     expectedWindow: {
-      requestedTarget: input.text,
+      requestedTarget,
       processPatterns: [...application.processPatterns, ...application.executablePatterns],
       titlePatterns: [...application.windowTitlePatterns],
       requireFreshFingerprint: application.family !== 'lumi',
@@ -903,9 +940,19 @@ export function verifyDesktopExecutionReceipt(
   const actuationComplete = ['read', 'status', 'explain'].includes(plan.operation)
     || actuationSteps.some(step => received.get(step.stepId)?.status === 'verified');
   const complete = requiredComplete && actuationComplete;
+  const verifiedPostOpen = plan.verification.profile === 'open'
+    && plan.steps.some(step => (
+      step.operation === 'focus_or_open'
+      && received.get(step.stepId)?.status === 'verified'
+      && received.get(step.stepId)?.applicationMatched === true
+    ))
+    && received.get('verify-result')?.status === 'verified';
   const applicationMatched = receipt.applicationMatched
     && receipt.steps
-      .filter(step => requiredStepIds.has(step.stepId) || step.status === 'verified')
+      .filter(step => (
+        (requiredStepIds.has(step.stepId) || step.status === 'verified')
+        && !(verifiedPostOpen && step.stepId === 'observe-target')
+      ))
       .every(step => step.applicationMatched);
   const identityBound = receipt.planId === plan.planId && receipt.taskId === plan.taskId;
   const unknownCommit = plan.sideEffectClass === 'external_commit'

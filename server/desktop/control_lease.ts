@@ -351,10 +351,30 @@ export function acquireDesktopControlLease(input: AcquireDesktopControlLeaseInpu
   });
 }
 
-export function reportDesktopUserActivity(userId: string, holdMs = USER_ACTIVITY_HOLD_MS): DesktopControlLeaseSnapshot | null {
+export function reportDesktopUserActivity(
+  userId: string,
+  holdMs = USER_ACTIVITY_HOLD_MS,
+  activityAt?: string | number,
+): DesktopControlLeaseSnapshot | null {
   const uid = normalized(userId, 'anonymous');
-  userActiveUntil.set(uid, Date.now() + Math.max(500, holdMs));
   const active = activeByUser.get(uid);
+  const activityAtMs = typeof activityAt === 'number'
+    ? activityAt
+    : activityAt
+      ? new Date(activityAt).getTime()
+      : Number.NaN;
+  const acquiredAtMs = active?.acquiredAt ? new Date(active.acquiredAt).getTime() : Number.NaN;
+  // Native idle-reset reports are polled and can arrive several seconds late.
+  // If the physical input happened before this lease was acquired, it was the
+  // input that started the foreground request, not a takeover of Lumi's new
+  // desktop work.
+  if (
+    active
+    && Number.isFinite(activityAtMs)
+    && Number.isFinite(acquiredAtMs)
+    && activityAtMs <= acquiredAtMs + 250
+  ) return null;
+  userActiveUntil.set(uid, Date.now() + Math.max(500, holdMs));
   if (active) pauseEntry(active, 'desktop_control_paused_for_user_activity');
   scheduleWake(uid);
   return active ? publicSnapshot(active) : null;

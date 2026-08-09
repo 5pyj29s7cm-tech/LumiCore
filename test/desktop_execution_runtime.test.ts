@@ -89,6 +89,35 @@ describe('desktop execution runtime', () => {
     });
   });
 
+  it('can open an exact target that was not already in the foreground', () => {
+    const plan = buildDesktopExecutionPlan({
+      text: 'open WPS',
+      lane: 'desktop_control',
+      taskId: 'wps-open-from-lumi',
+    });
+    const tracker = new DesktopExecutionTracker(plan);
+    tracker.record(verifiedRecord('desktop_active_window', JSON.stringify({
+      title: 'Lumi OS', process_name: 'lumi-os.exe', pid: 10,
+    })));
+    expect(tracker.authorize('desktop_open')).toMatchObject({ allowed: true });
+    tracker.record(verifiedRecord('desktop_open', JSON.stringify({
+      ok: true,
+      status: 'verified',
+      target: 'WPS',
+      targetMatched: true,
+      actualTarget: { title: 'WPS Writer', processName: 'wps.exe' },
+    })));
+    tracker.record(verifiedRecord('desktop_active_window', JSON.stringify({
+      title: 'Document1 - WPS Writer', process_name: 'wps.exe', pid: 20,
+    })));
+
+    expect(tracker.receipt()).toMatchObject({
+      applicationMatched: true,
+      finalState: 'verified_success',
+      completionVerified: true,
+    });
+  });
+
   it('rejects desktop control tools absent from the compiled desktop plan', () => {
     const tracker = new DesktopExecutionTracker(buildDesktopExecutionPlan({
       text: '打开 AutoCAD', lane: 'design_cad', taskId: 'cad-scope-task',

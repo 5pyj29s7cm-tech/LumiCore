@@ -134,10 +134,10 @@ export function registerAmbientHandlers(socket: Socket, getUserId: (s: Socket) =
     }
   }));
 
-  socket.on("desktop:user_activity", guard((data: { kind?: string; observedAt?: string }) => {
+  socket.on("desktop:user_activity", guard((data: { kind?: string; observedAt?: string; activityAt?: string }) => {
     const uid = getUserId(socket);
     if (!uid || socket.data?.lumiDeviceType !== 'desktop') return;
-    const paused = reportDesktopUserActivity(uid);
+    const paused = reportDesktopUserActivity(uid, undefined, data?.activityAt);
     socket.emit('desktop:user_activity_ack', {
       ok: true,
       kind: String(data?.kind || 'physical_input'),

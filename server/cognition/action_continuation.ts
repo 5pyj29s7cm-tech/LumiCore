@@ -30,6 +30,8 @@ export interface ActionContinuationHistoryItem {
   response?: string;
   toolCalls?: unknown;
   cognitiveIntent?: string;
+  timestamp?: string;
+  receivedAt?: string;
 }
 
 export interface RecentActionContinuationState {
@@ -100,6 +102,20 @@ const CONCRETE_LOCAL_SOURCE_RE =
 // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
 const EXPLICIT_ACTION_TARGET_RE =
   /(?:打开|启动|运行|读取|查看|画|绘制|保存|导出|发送|提交|放到|导入|写入|\b(?:open|launch|run|read|inspect|draw|draft|save|export|send|submit|import|write)\b).{0,96}(?:AutoCAD|CAD|微信|WeChat|浏览器|browser|网站|文件|图片|图纸|文件夹)/iu; // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+
+const REFERENTIAL_CONTEXT_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+
+function recordTimestamp(item: ActionContinuationHistoryItem): number | null {
+  const value = String(item.timestamp || item.receivedAt || '').trim();
+  if (!value) return null;
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function explicitDurableTaskReference(text: string): boolean {
+  // i18n-allow: Reviewed multilingual durable-task reference recognition; not user-visible copy.
+  return /(?:这个|那个|之前|昨天|上次|未完成|原来|刚才).{0,12}(?:任务|工作|操作)|(?:任务|工作).{0,12}(?:继续|执行|状态|进度)|AutoCAD|\bCAD\b|图纸|平面图|WPS|Word|Excel|PowerPoint|微信|WeChat/iu.test(text);
+}
 
 function compact(value: unknown, limit = 700): string {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
@@ -842,8 +858,19 @@ export function buildRecentActionContinuationBridge(
   history: ActionContinuationHistoryItem[] | undefined,
   persistedState?: ConversationActionContinuationState | null,
 ): string {
-  const durableState = normalizeConversationActionState(persistedState);
   const currentText = compact(userText, 700);
+  const normalizedDurableState = normalizeConversationActionState(persistedState);
+  const durableUpdatedAt = normalizedDurableState
+    ? new Date(normalizedDurableState.updatedAt).getTime()
+    : Number.NaN;
+  const staleReferentialExecution = Boolean(
+    normalizedDurableState
+    && Number.isFinite(durableUpdatedAt)
+    && Date.now() - durableUpdatedAt > REFERENTIAL_CONTEXT_MAX_AGE_MS
+    && classifyConversationActionFollowupIntent(currentText, normalizedDurableState) === 'execute'
+    && !explicitDurableTaskReference(currentText),
+  );
+  const durableState = staleReferentialExecution ? null : normalizedDurableState;
   const followupIntent = classifyConversationActionFollowupIntent(currentText, durableState);
   if (
     !(needsRecentActionContinuationContext(userText) || followupIntent !== 'none')
@@ -854,6 +881,10 @@ export function buildRecentActionContinuationBridge(
 
   const recent = (Array.isArray(history) ? history : [])
     .slice(-18)
+    .filter(item => {
+      const timestamp = recordTimestamp(item);
+      return timestamp === null || Date.now() - timestamp <= REFERENTIAL_CONTEXT_MAX_AGE_MS;
+    })
     .filter(item => ['user', 'assistant', 'agent'].includes(recordRole(item)) && recordText(item))
     .filter(item => !(recordRole(item) === 'user' && recordText(item) === currentText));
   const deduplicate = (items: ActionContinuationHistoryItem[]) => items.filter((item, index, candidates) => {

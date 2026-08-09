@@ -9,7 +9,13 @@ if (!process.argv[2] || !existsSync(databasePath)) {
 }
 
 const db = await new Promise((resolve, reject) => {
-  const handle = new sqlite3.Database(databasePath, sqlite3.OPEN_READONLY, error => error ? reject(error) : resolve(handle));
+  const handle = new sqlite3.Database(databasePath, sqlite3.OPEN_READONLY, error => {
+    if (error) return reject(error);
+    // A running Lumi instance writes short transactions frequently. Wait for
+    // those writers instead of reporting a healthy live database as broken.
+    handle.configure('busyTimeout', 15_000);
+    resolve(handle);
+  });
 });
 
 function all(sql) {

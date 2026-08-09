@@ -362,7 +362,7 @@ describe('recent action continuation', () => {
           actualTarget: { processName: 'wps.exe', title: 'WPS Writer' },
         }),
       }],
-      updatedAt: '2026-07-17T10:00:00.000Z',
+      updatedAt: new Date().toISOString(),
       evidenceMessageId: 'msg-open-wps',
     });
 
@@ -385,6 +385,21 @@ describe('recent action continuation', () => {
     expect(bridge).toContain('- appTarget: WPS');
     expect(bridge).toContain('desktop_open');
     expect(bridge).toContain('conversation-scoped persisted execution state');
+  });
+
+  it('does not reuse a stale completed application as the meaning of a new-day pronoun', () => {
+    const stale = buildConversationActionContinuationState({
+      userText: '打开 WPS。',
+      assistantText: '已打开 WPS。',
+      toolCalls: [{
+        name: 'desktop_open',
+        arguments: { target: 'WPS' },
+        result: JSON.stringify({ ok: true, status: 'verified', target: 'WPS', targetMatched: true }),
+      }],
+      updatedAt: new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString(),
+    });
+
+    expect(buildRecentActionContinuationBridge('在这里面写一份新文件', [], stale)).toBe('');
   });
 
   it('advances the same persisted task on execute follow-ups but does not let status turns replace its goal', () => {

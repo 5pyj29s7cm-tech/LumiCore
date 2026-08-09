@@ -189,6 +189,7 @@ export class DesktopExecutionTracker {
           ]
         : [];
       evidence.push(...identityEvidence);
+      const completingFocusOrOpen = this.pendingAction?.step.operation === 'focus_or_open';
       if (this.pendingAction) {
         const pending = this.pendingAction;
         const expectedFocusChange = pending.step.operation === 'focus_or_open' && matched;
@@ -212,13 +213,20 @@ export class DesktopExecutionTracker {
         this.replanRequiredReason = 'Desktop window/display fingerprint changed; the compiled UI/vision plan is invalid and must be rebuilt.';
         this.observationConsumed = true;
       }
-      const receiptStep = this.stepReceipts.has('observe-target') && matched
+      const receiptStep = completingFocusOrOpen && matched
         ? 'verify-result'
-        : 'observe-target';
+        : this.stepReceipts.has('observe-target') && matched
+          ? 'verify-result'
+          : 'observe-target';
       const receiptPlanStep = this.plan.steps.find(candidate => candidate.stepId === receiptStep)!;
+      const acceptedPreOpenObservation = receiptStep === 'observe-target'
+        && this.plan.verification.profile === 'open'
+        && verified;
       this.stepReceipts.set(receiptStep, {
         stepId: receiptStep,
-        status: verified && matched && !this.replanRequiredReason ? 'verified' : record.error ? 'failed' : 'blocked',
+        status: verified && (matched || acceptedPreOpenObservation) && !this.replanRequiredReason
+          ? 'verified'
+          : record.error ? 'failed' : 'blocked',
         layer: receiptPlanStep.layer,
         applicationMatched: matched,
         ...(fingerprintDigest ? {
@@ -226,10 +234,29 @@ export class DesktopExecutionTracker {
           windowFingerprintAfter: fingerprintDigest,
         } : {}),
         evidence,
-        ...(!matched
+        ...(!matched && !acceptedPreOpenObservation
           ? { error: 'foreground_application_mismatch' }
           : this.replanRequiredReason ? { error: 'desktop_plan_rebuild_required' } : {}),
       });
+      // A safe local open/focus may be the first desktop call. Its matching
+      // post-open observation proves both that the desktop was observed and
+      // that the exact target became foreground; do not require an otherwise
+      // redundant third observation just to fill the pre-observe slot.
+      if (receiptStep === 'verify-result' && !this.stepReceipts.has('observe-target')) {
+        const observeStep = this.plan.steps.find(candidate => candidate.stepId === 'observe-target')!;
+        this.stepReceipts.set('observe-target', {
+          stepId: 'observe-target',
+          status: verified && matched ? 'verified' : 'blocked',
+          layer: observeStep.layer,
+          applicationMatched: matched,
+          ...(fingerprintDigest ? {
+            windowFingerprintBefore: fingerprintDigest,
+            windowFingerprintAfter: fingerprintDigest,
+          } : {}),
+          evidence,
+          ...(!matched ? { error: 'post_open_target_mismatch' } : {}),
+        });
+      }
       if (receiptStep === 'observe-target' && ['read', 'status', 'explain'].includes(this.plan.operation)) {
         const verifyStep = this.plan.steps.find(candidate => candidate.stepId === 'verify-result')!;
         this.stepReceipts.set('verify-result', {

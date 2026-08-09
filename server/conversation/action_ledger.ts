@@ -5,7 +5,13 @@ import {
   type ConversationActionContinuationState,
 } from '../cognition/action_continuation';
 import { normalizeActionIntent, type NormalizedActionIntent } from '../cognition/normalized_action_intent';
-import { taskReceiptsToRecords, type ConversationTaskStatus } from '../cognition/task_execution_ledger';
+import {
+  mergeTaskReceipts,
+  taskCompletionFromReceipts,
+  taskReceiptsToRecords,
+  toolRecordSucceeded,
+  type ConversationTaskStatus,
+} from '../cognition/task_execution_ledger';
 import { buildToolExecutionEnvelope, toolRecordIdempotencyKey } from '../tools/execution_envelope';
 import type { ToolExecutionRecord } from '../tools/types';
 import type { CapabilityExecutionPlan } from '../cognition/capability_execution_plan';
@@ -205,6 +211,44 @@ function latestParentTask(
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
 }
 
+function markSupersededTask(
+  tasks: ConversationActionTaskRow[],
+  supersededTaskId: string | undefined,
+  replacementTaskId: string,
+  now: string,
+): void {
+  if (!supersededTaskId || supersededTaskId === replacementTaskId) return;
+  const previous = tasks.find(candidate => candidate.id === supersededTaskId);
+  if (!previous || previous.status === 'completed' || previous.status === 'cancelled') return;
+  const context = parseObject(previous.context);
+  const actionState = normalizeConversationActionState(context.actionState);
+  const blocker = `Superseded by task ${replacementTaskId}.`;
+  previous.status = 'cancelled';
+  previous.blocker = blocker;
+  previous.activeRequestId = '';
+  previous.completionSource = 'superseded';
+  previous.updatedAt = now;
+  previous.completedAt = now;
+  previous.revision = Math.max(1, Number(previous.revision) || 0) + 1;
+  previous.context = JSON.stringify({
+    ...context,
+    ...(actionState
+      ? {
+          actionState: sanitizeState({
+            ...actionState,
+            status: 'cancelled',
+            unfinished: false,
+            latestBlocker: blocker,
+            activeRequestId: undefined,
+            supersededTaskId: replacementTaskId,
+            revision: Math.max(actionState.revision || 0, previous.revision),
+            updatedAt: now,
+          }),
+        }
+      : {}),
+  });
+}
+
 export function syncConversationActionTaskLedger(
   db: any,
   input: {
@@ -221,6 +265,7 @@ export function syncConversationActionTaskLedger(
   const now = input.now || state.updatedAt || new Date().toISOString();
   const intent = normalizeActionIntent(input.userText || state.latestInstruction || state.goal);
   const tasks = db.conversationActionTasks as ConversationActionTaskRow[];
+  markSupersededTask(tasks, state.supersededTaskId, state.taskId, now);
   let task = tasks.find(candidate => candidate.id === state.taskId);
   const parent = intent.relation === 'child'
     ? latestParentTask(tasks, input.conversation.id, state.taskId)
@@ -286,6 +331,91 @@ export function syncConversationActionTaskLedger(
   return task;
 }
 
+/**
+ * Persist terminal records that arrive after their request was replaced. The
+ * immutable task/request identity decides ownership; the current conversation
+ * pointer is never modified by a late record from an older task.
+ */
+export function archiveBoundConversationActionReceipts(
+  db: any,
+  input: {
+    conversationId: string;
+    userId: string;
+    records: ToolExecutionRecord[];
+    turnId?: string;
+    now?: string;
+  },
+): { archived: number; taskIds: string[] } {
+  ensureTables(db);
+  const now = input.now || new Date().toISOString();
+  const tasks = db.conversationActionTasks as ConversationActionTaskRow[];
+  const grouped = new Map<string, ToolExecutionRecord[]>();
+  for (const record of input.records || []) {
+    const taskId = String(record.taskId || '').trim();
+    if (!taskId) continue;
+    const task = tasks.find(candidate => (
+      candidate.id === taskId
+      && candidate.conversationId === input.conversationId
+      && candidate.userId === input.userId
+    ));
+    if (!task) continue;
+    const records = grouped.get(taskId) || [];
+    records.push(record);
+    grouped.set(taskId, records);
+  }
+
+  let archived = 0;
+  const taskIds: string[] = [];
+  for (const [taskId, records] of grouped) {
+    const task = tasks.find(candidate => candidate.id === taskId)!;
+    archived += appendConversationActionReceipts(db, {
+      task,
+      records,
+      turnId: input.turnId,
+      requestId: records.find(record => record.requestId)?.requestId,
+      now,
+    }).length;
+    const context = parseObject(task.context);
+    const state = normalizeConversationActionState(context.actionState);
+    if (state) {
+      const receipts = mergeTaskReceipts(state.receipts || [], records, now);
+      const completion = taskCompletionFromReceipts(state.goal || task.goal, receipts);
+      const hasFailure = records.some(record => !toolRecordSucceeded(record));
+      const status: ConversationTaskStatus = completion.complete
+        ? 'completed'
+        : task.status === 'cancelled'
+          ? 'cancelled'
+          : hasFailure
+            ? 'blocked'
+            : task.status;
+      const nextState = normalizeConversationActionState({
+        ...state,
+        receipts,
+        status,
+        unfinished: status !== 'completed' && status !== 'cancelled',
+        latestBlocker: status === 'blocked' ? completion.blocker || task.blocker : status === 'cancelled' ? task.blocker : '',
+        activeRequestId: state.activeRequestId && records.some(record => record.requestId === state.activeRequestId)
+          ? undefined
+          : state.activeRequestId,
+        completionSource: completion.complete ? 'tool_receipt' : state.completionSource,
+        revision: Math.max(state.revision || 0, task.revision || 0) + 1,
+        updatedAt: now,
+      });
+      if (nextState) context.actionState = sanitizeState(nextState);
+      task.context = JSON.stringify(context);
+      task.status = status;
+      task.blocker = nextState?.latestBlocker || task.blocker;
+      task.activeRequestId = nextState?.activeRequestId || '';
+      task.completionSource = nextState?.completionSource || task.completionSource;
+      task.updatedAt = now;
+      task.revision = nextState?.revision || task.revision;
+      if (status === 'completed' || status === 'cancelled') task.completedAt = task.completedAt || now;
+    }
+    taskIds.push(taskId);
+  }
+  return { archived, taskIds };
+}
+
 export function appendConversationActionReceipts(
   db: any,
   input: {
@@ -341,6 +471,284 @@ export function appendConversationActionReceipts(
   return appended;
 }
 
+type SchedulerAuditOutcome = 'executing' | 'verified' | 'blocked' | 'failed' | 'unknown';
+
+const COMPACT_SCHEDULED_TASK_IDS = new Set([
+  'ambient_activity_poll',
+  'idle_check',
+]);
+
+function compactSchedulerAuditTaskId(scheduledTaskId: string): string {
+  return `scheduler_audit_${digest(scheduledTaskId).slice(0, 24)}`;
+}
+
+function schedulerRecordOutcome(
+  status: 'executing' | 'blocked' | 'completed',
+  records: ToolExecutionRecord[],
+): SchedulerAuditOutcome {
+  const declared = records
+    .map(record => String((record.receipt as any)?.status || ''))
+    .find(Boolean);
+  if (declared === 'failed' || declared === 'unknown' || declared === 'blocked') return declared;
+  if (status === 'completed') return 'verified';
+  return status;
+}
+
+function parseSchedulerAudit(task: ConversationActionTaskRow | undefined): Record<string, any> {
+  const context = parseObject(task?.context);
+  const audit = parseObject(context.schedulerAudit);
+  return {
+    schemaVersion: 1,
+    totalExecutions: 0,
+    completedCount: 0,
+    blockedCount: 0,
+    failedCount: 0,
+    unknownCount: 0,
+    compactedReceiptCount: 0,
+    receiptOutcomeCounts: {},
+    recentExecutions: [],
+    ...audit,
+  };
+}
+
+/** Returns the durable state for one compact scheduler slot, if it is still in the replay window. */
+export function getScheduledCapabilityExecutionStatus(
+  db: any,
+  input: { scheduledTaskId: string; executionId: string },
+): SchedulerAuditOutcome | null {
+  ensureTables(db);
+  const task = (db.conversationActionTasks as ConversationActionTaskRow[]).find(candidate => (
+    candidate.id === compactSchedulerAuditTaskId(input.scheduledTaskId)
+  ));
+  if (!task) return null;
+  const audit = parseSchedulerAudit(task);
+  if (audit.currentExecution?.executionId === input.executionId) {
+    return audit.currentExecution.status || null;
+  }
+  const recent = (Array.isArray(audit.recentExecutions) ? audit.recentExecutions : [])
+    .find((candidate: any) => candidate?.executionId === input.executionId);
+  return recent?.status || null;
+}
+
+function persistCompactScheduledCapabilityExecution(
+  db: any,
+  input: {
+    scheduledTaskId: string;
+    plan: CapabilityExecutionPlan;
+    status: Extract<ConversationTaskStatus, 'executing' | 'blocked' | 'completed'>;
+    records?: ToolExecutionRecord[];
+    blocker?: string;
+    now?: string;
+  },
+): ConversationActionTaskRow {
+  const now = input.now || new Date().toISOString();
+  const tasks = db.conversationActionTasks as ConversationActionTaskRow[];
+  const taskId = compactSchedulerAuditTaskId(input.scheduledTaskId);
+  let task = tasks.find(candidate => candidate.id === taskId);
+  const context = parseObject(task?.context);
+  const audit = parseSchedulerAudit(task);
+  const records = input.records || [];
+  const outcome = schedulerRecordOutcome(input.status, records);
+  const existing = audit.currentExecution?.executionId === input.plan.taskId
+    ? audit.currentExecution
+    : (Array.isArray(audit.recentExecutions) ? audit.recentExecutions : [])
+      .find((candidate: any) => candidate?.executionId === input.plan.taskId);
+
+  if (input.status === 'executing' && existing?.status && existing.status !== 'executing') {
+    return task!;
+  }
+
+  const isNewExecution = input.status === 'executing' && !existing;
+  if (isNewExecution) audit.totalExecutions = Number(audit.totalExecutions || 0) + 1;
+  const priorOutcome = existing?.status && existing.status !== 'executing'
+    ? existing.status
+    : String(audit.lastOutcome || '');
+  const entry = {
+    executionId: input.plan.taskId,
+    status: outcome,
+    startedAt: existing?.startedAt || now,
+    ...(outcome === 'executing' ? {} : { completedAt: now }),
+  };
+  const recent = (Array.isArray(audit.recentExecutions) ? audit.recentExecutions : [])
+    .filter((candidate: any) => candidate?.executionId !== input.plan.taskId);
+  recent.push(entry);
+  audit.recentExecutions = recent.slice(-36);
+  audit.currentExecution = entry;
+  audit.firstExecutionAt = audit.firstExecutionAt || now;
+  audit.lastExecutionAt = now;
+  if (outcome !== 'executing' && existing?.status !== outcome) {
+    if (outcome === 'verified') audit.completedCount = Number(audit.completedCount || 0) + 1;
+    if (outcome === 'blocked') audit.blockedCount = Number(audit.blockedCount || 0) + 1;
+    if (outcome === 'failed') audit.failedCount = Number(audit.failedCount || 0) + 1;
+    if (outcome === 'unknown') audit.unknownCount = Number(audit.unknownCount || 0) + 1;
+    audit.lastOutcome = outcome;
+  }
+
+  const persistedPlan = sanitizeCapabilityExecutionPlan(input.plan, now);
+  const values: ConversationActionTaskRow = {
+    id: taskId,
+    conversationId: `scheduler:${input.scheduledTaskId}`,
+    userId: 'system',
+    domain: 'personal',
+    orgId: '',
+    parentTaskId: '',
+    rootUserMessageId: '',
+    intentKind: input.plan.intent.kind,
+    operation: input.plan.intent.operation,
+    goal: `Audit declared scheduled task ${input.scheduledTaskId}`,
+    target: input.scheduledTaskId,
+    status: input.status,
+    blocker: String(input.blocker || '').slice(0, 500),
+    activeRequestId: input.status === 'executing' ? input.plan.taskId : '',
+    completionSource: input.status === 'completed' ? 'tool_receipt' : '',
+    context: JSON.stringify({
+      ...context,
+      source: 'scheduler',
+      scheduledTaskId: input.scheduledTaskId,
+      compactAudit: true,
+      executionPlan: persistedPlan,
+      schedulerAudit: audit,
+    }),
+    revision: Math.max(1, Number(task?.revision || 0) + (task ? 1 : 0)),
+    createdAt: task?.createdAt || now,
+    updatedAt: now,
+    completedAt: input.status === 'completed' ? now : '',
+  };
+  if (task) Object.assign(task, values);
+  else {
+    task = values;
+    tasks.push(task);
+  }
+
+  const lastReceiptAt = Date.parse(String(audit.lastReceiptAt || '')) || 0;
+  const abnormal = outcome !== 'verified' && outcome !== 'executing';
+  const checkpointDue = Date.parse(now) - lastReceiptAt >= 15 * 60 * 1000;
+  if (records.length > 0 && (abnormal || priorOutcome !== outcome || checkpointDue)) {
+    appendConversationActionReceipts(db, {
+      task,
+      records,
+      turnId: input.plan.taskId,
+      requestId: input.plan.taskId,
+      now,
+    });
+    audit.lastReceiptAt = now;
+    task.context = JSON.stringify({
+      ...parseObject(task.context),
+      schedulerAudit: audit,
+    });
+  }
+  return task;
+}
+
+/**
+ * One-version migration for the old 10-second/1-minute probe ledger. Only
+ * verified completed rows are folded; failures, unknown outcomes and their
+ * receipts remain append-only evidence.
+ */
+export function compactLegacyScheduledCapabilityExecutions(db: any): {
+  tasksRemoved: number;
+  receiptsRemoved: number;
+  summariesUpdated: number;
+} {
+  ensureTables(db);
+  const tasks = db.conversationActionTasks as ConversationActionTaskRow[];
+  const receipts = db.conversationActionReceipts as ConversationActionReceiptRow[];
+  const receiptsByTask = new Map<string, ConversationActionReceiptRow[]>();
+  for (const receipt of receipts) {
+    const related = receiptsByTask.get(receipt.taskId) || [];
+    related.push(receipt);
+    receiptsByTask.set(receipt.taskId, related);
+  }
+  let tasksRemoved = 0;
+  let receiptsRemoved = 0;
+  let summariesUpdated = 0;
+
+  for (const scheduledTaskId of COMPACT_SCHEDULED_TASK_IDS) {
+    const summaryId = compactSchedulerAuditTaskId(scheduledTaskId);
+    const candidates = tasks.filter(candidate => (
+      candidate.id !== summaryId
+      && candidate.conversationId === `scheduler:${scheduledTaskId}`
+      && candidate.status === 'completed'
+    ));
+    const verified = candidates.filter(candidate => {
+      const related = receiptsByTask.get(candidate.id) || [];
+      return related.length > 0 && related.every(receipt => receipt.outcome === 'verified_success');
+    });
+    if (verified.length === 0) continue;
+
+    verified.sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+    const removedIds = new Set(verified.map(candidate => candidate.id));
+    const removedReceipts = verified.flatMap(candidate => receiptsByTask.get(candidate.id) || []);
+    const summary = tasks.find(candidate => candidate.id === summaryId);
+    const audit = parseSchedulerAudit(summary);
+    const last = verified[verified.length - 1];
+    const lastContext = parseObject(last.context);
+    const migratedRecent = verified.slice(-36).map(candidate => ({
+      executionId: candidate.id,
+      status: 'verified',
+      startedAt: candidate.createdAt,
+      completedAt: candidate.completedAt || candidate.updatedAt,
+    }));
+    audit.totalExecutions = Number(audit.totalExecutions || 0) + verified.length;
+    audit.completedCount = Number(audit.completedCount || 0) + verified.length;
+    audit.compactedReceiptCount = Number(audit.compactedReceiptCount || 0) + removedReceipts.length;
+    audit.receiptOutcomeCounts = {
+      ...parseObject(audit.receiptOutcomeCounts),
+      verified_success: Number(parseObject(audit.receiptOutcomeCounts).verified_success || 0) + removedReceipts.length,
+    };
+    audit.firstExecutionAt = audit.firstExecutionAt || verified[0].createdAt;
+    audit.lastExecutionAt = last.updatedAt;
+    audit.lastOutcome = 'verified';
+    audit.currentExecution = migratedRecent[migratedRecent.length - 1];
+    audit.recentExecutions = [
+      ...(Array.isArray(audit.recentExecutions) ? audit.recentExecutions : []),
+      ...migratedRecent,
+    ].slice(-36);
+
+    const values: ConversationActionTaskRow = {
+      id: summaryId,
+      conversationId: `scheduler:${scheduledTaskId}`,
+      userId: 'system',
+      domain: 'personal',
+      orgId: '',
+      parentTaskId: '',
+      rootUserMessageId: '',
+      intentKind: last.intentKind,
+      operation: last.operation,
+      goal: `Audit declared scheduled task ${scheduledTaskId}`,
+      target: scheduledTaskId,
+      status: 'completed',
+      blocker: '',
+      activeRequestId: '',
+      completionSource: 'tool_receipt',
+      context: JSON.stringify({
+        ...parseObject(summary?.context),
+        source: 'scheduler',
+        scheduledTaskId,
+        compactAudit: true,
+        ...(lastContext.executionPlan ? { executionPlan: lastContext.executionPlan } : {}),
+        schedulerAudit: audit,
+      }),
+      revision: Math.max(1, Number(summary?.revision || 0) + 1),
+      createdAt: summary?.createdAt || verified[0].createdAt,
+      updatedAt: last.updatedAt,
+      completedAt: last.completedAt || last.updatedAt,
+    };
+    db.conversationActionTasks = tasks.filter(candidate => !removedIds.has(candidate.id));
+    const refreshedTasks = db.conversationActionTasks as ConversationActionTaskRow[];
+    const refreshedSummary = refreshedTasks.find(candidate => candidate.id === summaryId);
+    if (refreshedSummary) Object.assign(refreshedSummary, values);
+    else refreshedTasks.push(values);
+    db.conversationActionReceipts = receipts.filter(receipt => !removedIds.has(receipt.taskId));
+    tasks.splice(0, tasks.length, ...refreshedTasks);
+    receipts.splice(0, receipts.length, ...(db.conversationActionReceipts as ConversationActionReceiptRow[]));
+    tasksRemoved += verified.length;
+    receiptsRemoved += removedReceipts.length;
+    summariesUpdated += 1;
+  }
+  return { tasksRemoved, receiptsRemoved, summariesUpdated };
+}
+
 /**
  * Stores a scheduler execution in the shared action ledger. The scheduler has
  * no chat conversation, so it uses a namespaced conversation identity while
@@ -355,9 +763,11 @@ export function persistScheduledCapabilityExecution(
     records?: ToolExecutionRecord[];
     blocker?: string;
     now?: string;
+    compactAudit?: boolean;
   },
 ): ConversationActionTaskRow {
   ensureTables(db);
+  if (input.compactAudit) return persistCompactScheduledCapabilityExecution(db, input);
   const now = input.now || new Date().toISOString();
   const conversationId = `scheduler:${input.scheduledTaskId}`;
   const tasks = db.conversationActionTasks as ConversationActionTaskRow[];
@@ -661,4 +1071,107 @@ export function migrateLegacyConversationActionLedger(db: any): number {
     if (syncConversationActionTaskLedger(db, { conversation, state, now: state.updatedAt })) migrated += 1;
   }
   return migrated;
+}
+
+/**
+ * One-version repair for receipts written by the former text-scanning
+ * success detector. A verified structured result containing diagnostics such
+ * as `failed: 0` could be persisted as a failure. Only contradictory rows
+ * that already carry an explicit verified terminal decision are repaired.
+ */
+export function repairContradictoryConversationActionReceipts(db: any): number {
+  ensureTables(db);
+  let repaired = 0;
+  const repairedRecords = new Map<string, ToolExecutionRecord[]>();
+  for (const row of db.conversationActionReceipts as ConversationActionReceiptRow[]) {
+    if (row.outcome !== 'failed') continue;
+    const envelope = parseObject(row.envelope);
+    if (envelope?.verification?.status !== 'verified') continue;
+    const result = envelope.result;
+    if (!result || typeof result !== 'object') continue;
+    const record: ToolExecutionRecord = {
+      taskId: row.taskId,
+      turnId: row.turnId,
+      requestId: row.requestId,
+      idempotencyKey: row.idempotencyKey,
+      name: row.toolName,
+      arguments: envelope.toolName === 'client_action'
+        ? {
+            action: String(result.action || ''),
+            target: String(result.target || row.targetIdentity || ''),
+            ...(typeof result?.relayResult?.enabled === 'boolean'
+              ? { enabled: result.relayResult.enabled }
+              : {}),
+          }
+        : row.targetIdentity
+          ? { target: row.targetIdentity }
+          : {},
+      result: JSON.stringify(result),
+      receipt: result,
+      terminalVerification: {
+        status: 'verified',
+        strategy: String(envelope?.verification?.strategy || 'terminal_receipt') as any,
+        reason: String(envelope?.verification?.reason || 'Verified terminal receipt.'),
+      },
+    };
+    if (!toolRecordSucceeded(record)) continue;
+    row.outcome = 'verified_success';
+    row.envelope = JSON.stringify({
+      ...envelope,
+      status: 'verified_success',
+      error: undefined,
+    });
+    const records = repairedRecords.get(row.taskId) || [];
+    records.push(record);
+    repairedRecords.set(row.taskId, records);
+    repaired += 1;
+  }
+
+  const tasks = db.conversationActionTasks as ConversationActionTaskRow[];
+  for (const [taskId, records] of repairedRecords) {
+    const task = tasks.find(candidate => candidate.id === taskId);
+    if (!task) continue;
+    const context = parseObject(task.context);
+    const state = normalizeConversationActionState(context.actionState);
+    if (!state) continue;
+    const receipts = mergeTaskReceipts(
+      (state.receipts || []).map(receipt => (
+        receipt.outcome === 'failure' && receipt.terminalVerification?.status === 'verified'
+          ? { ...receipt, outcome: 'success' as const, error: '' }
+          : receipt
+      )),
+      records,
+      task.updatedAt,
+    );
+    const completion = taskCompletionFromReceipts(state.goal || task.goal, receipts);
+    const status = completion.complete ? 'completed' : task.status;
+    const nextState = normalizeConversationActionState({
+      ...state,
+      receipts,
+      status,
+      unfinished: status !== 'completed' && status !== 'cancelled',
+      latestBlocker: completion.complete ? '' : state.latestBlocker,
+      activeRequestId: completion.complete ? undefined : state.activeRequestId,
+      completionSource: completion.complete ? 'tool_receipt' : state.completionSource,
+      revision: Math.max(state.revision || 0, task.revision || 0) + 1,
+      updatedAt: task.updatedAt,
+    });
+    if (nextState) context.actionState = sanitizeState(nextState);
+    task.context = JSON.stringify(context);
+    task.status = status;
+    if (completion.complete) {
+      task.blocker = '';
+      task.activeRequestId = '';
+      task.completionSource = 'tool_receipt';
+      task.completedAt = task.completedAt || task.updatedAt;
+    }
+    task.revision = nextState?.revision || task.revision;
+    for (const conversation of db.conversations || []) {
+      const conversationState = normalizeConversationActionState(conversation.actionContinuationState);
+      if (conversationState?.taskId === task.id && nextState) {
+        conversation.actionContinuationState = nextState;
+      }
+    }
+  }
+  return repaired;
 }

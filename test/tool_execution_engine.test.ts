@@ -141,12 +141,35 @@ describe('unified tool execution engine', () => {
       handler: async () => JSON.stringify({ ok: true, status: 'relayed' }),
     });
 
+    const record = await executeToolCall({ registry, name: 'unverified_demo' });
+    expect(record.envelope?.status).toBe('failed');
     await expect(executeToolCallOrThrow({ registry, name: 'unverified_demo' })).rejects.toMatchObject({
       message: expect.stringMatching(/no verified post-action state/i),
       toolRecord: expect.objectContaining({
         terminalVerification: expect.objectContaining({ status: 'unverified' }),
       }),
     });
+  });
+
+  it('verifies a statusless structured receipt from an inferred read-only capability', async () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'read_native_items',
+      description: 'Read native items.',
+      parameters: { type: 'object', properties: {}, required: [] },
+      permission: 'public',
+      securityLevel: 'safe',
+      evidence: {
+        capability: 'native.items.read',
+        operation: 'observe',
+        assurance: 'observed',
+      },
+      handler: async () => JSON.stringify([{ id: 'item-1', name: 'Native item' }]),
+    });
+
+    const record = await executeToolCall({ registry, name: 'read_native_items' });
+    expect(record.terminalVerification?.status).toBe('verified');
+    expect(record.envelope?.status).toBe('verified_success');
   });
 
   it('separates backward-compatible human output from the terminal receipt', async () => {

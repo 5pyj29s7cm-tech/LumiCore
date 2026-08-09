@@ -300,4 +300,43 @@ describe('durable conversation task execution ledger', () => {
       blocker: 'No post-action state was observed.',
     });
   });
+
+  it('keeps a verified client action successful when its health payload contains failed zero', () => {
+    const record = {
+      name: 'client_action',
+      arguments: { action: 'set_wallpaper_mode', enabled: true },
+      result: JSON.stringify({
+        ok: true,
+        action: 'set_wallpaper_mode',
+        verification: { status: 'verified', matched: ['surface:wallpaper:open'] },
+        health: { failed: 0, pending: 1 },
+        diagnosticDetails: 'x'.repeat(4_000),
+      }),
+      capability: {
+        capabilityId: 'client.surface.action',
+        lane: 'client' as const,
+        operation: 'mutate' as const,
+        risk: 'low' as const,
+        sideEffects: [{ type: 'desktop_control' as const, scope: 'Lumi client', reversible: true }],
+        verification: {
+          strategy: 'state_diff' as const,
+          required: true,
+          requiredFields: ['verification.status'],
+          successSignals: ['verified client state'],
+          limitations: [],
+        },
+      },
+      terminalVerification: {
+        status: 'verified' as const,
+        strategy: 'state_diff' as const,
+        reason: 'The receipt contains verified post-action state.',
+      },
+    };
+
+    expect(toolRecordSucceeded(record)).toBe(true);
+    const receipts = recordsToTaskReceipts([record]);
+    expect(receipts[0].outcome).toBe('success');
+    expect(receipts[0].result.length).toBeLessThan(record.result.length);
+    expect(toolRecordSucceeded(taskReceiptsToRecords(receipts)[0])).toBe(true);
+  });
 });

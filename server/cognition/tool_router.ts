@@ -273,6 +273,27 @@ function strictDesktopObservationToolNames(
   return unique(plan.map(call => call.name));
 }
 
+function isCurrentAuthoringDocumentInspection(text: string): boolean {
+  const hasAuthoringApp = /(?:WPS|Microsoft\s+Word|Word|Excel|PowerPoint|Office)/iu.test(text);
+  // i18n-allow: Reviewed multilingual current-document input recognition; not user-visible copy.
+  const hasCurrentDocument = /(?:现在|当前|正在).{0,18}(?:打开|编辑|显示).{0,18}(?:这份|这个|该)?(?:文件|文档|表格|幻灯片|PPT|PDF)|(?:打开|编辑|显示)(?:着|的).{0,12}(?:这份|这个|该)?(?:文件|文档|表格|幻灯片|PPT|PDF)/u.test(text);
+  // i18n-allow: Reviewed multilingual document-inspection input recognition; not user-visible copy.
+  const wantsInspection = /(?:分析|总结|介绍|讲解|读取|阅读|看看|看一下|看法|想法|检查)|\b(?:analy[sz]e|summari[sz]e|review|inspect|read|present)\b/iu.test(text);
+  return hasAuthoringApp && hasCurrentDocument && wantsInspection;
+}
+
+function isDocumentOpenAndReviewRequest(text: string): boolean {
+  // i18n-allow: Reviewed multilingual negative open/launch input recognition; not user-visible copy.
+  if (/(?:不要|别|禁止|无需).{0,18}(?:打开|启动)|\b(?:do\s+not|don't|never|without)\b.{0,28}\b(?:open|launch)\b/iu.test(text)) return false;
+  // i18n-allow: Reviewed multilingual open/launch input recognition; not user-visible copy.
+  const wantsOpen = /(?:打开|启动)|\b(?:open|launch)\b/iu.test(text);
+  // i18n-allow: Reviewed multilingual document-type input recognition; not user-visible copy.
+  const hasDocument = /(?:PDF|DOCX|PPTX?|XLSX?|文件|文档|报告|介绍)|\b(?:pdf|docx?|pptx?|xlsx?|file|document)\b/iu.test(text);
+  // i18n-allow: Reviewed multilingual review/read input recognition; not user-visible copy.
+  const wantsReview = /(?:分析|总结|介绍|讲解|读取|阅读|逐页|一页一页|看一下|看看)|\b(?:analy[sz]e|summari[sz]e|review|read|present|walk\s+through)\b/iu.test(text);
+  return wantsOpen && hasDocument && wantsReview;
+}
+
 function isDirectAutocadOperationsPlayback(text: string): boolean {
   const raw = String(text || '');
   const hasOperations = /(?:_operations\.json\b|operationsPath|AutoCAD\s+operations)/i.test(raw);
@@ -678,6 +699,11 @@ export function routeToolsForTurn(
   const localCadSourceRequest = isLocalCadSourceRequest(text);
   const localCadImageSourceRequest = isLocalCadImageSourceRequest(text);
   const cadGeometryExtractionOnly = requiresCadGeometryExtractionOnly(text);
+  const currentAuthoringDocumentInspection = isCurrentAuthoringDocumentInspection(text);
+  const documentOpenAndReview = !currentAuthoringDocumentInspection
+    && !localCadSourceRequest
+    && actionContract.kind !== 'design_delivery'
+    && isDocumentOpenAndReviewRequest(text);
   const desktopObservationToolNames = currentAppEdit
     ? []
     : strictDesktopObservationToolNames(text, actionContract.kind);
@@ -685,6 +711,7 @@ export function routeToolsForTurn(
   const simpleDesktopOpen =
     actionContract.kind === 'desktop_operation'
     && isSimpleDesktopOpenRequest(text)
+    && !documentOpenAndReview
     && !isDirectAutocadOperationsPlayback(text);
   const extensionRegistryOnly = actionContract.kind === 'extension_registry';
   const forbiddenToolNames = new Set<string>();
@@ -789,6 +816,46 @@ export function routeToolsForTurn(
       forbiddenToolNames.add(submitTool);
     }
     reasons.push('history reads hard-forbid every external AI prompt-submission entry');
+  }
+
+  if (currentAuthoringDocumentInspection && !currentAppEdit) {
+    selected.clear();
+    for (const name of [
+      'desktop_active_window',
+      'desktop_running_processes',
+      'desktop_capture_screen',
+      'search_files',
+      'desktop_path_info',
+      'extract_document_text',
+      'read_pdf',
+      'read_docx',
+      'read_xlsx',
+    ]) addIfAvailable(selected, available, name);
+    categories.splice(0, categories.length, 'current_document_inspection');
+    reasons.splice(0, reasons.length, 'current authoring-document analysis uses visible app evidence plus read-only document extraction');
+    for (const name of availableNames) {
+      if (!selected.has(name)) forbiddenToolNames.add(name);
+    }
+  }
+
+  if (documentOpenAndReview && !currentAppEdit) {
+    selected.clear();
+    for (const name of [
+      'desktop_list_files',
+      'search_files',
+      'desktop_path_info',
+      'desktop_open',
+      'desktop_active_window',
+      'read_pdf',
+      'read_docx',
+      'read_xlsx',
+      'extract_document_text',
+    ]) addIfAvailable(selected, available, name);
+    categories.splice(0, categories.length, 'document_open_and_review');
+    reasons.splice(0, reasons.length, 'document presentation requires exact file discovery, opening, content extraction, and visible-target verification');
+    for (const name of availableNames) {
+      if (!selected.has(name)) forbiddenToolNames.add(name);
+    }
   }
 
   if (simpleDesktopOpen && !currentAppEdit) {
@@ -958,6 +1025,8 @@ export function routeToolsForTurn(
     truncated,
     unavailableMcpServers: unique(unavailableMcpServers),
     hardAllowlist: desktopObservationOnly
+      || currentAuthoringDocumentInspection
+      || documentOpenAndReview
       || simpleDesktopOpen
       || cadGeometryExtractionOnly
       || extensionRegistryOnly
@@ -968,6 +1037,8 @@ export function routeToolsForTurn(
       : undefined,
     maxIterations: selected.has('cad_draw_floorplan_in_autocad')
       ? 2
+      : currentAuthoringDocumentInspection || documentOpenAndReview
+      ? Math.max(3, selected.size)
       : simpleDesktopOpen
       ? Math.max(2, selected.size)
       : desktopObservationOnly

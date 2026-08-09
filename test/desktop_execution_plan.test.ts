@@ -4,6 +4,7 @@ import {
   resolveDesktopApplicationIdentity,
   verifyDesktopExecutionReceipt,
   desktopFingerprintMatchesApplication,
+  desktopFingerprintMatchesRequestedTarget,
   assessDesktopApplicationIdentity,
 } from '../server/desktop/execution_plan';
 
@@ -13,6 +14,24 @@ describe('desktop execution plan', () => {
     expect(resolveDesktopApplicationIdentity('打开 AutoCAD 图纸').id).toBe('autocad-desktop');
     expect(resolveDesktopApplicationIdentity('check the page in Chrome').id).toBe('chrome-browser');
     expect(resolveDesktopApplicationIdentity('查看微信消息').id).toBe('wechat-desktop');
+  });
+
+  it('does not confuse a Lumi-named document or directory with the Lumi client', () => {
+    const request = '\u6253\u5f00\u684c\u9762\u4e0a\u7684Lumi\u9879\u76ee\u4ecb\u7ecd\u8d44\u6599\u6587\u4ef6\u5939\u91cc\u7684Lumi\u4ea7\u54c1\u4ecb\u7ecd\u3002';
+    expect(resolveDesktopApplicationIdentity(request).id).toBe('unverified-desktop-application');
+    expect(resolveDesktopApplicationIdentity('\u6253\u5f00Lumi\u804a\u5929\u754c\u9762').id).toBe('lumi-client');
+
+    const plan = buildDesktopExecutionPlan({
+      text: request,
+      lane: 'desktop_control',
+      taskId: 'lumi-document-open',
+    });
+    expect(plan.steps.some(step => step.allowedTools.includes('desktop_open'))).toBe(true);
+    expect(plan.steps.some(step => step.allowedTools.includes('desktop_active_window'))).toBe(true);
+    expect(desktopFingerprintMatchesRequestedTarget({
+      processName: 'wpp.exe',
+      title: 'Lumi\u4ea7\u54c1\u4ecb\u7ecd - WPS Presentation',
+    }, request)).toBe(true);
   });
 
   it('uses exact process identity and never accepts an alternative app or spoofed title', () => {

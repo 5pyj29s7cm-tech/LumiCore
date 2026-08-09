@@ -1,6 +1,6 @@
 import './helpers';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { initDatabase } from '../db_layer';
+import { initDatabase, readDB } from '../db_layer';
 import {
   addMessage,
   getMessages,
@@ -289,5 +289,111 @@ describe('conversation action continuation state', () => {
       status: 'planning',
       activeRequestId: 'voice-request-1',
     });
+  });
+
+  it('supersedes the previous foreground task without leaving its lease executing', () => {
+    const userId = `conversation-action-supersede-${Date.now()}-${Math.random()}`;
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    const first = prepareConversationActionExecution({
+      conversationId: conversation.id,
+      userId,
+      userText: '进入壁纸模式。',
+      requestId: 'request-wallpaper',
+      toolPolicy: { allowedTools: ['client_action'], requireConfirmation: [], forbiddenTools: [], maxIterations: 4 },
+      forceTask: true,
+    });
+    const second = prepareConversationActionExecution({
+      conversationId: conversation.id,
+      userId,
+      userText: '打开网易云音乐，放首歌给我听吧。',
+      requestId: 'request-music',
+      toolPolicy: { allowedTools: ['desktop_open'], requireConfirmation: [], forbiddenTools: [], maxIterations: 4 },
+      forceTask: true,
+    });
+
+    expect(second.kind).toBe('new');
+    expect(second.state?.taskId).not.toBe(first.state?.taskId);
+    expect(second.state).toMatchObject({
+      goal: '打开网易云音乐，放首歌给我听吧。',
+      activeRequestId: 'request-music',
+    });
+    const oldTask = (readDB().conversationActionTasks || []).find((task: any) => task.id === first.state?.taskId);
+    expect(oldTask).toMatchObject({
+      status: 'cancelled',
+      activeRequestId: '',
+    });
+    expect(oldTask.blocker).toContain(second.state?.taskId);
+  });
+
+  it('archives a late receipt on its bound task without mutating the newer turn', () => {
+    const userId = `conversation-action-late-receipt-${Date.now()}-${Math.random()}`;
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'user',
+      content: '打开 WPS。',
+      domain: 'personal',
+      deferActionPreparation: true,
+      requestId: 'request-old',
+    } as any);
+    const oldTask = prepareConversationActionExecution({
+      conversationId: conversation.id,
+      userId,
+      userText: '打开 WPS。',
+      requestId: 'request-old',
+      toolPolicy: { allowedTools: ['desktop_open'], requireConfirmation: [], forbiddenTools: [], maxIterations: 4 },
+      forceTask: true,
+    });
+
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'user',
+      content: '进入壁纸模式。',
+      domain: 'personal',
+      deferActionPreparation: true,
+      requestId: 'request-new',
+    } as any);
+    const newTask = prepareConversationActionExecution({
+      conversationId: conversation.id,
+      userId,
+      userText: '进入壁纸模式。',
+      requestId: 'request-new',
+      toolPolicy: { allowedTools: ['client_action'], requireConfirmation: [], forbiddenTools: [], maxIterations: 4 },
+      forceTask: true,
+    });
+
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'assistant',
+      content: 'WPS 已打开。',
+      domain: 'personal',
+      requestId: 'request-old',
+      toolCalls: [{
+        taskId: oldTask.state?.taskId,
+        requestId: 'request-old',
+        name: 'desktop_open',
+        arguments: { target: 'WPS' },
+        result: JSON.stringify({ ok: true, status: 'verified', target: 'WPS', targetMatched: true }),
+      }],
+    } as any);
+
+    const current = getOrCreateActiveConversation(userId, 'lumi', 'personal', '').actionContinuationState;
+    expect(current).toMatchObject({
+      taskId: newTask.state?.taskId,
+      goal: '进入壁纸模式。',
+      activeRequestId: 'request-new',
+      receipts: [],
+    });
+    const archived = (readDB().conversationActionReceipts || []).filter((receipt: any) => (
+      receipt.taskId === oldTask.state?.taskId && receipt.requestId === 'request-old'
+    ));
+    expect(archived).toHaveLength(1);
+    expect(archived[0].toolName).toBe('desktop_open');
   });
 });

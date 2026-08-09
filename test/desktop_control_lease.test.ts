@@ -109,6 +109,26 @@ describe('global desktop control lease', () => {
     next.release();
   });
 
+  it('ignores a delayed idle-reset report for the input that started the foreground lease', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-08T12:00:05.000Z'));
+    const active = await acquireDesktopControlLease({
+      userId: 'lease-user-prompt-input',
+      taskId: 'foreground-task',
+      source: 'voice',
+    });
+
+    const paused = reportDesktopUserActivity(
+      'lease-user-prompt-input',
+      2_500,
+      '2026-08-08T12:00:04.000Z',
+    );
+    expect(paused).toBeNull();
+    expect(active.snapshot()).toMatchObject({ status: 'active', taskId: 'foreground-task' });
+    expect(getDesktopControlRuntimeSnapshot().userActivityHolds).toBe(0);
+    active.release();
+  });
+
   it('supports same-task reentrancy without exposing the desktop to another task', async () => {
     const first = await acquireDesktopControlLease({
       userId: 'lease-user-d',

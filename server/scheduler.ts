@@ -31,7 +31,10 @@ import {
   buildScheduledCapabilityExecutionPlan,
   type CapabilityExecutionPlan,
 } from './cognition/capability_execution_plan';
-import { persistScheduledCapabilityExecution } from './conversation/action_ledger';
+import {
+  getScheduledCapabilityExecutionStatus,
+  persistScheduledCapabilityExecution,
+} from './conversation/action_ledger';
 import type {
   CapabilityLane,
   CapabilityOperation,
@@ -112,6 +115,8 @@ interface ScheduledTask {
   quiet?: boolean;
   /** If false, task is paused and will not fire */
   enabled?: boolean;
+  /** Collapse high-frequency successful probes into a bounded audit summary. */
+  auditMode?: 'full' | 'compact';
 }
 
 export type ParsedSchedule =
@@ -511,9 +516,14 @@ export class Scheduler {
       plan = buildScheduledTaskExecutionPlan(task, startedAt);
       const authorization = authorizeCapabilityPlanTool(plan, 'scheduler_task_handler');
       const db = readDB();
-      const previous = (db.conversationActionTasks || []).find((candidate: any) => candidate.id === plan.taskId);
-      if (previous) {
-        if (previous.status === 'executing') {
+      const previousStatus = task.auditMode === 'compact'
+        ? getScheduledCapabilityExecutionStatus(db, {
+            scheduledTaskId: task.id,
+            executionId: plan.taskId,
+          })
+        : (db.conversationActionTasks || []).find((candidate: any) => candidate.id === plan.taskId)?.status;
+      if (previousStatus) {
+        if (previousStatus === 'executing') {
           const record = this.buildScheduledTaskRecord(plan, {
             verified: false,
             status: 'unknown',
@@ -526,6 +536,7 @@ export class Scheduler {
             blocker: 'A previous execution in this exact schedule slot has an unknown outcome; replay was stopped.',
             records: [record],
             now: startedAt.toISOString(),
+            compactAudit: task.auditMode === 'compact',
           });
           writeDB(db);
         }
@@ -542,6 +553,7 @@ export class Scheduler {
           error: authorization.reason,
         })],
         now: startedAt.toISOString(),
+        compactAudit: task.auditMode === 'compact',
       });
       writeDB(db);
       if (!authorization.allowed) {
@@ -563,6 +575,7 @@ export class Scheduler {
           delivery,
         })],
         now: task.lastRun,
+        compactAudit: task.auditMode === 'compact',
       });
       writeDB(completedDb);
     } catch (err: any) {
@@ -581,6 +594,7 @@ export class Scheduler {
               error: 'scheduler_handler_failed',
             })],
             now: failedAt,
+            compactAudit: task.auditMode === 'compact',
           });
           writeDB(db);
         } catch (ledgerError: any) {
@@ -2115,6 +2129,7 @@ Output ONLY the prediction message — no preamble, no labels.`;
     cron: 'every_10s',
     lastRun: null,
     executionClass: 'client_probe',
+    auditMode: 'compact',
     handler: async () => {
       if (scheduler.io) {
         const payload = { timestamp: new Date().toISOString() };
@@ -2132,6 +2147,7 @@ Output ONLY the prediction message — no preamble, no labels.`;
     cron: 'every_1m',
     lastRun: null,
     executionClass: 'client_probe',
+    auditMode: 'compact',
     handler: async () => {
       if (scheduler.io) {
         const payload = { timestamp: new Date().toISOString() };

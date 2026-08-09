@@ -6,6 +6,7 @@ import { buildForegroundWeChatReadArgs, buildForegroundWeChatSendArgs } from '..
 import {
   findConversationActionTask,
   formatConversationActionLedgerStatus,
+  repairContradictoryConversationActionReceipts,
   syncConversationActionTaskLedger,
 } from '../server/conversation/action_ledger';
 import type { ConversationActionContinuationState } from '../server/cognition/action_continuation';
@@ -151,6 +152,57 @@ describe('Lumi field-call stability replay', () => {
       'D:\\drawings\\source.png',
       'D:\\drawings\\plan.dwg',
     ]));
+  });
+
+  it('repairs the historical verified client-action receipts misclassified by failed-zero diagnostics', () => {
+    const db: any = { conversations: [], conversationActionTasks: [], conversationActionReceipts: [] };
+    const goal = '\u8fdb\u5165\u58c1\u7eb8\u6a21\u5f0f';
+    const result = JSON.stringify({
+      ok: true,
+      action: 'set_wallpaper_mode',
+      verification: { status: 'verified', matched: ['surface:wallpaper:open'] },
+      health: { failed: 0 },
+    });
+    const conversation: any = { id: 'conv_repair', userId: 'user_repair', domain: 'personal', orgId: '' };
+    const state = actionState({
+      taskId: 'task_repair',
+      goal,
+      latestInstruction: goal,
+      status: 'blocked',
+      unfinished: true,
+      latestBlocker: result,
+      completionSource: undefined,
+      receipts: [{
+        id: 'receipt_repair',
+        key: 'client_action:{"action":"set_wallpaper_mode","enabled":true}',
+        name: 'client_action',
+        arguments: { action: 'set_wallpaper_mode', enabled: true },
+        result,
+        error: result,
+        outcome: 'failure',
+        terminalVerification: {
+          status: 'verified',
+          strategy: 'state_diff',
+          reason: 'The receipt contains verified post-action state.',
+        },
+        recordedAt: '2026-08-08T12:42:09.107Z',
+      }],
+    });
+    conversation.actionContinuationState = state;
+    db.conversations.push(conversation);
+    syncConversationActionTaskLedger(db, { conversation, state });
+
+    expect(repairContradictoryConversationActionReceipts(db)).toBe(1);
+    expect(db.conversationActionReceipts[0].outcome).toBe('verified_success');
+    expect(db.conversationActionTasks[0]).toMatchObject({
+      status: 'completed',
+      blocker: '',
+      completionSource: 'tool_receipt',
+    });
+    expect(conversation.actionContinuationState).toMatchObject({
+      status: 'completed',
+      unfinished: false,
+    });
   });
 
   it('deduplicates an exactly confirmed external commit by idempotency key', async () => {
