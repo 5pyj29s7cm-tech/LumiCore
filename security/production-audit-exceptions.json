@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "exceptions": [
+    {
+      "package": "image-size",
+      "severity": "high",
+      "advisorySources": [1138808, 1138809],
+      "dependentPackages": ["pptxgenjs"],
+      "packageVersions": {
+        "image-size": "1.2.1",
+        "pptxgenjs": "4.0.1"
+      },
+      "dependencyRange": "^1.2.1",
+      "runtimeEntrypoints": [
+        "node_modules/pptxgenjs/dist/pptxgen.cjs.js",
+        "node_modules/pptxgenjs/dist/pptxgen.es.js"
+      ],
+      "forbiddenRuntimeReferences": [
+        "require('image-size')",
+        "require(\"image-size\")",
+        "from 'image-size'",
+        "from \"image-size\"",
+        "import('image-size')",
+        "import(\"image-size\")"
+      ],
+      "expiresOn": "2026-09-10",
+      "reason": "PptxGenJS 4.0.1 declares image-size but its shipped Node entrypoints do not import it. Upstream has no patched image-size release as of 2026-08-10. The exception becomes invalid if versions, advisory IDs, dependency path, entrypoint reachability, or expiry changes."
+    }
+  ]
+}

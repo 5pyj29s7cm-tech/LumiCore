@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import { createReadStream, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { computeSourceIdentity } from './lib/source-identity.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const root = path.resolve(path.dirname(__filename), '..');
@@ -61,11 +62,17 @@ async function main() {
   const pkg = await readJson(path.join(root, 'package.json'));
   const tauri = await readJson(path.join(root, 'src-tauri', 'tauri.conf.json'));
   const head = git(['rev-parse', 'HEAD'], 'unknown');
+  const sourceIdentity = computeSourceIdentity(root);
   const runtimeMetaPath = path.join(root, 'desktop-resources', 'dist-server', 'runtime-meta.json');
   if (!existsSync(runtimeMetaPath)) throw new Error('Packaged runtime metadata is missing. Build desktop resources first.');
   const runtimeMeta = await readJson(runtimeMetaPath);
-  if (runtimeMeta.version !== tauri.version || runtimeMeta.buildId !== head) {
-    throw new Error(`Packaged runtime metadata does not match ${tauri.version}/${head}`);
+  if (
+    runtimeMeta.version !== tauri.version
+    || runtimeMeta.buildId !== head
+    || runtimeMeta.sourceFingerprint !== sourceIdentity.fingerprint
+    || runtimeMeta.sourceDirty !== sourceIdentity.dirty
+  ) {
+    throw new Error(`Packaged runtime metadata does not match ${tauri.version}/${head}/${sourceIdentity.fingerprint}`);
   }
   const allFiles = await walk(bundleDir);
   const artifacts = allFiles

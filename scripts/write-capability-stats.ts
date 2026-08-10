@@ -105,4 +105,8 @@ const outputPath = path.join(workspaceRoot, 'docs', 'generated', 'capability-sta
 fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 fs.writeFileSync(outputPath, generated, 'utf8');
 console.log(`[capability-stats] wrote ${path.relative(workspaceRoot, outputPath)} (${manifest.length} tools, ${bundledSkills.length} bundled skills)`);
+if (missingExplicitEvidence.length || missingExplicitRisk.length) {
+  console.error(`[capability-stats] blocked: ${missingExplicitEvidence.length} tools lack explicit evidence and ${missingExplicitRisk.length} tools lack explicit risk metadata`);
+  process.exit(1);
+}
 process.exit(0);

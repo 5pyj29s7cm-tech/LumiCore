@@ -118,6 +118,8 @@ export function getRuntimeVersionInfo() {
     name: runtimeBuildMetadata.name,
     version: runtimeBuildMetadata.version,
     buildId: runtimeBuildMetadata.buildId,
+    sourceFingerprint: runtimeBuildMetadata.sourceFingerprint,
+    sourceDirty: runtimeBuildMetadata.sourceDirty,
     pid: process.pid,
     startedAt: serverStartedAt,
     uptimeSeconds: Math.round(process.uptime()),

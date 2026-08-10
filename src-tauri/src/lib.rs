@@ -2,18 +2,19 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::io::Read;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
-use std::io::Read;
 use std::time::{Duration, Instant, SystemTime};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager,
 };
+#[cfg(not(test))]
 use tauri_plugin_dialog::DialogExt;
 
 struct SpawnConfig {
@@ -192,14 +193,24 @@ fn get_desktop_capability_status() -> DesktopCapabilityStatus {
             app_launch_available: true,
             screen_capture_available: screen_recording_granted,
             input_available: accessibility_granted,
-            accessibility_permission: if accessibility_granted { "granted" } else { "required" }.to_string(),
-            screen_recording_permission: if screen_recording_granted { "granted" } else { "required" }.to_string(),
+            accessibility_permission: if accessibility_granted {
+                "granted"
+            } else {
+                "required"
+            }
+            .to_string(),
+            screen_recording_permission: if screen_recording_granted {
+                "granted"
+            } else {
+                "required"
+            }
+            .to_string(),
         };
     }
 
     #[cfg(target_os = "windows")]
     {
-        return DesktopCapabilityStatus {
+        DesktopCapabilityStatus {
             platform: "windows".to_string(),
             shell_available: true,
             app_discovery_available: true,
@@ -208,7 +219,7 @@ fn get_desktop_capability_status() -> DesktopCapabilityStatus {
             input_available: true,
             accessibility_permission: "not_required".to_string(),
             screen_recording_permission: "not_required".to_string(),
-        };
+        }
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -431,7 +442,10 @@ fn detect_gpu_usage() -> Option<f32> {
     {
         use std::os::windows::process::CommandExt;
         let output = std::process::Command::new("nvidia-smi")
-            .args(["--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"])
+            .args([
+                "--query-gpu=utilization.gpu",
+                "--format=csv,noheader,nounits",
+            ])
             .creation_flags(0x08000000u32)
             .output();
         if let Ok(out) = output {
@@ -675,7 +689,7 @@ fn delete_item(target: String) -> CommandResult {
             &target,
         ]);
         cmd.creation_flags(0x08000000u32);
-        return match cmd.output() {
+        match cmd.output() {
             Ok(out) if out.status.success() => CommandResult {
                 success: true,
                 output: format!("Moved to Recycle Bin: {}", target),
@@ -688,7 +702,7 @@ fn delete_item(target: String) -> CommandResult {
                 success: false,
                 output: e.to_string(),
             },
-        };
+        }
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -736,7 +750,7 @@ fn decode_command_bytes(bytes: &[u8]) -> String {
     #[cfg(target_os = "windows")]
     {
         let (decoded, _, _) = encoding_rs::GBK.decode(bytes);
-        return decoded.into_owned();
+        decoded.into_owned()
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -751,7 +765,10 @@ fn terminate_command_tree(child: &mut Child) {
         let mut taskkill = Command::new("taskkill");
         taskkill.args(["/PID", &pid, "/T", "/F"]);
         taskkill.creation_flags(0x08000000u32);
-        let _ = taskkill.stdout(Stdio::null()).stderr(Stdio::null()).status();
+        let _ = taskkill
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
     }
     let _ = child.kill();
     let _ = child.wait();
@@ -795,18 +812,27 @@ fn run_command(
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let output_base = std::env::temp_dir().join(format!("lumi-command-{}-{}", std::process::id(), unique));
+    let output_base =
+        std::env::temp_dir().join(format!("lumi-command-{}-{}", std::process::id(), unique));
     let stdout_path = output_base.with_extension("stdout");
     let stderr_path = output_base.with_extension("stderr");
     let stdout_file = match std::fs::File::create(&stdout_path) {
         Ok(file) => file,
-        Err(error) => return CommandResult { success: false, output: error.to_string() },
+        Err(error) => {
+            return CommandResult {
+                success: false,
+                output: error.to_string(),
+            }
+        }
     };
     let stderr_file = match std::fs::File::create(&stderr_path) {
         Ok(file) => file,
         Err(error) => {
             let _ = std::fs::remove_file(&stdout_path);
-            return CommandResult { success: false, output: error.to_string() };
+            return CommandResult {
+                success: false,
+                output: error.to_string(),
+            };
         }
     };
 
@@ -843,12 +869,19 @@ fn run_command(
             let status = loop {
                 match child.try_wait() {
                     Ok(Some(status)) => break Ok(status),
-                    Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+                    Ok(None) if Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(50))
+                    }
                     Ok(None) => {
                         timed_out = true;
                         terminate_command_tree(&mut child);
                         break child.try_wait().and_then(|status| {
-                            status.ok_or_else(|| std::io::Error::new(std::io::ErrorKind::TimedOut, "command timed out"))
+                            status.ok_or_else(|| {
+                                std::io::Error::new(
+                                    std::io::ErrorKind::TimedOut,
+                                    "command timed out",
+                                )
+                            })
                         });
                     }
                     Err(error) => break Err(error),
@@ -867,7 +900,10 @@ fn run_command(
                 combined.push_str("\n[Output truncated at 1 MiB per stream]");
             }
             if timed_out {
-                combined.push_str(&format!("\n[Command timed out after {} ms and was terminated]", timeout.as_millis()));
+                combined.push_str(&format!(
+                    "\n[Command timed out after {} ms and was terminated]",
+                    timeout.as_millis()
+                ));
             }
             status.map(|status| (status.success() && !timed_out, combined))
         }
@@ -920,7 +956,10 @@ fn resolve_resource_dir(resource_dir: &Path, name: &str) -> PathBuf {
     }
 
     // NSIS bundles resources inside a _up_ subdirectory (update-ready layout)
-    let nsis = resource_dir.join("_up_").join("desktop-resources").join(name);
+    let nsis = resource_dir
+        .join("_up_")
+        .join("desktop-resources")
+        .join(name);
     if nsis.exists() {
         return nsis;
     }
@@ -974,14 +1013,20 @@ fn cancel_command(
         .lock()
         .ok()
         .and_then(|mut active| active.pids.remove(command_id.trim()));
-    let Some(pid) = pid else { return false; };
+    let Some(pid) = pid else {
+        return false;
+    };
 
     #[cfg(target_os = "windows")]
     {
         let mut taskkill = Command::new("taskkill");
         taskkill.args(["/PID", &pid.to_string(), "/T", "/F"]);
         taskkill.creation_flags(0x08000000u32);
-        return taskkill.stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok();
+        taskkill
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok()
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -1033,7 +1078,12 @@ fn windows_app_definitions() -> Vec<WindowsAppDefinition> {
                 "\u{5fae}\u{4fe1}\u{5ba2}\u{6237}\u{7aef}",
                 "\u{5fae}\u{4fe1}\u{591a}\u{5f00}",
             ],
-            executable_names: vec!["Weixin.exe", "WeChat.exe", "\u{5fae}\u{4fe1}\u{591a}\u{5f00}.bat", "\u{5fae}\u{4fe1}.lnk"],
+            executable_names: vec![
+                "Weixin.exe",
+                "WeChat.exe",
+                "\u{5fae}\u{4fe1}\u{591a}\u{5f00}.bat",
+                "\u{5fae}\u{4fe1}.lnk",
+            ],
             fixed_paths: vec![
                 r"D:\Weixin\Weixin.exe",
                 r"%ProgramFiles%\Tencent\Weixin\Weixin.exe",
@@ -1058,7 +1108,11 @@ fn windows_app_definitions() -> Vec<WindowsAppDefinition> {
                 "\u{4f01}\u{4e1a}\u{5fae}\u{4fe1}",
                 "\u{4f01}\u{5fae}",
             ],
-            executable_names: vec!["WXWork.exe", "WeCom.exe", "\u{4f01}\u{4e1a}\u{5fae}\u{4fe1}.lnk"],
+            executable_names: vec![
+                "WXWork.exe",
+                "WeCom.exe",
+                "\u{4f01}\u{4e1a}\u{5fae}\u{4fe1}.lnk",
+            ],
             fixed_paths: vec![
                 r"%ProgramFiles%\Tencent\WXWork\WXWork.exe",
                 r"%ProgramFiles(x86)%\Tencent\WXWork\WXWork.exe",
@@ -1081,7 +1135,13 @@ fn windows_app_definitions() -> Vec<WindowsAppDefinition> {
                 "excel",
                 "ppt",
             ],
-            executable_names: vec!["wps.exe", "et.exe", "wpp.exe", "ksolaunch.exe", "WPS Office.lnk"],
+            executable_names: vec![
+                "wps.exe",
+                "et.exe",
+                "wpp.exe",
+                "ksolaunch.exe",
+                "WPS Office.lnk",
+            ],
             fixed_paths: vec![
                 r"%LOCALAPPDATA%\Kingsoft\WPS Office\ksolaunch.exe",
                 r"%ProgramFiles%\Kingsoft\WPS Office\ksolaunch.exe",
@@ -1100,7 +1160,12 @@ fn windows_app_definitions() -> Vec<WindowsAppDefinition> {
                 "chrome",
                 "\u{8c37}\u{6b4c}\u{6d4f}\u{89c8}\u{5668}",
             ],
-            executable_names: vec!["msedge.exe", "chrome.exe", "Microsoft Edge.lnk", "Google Chrome.lnk"],
+            executable_names: vec![
+                "msedge.exe",
+                "chrome.exe",
+                "Microsoft Edge.lnk",
+                "Google Chrome.lnk",
+            ],
             fixed_paths: vec![
                 r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
                 r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe",
@@ -1199,8 +1264,18 @@ fn windows_app_definitions() -> Vec<WindowsAppDefinition> {
         WindowsAppDefinition {
             app_id: "jianying",
             label: "Jianying",
-            aliases: vec!["jianying", "capcut", "\u{526a}\u{6620}", "\u{526a}\u{6620}\u{4e13}\u{4e1a}\u{7248}"],
-            executable_names: vec!["JianyingPro.exe", "CapCut.exe", "\u{526a}\u{6620}\u{4e13}\u{4e1a}\u{7248}.lnk", "\u{526a}\u{6620}.lnk"],
+            aliases: vec![
+                "jianying",
+                "capcut",
+                "\u{526a}\u{6620}",
+                "\u{526a}\u{6620}\u{4e13}\u{4e1a}\u{7248}",
+            ],
+            executable_names: vec![
+                "JianyingPro.exe",
+                "CapCut.exe",
+                "\u{526a}\u{6620}\u{4e13}\u{4e1a}\u{7248}.lnk",
+                "\u{526a}\u{6620}.lnk",
+            ],
             fixed_paths: vec![
                 r"%LOCALAPPDATA%\JianyingPro\Apps\JianyingPro.exe",
                 r"%ProgramFiles%\JianyingPro\JianyingPro.exe",
@@ -1211,7 +1286,13 @@ fn windows_app_definitions() -> Vec<WindowsAppDefinition> {
         WindowsAppDefinition {
             app_id: "autocad",
             label: "AutoCAD",
-            aliases: vec!["autocad", "cad", "\u{5929}\u{6b63}", "\u{4e2d}\u{671b}cad", "\u{6d69}\u{8fb0}cad"],
+            aliases: vec![
+                "autocad",
+                "cad",
+                "\u{5929}\u{6b63}",
+                "\u{4e2d}\u{671b}cad",
+                "\u{6d69}\u{8fb0}cad",
+            ],
             executable_names: vec!["acad.exe", "AutoCAD.exe", "ZWCAD.exe", "GstarCAD.exe"],
             fixed_paths: vec![],
         },
@@ -1266,7 +1347,12 @@ fn windows_app_definitions() -> Vec<WindowsAppDefinition> {
         WindowsAppDefinition {
             app_id: "powershell",
             label: "PowerShell",
-            aliases: vec!["powershell", "pwsh", "\u{7ec8}\u{7aef}", "\u{547d}\u{4ee4}\u{884c}"],
+            aliases: vec![
+                "powershell",
+                "pwsh",
+                "\u{7ec8}\u{7aef}",
+                "\u{547d}\u{4ee4}\u{884c}",
+            ],
             executable_names: vec!["powershell.exe", "pwsh.exe", "Windows Terminal.lnk"],
             fixed_paths: vec![
                 r"%WINDIR%\System32\WindowsPowerShell\v1.0\powershell.exe",
@@ -1403,31 +1489,42 @@ fn resolve_desktop_item_fuzzy(target: &str) -> Option<PathBuf> {
             break;
         }
     }
-    if query.is_empty() { return None; }
+    if query.is_empty() {
+        return None;
+    }
 
     let mut ranked: Vec<(usize, PathBuf)> = Vec::new();
     for root in desktop_item_roots() {
-        let Ok(entries) = std::fs::read_dir(root) else { continue; };
+        let Ok(entries) = std::fs::read_dir(root) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
-            let label = path.file_stem()
+            let label = path
+                .file_stem()
                 .or_else(|| path.file_name())
                 .map(|name| name.to_string_lossy().to_string())
                 .unwrap_or_default();
             let candidate = compact_app_text(&label);
-            if candidate.is_empty() { continue; }
+            if candidate.is_empty() {
+                continue;
+            }
             let distance = if candidate.contains(&query) || query.contains(&candidate) {
                 0
             } else {
                 unicode_edit_distance(&query, &candidate)
             };
             let threshold = std::cmp::max(1, query.chars().count() / 3);
-            if distance <= threshold { ranked.push((distance, path)); }
+            if distance <= threshold {
+                ranked.push((distance, path));
+            }
         }
     }
     ranked.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
     let best = ranked.first()?;
-    if ranked.get(1).map(|next| next.0 == best.0).unwrap_or(false) { return None; }
+    if ranked.get(1).map(|next| next.0 == best.0).unwrap_or(false) {
+        return None;
+    }
     Some(best.1.clone())
 }
 
@@ -1447,7 +1544,11 @@ mod app_query_tests {
 fn macos_app_roots() -> Vec<(PathBuf, &'static str, i32)> {
     let mut roots = vec![
         (PathBuf::from("/Applications"), "applications", 120),
-        (PathBuf::from("/System/Applications"), "system_applications", 90),
+        (
+            PathBuf::from("/System/Applications"),
+            "system_applications",
+            90,
+        ),
     ];
     if let Some(home) = dirs_next::home_dir() {
         roots.push((home.join("Applications"), "user_applications", 140));
@@ -1459,16 +1560,31 @@ fn macos_app_roots() -> Vec<(PathBuf, &'static str, i32)> {
 fn macos_app_aliases(label: &str) -> Vec<String> {
     let normalized = compact_app_text(label);
     let mut aliases = Vec::new();
-    if ["safari", "googlechrome", "chrome", "firefox", "microsoftedge", "bravebrowser"]
-        .iter()
-        .any(|name| normalized.contains(name))
+    if [
+        "safari",
+        "googlechrome",
+        "chrome",
+        "firefox",
+        "microsoftedge",
+        "bravebrowser",
+    ]
+    .iter()
+    .any(|name| normalized.contains(name))
     {
         aliases.extend(["browser".to_string(), "浏览器".to_string()]);
     }
-    if normalized.contains("wechat") || normalized.contains("weixin") || normalized.contains("微信") {
-        aliases.extend(["wechat".to_string(), "weixin".to_string(), "微信".to_string()]);
+    if normalized.contains("wechat") || normalized.contains("weixin") || normalized.contains("微信")
+    {
+        aliases.extend([
+            "wechat".to_string(),
+            "weixin".to_string(),
+            "微信".to_string(),
+        ]);
     }
-    if normalized.contains("autocad") || normalized.contains("zwcad") || normalized.contains("gstarcad") {
+    if normalized.contains("autocad")
+        || normalized.contains("zwcad")
+        || normalized.contains("gstarcad")
+    {
         aliases.extend(["cad".to_string(), "CAD".to_string()]);
     }
     if normalized.contains("microsoftword") || normalized.contains("wpsoffice") {
@@ -1526,7 +1642,11 @@ fn list_macos_native_apps(query: Option<&str>, limit: usize) -> Vec<NativeAppEnt
                         });
                     if matches_query {
                         apps.push(NativeAppEntry {
-                            app_id: if label_key.is_empty() { label.to_lowercase() } else { label_key },
+                            app_id: if label_key.is_empty() {
+                                label.to_lowercase()
+                            } else {
+                                label_key
+                            },
                             label,
                             path: path_text,
                             source: source.to_string(),
@@ -1544,7 +1664,10 @@ fn list_macos_native_apps(query: Option<&str>, limit: usize) -> Vec<NativeAppEnt
     }
 
     apps.sort_by(|left, right| {
-        right.score.cmp(&left.score).then_with(|| left.label.to_lowercase().cmp(&right.label.to_lowercase()))
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.label.to_lowercase().cmp(&right.label.to_lowercase()))
     });
     apps.truncate(limit.clamp(1, 200));
     apps
@@ -1600,7 +1723,12 @@ fn looks_like_url(target: &str) -> bool {
 fn launchable_extension(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
-        .map(|ext| matches!(ext.to_lowercase().as_str(), "exe" | "bat" | "cmd" | "lnk" | "url"))
+        .map(|ext| {
+            matches!(
+                ext.to_lowercase().as_str(),
+                "exe" | "bat" | "cmd" | "lnk" | "url"
+            )
+        })
         .unwrap_or(false)
 }
 
@@ -1616,12 +1744,19 @@ fn should_try_windows_app_index(target: &str) -> bool {
         return launchable_extension(target_path);
     }
 
-    if trimmed.contains('\\') || trimmed.contains('/') || trimmed.contains(':') || trimmed.starts_with('.') {
+    if trimmed.contains('\\')
+        || trimmed.contains('/')
+        || trimmed.contains(':')
+        || trimmed.starts_with('.')
+    {
         return false;
     }
 
     match target_path.extension().and_then(|ext| ext.to_str()) {
-        Some(ext) => matches!(ext.to_lowercase().as_str(), "exe" | "bat" | "cmd" | "lnk" | "url"),
+        Some(ext) => matches!(
+            ext.to_lowercase().as_str(),
+            "exe" | "bat" | "cmd" | "lnk" | "url"
+        ),
         None => true,
     }
 }
@@ -1653,7 +1788,11 @@ fn windows_app_search_roots() -> Vec<(PathBuf, &'static str, i32)> {
         roots.push((PathBuf::from(user_profile).join("Desktop"), "desktop", 130));
     }
     if let Ok(public_dir) = std::env::var("PUBLIC") {
-        roots.push((PathBuf::from(public_dir).join("Desktop"), "public_desktop", 110));
+        roots.push((
+            PathBuf::from(public_dir).join("Desktop"),
+            "public_desktop",
+            110,
+        ));
     }
     if let Ok(appdata) = std::env::var("APPDATA") {
         roots.push((
@@ -1752,7 +1891,11 @@ fn app_launch_history_path() -> Option<PathBuf> {
     let base = std::env::var("APPDATA")
         .or_else(|_| std::env::var("LOCALAPPDATA"))
         .ok()?;
-    Some(PathBuf::from(base).join("LumiOS").join("app-launch-history.json"))
+    Some(
+        PathBuf::from(base)
+            .join("LumiOS")
+            .join("app-launch-history.json"),
+    )
 }
 
 #[cfg(target_os = "windows")]
@@ -1872,7 +2015,9 @@ fn shortcut_candidates_for_definition(def: &WindowsAppDefinition) -> Vec<Windows
 }
 
 #[cfg(target_os = "windows")]
-fn shortcut_candidates_for_definitions(defs: &[WindowsAppDefinition]) -> Vec<WindowsLaunchCandidate> {
+fn shortcut_candidates_for_definitions(
+    defs: &[WindowsAppDefinition],
+) -> Vec<WindowsLaunchCandidate> {
     let mut candidates = Vec::new();
     for (root, source, score) in windows_app_search_roots() {
         if !root.exists() {
@@ -1900,7 +2045,10 @@ fn shortcut_candidates_for_definitions(defs: &[WindowsAppDefinition]) -> Vec<Win
                 let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
                     continue;
                 };
-                if let Some(def) = defs.iter().find(|def| filename_matches_app_definition(file_name, def)) {
+                if let Some(def) = defs
+                    .iter()
+                    .find(|def| filename_matches_app_definition(file_name, def))
+                {
                     candidates.push(candidate_from_path(def, path, source, score));
                 }
             }
@@ -1960,7 +2108,14 @@ fn generic_windows_launch_candidates(query: Option<&str>) -> Vec<WindowsLaunchCa
                     args: Vec::new(),
                     source: source.to_string(),
                     aliases: vec![label],
-                    score: base_score + if exact_match { 45 } else if partial_match { 15 } else { 0 },
+                    score: base_score
+                        + if exact_match {
+                            45
+                        } else if partial_match {
+                            15
+                        } else {
+                            0
+                        },
                 });
             }
         }
@@ -1979,7 +2134,9 @@ fn fixed_candidates_for_definition(def: &WindowsAppDefinition) -> Vec<WindowsLau
 }
 
 #[cfg(target_os = "windows")]
-fn dedupe_windows_candidates(mut candidates: Vec<WindowsLaunchCandidate>) -> Vec<WindowsLaunchCandidate> {
+fn dedupe_windows_candidates(
+    mut candidates: Vec<WindowsLaunchCandidate>,
+) -> Vec<WindowsLaunchCandidate> {
     candidates.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
     let mut seen = HashSet::new();
     candidates
@@ -2029,7 +2186,10 @@ fn list_windows_native_apps(query: Option<&str>, limit: usize) -> Vec<NativeAppE
     let definitions = windows_app_definitions();
     let mut candidates = Vec::new();
     if let Some(q) = query.map(str::trim).filter(|q| !q.is_empty()) {
-        for def in definitions.iter().filter(|def| app_query_matches_definition(q, def)) {
+        for def in definitions
+            .iter()
+            .filter(|def| app_query_matches_definition(q, def))
+        {
             candidates.extend(candidates_for_definition(def));
         }
         candidates.extend(generic_windows_launch_candidates(Some(q)));
@@ -2043,7 +2203,7 @@ fn list_windows_native_apps(query: Option<&str>, limit: usize) -> Vec<NativeAppE
     }
     dedupe_windows_candidates(candidates)
         .into_iter()
-        .take(limit.max(1).min(200))
+        .take(limit.clamp(1, 200))
         .map(native_app_entry_from_candidate)
         .collect()
 }
@@ -2220,13 +2380,16 @@ fn open_target_in_windows_application(application: &str, target: &str) -> Option
     }
     Some(CommandResult {
         success: false,
-        output: last_error.unwrap_or_else(|| format!("Failed to open {} in {}", target, application)),
+        output: last_error
+            .unwrap_or_else(|| format!("Failed to open {} in {}", target, application)),
     })
 }
 
 #[cfg(target_os = "macos")]
 fn open_target_in_macos_application(application: &str, target: &str) -> Option<CommandResult> {
-    let app = list_macos_native_apps(Some(application), 1).into_iter().next();
+    let app = list_macos_native_apps(Some(application), 1)
+        .into_iter()
+        .next();
     let mut command = Command::new("open");
     if let Some(ref matched) = app {
         command.arg("-a").arg(&matched.path).arg(target);
@@ -2239,7 +2402,8 @@ fn open_target_in_macos_application(application: &str, target: &str) -> Option<C
             output: format!(
                 "Opened {} in {}",
                 target,
-                app.map(|matched| matched.label).unwrap_or_else(|| application.to_string())
+                app.map(|matched| matched.label)
+                    .unwrap_or_else(|| application.to_string())
             ),
         },
         Ok(result) => CommandResult {
@@ -2330,11 +2494,11 @@ fn try_launch_generic_windows_app(target: &str) -> Option<CommandResult> {
 async fn list_native_apps(query: Option<String>, limit: Option<usize>) -> Vec<NativeAppEntry> {
     #[cfg(target_os = "windows")]
     {
-        return tauri::async_runtime::spawn_blocking(move || {
+        tauri::async_runtime::spawn_blocking(move || {
             list_windows_native_apps(query.as_deref(), limit.unwrap_or(80))
         })
         .await
-        .unwrap_or_default();
+        .unwrap_or_default()
     }
 
     #[cfg(target_os = "macos")]
@@ -2355,11 +2519,18 @@ async fn list_native_apps(query: Option<String>, limit: Option<usize>) -> Vec<Na
 }
 
 #[tauri::command]
-fn open_item(mut target: String, application: Option<String>, window: tauri::WebviewWindow) -> CommandResult {
+fn open_item(
+    mut target: String,
+    application: Option<String>,
+    window: tauri::WebviewWindow,
+) -> CommandResult {
     // Open file, folder, app, or URL with the OS default handler
     let _ = window.set_always_on_top(false);
 
-    if let Some(application) = application.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()) {
+    if let Some(application) = application
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
         #[cfg(target_os = "windows")]
         if let Some(result) = open_target_in_windows_application(&application, &target) {
             return result;
@@ -2386,7 +2557,10 @@ fn open_item(mut target: String, application: Option<String>, window: tauri::Web
         if result.success {
             return result;
         }
-        eprintln!("[LumiOS] indexed macOS app launch failed, keeping LaunchServices fallbacks: {}", result.output);
+        eprintln!(
+            "[LumiOS] indexed macOS app launch failed, keeping LaunchServices fallbacks: {}",
+            result.output
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -2462,7 +2636,7 @@ fn open_item(mut target: String, application: Option<String>, window: tauri::Web
                 success: false,
                 output: detail,
             }
-        },
+        }
         Err(e) => CommandResult {
             success: false,
             output: e.to_string(),
@@ -2471,6 +2645,7 @@ fn open_item(mut target: String, application: Option<String>, window: tauri::Web
 }
 
 #[tauri::command]
+#[cfg(not(test))]
 fn pick_directory(window: tauri::WebviewWindow) -> Result<Option<String>, String> {
     let _ = window.set_always_on_top(false);
     let picked = window
@@ -2484,6 +2659,12 @@ fn pick_directory(window: tauri::WebviewWindow) -> Result<Option<String>, String
         })
         .transpose()?;
     Ok(picked)
+}
+
+#[tauri::command]
+#[cfg(test)]
+fn pick_directory(_window: tauri::WebviewWindow) -> Result<Option<String>, String> {
+    Ok(None)
 }
 
 #[tauri::command]
@@ -2583,7 +2764,11 @@ fn set_wallpaper_mode(
 
     println!(
         "[LumiOS] Wallpaper mode: {}",
-        if enabled { "ON (click-through fullscreen)" } else { "OFF" }
+        if enabled {
+            "ON (click-through fullscreen)"
+        } else {
+            "OFF"
+        }
     );
     Ok(())
 }
@@ -2606,8 +2791,12 @@ fn place_window_in_desktop_corner(window: &tauri::WebviewWindow) -> Result<(), S
     if let Some(monitor) = maybe_monitor {
         let monitor_pos = monitor.position();
         let monitor_size = monitor.size();
-        let max_x = monitor_pos.x + monitor_size.width as i32 - DESKTOP_WIDGET_WIDTH as i32 - DESKTOP_WIDGET_MARGIN;
-        let max_y = monitor_pos.y + monitor_size.height as i32 - DESKTOP_WIDGET_HEIGHT as i32 - DESKTOP_WIDGET_MARGIN;
+        let max_x = monitor_pos.x + monitor_size.width as i32
+            - DESKTOP_WIDGET_WIDTH as i32
+            - DESKTOP_WIDGET_MARGIN;
+        let max_y = monitor_pos.y + monitor_size.height as i32
+            - DESKTOP_WIDGET_HEIGHT as i32
+            - DESKTOP_WIDGET_MARGIN;
         let x = max_x.max(monitor_pos.x + DESKTOP_WIDGET_MARGIN);
         let y = max_y.max(monitor_pos.y + DESKTOP_WIDGET_MARGIN);
         window
@@ -2634,14 +2823,20 @@ fn apply_desktop_widget_window(window: &tauri::WebviewWindow) -> Result<(), Stri
         eprintln!("[LumiOS] desktop widget set_resizable(false) failed: {}", e);
     }
     if let Err(e) = window.set_decorations(false) {
-        eprintln!("[LumiOS] desktop widget set_decorations(false) failed: {}", e);
+        eprintln!(
+            "[LumiOS] desktop widget set_decorations(false) failed: {}",
+            e
+        );
     }
     if let Err(e) = window.set_shadow(false) {
         eprintln!("[LumiOS] desktop widget set_shadow(false) failed: {}", e);
     }
     let _ = window.set_skip_taskbar(true);
     if let Err(e) = window.set_always_on_top(true) {
-        eprintln!("[LumiOS] desktop widget set_always_on_top(true) failed: {}", e);
+        eprintln!(
+            "[LumiOS] desktop widget set_always_on_top(true) failed: {}",
+            e
+        );
     }
     window
         .set_size(tauri::PhysicalSize::new(
@@ -2815,7 +3010,10 @@ fn apply_compact_window(window: &tauri::WebviewWindow) -> Result<(), String> {
     let _ = window.set_skip_taskbar(false);
     window.set_resizable(true).map_err(|e| e.to_string())?;
     window
-        .set_min_size(Some(tauri::LogicalSize::new(min_width as f64, min_height as f64)))
+        .set_min_size(Some(tauri::LogicalSize::new(
+            min_width as f64,
+            min_height as f64,
+        )))
         .map_err(|e| e.to_string())?;
     window
         .set_size(tauri::LogicalSize::new(width as f64, height as f64))
@@ -2952,7 +3150,9 @@ fn toggle_maximize_window(window: tauri::WebviewWindow) -> Result<(), String> {
         // Detect fill state by comparing window size to monitor size.
         let is_filling = match window.primary_monitor() {
             Ok(Some(m)) => {
-                let ws = window.outer_size().unwrap_or(tauri::PhysicalSize::new(0, 0));
+                let ws = window
+                    .outer_size()
+                    .unwrap_or(tauri::PhysicalSize::new(0, 0));
                 ws.width >= m.size().width.saturating_sub(80)
                     && ws.height >= m.size().height.saturating_sub(80)
             }
@@ -2965,7 +3165,8 @@ fn toggle_maximize_window(window: tauri::WebviewWindow) -> Result<(), String> {
                 .map_err(|e| e.to_string());
         }
         if let Ok(Some(m)) = window.primary_monitor() {
-            let _ = window.set_position(tauri::PhysicalPosition::new(m.position().x, m.position().y));
+            let _ =
+                window.set_position(tauri::PhysicalPosition::new(m.position().x, m.position().y));
             return window
                 .set_size(tauri::PhysicalSize::new(m.size().width, m.size().height))
                 .map_err(|e| e.to_string());
@@ -2988,10 +3189,7 @@ fn close_window(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, Mutex<ResidentState>>,
 ) -> Result<(), String> {
-    let should_hide = state
-        .lock()
-        .map_err(|e| e.to_string())?
-        .close_to_background;
+    let should_hide = state.lock().map_err(|e| e.to_string())?.close_to_background;
     if should_hide {
         window.hide().map_err(|e| e.to_string())
     } else {
@@ -3061,7 +3259,10 @@ fn get_runtime_resilience_status(
         "Automatic work still depends on Lumi's safety gate, idle gate, and user-confirmed workflows.".to_string(),
     ];
     if !autostart.supported {
-        notes.push("Launch at login is currently implemented for Windows current-user installs.".to_string());
+        notes.push(
+            "Launch at login is currently implemented for Windows current-user installs."
+                .to_string(),
+        );
     }
     if cfg!(debug_assertions) {
         notes.push("Dev mode uses the development server; packaged release mode supervises the bundled backend process.".to_string());
@@ -3171,7 +3372,10 @@ fn set_autostart_entry(enabled: bool) -> Result<(), String> {
         cmd.args(["delete", WINDOWS_RUN_KEY, "/v", AUTOSTART_VALUE_NAME, "/f"]);
         let output = hidden_output(&mut cmd).map_err(|e| e.to_string())?;
         let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
-        if output.status.success() || stderr.contains("unable to find") || stderr.contains("not found") {
+        if output.status.success()
+            || stderr.contains("unable to find")
+            || stderr.contains("not found")
+        {
             Ok(())
         } else {
             Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
@@ -3301,7 +3505,13 @@ $publisher = if ($signature.SignerCertificate) {{ [string]$signature.SignerCerti
     );
     let mut command = Command::new("powershell");
     command
-        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", &script])
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &script,
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .creation_flags(0x08000000u32);
@@ -3389,7 +3599,7 @@ fn get_active_window_info() -> ActiveWindowInfo {
     #[cfg(target_os = "windows")]
     {
         #[repr(C)]
-        struct RECT {
+        struct Rect {
             left: i32,
             top: i32,
             right: i32,
@@ -3399,7 +3609,7 @@ fn get_active_window_info() -> ActiveWindowInfo {
             fn GetForegroundWindow() -> isize;
             fn GetWindowTextW(hwnd: isize, lpString: *mut u16, nMaxCount: i32) -> i32;
             fn GetWindowThreadProcessId(hwnd: isize, lpdwProcessId: *mut u32) -> u32;
-            fn GetWindowRect(hwnd: isize, lpRect: *mut RECT) -> i32;
+            fn GetWindowRect(hwnd: isize, lpRect: *mut Rect) -> i32;
             fn GetClassNameW(hwnd: isize, lpClassName: *mut u16, nMaxCount: i32) -> i32;
         }
         unsafe {
@@ -3415,7 +3625,12 @@ fn get_active_window_info() -> ActiveWindowInfo {
                     window_class = String::from_utf16_lossy(&class_buf[..class_len as usize]);
                 }
                 GetWindowThreadProcessId(hwnd, &mut pid);
-                let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+                let mut rect = Rect {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                };
                 if GetWindowRect(hwnd, &mut rect) != 0 {
                     x = rect.left;
                     y = rect.top;
@@ -3491,15 +3706,42 @@ end tell
         if let Ok(out) = output {
             let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
             let fields: Vec<&str> = text.split('\t').collect();
-            if let Some(name) = fields.first().map(|value| value.trim()).filter(|value| !value.is_empty()) {
+            if let Some(name) = fields
+                .first()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+            {
                 process_name = name.to_string();
-                title = fields.get(2).map(|value| value.trim().to_string()).filter(|value| !value.is_empty()).unwrap_or_else(|| name.to_string());
-                pid = fields.get(1).and_then(|value| value.trim().parse().ok()).unwrap_or(0);
-                window_id = if pid > 0 { pid.to_string() } else { String::new() };
-                x = fields.get(3).and_then(|value| value.trim().parse().ok()).unwrap_or(0);
-                y = fields.get(4).and_then(|value| value.trim().parse().ok()).unwrap_or(0);
-                width = fields.get(5).and_then(|value| value.trim().parse().ok()).unwrap_or(0);
-                height = fields.get(6).and_then(|value| value.trim().parse().ok()).unwrap_or(0);
+                title = fields
+                    .get(2)
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| name.to_string());
+                pid = fields
+                    .get(1)
+                    .and_then(|value| value.trim().parse().ok())
+                    .unwrap_or(0);
+                window_id = if pid > 0 {
+                    pid.to_string()
+                } else {
+                    String::new()
+                };
+                x = fields
+                    .get(3)
+                    .and_then(|value| value.trim().parse().ok())
+                    .unwrap_or(0);
+                y = fields
+                    .get(4)
+                    .and_then(|value| value.trim().parse().ok())
+                    .unwrap_or(0);
+                width = fields
+                    .get(5)
+                    .and_then(|value| value.trim().parse().ok())
+                    .unwrap_or(0);
+                height = fields
+                    .get(6)
+                    .and_then(|value| value.trim().parse().ok())
+                    .unwrap_or(0);
             }
         }
     }
@@ -3577,7 +3819,9 @@ fn control_active_window(action: String) -> WindowControlResult {
                 _ => SW_RESTORE,
             };
             ShowWindow(hwnd, mode);
-            if normalized != "minimize" { SetForegroundWindow(hwnd); }
+            if normalized != "minimize" {
+                SetForegroundWindow(hwnd);
+            }
             command_ok = true;
         } else {
             command_error = "The foreground window disappeared before control".to_string();
@@ -3587,12 +3831,15 @@ fn control_active_window(action: String) -> WindowControlResult {
     #[cfg(target_os = "macos")]
     {
         let script = match normalized.as_str() {
-            "minimize" => r#"tell application "System Events"
+            "minimize" => {
+                r#"tell application "System Events"
 set frontProcess to first application process whose frontmost is true
 if (count of windows of frontProcess) is 0 then error "No front window"
 set value of attribute "AXMinimized" of front window of frontProcess to true
-end tell"#,
-            "maximize" => r#"tell application "System Events"
+end tell"#
+            }
+            "maximize" => {
+                r#"tell application "System Events"
 set frontProcess to first application process whose frontmost is true
 if (count of windows of frontProcess) is 0 then error "No front window"
 set frontWindow to front window of frontProcess
@@ -3601,8 +3848,10 @@ perform action "AXZoomWindow" of frontWindow
 on error
 click button 2 of frontWindow
 end try
-end tell"#,
-            _ => r#"tell application "System Events"
+end tell"#
+            }
+            _ => {
+                r#"tell application "System Events"
 set frontProcess to first application process whose frontmost is true
 if (count of windows of frontProcess) is 0 then error "No front window"
 set frontWindow to front window of frontProcess
@@ -3612,11 +3861,14 @@ end try
 try
 perform action "AXZoomWindow" of frontWindow
 end try
-end tell"#,
+end tell"#
+            }
         };
         match Command::new("osascript").args(["-e", script]).output() {
             Ok(output) if output.status.success() => command_ok = true,
-            Ok(output) => command_error = String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            Ok(output) => {
+                command_error = String::from_utf8_lossy(&output.stderr).trim().to_string()
+            }
             Err(error) => command_error = error.to_string(),
         }
     }
@@ -3624,16 +3876,29 @@ end tell"#,
     #[cfg(target_os = "linux")]
     {
         let result = if normalized == "minimize" {
-            Command::new("sh").args(["-c", "xdotool getactivewindow windowminimize"]).output()
+            Command::new("sh")
+                .args(["-c", "xdotool getactivewindow windowminimize"])
+                .output()
         } else {
-            let mode = if normalized == "maximize" { "add" } else { "remove" };
+            let mode = if normalized == "maximize" {
+                "add"
+            } else {
+                "remove"
+            };
             Command::new("wmctrl")
-                .args(["-r", ":ACTIVE:", "-b", &format!("{},maximized_vert,maximized_horz", mode)])
+                .args([
+                    "-r",
+                    ":ACTIVE:",
+                    "-b",
+                    &format!("{},maximized_vert,maximized_horz", mode),
+                ])
                 .output()
         };
         match result {
             Ok(output) if output.status.success() => command_ok = true,
-            Ok(output) => command_error = String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            Ok(output) => {
+                command_error = String::from_utf8_lossy(&output.stderr).trim().to_string()
+            }
             Err(error) => command_error = error.to_string(),
         }
     }
@@ -3645,7 +3910,12 @@ end tell"#,
         || (before.pid != 0 && before.pid == after.pid);
     WindowControlResult {
         ok: command_ok && same_window,
-        status: if command_ok && same_window { "verified" } else { "failed" }.to_string(),
+        status: if command_ok && same_window {
+            "verified"
+        } else {
+            "failed"
+        }
+        .to_string(),
         action: normalized,
         before,
         after,
@@ -3680,7 +3950,11 @@ fn get_running_processes() -> Vec<ProcessInfo> {
             });
         }
     }
-    processes.sort_by(|a, b| b.cpu_percent.partial_cmp(&a.cpu_percent).unwrap_or(std::cmp::Ordering::Equal));
+    processes.sort_by(|a, b| {
+        b.cpu_percent
+            .partial_cmp(&a.cpu_percent)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     processes.truncate(50); // top 50
     processes
 }
@@ -3718,7 +3992,10 @@ fn set_clipboard_files(paths: Vec<String>) -> Result<bool, String> {
     }
     for file in &files {
         if !file.is_file() {
-            return Err(format!("Clipboard file does not exist or is not a file: {}", file.display()));
+            return Err(format!(
+                "Clipboard file does not exist or is not a file: {}",
+                file.display()
+            ));
         }
     }
     let mut clipboard = Clipboard::new().map_err(|error| error.to_string())?;
@@ -3751,7 +4028,10 @@ fn get_idle_time() -> IdleInfo {
             fn GetTickCount() -> u32;
         }
         unsafe {
-            let mut lii = LastInputInfo { cb_size: std::mem::size_of::<LastInputInfo>() as u32, tick_count: 0 };
+            let mut lii = LastInputInfo {
+                cb_size: std::mem::size_of::<LastInputInfo>() as u32,
+                tick_count: 0,
+            };
             if GetLastInputInfo(&mut lii) != 0 {
                 let tick = GetTickCount();
                 let idle_ms = (tick.wrapping_sub(lii.tick_count)) as u64;
@@ -3767,13 +4047,22 @@ fn get_idle_time() -> IdleInfo {
         // xprintidle returns idle time in ms
         if let Ok(out) = Command::new("xprintidle").output() {
             if let Ok(ms) = String::from_utf8_lossy(&out.stdout).trim().parse::<u64>() {
-                return IdleInfo { idle_ms: ms, idle_seconds: ms / 1000 };
+                return IdleInfo {
+                    idle_ms: ms,
+                    idle_seconds: ms / 1000,
+                };
             }
         }
     }
     #[cfg(not(any(target_os = "windows", target_os = "linux")))]
-    IdleInfo { idle_ms: 0, idle_seconds: 0 };
-    IdleInfo { idle_ms: 0, idle_seconds: 0 }
+    IdleInfo {
+        idle_ms: 0,
+        idle_seconds: 0,
+    };
+    IdleInfo {
+        idle_ms: 0,
+        idle_seconds: 0,
+    }
 }
 
 // ── System Audio Volume (winmm.dll) ──
@@ -3816,7 +4105,11 @@ fn get_system_volume() -> f32 {
 
 #[tauri::command]
 fn set_system_volume(level: f32) -> Result<f32, String> {
-    let clamped = level.max(0.0).min(100.0);
+    let clamped = if level.is_nan() {
+        0.0
+    } else {
+        level.clamp(0.0, 100.0)
+    };
     #[cfg(target_os = "windows")]
     {
         extern "system" {
@@ -3833,7 +4126,11 @@ fn set_system_volume(level: f32) -> Result<f32, String> {
     #[cfg(target_os = "linux")]
     {
         let _ = Command::new("pactl")
-            .args(["set-sink-volume", "@DEFAULT_SINK@", &format!("{}%", clamped as u32)])
+            .args([
+                "set-sink-volume",
+                "@DEFAULT_SINK@",
+                &format!("{}%", clamped as u32),
+            ])
             .output();
     }
     Ok(clamped) // web fallback: just report the value
@@ -3901,7 +4198,7 @@ fn get_screen_brightness() -> f32 {
             50.0
         };
         DestroyPhysicalMonitors(1, monitors.as_mut_ptr());
-        return result;
+        result
     }
     #[cfg(target_os = "linux")]
     {
@@ -3909,7 +4206,10 @@ fn get_screen_brightness() -> f32 {
         if let Ok(out) = Command::new("brightnessctl").arg("get").output() {
             if let Ok(cur) = String::from_utf8_lossy(&out.stdout).trim().parse::<f32>() {
                 if let Ok(max_out) = Command::new("brightnessctl").arg("max").output() {
-                    if let Ok(max) = String::from_utf8_lossy(&max_out.stdout).trim().parse::<f32>() {
+                    if let Ok(max) = String::from_utf8_lossy(&max_out.stdout)
+                        .trim()
+                        .parse::<f32>()
+                    {
                         if max > 0.0 {
                             return ((cur / max) * 100.0).round();
                         }
@@ -3925,7 +4225,9 @@ fn get_screen_brightness() -> f32 {
                     std::fs::read_to_string(base.join("max_brightness")),
                     std::fs::read_to_string(base.join("brightness")),
                 ) {
-                    if let (Ok(max), Ok(cur)) = (max_str.trim().parse::<f32>(), cur_str.trim().parse::<f32>()) {
+                    if let (Ok(max), Ok(cur)) =
+                        (max_str.trim().parse::<f32>(), cur_str.trim().parse::<f32>())
+                    {
                         if max > 0.0 {
                             return ((cur / max) * 100.0).round();
                         }
@@ -3941,7 +4243,11 @@ fn get_screen_brightness() -> f32 {
 
 #[tauri::command]
 fn set_screen_brightness(level: f32) -> Result<f32, String> {
-    let clamped = level.max(0.0).min(100.0);
+    let clamped = if level.is_nan() {
+        0.0
+    } else {
+        level.clamp(0.0, 100.0)
+    };
     #[cfg(target_os = "windows")]
     unsafe {
         use brightness_ffi::*;
@@ -3973,9 +4279,7 @@ fn set_screen_brightness(level: f32) -> Result<f32, String> {
     {
         // Try brightnessctl first, then sysfs
         let pct = format!("{}%", clamped as u32);
-        let bctl = Command::new("brightnessctl")
-            .args(["set", &pct])
-            .output();
+        let bctl = Command::new("brightnessctl").args(["set", &pct]).output();
         if bctl.is_ok() {
             return Ok(clamped);
         }
@@ -4080,7 +4384,8 @@ Write-Output "OK|$x|$y|$w|$h""#,
             .ok()
             .map(|duration| duration.as_millis())
             .unwrap_or(0);
-        let temp_path = std::env::temp_dir().join(format!("lumi_scr_{}_{}.png", std::process::id(), unique));
+        let temp_path =
+            std::env::temp_dir().join(format!("lumi_scr_{}_{}.png", std::process::id(), unique));
         let output = Command::new("/usr/sbin/screencapture")
             .args(["-x", "-m"])
             .arg(&temp_path)
@@ -4092,7 +4397,8 @@ Write-Output "OK|$x|$y|$w|$h""#,
                     if png.len() >= 24 && &png[0..8] == b"\x89PNG\r\n\x1a\n" {
                         let width = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
                         let height = u32::from_be_bytes([png[20], png[21], png[22], png[23]]);
-                        let (screen_x, screen_y, input_width, input_height) = mac_main_display_input_geometry();
+                        let (screen_x, screen_y, input_width, input_height) =
+                            mac_main_display_input_geometry();
                         return CaptureResult {
                             image_base64: base64_encode(&png),
                             screen_x,
@@ -4175,11 +4481,12 @@ Write-Output "OK|$x|$y|$w|$h""#,
 /// Simple base64 encoder — avoids pulling in a crate for one function.
 fn base64_encode(bytes: &[u8]) -> String {
     const CHARS: &[char] = &[
-        'A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z',
-        'a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z',
-        '0','1','2','3','4','5','6','7','8','9','+','/',
+        'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R',
+        'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j',
+        'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '0', '1',
+        '2', '3', '4', '5', '6', '7', '8', '9', '+', '/',
     ];
-    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
@@ -4187,40 +4494,57 @@ fn base64_encode(bytes: &[u8]) -> String {
         let n = (b0 << 16) | (b1 << 8) | b2;
         out.push(CHARS[((n >> 18) & 0x3F) as usize]);
         out.push(CHARS[((n >> 12) & 0x3F) as usize]);
-        out.push(if chunk.len() > 1 { CHARS[((n >> 6) & 0x3F) as usize] } else { '=' });
-        out.push(if chunk.len() > 2 { CHARS[(n & 0x3F) as usize] } else { '=' });
+        out.push(if chunk.len() > 1 {
+            CHARS[((n >> 6) & 0x3F) as usize]
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            CHARS[(n & 0x3F) as usize]
+        } else {
+            '='
+        });
     }
     out
 }
 
 // ── Mouse & Keyboard Input Commands (enigo crate) ──
 
-use enigo::{Enigo, Mouse, Settings, Coordinate, Direction, Button, Keyboard, Key};
+use enigo::{Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 
 // Windows cursor save/restore for independent (virtual) cursor clicks.
 // Saves real cursor pos, moves to target, clicks, restores — all within ~2 frames.
 #[cfg(target_os = "windows")]
 mod cursor_guard {
     #[repr(C)]
-    struct POINT { x: i32, y: i32 }
+    struct Point {
+        x: i32,
+        y: i32,
+    }
     extern "system" {
-        fn GetCursorPos(lpPoint: *mut POINT) -> i32;
+        fn GetCursorPos(lpPoint: *mut Point) -> i32;
         fn SetCursorPos(x: i32, y: i32) -> i32;
     }
     pub fn get_pos() -> (i32, i32) {
-        let mut pt = POINT { x: 0, y: 0 };
-        unsafe { GetCursorPos(&mut pt); }
+        let mut pt = Point { x: 0, y: 0 };
+        unsafe {
+            GetCursorPos(&mut pt);
+        }
         (pt.x, pt.y)
     }
     pub fn restore(x: i32, y: i32) {
-        unsafe { SetCursorPos(x, y); }
+        unsafe {
+            SetCursorPos(x, y);
+        }
     }
 }
 
 #[tauri::command]
 fn mouse_move(x: f64, y: f64) -> Result<String, String> {
     let mut enigo = Enigo::new(&Settings::default()).map_err(|e| format!("enigo init: {}", e))?;
-    enigo.move_mouse(x as i32, y as i32, Coordinate::Abs).map_err(|e| format!("mouse_move: {}", e))?;
+    enigo
+        .move_mouse(x as i32, y as i32, Coordinate::Abs)
+        .map_err(|e| format!("mouse_move: {}", e))?;
     Ok(format!("Mouse moved to ({}, {})", x as i32, y as i32))
 }
 
@@ -4233,12 +4557,20 @@ fn mouse_click(button: String) -> Result<String, String> {
         _ => return Err(format!("Unknown button: {}. Use left/right/middle", button)),
     };
     let mut enigo = Enigo::new(&Settings::default()).map_err(|e| format!("enigo init: {}", e))?;
-    enigo.button(btn, Direction::Click).map_err(|e| format!("mouse_click: {}", e))?;
+    enigo
+        .button(btn, Direction::Click)
+        .map_err(|e| format!("mouse_click: {}", e))?;
     Ok(format!("Mouse {} click", button))
 }
 
 #[tauri::command]
-fn mouse_drag(from_x: f64, from_y: f64, to_x: f64, to_y: f64, button: String) -> Result<String, String> {
+fn mouse_drag(
+    from_x: f64,
+    from_y: f64,
+    to_x: f64,
+    to_y: f64,
+    button: String,
+) -> Result<String, String> {
     let btn = match button.as_str() {
         "left" => Button::Left,
         "right" => Button::Right,
@@ -4246,17 +4578,30 @@ fn mouse_drag(from_x: f64, from_y: f64, to_x: f64, to_y: f64, button: String) ->
         _ => return Err(format!("Unknown button: {}. Use left/right/middle", button)),
     };
     let mut enigo = Enigo::new(&Settings::default()).map_err(|e| format!("enigo init: {}", e))?;
-    enigo.move_mouse(from_x as i32, from_y as i32, Coordinate::Abs).map_err(|e| format!("drag move to start: {}", e))?;
-    enigo.button(btn, Direction::Press).map_err(|e| format!("drag press: {}", e))?;
-    enigo.move_mouse(to_x as i32, to_y as i32, Coordinate::Abs).map_err(|e| format!("drag move to end: {}", e))?;
-    enigo.button(btn, Direction::Release).map_err(|e| format!("drag release: {}", e))?;
-    Ok(format!("Dragged from ({}, {}) to ({}, {})", from_x as i32, from_y as i32, to_x as i32, to_y as i32))
+    enigo
+        .move_mouse(from_x as i32, from_y as i32, Coordinate::Abs)
+        .map_err(|e| format!("drag move to start: {}", e))?;
+    enigo
+        .button(btn, Direction::Press)
+        .map_err(|e| format!("drag press: {}", e))?;
+    enigo
+        .move_mouse(to_x as i32, to_y as i32, Coordinate::Abs)
+        .map_err(|e| format!("drag move to end: {}", e))?;
+    enigo
+        .button(btn, Direction::Release)
+        .map_err(|e| format!("drag release: {}", e))?;
+    Ok(format!(
+        "Dragged from ({}, {}) to ({}, {})",
+        from_x as i32, from_y as i32, to_x as i32, to_y as i32
+    ))
 }
 
 #[tauri::command]
 fn keyboard_type(text: String) -> Result<String, String> {
     let mut enigo = Enigo::new(&Settings::default()).map_err(|e| format!("enigo init: {}", e))?;
-    enigo.text(&text).map_err(|e| format!("keyboard_type: {}", e))?;
+    enigo
+        .text(&text)
+        .map_err(|e| format!("keyboard_type: {}", e))?;
     Ok(format!("Typed {} characters", text.len()))
 }
 
@@ -4268,11 +4613,24 @@ fn keyboard_press(key: String) -> Result<String, String> {
     // Parse modifiers first, then the main key
     for &part in &parts[..parts.len().saturating_sub(1)] {
         match part {
-            "ctrl" | "control" => enigo.key(Key::Control, Direction::Press).map_err(|e| format!("ctrl press: {}", e))?,
-            "shift" => enigo.key(Key::Shift, Direction::Press).map_err(|e| format!("shift press: {}", e))?,
-            "alt" => enigo.key(Key::Alt, Direction::Press).map_err(|e| format!("alt press: {}", e))?,
-            "meta" | "win" | "cmd" | "super" => enigo.key(Key::Meta, Direction::Press).map_err(|e| format!("meta press: {}", e))?,
-            _ => return Err(format!("Unknown modifier: {}. Use ctrl/shift/alt/meta", part)),
+            "ctrl" | "control" => enigo
+                .key(Key::Control, Direction::Press)
+                .map_err(|e| format!("ctrl press: {}", e))?,
+            "shift" => enigo
+                .key(Key::Shift, Direction::Press)
+                .map_err(|e| format!("shift press: {}", e))?,
+            "alt" => enigo
+                .key(Key::Alt, Direction::Press)
+                .map_err(|e| format!("alt press: {}", e))?,
+            "meta" | "win" | "cmd" | "super" => enigo
+                .key(Key::Meta, Direction::Press)
+                .map_err(|e| format!("meta press: {}", e))?,
+            _ => {
+                return Err(format!(
+                    "Unknown modifier: {}. Use ctrl/shift/alt/meta",
+                    part
+                ))
+            }
         }
     }
 
@@ -4292,29 +4650,56 @@ fn keyboard_press(key: String) -> Result<String, String> {
         "down" => Key::DownArrow,
         "left" => Key::LeftArrow,
         "right" => Key::RightArrow,
-        "f1" => Key::F1, "f2" => Key::F2, "f3" => Key::F3, "f4" => Key::F4,
-        "f5" => Key::F5, "f6" => Key::F6, "f7" => Key::F7, "f8" => Key::F8,
-        "f9" => Key::F9, "f10" => Key::F10, "f11" => Key::F11, "f12" => Key::F12,
+        "f1" => Key::F1,
+        "f2" => Key::F2,
+        "f3" => Key::F3,
+        "f4" => Key::F4,
+        "f5" => Key::F5,
+        "f6" => Key::F6,
+        "f7" => Key::F7,
+        "f8" => Key::F8,
+        "f9" => Key::F9,
+        "f10" => Key::F10,
+        "f11" => Key::F11,
+        "f12" => Key::F12,
         _ if main_key.len() == 1 => {
             let ch = main_key.chars().next().unwrap();
             if ch.is_ascii_alphanumeric() || ",./;'[]\\-=".contains(ch) {
                 Key::Unicode(ch)
             } else {
-                return Err(format!("Unknown key: {}. Use a single character or named key like enter/escape/tab", main_key));
+                return Err(format!(
+                    "Unknown key: {}. Use a single character or named key like enter/escape/tab",
+                    main_key
+                ));
             }
         }
-        _ => return Err(format!("Unknown key: {}. Use names (enter/escape/tab/up/down/etc) or a single character", main_key)),
+        _ => {
+            return Err(format!(
+                "Unknown key: {}. Use names (enter/escape/tab/up/down/etc) or a single character",
+                main_key
+            ))
+        }
     };
 
-    enigo.key(key_enum, Direction::Click).map_err(|e| format!("key press '{}': {}", main_key, e))?;
+    enigo
+        .key(key_enum, Direction::Click)
+        .map_err(|e| format!("key press '{}': {}", main_key, e))?;
 
     // Release modifiers in reverse order
     for &part in parts.iter().rev().skip(1) {
         match part {
-            "ctrl" | "control" => { let _ = enigo.key(Key::Control, Direction::Release); }
-            "shift" => { let _ = enigo.key(Key::Shift, Direction::Release); }
-            "alt" => { let _ = enigo.key(Key::Alt, Direction::Release); }
-            "meta" | "win" | "cmd" | "super" => { let _ = enigo.key(Key::Meta, Direction::Release); }
+            "ctrl" | "control" => {
+                let _ = enigo.key(Key::Control, Direction::Release);
+            }
+            "shift" => {
+                let _ = enigo.key(Key::Shift, Direction::Release);
+            }
+            "alt" => {
+                let _ = enigo.key(Key::Alt, Direction::Release);
+            }
+            "meta" | "win" | "cmd" | "super" => {
+                let _ = enigo.key(Key::Meta, Direction::Release);
+            }
             _ => {}
         }
     }
@@ -4325,20 +4710,30 @@ fn keyboard_press(key: String) -> Result<String, String> {
 // ── Independent cursor: click at coordinates without stealing the user's mouse ──
 
 #[cfg(not(target_os = "windows"))]
-fn save_cursor() -> (i32, i32) { (0, 0) }
+fn save_cursor() -> (i32, i32) {
+    (0, 0)
+}
 #[cfg(not(target_os = "windows"))]
 fn restore_cursor(_x: i32, _y: i32) {}
 
 #[cfg(target_os = "windows")]
-fn save_cursor() -> (i32, i32) { cursor_guard::get_pos() }
+fn save_cursor() -> (i32, i32) {
+    cursor_guard::get_pos()
+}
 #[cfg(target_os = "windows")]
-fn restore_cursor(x: i32, y: i32) { cursor_guard::restore(x, y); }
+fn restore_cursor(x: i32, y: i32) {
+    cursor_guard::restore(x, y);
+}
 
 fn click_at_impl(x: f64, y: f64, button: Button) -> Result<(), String> {
     let saved = save_cursor();
     let mut enigo = Enigo::new(&Settings::default()).map_err(|e| format!("enigo init: {}", e))?;
-    enigo.move_mouse(x as i32, y as i32, Coordinate::Abs).map_err(|e| format!("move: {}", e))?;
-    enigo.button(button, Direction::Click).map_err(|e| format!("click: {}", e))?;
+    enigo
+        .move_mouse(x as i32, y as i32, Coordinate::Abs)
+        .map_err(|e| format!("move: {}", e))?;
+    enigo
+        .button(button, Direction::Click)
+        .map_err(|e| format!("click: {}", e))?;
     restore_cursor(saved.0, saved.1);
     Ok(())
 }
@@ -4353,25 +4748,40 @@ fn mouse_click_at(x: f64, y: f64, button: Option<String>) -> Result<String, Stri
         _ => return Err(format!("Unknown button: {}", b)),
     };
     click_at_impl(x, y, btn)?;
-    Ok(format!("Clicked {} at ({}, {}) [virtual cursor]", b, x as i32, y as i32))
+    Ok(format!(
+        "Clicked {} at ({}, {}) [virtual cursor]",
+        b, x as i32, y as i32
+    ))
 }
 
 #[tauri::command]
 fn mouse_double_click_at(x: f64, y: f64) -> Result<String, String> {
     let saved = save_cursor();
     let mut enigo = Enigo::new(&Settings::default()).map_err(|e| format!("enigo init: {}", e))?;
-    enigo.move_mouse(x as i32, y as i32, Coordinate::Abs).map_err(|e| format!("move: {}", e))?;
-    enigo.button(Button::Left, Direction::Click).map_err(|e| format!("click1: {}", e))?;
+    enigo
+        .move_mouse(x as i32, y as i32, Coordinate::Abs)
+        .map_err(|e| format!("move: {}", e))?;
+    enigo
+        .button(Button::Left, Direction::Click)
+        .map_err(|e| format!("click1: {}", e))?;
     std::thread::sleep(std::time::Duration::from_millis(60));
-    enigo.button(Button::Left, Direction::Click).map_err(|e| format!("click2: {}", e))?;
+    enigo
+        .button(Button::Left, Direction::Click)
+        .map_err(|e| format!("click2: {}", e))?;
     restore_cursor(saved.0, saved.1);
-    Ok(format!("Double-clicked at ({}, {}) [virtual cursor]", x as i32, y as i32))
+    Ok(format!(
+        "Double-clicked at ({}, {}) [virtual cursor]",
+        x as i32, y as i32
+    ))
 }
 
 #[tauri::command]
 fn mouse_right_click_at(x: f64, y: f64) -> Result<String, String> {
     click_at_impl(x, y, Button::Right)?;
-    Ok(format!("Right-clicked at ({}, {}) [virtual cursor]", x as i32, y as i32))
+    Ok(format!(
+        "Right-clicked at ({}, {}) [virtual cursor]",
+        x as i32, y as i32
+    ))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -4389,10 +4799,12 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_process::init());
+
+    #[cfg(not(test))]
+    let builder = builder.plugin(tauri_plugin_dialog::init());
 
     // Internal/unsigned builds must never contact the public update service.
     // The updater plugin is compiled into the command surface only for an
@@ -4404,10 +4816,20 @@ pub fn run() {
     };
 
     builder
-        .manage(Mutex::new(BackendProcesses { node: None, python: None, node_restarts: 0, python_restarts: 0, node_config: None }))
+        .manage(Mutex::new(BackendProcesses {
+            node: None,
+            python: None,
+            node_restarts: 0,
+            python_restarts: 0,
+            node_config: None,
+        }))
         .manage(Mutex::new(ActiveDesktopCommands::default()))
         .manage(Mutex::new(WallpaperState::default()))
-        .manage(Mutex::new(ResidentState { close_to_background: started_in_background, started_in_background, force_quit: false }))
+        .manage(Mutex::new(ResidentState {
+            close_to_background: started_in_background,
+            started_in_background,
+            force_quit: false,
+        }))
         .manage(Mutex::new(DesktopWidgetState::default()))
         .manage(Mutex::new(CompactWindowState::default()))
         .on_page_load(move |webview, payload| {
@@ -4473,10 +4895,7 @@ pub fn run() {
             mouse_right_click_at,
         ])
         .setup(move |app| {
-            let resource_dir = app
-                .path()
-                .resource_dir()
-                .unwrap_or_default();
+            let resource_dir = app.path().resource_dir().unwrap_or_default();
 
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.center();
@@ -4522,66 +4941,66 @@ pub fn run() {
             if cfg!(debug_assertions) {
                 println!("[LumiOS] Dev mode — skipping bundled backend spawn");
             } else {
-            // ... rest of spawn code unchanged
+                // ... rest of spawn code unchanged
 
-            // Spawn Node.js backend
-            let dist_server = resolve_resource_dir(&resource_dir, "dist-server");
-            #[cfg(target_os = "windows")]
-            let node_bin = dist_server.join("node.exe");
-            #[cfg(not(target_os = "windows"))]
-            let node_bin = dist_server.join("node");
-            let server_js = dist_server.join("entry.cjs");
-            let server_bundle = dist_server.join("server.mjs");
-
-            if node_bin.exists() && server_js.exists() && server_bundle.exists() {
-                let normalized_node = normalize_unc(&node_bin);
-                let normalized_entry = normalize_unc(&server_js);
-                let normalized_cwd = normalize_unc(&dist_server);
-                println!(
-                    "[LumiOS] Starting backend: {} {} (cwd: {})",
-                    normalized_node.display(),
-                    normalized_entry.display(),
-                    normalized_cwd.display(),
-                );
-                let mut node_cmd = Command::new(&normalized_node);
-                node_cmd.arg(&normalized_entry)
-                    .env("LUMI_DESKTOP", "1")
-                    .env("HOST", "127.0.0.1")
-                    .current_dir(&normalized_cwd);
-                // Only set NODE_OPTIONS if hide-console.cjs exists (Windows only)
+                // Spawn Node.js backend
+                let dist_server = resolve_resource_dir(&resource_dir, "dist-server");
                 #[cfg(target_os = "windows")]
-                if normalized_cwd.join("hide-console.cjs").exists() {
-                    node_cmd.env("NODE_OPTIONS", "--require ./hide-console.cjs");
-                }
-                match spawn_hidden(&mut node_cmd)
-                {
-                    Ok(child) => {
-                        println!("[LumiOS] Backend PID: {}", child.id());
-                        let app_state = app.state::<Mutex<BackendProcesses>>();
-                        let mut state = app_state.lock().unwrap();
-                        state.node_config = Some(SpawnConfig {
-                            exe: normalized_node.to_path_buf(),
-                            entry: normalized_entry.to_path_buf(),
-                            work_dir: normalized_cwd.to_path_buf(),
-                        });
-                        state.node = Some(child);
-                    }
-                    Err(e) => {
-                        eprintln!("[LumiOS] Failed to start backend: {}", e);
-                    }
-                }
-            } else {
-                eprintln!(
-                    "[LumiOS] Backend not found. node.exe: {}, entry.cjs: {}, server.mjs: {}",
-                    node_bin.exists(),
-                    server_js.exists(),
-                    server_bundle.exists()
-                );
-            }
+                let node_bin = dist_server.join("node.exe");
+                #[cfg(not(target_os = "windows"))]
+                let node_bin = dist_server.join("node");
+                let server_js = dist_server.join("entry.cjs");
+                let server_bundle = dist_server.join("server.mjs");
 
-            // GPT-SoVITS is owned by the Node backend's supervised, on-demand
-            // runtime. Starting it here would bypass its queue, memory budget,
-            // restart backoff, and idle reclamation policy.
+                if node_bin.exists() && server_js.exists() && server_bundle.exists() {
+                    let normalized_node = normalize_unc(&node_bin);
+                    let normalized_entry = normalize_unc(&server_js);
+                    let normalized_cwd = normalize_unc(&dist_server);
+                    println!(
+                        "[LumiOS] Starting backend: {} {} (cwd: {})",
+                        normalized_node.display(),
+                        normalized_entry.display(),
+                        normalized_cwd.display(),
+                    );
+                    let mut node_cmd = Command::new(normalized_node);
+                    node_cmd
+                        .arg(normalized_entry)
+                        .env("LUMI_DESKTOP", "1")
+                        .env("HOST", "127.0.0.1")
+                        .current_dir(normalized_cwd);
+                    // Only set NODE_OPTIONS if hide-console.cjs exists (Windows only)
+                    #[cfg(target_os = "windows")]
+                    if normalized_cwd.join("hide-console.cjs").exists() {
+                        node_cmd.env("NODE_OPTIONS", "--require ./hide-console.cjs");
+                    }
+                    match spawn_hidden(&mut node_cmd) {
+                        Ok(child) => {
+                            println!("[LumiOS] Backend PID: {}", child.id());
+                            let app_state = app.state::<Mutex<BackendProcesses>>();
+                            let mut state = app_state.lock().unwrap();
+                            state.node_config = Some(SpawnConfig {
+                                exe: normalized_node.to_path_buf(),
+                                entry: normalized_entry.to_path_buf(),
+                                work_dir: normalized_cwd.to_path_buf(),
+                            });
+                            state.node = Some(child);
+                        }
+                        Err(e) => {
+                            eprintln!("[LumiOS] Failed to start backend: {}", e);
+                        }
+                    }
+                } else {
+                    eprintln!(
+                        "[LumiOS] Backend not found. node.exe: {}, entry.cjs: {}, server.mjs: {}",
+                        node_bin.exists(),
+                        server_js.exists(),
+                        server_bundle.exists()
+                    );
+                }
+
+                // GPT-SoVITS is owned by the Node backend's supervised, on-demand
+                // runtime. Starting it here would bypass its queue, memory budget,
+                // restart backoff, and idle reclamation policy.
             } // end else (release mode spawns backend)
 
             // ── Child process health check (release mode, checks every 5s) ──
@@ -4599,7 +5018,10 @@ pub fn run() {
                         if let Some(ref mut child) = state.node {
                             match child.try_wait() {
                                 Ok(Some(status)) => {
-                                    eprintln!("[LumiOS] Node backend exited with status {:?}", status.code());
+                                    eprintln!(
+                                        "[LumiOS] Node backend exited with status {:?}",
+                                        status.code()
+                                    );
                                     restart_node = true;
                                 }
                                 Ok(None) => { /* still running */ }
@@ -4611,9 +5033,14 @@ pub fn run() {
                         }
                         if restart_node && state.node_restarts < max_restarts {
                             if let Some(ref cfg) = state.node_config {
-                                eprintln!("[LumiOS] Restarting Node backend (attempt {}/{})", state.node_restarts + 1, max_restarts);
+                                eprintln!(
+                                    "[LumiOS] Restarting Node backend (attempt {}/{})",
+                                    state.node_restarts + 1,
+                                    max_restarts
+                                );
                                 let mut restart_cmd = Command::new(&cfg.exe);
-                                restart_cmd.arg(&cfg.entry)
+                                restart_cmd
+                                    .arg(&cfg.entry)
                                     .env("LUMI_DESKTOP", "1")
                                     .env("HOST", "127.0.0.1")
                                     .current_dir(&cfg.work_dir);
@@ -4621,8 +5048,7 @@ pub fn run() {
                                 if cfg.work_dir.join("hide-console.cjs").exists() {
                                     restart_cmd.env("NODE_OPTIONS", "--require ./hide-console.cjs");
                                 }
-                                match spawn_hidden(&mut restart_cmd)
-                                {
+                                match spawn_hidden(&mut restart_cmd) {
                                     Ok(child) => {
                                         println!("[LumiOS] Backend restarted, PID: {}", child.id());
                                         state.node = Some(child);
@@ -4634,10 +5060,12 @@ pub fn run() {
                                 }
                             }
                         } else if restart_node {
-                            eprintln!("[LumiOS] Node backend max restarts ({}) reached, giving up", max_restarts);
+                            eprintln!(
+                                "[LumiOS] Node backend max restarts ({}) reached, giving up",
+                                max_restarts
+                            );
                             state.node = None;
                         }
-
                     }
                 });
             }
@@ -4658,38 +5086,36 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building Lumi OS")
-        .run(|app, event| {
-            match event {
-                tauri::RunEvent::WindowEvent {
-                    label,
-                    event: tauri::WindowEvent::CloseRequested { api, .. },
-                    ..
-                } => {
-                    let resident = app.state::<Mutex<ResidentState>>();
-                    let should_hide = resident
-                        .lock()
-                        .map(|state| state.close_to_background && !state.force_quit)
-                        .unwrap_or(false);
-                    if label == "main" && should_hide {
-                        api.prevent_close();
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.hide();
-                        }
+        .run(|app, event| match event {
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::CloseRequested { api, .. },
+                ..
+            } => {
+                let resident = app.state::<Mutex<ResidentState>>();
+                let should_hide = resident
+                    .lock()
+                    .map(|state| state.close_to_background && !state.force_quit)
+                    .unwrap_or(false);
+                if label == "main" && should_hide {
+                    api.prevent_close();
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.hide();
                     }
                 }
-                tauri::RunEvent::Exit => {
-                    let state = app.state::<Mutex<BackendProcesses>>();
-                    let mut procs = state.lock().unwrap();
-                    if let Some(child) = procs.node.as_mut() {
-                        println!("[LumiOS] Stopping Node backend...");
-                        let _ = child.kill();
-                    }
-                    if let Some(child) = procs.python.as_mut() {
-                        println!("[LumiOS] Stopping GPT-SoVITS API...");
-                        let _ = child.kill();
-                    }
-                }
-                _ => {}
             }
+            tauri::RunEvent::Exit => {
+                let state = app.state::<Mutex<BackendProcesses>>();
+                let mut procs = state.lock().unwrap();
+                if let Some(child) = procs.node.as_mut() {
+                    println!("[LumiOS] Stopping Node backend...");
+                    let _ = child.kill();
+                }
+                if let Some(child) = procs.python.as_mut() {
+                    println!("[LumiOS] Stopping GPT-SoVITS API...");
+                    let _ = child.kill();
+                }
+            }
+            _ => {}
         });
 }

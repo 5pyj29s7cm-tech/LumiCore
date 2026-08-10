@@ -1,6 +1,7 @@
 import { build } from 'esbuild';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { computeSourceIdentity } from './lib/source-identity.mjs';
 
 const packageMeta = JSON.parse(readFileSync('package.json', 'utf8'));
 function git(args, fallback = 'development') {
@@ -11,11 +12,14 @@ function git(args, fallback = 'development') {
   }
 }
 
+const sourceIdentity = computeSourceIdentity(process.cwd());
 const runtimeMeta = {
   schemaVersion: 1,
   name: packageMeta.name || 'lumi-os',
   version: packageMeta.version,
   buildId: process.env.LUMI_BUILD_ID || process.env.GIT_COMMIT || git(['rev-parse', 'HEAD']),
+  sourceFingerprint: sourceIdentity.fingerprint,
+  sourceDirty: sourceIdentity.dirty,
   builtAt: new Date().toISOString(),
   channel: process.env.LUMI_RELEASE_CHANNEL || 'internal',
 };
@@ -119,5 +123,5 @@ console.log('[build-server] Generated dist-server/hide-console.cjs');
 console.log('[build-server] Skipped hide-console.cjs (not Windows)');
 }
 
-console.log(`[build-server] Generated runtime metadata ${runtimeMeta.version} ${runtimeMeta.buildId.slice(0, 7)} (${runtimeMeta.channel})`);
+console.log(`[build-server] Generated runtime metadata ${runtimeMeta.version} ${runtimeMeta.buildId.slice(0, 7)} (${runtimeMeta.channel}, source ${runtimeMeta.sourceFingerprint.slice(0, 12)}${runtimeMeta.sourceDirty ? ', dirty' : ''})`);
 console.log('[build-server] Generated dist-server/server.mjs + dist-server/system-explorer-worker.mjs + dist-server/entry.cjs + dist-server/runtime-meta.json + dist-server/hide-console.cjs');

@@ -6,6 +6,8 @@ export interface RuntimeBuildMetadata {
   name: string;
   version: string;
   buildId: string;
+  sourceFingerprint?: string;
+  sourceDirty?: boolean;
   builtAt: string;
   channel: string;
 }
@@ -20,12 +22,24 @@ export function normalizeRuntimeBuildMetadata(value: unknown): RuntimeBuildMetad
   const name = compact(candidate.name);
   const version = compact(candidate.version);
   const buildId = compact(candidate.buildId);
+  const sourceFingerprint = compact(candidate.sourceFingerprint);
+  const sourceDirty = typeof candidate.sourceDirty === 'boolean' ? candidate.sourceDirty : undefined;
   const builtAt = compact(candidate.builtAt);
   const channel = compact(candidate.channel);
   if (candidate.schemaVersion !== 1 || !name || !version || !buildId || !builtAt || !channel) return null;
+  if ((sourceFingerprint && sourceDirty === undefined) || (!sourceFingerprint && sourceDirty !== undefined)) return null;
+  if (sourceFingerprint && !/^[a-f0-9]{64}$/i.test(sourceFingerprint)) return null;
   if (version === '0.0.0') return null;
   if (Number.isNaN(Date.parse(builtAt))) return null;
-  return { schemaVersion: 1, name, version, buildId, builtAt, channel };
+  return {
+    schemaVersion: 1,
+    name,
+    version,
+    buildId,
+    ...(sourceFingerprint ? { sourceFingerprint, sourceDirty } : {}),
+    builtAt,
+    channel,
+  };
 }
 
 function readJson(filePath: string): unknown {

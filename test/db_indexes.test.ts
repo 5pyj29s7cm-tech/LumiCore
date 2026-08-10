@@ -76,15 +76,37 @@ function readExternalCommitJournalColumns(): Promise<string[]> {
   });
 }
 
-function readActionLedgerRows(conversationId: string): Promise<{ taskCount: number; receiptCount: number }> {
+function readActionLedgerRows(conversationId: string): Promise<{
+  taskCount: number;
+  receiptCount: number;
+  taskId: string;
+  status: string;
+  context: string;
+  receiptOutcome: string;
+}> {
   return new Promise((resolve, reject) => {
     const database = new sqlite3.Database(getDataPath('lumi.db'));
     database.get(
       `SELECT
         (SELECT COUNT(*) FROM conversation_action_tasks WHERE conversationId = ?) AS taskCount,
-        (SELECT COUNT(*) FROM conversation_action_receipts WHERE conversationId = ?) AS receiptCount`,
-      [conversationId, conversationId],
-      (error, row: { taskCount: number; receiptCount: number }) => {
+        (SELECT COUNT(*) FROM conversation_action_receipts WHERE conversationId = ?) AS receiptCount,
+        t.id AS taskId,
+        t.status,
+        t.context,
+        (SELECT outcome FROM conversation_action_receipts WHERE taskId = t.id ORDER BY createdAt DESC LIMIT 1) AS receiptOutcome
+       FROM conversation_action_tasks t
+       WHERE t.conversationId = ?
+       ORDER BY t.updatedAt DESC
+       LIMIT 1`,
+      [conversationId, conversationId, conversationId],
+      (error, row: {
+        taskCount: number;
+        receiptCount: number;
+        taskId: string;
+        status: string;
+        context: string;
+        receiptOutcome: string;
+      }) => {
         database.close();
         if (error) reject(error);
         else resolve(row);
@@ -201,7 +223,7 @@ describe('SQLite persistence indexes', () => {
     expect(persisted.lastSummaryMessageCount).toBe(0);
   });
 
-  it('persists the durable task identity and terminal receipts across an atomic snapshot write', async () => {
+  it('persists task identity and receipts only in the durable ledger across an atomic snapshot write', async () => {
     expect(await readActionTaskColumns()).toEqual(expect.arrayContaining([
       'parentTaskId',
       'activeRequestId',
@@ -240,7 +262,16 @@ describe('SQLite persistence indexes', () => {
     await flushDB();
 
     const persisted = await readConversationSummaryState(conversation.id);
-    expect(JSON.parse(persisted.actionContinuationState)).toMatchObject({
+    expect(JSON.parse(persisted.actionContinuationState)).toEqual({});
+    const ledger = await readActionLedgerRows(conversation.id);
+    expect(ledger).toMatchObject({
+      taskCount: 1,
+      receiptCount: 1,
+      status: 'completed',
+      receiptOutcome: 'verified_success',
+    });
+    expect(ledger.taskId).toMatch(/^task_/);
+    expect(JSON.parse(ledger.context).actionState).toMatchObject({
       version: 2,
       goal: '打开 WPS。',
       appTarget: 'WPS',
@@ -248,11 +279,6 @@ describe('SQLite persistence indexes', () => {
       unfinished: false,
       evidenceTools: ['desktop_open'],
       receipts: [{ name: 'desktop_open', outcome: 'success' }],
-    });
-    expect(JSON.parse(persisted.actionContinuationState).taskId).toMatch(/^task_/);
-    expect(await readActionLedgerRows(conversation.id)).toMatchObject({
-      taskCount: 1,
-      receiptCount: 1,
     });
   });
 

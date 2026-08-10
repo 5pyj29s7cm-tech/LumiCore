@@ -229,6 +229,103 @@ describe('conversation action continuation state', () => {
       });
   });
 
+  it('recovers an older hidden execution lease without replacing the newer current task', () => {
+    const userId = `conversation-hidden-lease-${Date.now()}-${Math.random()}`;
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    const staleTaskId = `task-stale-${Date.now()}-${Math.random()}`;
+    const newerTaskId = `task-newer-${Date.now()}-${Math.random()}`;
+    const db = readDB();
+    db.conversationActionTasks.push({
+      id: staleTaskId,
+      conversationId: conversation.id,
+      userId,
+      domain: 'personal',
+      orgId: '',
+      parentTaskId: '',
+      rootUserMessageId: '',
+      intentKind: 'desktop_operation',
+      operation: 'mutate',
+      goal: 'Open the earlier document',
+      target: 'document',
+      status: 'executing',
+      blocker: '',
+      activeRequestId: 'request-stale',
+      completionSource: '',
+      context: JSON.stringify({
+        actionState: {
+          version: 2,
+          taskId: staleTaskId,
+          goal: 'Open the earlier document',
+          status: 'executing',
+          unfinished: true,
+          activeRequestId: 'request-stale',
+          revision: 1,
+          updatedAt: '2026-07-22T12:00:00.000Z',
+        },
+      }),
+      revision: 1,
+      createdAt: '2026-07-22T12:00:00.000Z',
+      updatedAt: '2026-07-22T12:01:00.000Z',
+      completedAt: '',
+    });
+    db.conversationActionTasks.push({
+      id: newerTaskId,
+      conversationId: conversation.id,
+      userId,
+      domain: 'personal',
+      orgId: '',
+      parentTaskId: '',
+      rootUserMessageId: '',
+      intentKind: 'status_query',
+      operation: 'status',
+      goal: 'Report the newer task',
+      target: 'task',
+      status: 'completed',
+      blocker: '',
+      activeRequestId: '',
+      completionSource: 'tool_receipt',
+      context: JSON.stringify({
+        actionState: {
+          version: 2,
+          taskId: newerTaskId,
+          goal: 'Report the newer task',
+          status: 'completed',
+          unfinished: false,
+          revision: 1,
+          updatedAt: '2026-07-22T13:00:00.000Z',
+        },
+      }),
+      revision: 1,
+      createdAt: '2026-07-22T13:00:00.000Z',
+      updatedAt: '2026-07-22T13:00:00.000Z',
+      completedAt: '2026-07-22T13:00:00.000Z',
+    });
+
+    expect(getOrCreateActiveConversation(userId, 'lumi', 'personal', '').actionContinuationState)
+      .toBeUndefined();
+    expect(recoverOrphanedConversationActionExecutions('2026-07-22T14:00:00.000Z')).toBeGreaterThan(0);
+
+    const staleTask = db.conversationActionTasks.find((task: any) => task.id === staleTaskId);
+    expect(staleTask).toMatchObject({
+      status: 'blocked',
+      activeRequestId: '',
+      updatedAt: '2026-07-22T12:01:00.000Z',
+    });
+    expect(JSON.parse(staleTask.context)).toMatchObject({
+      executionLeaseRecovery: {
+        recoveredAt: '2026-07-22T14:00:00.000Z',
+        priorStatus: 'executing',
+        newerTaskAlreadyExists: true,
+      },
+      actionState: {
+        status: 'blocked',
+        unfinished: true,
+      },
+    });
+    expect(getOrCreateActiveConversation(userId, 'lumi', 'personal', '').actionContinuationState)
+      .toBeUndefined();
+  });
+
   it('persists an accepted voice instruction before routing without letting progress chat steal its task pointer', () => {
     const userId = `conversation-voice-durable-${Date.now()}-${Math.random()}`;
     const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');

@@ -7,14 +7,14 @@
 - Material side-effect capabilities: **135**
 - Material side-effect capabilities with a materialized evidence contract: **135/135**
 - Material side-effect capabilities with materialized non-none risk: **135/135**
-- Material side-effect capabilities with tool-specific evidence metadata: **133/135**
+- Material side-effect capabilities with tool-specific evidence metadata: **135/135**
 - Material side-effect capabilities with tool-specific risk metadata: **135/135**
 
 > Read-only local/network access is excluded from the material side-effect gate. Materialized policy metadata is conservative fallback, not proof that the tool owner supplied an exact contract. Release readiness requires the tool-specific counts to reach 100%.
 
 ## Release metadata gaps
 
-- Missing tool-specific evidence: `runtime_work_pause`, `runtime_work_resume`
+- Missing tool-specific evidence: _None_
 - Missing tool-specific risk: _None_
 
 ## By source

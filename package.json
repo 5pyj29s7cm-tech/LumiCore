@@ -45,7 +45,7 @@
     "stress:lifecycle:source": "node scripts/runtime-reliability.mjs --runtime source --mode lifecycle",
     "soak:runtime": "node scripts/runtime-reliability.mjs --mode soak",
     "soak:runtime:source": "node scripts/runtime-reliability.mjs --runtime source --mode soak",
-    "release:check": "node scripts/check-release-readiness.mjs",
+    "release:check": "npm run docs:capability-stats && node scripts/check-release-readiness.mjs",
     "release:manifest": "node scripts/write-release-manifest.mjs",
     "release:bundle": "node scripts/prepare-release-bundle.mjs",
     "release:verify": "npm run lint && npm run test -- --run && npm run build:desktop && npm run smoke:packaged",

@@ -156,7 +156,7 @@ async function main() {
   if (runtimeMeta.schemaVersion !== 1 || runtimeMeta.version === '0.0.0') {
     throw new Error(`Invalid packaged runtime metadata: ${JSON.stringify(runtimeMeta)}`);
   }
-  for (const field of ['name', 'version', 'buildId', 'builtAt', 'channel']) {
+  for (const field of ['name', 'version', 'buildId', 'sourceFingerprint', 'builtAt', 'channel']) {
     if (!String(runtimeMeta[field] || '').trim()) throw new Error(`Packaged runtime metadata is missing ${field}`);
   }
   let expectedBuildId = process.env.LUMI_EXPECT_BUILD_ID || '';
@@ -165,6 +165,9 @@ async function main() {
   }
   if (expectedBuildId && runtimeMeta.buildId !== expectedBuildId) {
     throw new Error(`Packaged build ID ${runtimeMeta.buildId} does not match expected commit ${expectedBuildId}`);
+  }
+  if (!/^[a-f0-9]{64}$/i.test(runtimeMeta.sourceFingerprint) || typeof runtimeMeta.sourceDirty !== 'boolean') {
+    throw new Error(`Packaged runtime metadata is missing a valid source identity: ${JSON.stringify(runtimeMeta)}`);
   }
 
   const runRoot = path.join(root, '.codex-run', `packaged-first-run-${Date.now()}`);

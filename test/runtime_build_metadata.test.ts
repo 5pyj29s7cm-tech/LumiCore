@@ -22,12 +22,16 @@ describe('runtime build metadata', () => {
       name: 'lumi-os',
       version: '3.0.3',
       buildId: 'abcdef123456',
+      sourceFingerprint: 'a'.repeat(64),
+      sourceDirty: false,
       builtAt: '2026-07-26T00:00:00.000Z',
       channel: 'internal',
     };
     expect(normalizeRuntimeBuildMetadata(valid)).toEqual(valid);
     expect(normalizeRuntimeBuildMetadata({ ...valid, version: '0.0.0' })).toBeNull();
     expect(normalizeRuntimeBuildMetadata({ ...valid, buildId: '' })).toBeNull();
+    expect(normalizeRuntimeBuildMetadata({ ...valid, sourceFingerprint: 'invalid' })).toBeNull();
+    expect(normalizeRuntimeBuildMetadata({ ...valid, sourceDirty: undefined })).toBeNull();
   });
 
   it('prefers packaged metadata over ambient package and environment values', () => {
@@ -38,6 +42,8 @@ describe('runtime build metadata', () => {
       name: 'lumi-os',
       version: '3.0.3',
       buildId: 'packaged-commit',
+      sourceFingerprint: 'b'.repeat(64),
+      sourceDirty: true,
       builtAt: '2026-07-26T00:00:00.000Z',
       channel: 'internal',
     };

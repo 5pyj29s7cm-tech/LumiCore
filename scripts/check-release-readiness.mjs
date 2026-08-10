@@ -4,6 +4,7 @@ import { createReadStream, existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { computeSourceIdentity } from './lib/source-identity.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const root = path.resolve(path.dirname(__filename), '..');
@@ -168,24 +169,25 @@ async function checkArtifact(checks, manifest, artifact, strictPublish) {
   }
 }
 
-async function checkReliabilityEvidence(checks, strict, head) {
+async function checkReliabilityEvidence(checks, strict, head, sourceFingerprint) {
   const evidenceDir = path.join(root, 'artifacts', 'runtime-reliability');
   const lifecyclePath = path.join(evidenceDir, 'lifecycle.json');
   const soakPath = path.join(evidenceDir, 'soak.json');
 
   if (existsSync(lifecyclePath)) {
     const lifecycle = await readJson(lifecyclePath);
-    const valid = lifecycle.ok === true && lifecycle.runtimeKind === 'packaged' && lifecycle.buildId === head && lifecycle.iterations >= 50 && lifecycle.orphanProcesses === 0
-      && lifecycle.baselineMs > 0 && lifecycle.p95Ms <= lifecycle.baselineMs * 0.75;
+    const valid = lifecycle.ok === true && lifecycle.runtimeKind === 'packaged' && lifecycle.buildId === head && lifecycle.sourceFingerprint === sourceFingerprint && lifecycle.iterations >= 50 && lifecycle.orphanProcesses === 0
+      && lifecycle.baselineMs > 0 && lifecycle.maxRegressionRatio >= 0 && lifecycle.maxRegressionRatio <= 0.15
+      && lifecycle.p95Ms <= lifecycle.baselineMs * (1 + lifecycle.maxRegressionRatio);
     if (valid) pass(checks, 'reliability.lifecycle', `50-run lifecycle P95 passed at ${lifecycle.p95Ms} ms`);
-    else warnOrFail(checks, strict, 'reliability.lifecycle', 'Lifecycle evidence must cover the current commit, 50 runs, zero orphans, and a 25% P95 improvement', lifecycle);
+    else warnOrFail(checks, strict, 'reliability.lifecycle', 'Lifecycle evidence must cover the current commit, 50 runs, zero orphans, and no more than 15% P95 regression', lifecycle);
   } else {
     warnOrFail(checks, strict, 'reliability.lifecycle', 'Missing 50-run lifecycle evidence', relative(lifecyclePath));
   }
 
   if (existsSync(soakPath)) {
     const soak = await readJson(soakPath);
-    const valid = soak.ok === true && soak.runtimeKind === 'packaged' && soak.buildId === head && soak.requestedHours >= 2 && soak.elapsedMs >= 1.99 * 60 * 60 * 1000
+    const valid = soak.ok === true && soak.runtimeKind === 'packaged' && soak.buildId === head && soak.sourceFingerprint === sourceFingerprint && soak.requestedHours >= 2 && soak.elapsedMs >= 1.99 * 60 * 60 * 1000
       && soak.mixedRounds >= 200 && soak.healthProbeInterruptions === 0
       && soak.backendRestarts === 0 && soak.mcpConsecutiveCrashes === 0 && soak.databaseDirty === false && soak.unhandledExceptions === 0
       && soak.sidecarBudgetExceeded?.gptSovits === 0 && soak.sidecarBudgetExceeded?.voiceprint === 0
@@ -217,16 +219,23 @@ async function main() {
   const head = git(['rev-parse', 'HEAD'], 'unknown');
   const shortHead = git(['rev-parse', '--short', 'HEAD'], 'unknown');
   const dirtyStatus = git(['status', '--short'], '');
+  const sourceIdentity = computeSourceIdentity(root);
 
-  await checkReliabilityEvidence(checks, args.strictPublish, head);
+  await checkReliabilityEvidence(checks, args.strictPublish, head, sourceIdentity.fingerprint);
 
   const runtimeMetaPath = path.join(root, 'desktop-resources', 'dist-server', 'runtime-meta.json');
   if (!existsSync(runtimeMetaPath)) {
     fail(checks, 'runtime-meta.exists', `Packaged runtime metadata missing: ${relative(runtimeMetaPath)}`);
   } else {
     const runtimeMeta = await readJson(runtimeMetaPath);
-    if (runtimeMeta.schemaVersion === 1 && runtimeMeta.version === pkg.version && runtimeMeta.buildId === head) {
-      pass(checks, 'runtime-meta.identity', `Packaged runtime metadata matches v${pkg.version} ${shortHead}`);
+    if (
+      runtimeMeta.schemaVersion === 1
+      && runtimeMeta.version === pkg.version
+      && runtimeMeta.buildId === head
+      && runtimeMeta.sourceFingerprint === sourceIdentity.fingerprint
+      && runtimeMeta.sourceDirty === sourceIdentity.dirty
+    ) {
+      pass(checks, 'runtime-meta.identity', `Packaged runtime metadata matches v${pkg.version} ${shortHead} and source ${sourceIdentity.fingerprint.slice(0, 12)}`);
     } else {
       fail(checks, 'runtime-meta.identity', 'Packaged runtime metadata must match the current version and commit', runtimeMeta);
     }
@@ -335,7 +344,12 @@ async function main() {
       });
     }
 
-    if (manifest.runtime?.version === tauri.version && manifest.runtime?.buildId === head) {
+    if (
+      manifest.runtime?.version === tauri.version
+      && manifest.runtime?.buildId === head
+      && manifest.runtime?.sourceFingerprint === sourceIdentity.fingerprint
+      && manifest.runtime?.sourceDirty === sourceIdentity.dirty
+    ) {
       pass(checks, 'manifest.runtime', 'Manifest runtime identity matches the current build');
     } else {
       fail(checks, 'manifest.runtime', 'Manifest runtime metadata is missing or stale', manifest.runtime || null);

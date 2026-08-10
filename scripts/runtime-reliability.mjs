@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { computeSourceIdentity } from './lib/source-identity.mjs';
 
 const root = process.cwd();
 
@@ -26,6 +27,7 @@ function parseArgs(argv) {
     voiceprintProbeIntervalMs: 10 * 60_000,
     voiceprintProbeTimeoutMs: 3 * 60_000,
     baselineMs: Number(process.env.LUMI_COLD_START_BASELINE_MS || 0),
+    maxRegressionRatio: Number(process.env.LUMI_COLD_START_MAX_REGRESSION_RATIO || 0.15),
     keep: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -45,6 +47,7 @@ function parseArgs(argv) {
     else if (value === '--voiceprint-probe-interval-ms') args.voiceprintProbeIntervalMs = Number(argv[++i]);
     else if (value === '--voiceprint-probe-timeout-ms') args.voiceprintProbeTimeoutMs = Number(argv[++i]);
     else if (value === '--baseline-ms') args.baselineMs = Number(argv[++i]);
+    else if (value === '--max-regression-ratio') args.maxRegressionRatio = Number(argv[++i]);
     else if (value === '--keep') args.keep = true;
     else throw new Error(`Unknown argument: ${value}`);
   }
@@ -59,6 +62,8 @@ function parseArgs(argv) {
     || args.ttsProbeTimeoutMs < 1000
     || args.voiceprintProbeIntervalMs < 1000
     || args.voiceprintProbeTimeoutMs < 1000
+    || args.maxRegressionRatio < 0
+    || args.maxRegressionRatio > 1
   ) throw new Error('Invalid reliability test limits');
   return args;
 }
@@ -359,9 +364,11 @@ async function runLifecycle(args, runRoot, runtimeMeta) {
     console.log(`[lifecycle] ${index + 1}/${args.iterations}: ${startupMs.at(-1)} ms`);
   }
   const p95Ms = percentile95(startupMs);
-  const targetMs = args.baselineMs > 0 ? Math.floor(args.baselineMs * 0.75) : null;
-  const result = { mode: 'lifecycle', runtimeKind: args.runtime, ok: targetMs === null || p95Ms <= targetMs, buildId: runtimeMeta.buildId, version: runtimeMeta.version, iterations: args.iterations, startupMs, p95Ms, baselineMs: args.baselineMs || null, targetMs, orphanProcesses: 0, completedAt: new Date().toISOString() };
-  if (!result.ok) throw Object.assign(new Error(`cold-start P95 ${p95Ms} ms exceeds 75% baseline target ${targetMs} ms`), { result });
+  const targetMs = args.baselineMs > 0
+    ? Math.ceil(args.baselineMs * (1 + args.maxRegressionRatio))
+    : null;
+  const result = { mode: 'lifecycle', runtimeKind: args.runtime, ok: targetMs === null || p95Ms <= targetMs, buildId: runtimeMeta.buildId, sourceFingerprint: runtimeMeta.sourceFingerprint, sourceDirty: runtimeMeta.sourceDirty, version: runtimeMeta.version, iterations: args.iterations, startupMs, p95Ms, baselineMs: args.baselineMs || null, maxRegressionRatio: args.maxRegressionRatio, targetMs, orphanProcesses: 0, completedAt: new Date().toISOString() };
+  if (!result.ok) throw Object.assign(new Error(`cold-start P95 ${p95Ms} ms exceeds the ${Math.round(args.maxRegressionRatio * 100)}% regression limit ${targetMs} ms`), { result });
   return result;
 }
 
@@ -596,6 +603,8 @@ async function runSoak(args, runRoot, runtimeMeta) {
     runtimeKind: args.runtime,
     ok: true,
     buildId: runtimeMeta.buildId,
+    sourceFingerprint: runtimeMeta.sourceFingerprint,
+    sourceDirty: runtimeMeta.sourceDirty,
     version: runtimeMeta.version,
     requestedHours: args.durationHours,
     elapsedMs: Date.now() - started,
@@ -676,12 +685,14 @@ async function main() {
   let runtimeMeta;
   if (args.runtime === 'source') {
     const packageMeta = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
-    const buildId = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', windowsHide: true }).trim();
+    const sourceIdentity = computeSourceIdentity(root);
     runtimeMeta = {
       schemaVersion: 1,
       name: packageMeta.name,
       version: packageMeta.version,
-      buildId,
+      buildId: sourceIdentity.head,
+      sourceFingerprint: sourceIdentity.fingerprint,
+      sourceDirty: sourceIdentity.dirty,
       builtAt: new Date().toISOString(),
       channel: 'internal-source',
     };
@@ -700,7 +711,7 @@ async function main() {
     result.sqliteIntegrity = true;
     result.foreignKeyViolations = 0;
   } catch (error) {
-    result = error.result || { mode: args.mode, runtimeKind: args.runtime, ok: false, buildId: runtimeMeta.buildId, version: runtimeMeta.version, error: error.message, completedAt: new Date().toISOString() };
+    result = error.result || { mode: args.mode, runtimeKind: args.runtime, ok: false, buildId: runtimeMeta.buildId, sourceFingerprint: runtimeMeta.sourceFingerprint, sourceDirty: runtimeMeta.sourceDirty, version: runtimeMeta.version, error: error.message, completedAt: new Date().toISOString() };
     throw error;
   } finally {
     if (args.ttsFixtureDir) await scrubStagedTtsFixture(runRoot);

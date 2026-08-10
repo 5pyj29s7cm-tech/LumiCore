@@ -132,6 +132,12 @@ export function registerRuntimeWorkTools(registry: ToolRegistry): void {
         limitations: ['A pausing receipt is provisional until the active executor reaches a checkpoint and acknowledges pause.'],
       },
     },
+    evidence: {
+      capability: 'runtime.work.pause',
+      operation: 'mutate',
+      assurance: 'verified',
+      subjectArgument: 'taskId',
+    },
   });
 
   registry.register({
@@ -170,6 +176,12 @@ export function registerRuntimeWorkTools(registry: ToolRegistry): void {
         successSignals: ['matched paused work is queued for durable execution'],
         limitations: ['Resumed means queued from the retained checkpoint; completion still requires a later verified task receipt.'],
       },
+    },
+    evidence: {
+      capability: 'runtime.work.resume',
+      operation: 'mutate',
+      assurance: 'verified',
+      subjectArgument: 'taskId',
     },
   });
 }

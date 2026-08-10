@@ -9,11 +9,14 @@ fn main() {
             let dll_dest = exe_dir.join("WebView2Loader.dll");
             if !dll_dest.exists() {
                 for candidate in &[
-                    exe_dir.join("_up_").join("desktop-resources").join("WebView2Loader.dll"),
+                    exe_dir
+                        .join("_up_")
+                        .join("desktop-resources")
+                        .join("WebView2Loader.dll"),
                     exe_dir.join("desktop-resources").join("WebView2Loader.dll"),
                 ] {
                     if candidate.exists() {
-                        let _ = std::fs::copy(&candidate, &dll_dest);
+                        let _ = std::fs::copy(candidate, &dll_dest);
                         break;
                     }
                 }

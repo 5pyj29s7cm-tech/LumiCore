@@ -6,6 +6,7 @@ import { buildForegroundWeChatReadArgs, buildForegroundWeChatSendArgs } from '..
 import {
   findConversationActionTask,
   formatConversationActionLedgerStatus,
+  getConversationActionStateFromLedger,
   repairContradictoryConversationActionReceipts,
   syncConversationActionTaskLedger,
 } from '../server/conversation/action_ledger';
@@ -199,7 +200,10 @@ describe('Lumi field-call stability replay', () => {
       blocker: '',
       completionSource: 'tool_receipt',
     });
-    expect(conversation.actionContinuationState).toMatchObject({
+    expect(getConversationActionStateFromLedger(db, {
+      conversationId: conversation.id,
+      userId: conversation.userId,
+    })).toMatchObject({
       status: 'completed',
       unfinished: false,
     });

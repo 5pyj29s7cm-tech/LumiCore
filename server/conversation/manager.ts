@@ -31,9 +31,11 @@ import {
   attachConversationModelExecutionGraph,
   loadConversationModelExecutionRecovery,
   migrateLegacyConversationActionLedger,
+  recoverConversationActionTaskLeases,
   repairContradictoryConversationActionReceipts,
   compactLegacyScheduledCapabilityExecutions,
   archiveBoundConversationActionReceipts,
+  getConversationActionStateFromLedger,
   syncConversationActionTaskLedger,
 } from './action_ledger';
 import type { CapabilityExecutionPlan } from '../cognition/capability_execution_plan';
@@ -48,6 +50,36 @@ export function getConversationActionStatus(
   const db = readDB();
   return formatConversationActionLedgerStatus(db, { conversationId, userId, query })
     || formatConversationActionTaskStatus(fallbackState);
+}
+
+function hydrateConversationActionState(
+  db: any,
+  conversation: Conversation,
+  query = '',
+): ConversationActionContinuationState | null {
+  const existing = normalizeConversationActionState(conversation.actionContinuationState);
+  const resolveHistoricalTask = Boolean(
+    query.trim() && needsRecentActionContinuationContext(query),
+  );
+  const ledgerState = getConversationActionStateFromLedger(db, {
+    conversationId: conversation.id,
+    userId: conversation.userId,
+    query: resolveHistoricalTask ? query : '',
+  });
+  const existingUpdatedAt = existing ? Date.parse(existing.updatedAt) : Number.NaN;
+  const ledgerUpdatedAt = ledgerState ? Date.parse(ledgerState.updatedAt) : Number.NaN;
+  const newestRuntimeState = existing && ledgerState
+    ? (Number.isFinite(ledgerUpdatedAt)
+      && (!Number.isFinite(existingUpdatedAt) || ledgerUpdatedAt > existingUpdatedAt)
+        ? ledgerState
+        : existing)
+    : existing || (ledgerState?.unfinished ? ledgerState : null);
+  const state = resolveHistoricalTask
+    ? ledgerState || existing
+    : newestRuntimeState;
+  if (state) conversation.actionContinuationState = state;
+  else delete conversation.actionContinuationState;
+  return state;
 }
 
 export interface Conversation {
@@ -73,7 +105,7 @@ export interface Conversation {
   domain?: string;
   /** orgId when in work domain */
   orgId?: string;
-  /** Durable, evidence-backed pointer for ordinary cross-turn actions. */
+  /** Runtime compatibility projection; durable state lives in conversation_action_tasks/receipts. */
   actionContinuationState?: ConversationActionContinuationState;
   /** Latest user turn waiting for its terminal assistant/tool record. */
   pendingActionContinuation?: {
@@ -164,6 +196,7 @@ export function getConversationForScope(
   const conversation = (db.conversations || []).find((item: Conversation) => item.id === conversationId);
   if (!conversation || conversation.userId !== userId) return null;
   if (!conversationMatchesScope(conversation, domain, orgId)) return null;
+  hydrateConversationActionState(db, conversation);
   if (isolateConversationSummaryForUse(conversation)) writeDB(db);
   return conversation;
 }
@@ -184,6 +217,7 @@ export function getOrCreateActiveConversation(userId: string, agentId?: string, 
       new Date(b.lastActiveAt).getTime() - new Date(a.lastActiveAt).getTime()
     )[0];
   if (active) {
+    hydrateConversationActionState(db, active);
     if (isolateConversationSummaryForUse(active)) writeDB(db);
     return active;
   }
@@ -327,7 +361,9 @@ export function getOrCreateConversationForTurn(
     || !conversationMatchesScope(active, domain, orgId)
     || !shouldRolloverConversationForTurn(active, options.userText, options.messageLimit)
   ) {
-    return { conversation: active || current, rolledOver: false };
+    const selected = active || current;
+    hydrateConversationActionState(db, selected);
+    return { conversation: selected, rolledOver: false };
   }
 
   const now = new Date().toISOString();
@@ -392,6 +428,7 @@ export function getActiveConversation(userId: string, agentId?: string, domainOr
     .sort((a: Conversation, b: Conversation) =>
       new Date(b.lastActiveAt).getTime() - new Date(a.lastActiveAt).getTime()
     )[0] || null;
+  if (active) hydrateConversationActionState(db, active);
   if (active && isolateConversationSummaryForUse(active)) writeDB(db);
   return active;
 }
@@ -418,6 +455,7 @@ export function getUserConversations(userId: string, limit = 20, offset = 0, dom
     .slice(offset, offset + limit);
   let summaryWasIsolated = false;
   for (const conversation of conversations) {
+    hydrateConversationActionState(db, conversation);
     if (isolateConversationSummaryForUse(conversation)) summaryWasIsolated = true;
   }
   if (summaryWasIsolated) writeDB(db);
@@ -438,6 +476,7 @@ export function prepareConversationActionExecution(input: {
     item.id === input.conversationId && item.userId === input.userId
   ));
   if (!conversation) return { state: null, kind: 'conversation' };
+  hydrateConversationActionState(db, conversation, input.userText);
   const prepared = prepareConversationActionTaskState(conversation.actionContinuationState, input);
   if (prepared.state !== conversation.actionContinuationState) {
     if (prepared.state) conversation.actionContinuationState = prepared.state;
@@ -512,6 +551,7 @@ export function cancelConversationActionExecution(
   const conversation = (db.conversations || []).find((item: Conversation) => (
     item.id === conversationId && item.userId === userId
   ));
+  if (conversation) hydrateConversationActionState(db, conversation);
   const previous = normalizeConversationActionState(conversation?.actionContinuationState);
   if (!conversation || !previous) return null;
   if (expectedRequestId && previous.activeRequestId !== expectedRequestId) return previous;
@@ -544,6 +584,7 @@ export function completeConversationActionFromUserObservation(
   const conversation = (db.conversations || []).find((item: Conversation) => (
     item.id === conversationId && item.userId === userId
   ));
+  if (conversation) hydrateConversationActionState(db, conversation);
   const previous = normalizeConversationActionState(conversation?.actionContinuationState);
   if (!conversation || !previous || !isUserObservedTaskCompletion(userText, previous)) return null;
   conversation.actionContinuationState = {
@@ -581,6 +622,7 @@ export function settleConversationActionExecutionRequest(
   const conversation = (db.conversations || []).find((item: Conversation) => (
     item.id === conversationId && item.userId === userId
   ));
+  if (conversation) hydrateConversationActionState(db, conversation);
   const previous = normalizeConversationActionState(conversation?.actionContinuationState);
   if (!conversation || !previous || previous.activeRequestId !== requestId) return previous;
 
@@ -623,10 +665,12 @@ export function recoverOrphanedConversationActionExecutions(
 ): number {
   const db = readDB();
   const migrated = migrateLegacyConversationActionLedger(db);
+  const recoveredLedgerLeases = recoverConversationActionTaskLeases(db, now);
   const repairedReceipts = repairContradictoryConversationActionReceipts(db);
   const schedulerCompaction = compactLegacyScheduledCapabilityExecutions(db);
   let recovered = 0;
   for (const conversation of db.conversations || []) {
+    hydrateConversationActionState(db, conversation);
     const previous = normalizeConversationActionState(conversation.actionContinuationState);
     if (
       !previous?.unfinished
@@ -655,11 +699,12 @@ export function recoverOrphanedConversationActionExecutions(
   }
   if (
     migrated > 0
+    || recoveredLedgerLeases > 0
     || repairedReceipts > 0
     || schedulerCompaction.tasksRemoved > 0
     || recovered > 0
   ) writeDB(db);
-  return recovered;
+  return recoveredLedgerLeases + recovered;
 }
 
 export function setConversationActionExecutionStatus(
@@ -672,6 +717,7 @@ export function setConversationActionExecutionStatus(
   const conversation = (db.conversations || []).find((item: Conversation) => (
     item.id === conversationId && item.userId === userId
   ));
+  if (conversation) hydrateConversationActionState(db, conversation);
   const previous = normalizeConversationActionState(conversation?.actionContinuationState);
   if (!conversation || !previous) return null;
   conversation.actionContinuationState = {
@@ -766,6 +812,7 @@ export function addMessage(msg: {
   if (msg.conversationId && db.conversations) {
     const conv = db.conversations.find((c: Conversation) => c.id === msg.conversationId);
     if (conv) {
+      hydrateConversationActionState(db, conv);
       conv.messageCount = (conv.messageCount || 0) + 1;
       conv.lastActiveAt = now;
       // Auto-title from first user message

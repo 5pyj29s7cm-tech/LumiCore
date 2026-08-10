@@ -96,13 +96,27 @@ jobs:
           LUMI_DESKTOP_WITH_LOCAL_VOICE: ${{ inputs.include_local_voice == 'true' && '1' || '0' }}
         run: npm run build:desktop
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
 
+      - name: Rust formatting
+        working-directory: src-tauri
+        run: cargo fmt --all -- --check
+
+      - name: Rust lint
+        working-directory: src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test --locked
+
       - name: Rust release check
         working-directory: src-tauri
-        run: cargo check --release
+        run: cargo check --release --locked
 
       - name: Build Windows installer
         shell: pwsh
@@ -171,3 +185,4 @@ jobs:
             src-tauri/target/release/bundle/release-manifest.json
             release-out/**
           if-no-files-found: error
+          retention-days: 7

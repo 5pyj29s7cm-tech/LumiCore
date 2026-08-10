@@ -225,13 +225,16 @@ async function prepareServer() {
     throw new Error('Missing runtime-meta.json in prepared desktop backend. Run npm run build:server first.');
   }
   const runtimeMeta = JSON.parse(await fs.readFile(runtimeMetaPath, 'utf8'));
-  for (const field of ['name', 'version', 'buildId', 'builtAt', 'channel']) {
+  for (const field of ['name', 'version', 'buildId', 'sourceFingerprint', 'builtAt', 'channel']) {
     if (!String(runtimeMeta[field] || '').trim()) {
       throw new Error(`Invalid runtime-meta.json: missing ${field}`);
     }
   }
   if (runtimeMeta.schemaVersion !== 1 || runtimeMeta.version === '0.0.0') {
     throw new Error('Invalid runtime-meta.json schema or version');
+  }
+  if (!/^[a-f0-9]{64}$/i.test(runtimeMeta.sourceFingerprint) || typeof runtimeMeta.sourceDirty !== 'boolean') {
+    throw new Error('Invalid runtime-meta.json source identity');
   }
 }
 

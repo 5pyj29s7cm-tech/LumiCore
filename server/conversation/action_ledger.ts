@@ -1031,15 +1031,13 @@ export function findConversationActionTask(
     .sort((left, right) => right.score - left.score || right.task.updatedAt.localeCompare(left.task.updatedAt))[0]?.task || null;
 }
 
-export function formatConversationActionLedgerStatus(
-  db: any,
-  input: { conversationId: string; userId: string; query?: string },
-): string | null {
-  const task = findConversationActionTask(db, input);
+export function conversationActionStateFromTask(
+  task: ConversationActionTaskRow | null | undefined,
+): ConversationActionContinuationState | null {
   if (!task) return null;
   const context = parseObject(task.context);
   const persisted = normalizeConversationActionState(context.actionState);
-  const state = normalizeConversationActionState({
+  return normalizeConversationActionState({
     ...(persisted || {}),
     version: 2,
     taskId: task.id,
@@ -1048,7 +1046,11 @@ export function formatConversationActionLedgerStatus(
     status: task.status,
     latestBlocker: task.blocker,
     activeRequestId: task.activeRequestId || undefined,
-    completionSource: task.completionSource === 'user_observation' ? 'user_observation' : task.completionSource === 'tool_receipt' ? 'tool_receipt' : undefined,
+    completionSource: task.completionSource === 'user_observation'
+      ? 'user_observation'
+      : task.completionSource === 'tool_receipt'
+        ? 'tool_receipt'
+        : undefined,
     unfinished: task.status !== 'completed' && task.status !== 'cancelled',
     updatedAt: task.updatedAt,
     appTarget: persisted?.appTarget || task.target,
@@ -1058,6 +1060,21 @@ export function formatConversationActionLedgerStatus(
     toolSummaries: persisted?.toolSummaries || [],
     receipts: persisted?.receipts || [],
   } as ConversationActionContinuationState);
+}
+
+export function getConversationActionStateFromLedger(
+  db: any,
+  input: { conversationId: string; userId: string; query?: string },
+): ConversationActionContinuationState | null {
+  return conversationActionStateFromTask(findConversationActionTask(db, input));
+}
+
+export function formatConversationActionLedgerStatus(
+  db: any,
+  input: { conversationId: string; userId: string; query?: string },
+): string | null {
+  const state = getConversationActionStateFromLedger(db, input);
+  if (!state) return null;
   return formatConversationActionTaskStatus(state);
 }
 
@@ -1071,6 +1088,70 @@ export function migrateLegacyConversationActionLedger(db: any): number {
     if (syncConversationActionTaskLedger(db, { conversation, state, now: state.updatedAt })) migrated += 1;
   }
   return migrated;
+}
+
+/**
+ * Process-local request leases cannot survive a backend restart. Recover every
+ * non-scheduler ledger row, including older rows hidden by a newer task. Hidden
+ * rows keep their original ordering timestamp so recovery cannot steal the
+ * conversation's current task pointer; the repair time remains in context.
+ */
+export function recoverConversationActionTaskLeases(
+  db: any,
+  now = new Date().toISOString(),
+): number {
+  ensureTables(db);
+  const tasks = db.conversationActionTasks as ConversationActionTaskRow[];
+  let recovered = 0;
+
+  for (const task of tasks) {
+    if (task.conversationId.startsWith('scheduler:')) continue;
+    if (!['planning', 'executing', 'waiting_confirmation'].includes(task.status)) continue;
+
+    const hasNewerTask = tasks.some(candidate => (
+      candidate.id !== task.id
+      && candidate.conversationId === task.conversationId
+      && candidate.userId === task.userId
+      && candidate.createdAt.localeCompare(task.createdAt) > 0
+    ));
+    const previousStatus = task.status;
+    const blocker = previousStatus === 'waiting_confirmation'
+      ? 'The pending confirmation expired when the previous runtime ended.'
+      : 'The previous runtime ended before this task reached a terminal receipt.';
+    const context = parseObject(task.context);
+    const actionState = normalizeConversationActionState(context.actionState);
+    const orderingTimestamp = hasNewerTask ? task.updatedAt : now;
+
+    task.status = 'blocked';
+    task.blocker = blocker;
+    task.activeRequestId = '';
+    task.revision = Math.max(1, Number(task.revision) || 0) + 1;
+    task.updatedAt = orderingTimestamp;
+    task.context = JSON.stringify({
+      ...context,
+      executionLeaseRecovery: {
+        recoveredAt: now,
+        priorStatus: previousStatus,
+        newerTaskAlreadyExists: hasNewerTask,
+      },
+      ...(actionState
+        ? {
+            actionState: sanitizeState({
+              ...actionState,
+              version: 2,
+              status: 'blocked',
+              unfinished: true,
+              latestBlocker: blocker,
+              activeRequestId: undefined,
+              revision: Math.max(actionState.revision || 0, task.revision),
+              updatedAt: orderingTimestamp,
+            }),
+          }
+        : {}),
+    });
+    recovered += 1;
+  }
+  return recovered;
 }
 
 /**
@@ -1166,12 +1247,6 @@ export function repairContradictoryConversationActionReceipts(db: any): number {
       task.completedAt = task.completedAt || task.updatedAt;
     }
     task.revision = nextState?.revision || task.revision;
-    for (const conversation of db.conversations || []) {
-      const conversationState = normalizeConversationActionState(conversation.actionContinuationState);
-      if (conversationState?.taskId === task.id && nextState) {
-        conversation.actionContinuationState = nextState;
-      }
-    }
   }
   return repaired;
 }

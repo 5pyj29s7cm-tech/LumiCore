@@ -116,6 +116,11 @@ const PERFORMANCE_INDEX_SQL = [
 let memoryDB: any = null;
 const SYSTEM_FLAGS_SETTING = '__lumi_system_flags';
 const SYSTEM_SNAPSHOTS_SETTING = '__lumi_system_snapshots';
+// One-version compatibility snapshot. Legacy continuation data can be read and
+// migrated, but new task state is persisted only in conversation_action_*.
+// Keeping the original value outside the mutable conversation projection stops
+// normal database flushes from writing new state back into the legacy column.
+const legacyActionContinuationStates = new WeakMap<object, Record<string, any> | undefined>();
 
 export interface LegacySummaryPersistenceRepair {
   id: string;
@@ -1334,15 +1339,18 @@ async function loadMemoryDB(): Promise<void> {
         lastSummaryMessageCount: isolatedSummary.lastSummaryMessageCount,
       });
     }
-    return {
+    const legacyActionContinuationState = parseStoredActionContinuationState(c.actionContinuationState);
+    const conversation = {
       ...c,
       summary: isolatedSummary.summary,
       summaryChain: isolatedSummary.summaryChain,
       lastSummaryMessageCount: isolatedSummary.lastSummaryMessageCount,
-      actionContinuationState: parseStoredActionContinuationState(c.actionContinuationState),
+      actionContinuationState: legacyActionContinuationState,
       domain: c.domain || 'personal',
       orgId: c.orgId || '',
     };
+    legacyActionContinuationStates.set(conversation, legacyActionContinuationState);
+    return conversation;
   });
 
   memoryDB = {
@@ -1804,7 +1812,7 @@ async function persistMemoryDB(): Promise<void> {
       name: 'conversations',
       createSQL: `CREATE TABLE _temp_conversations (id TEXT PRIMARY KEY, userId TEXT NOT NULL, agentId TEXT, title TEXT DEFAULT '', status TEXT DEFAULT 'active', summary TEXT DEFAULT '', summaryChain TEXT DEFAULT '[]', lastSummaryMessageCount INTEGER DEFAULT -1, actionContinuationState TEXT DEFAULT '{}', messageCount INTEGER DEFAULT 0, lastActiveAt TEXT NOT NULL, createdAt TEXT NOT NULL, domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '')`,
       insertSQL: `INSERT INTO _temp_conversations (id, userId, agentId, title, status, summary, summaryChain, lastSummaryMessageCount, actionContinuationState, messageCount, lastActiveAt, createdAt, domain, orgId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.conversations || []).map((c: any) => [c.id, c.userId, c.agentId || '', c.title || '', c.status || 'active', c.summary || '', JSON.stringify(Array.isArray(c.summaryChain) ? c.summaryChain : []), Number.isFinite(Number(c.lastSummaryMessageCount)) ? Math.floor(Number(c.lastSummaryMessageCount)) : -1, serializeStoredActionContinuationState(c.actionContinuationState), c.messageCount || 0, c.lastActiveAt, c.createdAt, c.domain || 'personal', c.orgId || '']),
+      rows: () => (memoryDB.conversations || []).map((c: any) => [c.id, c.userId, c.agentId || '', c.title || '', c.status || 'active', c.summary || '', JSON.stringify(Array.isArray(c.summaryChain) ? c.summaryChain : []), Number.isFinite(Number(c.lastSummaryMessageCount)) ? Math.floor(Number(c.lastSummaryMessageCount)) : -1, serializeStoredActionContinuationState(legacyActionContinuationStates.get(c)), c.messageCount || 0, c.lastActiveAt, c.createdAt, c.domain || 'personal', c.orgId || '']),
     },
     {
       name: 'conversation_action_tasks',
