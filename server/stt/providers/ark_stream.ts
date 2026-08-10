@@ -1,14 +1,16 @@
 import { randomUUID } from 'crypto';
 import { gzipSync, gunzipSync } from 'zlib';
 import { WebSocket } from 'ws';
-import { STTResult } from '../types';
+import { STTResult, StreamingSTTSession } from '../types';
 import { getKey } from '../../config/keys';
 import { isCircuitClosed, recordFailure, recordSuccess } from '../../cloud/circuit_breaker';
 import { logger } from '../../../logger';
+import { shouldEmitStreamingPartial } from '../partial_transcript';
 
 const PROVIDER = 'doubao-stt-stream';
 const DEFAULT_WS_URL = 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel';
 const DEFAULT_RESOURCE_ID = 'volc.bigasr.sauc.duration';
+const MAX_PENDING_AUDIO_CHUNKS = 32;
 
 const enum AsrMessageType {
   FullClientRequest = 0x1,
@@ -35,12 +37,7 @@ const enum Compression {
   Gzip = 0x1,
 }
 
-export interface ArkStreamSession {
-  sendAudio(chunk: Buffer): void;
-  end(): void;
-  onResult: (callback: (result: STTResult) => void) => void;
-  onError: (callback: (err: Error) => void) => void;
-}
+export interface ArkStreamSession extends StreamingSTTSession {}
 
 function getCredentials(): { appKey: string; accessKey: string } {
   const raw = process.env.DOUBAO_SPEECH_KEY || getKey('DOUBAO_SPEECH_KEY') || '';
@@ -282,7 +279,19 @@ export function createStream(
   let sequence = 1;
   let sessionReady = false;
   let closed = false;
+  let ending = false;
+  let errorNotified = false;
   let lastPartial = '';
+
+  const queueAudio = (chunk: Buffer) => {
+    if (audioQueue.length < MAX_PENDING_AUDIO_CHUNKS) audioQueue.push(Buffer.from(chunk));
+  };
+
+  const notifyError = (error: Error) => {
+    if (errorNotified || ending) return;
+    errorNotified = true;
+    emitError(errorCallbacks, error);
+  };
 
   function sendAudioFrame(chunk: Buffer) {
     if (closed || ws.readyState !== WebSocket.OPEN) return;
@@ -315,8 +324,8 @@ export function createStream(
         if (isFinal) {
           lastPartial = '';
           logger.info(`[Doubao-ASR] Final: "${extracted.text}"`);
-          resultCallbacks.forEach(cb => cb({ text: extracted.text, isFinal: true, model: 'doubao-bigmodel' }));
-        } else if (interimResults && extracted.text !== lastPartial) {
+          resultCallbacks.forEach(cb => cb({ text: extracted.text, isFinal: true, speechFinal: true, model: 'doubao-bigmodel' }));
+        } else if (interimResults && shouldEmitStreamingPartial(lastPartial, extracted.text)) {
           lastPartial = extracted.text;
           resultCallbacks.forEach(cb => cb({ text: extracted.text, isFinal: false, model: 'doubao-bigmodel' }));
         }
@@ -324,34 +333,37 @@ export function createStream(
     } catch (err: any) {
       const error = err instanceof Error ? err : new Error(String(err));
       logger.error('[Doubao-ASR] Response parse error:', error.message);
-      emitError(errorCallbacks, error);
+      notifyError(error);
     }
   });
 
   ws.on('error', (err: Error) => {
     logger.error('[Doubao-ASR] WebSocket error:', err.message);
-    emitError(errorCallbacks, new Error(`Doubao-ASR WebSocket error: ${err.message}`));
+    notifyError(new Error(`Doubao-ASR WebSocket error: ${err.message}`));
   });
 
   ws.on('close', (code: number, reason: Buffer) => {
     closed = true;
-    if (code !== 1000 && code !== 1001 && code !== 0) {
-      recordFailure(PROVIDER, undefined, new Error(`Doubao-ASR closed (code=${code})`));
+    if (!ending) {
+      notifyError(new Error(`Doubao-ASR closed (code=${code}, reason=${reason?.toString() || 'none'})`));
     }
     logger.info(`[Doubao-ASR] Closed (code=${code}, reason=${reason?.toString() || 'none'})`);
   });
 
   return {
     sendAudio(chunk: Buffer) {
+      if (ending) return;
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       if (!sessionReady || ws.readyState !== WebSocket.OPEN) {
-        audioQueue.push(buffer);
+        queueAudio(buffer);
         return;
       }
       sendAudioFrame(buffer);
     },
     end() {
       if (closed) return;
+      ending = true;
+      audioQueue.length = 0;
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(buildAudioRequest(++sequence, Buffer.alloc(0), false));
         setTimeout(() => {

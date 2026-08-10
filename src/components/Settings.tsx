@@ -37,6 +37,7 @@ import { usePlatform } from '@/hooks/usePlatform';
 import { BiometricsEnrollPanel } from './biometrics/BiometricsEnrollPanel';
 import { useApp, type AppearanceMode, type OperationMode } from '@/contexts/AppContext';
 import { VoiceProviderSwitch } from './VoiceProviderSwitch';
+import { VoiceDeviceSelector } from './VoiceDeviceSelector';
 import { MCPSettings } from './MCPSettings';
 import { getSavedKeyStatus, saveServerKeys } from '@/services/settingsKeys';
 import { apiFetch } from '@/services/apiClient';
@@ -3131,6 +3132,7 @@ function VoiceServicesPage({ t }: { t: any }) {
             <p className="text-xs text-white/40">{t.sttEngineDesc || uiMessage('settings.local-whisper-openai-whisper-doubao.ff3da59708')}</p>
           </div>
           <VoiceProviderSwitch t={t} />
+          <VoiceDeviceSelector />
         </div>
         <p className="text-sm text-white/40 max-w-xl mb-6">
           {t.voiceServicesDesc || uiMessage('settings.speech-recognition-asr-and-speech.4d604985a1')}

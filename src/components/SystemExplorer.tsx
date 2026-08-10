@@ -25,6 +25,11 @@ import {
 } from '../../shared/system_apps';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 import { systemExplorerCopy } from '../i18n/locales/systemExplorer';
+import { useRuntimeStatus } from '@/hooks/useRuntimeStatus';
+import { RuntimeEvidencePanel } from './RuntimeEvidencePanel';
+import { useApp } from '@/contexts/AppContext';
+import { useLumiScene } from '@/hooks/useLumiScene';
+import { LumiScenePanel } from './LumiScenePanel';
 
 interface DiskInfo {
   name: string;
@@ -401,7 +406,21 @@ export function buildReport(
 
 export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChange?: (section: string) => void }) {
   const { isDesktop, isTauri } = usePlatform();
+  const { workDomain, orgConnection } = useApp();
   const isZh = t?.langCode !== 'en';
+  const runtimeScopeKey = workDomain === 'work' && orgConnection?.connected && orgConnection?.orgId
+    ? `work:${orgConnection.orgId}`
+    : 'personal';
+  const {
+    status: structuredRuntimeStatus,
+    loading: structuredRuntimeLoading,
+    error: structuredRuntimeError,
+  } = useRuntimeStatus({ scopeKey: runtimeScopeKey });
+  const {
+    scene: runtimeScene,
+    loading: runtimeSceneLoading,
+    error: runtimeSceneError,
+  } = useLumiScene({ scopeKey: runtimeScopeKey });
   const [latest, setLatest] = useState<SystemSnapshot | null>(null);
   const [history, setHistory] = useState<SystemSnapshot[]>([]);
   const [profiles, setProfiles] = useState<ProfessionProfile[]>([]);
@@ -468,7 +487,7 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
     } finally {
       setLoading(false);
     }
-  }, [loadDesktopCapabilities, loadPermissions]);
+  }, [isZh, loadDesktopCapabilities, loadPermissions]);
 
   useEffect(() => {
     void loadAll();
@@ -617,6 +636,18 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
           </div>
         </div>
       </section>
+
+      <RuntimeEvidencePanel
+        status={structuredRuntimeStatus}
+        loading={structuredRuntimeLoading}
+        error={structuredRuntimeError}
+      />
+
+      <LumiScenePanel
+        scene={runtimeScene}
+        loading={runtimeSceneLoading}
+        error={runtimeSceneError}
+      />
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <InfoPanel

@@ -28,6 +28,7 @@ import {
   getConversationModelExecutionRecovery,
   cancelConversationActionExecution,
   setConversationActionExecutionStatus,
+  updateConversationActionFocus,
 } from "../conversation/manager";
 import { processInput, handleLLMFailure, extractSentiment, CognitiveContext, CognitiveResult } from "../cognition";
 import {
@@ -455,6 +456,17 @@ export function registerTaskHandler(
         conversationId: convForHistory.id,
         userId: uid,
         plan: executionPipeline.executionPlan,
+      });
+      updateConversationActionFocus({
+        taskId: actionTaskExecution.state.taskId,
+        userId: uid,
+        domain: taskScope.domain,
+        orgId: taskScope.orgId,
+        commitment: actionTaskExecution.state.goal,
+        nextAction: actionTaskExecution.state.latestInstruction || actionTaskExecution.state.goal,
+        resumePoint: actionTaskExecution.kind === 'resume'
+          ? actionTaskExecution.state.assistantState || actionTaskExecution.state.latestBlocker || ''
+          : '',
       });
     }
     const priorTaskRecords = actionTaskExecution.kind === 'resume'

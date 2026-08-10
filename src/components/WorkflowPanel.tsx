@@ -1,6 +1,12 @@
 import React, { useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { BrainCircuit, Wrench, CheckCircle2, XCircle, MessageSquare, ChevronRight, ShieldAlert } from 'lucide-react';
+import { FocusThreadPanel } from './FocusThreadPanel';
+import type { ConversationFocusThread } from '@/hooks/useFocusThreads';
+import { RuntimeEvidencePanel } from './RuntimeEvidencePanel';
+import type { StructuredRuntimeStatus } from '@/hooks/useRuntimeStatus';
+import { LumiScenePanel } from './LumiScenePanel';
+import type { LumiSceneSnapshot } from '../../shared/lumi_scene';
 
 export interface WorkflowStep {
   id: string;
@@ -30,6 +36,14 @@ interface WorkflowPanelProps {
   t?: any;
   placement?: 'center' | 'corner';
   backgroundTasks?: BackgroundWorkflowTask[];
+  focusThreads?: ConversationFocusThread[];
+  focusThreadsLoading?: boolean;
+  runtimeStatus?: StructuredRuntimeStatus | null;
+  runtimeStatusLoading?: boolean;
+  runtimeStatusError?: string;
+  scene?: LumiSceneSnapshot | null;
+  sceneLoading?: boolean;
+  sceneError?: string;
   onCancelBackgroundTask?: (taskId: string) => void;
 }
 
@@ -154,6 +168,14 @@ export default function WorkflowPanel({
   t,
   placement = 'center',
   backgroundTasks = [],
+  focusThreads = [],
+  focusThreadsLoading = false,
+  runtimeStatus = null,
+  runtimeStatusLoading = false,
+  runtimeStatusError = '',
+  scene = null,
+  sceneLoading = false,
+  sceneError = '',
   onCancelBackgroundTask,
 }: WorkflowPanelProps) {
   const listRef = useRef<HTMLDivElement>(null);
@@ -237,6 +259,17 @@ export default function WorkflowPanel({
               </div>
             )}
 
+            <FocusThreadPanel threads={focusThreads} loading={focusThreadsLoading} />
+
+            <RuntimeEvidencePanel
+              status={runtimeStatus}
+              loading={runtimeStatusLoading}
+              error={runtimeStatusError}
+              variant="compact"
+            />
+
+            <LumiScenePanel scene={scene} loading={sceneLoading} error={sceneError} compact />
+
             {latestStep && (
               <div className="border-l border-white/10 pl-3 py-0.5">
                 <div className="text-xs font-bold text-white/80 truncate">{latestStep.text}</div>
@@ -276,7 +309,7 @@ export default function WorkflowPanel({
             )}
 
             {/* Empty state */}
-            {steps.length === 0 && (
+            {steps.length === 0 && focusThreads.length === 0 && !runtimeStatus && !scene && (
               <div className="text-xs text-white/45 text-center py-4">
                 {t?.workflowWaiting || 'Waiting for agent activity...'}
               </div>

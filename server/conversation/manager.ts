@@ -40,6 +40,38 @@ import {
 } from './action_ledger';
 import type { CapabilityExecutionPlan } from '../cognition/capability_execution_plan';
 import type { WorkflowResult } from '../agents/orchestrator';
+import {
+  listConversationFocusThreads,
+  updateConversationFocusThread,
+  type ConversationFocusThread,
+} from './focus_threads';
+
+export function getConversationFocusThreads(input: {
+  userId: string;
+  domain?: string;
+  orgId?: string;
+  includeTerminal?: boolean;
+}): ConversationFocusThread[] {
+  return listConversationFocusThreads(readDB(), input);
+}
+
+export function updateConversationActionFocus(input: {
+  taskId: string;
+  userId: string;
+  domain?: string;
+  orgId?: string;
+  commitment?: string;
+  nextAction?: string;
+  waitingFor?: string;
+  interruption?: string;
+  resumePoint?: string;
+  dueAt?: string;
+}): ConversationFocusThread | null {
+  const db = readDB();
+  const focus = updateConversationFocusThread(db, input);
+  if (focus) writeDB(db);
+  return focus;
+}
 
 export function getConversationActionStatus(
   conversationId: string,

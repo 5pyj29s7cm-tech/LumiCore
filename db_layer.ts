@@ -66,6 +66,7 @@ const PERFORMANCE_INDEX_SQL = [
   `CREATE INDEX IF NOT EXISTS idx_model_routing_conversation_completed ON model_routing_receipts(conversationId, completedAt)`,
   `CREATE INDEX IF NOT EXISTS idx_model_routing_request ON model_routing_receipts(requestId)`,
   `CREATE INDEX IF NOT EXISTS idx_model_routing_selected ON model_routing_receipts(selectedProvider, selectedModel, completedAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_read_only_tool_patterns_scope ON read_only_tool_patterns(userId, domain, orgId, updatedAt)`,
   `CREATE INDEX IF NOT EXISTS idx_background_tasks_user_status ON background_delegation_tasks(userId, status, updatedAt)`,
   `CREATE INDEX IF NOT EXISTS idx_background_tasks_lease ON background_delegation_tasks(status, leaseExpiresAt)`,
   `CREATE INDEX IF NOT EXISTS idx_autonomous_tasks_user_status ON autonomous_tasks(userId, status, updatedAt)`,
@@ -737,6 +738,17 @@ function createTables(): Promise<void> {
         durationMs INTEGER NOT NULL DEFAULT 0
       );
 
+      CREATE TABLE IF NOT EXISTS read_only_tool_patterns (
+        id TEXT PRIMARY KEY,
+        userId TEXT NOT NULL,
+        domain TEXT NOT NULL DEFAULT 'personal',
+        orgId TEXT NOT NULL DEFAULT '',
+        confidence REAL NOT NULL DEFAULT 0,
+        successCount INTEGER NOT NULL DEFAULT 0,
+        updatedAt TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}'
+      );
+
       CREATE TABLE IF NOT EXISTS background_delegation_tasks (
         id TEXT PRIMARY KEY,
         userId TEXT NOT NULL,
@@ -1217,6 +1229,7 @@ async function loadMemoryDB(): Promise<void> {
   const conversationActionTasks = await query<any>('SELECT * FROM conversation_action_tasks');
   const conversationActionReceipts = await query<any>('SELECT * FROM conversation_action_receipts');
   const modelRoutingReceiptsRaw = await query<any>('SELECT * FROM model_routing_receipts');
+  const readOnlyToolPatternsRaw = await query<any>('SELECT * FROM read_only_tool_patterns');
   const backgroundDelegationTasksRaw = await query<any>('SELECT * FROM background_delegation_tasks');
   const autonomousTasksRaw = await query<any>('SELECT * FROM autonomous_tasks');
   const externalAiSessionsRaw = await query<any>('SELECT * FROM external_ai_sessions');
@@ -1371,6 +1384,23 @@ async function loadMemoryDB(): Promise<void> {
         try { return JSON.parse(receipt.attempts || '[]'); } catch { return []; }
       })(),
     })),
+    readOnlyToolPatterns: (readOnlyToolPatternsRaw || []).flatMap((row: any) => {
+      try {
+        const payload = JSON.parse(row.payload || '{}');
+        return payload && typeof payload === 'object'
+          ? [{
+              ...payload,
+              id: row.id,
+              userId: row.userId,
+              domain: row.domain || 'personal',
+              orgId: row.orgId || '',
+              confidence: Number(row.confidence) || 0,
+              successCount: Number(row.successCount) || 0,
+              updatedAt: row.updatedAt,
+            }]
+          : [];
+      } catch { return []; }
+    }),
     backgroundDelegationTasks: (backgroundDelegationTasksRaw || []).flatMap((row: any) => {
       try {
         const task = JSON.parse(row.payload || '{}');
@@ -1850,6 +1880,21 @@ async function persistMemoryDB(): Promise<void> {
         receipt.startedAt,
         receipt.completedAt,
         Number(receipt.durationMs) || 0,
+      ]),
+    },
+    {
+      name: 'read_only_tool_patterns',
+      createSQL: `CREATE TABLE _temp_read_only_tool_patterns (id TEXT PRIMARY KEY, userId TEXT NOT NULL, domain TEXT NOT NULL DEFAULT 'personal', orgId TEXT NOT NULL DEFAULT '', confidence REAL NOT NULL DEFAULT 0, successCount INTEGER NOT NULL DEFAULT 0, updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
+      insertSQL: `INSERT INTO _temp_read_only_tool_patterns (id, userId, domain, orgId, confidence, successCount, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.readOnlyToolPatterns || []).map((pattern: any) => [
+        pattern.id,
+        pattern.userId,
+        pattern.domain || 'personal',
+        pattern.orgId || '',
+        Number(pattern.confidence) || 0,
+        Number(pattern.successCount) || 0,
+        pattern.updatedAt || pattern.createdAt || new Date().toISOString(),
+        JSON.stringify(pattern),
       ]),
     },
     {

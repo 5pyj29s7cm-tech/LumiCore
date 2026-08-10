@@ -5,6 +5,10 @@ import {
 } from './learning_interface';
 import type { ToolExecutionRecord } from '../tools/types';
 import type { LumiTurnFlow } from './turn_flow';
+import {
+  recordReadOnlyToolPattern,
+  type ReadOnlyToolPatternRow,
+} from '../context/read_only_tool_learning';
 
 type LogFn = (message: string, ...args: any[]) => void;
 
@@ -34,6 +38,11 @@ export interface LumiPostTurnLearningOptions {
 export interface LumiPostTurnLearningOutcome {
   ok: boolean;
   result?: LumiLearningTurnResult;
+  readOnlyPattern?: {
+    recorded: boolean;
+    reason: string;
+    pattern?: ReadOnlyToolPatternRow;
+  };
   error?: string;
 }
 
@@ -60,11 +69,20 @@ export function persistLumiPostTurnLearning(
       agentId: context.agentId || '',
     });
 
+    const readOnlyPattern = recordReadOnlyToolPattern({
+      userId: context.userId,
+      userText: context.userText,
+      toolRecords: options.toolRecords || [],
+      domain: context.domain,
+      orgId: context.orgId,
+      observationRef: options.sourceInteractionId || context.defaultSourceInteractionId,
+    });
+
     if (result.shouldPersist) {
       const info = context.log?.info || console.log;
       info(`[LumiLearningInterface] ${label} persisted memories=${result.storedMemories} capability=${result.capabilityRecord?.id || 'none'} reasons=${result.reasons.join(',')}`);
     }
-    return { ok: true, result };
+    return { ok: true, result, readOnlyPattern };
   } catch (err: any) {
     const error = err?.message || String(err);
     const warn = context.log?.warn || console.warn;

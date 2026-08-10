@@ -42,6 +42,8 @@ export interface DurableBackgroundTaskSupervisorOptions {
   concurrency?: number;
   claimAgeMs?: number;
   taskExecutor?: (task: BackgroundDelegationTask) => Promise<void>;
+  /** A parent lifecycle supervisor may own scheduling and call tick(). */
+  autoSchedule?: boolean;
 }
 
 export interface DurableBackgroundTaskSupervisor {
@@ -317,14 +319,16 @@ export function startDurableBackgroundTaskSupervisor(
     }
   };
 
-  const timer = setInterval(() => { void tick(); }, Math.max(250, options.pollMs || DEFAULT_POLL_MS));
-  if (typeof (timer as any).unref === 'function') (timer as any).unref();
-  void tick();
+  const timer = options.autoSchedule === false
+    ? null
+    : setInterval(() => { void tick(); }, Math.max(250, options.pollMs || DEFAULT_POLL_MS));
+  if (timer && typeof (timer as any).unref === 'function') (timer as any).unref();
+  if (options.autoSchedule !== false) void tick();
   return {
     tick,
     stop() {
       stopped = true;
-      clearInterval(timer);
+      if (timer) clearInterval(timer);
     },
     activeTaskIds: () => Array.from(active),
   };

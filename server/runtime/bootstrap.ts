@@ -22,6 +22,13 @@ import { startDurableBackgroundTaskSupervisor } from "../agents/background_task_
 import { recoverInterruptedExternalAiCollaborations } from "../agents/external_ai_collaboration";
 import { recoverInterruptedExternalAiHistorySyncs } from "../agents/external_ai_history_sync";
 import { hydrateActiveExtensions } from "../extensions/registry";
+import { runScheduledReadOnlyPrewarm, readOnlyContextCache } from "../context/read_only_cache";
+import { getGptSovitsRuntimeStatus } from "../tts/gptsovits_runtime";
+import { getVoiceprintRuntimeStatus } from "../biometrics/voiceprint_provider";
+import {
+  setUnifiedRuntimeSupervisor,
+  UnifiedRuntimeSupervisor,
+} from "./unified_supervisor";
 
 interface BootstrapContext {
   server: any;
@@ -40,6 +47,7 @@ interface BootstrapContext {
 let firstBootExplorationWorker: ChildProcess | null = null;
 let backgroundTaskSupervisor: ReturnType<typeof startDurableBackgroundTaskSupervisor> | null = null;
 let backgroundTaskSupervisorStartupTimer: ReturnType<typeof setTimeout> | null = null;
+let unifiedRuntimeSupervisor: UnifiedRuntimeSupervisor | null = null;
 
 function isValidSystemSnapshot(value: unknown): value is SystemSnapshot {
   const snapshot = value as Partial<SystemSnapshot> | null;
@@ -231,6 +239,7 @@ export async function bootstrap(ctx: BootstrapContext) {
         getGlm: llm.getGlm,
         getRelay: llm.getRelay,
       },
+      autoSchedule: false,
     });
   };
 
@@ -248,6 +257,35 @@ export async function bootstrap(ctx: BootstrapContext) {
   if (typeof (backgroundTaskSupervisorStartupTimer as any).unref === 'function') {
     (backgroundTaskSupervisorStartupTimer as any).unref();
   }
+
+  unifiedRuntimeSupervisor = new UnifiedRuntimeSupervisor([
+    {
+      id: 'durable-background-tasks',
+      intervalMs: 1_000,
+      timeoutMs: 900,
+      run: async () => ({ started: backgroundTaskSupervisor ? await backgroundTaskSupervisor.tick() : 0 }),
+    },
+    {
+      id: 'read-only-context-prewarm',
+      intervalMs: 15_000,
+      timeoutMs: 2_000,
+      run: () => runScheduledReadOnlyPrewarm({ deadlineMs: 1_500, maxJobs: 8 }),
+    },
+    {
+      id: 'runtime-resource-observation',
+      intervalMs: 5_000,
+      timeoutMs: 1_000,
+      run: () => ({
+        registeredTools: toolRegistry.list().length,
+        databaseReadable: Boolean(readDB()),
+        readOnlyCache: readOnlyContextCache.metrics(),
+        gptSovits: getGptSovitsRuntimeStatus(),
+        voiceprint: getVoiceprintRuntimeStatus(),
+      }),
+    },
+  ]);
+  setUnifiedRuntimeSupervisor(unifiedRuntimeSupervisor);
+  unifiedRuntimeSupervisor.start();
 
   // GPT-SoVITS is supervised and started on first synthesis request. Keeping
   // the multi-gigabyte model resident while voice is idle is no longer the
@@ -330,6 +368,9 @@ export async function bootstrap(ctx: BootstrapContext) {
     }
     backgroundTaskSupervisor?.stop();
     backgroundTaskSupervisor = null;
+    unifiedRuntimeSupervisor?.stop();
+    unifiedRuntimeSupervisor = null;
+    setUnifiedRuntimeSupervisor(null);
     try {
       await stopMessagingConnections();
       console.log('[Messaging] Long connections stopped');

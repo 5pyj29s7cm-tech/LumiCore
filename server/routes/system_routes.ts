@@ -9,8 +9,9 @@ import { toolRegistry } from "../tools/registry";
 import { scheduler } from "../scheduler";
 import { classifyCloudError, getCloudHealth, recordFailure, resetCircuit } from "../cloud/core";
 import { loadKeys, saveKeys, getKey, getAllKeyNames, isPersistableKeyName } from "../config/keys";
-import { requireAuth, requireLocalRequest } from "../middleware/auth";
+import { requireAuth, requireLocalRequest, resolveDomain } from "../middleware/auth";
 import { getLatencyStats } from "../monitor/latency_store";
+import { getVoiceLatencyStats } from "../monitor/voice_latency_store";
 import { mcpManager, getMCPConfig } from "../mcp";
 import {
   getUserPreferredVision,
@@ -43,6 +44,8 @@ import { getRuntimeQueueStatus as getGptSovitsQueueStatus } from "../tts/provide
 import { getVoiceprintRuntimeStatus } from "../biometrics/voiceprint_provider";
 import { getToolRuntimeMetrics } from "../runtime/tool_metrics";
 import { getCapabilityRuntimeMetrics } from "../runtime/capability_metrics";
+import { getUnifiedRuntimeSupervisorStatus } from "../runtime/unified_supervisor";
+import { readOnlyContextCache } from "../context/read_only_cache";
 import { getCapabilityRolloutStage } from "../cognition/capability_rollout";
 import { getAdapterResilienceSnapshot } from "../tools/adapter_resilience";
 import { getLocalModelConfig, getLocalModelQueueSnapshot, refreshLocalModelConfig } from "../llm/local_models";
@@ -58,6 +61,7 @@ import {
 } from "../llm/model_configuration";
 import { getDesktopControlRuntimeSnapshot } from "../desktop/control_lease";
 import { listRegisteredProviders } from '../extensions/registry';
+import { buildStructuredRuntimeStatus } from '../monitor/runtime_status';
 
 export { testLLMProviderConnection, testVisionProviderConnection } from "../llm/model_configuration";
 
@@ -351,9 +355,11 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
           },
         },
         supervisedRuntimes: {
+          unified: getUnifiedRuntimeSupervisorStatus(),
           gptSovits: getGptSovitsRuntimeStatus(),
           voiceprint: getVoiceprintRuntimeStatus(),
         },
+        readOnlyContextCache: readOnlyContextCache.metrics(),
         functionalProbes: {
           databaseRead: true,
           registeredTools: toolRegistry.list().length,
@@ -398,6 +404,32 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
   // Cloud provider health — circuit breaker + fallback status
   router.get("/cloud/health", (_req, res) => {
     try { res.json(getCloudHealth()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Authenticated, scope-isolated projection of what Lumi is actually doing.
+  // Raw tool inputs/results never cross this boundary; the UI receives only
+  // durable task identities, policy state, receipt outcomes and aggregate
+  // runtime metrics.
+  router.get('/runtime/status', requireAuth, (req, res) => {
+    try {
+      const scope = resolveDomain(req.user!);
+      const toolMetrics = getToolRuntimeMetrics();
+      res.json(buildStructuredRuntimeStatus(readDB(), {
+        userId: req.user!.uid,
+        domain: scope.domain,
+        orgId: scope.orgId,
+        runtime: {
+          toolMetrics: toolMetrics.totals,
+          capabilityMetrics: getCapabilityRuntimeMetrics(),
+          voiceLatency: getVoiceLatencyStats(),
+          supervisor: getUnifiedRuntimeSupervisorStatus(),
+          readOnlyContextCache: readOnlyContextCache.metrics(),
+        },
+      }));
+    } catch (error: any) {
+      logger.error('Structured runtime status failed', error);
+      res.status(500).json({ error: error.message });
+    }
   });
 
   // Explicit functional probe for local OpenAI-compatible runtimes. This is
@@ -924,7 +956,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
 
   // Latency stats
   router.get("/monitor/latency", (_req: any, res: any) => {
-    res.json(getLatencyStats());
+    res.json({ ...getLatencyStats(), voice: getVoiceLatencyStats() });
   });
 
   // Ecosystem stats

@@ -20,6 +20,7 @@ import type {
   ModelGraphArbitrationReceipt,
   ModelGraphNodeReceipt,
 } from '../agents/model_execution_graph';
+import { reconcileConversationFocusThread } from './focus_threads';
 
 export interface ConversationActionTaskRow {
   id: string;
@@ -273,7 +274,7 @@ export function syncConversationActionTaskLedger(
   const parentContext = parent ? parseObject(parent.context) : {};
   const currentContext = parseObject(task?.context);
   const parentState = normalizeConversationActionState(parentContext.actionState);
-  const context = {
+  const context: Record<string, any> = {
     ...parentContext,
     // Execution/model plans are attached independently from action-state
     // updates. Preserve the current task context on every later status or
@@ -292,6 +293,14 @@ export function syncConversationActionTaskLedger(
     actionState: sanitizeState(state),
   };
   const completed = state.status === 'completed' || !state.unfinished;
+  const taskStatus = state.status || (state.unfinished ? 'blocked' : 'completed');
+  context.focusThread = reconcileConversationFocusThread(currentContext.focusThread, {
+    id: state.taskId,
+    goal: redactGoal(state.goal, intent),
+    status: taskStatus,
+    blocker: state.latestBlocker || '',
+    updatedAt: now,
+  }, now);
   const values: ConversationActionTaskRow = {
     id: state.taskId,
     conversationId: input.conversation.id,
@@ -304,7 +313,7 @@ export function syncConversationActionTaskLedger(
     operation: intent.kind === 'none' ? task?.operation || 'mutate' : intent.operation,
     goal: redactGoal(state.goal, intent),
     target: intent.target || state.appTarget || task?.target || '',
-    status: state.status || (state.unfinished ? 'blocked' : 'completed'),
+    status: taskStatus,
     blocker: state.latestBlocker || '',
     activeRequestId: state.activeRequestId || '',
     completionSource: state.completionSource || '',

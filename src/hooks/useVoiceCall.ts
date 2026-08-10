@@ -1,10 +1,14 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { requestMicrophoneStream } from '@/services/sensorPermissionService';
 import {
   shouldDisplayAgentResponse,
   type AgentResponseDelivery,
 } from '@/lib/agentResponseDelivery';
 import { closeAudioContext } from '@/lib/audioContextLifecycle';
+import {
+  applyPreferredVoiceOutputDevice,
+  requestPreferredMicrophoneStream,
+  VOICE_DEVICE_PREFERENCE_CHANGED,
+} from '@/lib/voiceDevicePreferences';
 
 export type CallState = 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking' | 'queued' | 'passive';
 
@@ -42,6 +46,13 @@ interface VoiceStartPayload {
   domain: 'personal' | 'work';
   orgId?: string;
   sessionId: string;
+}
+
+interface VoiceAudioResponse {
+  buffer: ArrayBuffer;
+  volumeGain?: number;
+  requestId?: string;
+  lane?: string;
 }
 
 export function shouldAcceptVoiceStatus(
@@ -170,6 +181,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
   const ensureTtsContext = useCallback(() => {
     if (!ttsContext.current || ttsContext.current.state === 'closed') {
       ttsContext.current = new AudioContext();
+      void applyPreferredVoiceOutputDevice(ttsContext.current);
       ttsGainNode.current = ttsContext.current.createGain();
       ttsGainNode.current.connect(ttsContext.current.destination);
       if (ttsContext.current.state === 'suspended') {
@@ -269,7 +281,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
     setCallState('idle');
   }, [cleanupCapture, disposePlaybackContexts, clearPassiveTimers, clearThinkingWatchdog]);
 
-  const audioQueue = useRef<Array<ArrayBuffer | { buffer: ArrayBuffer; volumeGain?: number; lane?: string }>>([]);
+  const audioQueue = useRef<Array<ArrayBuffer | VoiceAudioResponse>>([]);
 
   useEffect(() => {
     if (!socket) return;
@@ -282,6 +294,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
         activeVoiceRequestIdRef.current = data.requestId;
       }
       const map: Record<string, CallState> = {
+        connecting: 'connecting',
         listening: 'listening',
         thinking: 'thinking',
         speaking: 'speaking',
@@ -342,7 +355,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
      * Cross-fade: overlaps the last 50ms of previous audio with the first 50ms of next.
      * VolumeGain: applies server-computed volume adaptation.
      */
-    const playAudioChunk = (buffer: ArrayBuffer, volumeGain?: number, lane?: string) => {
+    const playAudioChunk = (buffer: ArrayBuffer, volumeGain?: number, lane?: string, requestId?: string) => {
       if (!isCallActive.current) return;
       const ctx = ensureTtsContext();
       const playbackGeneration = playbackGenerationRef.current;
@@ -381,10 +394,8 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
           // Check if more chunks are queued
           if (audioQueue.current.length > 0) {
             const next = audioQueue.current.shift()!;
-            const nextGain = typeof next === 'object' ? (next as any).volumeGain : undefined;
-            const nextBuffer = typeof next === 'object' ? (next as any).buffer : next;
-            const nextLane = typeof next === 'object' ? (next as any).lane : undefined;
-            playAudioChunk(nextBuffer, nextGain, nextLane);
+            const queued: VoiceAudioResponse = next instanceof ArrayBuffer ? { buffer: next } : next;
+            playAudioChunk(queued.buffer, queued.volumeGain, queued.lane, queued.requestId);
           } else {
             isTtsPlaying.current = false;
             setCallState(prev => prev === 'speaking' ? 'listening' : prev);
@@ -392,34 +403,46 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
         };
 
         source.start(effectiveStart);
+        if (requestId) {
+          const ackGeneration = playbackGeneration;
+          const delayMs = Math.max(0, Math.round((effectiveStart - ctx.currentTime) * 1000));
+          setTimeout(() => {
+            if (!isCallActive.current || ackGeneration !== playbackGenerationRef.current) return;
+            socket.emit('audio:playback_started', { requestId, lane });
+          }, delayMs);
+        }
       }, (err) => {
         if (playbackGeneration !== playbackGenerationRef.current) return;
         console.error('[VoiceCall] Decode failed:', err);
         isTtsPlaying.current = false;
         if (audioQueue.current.length > 0) {
           const next = audioQueue.current.shift()!;
-          const nextBuffer = typeof next === 'object' ? (next as any).buffer : next;
-          const nextGain = typeof next === 'object' ? (next as any).volumeGain : undefined;
-          const nextLane = typeof next === 'object' ? (next as any).lane : undefined;
-          playAudioChunk(nextBuffer, nextGain, nextLane);
+          const queued: VoiceAudioResponse = next instanceof ArrayBuffer ? { buffer: next } : next;
+          playAudioChunk(queued.buffer, queued.volumeGain, queued.lane, queued.requestId);
         }
       });
     };
 
     // Handle both old format (raw ArrayBuffer) and new format ({ buffer, volumeGain })
-    const onAudioResponse = (data: ArrayBuffer | { buffer: ArrayBuffer; volumeGain?: number; requestId?: string; lane?: string }) => {
+    const onAudioResponse = (data: ArrayBuffer | VoiceAudioResponse) => {
       if (!isCallActive.current) { console.log('[VoiceCall] Ignoring audio:response, call ended'); return; }
       if (!(data instanceof ArrayBuffer) && data.requestId && data.requestId !== activeVoiceRequestIdRef.current) return;
       const actualBuffer = data instanceof ArrayBuffer ? data : data.buffer;
       const actualGain = data instanceof ArrayBuffer ? undefined : data.volumeGain;
       const actualLane = data instanceof ArrayBuffer ? undefined : data.lane;
+      const actualRequestId = data instanceof ArrayBuffer ? undefined : data.requestId;
 
       if (isTtsPlaying.current) {
         // Currently playing — queue this chunk
-        audioQueue.current.push(data instanceof ArrayBuffer ? data : { buffer: actualBuffer, volumeGain: actualGain, lane: actualLane });
+        audioQueue.current.push(data instanceof ArrayBuffer ? data : {
+          buffer: actualBuffer,
+          volumeGain: actualGain,
+          lane: actualLane,
+          requestId: actualRequestId,
+        });
         return;
       }
-      playAudioChunk(actualBuffer, actualGain, actualLane);
+      playAudioChunk(actualBuffer, actualGain, actualLane, actualRequestId);
     };
 
     const onAudioTranscript = (data: { text: string; isFinal: boolean } & VoiceTranscriptMeta) => {
@@ -519,6 +542,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
         }
         isTtsPlaying.current = true;
         const ctx = new AudioContext();
+        void applyPreferredVoiceOutputDevice(ctx);
         const playbackGeneration = playbackGenerationRef.current;
         proactiveContext.current = ctx;
         ctx.decodeAudioData(data.audioBuffer.slice(0), (decoded) => {
@@ -637,7 +661,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
       await waitForVoiceSocket(activeSocket);
       if (generation !== callGenerationRef.current) return;
 
-      const stream = await requestMicrophoneStream({
+      const stream = await requestPreferredMicrophoneStream({
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true,
@@ -778,6 +802,15 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
       startInFlightRef.current = false;
     }
   }, [cleanupCapture, stopAllPlayback]);
+
+  useEffect(() => {
+    const applyOutputPreference = () => {
+      if (ttsContext.current) void applyPreferredVoiceOutputDevice(ttsContext.current);
+      if (proactiveContext.current) void applyPreferredVoiceOutputDevice(proactiveContext.current);
+    };
+    window.addEventListener(VOICE_DEVICE_PREFERENCE_CHANGED, applyOutputPreference);
+    return () => window.removeEventListener(VOICE_DEVICE_PREFERENCE_CHANGED, applyOutputPreference);
+  }, []);
 
   const startCallRef = useRef(startCall);
   startCallRef.current = startCall;

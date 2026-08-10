@@ -72,6 +72,7 @@ import {
   getConversationModelExecutionRecovery,
   cancelConversationActionExecution,
   setConversationActionExecutionStatus,
+  updateConversationActionFocus,
 } from "../conversation/manager";
 import { scheduleConversationSummary } from "../conversation/summary_scheduler";
 import { ensureBranch } from "../memory/tree";
@@ -1737,6 +1738,17 @@ export function registerChatHandler(
             userId: uid,
             plan: executionPipeline.executionPlan,
           });
+          updateConversationActionFocus({
+            taskId: workflowTaskExecution.state.taskId,
+            userId: uid,
+            domain: resolvedDomain,
+            orgId: resolvedOrgId,
+            commitment: workflowTaskExecution.state.goal,
+            nextAction: workflowTaskExecution.state.latestInstruction || workflowTaskExecution.state.goal,
+            resumePoint: workflowTaskExecution.kind === 'resume'
+              ? workflowTaskExecution.state.assistantState || workflowTaskExecution.state.latestBlocker || ''
+              : '',
+          });
           setConversationActionExecutionStatus(conversationId, uid, 'executing', { requestId });
         }
         const workflowIntentTrace = executionPipeline.intentTrace;
@@ -1912,6 +1924,17 @@ export function registerChatHandler(
           conversationId,
           userId: uid,
           plan: executionPipeline.executionPlan,
+        });
+        updateConversationActionFocus({
+          taskId: actionTaskExecution.state.taskId,
+          userId: uid,
+          domain: resolvedDomain,
+          orgId: resolvedOrgId,
+          commitment: actionTaskExecution.state.goal,
+          nextAction: actionTaskExecution.state.latestInstruction || actionTaskExecution.state.goal,
+          resumePoint: actionTaskExecution.kind === 'resume'
+            ? actionTaskExecution.state.assistantState || actionTaskExecution.state.latestBlocker || ''
+            : '',
         });
       }
       const priorTaskRecords = actionTaskExecution.kind === 'resume'

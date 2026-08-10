@@ -14,9 +14,15 @@ import {
 import { CURRENT_APP_FORBIDDEN_TOOLS } from './current_app_execution';
 import {
   toolRegistry,
+  type ToolRegistry,
 } from '../tools/registry';
 import { projectToolDeclarationForRouting } from '../tools/capability_projection';
 import type { CapabilityLane } from '../tools/types';
+import type { NormalizedActionIntent } from './normalized_action_intent';
+import {
+  rankReadOnlyToolPatterns,
+  type RankedReadOnlyToolPattern,
+} from '../context/read_only_tool_learning';
 
 export type LumiCapabilityLane =
   | 'conversation'
@@ -40,6 +46,11 @@ export interface LumiCapabilitySelectionInput {
   dispatch: LumiTurnDispatch;
   execution: LumiExecutionDecision;
   text: string;
+  userId?: string;
+  domain?: string;
+  orgId?: string;
+  normalizedIntent?: NormalizedActionIntent;
+  registry?: ToolRegistry;
 }
 
 export interface LumiCapabilitySelection {
@@ -48,6 +59,7 @@ export interface LumiCapabilitySelection {
   reasons: string[];
   preferredTools: string[];
   promptOverlay: string;
+  readOnlyPattern?: RankedReadOnlyToolPattern;
 }
 
 function unique(values: string[]): string[] {
@@ -92,7 +104,7 @@ function availablePreferredTools(input: LumiCapabilitySelectionInput, lane: Lumi
     external_tool: ['agents', 'desktop', 'web'],
   };
   const lanes = new Set(manifestLane[lane] || []);
-  const runtimeManifest = toolRegistry.getCapabilityManifest(input.execution.toolPolicy, {
+  const runtimeManifest = (input.registry || toolRegistry).getCapabilityManifest(input.execution.toolPolicy, {
     executableOnly: true,
   });
   const manifest = runtimeManifest.length > 0
@@ -115,6 +127,16 @@ function availablePreferredTools(input: LumiCapabilitySelectionInput, lane: Lumi
     )).slice(0, 48);
   }
   return unique(routeTools.filter(name => available.has(name))).slice(0, 48);
+}
+
+function isStrictReadOnlyManifestTool(name: string, registry: ToolRegistry = toolRegistry): boolean {
+  const manifest = registry.getCapabilityManifestEntry(name);
+  if (!manifest || (manifest.operation !== 'observe' && manifest.operation !== 'test')) return false;
+  if (manifest.sideEffects.length === 0) return false;
+  return manifest.sideEffects.every(effect => (
+    ['none', 'local_read', 'network_read'].includes(effect.type)
+    && effect.reversible === true
+  ));
 }
 
 function fallbackPrimary(input: LumiCapabilitySelectionInput): string {
@@ -394,7 +416,7 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
         effectiveAllowed.has(name)
       ))
     : [];
-  const preferredTools = unique([
+  const basePreferredTools = unique([
     ...availablePreferredTools(input, selected.lane),
     ...(input.dispatch.flow.specialWorkflow?.requiredTools || [])
       .filter(name => effectiveAllowed.size === 0 || effectiveAllowed.has(name)),
@@ -407,6 +429,32 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
     && (!recoveredCurrentAppEdit
       || !(CURRENT_APP_FORBIDDEN_TOOLS as readonly string[]).includes(name))
   )).slice(0, 48);
+  const normalizedIntent = input.normalizedIntent;
+  const canUseLearnedReadPattern = Boolean(
+    input.userId
+    && normalizedIntent
+    && normalizedIntent.sideEffectClass === 'none'
+    && (normalizedIntent.operation === 'read' || normalizedIntent.operation === 'status')
+    && normalizedIntent.relation !== 'correction',
+  );
+  const strictReadOnlyTools = canUseLearnedReadPattern
+    ? basePreferredTools.filter(name => isStrictReadOnlyManifestTool(name, input.registry || toolRegistry))
+    : [];
+  const readOnlyPattern = strictReadOnlyTools.length > 0
+    ? rankReadOnlyToolPatterns({
+        userId: input.userId!,
+        userText: routeText,
+        domain: input.domain || input.dispatch.flow.domain,
+        orgId: input.orgId || input.dispatch.flow.orgId,
+        availableTools: strictReadOnlyTools,
+      })[0]
+    : undefined;
+  // Learned history may only reorder already authorized tools. It never adds
+  // a declaration, changes confirmation, or starts an execution itself.
+  const preferredTools = unique([
+    ...(readOnlyPattern?.toolNames || []),
+    ...basePreferredTools,
+  ]).slice(0, 48);
   const routeCategories = input.execution.toolRoute?.categories || [];
   const promptOverlay = [
     '## Lumi Capability Selection',
@@ -415,6 +463,9 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
     `Why: ${unique(selected.reasons).join('; ')}.`,
     routeCategories.length ? `Tool route categories: ${routeCategories.join(', ')}.` : 'Tool route categories: none.',
     preferredTools.length ? `Preferred tools for this lane: ${preferredTools.join(', ')}.` : 'Preferred tools for this lane: none.',
+    readOnlyPattern
+      ? `Verified read-only history hint: ${readOnlyPattern.toolNames.join(' -> ')} (confidence=${readOnlyPattern.confidence.toFixed(2)}, action=${readOnlyPattern.action}). This hint may only reorder the current authorized read tools; it does not authorize or execute anything.`
+      : '',
     laneRule(selected, routeText),
     formatActionContractPrompt(actionContract),
     'This lane is an execution bias, not a fixed script. If the newest user wording contradicts it, follow the newest wording and update task state when work is persistent.',
@@ -424,5 +475,6 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
     ...selected,
     preferredTools,
     promptOverlay,
+    ...(readOnlyPattern ? { readOnlyPattern } : {}),
   };
 }

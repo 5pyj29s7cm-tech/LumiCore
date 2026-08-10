@@ -226,6 +226,11 @@ export function buildLumiExecutionPipeline(
     dispatch: turnIntent,
     execution,
     text: decisionText,
+    userId: input.dispatch.userId,
+    domain: input.dispatch.domain,
+    orgId: input.dispatch.orgId,
+    normalizedIntent,
+    registry: input.registry,
   });
   const manifest = input.registry.getCapabilityManifest(execution.toolPolicy);
   const capabilityIds = Array.from(new Set(

@@ -46,6 +46,8 @@ import {
   shouldDisplayAgentResponse,
 } from '@/lib/agentResponseDelivery';
 import { buildChatConversationScopeKey } from '@/lib/chatConversationScope';
+import { FocusThreadPanel } from './FocusThreadPanel';
+import { useFocusThreads } from '@/hooks/useFocusThreads';
 
 const CHAT_HISTORY_LIMIT = 300;
 const CHAT_RENDER_LIMIT = 80;
@@ -422,6 +424,11 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   })();
   const OperationModeIcon = operationModeMeta.Icon;
   const socket = socketService.connect();
+  const { threads: focusThreads, loading: focusThreadsLoading } = useFocusThreads({
+    domain: activeDomain,
+    orgId: activeOrgId,
+    enabled: isOpen && Boolean(user),
+  });
   const [selectedVoiceId, setSelectedVoiceId] = useState<string | undefined>();
   const [voices, setVoices] = useState<any[]>([]);
   const [showVoicePicker, setShowVoicePicker] = useState(false);
@@ -2739,6 +2746,12 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
               </div>
             </div>
           )}
+
+          <FocusThreadPanel
+            threads={focusThreads}
+            loading={focusThreadsLoading}
+            variant="strip"
+          />
 
           <div
             ref={scrollRef}

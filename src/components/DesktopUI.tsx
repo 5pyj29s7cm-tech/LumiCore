@@ -68,6 +68,9 @@ import type { PetConfig } from '../pets/types';
 import { useSocket } from '@/hooks/useSocket';
 import { useAmbientPoller } from '@/hooks/useAmbientPoller';
 import { useVoiceCall, type VoiceTranscriptMeta } from '@/hooks/useVoiceCall';
+import { useFocusThreads } from '@/hooks/useFocusThreads';
+import { useRuntimeStatus } from '@/hooks/useRuntimeStatus';
+import { useLumiScene } from '@/hooks/useLumiScene';
 import { useApp, type OperationMode } from '@/contexts/AppContext';
 const LocalAgentSphere = lazy(() => import('./LocalAgentSphere').then(m => ({ default: m.LocalAgentSphere })));
 const NexusGlobe = lazy(() => import('./NexusGlobe/NexusGlobe').then(m => ({ default: m.NexusGlobe })));
@@ -1520,6 +1523,30 @@ export function DesktopUI({
   const personalOpacity = useTransform(cameraZ, [0, -400], [1, 0]);
   const { isTauri } = usePlatform();
   const { selectedVoiceId, unreadCount, notifications, addNotification, orgConnection, workDomain, switchDomain, operationMode, setOperationMode, aiConfig, resolvedAppearanceMode } = useApp();
+  const focusScopeDomain = workDomain === 'work' && orgConnection?.connected && orgConnection?.orgId
+    ? 'work'
+    : 'personal';
+  const { threads: focusThreads, loading: focusThreadsLoading } = useFocusThreads({
+    domain: focusScopeDomain,
+    orgId: focusScopeDomain === 'work' ? orgConnection?.orgId : undefined,
+    enabled: Boolean(user),
+  });
+  const {
+    status: structuredRuntimeStatus,
+    loading: structuredRuntimeLoading,
+    error: structuredRuntimeError,
+  } = useRuntimeStatus({
+    enabled: Boolean(user),
+    scopeKey: `${focusScopeDomain}:${focusScopeDomain === 'work' ? orgConnection?.orgId || '' : ''}`,
+  });
+  const {
+    scene: runtimeScene,
+    loading: runtimeSceneLoading,
+    error: runtimeSceneError,
+  } = useLumiScene({
+    enabled: Boolean(user),
+    scopeKey: `${focusScopeDomain}:${focusScopeDomain === 'work' ? orgConnection?.orgId || '' : ''}`,
+  });
   const petPreferenceScopeKey = workDomain === 'work'
     ? `org_${orgConnection?.orgId || 'pending'}`
     : `personal_${user?.uid || 'local'}`;
@@ -4426,7 +4453,10 @@ export function DesktopUI({
       agentStatus !== 'idle' ||
       workflowSteps.length > 0 ||
       workflowHasExecution ||
-      backgroundWorkflowTasks.length > 0
+      backgroundWorkflowTasks.length > 0 ||
+      focusThreads.length > 0 ||
+      structuredRuntimeStatus?.level === 'working' ||
+      structuredRuntimeStatus?.level === 'attention'
     );
 
   const tutorialLabel = t.showTutorial || (uiMessage('desktop-ui.tutorial.67f6f569ce', (lang === 'zh') ? 'zh' : 'en'));
@@ -5495,6 +5525,14 @@ export function DesktopUI({
             t={t}
             placement={isWallpaperMode ? 'center' : 'corner'}
             backgroundTasks={backgroundWorkflowTasks}
+            focusThreads={focusThreads}
+            focusThreadsLoading={focusThreadsLoading}
+            runtimeStatus={structuredRuntimeStatus}
+            runtimeStatusLoading={structuredRuntimeLoading}
+            runtimeStatusError={structuredRuntimeError}
+            scene={runtimeScene}
+            sceneLoading={runtimeSceneLoading}
+            sceneError={runtimeSceneError}
             onCancelBackgroundTask={cancelBackgroundWorkflowTask}
           />
         </Suspense>

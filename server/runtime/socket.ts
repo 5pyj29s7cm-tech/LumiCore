@@ -11,6 +11,8 @@ import { registerConversationHandlers } from "../socket/conversations";
 import { registerWakeHandlers } from "../socket/wake";
 import { registerTerminalHandlers } from "../socket/terminal";
 import { registerClientSelfHandlers } from "../socket/client_self";
+import { registerFocusHandlers } from "../socket/focus";
+import { registerSceneHandlers } from "../socket/scene";
 import { getSensory } from "../socket/shared";
 import { perceptionEvents } from "../socket/shared";
 import { deviceRegistry } from "../devices";
@@ -196,6 +198,8 @@ export function initSocketRuntime({ io, jwtSecret, llm }: SocketContext) {
     registerWakeHandlers(socket, getUserId);
     registerTerminalHandlers(socket, getUserId);
     registerClientSelfHandlers(socket, getUserId, io);
+    registerFocusHandlers(socket, getUserId, io);
+    registerSceneHandlers(socket, getUserId, io);
     const scopedSensory = (requestedUid: string) => {
       const scope = resolveSocketScope(socket, uid);
       return getSensory(requestedUid, undefined, scope);

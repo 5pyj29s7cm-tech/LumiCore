@@ -6383,6 +6383,10 @@
     "en": "Audio input disabled.",
     "zh": "音频输入已停用。"
   },
+  "settings.audio-device-list-unavailable.a063f48e43": {
+    "en": "Audio device selection is unavailable in this runtime.",
+    "zh": "当前运行环境无法选择音频设备。"
+  },
   "settings.audio-receptors.2d53651196": {
     "en": "Audio Receptors",
     "zh": "音频输入"
@@ -6390,6 +6394,26 @@
   "settings.audio-voice-output.e1f3dc4c32": {
     "en": "Audio & Voice Output",
     "zh": "音频与语音输出"
+  },
+  "settings.microphone-input.6f0b4220dd": {
+    "en": "Microphone input",
+    "zh": "麦克风输入"
+  },
+  "settings.speaker-output.3ce99de026": {
+    "en": "Speaker output",
+    "zh": "扬声器输出"
+  },
+  "settings.system-default-device.0e427a5690": {
+    "en": "System default",
+    "zh": "系统默认"
+  },
+  "settings.voice-devices.ef50d7638a": {
+    "en": "Voice devices",
+    "zh": "语音设备"
+  },
+  "settings.voice-devices-description.56ca042951": {
+    "en": "Choose the microphone and speaker Lumi uses for voice conversations.",
+    "zh": "选择 Lumi 语音对话使用的麦克风和扬声器。"
   },
   "settings.authorize.9ed688f227": {
     "en": "Authorize",
@@ -9166,5 +9190,65 @@
   "agent-chat-page.using-session-materials.66f4979b61": {
     "en": "I am continuing with the materials from this conversation...",
     "zh": "\u6211\u6b63\u5728\u7ee7\u7eed\u4f7f\u7528\u672c\u4f1a\u8bdd\u7684\u6750\u6599\u2026\u2026"
+  },
+  "focus-thread-panel.planning.46c9f7780c": {
+    "en": "Planning",
+    "zh": "\u89c4\u5212\u4e2d"
+  },
+  "focus-thread-panel.executing.76b91cbb06": {
+    "en": "Executing",
+    "zh": "\u6267\u884c\u4e2d"
+  },
+  "focus-thread-panel.waiting-confirmation.266caeaec0": {
+    "en": "Awaiting approval",
+    "zh": "\u7b49\u5f85\u786e\u8ba4"
+  },
+  "focus-thread-panel.blocked.d42294315f": {
+    "en": "Blocked",
+    "zh": "\u5df2\u53d7\u963b"
+  },
+  "focus-thread-panel.completed.d824a8a52c": {
+    "en": "Completed",
+    "zh": "\u5df2\u5b8c\u6210"
+  },
+  "focus-thread-panel.cancelled.2c1db96e4c": {
+    "en": "Cancelled",
+    "zh": "\u5df2\u53d6\u6d88"
+  },
+  "focus-thread-panel.user-confirmation.00a5dd69ad": {
+    "en": "Your confirmation",
+    "zh": "\u7528\u6237\u786e\u8ba4"
+  },
+  "focus-thread-panel.waiting-for.52c50d0b29": {
+    "en": "Waiting for",
+    "zh": "\u7b49\u5f85"
+  },
+  "focus-thread-panel.next-action.c19d64b6d0": {
+    "en": "Next",
+    "zh": "\u4e0b\u4e00\u6b65"
+  },
+  "focus-thread-panel.resume-point.f54de8a76a": {
+    "en": "Resume from",
+    "zh": "\u6062\u590d\u70b9"
+  },
+  "focus-thread-panel.date-locale.43f735d2f1": {
+    "en": "en-US",
+    "zh": "zh-CN"
+  },
+  "focus-thread-panel.evidence-task.40d66a3a28": {
+    "en": "Evidence task",
+    "zh": "\u56de\u6267\u4efb\u52a1"
+  },
+  "focus-thread-panel.active-focus.09d8da7b70": {
+    "en": "Active focus",
+    "zh": "\u5f53\u524d\u7126\u70b9"
+  },
+  "focus-thread-panel.active-count.9f970d5ccb": {
+    "en": "{count} active",
+    "zh": "{count} \u9879\u8fdb\u884c\u4e2d"
+  },
+  "focus-thread-panel.syncing.b0915c9901": {
+    "en": "Syncing",
+    "zh": "\u540c\u6b65\u4e2d"
   }
 }
