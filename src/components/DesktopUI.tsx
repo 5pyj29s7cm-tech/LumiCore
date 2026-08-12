@@ -39,7 +39,6 @@ import {
   Pause,
   Mic,
   Terminal as TerminalIcon,
-  Bot,
   Monitor,
   Trash2,
   RefreshCw,
@@ -49,6 +48,7 @@ import {
   Copy,
   Download,
   Upload,
+  Command,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { GlassCard } from './SharedUI';
@@ -73,6 +73,7 @@ const LocalAgentSphere = lazy(() => import('./LocalAgentSphere').then(m => ({ de
 const NexusGlobe = lazy(() => import('./NexusGlobe/NexusGlobe').then(m => ({ default: m.NexusGlobe })));
 const InkWorldLazy = lazy(() => import('./InkWorld').then(m => ({ default: m.InkWorld })));
 import type { BackgroundWorkflowTask, WorkflowStep } from './workflowTypes';
+import type { CommandCenterView } from './commandCenterTypes';
 import { useWakeWord } from '../hooks/useWakeWord';
 import { ErrorBoundary } from './ErrorBoundary';
 import { appConfirm } from '@/lib/appConfirm';
@@ -150,7 +151,6 @@ const Sanctuary = lazy(() => import('./Sanctuary').then(m => ({ default: m.Sanct
 const Settings = lazy(() => import('./Settings').then(m => ({ default: m.Settings })));
 const SkillCenter = lazy(() => import('./SkillCenter').then(m => ({ default: m.SkillCenter })));
 const SystemExplorer = lazy(() => import('./SystemExplorer').then(m => ({ default: m.SystemExplorer })));
-const TeamHub = lazy(() => import('./TeamHub').then(m => ({ default: m.TeamHub })));
 const TerminalWindow = lazy(() => import('./Terminal').then(m => ({ default: m.TerminalWindow })));
 const TokenDashboard = lazy(() => import('./TokenDashboard').then(m => ({ default: m.TokenDashboard })));
 const ToolPanel = lazy(() => import('./ToolPanel').then(m => ({ default: m.ToolPanel })));
@@ -1537,10 +1537,12 @@ export function DesktopUI({
   const canCustomizeLumiAppearance = workDomain !== 'work'
     || ['owner', 'admin'].includes(String(orgConnection?.orgRole || ''));
 
-  const [openWindows, setOpenWindows] = useState<string[]>(activeTab !== 'home' && activeTab !== 'knowledge' ? [activeTab] : []);
+  const initialCommandCenterOpen = activeTab === 'chat' || activeTab === 'team' || activeTab === 'command-center';
+  const initialWindowId = activeTab !== 'home' && activeTab !== 'knowledge' && !initialCommandCenterOpen ? activeTab : null;
+  const [openWindows, setOpenWindows] = useState<string[]>(initialWindowId ? [initialWindowId] : []);
   const [minimizedWindows, setMinimizedWindows] = useState<string[]>([]);
-  const [focusedWindow, setFocusedWindow] = useState<string | null>(activeTab !== 'home' && activeTab !== 'knowledge' ? activeTab : null);
-  const [windowOrder, setWindowOrder] = useState<string[]>(activeTab !== 'home' && activeTab !== 'knowledge' ? [activeTab] : []);
+  const [focusedWindow, setFocusedWindow] = useState<string | null>(initialWindowId);
+  const [windowOrder, setWindowOrder] = useState<string[]>(initialWindowId ? [initialWindowId] : []);
   const [knowledgeOpen, setKnowledgeOpen] = useState(activeTab === 'knowledge');
   const [knowledgeLoaded, setKnowledgeLoaded] = useState(activeTab === 'knowledge');
   const [organizationWorkspaceView, setOrganizationWorkspaceView] = useState<OrganizationWorkspaceView>('dashboard');
@@ -1566,8 +1568,9 @@ export function DesktopUI({
     };
   }, [knowledgeRuntimeState, orgConnection?.orgId, workDomain]);
   const knowledgeRefreshSequenceRef = useRef(0);
-  const [chatOpen, setChatOpen] = useState(false);
-  const [chatLoaded, setChatLoaded] = useState(false);
+  const [chatOpen, setChatOpen] = useState(initialCommandCenterOpen);
+  const [chatLoaded, setChatLoaded] = useState(initialCommandCenterOpen);
+  const [commandCenterView, setCommandCenterView] = useState<CommandCenterView>('office');
   const [chatPrefill, setChatPrefill] = useState('');
   const [chatPrefillSource, setChatPrefillSource] = useState('proactive');
   const [chatAttachmentRequest, setChatAttachmentRequest] = useState<ChatAttachmentRequest | null>(null);
@@ -1689,12 +1692,23 @@ export function DesktopUI({
     if (chatOpen) setWallpaperWorkPromptVisible(false);
   }, [chatOpen]);
 
+  const openCommandCenter = useCallback((view: CommandCenterView = 'office') => {
+    setCommandCenterView(view === 'team' ? 'office' : view);
+    setOpenWindows(previous => previous.filter(windowId => !['chat', 'team', 'command-center'].includes(windowId)));
+    setMinimizedWindows(previous => previous.filter(windowId => !['chat', 'team', 'command-center'].includes(windowId)));
+    setWindowOrder(previous => previous.filter(windowId => !['chat', 'team', 'command-center'].includes(windowId)));
+    setFocusedWindow(previous => ['chat', 'team', 'command-center'].includes(previous || '') ? null : previous);
+    setChatLoaded(true);
+    setChatOpen(true);
+    setActiveTab('command-center');
+  }, [setActiveTab]);
+
   const openProactiveChat = useCallback((detail: ProactiveChatDetail) => {
     setIsNotificationPanelOpen(false);
     setChatPrefillSource('proactive_context');
     setChatPrefill(formatProactiveChatPrefill(detail, lang));
-    setChatOpen(true);
-  }, [lang]);
+    openCommandCenter('office');
+  }, [lang, openCommandCenter]);
 
   useEffect(() => {
     const handleOpenProactiveChat = (event: Event) => {
@@ -1718,13 +1732,11 @@ export function DesktopUI({
       }
       setChatAttachmentRequest(detail);
       setKnowledgeOpen(false);
-      setChatLoaded(true);
-      setChatOpen(true);
-      setActiveTab('chat');
+      openCommandCenter('office');
     };
     window.addEventListener('lumi:reference-file-in-chat', handleFileReference);
     return () => window.removeEventListener('lumi:reference-file-in-chat', handleFileReference);
-  }, [lang, orgConnection?.connected, orgConnection?.orgId, setActiveTab, workDomain]);
+  }, [lang, openCommandCenter, orgConnection?.connected, orgConnection?.orgId, workDomain]);
 
   const getDefaultDesktopIconPosition = useCallback((index: number) => ({
     x: desktopIconLayout.startX + (index % desktopIconColumns) * desktopIconLayout.cellWidth,
@@ -1733,10 +1745,9 @@ export function DesktopUI({
 
   // Desktop icon layout: absolute positioning with viewport-aware columns.
   const desktopIcons = [
-    { id: 'chat', labelKey: 'chat', icon: <MessageSquare size={24} />, colorClass: 'from-green-500 to-emerald-600', windowId: 'chat' },
+    { id: 'command-center', label: uiMessage('command-center.title.c5bb6d0f01', (lang === 'zh') ? 'zh' : 'en'), icon: <Command size={24} />, colorClass: 'from-cyan-500 to-violet-600', windowId: 'command-center' },
     { id: 'tools', labelKey: 'tools', icon: <Wrench size={24} />, colorClass: 'from-amber-500 to-orange-600', windowId: 'tools' },
     { id: 'skills', labelKey: 'skills', icon: <Sparkles size={24} />, colorClass: 'from-emerald-500 to-teal-600', windowId: 'skills' },
-    { id: 'team', labelKey: 'team', icon: <Bot size={24} />, colorClass: 'from-cyan-500 to-blue-600', windowId: 'team' },
     { id: 'memory-avatar', labelKey: 'memoryAvatars', icon: <Castle size={24} />, colorClass: 'from-fuchsia-500 to-purple-600', windowId: 'memory-avatar' },
     { id: 'personalization', labelKey: 'personalization', icon: <Brush size={24} />, colorClass: 'from-cyan-400 to-indigo-600', windowId: 'personalization' },
   ];
@@ -2879,13 +2890,17 @@ export function DesktopUI({
         if (detail.tab === 'org' && detail.sub) {
           queueOrganizationWorkspaceRoute(detail.sub, detail.articleId);
         }
+        if (detail.tab === 'chat' || detail.tab === 'command-center' || detail.tab === 'team') {
+          openCommandCenter(detail.tab === 'team' ? 'team' : 'office');
+          return;
+        }
         // Anyone can open the org tab — join/create/connect handled by OrgPortal
         setActiveTab(detail.tab);
       }
     };
     window.addEventListener('lumi:navigate', handler);
     return () => window.removeEventListener('lumi:navigate', handler);
-  }, [setActiveTab]);
+  }, [openCommandCenter, setActiveTab]);
 
   const openMemoryAvatar = useCallback(async () => {
     try { sounds.playClick(); } catch {}
@@ -3545,9 +3560,8 @@ export function DesktopUI({
       setKnowledgeOpen(prev => !prev);
       return;
     }
-    if (tab === 'chat') {
-      setChatOpen(prev => !prev);
-      setActiveTab(tab);
+    if (tab === 'chat' || tab === 'command-center' || tab === 'team') {
+      openCommandCenter(tab === 'team' ? 'team' : 'office');
       return;
     }
     if (tab === 'memory-avatar') {
@@ -3566,7 +3580,7 @@ export function DesktopUI({
       setWindowOrder(prev => [...prev, tab]);
     }
     setActiveTab(tab);
-  }, [focusedWindow, minimizedWindows, openMemoryAvatar, openWindows, setActiveTab]);
+  }, [focusedWindow, minimizedWindows, openCommandCenter, openMemoryAvatar, openWindows, setActiveTab]);
 
   const closeWindow = useCallback((tab: string) => {
     try { sounds.playClick(); } catch {}
@@ -3765,6 +3779,7 @@ export function DesktopUI({
         if (value === 'sync') return 'devices';
         if (value === 'avatar-studio' || value === 'sound') return 'personalization';
         if (value === 'world' || value === 'nexus' || value === 'nexus-view' || value === 'cloud-canvas') return 'nexus';
+        if (value === 'chat' || value === 'team' || value === 'command-center') return 'command-center';
         return value;
       };
 
@@ -3810,9 +3825,8 @@ export function DesktopUI({
           setActiveTab('knowledge');
           return;
         }
-        if (windowId === 'chat') {
-          setChatOpen(true);
-          setActiveTab('chat');
+        if (windowId === 'command-center') {
+          openCommandCenter(value === 'team' ? 'team' : 'office');
           return;
         }
         if (windowId === 'notifications') {
@@ -3866,8 +3880,9 @@ export function DesktopUI({
           setKnowledgeOpen(false);
           return;
         }
-        if (windowId === 'chat') {
+        if (windowId === 'command-center') {
           setChatOpen(false);
+          setActiveTab('home');
           return;
         }
         if (windowId === 'nexus') {
@@ -4078,6 +4093,18 @@ export function DesktopUI({
         }
         if (registeredSurface) {
           if (registeredSurface.settingsSection) setSettingsSection(registeredSurface.settingsSection);
+          const requestedCommandView = registeredSurface.commandCenterViewByAction?.[action];
+          if (requestedCommandView) {
+            openCommandCenter(requestedCommandView);
+            respond({
+              ok: true,
+              action,
+              target: registeredSurface.target,
+              surface: registeredSurface.id,
+              view: requestedCommandView,
+            });
+            return;
+          }
           if (action === 'open_avatar_studio') setPersonalizationSection('appearance');
           if (action === 'open_sound_studio') setPersonalizationSection('voice');
           openSurface(registeredSurface.target);
@@ -4108,6 +4135,7 @@ export function DesktopUI({
     focusedWindow,
     isDesktopWidgetMode,
     openMemoryAvatar,
+    openCommandCenter,
     openWindows,
     operationMode,
     orgConnection?.connected,
@@ -4137,6 +4165,8 @@ export function DesktopUI({
         appLauncherOpen: isSearchOpen,
         knowledgeOpen,
         chatOpen,
+        commandCenterOpen: chatOpen,
+        commandCenterView,
         notificationsOpen: isNotificationPanelOpen,
         memoryAvatarOpen: memoryLabOpen,
         meetingOpen: meetingNotesOpen || operationMode === 'meeting',
@@ -4182,6 +4212,8 @@ export function DesktopUI({
           appLauncherOpen: isSearchOpen,
           knowledgeOpen,
           chatOpen,
+          commandCenterOpen: chatOpen,
+          commandCenterView,
           notificationsOpen: isNotificationPanelOpen,
           memoryAvatarOpen: memoryLabOpen,
           runtimeLogOpen: openWindows.includes('kernel'),
@@ -4236,6 +4268,7 @@ export function DesktopUI({
     availableOrganizationWorkspaceViews,
     callState,
     chatOpen,
+    commandCenterView,
     clientPermissions,
     clientRuntime,
     callError,
@@ -4281,7 +4314,7 @@ export function DesktopUI({
 
   const desktopAppEntries = desktopIcons.map(def => ({
     id: def.windowId,
-    label: (t as any)[def.labelKey] || def.labelKey,
+    label: 'label' in def ? def.label : (t as any)[def.labelKey] || def.labelKey,
     icon: def.icon,
     color: def.colorClass,
   }));
@@ -4318,7 +4351,6 @@ export function DesktopUI({
     if (windowId === 'personality') return { w: '1050px', h: '720px' };
     if (windowId === 'generate') return { w: '1050px', h: '720px' };
     if (windowId === 'tools') return { w: '850px', h: '620px' };
-    if (windowId === 'team') return { w: '900px', h: '700px' };
     if (windowId === 'github-mcp') return { w: '850px', h: '620px' };
     if (windowId === 'notifications') return { w: '700px', h: '550px' };
     if (windowId === 'reminders') return { w: '650px', h: '620px' };
@@ -4645,6 +4677,8 @@ export function DesktopUI({
               onCloseOrganization={() => {
                 if (activeTab === 'org') setActiveTab('home');
               }}
+              commandCenterOpen={chatOpen}
+              onOpenCommandCenter={() => openCommandCenter('office')}
             />
           </div>
 
@@ -4826,7 +4860,7 @@ export function DesktopUI({
           <div className="lumi-dock-separator h-8 w-px shrink-0 bg-white/10 mx-2" />
           <AnimatePresence>
             {dockApps.map(app => {
-              const isActive = openWindows.includes(app.id) || (app.id === 'chat' && chatOpen);
+              const isActive = openWindows.includes(app.id) || (app.id === 'command-center' && chatOpen);
               return (
               <motion.button
                 key={app.id}
@@ -4835,7 +4869,7 @@ export function DesktopUI({
                 onClick={() => toggleWindow(app.id)}
                 className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all group relative ${
                   isActive
-                    ? `bg-gradient-to-br ${app.id === focusedWindow || app.id === 'chat' ? app.color : 'from-white/10 to-white/5'} text-white shadow-lg ${minimizedWindows.includes(app.id) ? 'opacity-40 translate-y-2' : ''}`
+                    ? `bg-gradient-to-br ${app.id === focusedWindow || app.id === 'command-center' ? app.color : 'from-white/10 to-white/5'} text-white shadow-lg ${minimizedWindows.includes(app.id) ? 'opacity-40 translate-y-2' : ''}`
                     : 'bg-white/5 text-white/40 hover:bg-white/10'
                 }`}
               >
@@ -5095,9 +5129,9 @@ export function DesktopUI({
             <div className="lumi-desktop-icon-canvas relative flex-1 w-full" style={{ margin: 0, padding: 0, minHeight: desktopIconAreaHeight }}>
               {desktopIcons.map((def, i) => {
                 const { x, y } = getDefaultDesktopIconPosition(i);
-                const label = (t as any)[def.labelKey] || def.labelKey;
-                const isIconOpen = openWindows.includes(def.windowId) || (def.windowId === 'chat' && chatOpen);
-                const isIconFocused = focusedWindow === def.windowId || (def.windowId === 'chat' && chatOpen);
+                const label = 'label' in def ? def.label : (t as any)[def.labelKey] || def.labelKey;
+                const isIconOpen = openWindows.includes(def.windowId) || (def.windowId === 'command-center' && chatOpen);
+                const isIconFocused = focusedWindow === def.windowId || (def.windowId === 'command-center' && chatOpen);
                 const handleClick = () => {
                   toggleWindow(def.windowId);
                 };
@@ -5535,8 +5569,6 @@ export function DesktopUI({
                     <PersonalityEditor t={t} />
                   ) : windowId === 'tools' ? (
                     <ToolPanel />
-                  ) : windowId === 'team' ? (
-                    <TeamHub t={t} />
                   ) : windowId === 'github-mcp' ? (
                     <GitHubMCPBrowser t={t} />
                   ) : windowId === 'notifications' ? (
@@ -5615,7 +5647,7 @@ export function DesktopUI({
                     </div>
                   ) : windowId === 'terminal' ? (
                     <TerminalWindow t={t} onClose={() => closeWindow('terminal')} isActive={focusedWindow === 'terminal'} />
-                  ) : windowId === 'chat' ? (
+                  ) : windowId === 'chat' || windowId === 'team' || windowId === 'command-center' ? (
                     // Chat is now fullscreen overlay — this case should not be reached
                     null
                   ) : renderTabContent(windowId)}
@@ -5649,7 +5681,15 @@ export function DesktopUI({
             t={t}
             user={user}
             isOpen={chatOpen}
-            onClose={() => { setChatOpen(false); setChatPrefill(''); setChatPrefillSource('proactive'); }}
+            onClose={() => { setChatOpen(false); setActiveTab('home'); setChatPrefill(''); setChatPrefillSource('proactive'); }}
+            layout="command-center"
+            commandCenterView={commandCenterView}
+            onCommandCenterViewChange={setCommandCenterView}
+            onOpenNexus={() => {
+              setChatOpen(false);
+              setViewMode('world');
+              setActiveTab('home');
+            }}
             prefillMessage={chatPrefill}
             prefillSource={chatPrefillSource}
             onPrefillConsumed={() => { setChatPrefill(''); setChatPrefillSource('proactive'); }}

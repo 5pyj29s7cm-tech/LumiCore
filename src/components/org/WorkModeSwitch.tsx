@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Building2, Loader2, User } from 'lucide-react';
+import { Building2, Command, Loader2, User } from 'lucide-react';
 import { toast } from 'sonner';
 import { useT } from '../../lib/useT';
 import type { DomainSwitchResult } from '../../contexts/AppContext';
@@ -11,6 +11,8 @@ interface Props {
   onOpenOrganization: () => void;
   onCloseOrganization?: () => void;
   organizationOpen?: boolean;
+  commandCenterOpen?: boolean;
+  onOpenCommandCenter: () => void;
   connected: boolean;
 }
 
@@ -20,6 +22,8 @@ export function WorkModeSwitch({
   onOpenOrganization,
   onCloseOrganization,
   organizationOpen = false,
+  commandCenterOpen = false,
+  onOpenCommandCenter,
   connected,
 }: Props) {
   const t = useT();
@@ -93,6 +97,21 @@ export function WorkModeSwitch({
       >
         <User size={13} />
         <span className="lumi-work-mode-label">{uiMessage('work-mode-switch.personal.d3eb901f5d')}</span>
+      </button>
+      <button
+        type="button"
+        onClick={onOpenCommandCenter}
+        disabled={switching}
+        title={uiMessage('command-center.open.9d87f7d2c1')}
+        aria-label={uiMessage('command-center.open.9d87f7d2c1')}
+        className={`lumi-command-center-switch flex h-7 min-w-[118px] items-center justify-center gap-1.5 rounded-full px-3 transition-all ${
+          commandCenterOpen
+            ? 'border border-cyan-300/25 bg-cyan-400/16 text-cyan-100 shadow-[0_0_20px_rgba(34,211,238,0.14)]'
+            : 'text-white/55 hover:bg-cyan-300/10 hover:text-cyan-100'
+        } disabled:cursor-wait`}
+      >
+        <Command size={13} />
+        <span className="lumi-command-center-label">{uiMessage('command-center.title.c5bb6d0f01')}</span>
       </button>
       <button
         type="button"

@@ -130,6 +130,8 @@ export function createLumiMcpServer(llmGetters?: {
           : '';
 
         const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+          // A remote MCP caller receives the LAP constitution, but never another
+          // authenticated desktop user's active peer/session projection.
           { role: 'system', content: systemPrompt + '\n\n' + formatLAPSelfPrompt() + (memoryContext ? `\n\n## User context (memories):\n${memoryContext}` : '') },
           { role: 'user', content: message },
         ];

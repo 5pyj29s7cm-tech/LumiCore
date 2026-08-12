@@ -27,7 +27,7 @@ type ExternalCatalogSkill = {
   setupNote?: string;
 };
 
-export function TeamHub({ t }: { t?: any }) {
+export function TeamHub({ t, variant = 'full' }: { t?: any; variant?: 'full' | 'command-center' }) {
   const socket = useSocket();
   const { workDomain, switchDomain } = useApp();
   const [agents, setAgents] = useState<any[]>([]);
@@ -420,9 +420,9 @@ export function TeamHub({ t }: { t?: any }) {
   };
 
   return (
-    <div className="space-y-6">
+    <div className={variant === 'command-center' ? 'space-y-3' : 'space-y-6'}>
       {/* Header */}
-      <div className="lumi-panel flex items-center justify-between gap-4 p-5">
+      <div className={`lumi-panel flex items-center justify-between gap-4 ${variant === 'command-center' ? 'p-3' : 'p-5'}`}>
         <div>
           <h2 className="flex items-center gap-2 text-xl font-black uppercase tracking-[0.08em] text-white/90">
             <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-cyan-300/15 bg-cyan-400/10 text-cyan-300">
@@ -430,7 +430,7 @@ export function TeamHub({ t }: { t?: any }) {
             </span>
             {t?.teamHub || 'Agent Team'}
           </h2>
-          <p className="text-sm text-white/40 max-w-xl mt-1">
+          <p className={`${variant === 'command-center' ? 'text-xs' : 'text-sm'} text-white/40 max-w-xl mt-1`}>
             {uiMessage('team-hub.lumi-s-working-team-internal.6cac06c430')}
           </p>
           <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-bold text-white/35">

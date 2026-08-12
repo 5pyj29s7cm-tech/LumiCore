@@ -1,12 +1,15 @@
 import { getLocalAgent } from './transport';
 import { getAllSessions } from './session';
 import { getTasksForAgent, buildTaskListResponse } from './delegate';
+import type { TaskRecord } from './delegate';
 import { getActiveSharedContexts } from './context';
 import type {
   LAPAgentIdentity,
   LAPMemoryIngestionMode,
   LAPSession,
 } from './types';
+import type { LAPAccessScope } from './access';
+import { canUseSession } from './access';
 
 export const LAP_PROTOCOL_NAME = 'LAP';
 export const LAP_PROTOCOL_VERSION = '2.0';
@@ -33,10 +36,17 @@ export interface LAPPolicySnapshot {
   };
 }
 
-export function getLAPPolicySnapshot(): LAPPolicySnapshot {
+export function getLAPPolicySnapshot(accessScope?: LAPAccessScope): LAPPolicySnapshot {
   const localAgent = getLocalAgent();
-  const sessions = getAllSessions();
-  const taskSummary = buildTaskListResponse(getTasksForAgent(localAgent.agentId)).summary;
+  // LAP state is user/workspace scoped. Callers without an authenticated scope
+  // receive policy metadata but never a global projection of peer sessions.
+  const sessions = accessScope
+    ? getAllSessions().filter(session => canUseSession(session, accessScope))
+    : [];
+  const allowedSessionIds = new Set(sessions.map(session => session.sessionId));
+  const taskSummary = buildTaskListResponse(
+    getTasksForAgent(localAgent.agentId).filter((task: TaskRecord) => allowedSessionIds.has(task.sessionId)),
+  ).summary;
 
   return {
     protocol: LAP_PROTOCOL_NAME,
@@ -69,8 +79,8 @@ export function getLAPPolicySnapshot(): LAPPolicySnapshot {
   };
 }
 
-export function formatLAPSelfPrompt(): string {
-  const snapshot = getLAPPolicySnapshot();
+export function formatLAPSelfPrompt(accessScope?: LAPAccessScope): string {
+  const snapshot = getLAPPolicySnapshot(accessScope);
   const sessionLines = snapshot.activeSessions.length
     ? snapshot.activeSessions.map(session => (
       `- ${session.peer.name} (${session.peer.agentId}): trust=${session.trustLevel}, scope=${session.scope.join(', ') || 'none'}, sharedContexts=${session.sharedContextCount}`

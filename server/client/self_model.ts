@@ -114,6 +114,8 @@ export interface ClientStateSnapshot {
     appLauncherOpen?: boolean;
     knowledgeOpen?: boolean;
     chatOpen?: boolean;
+    commandCenterOpen?: boolean;
+    commandCenterView?: 'office' | 'team' | 'network' | 'core';
     notificationsOpen?: boolean;
     memoryAvatarOpen?: boolean;
     runtimeLogOpen?: boolean;
@@ -397,12 +399,12 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     stateKeys: ['viewMode', 'surfaces.nexusOpen'],
   },
   {
-    id: 'window.chat',
-    label: 'Side chat window',
-    kind: 'window',
-    actions: ['open_chat', 'close_client_surface(chat)'],
-    notes: 'Compact chat surface for direct conversation inside the desktop client.',
-    stateKeys: ['surfaces.chatOpen'],
+    id: 'workspace.command_center',
+    label: 'Lumi command center',
+    kind: 'workspace',
+    actions: ['open_command_center', 'open_chat', 'open_team', 'close_client_surface(command-center)'],
+    notes: 'One scoped workspace combines conversation, persistent task and receipt status, the real agent team, animated workstations, Inter-Lumi networking, and the distributed core. Chat and Team are views of this workspace, not separate windows.',
+    stateKeys: ['surfaces.commandCenterOpen', 'surfaces.commandCenterView', 'tools'],
   },
   {
     id: 'workspace.org',
@@ -547,14 +549,6 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     actions: ['open_skills'],
     notes: 'Installed and discoverable Lumi skills, including GitHub MCP discovery.',
     stateKeys: ['windows'],
-  },
-  {
-    id: 'workspace.team',
-    label: 'Agent team',
-    kind: 'tool_surface',
-    actions: ['open_team'],
-    notes: 'Team members, sub-agents, and orchestration surfaces.',
-    stateKeys: ['windows', 'tools'],
   },
   {
     id: 'network.lap',
@@ -1096,8 +1090,10 @@ export function normalizeClientActionTarget(value?: string): string {
     home: 'home',
     main: 'home',
     'main-screen': 'home',
-    chat: 'chat',
-    team: 'team',
+    chat: 'command-center',
+    'command-center': 'command-center',
+    command: 'command-center',
+    team: 'command-center',
     tools: 'tools',
     tool: 'tools',
     plans: 'plans',
@@ -1232,7 +1228,7 @@ export function getClientStateDigest(state: ClientStateSnapshot | null | undefin
   if (state.viewMode === 'world' || state.surfaces?.nexusOpen) openSurfaces.push('nexus');
   if (state.surfaces?.appLauncherOpen) openSurfaces.push('app-launcher');
   if (state.surfaces?.knowledgeOpen) openSurfaces.push('knowledge');
-  if (state.surfaces?.chatOpen) openSurfaces.push('chat');
+  if (state.surfaces?.commandCenterOpen || state.surfaces?.chatOpen) openSurfaces.push('command-center');
   if (state.surfaces?.notificationsOpen) openSurfaces.push('notifications');
   if (state.surfaces?.memoryAvatarOpen) openSurfaces.push('memory-avatar');
   if (state.surfaces?.runtimeLogOpen || state.runtimeLog?.open) openSurfaces.push('runtime-log');
@@ -1405,11 +1401,10 @@ export function getClientActionExpectation(args: Record<string, any> = {}): Clie
     case 'open_tools':
       setSurface('tools', 'tools');
       break;
+    case 'open_command_center':
     case 'open_team':
-      setSurface('team', 'team');
-      break;
     case 'open_chat':
-      setSurface('chat', 'chat');
+      setSurface('command-center', 'Lumi command center');
       break;
     case 'open_plans':
     case 'open_work_queue':
@@ -1803,6 +1798,8 @@ function surfaceIsOpen(state: ClientStateSnapshot | null | undefined, surface: s
     appLauncherOpen: state.surfaces?.appLauncherOpen,
     knowledgeOpen: state.surfaces?.knowledgeOpen,
     chatOpen: state.surfaces?.chatOpen,
+    commandCenterOpen: state.surfaces?.commandCenterOpen,
+    commandCenterView: state.surfaces?.commandCenterView,
     notificationsOpen: state.surfaces?.notificationsOpen,
     memoryAvatarOpen: state.surfaces?.memoryAvatarOpen,
     meetingOpen: state.surfaces?.meetingOpen || state.meeting?.active,
@@ -1818,7 +1815,8 @@ function surfaceIsOpen(state: ClientStateSnapshot | null | undefined, surface: s
   if (target === 'app-launcher') return Boolean(state.surfaces?.appLauncherOpen);
   if (target === 'org') return state.activeTab === 'org' || openWindows.includes('org') || state.windows?.focused === 'org';
   if (target === 'knowledge') return Boolean(state.surfaces?.knowledgeOpen) || openWindows.includes('knowledge');
-  if (target === 'chat') return Boolean(state.surfaces?.chatOpen) || openWindows.includes('chat');
+  if (target === 'command-center') return Boolean(state.surfaces?.commandCenterOpen || state.surfaces?.chatOpen)
+    || openWindows.includes('command-center') || openWindows.includes('chat') || openWindows.includes('team');
   if (target === 'notifications') return Boolean(state.surfaces?.notificationsOpen) || openWindows.includes('notifications');
   if (target === 'memory-avatar') return Boolean(state.surfaces?.memoryAvatarOpen) || openWindows.includes('memory-avatar');
   if (target === 'meeting') return Boolean(state.surfaces?.meetingOpen || state.meeting?.active) || openWindows.includes('meeting');
@@ -1989,7 +1987,7 @@ export function formatClientSelfPrompt(
     `- Knowledge ingestion: domain=${state.knowledge?.domain || state.workDomain || 'personal'}, files=${state.knowledge?.totalFiles || 0}, indexed=${state.knowledge?.indexedFiles || 0}, partial=${state.knowledge?.partialFiles || 0}, pending=${state.knowledge?.pendingFiles || 0}, failed=${state.knowledge?.failedFiles || 0}, unsupported=${state.knowledge?.unsupportedFiles || 0}${state.knowledge?.orgArticles ? `, orgArticles=${state.knowledge.orgArticles.total || 0}, orgPublished=${state.knowledge.orgArticles.published || 0}, orgIndexed=${state.knowledge.orgArticles.indexed || 0}, orgMissingIndex=${state.knowledge.orgArticles.missingIndex || 0}, orgStale=${state.knowledge.orgArticles.stale || 0}` : ''}${state.knowledge?.lastError ? `, error=${state.knowledge.lastError}` : ''}`,
     `- Open windows: ${(state.windows?.open || []).join(', ') || 'none'}`,
     `- Focused window: ${state.windows?.focused || 'none'}`,
-    `- Surfaces: nexus=${Boolean(state.surfaces?.nexusOpen || state.viewMode === 'world')}, launcher=${Boolean(state.surfaces?.appLauncherOpen)}, knowledge=${Boolean(state.surfaces?.knowledgeOpen)}, chat=${Boolean(state.surfaces?.chatOpen)}, notifications=${Boolean(state.surfaces?.notificationsOpen)}, memoryAvatar=${Boolean(state.surfaces?.memoryAvatarOpen)}, runtimeLog=${Boolean(state.surfaces?.runtimeLogOpen)}, meeting=${Boolean(state.surfaces?.meetingOpen)}, wallpaper=${Boolean(state.surfaces?.wallpaperMode)}, widget=${Boolean(state.surfaces?.widgetMode)}`,
+    `- Surfaces: nexus=${Boolean(state.surfaces?.nexusOpen || state.viewMode === 'world')}, launcher=${Boolean(state.surfaces?.appLauncherOpen)}, knowledge=${Boolean(state.surfaces?.knowledgeOpen)}, commandCenter=${Boolean(state.surfaces?.commandCenterOpen || state.surfaces?.chatOpen)}(${state.surfaces?.commandCenterView || 'office'}), notifications=${Boolean(state.surfaces?.notificationsOpen)}, memoryAvatar=${Boolean(state.surfaces?.memoryAvatarOpen)}, runtimeLog=${Boolean(state.surfaces?.runtimeLogOpen)}, meeting=${Boolean(state.surfaces?.meetingOpen)}, wallpaper=${Boolean(state.surfaces?.wallpaperMode)}, widget=${Boolean(state.surfaces?.widgetMode)}`,
     `- Voice: ${state.voice?.state || 'idle'}${state.voice?.muted ? ' (muted)' : ''}`,
     `- Meeting: active=${Boolean(state.meeting?.active)}, notes=${state.meeting?.noteCount || 0}, report=${Boolean(state.meeting?.hasReport)}, reportGenerating=${Boolean(state.meeting?.reportGenerating)}`,
     `- Runtime log: open=${Boolean(state.runtimeLog?.open)}, status=${state.runtimeLog?.status || 'ready'}${state.runtimeLog?.lastError ? `, error=${state.runtimeLog.lastError}` : ''}`,
@@ -2145,7 +2143,9 @@ export function formatClientSelfPrompt(
     '### Action Constitution',
     ...actionConstitution.rules.map(rule => `- ${rule}`),
     '',
-    isWork ? 'The active work workspace does not expose the member\'s personal LAP profile.' : formatLAPSelfPrompt(),
+    isWork
+      ? 'The active work workspace does not expose the member\'s personal LAP profile.'
+      : formatLAPSelfPrompt({ userId, domain: 'personal', orgId: '' }),
   ].join('\n');
 }
 

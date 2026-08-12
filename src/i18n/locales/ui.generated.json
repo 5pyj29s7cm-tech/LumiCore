@@ -9250,5 +9250,389 @@
   "focus-thread-panel.syncing.b0915c9901": {
     "en": "Syncing",
     "zh": "\u540c\u6b65\u4e2d"
+  },
+  "command-center.title.c5bb6d0f01": {
+    "en": "Lumi Command",
+    "zh": "Lumi \u6307\u6325\u4e2d\u5fc3"
+  },
+  "command-center.open.9d87f7d2c1": {
+    "en": "Open Lumi Command Center",
+    "zh": "\u6253\u5f00 Lumi \u6307\u6325\u4e2d\u5fc3"
+  },
+  "command-center.office.26fdbd3a4a": {
+    "en": "Office",
+    "zh": "\u667a\u80fd\u4f53\u529e\u516c\u5ba4"
+  },
+  "command-center.team.081d69d2f4": {
+    "en": "Team",
+    "zh": "\u56e2\u961f"
+  },
+  "command-center.network.e5d531b657": {
+    "en": "Lumi Network",
+    "zh": "Lumi \u7f51\u7edc"
+  },
+  "command-center.core.1b1073a209": {
+    "en": "OS Core",
+    "zh": "OS \u6838\u5fc3"
+  },
+  "command-center.personal-scope.c7bb921ff1": {
+    "en": "Personal domain",
+    "zh": "\u4e2a\u4eba\u57df"
+  },
+  "command-center.organization-scope.7e5a629a21": {
+    "en": "Organization domain",
+    "zh": "\u7ec4\u7ec7\u57df"
+  },
+  "command-center.scope-boundary.09ef8aa52a": {
+    "en": "Chat, tasks, agents, and memory stay inside the active domain.",
+    "zh": "\u5bf9\u8bdd\u3001\u4efb\u52a1\u3001\u667a\u80fd\u4f53\u548c\u8bb0\u5fc6\u4ec5\u5728\u5f53\u524d\u6570\u636e\u57df\u5185\u6d41\u8f6c\u3002"
+  },
+  "command-center.lumi-desk.752fe2bcb1": {
+    "en": "Lumi command desk",
+    "zh": "Lumi \u6307\u6325\u53f0"
+  },
+  "command-center.dispatching.270bc5f426": {
+    "en": "Coordinating the active work",
+    "zh": "\u6b63\u5728\u7edf\u7b79\u5f53\u524d\u5de5\u4f5c"
+  },
+  "command-center.ready.4a09f2582b": {
+    "en": "Ready",
+    "zh": "\u5f85\u547d"
+  },
+  "command-center.working.90f16b23a5": {
+    "en": "Working",
+    "zh": "\u5de5\u4f5c\u4e2d"
+  },
+  "command-center.paused.7848cd9af5": {
+    "en": "Paused",
+    "zh": "\u5df2\u6682\u505c"
+  },
+  "command-center.attention.c47451e86a": {
+    "en": "Needs attention",
+    "zh": "\u9700\u8981\u5173\u6ce8"
+  },
+  "command-center.waiting-confirmation.1640ac02bb": {
+    "en": "Waiting for confirmation",
+    "zh": "\u7b49\u5f85\u786e\u8ba4"
+  },
+  "command-center.no-workers.f27019b97a": {
+    "en": "No worker agents in this domain yet. Ask Lumi to create one or add one from Team.",
+    "zh": "\u5f53\u524d\u57df\u8fd8\u6ca1\u6709\u5458\u5de5\u667a\u80fd\u4f53\uff0c\u53ef\u4ee5\u8ba9 Lumi \u521b\u5efa\uff0c\u6216\u4ece\u56e2\u961f\u4e2d\u5f15\u5165\u3002"
+  },
+  "command-center.office-scene-aria.657e86c3da": {
+    "en": "Live Lumi agent office driven by real tasks and receipts",
+    "zh": "\u7531\u771f\u5b9e\u4efb\u52a1\u4e0e\u56de\u6267\u9a71\u52a8\u7684 Lumi \u667a\u80fd\u529e\u516c\u5ba4"
+  },
+  "command-center.office-floor.a59513a4eb": {
+    "en": "Floor",
+    "zh": "\u697c\u5c42"
+  },
+  "command-center.previous-floor.d0a3f3e6d8": {
+    "en": "Previous office floor",
+    "zh": "\u4e0a\u4e00\u4e2a\u529e\u516c\u697c\u5c42"
+  },
+  "command-center.next-floor.1caedfc76e": {
+    "en": "Next office floor",
+    "zh": "\u4e0b\u4e00\u4e2a\u529e\u516c\u697c\u5c42"
+  },
+  "command-center.lumi-commander.32f6b27c0a": {
+    "en": "Lumi command center",
+    "zh": "Lumi \u6307\u6325\u4e2d\u67a2"
+  },
+  "command-center.real-state.33d73ad8c9": {
+    "en": "Every desk is driven by real agent, task, and receipt state.",
+    "zh": "\u6bcf\u4e2a\u5de5\u4f4d\u90fd\u7531\u771f\u5b9e\u667a\u80fd\u4f53\u3001\u4efb\u52a1\u548c\u56de\u6267\u72b6\u6001\u9a71\u52a8\u3002"
+  },
+  "command-center.local-lumi.11866c1402": {
+    "en": "This Lumi",
+    "zh": "\u672c\u673a Lumi"
+  },
+  "command-center.peer-lumi.687323eaaf": {
+    "en": "Connected Lumi",
+    "zh": "\u5df2\u8fde\u63a5 Lumi"
+  },
+  "command-center.no-peers.b9c177fcb5": {
+    "en": "No trusted Lumi peer is connected. Discovery and handshake will appear here.",
+    "zh": "\u6682\u65e0\u5df2\u8fde\u63a5\u7684\u53ef\u4fe1 Lumi\uff0c\u540e\u7eed\u7684\u53d1\u73b0\u4e0e\u63e1\u624b\u4f1a\u5728\u8fd9\u91cc\u5b8c\u6210\u3002"
+  },
+  "command-center.external-context.5de665e847": {
+    "en": "Incoming Lumi knowledge remains external context until you explicitly approve absorption.",
+    "zh": "\u5176\u4ed6 Lumi \u7684\u77e5\u8bc6\u9ed8\u8ba4\u4fdd\u6301\u4e3a\u5916\u90e8\u4e0a\u4e0b\u6587\uff0c\u53ea\u6709\u7ecf\u4f60\u660e\u786e\u540c\u610f\u624d\u80fd\u5438\u6536\u3002"
+  },
+  "command-center.available-capabilities.1a80c899d2": {
+    "en": "Available external capabilities",
+    "zh": "\u53ef\u7528\u5916\u90e8\u80fd\u529b"
+  },
+  "command-center.refresh.7436ee304a": {
+    "en": "Refresh command state",
+    "zh": "\u5237\u65b0\u6307\u6325\u72b6\u6001"
+  },
+  "command-center.open-core.66a1099fe1": {
+    "en": "Enter distributed core",
+    "zh": "\u8fdb\u5165\u5206\u5e03\u5f0f\u6838\u5fc3"
+  },
+  "command-center.show-workspace.8cbc21838f": {
+    "en": "Show command workspace",
+    "zh": "\u663e\u793a\u6307\u6325\u5de5\u4f5c\u533a"
+  },
+  "command-center.back-to-chat.b71016948a": {
+    "en": "Back to chat",
+    "zh": "\u8fd4\u56de\u5bf9\u8bdd"
+  },
+  "command-center.active-tasks.e3c67ca0fe": {
+    "en": "Active",
+    "zh": "\u6267\u884c\u4e2d"
+  },
+  "command-center.background-tasks.99e4258af0": {
+    "en": "Background",
+    "zh": "\u540e\u53f0"
+  },
+  "command-center.confirmations.60da2ef07a": {
+    "en": "Confirm",
+    "zh": "\u5f85\u786e\u8ba4"
+  },
+  "command-center.real-task-ledger.5b1be77168": {
+    "en": "Task ledger",
+    "zh": "\u771f\u5b9e\u4efb\u52a1\u8d26\u672c"
+  },
+  "command-center.receipt-driven.c10f9390d4": {
+    "en": "receipt-driven",
+    "zh": "\u4ee5\u56de\u6267\u4e3a\u51c6"
+  },
+  "command-center.verified-receipts.02cc95eeba": {
+    "en": "verified receipts",
+    "zh": "\u5df2\u9a8c\u8bc1\u56de\u6267"
+  },
+  "command-center.external-runtime.09147c7e91": {
+    "en": "External runtime",
+    "zh": "\u5916\u90e8\u8fd0\u884c\u65f6"
+  },
+  "command-center.lumi-worker.1e9be8d08f": {
+    "en": "Lumi worker",
+    "zh": "Lumi \u5458\u5de5"
+  },
+  "command-center.marketplace-runtimes.52d43cf3bd": {
+    "en": "Marketplace and external runtimes",
+    "zh": "\u80fd\u529b\u5e02\u573a\u4e0e\u5916\u90e8\u8fd0\u884c\u65f6"
+  },
+  "command-center.authorized.4357a61fc6": {
+    "en": "Authorized",
+    "zh": "\u5df2\u6388\u6743"
+  },
+  "command-center.pending-authorization.81ff59477b": {
+    "en": "Pending approval",
+    "zh": "\u5f85\u6388\u6743"
+  },
+  "command-center.authorize.76b1820f2e": {
+    "en": "Authorize",
+    "zh": "\u6388\u6743\u5f15\u5165"
+  },
+  "command-center.cancel.7cc65d915c": {
+    "en": "Cancel",
+    "zh": "\u53d6\u6d88"
+  },
+  "command-center.authorize-lumi-title.846a6924d8": {
+    "en": "Authorize this Lumi",
+    "zh": "\u6388\u6743\u8fd9\u4e2a Lumi"
+  },
+  "command-center.authorize-lumi-message.30ce57f561": {
+    "en": "Bind this peer to the active workspace with these requested scopes. Incoming context remains external and cannot alter personality.",
+    "zh": "\u5c06\u8be5\u5bf9\u7aef\u7ed1\u5b9a\u5230\u5f53\u524d\u5de5\u4f5c\u533a\uff0c\u5e76\u6388\u4e88\u4e0b\u5217\u8bf7\u6c42\u8303\u56f4\u3002\u5bf9\u7aef\u4e0a\u4e0b\u6587\u4ecd\u5c5e\u5916\u90e8\u5185\u5bb9\uff0c\u4e0d\u5f97\u4fee\u6539\u4eba\u683c\u3002"
+  },
+  "command-center.lumi-authorized.40cd471ea1": {
+    "en": "Lumi peer authorized for this workspace",
+    "zh": "\u5df2\u4e3a\u5f53\u524d\u5de5\u4f5c\u533a\u6388\u6743\u8be5 Lumi"
+  },
+  "command-center.lumi-authorization-failed.3a7a2f588e": {
+    "en": "Lumi authorization failed",
+    "zh": "Lumi \u6388\u6743\u5931\u8d25"
+  },
+  "command-center.revoke-lumi-title.78ce82ea42": {
+    "en": "Revoke this Lumi",
+    "zh": "\u64a4\u9500\u8fd9\u4e2a Lumi"
+  },
+  "command-center.revoke-lumi-message.84e087b4b4": {
+    "en": "This removes the session, delegated work and temporary shared context from the active workspace.",
+    "zh": "\u5c06\u4ece\u5f53\u524d\u5de5\u4f5c\u533a\u79fb\u9664\u4f1a\u8bdd\u3001\u59d4\u6d3e\u4efb\u52a1\u548c\u4e34\u65f6\u5171\u4eab\u4e0a\u4e0b\u6587\u3002"
+  },
+  "command-center.revoke.6fd9cdb478": {
+    "en": "Revoke",
+    "zh": "\u64a4\u9500"
+  },
+  "command-center.lumi-revoked.2aa9c7cb16": {
+    "en": "Lumi peer revoked",
+    "zh": "\u5df2\u64a4\u9500 Lumi \u5bf9\u7aef"
+  },
+  "command-center.lumi-revoke-failed.c5522c7067": {
+    "en": "Failed to revoke Lumi peer",
+    "zh": "\u64a4\u9500 Lumi \u5bf9\u7aef\u5931\u8d25"
+  },
+  "command-center.context-firewall.17a3907fd4": {
+    "en": "Context firewall",
+    "zh": "\u4e0a\u4e0b\u6587\u9632\u706b\u5899"
+  },
+  "command-center.runtime-unavailable.52e4d243c4": {
+    "en": "Runtime state unavailable",
+    "zh": "\u8fd0\u884c\u65f6\u72b6\u6001\u4e0d\u53ef\u7528"
+  },
+  "command-center.tasks.1ddfd1ee9d": {
+    "en": "Tasks",
+    "zh": "\u4efb\u52a1"
+  },
+  "command-center.receipts.291d3480e2": {
+    "en": "Receipts",
+    "zh": "\u56de\u6267"
+  },
+  "command-center.pair-another-lumi.166e66dcab": {
+    "en": "Pair another Lumi",
+    "zh": "\u914d\u5bf9\u53e6\u4e00\u4e2a Lumi"
+  },
+  "command-center.pairing-ticket-note.48c906291e": {
+    "en": "Create a ten-minute, single-use token. The peer remains inert until you approve its exact identity and scopes here.",
+    "zh": "\u521b\u5efa\u4e00\u679a 10 \u5206\u949f\u5185\u6709\u6548\u4e14\u53ea\u80fd\u4f7f\u7528\u4e00\u6b21\u7684\u4ee4\u724c\u3002\u5bf9\u7aef\u4ecd\u9700\u4f60\u5728\u6b64\u786e\u8ba4\u5176\u8eab\u4efd\u548c\u6743\u9650\u540e\u624d\u80fd\u5de5\u4f5c\u3002"
+  },
+  "command-center.create-pairing-ticket.23c7b7105a": {
+    "en": "Create token",
+    "zh": "\u521b\u5efa\u4ee4\u724c"
+  },
+  "command-center.click-to-copy.3a8b4d21c1": {
+    "en": "Click to copy",
+    "zh": "\u70b9\u51fb\u590d\u5236"
+  },
+  "command-center.pairing-ticket-failed.18a94503f7": {
+    "en": "Failed to create pairing token",
+    "zh": "\u521b\u5efa\u914d\u5bf9\u4ee4\u724c\u5931\u8d25"
+  },
+  "command-center.pairing-token-copied.e23d53b09a": {
+    "en": "Pairing token copied",
+    "zh": "\u914d\u5bf9\u4ee4\u724c\u5df2\u590d\u5236"
+  },
+  "command-center.copy-failed.150177ecfd": {
+    "en": "Copy failed",
+    "zh": "\u590d\u5236\u5931\u8d25"
+  },
+  "command-center.sandbox-probe.8dd49c2607": {
+    "en": "Sandbox capability probe",
+    "zh": "\u6c99\u7bb1\u80fd\u529b\u63a2\u6d4b"
+  },
+  "command-center.sandbox-probe-placeholder.7cde36e482": {
+    "en": "Give the peer one small verification task",
+    "zh": "\u7ed9\u5bf9\u7aef\u4e00\u4e2a\u5c0f\u578b\u9a8c\u8bc1\u4efb\u52a1"
+  },
+  "command-center.run-probe.a9d83908f4": {
+    "en": "Probe",
+    "zh": "\u8bd5\u7528"
+  },
+  "command-center.sandbox-limits.289559ff72": {
+    "en": "No tools, local files or memory are shared. Unknown outcomes are never replayed automatically.",
+    "zh": "\u4e0d\u5171\u4eab\u5de5\u5177\u3001\u672c\u5730\u6587\u4ef6\u6216\u8bb0\u5fc6\uff1b\u7ed3\u679c\u672a\u77e5\u65f6\u7edd\u4e0d\u81ea\u52a8\u91cd\u53d1\u3002"
+  },
+  "command-center.probe-prompt-required.087c5892c3": {
+    "en": "Enter a sandbox probe task first",
+    "zh": "\u8bf7\u5148\u8f93\u5165\u6c99\u7bb1\u63a2\u6d4b\u4efb\u52a1"
+  },
+  "command-center.probe-running.a478c0bc0e": {
+    "en": "Waiting for a verified peer acknowledgement",
+    "zh": "\u6b63\u5728\u7b49\u5f85\u5bf9\u7aef\u7684\u53ef\u9a8c\u8bc1\u63a5\u6536\u56de\u6267"
+  },
+  "command-center.probe-accepted.66ac386914": {
+    "en": "Peer accepted the isolated probe",
+    "zh": "\u5bf9\u7aef\u5df2\u63a5\u6536\u9694\u79bb\u63a2\u6d4b\u4efb\u52a1"
+  },
+  "command-center.probe-failed.c49ff322d4": {
+    "en": "Sandbox probe failed",
+    "zh": "\u6c99\u7bb1\u63a2\u6d4b\u5931\u8d25"
+  },
+  "command-center.probe-peer-result.bdb7e14f0e": {
+    "en": "Untrusted peer-reported result",
+    "zh": "\u5bf9\u7aef\u56de\u62a5\u7ed3\u679c\uff08\u672a\u7ecf\u672c\u5730\u4e1a\u52a1\u9a8c\u8bc1\uff09"
+  },
+  "command-center.probe-late-result.9258116370": {
+    "en": "Late peer-reported result archived",
+    "zh": "\u5df2\u5f52\u6863\u5bf9\u7aef\u8fdf\u5230\u7ed3\u679c"
+  },
+  "command-center.probe-empty-result.3305720766": {
+    "en": "No output was returned",
+    "zh": "\u5bf9\u7aef\u672a\u8fd4\u56de\u8f93\u51fa"
+  },
+  "command-center.probe-unknown.2a2fb722a9": {
+    "en": "Outcome unknown; automatic replay was blocked",
+    "zh": "\u7ed3\u679c\u672a\u77e5\uff0c\u5df2\u963b\u6b62\u81ea\u52a8\u91cd\u53d1"
+  },
+  "command-center.probe-in-progress.218ffae286": {
+    "en": "Sandbox task is still in progress",
+    "zh": "\u6c99\u7bb1\u4efb\u52a1\u4ecd\u5728\u6267\u884c"
+  },
+  "command-center.community-lumi.2a9df06015": {
+    "en": "Community Lumi directory",
+    "zh": "\u793e\u533a Lumi \u76ee\u5f55"
+  },
+  "command-center.community-node.75930e79ad": {
+    "en": "Community node",
+    "zh": "\u793e\u533a\u8282\u70b9"
+  },
+  "command-center.community-empty.2ff60e4e91": {
+    "en": "The connected directory has no public Lumi profiles.",
+    "zh": "\u5df2\u8fde\u63a5\u7684\u76ee\u5f55\u4e2d\u5c1a\u65e0\u516c\u5f00 Lumi \u6863\u6848\u3002"
+  },
+  "command-center.community-offline.37b0415de7": {
+    "en": "The configured community directory is unavailable",
+    "zh": "\u5df2\u914d\u7f6e\u7684\u793e\u533a\u76ee\u5f55\u5f53\u524d\u4e0d\u53ef\u7528"
+  },
+  "command-center.community-not-configured.70ac8f734b": {
+    "en": "No community directory is configured. Lumi will not fabricate discoverable peers.",
+    "zh": "\u5c1a\u672a\u914d\u7f6e\u793e\u533a Lumi \u76ee\u5f55\uff0c\u5ba2\u6237\u7aef\u4e0d\u4f1a\u4f2a\u9020\u53ef\u53d1\u73b0\u5bf9\u8c61\u3002"
+  },
+  "command-center.community-boundary.181ef36bbd": {
+    "en": "Directory profiles are discovery metadata only. Collaboration still requires one-time pairing, local authorization and sandbox verification.",
+    "zh": "\u76ee\u5f55\u6863\u6848\u4ec5\u7528\u4e8e\u53d1\u73b0\uff1b\u534f\u4f5c\u4ecd\u987b\u7ecf\u8fc7\u4e00\u6b21\u6027\u914d\u5bf9\u3001\u672c\u673a\u6388\u6743\u548c\u6c99\u7bb1\u9a8c\u8bc1\u3002"
+  },
+  "command-center.selective-absorption.56fd31ae52": {
+    "en": "Selective absorption",
+    "zh": "\u9009\u62e9\u6027\u5438\u6536"
+  },
+  "command-center.inspect-context.8966bf16d6": {
+    "en": "Inspect",
+    "zh": "\u67e5\u770b\u5916\u90e8\u4e0a\u4e0b\u6587"
+  },
+  "command-center.no-external-context.762357399e": {
+    "en": "No eligible peer context is loaded. Inspecting does not write memory.",
+    "zh": "\u5c1a\u672a\u52a0\u8f7d\u53ef\u7528\u7684\u5bf9\u7aef\u4e0a\u4e0b\u6587\uff1b\u67e5\u770b\u4e0d\u4f1a\u5199\u5165\u8bb0\u5fc6\u3002"
+  },
+  "command-center.absorb.55c9e779c1": {
+    "en": "Absorb",
+    "zh": "\u5438\u6536"
+  },
+  "command-center.absorb-title.c816db1ecf": {
+    "en": "Absorb this knowledge",
+    "zh": "\u5438\u6536\u8fd9\u6761\u77e5\u8bc6"
+  },
+  "command-center.absorb-warning.b839cc486f": {
+    "en": "This creates one long-term memory in the active workspace with LAP source attribution. It cannot alter Lumi's personality.",
+    "zh": "\u8fd9\u4f1a\u5728\u5f53\u524d\u5de5\u4f5c\u533a\u521b\u5efa\u4e00\u6761\u5e26 LAP \u6765\u6e90\u7684\u957f\u671f\u8bb0\u5fc6\uff0c\u4f46\u4e0d\u80fd\u6539\u53d8 Lumi \u4eba\u683c\u3002"
+  },
+  "command-center.absorbed-with-provenance.5bf8ad2639": {
+    "en": "Knowledge absorbed with LAP provenance",
+    "zh": "\u77e5\u8bc6\u5df2\u5438\u6536\u5e76\u4fdd\u7559 LAP \u6765\u6e90"
+  },
+  "command-center.absorb-failed.b79b8245d7": {
+    "en": "Knowledge absorption was blocked",
+    "zh": "\u77e5\u8bc6\u5438\u6536\u5df2\u88ab\u963b\u6b62"
+  },
+  "command-center.context-load-failed.d5b5a2c9f7": {
+    "en": "Failed to load peer context",
+    "zh": "\u5bf9\u7aef\u4e0a\u4e0b\u6587\u52a0\u8f7d\u5931\u8d25"
+  },
+  "command-center.external-ai-collaboration.041cce3f7e": {
+    "en": "External AI collaboration",
+    "zh": "\u5916\u90e8 AI \u534f\u540c"
+  },
+  "command-center.answers.2508a7e9d3": {
+    "en": "answers",
+    "zh": "\u4efd\u7b54\u590d"
+  },
+  "command-center.no-external-ai-sessions.123849148a": {
+    "en": "No scoped external-AI collaboration session yet. Ask Lumi in chat to consult one or more external AI systems.",
+    "zh": "\u5f53\u524d\u5de5\u4f5c\u533a\u8fd8\u6ca1\u6709\u5916\u90e8 AI \u534f\u540c\u4f1a\u8bdd\u3002\u53ef\u5728\u5bf9\u8bdd\u4e2d\u8ba9 Lumi \u8c03\u7528\u4e00\u4e2a\u6216\u591a\u4e2a\u5916\u90e8 AI\u3002"
   }
 }

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Send, Loader2, ArrowLeft, Ghost, Zap, Cpu, Sparkles, FileText, Mic, CheckCircle2, Square, ChevronDown, ChevronRight, XCircle, Copy, Check, Paperclip, Image as ImageIcon, MessageCircle, Briefcase, User, ExternalLink, FolderOpen, Upload } from 'lucide-react';
+import { Send, Loader2, ArrowLeft, Ghost, Zap, Cpu, Sparkles, FileText, Mic, CheckCircle2, Square, ChevronDown, ChevronRight, XCircle, Copy, Check, Paperclip, Image as ImageIcon, MessageCircle, Briefcase, User, ExternalLink, FolderOpen, Upload, Command } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -48,6 +48,8 @@ import {
 import { buildChatConversationScopeKey } from '@/lib/chatConversationScope';
 import { FocusThreadPanel } from './FocusThreadPanel';
 import { useFocusThreads } from '@/hooks/useFocusThreads';
+import { CommandCenterPanel } from './CommandCenterPanel';
+import type { CommandCenterView } from './commandCenterTypes';
 
 const CHAT_HISTORY_LIMIT = 300;
 const CHAT_RENDER_LIMIT = 80;
@@ -364,8 +366,41 @@ function extractGeneratedFiles(text: string): GeneratedFileLink[] {
     });
 }
 
-export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage, prefillSource = 'proactive', onPrefillConsumed, attachmentRequest, onAttachmentRequestConsumed }: { t: any; user: any; agent?: any; isOpen: boolean; onClose: () => void; prefillMessage?: string; prefillSource?: string; onPrefillConsumed?: () => void; attachmentRequest?: ChatAttachmentRequest; onAttachmentRequestConsumed?: (requestId: string) => void }) {
+export function AgentChatPage({
+  t,
+  user,
+  agent,
+  isOpen,
+  onClose,
+  prefillMessage,
+  prefillSource = 'proactive',
+  onPrefillConsumed,
+  attachmentRequest,
+  onAttachmentRequestConsumed,
+  layout = 'standalone',
+  commandCenterView = 'office',
+  onCommandCenterViewChange,
+  onOpenNexus,
+}: {
+  t: any;
+  user: any;
+  agent?: any;
+  isOpen: boolean;
+  onClose: () => void;
+  prefillMessage?: string;
+  prefillSource?: string;
+  onPrefillConsumed?: () => void;
+  attachmentRequest?: ChatAttachmentRequest;
+  onAttachmentRequestConsumed?: (requestId: string) => void;
+  layout?: 'standalone' | 'command-center';
+  commandCenterView?: CommandCenterView;
+  onCommandCenterViewChange?: (view: CommandCenterView) => void;
+  onOpenNexus?: () => void;
+}) {
   const [messages, setMessages] = useState<any[]>([]);
+  const [compactCommandCenterOpen, setCompactCommandCenterOpen] = useState(false);
+  const [officeChatOpen, setOfficeChatOpen] = useState(true);
+  const isOfficeCommandCenter = layout === 'command-center' && (commandCenterView === 'office' || commandCenterView === 'team');
   const isZh = t?.langCode !== 'en';
   const ui = (zh: string, en: string) => isZh ? zh : en;
   const { platform, isElectron } = usePlatform();
@@ -2555,16 +2590,64 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           </motion.div>
         )}
       </AnimatePresence>
-    <div className="lumi-chat-layout flex-1 max-w-[90rem] mx-auto w-full space-y-4 md:space-y-8 pb-32 md:pb-0 overflow-hidden flex flex-col">
-      <div className="lumi-chat-toolbar flex items-center justify-between px-4 md:px-0 pt-6 flex-shrink-0">
+    <div className={`lumi-chat-layout relative mx-auto flex w-full flex-1 flex-col overflow-hidden ${isOfficeCommandCenter ? 'max-w-none' : 'max-w-[90rem] space-y-4 pb-32 md:space-y-8 md:pb-0'}`}>
+      {isOfficeCommandCenter && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.35 }}
+          className="absolute inset-0 z-0"
+        >
+          <CommandCenterPanel
+            t={t}
+            view="office"
+            onViewChange={onCommandCenterViewChange || (() => {})}
+            onOpenNexus={onOpenNexus}
+          />
+        </motion.div>
+      )}
+
+      <div className={`lumi-chat-toolbar relative z-[55] flex flex-shrink-0 items-center justify-between px-4 ${isOfficeCommandCenter ? 'pt-4' : 'pt-6 md:px-0'}`}>
+        <div className="flex shrink-0 items-center gap-2">
         <button
           onClick={onClose}
           className="w-10 h-10 flex items-center justify-center bg-black/40 backdrop-blur-xl border border-white/[0.08] rounded-2xl text-white/40 hover:text-white hover:border-white/20 transition-all"
         >
           <ArrowLeft size={18} />
         </button>
-        <div className="lumi-chat-toolbar-actions flex min-w-0 items-center gap-3">
-          <div className="lumi-chat-voice-picker relative">
+        {isOfficeCommandCenter && (
+          <button
+            type="button"
+            onClick={() => setOfficeChatOpen(current => !current)}
+            className={`flex h-10 items-center gap-2 rounded-xl border px-3 text-xs font-bold shadow-xl backdrop-blur-xl transition-colors ${
+              officeChatOpen
+                ? 'border-cyan-300/20 bg-[#06101a]/78 text-cyan-100'
+                : 'border-white/10 bg-black/45 text-white/55 hover:text-white/80'
+            }`}
+            title={officeChatOpen ? (t.collapseChat || 'Collapse chat') : (t.openChat || 'Open chat')}
+          >
+            <MessageCircle size={14} />
+            <span className="hidden sm:inline">{t.chat || 'Chat'}</span>
+          </button>
+        )}
+        {layout === 'command-center' && !isOfficeCommandCenter && (
+          <button
+            type="button"
+            onClick={() => setCompactCommandCenterOpen(current => !current)}
+            className={`flex h-10 items-center gap-2 rounded-xl border px-3 text-xs font-bold transition-colors xl:hidden ${
+              compactCommandCenterOpen
+                ? 'border-cyan-300/25 bg-cyan-300/15 text-cyan-100'
+                : 'border-white/10 bg-black/35 text-white/50 hover:text-white/75'
+            }`}
+            title={compactCommandCenterOpen ? uiMessage('command-center.back-to-chat.b71016948a') : uiMessage('command-center.show-workspace.8cbc21838f')}
+          >
+            {compactCommandCenterOpen ? <ArrowLeft size={14} /> : <Command size={14} />}
+            <span>{compactCommandCenterOpen ? uiMessage('command-center.back-to-chat.b71016948a') : uiMessage('command-center.title.c5bb6d0f01')}</span>
+          </button>
+        )}
+        </div>
+        <div className={`lumi-chat-toolbar-actions flex min-w-0 items-center ${isOfficeCommandCenter ? 'gap-1.5' : 'gap-3'}`}>
+          <div className={`lumi-chat-voice-picker relative ${isOfficeCommandCenter ? 'hidden 2xl:block' : ''}`}>
             <Button
               variant="ghost"
               size="sm"
@@ -2630,10 +2713,10 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           >
             <FileText className="h-4 w-4 md:h-5 md:w-5" />
           </button>
-          <div className="lumi-chat-agent-mark w-8 h-8 md:w-10 md:h-10 rounded-xl bg-celestial-saturn/20 flex items-center justify-center text-celestial-saturn border border-celestial-saturn/20">
+          <div className={`lumi-chat-agent-mark h-8 w-8 items-center justify-center rounded-xl border border-celestial-saturn/20 bg-celestial-saturn/20 text-celestial-saturn md:h-10 md:w-10 ${isOfficeCommandCenter ? 'hidden sm:flex' : 'flex'}`}>
             <Ghost className="w-4 h-4 md:w-5 md:h-5" />
           </div>
-          <div className="lumi-chat-agent-identity min-w-0 text-right sm:text-left">
+          <div className={`lumi-chat-agent-identity min-w-0 text-right sm:text-left ${isOfficeCommandCenter ? 'hidden 2xl:block' : ''}`}>
             <div className="flex max-w-[52vw] flex-wrap items-center justify-end gap-1.5 sm:max-w-none sm:justify-start">
               <h2 className="min-w-0 truncate text-base font-bold tracking-tight md:text-xl">
                 {agentName}
@@ -2663,11 +2746,32 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
         </div>
       </div>
 
-      <div className="flex gap-3 flex-1 min-h-0">
+      {layout === 'command-center' && !isOfficeCommandCenter && compactCommandCenterOpen && (
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 12 }}
+          className="absolute inset-x-2 bottom-2 top-14 z-[45] xl:hidden"
+        >
+          <CommandCenterPanel
+            t={t}
+            view={commandCenterView}
+            onViewChange={onCommandCenterViewChange || (() => {})}
+            onOpenNexus={onOpenNexus}
+          />
+        </motion.div>
+      )}
+
+      <div className={`relative z-20 flex min-h-0 flex-1 ${isOfficeCommandCenter ? 'pointer-events-none' : 'gap-3'}`}>
 
         {/* Chat Panel */}
+        {(!isOfficeCommandCenter || officeChatOpen) && (
         <div
-          className="lumi-chat-panel flex-1 flex flex-col glass rounded-[2.5rem] md:rounded-[3rem] border overflow-hidden shadow-2xl min-w-0"
+          className={`lumi-chat-panel flex flex-col glass rounded-[2.5rem] md:rounded-[3rem] border overflow-hidden shadow-2xl min-w-0 ${
+            isOfficeCommandCenter
+              ? 'pointer-events-auto absolute bottom-4 left-4 top-3 z-40 w-[min(390px,calc(100%-2rem))]'
+              : 'flex-1'
+          }`}
           style={chatPanelStyle}
         >
           <div
@@ -3159,7 +3263,27 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
             </form>
           </div>
         </div>
+        )}
 
+        {/* Command Center or standalone chat information */}
+        {layout === 'command-center' ? (!isOfficeCommandCenter ? (
+          <motion.div
+            initial={{ opacity: 0, x: 28 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.35, ease: [0.25, 0.1, 0.25, 1], delay: 0.08 }}
+            className={`lumi-command-center-rail hidden min-h-0 xl:block ${
+              commandCenterView === 'office' ? 'min-w-0 flex-1' : 'w-[440px] flex-shrink-0 2xl:w-[520px]'
+            }`}
+          >
+            <CommandCenterPanel
+              t={t}
+              view={commandCenterView}
+              onViewChange={onCommandCenterViewChange || (() => {})}
+              onOpenNexus={onOpenNexus}
+            />
+          </motion.div>
+        ) : null) : (
+          <>
         {/* Info Sidebar */}
             <motion.div
               initial={{ opacity: 0, x: 40 }}
@@ -3263,6 +3387,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           </GlassCard>
           </motion.div>
             </motion.div>
+          </>
+        )}
       </div>
     </div>
         </motion.div>

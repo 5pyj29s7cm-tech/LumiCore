@@ -1037,7 +1037,13 @@ export function findConversationActionTask(
       if (query && haystack.includes(query)) score += 3;
       return { task, score };
     })
-    .sort((left, right) => right.score - left.score || right.task.updatedAt.localeCompare(left.task.updatedAt))[0]?.task || null;
+    .sort((left, right) => (
+      right.score - left.score
+      || (query
+        ? right.task.updatedAt.localeCompare(left.task.updatedAt)
+        : right.task.createdAt.localeCompare(left.task.createdAt)
+          || right.task.updatedAt.localeCompare(left.task.updatedAt))
+    ))[0]?.task || null;
 }
 
 export function conversationActionStateFromTask(

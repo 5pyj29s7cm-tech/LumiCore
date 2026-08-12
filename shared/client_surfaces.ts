@@ -9,6 +9,7 @@ export interface PersonalClientSurfaceDefinition {
   launcherIds?: readonly string[];
   organizationView?: string;
   organizationViewByAction?: Readonly<Record<string, string>>;
+  commandCenterViewByAction?: Readonly<Record<string, 'office' | 'team' | 'network' | 'core'>>;
 }
 
 export interface ClientSettingsSectionDefinition {
@@ -28,6 +29,8 @@ export interface PersonalClientSurfaceVisibilityState {
   appLauncherOpen?: boolean;
   knowledgeOpen?: boolean;
   chatOpen?: boolean;
+  commandCenterOpen?: boolean;
+  commandCenterView?: 'office' | 'team' | 'network' | 'core';
   notificationsOpen?: boolean;
   memoryAvatarOpen?: boolean;
   meetingOpen?: boolean;
@@ -173,12 +176,17 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
     launcherIds: [],
   },
   {
-    id: 'chat',
-    label: 'Side chat',
-    target: 'chat',
-    actions: ['open_chat'],
-    useWhen: 'Hold a conversation beside other work without leaving the desktop shell.',
-    launcherIds: ['chat'],
+    id: 'command-center',
+    label: 'Lumi command center',
+    target: 'command-center',
+    actions: ['open_command_center', 'open_chat', 'open_team'],
+    commandCenterViewByAction: {
+      open_command_center: 'office',
+      open_chat: 'office',
+      open_team: 'office',
+    },
+    useWhen: 'Converse with Lumi, inspect persistent tasks and receipts, coordinate the agent team, and enter the Lumi network or distributed core from one scoped workspace.',
+    launcherIds: ['command-center'],
   },
   {
     id: 'knowledge',
@@ -261,14 +269,6 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
     actions: ['open_tools'],
     useWhen: 'Inspect executable tools, categories, status, and invocation surfaces.',
     launcherIds: ['tools'],
-  },
-  {
-    id: 'team',
-    label: 'Agent team',
-    target: 'team',
-    actions: ['open_team'],
-    useWhen: 'Inspect sub-agents, delegation, orchestration, and multi-agent work.',
-    launcherIds: ['team'],
   },
   {
     id: 'memory-avatar',
@@ -589,7 +589,7 @@ export function getOpenPersonalClientSurfaceIds(
       if (surface.id === 'nexus') return state.viewMode === 'world';
       if (surface.id === 'app-launcher') return Boolean(state.appLauncherOpen);
       if (surface.id === 'knowledge') return Boolean(state.knowledgeOpen);
-      if (surface.id === 'chat') return Boolean(state.chatOpen);
+      if (surface.id === 'command-center') return Boolean(state.commandCenterOpen || state.chatOpen);
       if (surface.id === 'notifications') return Boolean(state.notificationsOpen);
       if (surface.id === 'memory-avatar') return Boolean(state.memoryAvatarOpen);
       if (surface.id === 'meeting') return Boolean(state.meetingOpen);

@@ -9,7 +9,7 @@ import type {
   LAPSession,
 } from './types';
 
-interface TaskRecord {
+export interface TaskRecord {
   task: LAPTask;
   sessionId: string;
   from: string;      // delegator agentId
@@ -19,6 +19,7 @@ interface TaskRecord {
   updatedAt: string;
   result?: Record<string, any>;
   error?: string;
+  lateResultAt?: string;
 }
 
 const tasks: Map<string, TaskRecord> = new Map();
@@ -26,8 +27,13 @@ const tasks: Map<string, TaskRecord> = new Map();
 export function delegateTask(
   request: LAPTaskDelegateRequest,
   session: LAPSession,
+  fromAgentId: string = session.peerA.agentId,
 ): LAPTaskDelegateResponse {
   const { task } = request;
+
+  if (session.authorizationStatus !== 'approved') {
+    return { accepted: false, taskId: task.taskId || '', reason: 'Session is waiting for local user approval' };
+  }
 
   // Validate task
   if (!task.type || !task.taskId) {
@@ -47,11 +53,18 @@ export function delegateTask(
     }
   }
 
+  const toAgentId = session.peerA.agentId === fromAgentId
+    ? session.peerB.agentId
+    : session.peerB.agentId === fromAgentId
+      ? session.peerA.agentId
+      : '';
+  if (!toAgentId) return { accepted: false, taskId: task.taskId, reason: 'Delegating peer is not part of this session' };
+
   const record: TaskRecord = {
     task,
     sessionId: session.sessionId,
-    from: session.peerA.agentId,
-    to: session.peerB.agentId,
+    from: fromAgentId,
+    to: toAgentId,
     status: 'accepted',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -65,18 +78,64 @@ export function delegateTask(
   };
 }
 
+export function registerOutboundTask(task: LAPTask, session: LAPSession, fromAgentId: string): TaskRecord {
+  const toAgentId = session.peerA.agentId === fromAgentId
+    ? session.peerB.agentId
+    : session.peerB.agentId === fromAgentId
+      ? session.peerA.agentId
+      : '';
+  if (!toAgentId) throw new Error('Outbound LAP sender is not part of this session.');
+  const existing = tasks.get(task.taskId);
+  if (existing) {
+    if (existing.sessionId !== session.sessionId || existing.from !== fromAgentId) {
+      throw new Error('LAP task id is already bound to another session or sender.');
+    }
+    return existing;
+  }
+  const now = new Date().toISOString();
+  const record: TaskRecord = {
+    task,
+    sessionId: session.sessionId,
+    from: fromAgentId,
+    to: toAgentId,
+    status: 'pending',
+    createdAt: now,
+    updatedAt: now,
+  };
+  tasks.set(task.taskId, record);
+  return record;
+}
+
 export function updateTaskStatus(
+  sessionId: string,
   taskId: string,
   status: LAPTaskStatus,
   output?: Record<string, any>,
   error?: string,
+  fromAgentId?: string,
 ): boolean {
   const record = tasks.get(taskId);
-  if (!record) return false;
+  if (!record || record.sessionId !== sessionId) return false;
+  if (fromAgentId && record.to !== fromAgentId) return false;
+  if (!['pending', 'accepted', 'rejected', 'running', 'completed', 'failed', 'unknown'].includes(status)) return false;
+  const previousStatus = record.status;
+  const terminal = new Set<LAPTaskStatus>(['completed', 'failed', 'rejected']);
+  if (terminal.has(previousStatus) && status !== previousStatus) return false;
+  if (previousStatus === 'unknown' && status !== 'completed' && status !== 'failed') return false;
+  if ((previousStatus === 'running' || previousStatus === 'accepted') && status === 'pending') return false;
+  if (previousStatus === 'running' && status === 'accepted') return false;
   record.status = status;
   record.updatedAt = new Date().toISOString();
-  if (output) record.result = output;
-  if (error) record.error = error;
+  if (previousStatus === 'unknown' && (status === 'completed' || status === 'failed')) {
+    record.lateResultAt = record.updatedAt;
+  }
+  if (output) {
+    const serialized = JSON.stringify(output);
+    record.result = serialized.length <= 16_000
+      ? output
+      : { truncated: true, preview: serialized.slice(0, 12_000) };
+  }
+  if (error) record.error = String(error).slice(0, 2_000);
   return true;
 }
 
@@ -104,7 +163,7 @@ export function cancelTasksForSession(sessionId: string): number {
   return count;
 }
 
-export function buildTaskListResponse(tasks: TaskRecord[]): Record<string, any> {
+export function buildTaskListResponse(tasks: TaskRecord[], options: { includeResult?: boolean } = {}): Record<string, any> {
   return {
     tasks: tasks.map(r => ({
       taskId: r.task.taskId,
@@ -115,6 +174,18 @@ export function buildTaskListResponse(tasks: TaskRecord[]): Record<string, any> 
       createdAt: r.createdAt,
       updatedAt: r.updatedAt,
       hasResult: !!r.result,
+      ...(options.includeResult ? {
+        result: r.result,
+        error: r.error,
+        lateResultAt: r.lateResultAt,
+        receiptStatus: r.status === 'completed'
+          ? r.lateResultAt ? 'peer_reported_late' : 'peer_reported'
+          : r.status === 'failed' || r.status === 'rejected'
+            ? 'failed'
+            : r.status === 'unknown'
+              ? 'unknown'
+              : 'pending',
+      } : {}),
     })),
     summary: {
       total: tasks.length,
@@ -122,6 +193,11 @@ export function buildTaskListResponse(tasks: TaskRecord[]): Record<string, any> 
       running: tasks.filter(t => t.status === 'running').length,
       completed: tasks.filter(t => t.status === 'completed').length,
       failed: tasks.filter(t => t.status === 'failed').length,
+      unknown: tasks.filter(t => t.status === 'unknown').length,
     },
   };
+}
+
+export function resetLAPTasksForTests(): void {
+  tasks.clear();
 }

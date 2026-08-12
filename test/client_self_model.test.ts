@@ -300,11 +300,11 @@ describe('Lumi client self model', () => {
         name: 'open chat',
         args: { action: 'open_chat' },
         after: {
-          activeTab: 'chat',
+          activeTab: 'command-center',
           windows: { open: [], focused: null, minimized: [] },
-          surfaces: { chatOpen: true },
+          surfaces: { chatOpen: true, commandCenterOpen: true, commandCenterView: 'office' },
         },
-        matched: 'surface:chat:open',
+        matched: 'surface:command-center:open',
       },
       {
         name: 'switch assistant mode',

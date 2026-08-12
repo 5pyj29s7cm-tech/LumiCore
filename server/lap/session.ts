@@ -19,13 +19,19 @@ export function createSession(
   peerB: LAPAgentIdentity,
   trustLevel: LAPTrustLevel,
   scope: LAPScope[],
+  target?: LAPHandshakeRequest['target'],
 ): LAPSession {
   const session: LAPSession = {
     sessionId: randomUUID(),
     peerA,
     peerB,
     trustLevel,
-    scope,
+    scope: [],
+    requestedScope: scope,
+    authorizationStatus: 'pending',
+    targetUserId: target?.userId,
+    targetDomain: target?.domain,
+    targetOrgId: target?.domain === 'work' ? String(target.orgId || '') : '',
     establishedAt: new Date().toISOString(),
     lastHeartbeat: new Date().toISOString(),
   };
@@ -59,6 +65,15 @@ export function removeSession(sessionId: string): boolean {
   return sessions.delete(sessionId);
 }
 
+export function approveSession(sessionId: string): LAPSession | undefined {
+  const session = sessions.get(sessionId);
+  if (!session || session.authorizationStatus === 'revoked') return undefined;
+  session.authorizationStatus = 'approved';
+  session.scope = [...(session.requestedScope || [])];
+  session.lastHeartbeat = new Date().toISOString();
+  return session;
+}
+
 export function updateHeartbeat(sessionId: string): void {
   const session = sessions.get(sessionId);
   if (session) session.lastHeartbeat = new Date().toISOString();
@@ -85,8 +100,15 @@ export function validateHandshake(
   localAgent: LAPAgentIdentity,
 ): { valid: boolean; reason?: string; trustLevel?: LAPTrustLevel } {
   // Check agent ID is non-empty
-  if (!request.agent.agentId || !request.agent.userId) {
-    return { valid: false, reason: 'Agent identity incomplete: missing agentId or userId' };
+  if (!request.agent.agentId || !request.agent.userId || !request.agent.publicKey) {
+    return { valid: false, reason: 'Agent identity incomplete: missing agentId, userId, or public key' };
+  }
+
+  if (!request.target?.userId || !['personal', 'work'].includes(request.target.domain)) {
+    return { valid: false, reason: 'Handshake requires a local pairing target' };
+  }
+  if (request.target.domain === 'work' && !String(request.target.orgId || '').trim()) {
+    return { valid: false, reason: 'Organization pairing requires target.orgId' };
   }
 
   // Check nonce length
@@ -113,16 +135,22 @@ export function buildHandshakeResponse(
   trustLevel: LAPTrustLevel,
   scope: LAPScope[],
 ): LAPHandshakeResponse {
-  const session = createSession(request.agent, localAgent, trustLevel, scope);
+  const session = createSession(request.agent, localAgent, trustLevel, scope, request.target);
   return {
     accepted: true,
     sessionId: session.sessionId,
     agent: localAgent,
     trustLevel,
-    scope,
+    scope: [],
+    authorizationStatus: 'pending',
   };
 }
 
 export function getAllSessions(): LAPSession[] {
   return Array.from(sessions.values());
+}
+
+export function resetLAPSessionsForTests(): void {
+  sessions.clear();
+  agentPeers.clear();
 }

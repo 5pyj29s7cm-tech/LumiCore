@@ -121,8 +121,8 @@ describe('complete personal-client surface contract', () => {
     ])).sort();
 
     expect([...PERSONAL_CLIENT_LAUNCHER_IDS].sort()).toEqual(renderedLauncherIds);
-    expect(quotedPropertyValues(desktopIcons, 'windowId')).toHaveLength(6);
-    expect(quotedPropertyValues(desktopIcons, 'windowId')[0]).toBe('chat');
+    expect(quotedPropertyValues(desktopIcons, 'windowId')).toHaveLength(5);
+    expect(quotedPropertyValues(desktopIcons, 'windowId')[0]).toBe('command-center');
     expect(quotedPropertyValues(desktopIcons, 'windowId')).not.toContain('runtime-log');
     expect(quotedPropertyValues(desktopIcons, 'windowId')).toContain('personalization');
     expect(quotedPropertyValues(desktopIcons, 'windowId')).not.toEqual(expect.arrayContaining(['avatar-studio', 'sound']));

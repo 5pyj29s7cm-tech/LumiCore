@@ -1534,6 +1534,17 @@ body,
   display: none;
 }
 
+[data-ui-density="tight"] .lumi-command-center-switch,
+[data-ui-density="mini"] .lumi-command-center-switch {
+  min-width: 32px;
+  padding-inline: 8px;
+}
+
+[data-ui-density="tight"] .lumi-command-center-label,
+[data-ui-density="mini"] .lumi-command-center-label {
+  display: none;
+}
+
 [data-ui-density="tight"] .lumi-dock {
   bottom: 6px;
   height: 44px;

@@ -16,12 +16,10 @@ describe('focus thread client projection', () => {
     expect(hook).not.toContain('userId:');
   });
 
-  it('shows the same evidence-backed focus in desktop and chat surfaces', () => {
-    const desktop = source('src/components/DesktopUI.tsx');
+  it('shows the evidence-backed focus inside the unified command-center chat surface', () => {
     const chat = source('src/components/AgentChatPage.tsx');
     const panel = source('src/components/FocusThreadPanel.tsx');
-    expect(desktop).toContain('useFocusThreads({');
-    expect(desktop).toContain('focusThreads={focusThreads}');
+    expect(chat).toContain('useFocusThreads({');
     expect(chat).toContain('<FocusThreadPanel');
     expect(chat).toContain('variant="strip"');
     expect(panel).toContain('thread.evidenceTaskId');

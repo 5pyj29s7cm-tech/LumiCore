@@ -62,7 +62,7 @@ describe('notification center-only delivery', () => {
 
   it('does not auto-open MCP or desktop-takeover panels for background events', () => {
     const desktop = source('src/components/DesktopUI.tsx');
-    const mcpListener = between(desktop, '// MCP Live Activity socket listener', 'const upsertBackgroundWorkflowTask');
+    const mcpListener = between(desktop, '// MCP Live Activity socket listener', '// Workflow status listener');
 
     expect(mcpListener).toContain("socket.on('mcp:activity', handler)");
     expect(mcpListener).toContain('addNotification({');

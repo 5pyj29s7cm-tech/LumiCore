@@ -881,6 +881,25 @@ export function getExternalAiSessionSnapshot(sessionId: string, userId?: string)
   return sessionSnapshot(sessionId, userId);
 }
 
+export function listExternalAiSessionSnapshots(input: {
+  userId: string;
+  domain?: 'personal' | 'work';
+  orgId?: string;
+  limit?: number;
+}): any[] {
+  const db = readDB();
+  const { sessions } = arrays(db);
+  const domain = input.domain === 'work' ? 'work' : 'personal';
+  const orgId = domain === 'work' ? String(input.orgId || '') : '';
+  const limit = Math.max(1, Math.min(Number(input.limit) || 20, 100));
+  return sessions
+    .filter(session => session.userId === input.userId && session.domain === domain && session.orgId === orgId)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    .slice(0, limit)
+    .map(session => sessionSnapshot(session.id, input.userId))
+    .filter(Boolean);
+}
+
 export function recoverInterruptedExternalAiCollaborations(): number {
   const db = readDB();
   const { dispatches, sessions } = arrays(db);

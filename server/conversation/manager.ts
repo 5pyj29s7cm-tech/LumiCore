@@ -101,7 +101,8 @@ function hydrateConversationActionState(
   const existingUpdatedAt = existing ? Date.parse(existing.updatedAt) : Number.NaN;
   const ledgerUpdatedAt = ledgerState ? Date.parse(ledgerState.updatedAt) : Number.NaN;
   const newestRuntimeState = existing && ledgerState
-    ? (Number.isFinite(ledgerUpdatedAt)
+    ? (existing.taskId === ledgerState.taskId
+      && Number.isFinite(ledgerUpdatedAt)
       && (!Number.isFinite(existingUpdatedAt) || ledgerUpdatedAt > existingUpdatedAt)
         ? ledgerState
         : existing)

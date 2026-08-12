@@ -7,7 +7,7 @@ import type {
 } from './types';
 import { evaluateLAPContextFirewall } from './firewall';
 
-interface SharedContextRecord {
+export interface SharedContextRecord {
   id: string;
   sessionId: string;
   fromAgentId: string;
@@ -24,6 +24,14 @@ export function shareContext(
   request: LAPContextShareRequest,
   session: LAPSession,
 ): LAPContextShareResponse {
+  if (session.authorizationStatus !== 'approved') {
+    return {
+      accepted: false,
+      acceptedEntries: 0,
+      rejectedEntries: request.contexts.length,
+      reason: 'Session is waiting for local user approval',
+    };
+  }
   if (!session.scope.includes('share_context')) {
     return {
       accepted: false,
@@ -90,8 +98,16 @@ export function getActiveSharedContexts(sessionId: string): SharedContextRecord[
   return records.filter(record => !record.expiresAt || record.expiresAt > now);
 }
 
+export function getSharedContext(sessionId: string, contextId: string): SharedContextRecord | undefined {
+  return getActiveSharedContexts(sessionId).find(record => record.id === contextId);
+}
+
 export function removeSharedContexts(sessionId: string): number {
   const count = (sharedContexts.get(sessionId) || []).length;
   sharedContexts.delete(sessionId);
   return count;
+}
+
+export function resetSharedContextsForTests(): void {
+  sharedContexts.clear();
 }

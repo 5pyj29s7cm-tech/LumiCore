@@ -35,6 +35,12 @@ export interface LAPSession {
   scope: LAPScope[];
   establishedAt: string;   // ISO timestamp
   lastHeartbeat: string;
+  /** A handshake is inert until the intended local user explicitly approves it. */
+  authorizationStatus?: 'pending' | 'approved' | 'revoked';
+  requestedScope?: LAPScope[];
+  targetUserId?: string;
+  targetDomain?: 'personal' | 'work';
+  targetOrgId?: string;
 }
 
 // Messages (JSON-RPC-like envelope)
@@ -53,6 +59,14 @@ export interface LAPHandshakeRequest extends LAPMessage {
   agent: LAPAgentIdentity;
   proposedScope: LAPScope[];
   nonce: string;           // random 32-byte hex
+  /** Short-lived, single-use token issued by the destination Lumi owner. */
+  pairingToken?: string;
+  /** Pairing destination issued by the local Lumi client. */
+  target?: {
+    userId: string;
+    domain: 'personal' | 'work';
+    orgId?: string;
+  };
 }
 
 export interface LAPHandshakeResponse {
@@ -62,6 +76,7 @@ export interface LAPHandshakeResponse {
   agent: LAPAgentIdentity;
   trustLevel: LAPTrustLevel;
   scope: LAPScope[];
+  authorizationStatus?: 'pending' | 'approved';
 }
 
 // 2. Context sharing
@@ -108,7 +123,7 @@ export interface LAPContextShareResponse {
 
 // 3. Task delegation
 
-export type LAPTaskStatus = 'pending' | 'accepted' | 'rejected' | 'running' | 'completed' | 'failed';
+export type LAPTaskStatus = 'pending' | 'accepted' | 'rejected' | 'running' | 'completed' | 'failed' | 'unknown';
 export type LAPTaskPriority = 'low' | 'normal' | 'high' | 'critical';
 
 export interface LAPTask {

@@ -18,6 +18,7 @@ export function inferLAPPrivacyClass(entry: Partial<LAPContextEntry>): LAPPrivac
 export function evaluateLAPContextFirewall(
   entry: LAPContextEntry,
   session?: LAPSession,
+  options: { localUserApproved?: boolean } = {},
 ): LAPContextFirewallDecision {
   if (!entry || typeof entry !== 'object') {
     return rejectLAPContext('Context entry is missing or malformed');
@@ -39,10 +40,13 @@ export function evaluateLAPContextFirewall(
   }
 
   const privacyClass = inferLAPPrivacyClass(entry);
-  if ((privacyClass === 'private' || privacyClass === 'secret') && entry.userApproved !== true) {
+  // `entry.userApproved` is supplied by the remote peer and is provenance only;
+  // it can never stand in for consent from this Lumi's authenticated owner.
+  const locallyApproved = options.localUserApproved === true;
+  if ((privacyClass === 'private' || privacyClass === 'secret') && !locallyApproved) {
     return rejectLAPContext(`User approval is required for ${privacyClass} LAP context`);
   }
-  if (entry.scope === 'permanent' && entry.userApproved !== true) {
+  if (entry.scope === 'permanent' && !locallyApproved) {
     return rejectLAPContext('Permanent LAP context requires explicit user approval');
   }
   if (entry.scope === 'permanent' && session?.trustLevel !== 'direct') {
@@ -50,7 +54,7 @@ export function evaluateLAPContextFirewall(
   }
 
   const memoryIngestion: LAPMemoryIngestionMode =
-    entry.scope === 'permanent' && entry.userApproved === true ? 'candidate_memory' : 'external_context';
+    entry.scope === 'permanent' && locallyApproved ? 'candidate_memory' : 'external_context';
 
   return {
     accepted: true,
@@ -58,6 +62,7 @@ export function evaluateLAPContextFirewall(
       ...entry,
       origin: entry.origin || 'external_lumi',
       privacyClass,
+      userApproved: locallyApproved,
       tags: entry.tags || [],
     },
     memoryIngestion,

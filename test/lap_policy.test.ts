@@ -47,7 +47,7 @@ describe('LAP policy and memory firewall', () => {
     expect(decision.reason).toMatch(/approval|private/i);
   });
 
-  it('allows approved permanent memory only on direct trust as a candidate', () => {
+  it('does not trust a remote peer to self-assert local approval', () => {
     const decision = evaluateLAPContextFirewall({
       type: 'memory',
       scope: 'permanent',
@@ -56,6 +56,20 @@ describe('LAP policy and memory firewall', () => {
       privacyClass: 'shared',
       userApproved: true,
     }, directSession);
+
+    expect(decision.accepted).toBe(false);
+    expect(decision.memoryIngestion).toBe('blocked');
+  });
+
+  it('allows permanent memory only after separate local approval on direct trust', () => {
+    const decision = evaluateLAPContextFirewall({
+      type: 'memory',
+      scope: 'permanent',
+      payload: 'Alice approved sharing this reusable collaboration preference.',
+      confidence: 0.8,
+      privacyClass: 'shared',
+      userApproved: true,
+    }, directSession, { localUserApproved: true });
 
     expect(decision.accepted).toBe(true);
     expect(decision.memoryIngestion).toBe('candidate_memory');
@@ -69,5 +83,12 @@ describe('LAP policy and memory firewall', () => {
     expect(snapshot.protocol).toBe('LAP');
     expect(prompt).toContain('Inter-Lumi');
     expect(prompt).toContain('Do not write it into local long-term memory');
+  });
+
+  it('does not expose global peer or task state without an authenticated workspace scope', () => {
+    const snapshot = getLAPPolicySnapshot();
+
+    expect(snapshot.activeSessions).toEqual([]);
+    expect(snapshot.taskSummary.total).toBe(0);
   });
 });
