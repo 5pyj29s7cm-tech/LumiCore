@@ -68,14 +68,11 @@ import type { PetConfig } from '../pets/types';
 import { useSocket } from '@/hooks/useSocket';
 import { useAmbientPoller } from '@/hooks/useAmbientPoller';
 import { useVoiceCall, type VoiceTranscriptMeta } from '@/hooks/useVoiceCall';
-import { useFocusThreads } from '@/hooks/useFocusThreads';
-import { useRuntimeStatus } from '@/hooks/useRuntimeStatus';
-import { useLumiScene } from '@/hooks/useLumiScene';
 import { useApp, type OperationMode } from '@/contexts/AppContext';
 const LocalAgentSphere = lazy(() => import('./LocalAgentSphere').then(m => ({ default: m.LocalAgentSphere })));
 const NexusGlobe = lazy(() => import('./NexusGlobe/NexusGlobe').then(m => ({ default: m.NexusGlobe })));
 const InkWorldLazy = lazy(() => import('./InkWorld').then(m => ({ default: m.InkWorld })));
-import type { BackgroundWorkflowTask, WorkflowStep } from './WorkflowPanel';
+import type { BackgroundWorkflowTask, WorkflowStep } from './workflowTypes';
 import { useWakeWord } from '../hooks/useWakeWord';
 import { ErrorBoundary } from './ErrorBoundary';
 import { appConfirm } from '@/lib/appConfirm';
@@ -158,7 +155,6 @@ const TerminalWindow = lazy(() => import('./Terminal').then(m => ({ default: m.T
 const TokenDashboard = lazy(() => import('./TokenDashboard').then(m => ({ default: m.TokenDashboard })));
 const ToolPanel = lazy(() => import('./ToolPanel').then(m => ({ default: m.ToolPanel })));
 const VoiceTrainingDialog = lazy(() => import('./VoiceTrainingDialog').then(m => ({ default: m.VoiceTrainingDialog })));
-const WorkflowPanel = lazy(() => import('./WorkflowPanel'));
 
 type ProactiveChatDetail = {
   type?: string;
@@ -1523,30 +1519,6 @@ export function DesktopUI({
   const personalOpacity = useTransform(cameraZ, [0, -400], [1, 0]);
   const { isTauri } = usePlatform();
   const { selectedVoiceId, unreadCount, notifications, addNotification, orgConnection, workDomain, switchDomain, operationMode, setOperationMode, aiConfig, resolvedAppearanceMode } = useApp();
-  const focusScopeDomain = workDomain === 'work' && orgConnection?.connected && orgConnection?.orgId
-    ? 'work'
-    : 'personal';
-  const { threads: focusThreads, loading: focusThreadsLoading } = useFocusThreads({
-    domain: focusScopeDomain,
-    orgId: focusScopeDomain === 'work' ? orgConnection?.orgId : undefined,
-    enabled: Boolean(user),
-  });
-  const {
-    status: structuredRuntimeStatus,
-    loading: structuredRuntimeLoading,
-    error: structuredRuntimeError,
-  } = useRuntimeStatus({
-    enabled: Boolean(user),
-    scopeKey: `${focusScopeDomain}:${focusScopeDomain === 'work' ? orgConnection?.orgId || '' : ''}`,
-  });
-  const {
-    scene: runtimeScene,
-    loading: runtimeSceneLoading,
-    error: runtimeSceneError,
-  } = useLumiScene({
-    enabled: Boolean(user),
-    scopeKey: `${focusScopeDomain}:${focusScopeDomain === 'work' ? orgConnection?.orgId || '' : ''}`,
-  });
   const petPreferenceScopeKey = workDomain === 'work'
     ? `org_${orgConnection?.orgId || 'pending'}`
     : `personal_${user?.uid || 'local'}`;
@@ -1884,7 +1856,6 @@ export function DesktopUI({
   const showMcpPanel = false;
   const [agentStatus, setAgentStatus] = useState<'idle' | 'thinking' | 'background' | 'executing' | 'waiting_confirmation' | 'done' | 'error'>('idle');
   const [workflowSteps, setWorkflowSteps] = useState<WorkflowStep[]>([]);
-  const [backgroundWorkflowTasks, setBackgroundWorkflowTasks] = useState<BackgroundWorkflowTask[]>([]);
   const [pendingOperationMode, setPendingOperationMode] = useState<OperationMode | null>(null);
   const seenWorkflowToolEvents = useRef<Set<string>>(new Set());
   const backgroundTaskStatusRef = useRef<Map<string, string>>(new Map());
@@ -3041,42 +3012,6 @@ export function DesktopUI({
     return () => { socket.off('mcp:activity', handler); };
   }, [socket, addNotification]);
 
-  const upsertBackgroundWorkflowTask = useCallback((task: BackgroundWorkflowTask) => {
-    if (!task?.id) return;
-    setBackgroundWorkflowTasks(prev => {
-      const existing = prev.findIndex(item => item.id === task.id);
-      const nextTask = { ...prev[existing], ...task };
-      const next = existing >= 0
-        ? prev.map(item => item.id === task.id ? nextTask : item)
-        : [nextTask, ...prev];
-      return next.slice(0, 6);
-    });
-
-    if (['completed', 'failed', 'cancelled'].includes(task.status)) {
-      window.setTimeout(() => {
-        setBackgroundWorkflowTasks(prev => prev.filter(item => item.id !== task.id));
-        backgroundTaskStatusRef.current.delete(task.id);
-      }, 12000);
-    }
-  }, []);
-
-  const cancelBackgroundWorkflowTask = useCallback((taskId: string) => {
-    socket?.emit('agent:background_cancel', { taskId });
-    setBackgroundWorkflowTasks(prev => prev.map(task =>
-      task.id === taskId ? { ...task, status: 'cancelling' } : task
-    ));
-  }, [socket]);
-
-  useEffect(() => {
-    fetch('/api/autonomy/background-tasks', { credentials: 'include' })
-      .then(res => res.ok ? res.json() : null)
-      .then(data => {
-        if (!Array.isArray(data?.tasks)) return;
-        data.tasks.slice(0, 6).forEach((task: BackgroundWorkflowTask) => upsertBackgroundWorkflowTask(task));
-      })
-      .catch(() => {});
-  }, [upsertBackgroundWorkflowTask]);
-
   // Workflow status listener — agent:status, agent:tool_call, agent:response, agent:error
   useEffect(() => {
     if (!socket) return;
@@ -3336,14 +3271,12 @@ export function DesktopUI({
     const onDelegation = (data: any) => {
       const task = normalizeBackgroundTask(data);
       if (!task) return;
-      upsertBackgroundWorkflowTask(task);
       recordBackgroundTaskStep(task);
     };
 
     const onBackgroundTaskUpdate = (data: any) => {
       const task = normalizeBackgroundTask(data);
       if (!task) return;
-      upsertBackgroundWorkflowTask(task);
       recordBackgroundTaskStep(task);
     };
 
@@ -3474,7 +3407,6 @@ export function DesktopUI({
     t.workflowError,
     t.workflowResponseReady,
     t.workflowToolFailed,
-    upsertBackgroundWorkflowTask,
     workDomain,
   ]);
 
@@ -4441,24 +4373,6 @@ export function DesktopUI({
   const pendingOperationModeOption = pendingOperationMode
     ? operationModeOptions.find(m => m.id === pendingOperationMode)
     : null;
-  const workflowHasExecution = workflowSteps.some(step =>
-    step.type === 'background' ||
-    step.type === 'confirmation' ||
-    step.type === 'tool_start' ||
-    step.type === 'tool_result' ||
-    step.type === 'error'
-  );
-  const workflowPanelVisible =
-    !chatOpen && (
-      agentStatus !== 'idle' ||
-      workflowSteps.length > 0 ||
-      workflowHasExecution ||
-      backgroundWorkflowTasks.length > 0 ||
-      focusThreads.length > 0 ||
-      structuredRuntimeStatus?.level === 'working' ||
-      structuredRuntimeStatus?.level === 'attention'
-    );
-
   const tutorialLabel = t.showTutorial || (uiMessage('desktop-ui.tutorial.67f6f569ce', (lang === 'zh') ? 'zh' : 'en'));
 
   const handleShellContextMenu = useCallback((e: React.MouseEvent) => {
@@ -5516,27 +5430,6 @@ export function DesktopUI({
         )}
       </AnimatePresence>
 
-      {workflowPanelVisible && (
-        <Suspense fallback={null}>
-          <WorkflowPanel
-            visible={true}
-            agentStatus={agentStatus}
-            steps={workflowSteps}
-            t={t}
-            placement={isWallpaperMode ? 'center' : 'corner'}
-            backgroundTasks={backgroundWorkflowTasks}
-            focusThreads={focusThreads}
-            focusThreadsLoading={focusThreadsLoading}
-            runtimeStatus={structuredRuntimeStatus}
-            runtimeStatusLoading={structuredRuntimeLoading}
-            runtimeStatusError={structuredRuntimeError}
-            scene={runtimeScene}
-            sceneLoading={runtimeSceneLoading}
-            sceneError={runtimeSceneError}
-            onCancelBackgroundTask={cancelBackgroundWorkflowTask}
-          />
-        </Suspense>
-      )}
       <CursorGlow />
       <AnimatePresence>
         {wallpaperWorkPromptVisible && !isWallpaperMode && !chatOpen && (

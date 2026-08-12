@@ -24,7 +24,7 @@ import {
   type ChatResponseFinalization,
   type ChatProgressTone,
 } from '@/lib/chatProgress';
-import type { BackgroundWorkflowTask, WorkflowStep } from './WorkflowPanel';
+import type { BackgroundWorkflowTask, WorkflowStep } from './workflowTypes';
 import { WeChatSettings } from './WeChatSettings';
 import type { FileEntry } from './MemoryTree';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
@@ -2806,7 +2806,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
             )}
             <AnimatePresence initial={false}>
               {displayMessages.map((msg) => (
-                msg.type === 'file_context' || msg.type === 'tool' ? null /* invisible context; tool detail stays on the home WorkflowPanel while chat shows inline progress */ : (
+                msg.type === 'file_context' || msg.type === 'tool' ? null /* invisible context; chat keeps the user-facing progress while detailed receipts stay in System Explorer */ : (
                 <motion.div
                   key={msg.id}
                   initial={{ opacity: 0, y: 10 }}
