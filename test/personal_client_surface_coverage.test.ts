@@ -121,13 +121,18 @@ describe('complete personal-client surface contract', () => {
     ])).sort();
 
     expect([...PERSONAL_CLIENT_LAUNCHER_IDS].sort()).toEqual(renderedLauncherIds);
-    expect(quotedPropertyValues(desktopIcons, 'windowId')).toHaveLength(5);
-    expect(quotedPropertyValues(desktopIcons, 'windowId')[0]).toBe('command-center');
+    expect(quotedPropertyValues(desktopIcons, 'windowId')).toEqual(['tools', 'skills', 'memory-avatar']);
+    expect(quotedPropertyValues(desktopIcons, 'windowId')).not.toContain('command-center');
     expect(quotedPropertyValues(desktopIcons, 'windowId')).not.toContain('runtime-log');
-    expect(quotedPropertyValues(desktopIcons, 'windowId')).toContain('personalization');
+    expect(quotedPropertyValues(desktopIcons, 'windowId')).not.toContain('personalization');
     expect(quotedPropertyValues(desktopIcons, 'windowId')).not.toEqual(expect.arrayContaining(['avatar-studio', 'sound']));
+    expect(quotedPropertyValues(utilityIcons, 'id')).toContain('personalization');
     expect(quotedPropertyValues(appIcons, 'id')).not.toContain('chat');
     expect(desktop).toContain('const desktopIconColumns = 3');
+    const dock = sourceBlock(desktop, '{/* Bottom Taskbar / Dock */}', '{/* Main OS Content Layer (Personal Desktop Surface) */}');
+    expect(dock).toContain('data-lumi-target="personalization"');
+    expect(dock).not.toContain("setViewMode(viewMode === 'personal' ? 'world' : 'personal')");
+    expect(dock).not.toContain('<Globe');
     expect(desktop).toContain('getPersonalClientSurfaceByAction(action)');
     expect(desktop).toContain('appLauncherOpen: isSearchOpen');
     expect(desktop).toContain('notificationsOpen: isNotificationPanelOpen');

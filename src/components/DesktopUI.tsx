@@ -6,7 +6,6 @@ import { sounds } from '../services/soundService';
 import {
   Rocket,
   Cpu,
-  Globe,
   Settings as SettingsIcon,
   Shield,
   Zap,
@@ -48,7 +47,6 @@ import {
   Copy,
   Download,
   Upload,
-  Command,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { GlassCard } from './SharedUI';
@@ -1746,11 +1744,9 @@ export function DesktopUI({
 
   // Desktop icon layout: absolute positioning with viewport-aware columns.
   const desktopIcons = [
-    { id: 'command-center', label: uiMessage('command-center.title.c5bb6d0f01', (lang === 'zh') ? 'zh' : 'en'), icon: <Command size={24} />, colorClass: 'from-cyan-500 to-violet-600', windowId: 'command-center' },
     { id: 'tools', labelKey: 'tools', icon: <Wrench size={24} />, colorClass: 'from-amber-500 to-orange-600', windowId: 'tools' },
     { id: 'skills', labelKey: 'skills', icon: <Sparkles size={24} />, colorClass: 'from-emerald-500 to-teal-600', windowId: 'skills' },
     { id: 'memory-avatar', labelKey: 'memoryAvatars', icon: <Castle size={24} />, colorClass: 'from-fuchsia-500 to-purple-600', windowId: 'memory-avatar' },
-    { id: 'personalization', labelKey: 'personalization', icon: <Brush size={24} />, colorClass: 'from-cyan-400 to-indigo-600', windowId: 'personalization' },
   ];
   const desktopIconAreaHeight = Math.max(
     desktopIconLayout.compact ? 300 : 400,
@@ -4322,6 +4318,7 @@ export function DesktopUI({
   }));
   const utilityAppEntries = [
     { id: 'knowledge', label: t.knowledgeBase || 'Knowledge Base', icon: <BrainCircuit size={24} />, color: 'from-cyan-400 to-blue-600' },
+    { id: 'personalization', label: t.personalization || 'Personalization', icon: <Brush size={24} />, color: 'from-cyan-400 to-indigo-600' },
     { id: 'notifications', label: t.notificationsLabel || 'Notifications', icon: <Bell size={24} />, color: 'from-amber-500 to-orange-600' },
     { id: 'terminal', label: t.terminal || 'Terminal', icon: <TerminalIcon size={24} />, color: 'from-green-500 to-emerald-600' },
     { id: 'voice', label: t.voiceLabel || 'Voice', icon: <Volume2 size={24} />, color: 'from-pink-500 to-rose-600' },
@@ -4367,7 +4364,7 @@ export function DesktopUI({
   const dockApps = [
     ...appIcons,
     ...openWindows
-      .filter(windowId => windowId !== 'chat' && !appIcons.some(app => app.id === windowId))
+      .filter(windowId => windowId !== 'chat' && windowId !== 'personalization' && !appIcons.some(app => app.id === windowId))
       .map(getWindowMeta),
   ];
   const operationModeOptions = [
@@ -4839,17 +4836,6 @@ export function DesktopUI({
               : 'opacity-100 pointer-events-auto'
           }`}
         >
-          <button 
-            onClick={() => setViewMode(viewMode === 'personal' ? 'world' : 'personal')}
-            className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all group relative ${
-              viewMode === 'world' ? 'bg-celestial-saturn text-black' : 'bg-white/5 text-white/40 hover:bg-white/10'
-            }`}
-          >
-            {viewMode === 'world' ? <Cpu size={24} /> : <Globe size={24} />}
-            <div className="absolute -top-12 left-1/2 -translate-x-1/2 px-3 py-1 bg-black/80 rounded-lg text-xs font-black uppercase text-white opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-              {viewMode === 'world' ? (t.personalView || 'Personal View') : (t.nexusView || 'Nexus View')}
-            </div>
-          </button>
           <button
             data-lumi-target="knowledge"
             onClick={() => setKnowledgeOpen(prev => !prev)}
@@ -4862,6 +4848,20 @@ export function DesktopUI({
             <BrainCircuit size={24} />
             <div className="absolute -top-12 left-1/2 -translate-x-1/2 px-3 py-1 bg-black/80 rounded-lg text-xs font-black uppercase text-white opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
               {t.knowledgeBase || 'Knowledge Base'}
+            </div>
+          </button>
+          <button
+            data-lumi-target="personalization"
+            onClick={() => toggleWindow('personalization')}
+            className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all group relative ${
+              openWindows.includes('personalization')
+                ? 'bg-gradient-to-br from-cyan-400 to-indigo-600 text-white shadow-lg'
+                : 'bg-white/5 text-white/40 hover:bg-white/10 hover:text-white'
+            }`}
+          >
+            <Brush size={24} />
+            <div className="absolute -top-12 left-1/2 -translate-x-1/2 px-3 py-1 bg-black/80 rounded-lg text-xs font-black uppercase text-white opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+              {t.personalization || 'Personalization'}
             </div>
           </button>
           <div className="lumi-dock-separator h-8 w-px shrink-0 bg-white/10 mx-2" />

@@ -186,7 +186,9 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
       open_team: 'office',
     },
     useWhen: 'Converse with Lumi, inspect persistent tasks and receipts, coordinate the agent team, and enter the distributed core from one scoped workspace.',
-    launcherIds: ['command-center'],
+    // The command center is a permanent top-level navigation destination,
+    // not a duplicated desktop/app-launcher icon.
+    launcherIds: [],
   },
   {
     id: 'knowledge',
