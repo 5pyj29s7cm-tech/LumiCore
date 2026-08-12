@@ -13,6 +13,7 @@ export type ChatExecutionScope = {
   domain: 'personal' | 'work';
   orgId?: string;
   source: string;
+  conversationId?: string;
 };
 
 export type ChatExecutionEvent = {
@@ -41,7 +42,7 @@ const activeByScope = new Map<string, string>();
 
 function normalizedScopeKey(scope: ChatExecutionScope): string {
   const orgId = scope.domain === 'work' ? String(scope.orgId || '') : '';
-  return `${scope.userId}:${scope.domain}:${orgId}:${scope.source || 'chat'}`;
+  return `${scope.userId}:${scope.domain}:${orgId}:${scope.source || 'chat'}:${String(scope.conversationId || '')}`;
 }
 
 function executionKey(scope: ChatExecutionScope, requestId: string): string {
@@ -116,6 +117,7 @@ export function beginChatExecution(
       agentName: 'Lumi',
       source: previous.source,
       requestId: previous.requestId,
+      conversationId: scope.conversationId,
       finalized: true,
       blocked: true,
       reason: 'cancelled',
@@ -187,6 +189,7 @@ export function markChatExecutionCancelling(
       status: 'cancelling',
       source: record.source,
       requestId: record.requestId,
+      conversationId: scope.conversationId,
     },
   };
   return copySnapshot(record);

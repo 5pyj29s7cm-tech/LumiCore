@@ -203,6 +203,8 @@ export interface ConversationTurnOptions {
   userText?: string;
   /** Test/diagnostic override. Production defaults to CONVERSATION_ROLLOVER_MESSAGE_LIMIT or 240. */
   messageLimit?: number;
+  /** Bind this turn to the conversation selected by the client. */
+  conversationId?: string;
 }
 
 export interface ConversationTurnResult {
@@ -275,6 +277,49 @@ export function getOrCreateActiveConversation(userId: string, agentId?: string, 
   db.conversations.push(conv);
   writeDB(db);
   return conv;
+}
+
+/**
+ * Start an empty active conversation without deleting the archived transcript or
+ * its durable task ledger. In-flight work may finish against the archived
+ * conversation while later chat turns are isolated in the new conversation.
+ */
+export function startNewConversation(userId: string, agentId?: string, domain?: string, orgId?: string): Conversation {
+  const db = readDB();
+  if (!db.conversations) db.conversations = [];
+  const scope = resolveConversationScope(domain, orgId);
+  const now = new Date().toISOString();
+
+  for (const conversation of db.conversations as Conversation[]) {
+    if (
+      conversation.userId === userId
+      && conversation.agentId === (agentId || '')
+      && conversation.status === 'active'
+      && conversationMatchesScope(conversation, scope.domain, scope.orgId)
+    ) {
+      conversation.status = 'closed';
+      conversation.lastActiveAt = now;
+    }
+  }
+
+  const conversation: Conversation = {
+    id: 'conv_' + crypto.randomUUID(),
+    userId,
+    agentId: agentId || '',
+    title: '',
+    status: 'active',
+    summary: '',
+    summaryChain: [],
+    lastSummaryMessageCount: 0,
+    messageCount: 0,
+    lastActiveAt: now,
+    createdAt: now,
+    domain: scope.domain,
+    orgId: scope.orgId,
+  };
+  db.conversations.push(conversation);
+  writeDB(db);
+  return conversation;
 }
 
 const DEFAULT_CONVERSATION_ROLLOVER_MESSAGE_LIMIT = 240;
@@ -377,7 +422,19 @@ export function getOrCreateConversationForTurn(
   orgId?: string,
   options: ConversationTurnOptions = {},
 ): ConversationTurnResult {
-  const current = getOrCreateActiveConversation(userId, agentId, domain, orgId);
+  const requestedConversationId = String(options.conversationId || '').trim();
+  const requestedConversation = requestedConversationId
+    ? getConversationForScope(requestedConversationId, userId, domain, orgId)
+    : null;
+  if (requestedConversationId && (!requestedConversation || requestedConversation.agentId !== (agentId || ''))) {
+    throw new Error('Conversation is unavailable for this user, agent, or workspace');
+  }
+  const current = requestedConversation || getOrCreateActiveConversation(userId, agentId, domain, orgId);
+  // An explicitly bound in-flight turn is allowed to finish after the user has
+  // opened a new conversation. Never roll that archived transcript into the new one.
+  if (requestedConversation && requestedConversation.status !== 'active') {
+    return { conversation: requestedConversation, rolledOver: false };
+  }
   if (!shouldRolloverConversationForTurn(current, options.userText, options.messageLimit)) {
     return { conversation: current, rolledOver: false };
   }
@@ -476,12 +533,20 @@ export function setConversationMode(conversationId: string, mode: string): void 
   writeDB(db);
 }
 
-export function getUserConversations(userId: string, limit = 20, offset = 0, domainOrOrgId?: string, orgIdMaybe?: string): Conversation[] {
+export function getUserConversations(
+  userId: string,
+  limit = 20,
+  offset = 0,
+  domainOrOrgId?: string,
+  orgIdMaybe?: string,
+  agentId?: string,
+): Conversation[] {
   const db = readDB();
   if (!db.conversations) return [];
   const conversations = db.conversations
     .filter((c: Conversation) => {
       if (c.userId !== userId) return false;
+      if (agentId && c.agentId !== agentId) return false;
       return conversationMatchesScope(c, domainOrOrgId, orgIdMaybe);
     })
     .sort((a, b) => new Date(b.lastActiveAt).getTime() - new Date(a.lastActiveAt).getTime())
@@ -493,6 +558,43 @@ export function getUserConversations(userId: string, limit = 20, offset = 0, dom
   }
   if (summaryWasIsolated) writeDB(db);
   return conversations;
+}
+
+export function activateConversation(
+  conversationId: string,
+  userId: string,
+  agentId: string,
+  domainOrOrgId?: string,
+  orgIdMaybe?: string,
+): Conversation | null {
+  const db = readDB();
+  if (!db.conversations) return null;
+  const target = db.conversations.find((conversation: Conversation) => (
+    conversation.id === conversationId
+    && conversation.userId === userId
+    && conversation.agentId === agentId
+    && conversationMatchesScope(conversation, domainOrOrgId, orgIdMaybe)
+  ));
+  if (!target) return null;
+
+  const now = new Date().toISOString();
+  for (const conversation of db.conversations as Conversation[]) {
+    if (
+      conversation.id !== target.id
+      && conversation.userId === userId
+      && conversation.agentId === agentId
+      && conversation.status === 'active'
+      && conversationMatchesScope(conversation, domainOrOrgId, orgIdMaybe)
+    ) {
+      conversation.status = 'closed';
+      conversation.lastActiveAt = now;
+    }
+  }
+  target.status = 'active';
+  target.lastActiveAt = now;
+  hydrateConversationActionState(db, target);
+  writeDB(db);
+  return target;
 }
 
 export function prepareConversationActionExecution(input: {

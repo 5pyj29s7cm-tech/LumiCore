@@ -115,7 +115,7 @@ export interface ClientStateSnapshot {
     knowledgeOpen?: boolean;
     chatOpen?: boolean;
     commandCenterOpen?: boolean;
-    commandCenterView?: 'office' | 'team' | 'network' | 'core';
+    commandCenterView?: 'office' | 'team' | 'core';
     notificationsOpen?: boolean;
     memoryAvatarOpen?: boolean;
     runtimeLogOpen?: boolean;
@@ -403,7 +403,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Lumi command center',
     kind: 'workspace',
     actions: ['open_command_center', 'open_chat', 'open_team', 'close_client_surface(command-center)'],
-    notes: 'One scoped workspace combines conversation, persistent task and receipt status, the real agent team, animated workstations, Inter-Lumi networking, and the distributed core. Chat and Team are views of this workspace, not separate windows.',
+    notes: 'One scoped workspace combines conversation, persistent task and receipt status, the real agent team, animated workstations, and the distributed core. Chat and Team are views of this workspace, not separate windows.',
     stateKeys: ['surfaces.commandCenterOpen', 'surfaces.commandCenterView', 'tools'],
   },
   {

@@ -67,4 +67,15 @@ describe('chat execution registry', () => {
     expect(getChatExecution(scope)?.requestId).toBe('personal-request');
     expect(getChatExecution(workScope)?.requestId).toBe('work-request');
   });
+
+  it('keeps executions in separate conversations from superseding each other', () => {
+    const firstConversation: ChatExecutionScope = { ...scope, conversationId: 'conversation-1' };
+    const secondConversation: ChatExecutionScope = { ...scope, conversationId: 'conversation-2' };
+
+    expect(beginChatExecution(firstConversation, 'request-1')).toBeNull();
+    expect(beginChatExecution(secondConversation, 'request-2')).toBeNull();
+
+    expect(getChatExecution(firstConversation)).toMatchObject({ requestId: 'request-1', terminal: false });
+    expect(getChatExecution(secondConversation)).toMatchObject({ requestId: 'request-2', terminal: false });
+  });
 });

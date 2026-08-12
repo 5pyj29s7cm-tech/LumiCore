@@ -1506,6 +1506,7 @@ export function DesktopUI({
 }) {
   // Camera and Environment state
   const [viewMode, setViewMode] = useState<'personal' | 'world'>('personal');
+  const [nexusReturnTarget, setNexusReturnTarget] = useState<'home' | 'command-center'>('home');
   const [syncRate, setSyncRate] = useState(1);
   const cameraZ = useMotionValue(viewMode === 'personal' ? 0 : -800);
 
@@ -3808,6 +3809,7 @@ export function DesktopUI({
           return;
         }
         if (windowId === 'nexus') {
+          setNexusReturnTarget('home');
           setViewMode('world');
           setActiveTab('home');
           return;
@@ -4622,10 +4624,15 @@ export function DesktopUI({
               </motion.div>
 
               <motion.button
-                onClick={() => setViewMode('personal')}
+                onClick={() => {
+                  setViewMode('personal');
+                  if (nexusReturnTarget === 'command-center') openCommandCenter('office');
+                }}
                 className="lumi-ink-return-button group px-10 py-4 bg-white/5 hover:bg-white/10 border border-white/10 rounded-full text-xs font-black text-white/60 tracking-[0.4em] uppercase transition-all backdrop-blur-2xl hover:text-white hover:border-white/20"
               >
-                {t.focusPersonalTerritory || 'Focus Personal Territory'}
+                {nexusReturnTarget === 'command-center'
+                  ? `${t.back || 'Back'} · ${uiMessage('command-center.title.c5bb6d0f01')}`
+                  : (t.focusPersonalTerritory || 'Focus Personal Territory')}
               </motion.button>
             </div>
 
@@ -5687,6 +5694,7 @@ export function DesktopUI({
             onCommandCenterViewChange={setCommandCenterView}
             onOpenNexus={() => {
               setChatOpen(false);
+              setNexusReturnTarget('command-center');
               setViewMode('world');
               setActiveTab('home');
             }}

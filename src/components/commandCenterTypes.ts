@@ -1,1 +1,1 @@
-export type CommandCenterView = 'office' | 'team' | 'network' | 'core';
+export type CommandCenterView = 'office' | 'team' | 'core';

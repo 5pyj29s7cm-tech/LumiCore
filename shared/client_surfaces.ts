@@ -9,7 +9,7 @@ export interface PersonalClientSurfaceDefinition {
   launcherIds?: readonly string[];
   organizationView?: string;
   organizationViewByAction?: Readonly<Record<string, string>>;
-  commandCenterViewByAction?: Readonly<Record<string, 'office' | 'team' | 'network' | 'core'>>;
+  commandCenterViewByAction?: Readonly<Record<string, 'office' | 'team' | 'core'>>;
 }
 
 export interface ClientSettingsSectionDefinition {
@@ -30,7 +30,7 @@ export interface PersonalClientSurfaceVisibilityState {
   knowledgeOpen?: boolean;
   chatOpen?: boolean;
   commandCenterOpen?: boolean;
-  commandCenterView?: 'office' | 'team' | 'network' | 'core';
+  commandCenterView?: 'office' | 'team' | 'core';
   notificationsOpen?: boolean;
   memoryAvatarOpen?: boolean;
   meetingOpen?: boolean;
@@ -185,7 +185,7 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
       open_chat: 'office',
       open_team: 'office',
     },
-    useWhen: 'Converse with Lumi, inspect persistent tasks and receipts, coordinate the agent team, and enter the Lumi network or distributed core from one scoped workspace.',
+    useWhen: 'Converse with Lumi, inspect persistent tasks and receipts, coordinate the agent team, and enter the distributed core from one scoped workspace.',
     launcherIds: ['command-center'],
   },
   {

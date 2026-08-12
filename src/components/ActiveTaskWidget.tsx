@@ -1,0 +1,197 @@
+import { AnimatePresence, motion } from 'motion/react';
+import { CheckCircle2, CircleAlert, Loader2, ShieldAlert } from 'lucide-react';
+import type { BackgroundWorkflowTask } from './workflowTypes';
+import type { ConversationFocusThread } from '@/hooks/useFocusThreads';
+import type { RuntimeTaskProjection, StructuredRuntimeStatus } from '@/hooks/useRuntimeStatus';
+import { uiMessage } from '@/i18n/uiMessages';
+import type { Locale } from '@/i18n/runtime';
+
+const ACTIVE_TASK_STATUSES = new Set(['planning', 'executing', 'waiting_confirmation']);
+const ACTIVE_BACKGROUND_STATUSES = new Set(['queued', 'running', 'cancelling']);
+
+export interface ActiveTaskWidgetState {
+  visible: boolean;
+  title: string;
+  detail: string;
+  status: string;
+  activeCount: number;
+  receiptTotal: number;
+  verifiedReceipts: number;
+  failedReceipts: number;
+}
+
+function activeRuntimeTasks(status: StructuredRuntimeStatus | null): RuntimeTaskProjection[] {
+  return (status?.tasks || []).filter(task => ACTIVE_TASK_STATUSES.has(task.status));
+}
+
+function activeFocusThreads(threads: ConversationFocusThread[]): ConversationFocusThread[] {
+  return threads.filter(thread => ACTIVE_TASK_STATUSES.has(thread.status));
+}
+
+function activeBackgroundTasks(tasks: BackgroundWorkflowTask[]): BackgroundWorkflowTask[] {
+  return tasks.filter(task => ACTIVE_BACKGROUND_STATUSES.has(task.status));
+}
+
+export function selectActiveTaskWidgetState(input: {
+  status: StructuredRuntimeStatus | null;
+  focusThreads: ConversationFocusThread[];
+  backgroundTasks: BackgroundWorkflowTask[];
+  workflowActive: boolean;
+  workflowStatus: string;
+  progressText: string;
+  fallbackTitle: string;
+}): ActiveTaskWidgetState {
+  const runtimeTasks = activeRuntimeTasks(input.status);
+  const threads = activeFocusThreads(input.focusThreads);
+  const backgroundTasks = activeBackgroundTasks(input.backgroundTasks);
+  const primaryTask = runtimeTasks[0];
+  const primaryThread = threads[0];
+  const primaryBackgroundTask = backgroundTasks[0];
+  const visible = Boolean(primaryTask || primaryThread || primaryBackgroundTask || input.workflowActive);
+  const status = primaryTask?.status
+    || primaryThread?.status
+    || primaryBackgroundTask?.status
+    || input.workflowStatus;
+  const title = primaryTask?.goal
+    || primaryThread?.goal
+    || primaryBackgroundTask?.title
+    || input.fallbackTitle;
+  const detail = primaryTask?.blocker
+    || primaryThread?.waitingFor
+    || primaryThread?.nextAction
+    || primaryBackgroundTask?.error
+    || input.progressText;
+  const activeTaskIds = new Set([
+    ...runtimeTasks.map(task => task.taskId),
+    ...threads.map(thread => thread.taskId),
+    ...backgroundTasks.map(task => task.id),
+  ].filter(Boolean));
+  const activeCount = Math.max(activeTaskIds.size, input.workflowActive ? 1 : 0);
+
+  return {
+    visible,
+    title,
+    detail,
+    status,
+    activeCount,
+    receiptTotal: primaryTask?.evidence.total || 0,
+    verifiedReceipts: primaryTask?.evidence.verified || 0,
+    failedReceipts: (primaryTask?.evidence.failed || 0) + (primaryTask?.evidence.unknown || 0),
+  };
+}
+
+function statusCopy(status: string, locale: Locale): string {
+  if (status === 'waiting_confirmation') return uiMessage('command-center.waiting-confirmation.1640ac02bb', locale);
+  if (status === 'planning' || status === 'thinking') return uiMessage('focus-thread-panel.planning.46c9f7780c', locale);
+  if (status === 'queued') return uiMessage('command-center.ready.4a09f2582b', locale);
+  if (status === 'cancelling') return uiMessage('agent-chat-page.cancelling.7163e20e93', locale);
+  return uiMessage('command-center.working.90f16b23a5', locale);
+}
+
+export function ActiveTaskWidget({
+  status,
+  focusThreads,
+  backgroundTasks,
+  workflowActive,
+  workflowStatus,
+  progressText,
+  isZh,
+}: {
+  status: StructuredRuntimeStatus | null;
+  focusThreads: ConversationFocusThread[];
+  backgroundTasks: BackgroundWorkflowTask[];
+  workflowActive: boolean;
+  workflowStatus: string;
+  progressText: string;
+  isZh: boolean;
+}) {
+  const locale: Locale = isZh ? 'zh' : 'en';
+  const view = selectActiveTaskWidgetState({
+    status,
+    focusThreads,
+    backgroundTasks,
+    workflowActive,
+    workflowStatus,
+    progressText,
+    fallbackTitle: uiMessage('agent-chat-page.lumi-is-working.98a841ddde', locale),
+  });
+  const waitingConfirmation = view.status === 'waiting_confirmation';
+  const hasEvidenceProblem = view.failedReceipts > 0;
+  const tone = waitingConfirmation
+    ? 'border-amber-200/25 bg-[#171309]/88 shadow-[0_18px_55px_rgba(0,0,0,0.36),0_0_32px_rgba(251,191,36,0.08)]'
+    : hasEvidenceProblem
+      ? 'border-red-200/25 bg-[#180d10]/88 shadow-[0_18px_55px_rgba(0,0,0,0.36),0_0_32px_rgba(248,113,113,0.08)]'
+      : 'border-cyan-200/18 bg-[#061019]/88 shadow-[0_18px_55px_rgba(0,0,0,0.36),0_0_32px_rgba(34,211,238,0.08)]';
+
+  return (
+    <AnimatePresence>
+      {view.visible && (
+        <motion.aside
+          key="active-task-widget"
+          initial={{ opacity: 0, y: 14, scale: 0.96 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 10, scale: 0.97 }}
+          transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
+          className={`pointer-events-none absolute bottom-20 left-4 z-[44] w-[min(340px,calc(100%-2rem))] overflow-hidden rounded-2xl border p-3.5 backdrop-blur-2xl sm:left-5 ${tone}`}
+          aria-live="polite"
+          aria-label={uiMessage('command-center.tasks.1ddfd1ee9d', locale)}
+        >
+          <div className="flex min-w-0 items-start gap-3">
+            <span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border ${
+              waitingConfirmation
+                ? 'border-amber-200/20 bg-amber-300/10 text-amber-100'
+                : hasEvidenceProblem
+                  ? 'border-red-200/20 bg-red-300/10 text-red-100'
+                  : 'border-cyan-200/18 bg-cyan-300/[0.08] text-cyan-100'
+            }`}>
+              {waitingConfirmation
+                ? <ShieldAlert size={15} />
+                : hasEvidenceProblem
+                  ? <CircleAlert size={15} />
+                  : <Loader2 size={15} className="animate-spin" />}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] font-black uppercase tracking-[0.2em] text-white/35">
+                  {uiMessage('command-center.tasks.1ddfd1ee9d', locale)}
+                </span>
+                <span className={`rounded-full border px-1.5 py-0.5 text-[8px] font-black ${
+                  waitingConfirmation
+                    ? 'border-amber-200/18 bg-amber-300/10 text-amber-100/80'
+                    : 'border-cyan-200/15 bg-cyan-300/[0.07] text-cyan-100/75'
+                }`}>
+                  {statusCopy(view.status, locale)}
+                </span>
+                {view.activeCount > 1 && (
+                  <span className="text-[9px] font-bold text-white/28">+{view.activeCount - 1}</span>
+                )}
+              </div>
+              <div className="mt-1 line-clamp-2 text-xs font-bold leading-relaxed text-white/82">
+                {view.title}
+              </div>
+              {view.detail && (
+                <div className={`mt-1 truncate text-[10px] ${waitingConfirmation ? 'text-amber-100/58' : 'text-white/40'}`} title={view.detail}>
+                  {view.detail}
+                </div>
+              )}
+            </div>
+          </div>
+          {view.receiptTotal > 0 && (
+            <div className="mt-2.5 flex items-center gap-3 border-t border-white/[0.07] pt-2 text-[9px] text-white/32">
+              <span>{uiMessage('command-center.receipts.291d3480e2', locale)} {view.receiptTotal}</span>
+              <span className="inline-flex items-center gap-1 text-emerald-100/60">
+                <CheckCircle2 size={10} />
+                {uiMessage('command-center.verified-receipts.02cc95eeba', locale)} {view.verifiedReceipts}
+              </span>
+              {view.failedReceipts > 0 && (
+                <span className="text-red-100/65">
+                  {uiMessage('command-center.attention.c47451e86a', locale)} {view.failedReceipts}
+                </span>
+              )}
+            </div>
+          )}
+        </motion.aside>
+      )}
+    </AnimatePresence>
+  );
+}

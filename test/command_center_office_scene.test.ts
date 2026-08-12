@@ -38,14 +38,29 @@ describe('command center live agent office', () => {
     expect(world).not.toContain('setTimeout');
   });
 
-  it('keeps the office full-screen with floating chat and receipt ledger controls', () => {
+  it('keeps the office full-screen and shows active work as a transient floating widget', () => {
     const chatPage = source('src/components/AgentChatPage.tsx');
     const panel = source('src/components/CommandCenterPanel.tsx');
+    const taskWidget = source('src/components/ActiveTaskWidget.tsx');
     const surfaces = source('shared/client_surfaces.ts');
 
     expect(chatPage).toContain('className="absolute inset-0 z-0"');
-    expect(chatPage).toContain("'pointer-events-auto absolute bottom-4 left-4 top-3 z-40");
-    expect(panel).toContain('className="custom-scrollbar absolute bottom-4 right-4 top-16 z-30');
+    expect(chatPage).toContain("'pointer-events-auto absolute bottom-4 right-4 top-3 z-40");
+    expect(chatPage).toContain('<ActiveTaskWidget');
+    expect(chatPage).toContain('<VoiceCallButton');
+    expect(chatPage).toContain('setShowWeChatSettings(true)');
+    expect(chatPage).toContain('toggleConversationHistory');
+    expect(chatPage).not.toContain('conversationPanelView');
+    expect(chatPage).not.toContain('<ConversationTaskLedger');
+    expect(chatPage).toContain('!isOfficeCommandCenter && (');
+    expect(chatPage).toContain('<div className="lumi-chat-voice-picker relative"');
+    expect(chatPage).toContain('onClick={requestMeetingMode}');
+    expect(chatPage).toContain("isOfficeCommandCenter ? 'hidden' : ''");
+    expect(taskWidget).toContain("const ACTIVE_TASK_STATUSES = new Set(['planning', 'executing', 'waiting_confirmation'])");
+    expect(taskWidget).toContain('AnimatePresence');
+    expect(taskWidget).toContain('view.visible &&');
+    expect(taskWidget).toContain('primaryTask?.evidence.verified');
+    expect(panel).not.toContain('className="custom-scrollbar absolute bottom-4 right-4 top-16 z-30');
     expect(panel).toContain('className="absolute bottom-4 left-1/2 z-30');
     expect(panel).not.toContain("grid-cols-[minmax(0,1fr)_260px]");
     expect(panel).not.toContain('<TeamHub');

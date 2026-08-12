@@ -6,11 +6,18 @@ import {
   getMessages,
   closeConversation,
   getActiveConversation,
+  startNewConversation,
+  activateConversation,
 } from "../conversation/manager";
 
 type ConversationScope = { domain: 'personal' | 'work'; orgId: string };
 
 function getConversationScope(req: any): ConversationScope {
+  const requestedDomain = String(req.query?.domain || req.body?.domain || '').trim();
+  if (requestedDomain === 'personal') return { domain: 'personal', orgId: '' };
+  if (requestedDomain === 'work') {
+    return { domain: 'work', orgId: req.user?.orgId ? String(req.user.orgId) : '' };
+  }
   return req.user?.orgId
     ? { domain: 'work', orgId: String(req.user.orgId) }
     : { domain: 'personal', orgId: '' };
@@ -27,7 +34,22 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
     const offset = parseInt(req.query.offset as string) || 0;
     const scope = getConversationScope(req);
     if (scope.domain === 'work' && !scope.orgId) return res.json({ conversations: [], limit, offset });
-    const conversations = getUserConversations(req.user!.uid, limit, offset, scope.domain, scope.orgId);
+    const agentId = String(req.query.agentId || '').trim() || undefined;
+    const conversations = getUserConversations(req.user!.uid, limit, offset, scope.domain, scope.orgId, agentId)
+      .map(conversation => {
+        const recent = getMessages(conversation.id, 12).filter(message => message.role !== 'tool');
+        const lastUser = [...recent].reverse().find(message => message.role !== 'assistant' && String(message.message || '').trim());
+        const lastVisible = [...recent].reverse().find(message => (
+          String(message.role === 'assistant' ? message.message : (message.response || message.message) || '').trim()
+        ));
+        const preview = String(
+          lastVisible
+            ? (lastVisible.role === 'assistant' ? lastVisible.message : (lastVisible.response || lastVisible.message))
+            : conversation.summary || ''
+        ).replace(/\s+/g, ' ').trim().slice(0, 120);
+        const displayTitle = String(conversation.title || lastUser?.message || preview || '').replace(/\s+/g, ' ').trim().slice(0, 48);
+        return { ...conversation, displayTitle, preview };
+      });
     res.json({ conversations, limit, offset });
   });
 
@@ -37,6 +59,16 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
     const agentId = (req.query.agentId as string | undefined) || undefined;
     const activeConversation = getActiveConversation(req.user!.uid, agentId, scope.domain, scope.orgId);
     res.json({ activeConversation });
+  });
+
+  router.post("/conversations/new", requireAuth, (req, res) => {
+    const scope = getConversationScope(req);
+    if (scope.domain === 'work' && !scope.orgId) {
+      return res.status(403).json({ error: 'A connected organization is required for a work conversation' });
+    }
+    const agentId = String(req.body?.agentId || req.query?.agentId || 'lumi').trim() || 'lumi';
+    const conversation = startNewConversation(req.user!.uid, agentId, scope.domain, scope.orgId);
+    res.status(201).json({ conversation });
   });
 
   router.get("/conversations/search", requireAuth, (req, res) => {
@@ -103,6 +135,23 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
     const limit = parseInt(req.query.limit as string) || 50;
     const messages = getMessages(req.params.id, limit);
     res.json({ messages });
+  });
+
+  router.post("/conversations/:id/activate", requireAuth, (req, res) => {
+    const scope = getConversationScope(req);
+    if (scope.domain === 'work' && !scope.orgId) {
+      return res.status(403).json({ error: 'A connected organization is required for a work conversation' });
+    }
+    const agentId = String(req.body?.agentId || req.query?.agentId || 'lumi').trim() || 'lumi';
+    const conversation = activateConversation(
+      req.params.id,
+      req.user!.uid,
+      agentId,
+      scope.domain,
+      scope.orgId,
+    );
+    if (!conversation) return res.status(404).json({ error: 'Conversation not found for this agent or workspace' });
+    res.json({ conversation });
   });
 
   router.post("/conversations/:id/close", requireAuth, (req, res) => {
