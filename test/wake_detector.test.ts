@@ -167,8 +167,8 @@ describe('Wake Detector Factory', () => {
     circuits.resetCircuit();
   });
 
-  it('selects Ark when STT preference is ark and Doubao key has colon', async () => {
-    process.env.DOUBAO_SPEECH_KEY = '12345:token-abc';
+  it('selects Ark when STT preference is ark and a new-console Doubao API key is configured', async () => {
+    process.env.DOUBAO_SPEECH_KEY = 'uuid-api-key-value';
     vi.doMock('../server/config/voice_preference', () => ({
       getVoicePreference: () => ({ stt: 'ark', tts: 'auto' }),
     }));
@@ -181,6 +181,19 @@ describe('Wake Detector Factory', () => {
     expect(session).toBeDefined();
     expect(session.sendAudio).toBeDefined();
     session.stop();
+  });
+
+  it('rejects legacy Doubao AppID:AccessToken credentials', async () => {
+    process.env.DOUBAO_SPEECH_KEY = '12345:token-abc';
+    vi.doMock('../server/config/voice_preference', () => ({
+      getVoicePreference: () => ({ stt: 'ark', tts: 'auto' }),
+    }));
+    vi.doMock('../server/config/keys', () => ({
+      getKey: () => undefined,
+    }));
+
+    const { createWakeDetector } = await import('../server/stt/wake_detector');
+    expect(() => createWakeDetector()).toThrow('Doubao Speech API Key');
   });
 
   it('falls back to available provider when preference cannot be satisfied', async () => {

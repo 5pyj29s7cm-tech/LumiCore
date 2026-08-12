@@ -55,6 +55,19 @@ describe('Settings & Keys API', () => {
     expect(res.status).toBe(400);
   });
 
+  it('POST /settings/keys rejects legacy Doubao credentials', async () => {
+    const res = await fetch(`${url}/api/settings/keys`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keys: { DOUBAO_SPEECH_KEY: '12345:legacy-token' } }),
+      signal: AbortSignal.timeout(5000),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      error: expect.stringContaining('new-console API Key value'),
+    });
+  });
+
   it('stores reasoning routing policy and exposes sanitized routing receipts', async () => {
     const update = await fetch(`${url}/api/preferences/llm`, {
       method: 'PUT',

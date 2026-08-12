@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const clearedEnvKeys = ['DASHSCOPE_API_KEY', 'QWEN_API_KEY', 'OPENAI_API_KEY'] as const;
+const clearedEnvKeys = ['DASHSCOPE_API_KEY', 'QWEN_API_KEY', 'OPENAI_API_KEY', 'DOUBAO_SPEECH_KEY'] as const;
 let previousEnv: Partial<Record<(typeof clearedEnvKeys)[number], string | undefined>> = {};
 
 async function loadAdapter(stt: 'auto' | 'local-whisper' | 'qwen' | 'ark' | 'whisper' = 'auto') {
@@ -60,6 +60,13 @@ describe('STT adapter provider selection', () => {
     process.env.DASHSCOPE_API_KEY = 'dashscope-test-key';
     const adapter = await loadAdapter('auto');
     expect(adapter.getActiveStreamingSTTProvider()).toBe('qwen');
+  });
+
+  it('selects Doubao realtime STT with a new-console single API key', async () => {
+    process.env.DOUBAO_SPEECH_KEY = 'uuid-api-key-value';
+    const adapter = await loadAdapter('auto');
+    expect(adapter.getActiveStreamingSTTProvider()).toBe('ark');
+    expect(adapter.getActiveSTTProvider()).toBe('ark');
   });
 
   it('keeps local Whisper out of realtime even when explicitly preferred', async () => {

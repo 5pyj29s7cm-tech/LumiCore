@@ -7,6 +7,7 @@ import { getKey } from '../config/keys';
 import { getVoicePreference } from '../config/voice_preference';
 import { classifyCloudError } from '../cloud/core';
 import { isCircuitClosed, recordFailure, recordSuccess } from '../cloud/circuit_breaker';
+import * as doubaoAsr from './providers/ark';
 
 const WAKE_WORDS = [
   'Jarvis', 'jarvis', '贾维斯',
@@ -464,11 +465,9 @@ function createQwenWakeDetector(
 // ── Provider: Ark (Doubao) polling batch transcription ──
 
 function createArkWakeDetector(
-  apiKey: string,
   echoFilter?: (text: string) => boolean,
 ): WakeDetectorSession {
   const POLL_MS = 2000;
-  const MODEL = 'doubao-stt-1.0';
 
   const wakeCallbacks: Array<(keyword: string) => void> = [];
   const errorCallbacks: Array<(err: Error) => void> = [];
@@ -482,25 +481,12 @@ function createArkWakeDetector(
     audioChunks.length = 0;
 
     try {
-      const form = new FormData();
-      form.append('file', new Blob([combined], { type: 'audio/webm' }), 'audio.webm');
-      form.append('model', MODEL);
-      form.append('language', 'zh');
-
-      const res = await fetch('https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash', {
-        method: 'POST',
-        headers: { Authorization: `Bearer;${apiKey}` },
-        body: form,
+      const result = await doubaoAsr.transcribe(combined, 'zh', {
+        fileName: 'audio.webm',
+        mimeType: 'audio/webm',
         signal: AbortSignal.timeout(5000),
       });
-
-      if (!res.ok) {
-        logger.warn(`[Wake:Ark] HTTP ${res.status}`);
-        return;
-      }
-
-      const data = await res.json() as any;
-      const transcript = data.text || '';
+      const transcript = result.text || '';
       if (!transcript) return;
 
       logger.info(`[Wake:Ark] Transcript: "${transcript}"`);
@@ -552,8 +538,7 @@ export function createWakeDetector(
     userPref = getVoicePreference().stt || 'auto';
   } catch {}
 
-  const speechKey = process.env.DOUBAO_SPEECH_KEY || getKey('DOUBAO_SPEECH_KEY');
-  const hasDoubao = !!(speechKey && speechKey.includes(':'));
+  const hasDoubao = doubaoAsr.hasDoubaoSpeech();
   const qwenKey = accessKey
     || process.env.DASHSCOPE_API_KEY
     || process.env.QWEN_API_KEY
@@ -563,9 +548,8 @@ export function createWakeDetector(
   // Explicit user choice takes priority
   if (userPref === 'ark') {
     if (hasDoubao) {
-      const token = speechKey!.slice(speechKey!.indexOf(':') + 1).trim();
       logger.info('[WakeDetector] Using Doubao Speech (user preference)');
-      return createArkWakeDetector(token, echoFilter);
+      return createArkWakeDetector(echoFilter);
     }
     logger.warn('[WakeDetector] User prefers Ark but no Doubao Speech key configured');
   }
@@ -579,14 +563,13 @@ export function createWakeDetector(
 
   // Auto mode — prefer Doubao, fall back to Qwen
   if (hasDoubao) {
-    const token = speechKey!.slice(speechKey!.indexOf(':') + 1).trim();
     logger.info('[WakeDetector] Using Doubao Speech (auto)');
-    return createArkWakeDetector(token, echoFilter);
+    return createArkWakeDetector(echoFilter);
   }
   if (qwenKey) {
     logger.info('[WakeDetector] Using Qwen (auto)');
     return createQwenWakeDetector(qwenKey, echoFilter);
   }
 
-  throw new Error('Doubao Speech (AppID:AccessToken) or DASHSCOPE_API_KEY required for wake word detection');
+  throw new Error('Doubao Speech API Key or DASHSCOPE_API_KEY required for wake word detection');
 }

@@ -10,6 +10,7 @@ import { isCircuitClosed, recordFailure, recordSuccess } from './circuit_breaker
 import { isCloudRetryable } from './retry';
 import { getKey } from '../config/keys';
 import { isGptSovitsRuntimeInstalled } from '../tts/gptsovits_runtime';
+import { hasDoubaoSpeechCredentials } from '../config/doubao_speech';
 
 // ── Provider Priority Lists ──
 
@@ -175,9 +176,8 @@ export function getAvailableLLMProviders(): Record<string, boolean> {
  * Check which STT providers have API keys configured.
  */
 export function getAvailableSTTProviders(): Record<string, boolean> {
-  const doubaoSpeech = process.env.DOUBAO_SPEECH_KEY || getKey('DOUBAO_SPEECH_KEY') || '';
   return {
-    ark: doubaoSpeech.includes(':'),
+    ark: hasDoubaoSpeechCredentials(),
     qwen: !!(process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY || getKey('DASHSCOPE_API_KEY') || getKey('QWEN_API_KEY')),
     whisper: !!(process.env.OPENAI_API_KEY || getKey('OPENAI_API_KEY')),
   };
@@ -187,14 +187,13 @@ export function getAvailableSTTProviders(): Record<string, boolean> {
  * Check which TTS providers have API keys configured.
  */
 export function getAvailableTTSProviders(): Record<string, boolean> {
-  const doubaoSpeech = process.env.DOUBAO_SPEECH_KEY || getKey('DOUBAO_SPEECH_KEY') || '';
   return {
     'local-cosyvoice': !!(
       process.env.LOCAL_COSYVOICE_ENABLED === 'true'
       || process.env.LOCAL_COSYVOICE_API_URL
       || process.env.COSYVOICE_LOCAL_API_URL
     ),
-    ark: doubaoSpeech.includes(':'),
+    ark: hasDoubaoSpeechCredentials(),
     cosyvoice: !!(process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY || getKey('DASHSCOPE_API_KEY') || getKey('QWEN_API_KEY')),
     gptsovits: !!(
       process.env.GPTSOVITS_API_URL

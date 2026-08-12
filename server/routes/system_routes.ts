@@ -9,6 +9,7 @@ import { toolRegistry } from "../tools/registry";
 import { scheduler } from "../scheduler";
 import { classifyCloudError, getCloudHealth, recordFailure, resetCircuit } from "../cloud/core";
 import { loadKeys, saveKeys, getKey, getAllKeyNames, isPersistableKeyName } from "../config/keys";
+import { parseDoubaoSpeechCredentials } from "../config/doubao_speech";
 import { requireAuth, requireLocalRequest, resolveDomain } from "../middleware/auth";
 import { getLatencyStats } from "../monitor/latency_store";
 import { getVoiceLatencyStats } from "../monitor/voice_latency_store";
@@ -39,6 +40,11 @@ import { listModelRoutingReceipts } from "../llm/model_routing_receipts";
 import { getVoicePreference, setVoicePreference, type VoicePreference } from "../config/voice_preference";
 import { getActiveSTTProvider, getActiveStreamingSTTProvider } from "../stt/adapter";
 import { getActiveProvider as getActiveTTSProvider } from "../tts/adapter";
+import { probeDoubaoStreamingConnection } from "../stt/providers/ark_stream";
+import {
+  getConfiguredDoubaoTtsDetails,
+  synthesizeSpeech as synthesizeDoubaoSpeech,
+} from "../tts/providers/ark";
 import { getGptSovitsRuntimeStatus } from "../tts/gptsovits_runtime";
 import { getRuntimeQueueStatus as getGptSovitsQueueStatus } from "../tts/providers/gptsovits";
 import { getVoiceprintRuntimeStatus } from "../biometrics/voiceprint_provider";
@@ -467,6 +473,52 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
     });
   });
 
+  router.post("/voice/doubao/probe", requireAuth, requireLocalRequest, async (_req, res) => {
+    const ttsDetails = getConfiguredDoubaoTtsDetails();
+    if (!ttsDetails.credentialMode || !ttsDetails.voiceId) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Doubao Speech is not configured. Save a new-console API Key value first.',
+      });
+    }
+
+    const startedAt = Date.now();
+    const [streamingStt, speechSynthesis] = await Promise.allSettled([
+      probeDoubaoStreamingConnection({ timeoutMs: 10_000, language: 'zh-CN' }),
+      synthesizeDoubaoSpeech(
+        'Lumi Doubao speech connection test.',
+        ttsDetails.voiceId,
+        AbortSignal.timeout(20_000),
+      ).then(result => {
+        if (result.audioBuffer.length < 256) throw new Error('Doubao TTS returned too little audio data to verify synthesis');
+        return {
+          ok: true as const,
+          endpoint: ttsDetails.endpoint,
+          resourceId: ttsDetails.resourceId,
+          voiceId: ttsDetails.voiceId,
+          format: result.format,
+          audioBytes: result.audioBuffer.length,
+        };
+      }),
+    ]);
+
+    const failureMessage = (reason: unknown) => reason instanceof Error ? reason.message : String(reason || 'Unknown error');
+    const result = {
+      ok: streamingStt.status === 'fulfilled' && speechSynthesis.status === 'fulfilled',
+      credentialMode: ttsDetails.credentialMode,
+      fallbackUsed: false,
+      streamingStt: streamingStt.status === 'fulfilled'
+        ? streamingStt.value
+        : { ok: false, error: failureMessage(streamingStt.reason) },
+      speechSynthesis: speechSynthesis.status === 'fulfilled'
+        ? speechSynthesis.value
+        : { ok: false, error: failureMessage(speechSynthesis.reason) },
+      latencyMs: Date.now() - startedAt,
+      verifiedAt: new Date().toISOString(),
+    };
+    return res.status(result.ok ? 200 : 502).json(result);
+  });
+
   router.post("/voice/provider", requireAuth, requireLocalRequest, (req, res) => {
     const { stt, tts } = req.body || {};
     const allowedStt = new Set<VoicePreference['stt']>(['auto', 'local-whisper', 'qwen', 'ark', 'whisper']);
@@ -862,7 +914,10 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
       const stored = loadKeys();
       const masked: Record<string, boolean> = {};
       for (const name of getAllKeyNames()) {
-        masked[name] = !!(process.env[name] || stored[name]);
+        const configured = process.env[name] || stored[name];
+        masked[name] = name === 'DOUBAO_SPEECH_KEY'
+          ? parseDoubaoSpeechCredentials(configured) !== null
+          : !!configured;
       }
       res.json(masked);
     } catch (err: any) {
@@ -883,6 +938,11 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
         if (!isPersistableKeyName(k) || typeof v !== 'string') {
           ignored.push(k);
           continue;
+        }
+        if (k === 'DOUBAO_SPEECH_KEY' && v.trim().length > 0 && !parseDoubaoSpeechCredentials(v)) {
+          return res.status(400).json({
+            error: 'DOUBAO_SPEECH_KEY only accepts a new-console API Key value. Legacy AppID:AccessToken is not supported.',
+          });
         }
         if (v.trim().length > 0) {
           toSave[k] = v.trim();

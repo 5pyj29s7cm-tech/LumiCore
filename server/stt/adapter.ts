@@ -219,8 +219,7 @@ export function createResilientStreamingSession(
 export function getActiveSTTProvider(options: { requireHealthy?: boolean } = {}): STTProvider | null {
   const pref = getVoicePreference();
   const available = options.requireHealthy ? isCircuitHealthy : isCircuitClosed;
-  const doubaoSpeech = process.env.DOUBAO_SPEECH_KEY || getKey('DOUBAO_SPEECH_KEY');
-  const hasDoubao = Boolean(doubaoSpeech && doubaoSpeech.includes(':'));
+  const hasDoubao = arkStream.hasDoubaoSpeech();
   const qwenKey = hasQwenKey();
   const openaiKey = hasOpenAIKey();
   if (pref.stt === 'local-whisper' && localWhisper.isLocalWhisperAvailable()) return 'local-whisper';

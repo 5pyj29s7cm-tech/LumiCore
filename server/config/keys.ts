@@ -4,6 +4,7 @@ import { getDataPath } from './data_path';
 import { resetCircuit } from '../cloud/circuit_breaker';
 
 const KEYS_FILE = getDataPath('keys.json');
+const RETIRED_DOUBAO_CREDENTIAL_SEPARATOR = ':';
 
 export interface KeyStore {
   [key: string]: string | undefined;
@@ -96,7 +97,17 @@ const KEY_TO_CIRCUIT: Partial<Record<keyof KeyStore, string[]>> = {
 export function loadKeys(): KeyStore {
   try {
     if (fs.existsSync(KEYS_FILE)) {
-      return JSON.parse(fs.readFileSync(KEYS_FILE, 'utf-8'));
+      const loaded = JSON.parse(fs.readFileSync(KEYS_FILE, 'utf-8')) as KeyStore;
+      const doubaoCredential = String(loaded.DOUBAO_SPEECH_KEY || '').trim();
+      if (doubaoCredential.includes(RETIRED_DOUBAO_CREDENTIAL_SEPARATOR)) {
+        delete loaded.DOUBAO_SPEECH_KEY;
+        try {
+          fs.writeFileSync(KEYS_FILE, JSON.stringify(loaded, null, 2));
+        } catch {
+          // Keep all other loaded keys available even if residue cleanup cannot persist.
+        }
+      }
+      return loaded;
     }
   } catch {}
   return {};

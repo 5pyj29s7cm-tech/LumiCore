@@ -8,6 +8,7 @@ import * as dashscopeFile from './providers/dashscope-file';
 import * as localWhisper from './providers/local-whisper';
 import * as whisper from './providers/whisper';
 import * as ark from './providers/ark';
+import { hasDoubaoSpeechCredentials } from '../config/doubao_speech';
 
 export type AudioFileProvider = STTProvider;
 
@@ -88,8 +89,7 @@ function getConfiguredKey(provider: AudioFileProvider, availability?: Partial<Re
       return process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY
         || getKey('DASHSCOPE_API_KEY') || getKey('QWEN_API_KEY') || '';
     case 'ark': {
-      const raw = process.env.DOUBAO_SPEECH_KEY || getKey('DOUBAO_SPEECH_KEY') || '';
-      return raw.includes(':') ? raw : '';
+      return hasDoubaoSpeechCredentials() ? 'configured' : '';
     }
     case 'local-whisper':
       return localWhisper.isLocalWhisperAvailable() ? 'local' : '';
@@ -192,6 +192,7 @@ async function transcribeWithProvider(
       const result = await ark.transcribe(audioBuffer, options.language, {
         fileName: options.fileName,
         mimeType: options.mimeType,
+        fetchImpl: options.fetchImpl,
       });
       return { text: result.text, model: result.model };
     }

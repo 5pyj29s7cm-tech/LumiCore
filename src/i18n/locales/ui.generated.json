@@ -6607,10 +6607,6 @@
     "en": "failed",
     "zh": "连接失败"
   },
-  "settings.format-appid-accesstoken-get-both.c1d78f1a86": {
-    "en": "Format: AppID:AccessToken. Get both from console.volcengine.com/speech → App Management",
-    "zh": "格式：AppID:AccessToken。可在 console.volcengine.com/speech 的应用管理中获取。"
-  },
   "settings.general.40e00570d2": {
     "en": "General",
     "zh": "通用"
@@ -9190,6 +9186,10 @@
   "agent-chat-page.using-session-materials.66f4979b61": {
     "en": "I am continuing with the materials from this conversation...",
     "zh": "\u6211\u6b63\u5728\u7ee7\u7eed\u4f7f\u7528\u672c\u4f1a\u8bdd\u7684\u6750\u6599\u2026\u2026"
+  },
+  "settings.doubao-speech-api-key-only.4ab619f21d": {
+    "en": "Paste the new-console API Key value, not its name. Legacy AppID:AccessToken credentials are rejected. The live test verifies both streaming ASR and TTS without fallback.",
+    "zh": "\u7c98\u8d34\u65b0\u7248\u63a7\u5236\u53f0 API Key \u7684\u503c\uff0c\u4e0d\u662f\u540d\u79f0\u3002\u65e7\u7248 AppID:AccessToken \u51ed\u636e\u4f1a\u88ab\u62d2\u7edd\u3002\u5b9e\u8c03\u4f1a\u5728\u7981\u6b62\u964d\u7ea7\u7684\u60c5\u51b5\u4e0b\u540c\u65f6\u9a8c\u8bc1\u6d41\u5f0f ASR \u548c TTS\u3002"
   },
   "focus-thread-panel.planning.46c9f7780c": {
     "en": "Planning",

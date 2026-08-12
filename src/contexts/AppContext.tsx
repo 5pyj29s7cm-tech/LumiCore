@@ -187,6 +187,12 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
+try {
+  localStorage.removeItem('lumi_doubao_speech');
+} catch {
+  // Browser storage can be unavailable in non-DOM runtimes.
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);

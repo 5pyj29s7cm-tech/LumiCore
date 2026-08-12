@@ -2883,7 +2883,7 @@ function CloudProviderSettings({ t, providerStatus }: { t: any; providerStatus: 
           <LLMProviderRow icon={<Sparkle size={18} className="text-purple-400" />} label="Anthropic Claude" providerId="anthropic" models={['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-haiku-4-5']} placeholder="sk-ant-..." serverKey="ANTHROPIC_API_KEY" t={t} />
           <ApiKeyField compact icon={<Sparkle size={18} className="text-rose-300" />} label="MiniMax" placeholder="sk-..." storageKey="lumi_minimax_key" serverKey="MINIMAX_API_KEY" consoleUrl="https://platform.minimaxi.com" hint={uiMessage('settings.minimax-generation-provider-hint.2c939bd0f7')} t={t} />
           <ApiKeyField compact icon={<Sparkle size={18} className="text-emerald-300" />} label="SiliconFlow" placeholder="sk-..." storageKey="lumi_siliconflow_key" serverKey="SILICONFLOW_API_KEY" consoleUrl="https://cloud.siliconflow.cn" hint={uiMessage('settings.siliconflow-generation-provider-hint.73aa2ce8e7')} t={t} />
-          <ApiKeyField compact icon={<Volume2 size={18} className="text-emerald-300" />} label={t.doubaoSpeechLabel || 'Doubao Speech'} placeholder="AppID:AccessToken" storageKey="lumi_doubao_speech" serverKey="DOUBAO_SPEECH_KEY" hint={t.doubaoSpeechHint || uiMessage('settings.format-appid-accesstoken-get-both.c1d78f1a86')} t={t} />
+          <ApiKeyField compact icon={<Volume2 size={18} className="text-emerald-300" />} label={t.doubaoSpeechLabel || 'Doubao Speech'} placeholder="New-console API Key value" storageKey="lumi_doubao_speech" serverKey="DOUBAO_SPEECH_KEY" consoleUrl="https://console.volcengine.com/speech/new/setting/apikeys" testEndpoint="/api/voice/doubao/probe" persistInBrowser={false} hint={uiMessage('settings.doubao-speech-api-key-only.4ab619f21d')} t={t} />
         </div>
       </SettingsSection>
     </div>
@@ -3172,21 +3172,30 @@ function SpeechProviderSettings({ t }: { t: any }) {
         {uiMessage('settings.speech-provider-description.ea8bf84041')}
       </p>
       <div className="border-y border-white/10">
-        <ApiKeyField icon={<Volume2 size={18} className="text-emerald-400" />} label={t.doubaoSpeechLabel || 'Doubao Speech (STT + TTS)'} placeholder="AppID:AccessToken" storageKey="lumi_doubao_speech" serverKey="DOUBAO_SPEECH_KEY" hint={t.doubaoSpeechHint || uiMessage('settings.format-appid-accesstoken-get-both.c1d78f1a86')} t={t} />
+        <ApiKeyField icon={<Volume2 size={18} className="text-emerald-400" />} label={t.doubaoSpeechLabel || 'Doubao Speech (STT + TTS)'} placeholder="New-console API Key value" storageKey="lumi_doubao_speech" serverKey="DOUBAO_SPEECH_KEY" consoleUrl="https://console.volcengine.com/speech/new/setting/apikeys" testEndpoint="/api/voice/doubao/probe" persistInBrowser={false} hint={uiMessage('settings.doubao-speech-api-key-only.4ab619f21d')} t={t} />
         <ApiKeyField icon={<Zap size={18} className="text-violet-400" />} label={t.dashscopeLabel || 'DashScope (Cloud STT + TTS)'} placeholder="sk-..." storageKey="lumi_dashscope_key" serverKey="DASHSCOPE_API_KEY" hint={t.dashscopeHint || uiMessage('settings.powers-qwen-asr-and-dashscope.519f4cb3da')} t={t} />
       </div>
     </SettingsSection>
   );
 }
 
-function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, serverKey, hint, consoleUrl, compact = false, secret = true, t }: { icon: React.ReactNode, label: string, placeholder: string, disabled?: boolean, storageKey: string, serverKey?: string, hint?: string, consoleUrl?: string, compact?: boolean, secret?: boolean, t?: any }) {
+function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, serverKey, hint, consoleUrl, testEndpoint, persistInBrowser = true, compact = false, secret = true, t }: { icon: React.ReactNode, label: string, placeholder: string, disabled?: boolean, storageKey: string, serverKey?: string, hint?: string, consoleUrl?: string, testEndpoint?: string, persistInBrowser?: boolean, compact?: boolean, secret?: boolean, t?: any }) {
   const isZh = t?.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
   const [value, setValue] = useState(() => {
+    if (!persistInBrowser) return '';
     try { return localStorage.getItem(storageKey) || ''; } catch { return ''; }
   });
   const [saved, setSaved] = useState(false);
   const [serverConfigured, setServerConfigured] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  useEffect(() => {
+    if (!persistInBrowser) {
+      try { localStorage.removeItem(storageKey); } catch { /* localStorage may be unavailable */ }
+    }
+  }, [persistInBrowser, storageKey]);
 
   useEffect(() => {
     if (!serverKey) return;
@@ -3201,6 +3210,7 @@ function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, s
       setServerConfigured(false);
       setValue('');
       setSaved(true);
+      setTestResult(null);
       setTimeout(() => setSaved(false), 2000);
       toast.success(t?.apiKeyRemoved || uiMessage('settings.api-key-removed.bae3220b94'));
     };
@@ -3216,9 +3226,12 @@ function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, s
   const handleSave = () => {
     if (!value.trim()) return;
     const saveLocal = () => {
-      localStorage.setItem(storageKey, value.trim());
+      if (persistInBrowser) localStorage.setItem(storageKey, value.trim());
+      else localStorage.removeItem(storageKey);
       setServerConfigured(!!serverKey || serverConfigured);
+      if (!persistInBrowser) setValue('');
       setSaved(true);
+      setTestResult(null);
       setTimeout(() => setSaved(false), 2000);
       toast.success(t?.apiKeySaved || uiMessage('settings.api-key-saved.a1dc4d42fb'));
     };
@@ -3229,6 +3242,35 @@ function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, s
       return;
     }
     saveLocal();
+  };
+
+  const handleTest = async () => {
+    if (!testEndpoint || !serverConfigured || testing) return;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const response = await apiFetch(testEndpoint, { method: 'POST', credentials: 'include' });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload?.ok !== true) {
+        const details = [payload?.streamingStt?.error, payload?.speechSynthesis?.error, payload?.error]
+          .filter(Boolean)
+          .join(' | ');
+        throw new Error(details || uiMessage('settings.live-call-failed.cd19d46055'));
+      }
+      const message = formatUiMessage(
+        'settings.live-call-passed-value0-ms.9f3242a245',
+        { value0: Number(payload.latencyMs || 0) },
+        isZh ? 'zh' : 'en',
+      );
+      setTestResult({ ok: true, message });
+      toast.success(message);
+    } catch (error: any) {
+      const message = error?.message || uiMessage('settings.live-call-failed.cd19d46055');
+      setTestResult({ ok: false, message });
+      toast.error(message);
+    } finally {
+      setTesting(false);
+    }
   };
 
   return (
@@ -3266,15 +3308,32 @@ function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, s
             {t?.remove || uiMessage('settings.remove.78190c6054')}
           </button>
         </div>
-        <Button
-          onClick={handleSave}
-          disabled={disabled || !value.trim()}
-          className="h-11 rounded-lg bg-celestial-saturn px-5 text-xs font-semibold text-black transition-all hover:bg-celestial-saturn/90 disabled:cursor-not-allowed disabled:opacity-30"
-        >
-          {t?.save || uiMessage('settings.save.ec8e6d5819')}
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            onClick={handleSave}
+            disabled={disabled || !value.trim()}
+            className="h-11 rounded-lg bg-celestial-saturn px-5 text-xs font-semibold text-black transition-all hover:bg-celestial-saturn/90 disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            {t?.save || uiMessage('settings.save.ec8e6d5819')}
+          </Button>
+          {testEndpoint && (
+            <Button
+              variant="outline"
+              onClick={handleTest}
+              disabled={disabled || !serverConfigured || testing}
+              className="h-11 rounded-lg border-white/15 px-4 text-xs font-semibold text-white/75 disabled:cursor-not-allowed disabled:opacity-30"
+            >
+              {testing ? <Loader2 size={14} className="animate-spin" /> : uiMessage('settings.test.9408c1ff3a')}
+            </Button>
+          )}
+        </div>
       </div>
       {hint && <p className="text-[12px] text-white/45 leading-relaxed">{hint}</p>}
+      {testResult && (
+        <p className={`text-[12px] leading-relaxed ${testResult.ok ? 'text-emerald-300' : 'text-red-300'}`}>
+          {testResult.message}
+        </p>
+      )}
       </div>
     </SettingsDisclosure>
   );
