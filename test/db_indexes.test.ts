@@ -1,7 +1,14 @@
 import './helpers';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import sqlite3 from 'sqlite3';
-import { closeDatabase, flushDB, initDatabase, readDB, writeDB } from '../db_layer';
+import {
+  closeDatabase,
+  flushDB,
+  getDatabasePersistenceStatus,
+  initDatabase,
+  readDB,
+  writeDB,
+} from '../db_layer';
 import { getDataPath } from '../server/config/data_path';
 import { addMessage, getOrCreateActiveConversation, setConversationSummary } from '../server/conversation/manager';
 import { ToolRegistry, resetExternalCommitRuntimeCacheForTests } from '../server/tools/registry';
@@ -143,12 +150,18 @@ describe('SQLite persistence indexes', () => {
     await flushDB();
   });
 
-  it('recreates performance indexes after an atomic full snapshot write', async () => {
+  it('persists only changed tables while preserving performance indexes', async () => {
     const db = readDB();
     if (!db.settings) db.settings = [];
     db.settings.push({ key: `index-test-${Date.now()}`, value: '1' });
     writeDB(db);
     await flushDB();
+
+    expect(getDatabasePersistenceStatus().lastFlushTables).toEqual(['settings']);
+
+    writeDB(db);
+    await flushDB();
+    expect(getDatabasePersistenceStatus().lastFlushTables).toEqual([]);
 
     const indexes = await readIndexNames();
     expect(indexes).toEqual(expect.arrayContaining([

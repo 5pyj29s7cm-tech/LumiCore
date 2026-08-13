@@ -1646,8 +1646,9 @@ body,
 .lumi-command-center-office {
   isolation: isolate;
   background:
-    radial-gradient(circle at 52% 38%, rgba(70, 213, 224, 0.075), transparent 38%),
-    linear-gradient(150deg, #07141f 0%, #040b13 64%, #02070c 100%);
+    radial-gradient(ellipse at 68% 30%, rgba(28, 211, 204, .075), transparent 41%),
+    radial-gradient(ellipse at 16% 24%, rgba(255, 118, 43, .055), transparent 31%),
+    linear-gradient(155deg, #0c181e 0%, #081218 52%, #050c11 100%) !important;
 }
 
 .lumi-command-center-office::after {
@@ -1667,9 +1668,9 @@ body,
   min-height: 520px;
   overflow: hidden;
   background:
-    radial-gradient(circle at 50% 22%, rgba(64, 223, 231, 0.11), transparent 18%),
-    radial-gradient(circle at 50% 58%, rgba(47, 114, 150, 0.09), transparent 42%),
-    linear-gradient(160deg, rgba(8, 24, 35, 0.94), rgba(3, 10, 17, 0.98));
+    radial-gradient(ellipse at 68% 30%, rgba(28, 211, 204, .075), transparent 41%),
+    radial-gradient(ellipse at 16% 24%, rgba(255, 118, 43, .055), transparent 31%),
+    linear-gradient(155deg, #0c181e 0%, #081218 52%, #050c11 100%) !important;
 }
 
 .lumi-2d-world::before {
@@ -1678,36 +1679,17 @@ body,
   content: "";
   pointer-events: none;
   background:
-    linear-gradient(90deg, transparent 49.9%, rgba(120, 225, 233, 0.035) 50%, transparent 50.1%),
-    linear-gradient(0deg, transparent 49.9%, rgba(120, 225, 233, 0.025) 50%, transparent 50.1%);
+    radial-gradient(ellipse at 50% 0%, rgba(113, 228, 222, .035), transparent 38%),
+    linear-gradient(180deg, rgba(255, 255, 255, .012), transparent 32%, rgba(0, 5, 8, .12)) !important;
 }
 
 /* Original 2D Lumi wisps: non-humanoid, non-robot command-center characters. */
-.lumi-command-center-office {
-  background:
-    radial-gradient(circle at 48% 20%, rgba(117, 226, 224, 0.13), transparent 34%),
-    linear-gradient(145deg, #102630 0%, #0b1b25 48%, #07131c 100%);
-}
-
 .lumi-office-live-chip {
-  border: 1px solid rgba(197, 240, 238, 0.16);
-  background: rgba(17, 41, 50, 0.66);
-  box-shadow: 0 12px 36px rgba(3, 13, 19, 0.2), inset 0 1px rgba(255, 255, 255, 0.04);
-  backdrop-filter: blur(22px) saturate(1.2);
-}
-
-.lumi-2d-world {
-  background:
-    radial-gradient(ellipse at 50% 8%, rgba(151, 239, 233, 0.18), transparent 31%),
-    radial-gradient(ellipse at 21% 68%, rgba(76, 156, 166, 0.1), transparent 34%),
-    radial-gradient(ellipse at 82% 65%, rgba(141, 118, 190, 0.09), transparent 32%),
-    linear-gradient(180deg, #16323d 0%, #102630 36%, #0a1b24 100%);
-}
-
-.lumi-2d-world::before {
-  background:
-    linear-gradient(180deg, rgba(213, 250, 247, 0.04), transparent 22%),
-    radial-gradient(ellipse at 50% 100%, rgba(3, 12, 17, 0.46), transparent 62%);
+  border: 1px solid rgba(92, 221, 215, .13);
+  background: rgba(6, 15, 20, .82);
+  color: #dceced;
+  box-shadow: 0 12px 30px rgba(0, 4, 7, .34), inset 0 1px rgba(255, 255, 255, .025);
+  backdrop-filter: blur(18px);
 }
 
 .lumi-2d-map { opacity: 0.62; }
@@ -2547,21 +2529,8 @@ body,
 }
 
 /* Marvis-inspired spatial grammar with original Lumi creatures and assets. */
-.lumi-command-center-office,
-.lumi-2d-world {
-  background: #0d1b22 !important;
-}
-
-.lumi-2d-world::before {
-  background:
-    radial-gradient(ellipse at 50% 18%, rgba(92,159,166,.16), transparent 46%),
-    radial-gradient(ellipse at 18% 72%, rgba(255,132,56,.055), transparent 28%),
-    linear-gradient(180deg, rgba(181,224,226,.035), transparent 30%) !important;
-}
-
 .lumi-2d-map { opacity: 1; }
 .lumi-2d-world__vignette { box-shadow: inset 0 0 110px rgba(0,6,10,.3); background: linear-gradient(180deg,rgba(8,17,22,.04),transparent 65%,rgba(4,10,14,.24)); }
-.lumi-office-live-chip { border: 1px solid rgba(173,219,221,.12); background: rgba(14,31,38,.78); color: #dceced; box-shadow: 0 10px 28px rgba(0,8,12,.22); backdrop-filter: blur(18px); }
 .lumi-office-live-chip .text-white\/72 { color: rgba(229,248,248,.82) !important; }
 .lumi-office-live-chip .text-white\/30,
 .lumi-office-live-chip .text-white\/45 { color: rgba(205,231,232,.46) !important; }
@@ -2738,20 +2707,6 @@ body,
 @media (max-width:1050px){.lumi-private-office{min-width:210px;width:31%}.lumi-private-office__guest-seat--right{display:none}}
 
 /* Deep studio palette: dark without flattening furniture, characters or rooms. */
-.lumi-command-center-office,
-.lumi-2d-world {
-  background:
-    radial-gradient(ellipse at 66% 24%, rgba(126, 222, 223, .13), transparent 38%),
-    radial-gradient(ellipse at 14% 38%, rgba(255, 139, 72, .08), transparent 31%),
-    linear-gradient(155deg, #162c35 0%, #10242d 48%, #091820 100%) !important;
-}
-
-.lumi-2d-world::before {
-  background:
-    linear-gradient(180deg, rgba(224, 249, 247, .045), transparent 26%),
-    radial-gradient(ellipse at 68% 96%, rgba(65, 135, 143, .16), transparent 51%) !important;
-}
-
 .lumi-2d-world__vignette {
   box-shadow: inset 0 0 82px rgba(0, 7, 11, .2);
   background: linear-gradient(180deg, transparent 55%, rgba(4, 13, 17, .12));
@@ -2933,20 +2888,6 @@ body,
 .lumi-2d-node--seated { transform: translate(-50%, -36%) scale(.9); }
 
 /* Match the surrounding Lumi OS shell: obsidian, cyan runtime light, orange identity. */
-.lumi-command-center-office,
-.lumi-2d-world {
-  background:
-    radial-gradient(ellipse at 68% 30%, rgba(28, 211, 204, .075), transparent 41%),
-    radial-gradient(ellipse at 16% 24%, rgba(255, 118, 43, .055), transparent 31%),
-    linear-gradient(155deg, #0c181e 0%, #081218 52%, #050c11 100%) !important;
-}
-
-.lumi-2d-world::before {
-  background:
-    radial-gradient(ellipse at 50% 0%, rgba(113, 228, 222, .035), transparent 38%),
-    linear-gradient(180deg, rgba(255, 255, 255, .012), transparent 32%, rgba(0, 5, 8, .12)) !important;
-}
-
 .lumi-office-live-chip,
 .lumi-office-floor-switch {
   border-color: rgba(92, 221, 215, .13);

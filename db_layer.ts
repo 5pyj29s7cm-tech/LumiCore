@@ -1,6 +1,7 @@
 import sqlite3 from 'sqlite3';
 import fs from 'fs';
 import path from 'path';
+import { createHash } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { getDataPath, getDataRoot } from './server/config/data_path';
 import { isolateLegacyGuardSummaryState } from './server/conversation/guard_history';
@@ -1234,8 +1235,9 @@ async function loadMemoryDB(): Promise<void> {
   const interactionsRaw = await query<any>('SELECT * FROM interactions');
   const marketplaceSkills = await query<any>('SELECT * FROM marketplace_skills');
   const skills = await query<any>('SELECT * FROM skills');
-  const founderVisionRow = await query<any>('SELECT content FROM founder_vision WHERE id = 1');
+  const founderVisionRow = await query<any>('SELECT content, updatedAt FROM founder_vision WHERE id = 1');
   const founderVision = founderVisionRow[0]?.content || '';
+  const founderVisionUpdatedAt = founderVisionRow[0]?.updatedAt || new Date(0).toISOString();
 
   // Load memories
   const memoriesRaw = await query<any>('SELECT * FROM memories');
@@ -1397,6 +1399,7 @@ async function loadMemoryDB(): Promise<void> {
     marketplaceSkills,
     skills,
     founderVision,
+    founderVisionUpdatedAt,
     memories: (memories || []).map((m: any) => ({ ...m, domain: m.domain || 'personal', orgId: m.orgId || '' })),
     reminders: remindersRaw || [],
     conversations,
@@ -1563,6 +1566,8 @@ async function loadMemoryDB(): Promise<void> {
     auditLog: auditLogEntries || [],
   };
 
+  seedPersistenceTableDigests();
+
   configureSqliteExternalCommitJournal();
 
   // Prompt safety is already guaranteed by the sanitized in-memory rows.
@@ -1640,6 +1645,10 @@ let writeInFlight = false;
 let dirtySinceMs = 0;
 let lastSuccessfulFlushAt = '';
 let lastPersistenceError = '';
+let persistenceTableDigests = new Map<string, string>();
+let lastFlushTables: string[] = [];
+let totalTableWrites = 0;
+let totalSkippedTableWrites = 0;
 
 function recordDatabaseDirty(): void {
   if (!dirtySinceMs) dirtySinceMs = Date.now();
@@ -1828,6 +1837,9 @@ export function getDatabasePersistenceStatus(nowMs = Date.now()): {
   degraded: boolean;
   lastSuccessfulFlushAt: string;
   lastError: string;
+  lastFlushTables: string[];
+  totalTableWrites: number;
+  totalSkippedTableWrites: number;
 } {
   const pending = dbDirty || persistedRevision < writeRevision;
   const lagMs = pending && dirtySinceMs ? Math.max(0, nowMs - dirtySinceMs) : 0;
@@ -1838,6 +1850,9 @@ export function getDatabasePersistenceStatus(nowMs = Date.now()): {
     degraded: Boolean(lastPersistenceError) || lagMs >= 30_000,
     lastSuccessfulFlushAt,
     lastError: lastPersistenceError,
+    lastFlushTables: [...lastFlushTables],
+    totalTableWrites,
+    totalSkippedTableWrites,
   };
 }
 
@@ -1863,6 +1878,10 @@ export async function closeDatabase(): Promise<void> {
   dirtySinceMs = 0;
   lastSuccessfulFlushAt = '';
   lastPersistenceError = '';
+  persistenceTableDigests = new Map();
+  lastFlushTables = [];
+  totalTableWrites = 0;
+  totalSkippedTableWrites = 0;
   dbDirty = false;
   configureExternalCommitJournal(null);
 
@@ -1880,16 +1899,25 @@ export async function closeDatabase(): Promise<void> {
  * Data is written to temp tables first, then the original tables are atomically
  * replaced. If the process crashes mid-write, the original data is preserved.
  */
-async function persistMemoryDB(): Promise<void> {
-  // Table definitions: [tableName, createSQL (must match the schema), insertSQL, rowMapper]
-  interface TableSpec {
-    name: string;
-    createSQL: string;
-    insertSQL: string;
-    rows: () => any[][];
-  }
+interface PersistenceTableSpec {
+  name: string;
+  createSQL: string;
+  insertSQL: string;
+  rows: () => any[][];
+}
 
-  const specs: TableSpec[] = [
+const STABLE_PERSISTENCE_TIMESTAMP = new Date(0).toISOString();
+
+function persistenceTimestamp(...candidates: unknown[]): string {
+  for (const candidate of candidates) {
+    const value = String(candidate || '').trim();
+    if (value) return value;
+  }
+  return STABLE_PERSISTENCE_TIMESTAMP;
+}
+
+function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
+  const specs: PersistenceTableSpec[] = [
     {
       name: 'users',
       createSQL: `CREATE TABLE _temp_users (uid TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL, role TEXT DEFAULT 'user', balance REAL DEFAULT 0, phone TEXT DEFAULT '', createdAt TEXT NOT NULL)`,
@@ -1975,7 +2003,7 @@ async function persistMemoryDB(): Promise<void> {
         pattern.orgId || '',
         Number(pattern.confidence) || 0,
         Number(pattern.successCount) || 0,
-        pattern.updatedAt || pattern.createdAt || new Date().toISOString(),
+        persistenceTimestamp(pattern.updatedAt, pattern.createdAt),
         JSON.stringify(pattern),
       ]),
     },
@@ -1988,7 +2016,7 @@ async function persistMemoryDB(): Promise<void> {
         task.userId,
         task.status || 'queued',
         task.leaseExpiresAt || '',
-        task.updatedAt || task.createdAt || new Date().toISOString(),
+        persistenceTimestamp(task.updatedAt, task.createdAt),
         JSON.stringify(task),
       ]),
     },
@@ -2026,7 +2054,7 @@ async function persistMemoryDB(): Promise<void> {
         task.userId,
         task.status || 'pending',
         task.leaseExpiresAt || '',
-        task.updatedAt || task.createdAt || new Date().toISOString(),
+        persistenceTimestamp(task.updatedAt, task.createdAt),
         JSON.stringify(task),
       ]),
     },
@@ -2040,7 +2068,7 @@ async function persistMemoryDB(): Promise<void> {
         session.taskId || '',
         session.conversationId || '',
         session.status || 'active',
-        session.updatedAt || session.createdAt || new Date().toISOString(),
+        persistenceTimestamp(session.updatedAt, session.createdAt),
         JSON.stringify(session),
       ]),
     },
@@ -2056,7 +2084,7 @@ async function persistMemoryDB(): Promise<void> {
         dispatch.status || 'planned',
         dispatch.routeKind || 'desktop_visual',
         dispatch.idempotencyKey,
-        dispatch.updatedAt || dispatch.createdAt || new Date().toISOString(),
+        persistenceTimestamp(dispatch.updatedAt, dispatch.createdAt),
         JSON.stringify(dispatch),
       ]),
     },
@@ -2070,7 +2098,7 @@ async function persistMemoryDB(): Promise<void> {
         answer.dispatchId,
         answer.userId,
         answer.targetId,
-        answer.receivedAt || new Date().toISOString(),
+        persistenceTimestamp(answer.receivedAt),
         JSON.stringify(answer),
       ]),
     },
@@ -2085,7 +2113,7 @@ async function persistMemoryDB(): Promise<void> {
         source.orgId || '',
         source.sourceKind,
         source.status || 'active',
-        source.updatedAt || source.createdAt || new Date().toISOString(),
+        persistenceTimestamp(source.updatedAt, source.createdAt),
         JSON.stringify(source),
       ]),
     },
@@ -2099,7 +2127,7 @@ async function persistMemoryDB(): Promise<void> {
         job.userId,
         job.status || 'pending',
         job.nextCursor || '',
-        job.updatedAt || job.createdAt || new Date().toISOString(),
+        persistenceTimestamp(job.updatedAt, job.createdAt),
         JSON.stringify(job),
       ]),
     },
@@ -2112,7 +2140,7 @@ async function persistMemoryDB(): Promise<void> {
         conversation.sourceId,
         conversation.userId,
         conversation.externalConversationId,
-        conversation.updatedAt || conversation.createdAt || new Date().toISOString(),
+        persistenceTimestamp(conversation.updatedAt, conversation.createdAt),
         JSON.stringify(conversation),
       ]),
     },
@@ -2128,7 +2156,7 @@ async function persistMemoryDB(): Promise<void> {
         message.externalMessageId,
         message.contentDigest || '',
         message.messageAt || '',
-        message.updatedAt || message.createdAt || new Date().toISOString(),
+        persistenceTimestamp(message.updatedAt, message.createdAt),
         JSON.stringify(message),
       ]),
     },
@@ -2143,7 +2171,7 @@ async function persistMemoryDB(): Promise<void> {
         attachment.userId,
         attachment.externalAttachmentId,
         attachment.contentDigest || '',
-        attachment.updatedAt || attachment.createdAt || new Date().toISOString(),
+        persistenceTimestamp(attachment.updatedAt, attachment.createdAt),
         JSON.stringify(attachment),
       ]),
     },
@@ -2155,7 +2183,7 @@ async function persistMemoryDB(): Promise<void> {
         publisher.fingerprint,
         publisher.publisherId,
         publisher.status || 'trusted',
-        publisher.updatedAt || publisher.createdAt || new Date().toISOString(),
+        persistenceTimestamp(publisher.updatedAt, publisher.createdAt),
         JSON.stringify(publisher),
       ]),
     },
@@ -2172,7 +2200,7 @@ async function persistMemoryDB(): Promise<void> {
         revision.status || 'staged',
         revision.manifestDigest,
         revision.signerFingerprint,
-        revision.updatedAt || revision.createdAt || new Date().toISOString(),
+        persistenceTimestamp(revision.updatedAt, revision.createdAt),
         JSON.stringify(revision),
       ]),
     },
@@ -2185,7 +2213,7 @@ async function persistMemoryDB(): Promise<void> {
         receipt.extensionId,
         receipt.revisionId,
         receipt.status || 'unknown',
-        receipt.createdAt || new Date().toISOString(),
+        persistenceTimestamp(receipt.createdAt),
         JSON.stringify(receipt),
       ]),
     },
@@ -2344,33 +2372,74 @@ async function persistMemoryDB(): Promise<void> {
   ];
 
   // Special handling: founder_vision is a single row
-  const founderSpec: TableSpec = {
+  const founderSpec: PersistenceTableSpec = {
     name: 'founder_vision',
     createSQL: `CREATE TABLE _temp_founder_vision (id INTEGER PRIMARY KEY CHECK (id = 1), content TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
     insertSQL: `INSERT INTO _temp_founder_vision (id, content, updatedAt) VALUES (?, ?, ?)`,
-    rows: () => memoryDB.founderVision ? [[1, memoryDB.founderVision, new Date().toISOString()]] : [],
+    rows: () => memoryDB.founderVision
+      ? [[1, memoryDB.founderVision, persistenceTimestamp(memoryDB.founderVisionUpdatedAt)]]
+      : [],
   };
 
-  const allSpecs = [...specs, founderSpec];
+  return [...specs, founderSpec];
+}
+
+function digestPersistenceRows(rows: any[][]): string {
+  const hash = createHash('sha256');
+  hash.update(String(rows.length));
+  for (const row of rows) {
+    hash.update('\n');
+    hash.update(JSON.stringify(row));
+  }
+  return hash.digest('hex');
+}
+
+function seedPersistenceTableDigests(): void {
+  const next = new Map<string, string>();
+  for (const spec of buildPersistenceTableSpecs()) {
+    next.set(spec.name, digestPersistenceRows(spec.rows()));
+  }
+  persistenceTableDigests = next;
+}
+
+/**
+ * Persist only tables whose exact serialized rows changed since the last
+ * durable snapshot. The changed set is still replaced atomically in one
+ * transaction, preserving the previous crash/rollback semantics without
+ * rebuilding unrelated high-volume tables on every chat or scheduler write.
+ */
+async function persistMemoryDB(): Promise<void> {
+  const allSpecs = buildPersistenceTableSpecs();
+  const changed: Array<{ spec: PersistenceTableSpec; rows: any[][]; digest: string }> = [];
+  for (const spec of allSpecs) {
+    const rows = spec.rows();
+    const digest = digestPersistenceRows(rows);
+    if (persistenceTableDigests.get(spec.name) !== digest) changed.push({ spec, rows, digest });
+  }
+  totalSkippedTableWrites += allSpecs.length - changed.length;
+  if (changed.length === 0) {
+    lastFlushTables = [];
+    return;
+  }
 
   await run('BEGIN IMMEDIATE TRANSACTION');
   try {
     // Phase 1: Create temp tables and populate them
-    for (const spec of allSpecs) {
+    for (const { spec, rows } of changed) {
       await run(`DROP TABLE IF EXISTS _temp_${spec.name}`);
       await run(spec.createSQL);
-      for (const row of spec.rows()) {
+      for (const row of rows) {
         await run(spec.insertSQL, row);
       }
     }
 
     // Phase 2: Drop original tables
-    for (const spec of allSpecs) {
+    for (const { spec } of changed) {
       await run(`DROP TABLE IF EXISTS ${spec.name}`);
     }
 
     // Phase 3: Rename temp tables to original names (atomic in SQLite within a transaction)
-    for (const spec of allSpecs) {
+    for (const { spec } of changed) {
       await run(`ALTER TABLE _temp_${spec.name} RENAME TO ${spec.name}`);
     }
 
@@ -2381,12 +2450,15 @@ async function persistMemoryDB(): Promise<void> {
     }
 
     await run('COMMIT');
+    for (const { spec, digest } of changed) persistenceTableDigests.set(spec.name, digest);
+    lastFlushTables = changed.map(({ spec }) => spec.name);
+    totalTableWrites += changed.length;
   } catch (err) {
     // Preserve the original failure. A failed/externally interrupted BEGIN or
     // COMMIT must not be replaced by "no transaction is active" from cleanup.
     try { await run('ROLLBACK'); } catch {}
     try {
-      for (const spec of allSpecs) {
+      for (const { spec } of changed) {
         await run(`DROP TABLE IF EXISTS _temp_${spec.name}`);
       }
     } catch {}

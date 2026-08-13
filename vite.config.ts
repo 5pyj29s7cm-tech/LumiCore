@@ -75,18 +75,6 @@ export default defineConfig(({ mode }) => {
             if (normalized.includes('/node_modules/@tauri-apps/api/')) return 'vendor-tauri';
             if (normalized.includes('/node_modules/socket.io-client/') || normalized.includes('/node_modules/engine.io-client/')) return 'vendor-realtime';
 
-            if (
-              normalized.includes('/node_modules/react-markdown/') ||
-              normalized.includes('/node_modules/remark-') ||
-              normalized.includes('/node_modules/rehype-') ||
-              normalized.includes('/node_modules/highlight.js/') ||
-              normalized.includes('/node_modules/micromark') ||
-              normalized.includes('/node_modules/mdast-util') ||
-              normalized.includes('/node_modules/hast-util') ||
-              normalized.includes('/node_modules/unist-util') ||
-              normalized.includes('/node_modules/vfile')
-            ) return 'vendor-markdown';
-
             if (normalized.includes('/node_modules/lucide-react/')) return 'vendor-icons';
             if (normalized.includes('/node_modules/motion/')) return 'vendor-motion';
             if (normalized.includes('/node_modules/react/') || normalized.includes('/node_modules/react-dom/')) return 'vendor-react';

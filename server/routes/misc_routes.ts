@@ -1,6 +1,6 @@
 // Misc routes that didn't fit into other modules: founder vision, feedback, admin config, Org chat
 import { Router } from "express";
-import { readDB, writeDB, querySQL, runSQL } from "../../db_layer";
+import { flushDBOrThrow, readDB, writeDB, querySQL } from "../../db_layer";
 import { runWithTools } from "../llm/adapter";
 import { toolRegistry } from "../tools/registry";
 import { makeLLMCall, NormalizedMessage } from "../llm/providers";
@@ -25,14 +25,16 @@ export function mountMiscRoutes(router: Router, _jwtSecret: string, llm: {
     }
   });
 
-  router.post("/founder/vision", requireAuth, (req, res) => {
+  router.post("/founder/vision", requireAuth, async (req, res) => {
     try {
       const { vision } = req.body || {};
       if (typeof vision !== 'string') return res.status(400).json({ error: 'vision is required' });
-      runSQL(`INSERT OR REPLACE INTO founder_vision (id, content) VALUES (1, ?)`, [vision]);
+      const updatedAt = new Date().toISOString();
       const db = readDB();
       db.founderVision = vision;
+      db.founderVisionUpdatedAt = updatedAt;
       writeDB(db);
+      await flushDBOrThrow();
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });

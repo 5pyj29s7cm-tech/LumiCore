@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { gzipSync } from 'node:zlib';
 
@@ -30,6 +30,26 @@ const forbiddenPreloads = preloadResources.filter(resource => forbidden.test(res
 if (forbiddenPreloads.length) {
   console.error(`[bundle-budget] forbidden heavy desktop preload(s): ${forbiddenPreloads.join(', ')}`);
   process.exit(1);
+}
+
+const optionalChunkLimits = [
+  { pattern: /^esm-[\w-]+\.js$/i, bytes: 3_600_000, label: 'wake-word optional chunk' },
+  { pattern: /^OrbitControls-[\w-]+\.js$/i, bytes: 1_200_000, label: '3D optional chunk' },
+  { pattern: /^Terminal-[\w-]+\.js$/i, bytes: 600_000, label: 'terminal optional chunk' },
+  { pattern: /^loader-[\w-]+\.js$/i, bytes: 180_000, label: 'vision optional chunk' },
+];
+const assetDir = path.join(distDir, 'assets');
+for (const fileName of existsSync(assetDir) ? readdirSync(assetDir) : []) {
+  const budget = optionalChunkLimits.find(candidate => candidate.pattern.test(fileName));
+  if (!budget) continue;
+  const bytes = statSync(path.join(assetDir, fileName)).size;
+  if (bytes > budget.bytes) {
+    console.error(
+      `[bundle-budget] blocked: ${budget.label} ${fileName} is ${(bytes / 1024).toFixed(1)} KiB, `
+      + `above ${(budget.bytes / 1024).toFixed(1)} KiB.`,
+    );
+    process.exit(1);
+  }
 }
 
 let total = gzipSync(Buffer.from(html)).byteLength;
