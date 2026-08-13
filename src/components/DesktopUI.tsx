@@ -1687,6 +1687,12 @@ export function DesktopUI({
     if (isWallpaperMode) setWallpaperWorkPromptVisible(false);
   }, [isWallpaperMode]);
 
+  const syncWallpaperModeView = useCallback((enabled: boolean) => {
+    isWallpaperModeRef.current = enabled;
+    setIsWallpaperMode(enabled);
+    systemService.syncWallpaperDocumentMode(enabled);
+  }, []);
+
   useEffect(() => {
     if (chatOpen) setWallpaperWorkPromptVisible(false);
   }, [chatOpen]);
@@ -2934,14 +2940,25 @@ export function DesktopUI({
       wallpaperAutomationTimerRef.current = null;
     }
 
-    setIsWallpaperMode(enabled);
-    void systemService.setWallpaperMode(enabled);
+    const previous = isWallpaperModeRef.current;
+    syncWallpaperModeView(enabled);
+    void systemService.setWallpaperMode(enabled).then(actual => {
+      syncWallpaperModeView(actual);
+    }).catch(error => {
+      syncWallpaperModeView(previous);
+      console.error('Wallpaper mode transition failed:', error);
+      toast.error('Wallpaper mode could not be changed');
+    });
 
     if (enabled && options.timeoutMs) {
       wallpaperAutomationTimerRef.current = setTimeout(() => {
         if (!wallpaperWasEnabledBeforeAutomationRef.current) {
-          setIsWallpaperMode(false);
-          void systemService.setWallpaperMode(false);
+          syncWallpaperModeView(false);
+          void systemService.setWallpaperMode(false).then(actual => {
+            syncWallpaperModeView(actual);
+          }).catch(error => {
+            console.error('Wallpaper mode restore failed:', error);
+          });
         }
         wallpaperWasEnabledBeforeAutomationRef.current = false;
         wallpaperAutomationTimerRef.current = null;
@@ -2958,7 +2975,38 @@ export function DesktopUI({
         icon: enabled ? <Sparkles className="text-celestial-saturn" /> : <Box className="text-white/40" />
       });
     }
-  }, [t, addNotification]);
+  }, [t, addNotification, syncWallpaperModeView]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: undefined | (() => void);
+
+    void systemService.getWallpaperMode()
+      .then(enabled => {
+        if (!disposed) syncWallpaperModeView(enabled);
+      })
+      .catch(error => console.error('Failed to read wallpaper mode:', error));
+
+    const hasTauriRuntime = Boolean(
+      (window as any).__TAURI_INTERNALS__ || (window as any).__TAURI_IPC__ || (window as any).__TAURI__,
+    );
+    if (hasTauriRuntime) {
+      void import('@tauri-apps/api/event')
+        .then(({ listen }) => listen<{ enabled?: boolean }>('lumi:wallpaper-mode-changed', event => {
+          if (!disposed) syncWallpaperModeView(Boolean(event.payload?.enabled));
+        }))
+        .then(stop => {
+          if (disposed) stop();
+          else unlisten = stop;
+        })
+        .catch(error => console.error('Failed to listen for wallpaper mode changes:', error));
+    }
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [syncWallpaperModeView]);
 
   const toggleWallpaperMode = useCallback(() => {
     applyWallpaperMode(!isWallpaperMode);
@@ -4723,7 +4771,7 @@ export function DesktopUI({
                   title={isWallpaperMode ? (uiMessage('desktop-ui.exit-wallpaper-mode.9b9dd6514d', (lang === 'zh') ? 'zh' : 'en')) : (uiMessage('desktop-ui.wallpaper-mode.eb93c52005', (lang === 'zh') ? 'zh' : 'en'))}
                >
                  <Zap size={10} className={isWallpaperMode ? 'animate-pulse' : ''} />
-                 <span className="lumi-shell-wallpaper-label">{isWallpaperMode ? 'Fusion' : (uiMessage('desktop-ui.wallpaper.b2aa8da019', (lang === 'zh') ? 'zh' : 'en'))}</span>
+                 <span className="lumi-shell-wallpaper-label">{isWallpaperMode ? 'Fusion' : 'Wallpaper'}</span>
                </button>
             </div>
 

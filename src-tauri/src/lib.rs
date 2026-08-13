@@ -12,7 +12,7 @@ use std::time::{Duration, Instant, SystemTime};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager,
+    Emitter, Manager,
 };
 #[cfg(not(test))]
 use tauri_plugin_dialog::DialogExt;
@@ -40,6 +40,11 @@ struct WallpaperState {
     previous_position: Option<tauri::PhysicalPosition<i32>>,
     was_fullscreen: bool,
     was_maximized: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WallpaperMode {
+    pub enabled: bool,
 }
 
 #[derive(Default)]
@@ -2672,7 +2677,25 @@ fn set_wallpaper_mode(
     enabled: bool,
     state: tauri::State<'_, Mutex<WallpaperState>>,
     window: tauri::WebviewWindow,
-) -> Result<(), String> {
+) -> Result<WallpaperMode, String> {
+    let mode = apply_wallpaper_mode(enabled, state.inner(), &window)?;
+    let _ = window.emit("lumi:wallpaper-mode-changed", mode.clone());
+    Ok(mode)
+}
+
+#[tauri::command]
+fn get_wallpaper_mode(
+    state: tauri::State<'_, Mutex<WallpaperState>>,
+) -> Result<WallpaperMode, String> {
+    let enabled = state.lock().map_err(|e| e.to_string())?.enabled;
+    Ok(WallpaperMode { enabled })
+}
+
+fn apply_wallpaper_mode(
+    enabled: bool,
+    state: &Mutex<WallpaperState>,
+    window: &tauri::WebviewWindow,
+) -> Result<WallpaperMode, String> {
     let restore = {
         let mut wallpaper = state.lock().map_err(|e| e.to_string())?;
         if enabled {
@@ -2702,6 +2725,11 @@ fn set_wallpaper_mode(
         let _ = window.set_resizable(true);
         let _ = window.set_decorations(false);
         let _ = window.set_shadow(false);
+        // Keep the macOS Dock icon available as a guaranteed escape hatch. A
+        // click-through NSWindow cannot receive its own on-screen exit click.
+        #[cfg(target_os = "macos")]
+        let _ = window.set_skip_taskbar(false);
+        #[cfg(not(target_os = "macos"))]
         let _ = window.set_skip_taskbar(true);
 
         let maybe_monitor = window
@@ -2770,7 +2798,7 @@ fn set_wallpaper_mode(
             "OFF"
         }
     );
-    Ok(())
+    Ok(WallpaperMode { enabled })
 }
 
 const DESKTOP_WIDGET_WIDTH: u32 = 240;
@@ -3392,9 +3420,28 @@ fn show_main_window_impl(app: &tauri::AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
+    let wallpaper_enabled = app
+        .state::<Mutex<WallpaperState>>()
+        .lock()
+        .map(|state| state.enabled)
+        .unwrap_or(false);
+    let restore_result = if wallpaper_enabled {
+        let state = app.state::<Mutex<WallpaperState>>();
+        let result = apply_wallpaper_mode(false, state.inner(), &window);
+        if result.is_ok() {
+            let _ = window.emit(
+                "lumi:wallpaper-mode-changed",
+                WallpaperMode { enabled: false },
+            );
+        }
+        result.map(|_| ())
+    } else {
+        Ok(())
+    };
     window.show().map_err(|e| e.to_string())?;
+    let _ = window.unminimize();
     window.set_focus().map_err(|e| e.to_string())?;
-    Ok(())
+    restore_result
 }
 
 fn hide_main_window_impl(app: &tauri::AppHandle) -> Result<(), String> {
@@ -3406,9 +3453,16 @@ fn hide_main_window_impl(app: &tauri::AppHandle) -> Result<(), String> {
 
 fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show Lumi", true, None::<&str>)?;
+    let exit_wallpaper = MenuItem::with_id(
+        app,
+        "exit_wallpaper",
+        "Exit Wallpaper Mode",
+        true,
+        None::<&str>,
+    )?;
     let hide = MenuItem::with_id(app, "hide", "Hide to Background", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Lumi", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &hide, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &exit_wallpaper, &hide, &quit])?;
 
     let mut builder = TrayIconBuilder::with_id("main")
         .tooltip("Lumi OS is ready")
@@ -3416,6 +3470,9 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => {
+                let _ = show_main_window_impl(app);
+            }
+            "exit_wallpaper" => {
                 let _ = show_main_window_impl(app);
             }
             "hide" => {
@@ -4791,11 +4848,9 @@ pub fn run() {
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
+            // A second launch is another native recovery path for a
+            // click-through wallpaper window.
+            let _ = show_main_window_impl(app);
         }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
@@ -4855,6 +4910,7 @@ pub fn run() {
             open_item,
             pick_directory,
             set_wallpaper_mode,
+            get_wallpaper_mode,
             enter_desktop_widget_mode,
             exit_desktop_widget_mode,
             toggle_desktop_widget_mode,
@@ -5074,11 +5130,18 @@ pub fn run() {
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
             let window = app.get_webview_window("main").unwrap();
             let reg = app.global_shortcut();
-            let _ = reg.on_shortcut("Alt+Space", move |_app, _shortcut, _event| {
-                if window.is_visible().unwrap_or(true) {
+            let _ = reg.on_shortcut("Alt+Space", move |app, _shortcut, _event| {
+                let wallpaper_enabled = app
+                    .state::<Mutex<WallpaperState>>()
+                    .lock()
+                    .map(|state| state.enabled)
+                    .unwrap_or(false);
+                if wallpaper_enabled {
+                    let _ = show_main_window_impl(app);
+                } else if window.is_visible().unwrap_or(true) {
                     let _ = window.hide();
                 } else {
-                    let _ = window.show();
+                    let _ = show_main_window_impl(app);
                 }
             });
 
@@ -5103,6 +5166,12 @@ pub fn run() {
                         let _ = window.hide();
                     }
                 }
+            }
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => {
+                // Clicking the Dock icon must always recover a click-through
+                // wallpaper window and restore its previous bounds.
+                let _ = show_main_window_impl(app);
             }
             tauri::RunEvent::Exit => {
                 let state = app.state::<Mutex<BackendProcesses>>();

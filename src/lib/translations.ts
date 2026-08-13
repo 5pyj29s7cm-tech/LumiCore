@@ -2272,7 +2272,7 @@ export const translations: TranslationMap = {
     cloning: "克隆中",
     personalization: "个性化",
     appearanceThemes: "外观与主题",
-    wallpaper: "壁纸",
+    wallpaper: "Wallpaper",
     desktopBackgroundProtocol: "桌面背景协议",
     wallpaperFusionActive: "壁纸融合已激活",
     standardFocusMode: "标准桌面",

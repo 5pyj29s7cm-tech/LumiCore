@@ -11,6 +11,7 @@
     "beforeBundleCommand": "node scripts/copy-webview2-dll.mjs"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "Lumi OS",

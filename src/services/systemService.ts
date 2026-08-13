@@ -28,6 +28,10 @@ export interface LiveStats {
   uptime_seconds: number;
 }
 
+export interface WallpaperModeState {
+  enabled: boolean;
+}
+
 class SystemService {
   private isTauri: boolean;
   private isElectron: boolean;
@@ -103,24 +107,46 @@ class SystemService {
     }
   }
 
-  /**
-   * Toggle wallpaper visual mode + OS-level click-through (Win32 WS_EX_TRANSPARENT)
-   */
-  async setWallpaperMode(enabled: boolean): Promise<void> {
+  syncWallpaperDocumentMode(enabled: boolean): void {
     if (enabled) {
       document.documentElement.classList.add('lumi-wallpaper-mode');
     } else {
       document.documentElement.classList.remove('lumi-wallpaper-mode');
     }
+  }
+
+  /**
+   * Toggle the transparent desktop overlay and native click-through window.
+   */
+  async setWallpaperMode(enabled: boolean): Promise<boolean> {
+    const previous = document.documentElement.classList.contains('lumi-wallpaper-mode');
+    this.syncWallpaperDocumentMode(enabled);
 
     if (this.isTauri) {
       try {
         const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('set_wallpaper_mode', { enabled });
+        const state = await invoke<WallpaperModeState | null>('set_wallpaper_mode', { enabled });
+        const resolved = typeof state?.enabled === 'boolean' ? state.enabled : enabled;
+        this.syncWallpaperDocumentMode(resolved);
+        return resolved;
       } catch (err) {
+        this.syncWallpaperDocumentMode(previous);
         console.error('Failed to set wallpaper mode:', err);
+        throw err;
       }
     }
+    return enabled;
+  }
+
+  async getWallpaperMode(): Promise<boolean> {
+    if (this.isTauri) {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const state = await invoke<WallpaperModeState>('get_wallpaper_mode');
+      const enabled = Boolean(state?.enabled);
+      this.syncWallpaperDocumentMode(enabled);
+      return enabled;
+    }
+    return document.documentElement.classList.contains('lumi-wallpaper-mode');
   }
 
   /**
