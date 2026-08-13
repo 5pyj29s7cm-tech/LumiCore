@@ -29,6 +29,7 @@ import {
   isRecoveredCurrentAppEditingContinuation,
   needsRecentActionContinuationContext,
 } from './action_continuation';
+import { isCapabilityMetaQuestion } from './capability_meta';
 
 export type LumiTurnChannel = 'chat' | 'voice' | 'task' | 'scheduler' | 'agent';
 export type LumiVerificationIntent = 'none' | 'completion_evidence' | 'work_takeover_result' | 'capability_experiment';
@@ -61,6 +62,7 @@ export interface LumiTurnFlow {
   effectiveOperationMode: OperationMode;
   requestedMode: OperationMode | null;
   autoPromoteToAssistant: boolean;
+  conceptualCapabilityQuestion?: boolean;
   allowToolUseForTurn: boolean;
   selfRepairTurn: boolean;
   clientActionOnlyTurn: boolean;
@@ -129,8 +131,9 @@ export function shouldAutoPromoteWorkTurn(
 function buildTurnFlowPromptOverlay(flow: Omit<LumiTurnFlow, 'promptOverlay'>): string {
   const focus: string[] = [];
   if (flow.specialWorkflow) focus.push(`skill_workflow=${flow.specialWorkflow.skillId}`);
-  if (flow.workTakeover.shouldResumeTask) focus.push(`active_task=${flow.workTakeover.latestTask?.id || 'unknown'}`);
-  if (flow.workTakeover.strength === 'hint') focus.push(`task_hint=${flow.workTakeover.latestTask?.id || 'unknown'}`);
+  if (!flow.conceptualCapabilityQuestion && flow.workTakeover.shouldResumeTask) focus.push(`active_task=${flow.workTakeover.latestTask?.id || 'unknown'}`);
+  if (!flow.conceptualCapabilityQuestion && flow.workTakeover.strength === 'hint') focus.push(`task_hint=${flow.workTakeover.latestTask?.id || 'unknown'}`);
+  if (flow.conceptualCapabilityQuestion) focus.push('capability_explanation');
   if (flow.workSurfaceRoute.directDesktop) focus.push('external_desktop');
   if (flow.workSurfaceRoute.artifactFirst) focus.push('artifact_first');
   if (flow.clientActionOnlyTurn) focus.push('client_surface');
@@ -147,6 +150,12 @@ function buildTurnFlowPromptOverlay(flow: Omit<LumiTurnFlow, 'promptOverlay'>): 
     'Decision order for this turn:',
     '1. Stay as Lumi first: understand the user, the surface, the unfinished task pointer, and the current screen/work context before choosing a capability.',
     '2. Use normal language when the user is chatting, reflecting, correcting, or asking a conceptual question. Do not force a task/tool path just because a task exists.',
+    flow.conceptualCapabilityQuestion
+      ? 'This is a conceptual question about Lumi modes or tool access. Explain the real per-turn routing model without calling tools, inspecting client state, resuming a task, or claiming tools are missing from the session.'
+      : '',
+    flow.source === 'command-center-chat'
+      ? 'The command-center office text panel is Lumi\'s only text entry. Never direct the user to another chat screen or tell them to go to the command center; they are already there.'
+      : '',
     '3. Use the task center only for persistent work with state, follow-up, artifacts, blockers, and confirmation boundaries.',
     '4. Use skill workflows for learned repeatable capabilities, but never let a demo/script override the current user wording or task parameters.',
     '5. Use external software, browser, desktop control, and MCP/tools as Lumi\'s hands, not as separate agents. Verify visible or file results before claiming completion.',
@@ -156,7 +165,7 @@ function buildTurnFlowPromptOverlay(flow: Omit<LumiTurnFlow, 'promptOverlay'>): 
     `- Background delegation: ${flow.executionGovernance.delegationIntent} (${flow.executionGovernance.delegationReason}). Agents are optional workers; Lumi remains the owner and explains the result humanly.`,
     `- Capability learning: ${flow.executionGovernance.capabilityLearningIntent} (${flow.executionGovernance.capabilityLearningReason}). Before adding new code or wrappers, inspect capability_learning_list/self_extension_plan, reuse learned skills/adapters/tools when possible, and use capability_gap_autofix only for a real missing or brittle capability.`,
     'If chat/work intent is ambiguous, ask one short clarification or continue the conversation naturally.',
-    flow.workTakeover.promptOverlay,
+    flow.conceptualCapabilityQuestion ? '' : flow.workTakeover.promptOverlay,
   ].filter(Boolean).join('\n');
 }
 
@@ -340,6 +349,7 @@ function buildExecutionGovernance(input: {
 }
 
 export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
+  const conceptualCapabilityQuestion = isCapabilityMetaQuestion(input.text);
   const continuationContext = compact(input.continuationContext);
   const hasContinuationContext = Boolean(continuationContext);
   const directActionFollowupIntent = classifyRecentActionFollowupIntent(input.text);
@@ -357,18 +367,20 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   const currentAcceptsContinuationContext = needsRecentActionContinuationContext(input.text)
     || explicitContinuationConfirmation
     || recoveredActionFollowupIntent !== 'none';
-  const continuationMayDriveAction = hasContinuationContext
+  const continuationMayDriveAction = !conceptualCapabilityQuestion && hasContinuationContext
     && (actionFollowupIntent === 'execute' || explicitContinuationConfirmation);
-  const statusOnlyContinuation = hasContinuationContext && actionFollowupIntent === 'status';
+  const statusOnlyContinuation = !conceptualCapabilityQuestion && hasContinuationContext && actionFollowupIntent === 'status';
   const contextualText = hasContinuationContext
     ? `${input.text}\n\n${continuationContext}`
     : input.text;
   // Status/why/recall follow-ups still need the recovered evidence in the model
   // context, but only execute/confirmation follow-ups may turn it into tool work.
-  const routingText = hasContinuationContext && currentAcceptsContinuationContext
+  const routingText = conceptualCapabilityQuestion
+    ? input.text
+    : hasContinuationContext && currentAcceptsContinuationContext
     ? contextualText
     : input.text;
-  const explicitTeamExecution = hasExplicitTeamExecutionRequest(routingText);
+  const explicitTeamExecution = !conceptualCapabilityQuestion && hasExplicitTeamExecutionRequest(routingText);
   const operationMode = normalizeOperationMode(input.operationMode);
   const requestedMode = input.requestedMode || detectRequestedOperationMode(input.text);
   const surface = resolveTurnSurface({
@@ -383,7 +395,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     orgId: input.orgId,
     surface,
   });
-  const rawClientActionIntent = hasClientActionOnlyIntent(input.text);
+  const rawClientActionIntent = !conceptualCapabilityQuestion && hasClientActionOnlyIntent(input.text);
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   const continuationNamesExternalTarget = continuationMayDriveAction
     && /(?:desktop_|wechat_|browser_|mcp_|AutoCAD|\bCAD\b|微信|浏览器)/iu.test(continuationContext); // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
@@ -393,7 +405,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     ? currentActionContract
     : buildActionContract(routingText);
   const actionContractRequiresTools = actionContract.applies && actionContract.kind !== 'none' && !clientActionIntent;
-  const autoPromoteToAssistant = shouldAutoPromoteWorkTurn(
+  const autoPromoteToAssistant = !conceptualCapabilityQuestion && (shouldAutoPromoteWorkTurn(
     input.text,
     operationMode,
     requestedMode,
@@ -407,7 +419,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     && operationMode === 'chat'
     && !requestedMode
     && actionContractRequiresTools
-  );
+  ));
   const taskEntryTurn = input.channel === 'task';
   const chatModePureConversation = operationMode === 'chat' && !requestedMode && !taskEntryTurn && !autoPromoteToAssistant;
   const shouldPromoteForAction =
@@ -420,7 +432,8 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   const explicitCapabilityMaintenance =
     capabilityLearningPreview.capabilityLearningIntent === 'inspect_reuse'
     || capabilityLearningPreview.capabilityLearningIntent === 'stabilize_existing';
-  const selfRepairTurn = !statusOnlyContinuation
+  const selfRepairTurn = !conceptualCapabilityQuestion
+    && !statusOnlyContinuation
     && !chatModePureConversation
     && !explicitCapabilityMaintenance
     && isDiagnosticOrRepairRequest(input.text);
@@ -429,7 +442,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   const workSurfaceRoute = resolveWorkSurfaceRoute(routingText);
   const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(routingText);
   const explicitBackgroundDelegation = hasExplicitBackgroundDelegationPreference(input.text);
-  const allowToolUseForTurn = statusOnlyContinuation
+  const allowToolUseForTurn = conceptualCapabilityQuestion || statusOnlyContinuation
     ? false
     : chatModePureConversation
     ? clientActionOnlyTurn
@@ -442,11 +455,11 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
       explicitTeamExecution ||
       explicitBackgroundDelegation ||
       shouldAllowToolUseForTurn(input.text, input.source, effectiveOperationMode);
-  const specialWorkflow = recoveredCurrentAppEdit
+  const specialWorkflow = conceptualCapabilityQuestion || recoveredCurrentAppEdit
     ? null
     : matchSkillWorkflow(routingText, { targetIsLumi: input.targetIsLumi });
-  const exposeAgentWork = explicitTeamExecution || shouldExposeAgentWork(input.text);
-  const execution = buildExecutionGovernance({
+  const exposeAgentWork = !conceptualCapabilityQuestion && (explicitTeamExecution || shouldExposeAgentWork(input.text));
+  const derivedExecution = buildExecutionGovernance({
     text: routingText,
     flowInput: input,
     allowToolUseForTurn,
@@ -455,6 +468,20 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     workSurfaceRoute,
     workTakeover,
   });
+  const execution = conceptualCapabilityQuestion
+    ? {
+        completionEvidenceNeeded: false,
+        governance: {
+          verificationIntent: 'none' as const,
+          verificationReason: 'conceptual capability explanation does not execute work',
+          delegationIntent: 'none' as const,
+          delegationReason: 'conceptual capability explanation stays in the foreground conversation',
+          capabilityLearningIntent: 'none' as const,
+          capabilityLearningReason: 'the user asked how existing capability routing works',
+          shouldInspectCapabilitiesFirst: false,
+        },
+      }
+    : derivedExecution;
 
   const flowWithoutPrompt: Omit<LumiTurnFlow, 'promptOverlay'> = {
     channel: input.channel,
@@ -466,6 +493,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     effectiveOperationMode,
     requestedMode,
     autoPromoteToAssistant,
+    conceptualCapabilityQuestion,
     allowToolUseForTurn,
     selfRepairTurn,
     clientActionOnlyTurn,
@@ -476,7 +504,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     specialWorkflow,
     executionGovernance: execution.governance,
     completionEvidenceNeeded: execution.completionEvidenceNeeded,
-    routeText: !statusOnlyContinuation && workTakeover.shouldResumeTask && workTakeover.routeText
+    routeText: !conceptualCapabilityQuestion && !statusOnlyContinuation && workTakeover.shouldResumeTask && workTakeover.routeText
       ? workTakeover.routeText
       : routingText,
   };
@@ -489,6 +517,9 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
 
 export function buildInteractionModeOverlay(flow: LumiTurnFlow): string {
   const opModeConfig = getOperationModeConfig(flow.effectiveOperationMode);
+  if (flow.conceptualCapabilityQuestion) {
+    return '## Capability Explanation\nThis turn only explains how Lumi modes and per-turn capability routing work. Do not call tools, inspect client state, resume an existing task, or delegate work. A routed subset is not the installed tool inventory; never ask the user to enable, mount, or switch to a fictional tool mode.';
+  }
   if (flow.clientActionOnlyTurn) {
     return '## Client Mode Control\nThe user is asking Lumi to change a client mode or open a client-native surface. You may only use client_get_state and client_action. Do not use file, terminal, desktop mouse/keyboard, web, team, or external-app tools. For meeting/autonomous mode, use the client action confirmation flow when required.';
   }

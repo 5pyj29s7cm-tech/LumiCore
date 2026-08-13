@@ -2,6 +2,35 @@ import './helpers';
 import { describe, expect, it } from 'vitest';
 
 describe('Lumi turn flow', () => {
+  it.each(['chat', 'voice'] as const)('keeps capability access questions conversational in %s', async (channel) => {
+    const { initDatabase } = await import('../db_layer');
+    const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+    await initDatabase();
+
+    const dispatch = buildLumiTurnDispatch({
+      userId: `turn_flow_capability_meta_${channel}`,
+      text: '\u90a3\u8981\u600e\u4e48\u624d\u80fd\u8ba9\u4f60\u4f7f\u7528\u5176\u5b83\u5de5\u5177',
+      continuationContext: 'active task: search memory and continue execution',
+      channel,
+      source: channel === 'chat' ? 'command-center-chat' : 'voice',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+
+    expect(dispatch.boundary).toBe('conversation');
+    expect(dispatch.flow.conceptualCapabilityQuestion).toBe(true);
+    expect(dispatch.flow.allowToolUseForTurn).toBe(false);
+    expect(dispatch.flow.clientActionOnlyTurn).toBe(false);
+    expect(dispatch.flow.selfRepairTurn).toBe(false);
+    expect(dispatch.flow.specialWorkflow).toBeNull();
+    expect(dispatch.flow.executionGovernance.delegationIntent).toBe('none');
+    expect(dispatch.flow.routeText).not.toContain('active task');
+    if (channel === 'chat') {
+      expect(dispatch.promptOverlay).toContain('only text entry');
+      expect(dispatch.flow.promptOverlay).toContain('already there');
+    }
+  });
+
   it('keeps a missing-reply complaint conversational in assistant mode', async () => {
     const { initDatabase } = await import('../db_layer');
     const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');

@@ -183,11 +183,75 @@ describe('scheduler capability execution protocol', () => {
     })).toBe('verified');
   });
 
+  it('keeps all scheduled task summaries bounded while preserving abnormal receipts', () => {
+    const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
+    for (const scheduledTaskId of ['reminder_check', 'autonomous_work_cycle', 'memory_consolidation']) {
+      for (let index = 0; index < 80; index += 1) {
+        const startedAt = new Date(Date.parse('2026-08-07T00:00:00.000Z') + index * 5 * 60_000);
+        const task = {
+          id: scheduledTaskId,
+          cron: 'every_5m',
+          executionClass: scheduledTaskId === 'reminder_check'
+            ? 'proactive_delivery' as const
+            : scheduledTaskId === 'autonomous_work_cycle'
+              ? 'autonomous_orchestration' as const
+              : 'maintenance' as const,
+        };
+        const plan = buildScheduledTaskExecutionPlan(task, startedAt);
+        persistScheduledCapabilityExecution(db, {
+          scheduledTaskId,
+          plan,
+          status: 'executing',
+          compactAudit: true,
+          now: startedAt.toISOString(),
+        });
+        persistScheduledCapabilityExecution(db, {
+          scheduledTaskId,
+          plan,
+          status: 'completed',
+          records: [verifiedRecord(plan)],
+          compactAudit: true,
+          now: new Date(startedAt.getTime() + 250).toISOString(),
+        });
+      }
+    }
+
+    expect(db.conversationActionTasks).toHaveLength(3);
+    expect(db.conversationActionReceipts.length).toBeLessThanOrEqual(6);
+    for (const task of db.conversationActionTasks) {
+      const audit = JSON.parse(task.context).schedulerAudit;
+      expect(audit.totalExecutions).toBe(80);
+      expect(audit.completedCount).toBe(80);
+      expect(audit.recentExecutions).toHaveLength(36);
+    }
+
+    const abnormalTask = {
+      id: 'reminder_check',
+      cron: 'every_5m',
+      executionClass: 'proactive_delivery' as const,
+    };
+    const abnormalPlan = buildScheduledTaskExecutionPlan(abnormalTask, new Date('2026-08-08T00:00:00.000Z'));
+    const abnormalRecord = verifiedRecord(abnormalPlan);
+    abnormalRecord.error = 'scheduler_handler_failed';
+    abnormalRecord.receipt = { status: 'failed', verified: false };
+    persistScheduledCapabilityExecution(db, {
+      scheduledTaskId: abnormalTask.id,
+      plan: abnormalPlan,
+      status: 'blocked',
+      blocker: 'handler failed',
+      records: [abnormalRecord],
+      compactAudit: true,
+      now: '2026-08-08T00:00:01.000Z',
+    });
+    expect(db.conversationActionReceipts.some((receipt: any) => receipt.outcome === 'failed')).toBe(true);
+  });
+
   it('compacts only legacy verified probe rows and preserves abnormal evidence', () => {
     const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
+    const scheduledTaskId = 'reminder_check';
     const makeTask = (id: string, status: string, at: string) => ({
       id,
-      conversationId: 'scheduler:idle_check',
+      conversationId: `scheduler:${scheduledTaskId}`,
       userId: 'system',
       domain: 'personal',
       orgId: '',
@@ -196,7 +260,7 @@ describe('scheduler capability execution protocol', () => {
       intentKind: 'scheduled_task',
       operation: 'communicate',
       goal: 'legacy scheduler run',
-      target: 'idle_check',
+      target: scheduledTaskId,
       status,
       blocker: status === 'blocked' ? 'failure kept' : '',
       activeRequestId: '',
@@ -214,12 +278,12 @@ describe('scheduler capability execution protocol', () => {
       db.conversationActionReceipts.push({
         id: `receipt-${id}`,
         taskId: id,
-        conversationId: 'scheduler:idle_check',
+        conversationId: `scheduler:${scheduledTaskId}`,
         turnId: id,
         requestId: id,
         idempotencyKey: id,
         toolName: 'scheduler_task_handler',
-        targetIdentity: 'idle_check',
+        targetIdentity: scheduledTaskId,
         inputDigest: id,
         envelope: '{}',
         outcome: 'verified_success',
@@ -230,12 +294,12 @@ describe('scheduler capability execution protocol', () => {
     db.conversationActionReceipts.push({
       id: 'receipt-legacy-failed',
       taskId: 'legacy-failed',
-      conversationId: 'scheduler:idle_check',
+      conversationId: `scheduler:${scheduledTaskId}`,
       turnId: 'legacy-failed',
       requestId: 'legacy-failed',
       idempotencyKey: 'legacy-failed',
       toolName: 'scheduler_task_handler',
-      targetIdentity: 'idle_check',
+      targetIdentity: scheduledTaskId,
       inputDigest: 'failed',
       envelope: '{}',
       outcome: 'failed',
@@ -251,7 +315,7 @@ describe('scheduler capability execution protocol', () => {
     expect(db.conversationActionReceipts).toEqual([
       expect.objectContaining({ id: 'receipt-legacy-failed', outcome: 'failed' }),
     ]);
-    const summary = db.conversationActionTasks.find((task: any) => task.target === 'idle_check' && task.id !== 'legacy-failed');
+    const summary = db.conversationActionTasks.find((task: any) => task.target === scheduledTaskId && task.id !== 'legacy-failed');
     expect(JSON.parse(summary.context).schedulerAudit).toMatchObject({
       totalExecutions: 3,
       completedCount: 3,
@@ -271,7 +335,8 @@ describe('scheduler capability execution protocol', () => {
       .toBeLessThan(run.indexOf('await task.handler()'));
     expect(run).toContain("authorizeCapabilityPlanTool(plan, 'scheduler_task_handler')");
     expect(run).toContain("previousStatus === 'executing'");
-    expect(run).toContain("task.auditMode === 'compact'");
+    expect(run).toContain("const compactAudit = task.auditMode !== 'full'");
+    expect(run).toContain('compactAudit,');
     expect(run).toContain('automatic replay for this slot is disabled');
 
     const registrations = source.match(/scheduler\.register\(\{/g) || [];

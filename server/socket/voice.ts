@@ -86,6 +86,7 @@ import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execu
 import { createDesktopExecutionTracker, withDesktopExecutionReceipt } from "../desktop/execution_runtime";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
+import { buildCapabilityMetaResponse, isCapabilityMetaQuestion } from "../cognition/capability_meta";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
 import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
@@ -1217,7 +1218,7 @@ async function processVoiceInput(
 
   session.isSpeaking = false;
   session.isProcessing = true;
-  session.isBackgroundWork = hasExplicitToolIntent(actionIntentText);
+  session.isBackgroundWork = !isCapabilityMetaQuestion(actionIntentText) && hasExplicitToolIntent(actionIntentText);
   session.activeWorkStatus = session.isBackgroundWork ? 'planning' : 'idle';
   session.activeWorkStep = '';
   session.activeWorkToolCalls = 0;
@@ -1360,6 +1361,7 @@ async function processVoiceInput(
   const requestedModeHint = detectRequestedOperationMode(userText);
   const skipKnowledgeRetrieval = Boolean(preMatchedQuickResult)
     || Boolean(requestedModeHint)
+    || isCapabilityMetaQuestion(userText)
     || hasClientActionOnlyIntent(userText)
     || isUserCorrectionOrExplanationQuestion(userText);
   const allowLocalFileWrites = shouldAllowVoiceLocalFileWriteForTurn(routedUserText);
@@ -1561,6 +1563,14 @@ async function processVoiceInput(
   const visionIntent = turnFlow.visionIntent;
   const exposeAgentWork = turnFlow.exposeAgentWork;
   const executionDecision = executionPipeline.execution;
+  const capabilityMetaResponse = buildCapabilityMetaResponse({
+    text: actionIntentText,
+    operationMode: turnFlow.effectiveOperationMode,
+    source: 'voice',
+  });
+  if (capabilityMetaResponse) {
+    preMatchedQuickResult = { matched: true, responseText: capabilityMetaResponse };
+  }
   session.isBackgroundWork = executionDecision.allowToolUse;
   session.activeWorkStatus = executionDecision.allowToolUse ? 'planning' : 'idle';
   if (executionDecision.allowToolUse && !session.workHeartbeatTimer) {
@@ -1584,7 +1594,9 @@ async function processVoiceInput(
     actionIntentText,
     conversationTurn.conversation.actionContinuationState,
   );
-  const actionTaskExecution = userObservedCompletion
+  const actionTaskExecution = turnFlow.conceptualCapabilityQuestion
+    ? { state: null, kind: 'conversation' as const }
+    : userObservedCompletion
     ? {
         state: conversationTurn.conversation.actionContinuationState || null,
         kind: 'conversation' as const,

@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import os from "os";
 import fs from "fs";
 import path from "path";
-import { readDB, writeDB, isDbDirty } from "../../db_layer";
+import { getDatabasePersistenceStatus, readDB, writeDB, isDbDirty } from "../../db_layer";
 import { logger } from "../../logger";
 import { toolRegistry } from "../tools/registry";
 import { scheduler } from "../scheduler";
@@ -288,6 +288,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
       const capabilityMetrics = getCapabilityRuntimeMetrics();
       const ollama = getLocalModelConfig('ollama');
       const lmstudio = getLocalModelConfig('lmstudio');
+      const persistence = getDatabasePersistenceStatus();
       const backgroundTasks = Array.isArray(db.backgroundDelegationTasks) ? db.backgroundDelegationTasks : [];
       const autonomousTasks = Array.isArray(db.autonomousTasks) ? db.autonomousTasks : [];
       const externalAiSessions = Array.isArray(db.externalAiSessions) ? db.externalAiSessions : [];
@@ -303,7 +304,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
         return counts;
       }, {});
       res.json({
-        status: isDbDirty() ? "degraded" : "ok",
+        status: persistence.degraded ? "degraded" : "ok",
         timestamp: new Date().toISOString(),
         runtime: getRuntimeVersionInfo(),
         database: {
@@ -311,6 +312,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
           agents: db.agents.length,
           interactions: db.interactions.length,
           dirty: isDbDirty(),
+          persistence,
           actionTasks: (db.conversationActionTasks || []).length,
           actionReceipts: (db.conversationActionReceipts || []).length,
           extensionRevisions: extensionRevisions.length,

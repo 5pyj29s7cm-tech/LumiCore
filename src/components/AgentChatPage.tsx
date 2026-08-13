@@ -71,7 +71,7 @@ type ChatExecutionSnapshot = {
 
 type PersistedChatExecution = {
   requestId: string;
-  source: 'chat';
+  source: string;
   domain: 'personal' | 'work';
   orgId?: string;
   conversationId?: string;
@@ -415,6 +415,7 @@ export function AgentChatPage({
   const [messages, setMessages] = useState<any[]>([]);
   const isOfficeCommandCenter = layout === 'command-center' && (commandCenterView === 'office' || commandCenterView === 'team');
   const isCommandCenterUtility = layout === 'command-center' && !isOfficeCommandCenter;
+  const chatExecutionSource = layout === 'command-center' ? 'command-center-chat' : 'chat';
   const isZh = t?.langCode !== 'en';
   const commandCenterPlannerText = commandCenterPlannerCopy(isZh ? 'zh' : 'en');
   const ui = (zh: string, en: string) => isZh ? zh : en;
@@ -1281,7 +1282,7 @@ export function AgentChatPage({
     try {
       const execution: PersistedChatExecution = {
         requestId,
-        source: 'chat',
+        source: chatExecutionSource,
         domain: activeDomain,
         orgId: activeOrgId || undefined,
         conversationId: attachmentConversationIdRef.current || undefined,
@@ -1289,7 +1290,7 @@ export function AgentChatPage({
       };
       localStorage.setItem(activeExecutionStorageKey, JSON.stringify(execution));
     } catch {}
-  }, [activeDomain, activeExecutionStorageKey, activeOrgId]);
+  }, [activeDomain, activeExecutionStorageKey, activeOrgId, chatExecutionSource]);
   const clearPersistedExecution = useCallback((requestId?: string) => {
     try {
       if (requestId) {
@@ -1308,7 +1309,7 @@ export function AgentChatPage({
       const activeRequestId = activeChatRequestIdRef.current;
       if (activeRequestId) return data?.requestId === activeRequestId;
       if (data?.requestId) return false;
-      if (data?.source && data.source !== 'chat') return false;
+      if (data?.source && data.source !== chatExecutionSource) return false;
       return textChatActiveRef.current;
     };
 
@@ -1742,6 +1743,7 @@ export function AgentChatPage({
     agentId,
     agentName,
     bindAttachmentContextToConversation,
+    chatExecutionSource,
     clearChatProgress,
     clearPersistedExecution,
     finishChatProgress,
@@ -1790,7 +1792,7 @@ export function AgentChatPage({
 
       socket.emit('agent:execution_resume', {
         requestId: persisted.requestId,
-        source: 'chat',
+        source: persisted.source || chatExecutionSource,
         domain: persisted.domain,
         orgId: persisted.orgId || null,
         conversationId: persisted.conversationId,
@@ -1821,7 +1823,7 @@ export function AgentChatPage({
     socket.on('connect', resumeActiveExecution);
     if (socket.connected) resumeActiveExecution();
     return () => { socket.off('connect', resumeActiveExecution); };
-  }, [activeExecutionStorageKey, clearPersistedExecution, isFounder, isZh, pushChatProgress, socket]);
+  }, [activeExecutionStorageKey, chatExecutionSource, clearPersistedExecution, isFounder, isZh, pushChatProgress, socket]);
 
   const startNewTextConversation = useCallback(async () => {
     if (isCreatingConversation) return;
@@ -2098,7 +2100,7 @@ export function AgentChatPage({
       if (data?.conversationId && data.conversationId !== requestConversationId) return false;
       if (data?.requestId) return data.requestId === requestId;
       if (activeChatRequestIdRef.current) return false;
-      if (data?.source && data.source !== 'chat') return false;
+      if (data?.source && data.source !== chatExecutionSource) return false;
       return textChatActiveRef.current;
     };
     const cleanupSocketWaiters = () => {
@@ -2150,7 +2152,7 @@ export function AgentChatPage({
 
         socket.emit('agent:execution_resume', {
           requestId,
-          source: 'chat',
+          source: chatExecutionSource,
           domain: activeDomain,
           orgId: activeOrgId || null,
           conversationId: attachmentConversationIdRef.current || undefined,
@@ -2198,7 +2200,7 @@ export function AgentChatPage({
       agentId,
       domain: activeDomain,
       orgId: activeOrgId || null,
-      source: 'chat',
+      source: chatExecutionSource,
       operationMode,
       requestId,
       conversationId: attachmentConversationIdRef.current || undefined,
@@ -2263,7 +2265,7 @@ export function AgentChatPage({
     }, 8000);
     socket.emit('agent:abort_chat', {
       requestId,
-      source: 'chat',
+      source: chatExecutionSource,
       domain: activeDomain,
       orgId: activeOrgId || null,
       conversationId: attachmentConversationIdRef.current || undefined,

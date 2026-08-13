@@ -4,6 +4,42 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 describe('Lumi result finalizer', () => {
+  it.each([
+    '\u5f53\u524d\u4f1a\u8bdd\u53ea\u6302\u8f7d\u4e86\u4e24\u4e2a\u5de5\u5177\uff0c\u8bb0\u5fc6\u5e93\u68c0\u7d22\u5de5\u5177\u6ca1\u6302\u8f7d\u3002',
+    '\u5f53\u524d\u804a\u5929\u6a21\u5f0f\u672c\u8eab\u6ca1\u5e26\u5de5\u5177\uff0c\u7ffb\u4e0d\u4e86\u8bb0\u5fc6\u5e93\u3002',
+  ])('blocks unsupported per-session tool availability claims: %s', async (responseText) => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '\u4f60\u73b0\u5728\u4e0d\u662f\u52a9\u624b\u6a21\u5f0f\u5417',
+      responseText,
+      toolRecords: [],
+      source: 'command-center-chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain('fictional user-switchable tool availability');
+    expect(result.text).toContain('\u4e0d\u5b58\u5728\u9700\u8981\u4f60\u5207\u6362');
+  });
+
+  it('allows a truthful explanation that a routed subset is not the tool inventory', async () => {
+    const { buildCapabilityMetaResponse } = await import('../server/cognition/capability_meta');
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const responseText = buildCapabilityMetaResponse({
+      text: '\u90a3\u8981\u600e\u4e48\u624d\u80fd\u8ba9\u4f60\u4f7f\u7528\u5176\u5b83\u5de5\u5177',
+      operationMode: 'assistant',
+      source: 'command-center-chat',
+    })!;
+    const result = finalizeLumiResponse({
+      taskText: '\u90a3\u8981\u600e\u4e48\u624d\u80fd\u8ba9\u4f60\u4f7f\u7528\u5176\u5b83\u5de5\u5177',
+      responseText,
+      toolRecords: [],
+      source: 'command-center-chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(responseText);
+  });
+
   it('blocks raw legacy function-call markup from reaching the user', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
     const result = finalizeLumiResponse({

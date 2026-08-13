@@ -1597,11 +1597,14 @@ export function readDB(): any {
   return memoryDB;
 }
 
-// Prune old entries from memory + SQLite to prevent unbounded growth
+// Prune high-volume telemetry from memory + SQLite to prevent unbounded
+// growth. Durable memories are deliberately excluded: count-based deletion
+// would silently erase knowledge and identity without considering tier,
+// importance, consolidation state, or user retention policy.
 export function pruneOldData(): void {
   if (!memoryDB || !db) return;
-  const limits: Record<string, number> = { interactions: 20000, memories: 5000, tokenUsage: 5000 };
-  const tableMap: Record<string, string> = { interactions: 'interactions', memories: 'memories', tokenUsage: 'token_usage' };
+  const limits: Record<string, number> = { interactions: 20000, tokenUsage: 5000 };
+  const tableMap: Record<string, string> = { interactions: 'interactions', tokenUsage: 'token_usage' };
   for (const [key, max] of Object.entries(limits)) {
     const arr = memoryDB[key];
     if (arr && arr.length > max) {
@@ -1616,7 +1619,7 @@ export function pruneOldData(): void {
       console.log(`[DB] Pruned ${excess} old ${key} (${max} kept)`);
     }
   }
-  dbDirty = true;
+  recordDatabaseDirty();
 }
 
 // Write lock to prevent concurrent SQLite transactions
@@ -1634,6 +1637,28 @@ let writeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let writeRevision = 0;
 let persistedRevision = 0;
 let writeInFlight = false;
+let dirtySinceMs = 0;
+let lastSuccessfulFlushAt = '';
+let lastPersistenceError = '';
+
+function recordDatabaseDirty(): void {
+  if (!dirtySinceMs) dirtySinceMs = Date.now();
+  dbDirty = true;
+}
+
+function recordSuccessfulDatabaseFlush(): void {
+  lastSuccessfulFlushAt = new Date().toISOString();
+  lastPersistenceError = '';
+  if (persistedRevision >= writeRevision) {
+    dbDirty = false;
+    dirtySinceMs = 0;
+  }
+}
+
+function recordDatabaseFlushFailure(error: unknown): void {
+  recordDatabaseDirty();
+  lastPersistenceError = error instanceof Error ? error.message : String(error || 'Unknown persistence failure');
+}
 
 function scheduleDatabaseFlush(delayMs = 100): void {
   if (writeDebounceTimer || writeInFlight) return;
@@ -1650,14 +1675,14 @@ function scheduleDatabaseFlush(delayMs = 100): void {
       .then(() => persistMemoryDB())
       .then(() => {
         persistedRevision = Math.max(persistedRevision, targetRevision);
-        dbDirty = persistedRevision < writeRevision;
+        recordSuccessfulDatabaseFlush();
       })
       .catch((err) => {
         // persistMemoryDB writes through a transaction and does not mutate the
         // in-memory source of truth. Keeping that live object is both safer and
         // dramatically cheaper than cloning the complete database on every
         // chat/voice event (large tool receipts previously exhausted V8 heap).
-        dbDirty = true;
+        recordDatabaseFlushFailure(err);
         console.error('[DB] Failed to persist database:', err);
       })
       .finally(() => {
@@ -1733,7 +1758,7 @@ export function writeDB(data: any): void {
     throw new Error('Database not initialized.');
   }
   memoryDB = data;
-  dbDirty = true;
+  recordDatabaseDirty();
   writeRevision += 1;
 
   // Keep at most one full snapshot write in flight. Rapid message, memory and
@@ -1751,9 +1776,14 @@ async function flushDatabaseStrict(): Promise<void> {
   if (persistedRevision < writeRevision || dbDirty) {
     const targetRevision = writeRevision;
     writeInFlight = true;
-    await persistMemoryDB();
-    persistedRevision = Math.max(persistedRevision, targetRevision);
-    dbDirty = persistedRevision < writeRevision;
+    try {
+      await persistMemoryDB();
+      persistedRevision = Math.max(persistedRevision, targetRevision);
+      recordSuccessfulDatabaseFlush();
+    } catch (error) {
+      recordDatabaseFlushFailure(error);
+      throw error;
+    }
   }
 }
 
@@ -1776,7 +1806,7 @@ export async function flushDB(): Promise<void> {
   try {
     await flushDBOrThrow();
   } catch (err) {
-    dbDirty = true;
+    recordDatabaseFlushFailure(err);
     console.error('[DB] flushDB failed:', err);
   }
 }
@@ -1785,6 +1815,30 @@ let dbDirty = false;
 
 export function isDbDirty(): boolean {
   return dbDirty;
+}
+
+/**
+ * A short dirty window is normal because writes are deliberately coalesced.
+ * Health only degrades after a real persistence error or a sustained backlog.
+ */
+export function getDatabasePersistenceStatus(nowMs = Date.now()): {
+  pending: boolean;
+  writeInFlight: boolean;
+  lagMs: number;
+  degraded: boolean;
+  lastSuccessfulFlushAt: string;
+  lastError: string;
+} {
+  const pending = dbDirty || persistedRevision < writeRevision;
+  const lagMs = pending && dirtySinceMs ? Math.max(0, nowMs - dirtySinceMs) : 0;
+  return {
+    pending,
+    writeInFlight,
+    lagMs,
+    degraded: Boolean(lastPersistenceError) || lagMs >= 30_000,
+    lastSuccessfulFlushAt,
+    lastError: lastPersistenceError,
+  };
 }
 
 /** Flush pending work and release the SQLite handle (tests and graceful shutdown). */
@@ -1806,6 +1860,9 @@ export async function closeDatabase(): Promise<void> {
   writeRevision = 0;
   persistedRevision = 0;
   writeInFlight = false;
+  dirtySinceMs = 0;
+  lastSuccessfulFlushAt = '';
+  lastPersistenceError = '';
   dbDirty = false;
   configureExternalCommitJournal(null);
 

@@ -627,11 +627,6 @@ export function settleBackgroundConversationActionTask(
 
 type SchedulerAuditOutcome = 'executing' | 'verified' | 'blocked' | 'failed' | 'unknown';
 
-const COMPACT_SCHEDULED_TASK_IDS = new Set([
-  'ambient_activity_poll',
-  'idle_check',
-]);
-
 function compactSchedulerAuditTaskId(scheduledTaskId: string): string {
   return `scheduler_audit_${digest(scheduledTaskId).slice(0, 24)}`;
 }
@@ -776,7 +771,11 @@ function persistCompactScheduledCapabilityExecution(
 
   const lastReceiptAt = Date.parse(String(audit.lastReceiptAt || '')) || 0;
   const abnormal = outcome !== 'verified' && outcome !== 'executing';
-  const checkpointDue = Date.parse(now) - lastReceiptAt >= 15 * 60 * 1000;
+  // The summary row itself keeps exact counters and the most recent 36 slot
+  // identities. A successful receipt every six hours is enough to prove the
+  // heartbeat while avoiding thousands of identical scheduler receipts.
+  // Abnormal outcomes are still appended immediately.
+  const checkpointDue = Date.parse(now) - lastReceiptAt >= 6 * 60 * 60 * 1000;
   if (records.length > 0 && (abnormal || priorOutcome !== outcome || checkpointDue)) {
     appendConversationActionReceipts(db, {
       task,
@@ -817,7 +816,15 @@ export function compactLegacyScheduledCapabilityExecutions(db: any): {
   let receiptsRemoved = 0;
   let summariesUpdated = 0;
 
-  for (const scheduledTaskId of COMPACT_SCHEDULED_TASK_IDS) {
+  const scheduledTaskIds = new Set(tasks
+    .filter(candidate => (
+      candidate.intentKind === 'scheduled_task'
+      && candidate.conversationId.startsWith('scheduler:')
+      && candidate.target
+    ))
+    .map(candidate => candidate.target));
+
+  for (const scheduledTaskId of scheduledTaskIds) {
     const summaryId = compactSchedulerAuditTaskId(scheduledTaskId);
     const candidates = tasks.filter(candidate => (
       candidate.id !== summaryId

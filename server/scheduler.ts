@@ -116,7 +116,11 @@ interface ScheduledTask {
   quiet?: boolean;
   /** If false, task is paused and will not fire */
   enabled?: boolean;
-  /** Collapse high-frequency successful probes into a bounded audit summary. */
+  /**
+   * Collapse successful runs into a bounded audit summary. Compact is the
+   * safe default; use full only when every successful slot is itself a
+   * business record. Failures and unknown outcomes are always preserved.
+   */
   auditMode?: 'full' | 'compact';
 }
 
@@ -511,13 +515,14 @@ export class Scheduler {
     if (task.enabled === false || this.runningTasks.has(task.id)) return;
     this.runningTasks.add(task.id);
     const startedAt = new Date();
+    const compactAudit = task.auditMode !== 'full';
     let plan: CapabilityExecutionPlan | null = null;
     let handlerStarted = false;
     try {
       plan = buildScheduledTaskExecutionPlan(task, startedAt);
       const authorization = authorizeCapabilityPlanTool(plan, 'scheduler_task_handler');
       const db = readDB();
-      const previousStatus = task.auditMode === 'compact'
+      const previousStatus = compactAudit
         ? getScheduledCapabilityExecutionStatus(db, {
             scheduledTaskId: task.id,
             executionId: plan.taskId,
@@ -537,7 +542,7 @@ export class Scheduler {
             blocker: 'A previous execution in this exact schedule slot has an unknown outcome; replay was stopped.',
             records: [record],
             now: startedAt.toISOString(),
-            compactAudit: task.auditMode === 'compact',
+            compactAudit,
           });
           writeDB(db);
         }
@@ -554,7 +559,7 @@ export class Scheduler {
           error: authorization.reason,
         })],
         now: startedAt.toISOString(),
-        compactAudit: task.auditMode === 'compact',
+        compactAudit,
       });
       writeDB(db);
       if (!authorization.allowed) {
@@ -576,7 +581,7 @@ export class Scheduler {
           delivery,
         })],
         now: task.lastRun,
-        compactAudit: task.auditMode === 'compact',
+        compactAudit,
       });
       writeDB(completedDb);
     } catch (err: any) {
@@ -595,7 +600,7 @@ export class Scheduler {
               error: 'scheduler_handler_failed',
             })],
             now: failedAt,
-            compactAudit: task.auditMode === 'compact',
+            compactAudit,
           });
           writeDB(db);
         } catch (ledgerError: any) {

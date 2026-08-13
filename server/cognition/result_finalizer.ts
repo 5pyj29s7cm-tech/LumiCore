@@ -204,8 +204,15 @@ function unsupportedOngoingExecutionClaim(
 
 function unsupportedToolAvailabilityExcuse(input: LumiResultFinalizerInput): string | null {
   const response = String(input.responseText || '');
+  // A correct explanation may explicitly deny the fictional state (for
+  // example, "the routed subset does not mean tools are unmounted"). Remove
+  // those denial clauses before looking for an unsupported availability claim.
+  const availabilityClaimText = response.replace(
+    /(?:\u4e0d\u4ee3\u8868|\u5e76\u4e0d\u4ee3\u8868|\u4e0d\u7b49\u4e8e|\u4e0d\u80fd\u8bf4\u660e|\u4e0d\u662f\u8bf4|does\s+not\s+mean|doesn'?t\s+mean)[^\u3002\uff01\uff1f.!?\n]{0,100}[\u3002\uff01\uff1f.!?]?/giu,
+    '',
+  );
   // i18n-allow: Unsupported user-switchable tool-state excuse recognition; not user-visible copy.
-  const claimsToolsAreOff = /(?:当前|现在|这轮|我这边)?[^。！？!?\n]{0,24}(?:工具|tool)[^。！？!?\n]{0,28}(?:没(?:有)?打开|未打开|没开启|未开启|不可用|没有开放|not (?:open|enabled|available)|disabled)|(?:需要|要不要|可以)(?:我)?[^。！？!?\n]{0,28}(?:切换|切到|进入|开启)[^。！？!?\n]{0,24}(?:工具可用|工具模式|tool mode|tools? enabled)/iu.test(response);
+  const claimsToolsAreOff = /(?:当前|现在|这轮|我这边|当前会话|这个会话)?[^。！？!?\n]{0,32}(?:工具|tool)[^。！？!?\n]{0,36}(?:没(?:有)?打开|未打开|没开启|未开启|不可用|没有开放|没(?:有)?挂载|未挂载|没带|只有|只(?:挂载|有)|not (?:open|enabled|available|mounted|loaded)|disabled)|(?:当前|现在|这轮|我这边|当前会话|这个会话)?[^。！？!?\n]{0,28}(?:只有|只(?:挂载|有)|没(?:有)?挂载|未挂载|没带)[^。！？!?\n]{0,20}(?:工具|tool)|(?:需要|要不要|可以)(?:我)?[^。！？!?\n]{0,28}(?:切换|切到|进入|开启)[^。！？!?\n]{0,24}(?:工具可用|工具模式|tool mode|tools? enabled)/iu.test(availabilityClaimText);
   if (!claimsToolsAreOff) return null;
   const actualUnavailableReceipt = (input.toolRecords || []).some(record => (
     String(record.error || '').trim()

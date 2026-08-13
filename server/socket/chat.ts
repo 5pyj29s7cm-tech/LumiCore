@@ -35,6 +35,7 @@ import {
   shouldForwardPreFinalizationProgress,
 } from "../cognition/response_delivery";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
+import { buildCapabilityMetaResponse } from "../cognition/capability_meta";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
 import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
@@ -1922,7 +1923,9 @@ export function registerChatHandler(
       const desktopExecutionTracker = createDesktopExecutionTracker(desktopExecutionPolicy.executionPlan);
       const toolRoute = executionDecision.toolRoute;
       const routedToolPolicy = executionDecision.toolPolicy;
-      const actionTaskExecution = conversationId
+      const actionTaskExecution = turnFlow.conceptualCapabilityQuestion
+        ? { state: null, kind: 'conversation' as const }
+        : conversationId
         ? prepareConversationActionExecution({
             conversationId,
             userId: uid,
@@ -2385,16 +2388,23 @@ export function registerChatHandler(
 
       // ── Quick Command Fast-Path: deterministic commands skip LLM entirely ──
       try {
-        const quickResult = shouldRunLegacyDirectExecution() ? await matchQuickCommand(
-          continuationOpenTarget ? buildInternalOpenCommand(visibleUserText, continuationOpenTarget) : text,
-          uid,
-          {
-          domain: resolvedDomain,
-          orgId: resolvedOrgId,
-          surface: turnSurface,
-          currentAppTarget: getRecoveredApplicationContinuationTarget(actionContinuationBridge),
-          },
-        ) : null;
+        const capabilityMetaResponse = buildCapabilityMetaResponse({
+          text: visibleUserText,
+          operationMode: turnFlow.effectiveOperationMode,
+          source: eventSource,
+        });
+        const quickResult = capabilityMetaResponse
+          ? { matched: true, responseText: capabilityMetaResponse }
+          : shouldRunLegacyDirectExecution() ? await matchQuickCommand(
+              continuationOpenTarget ? buildInternalOpenCommand(visibleUserText, continuationOpenTarget) : text,
+              uid,
+              {
+                domain: resolvedDomain,
+                orgId: resolvedOrgId,
+                surface: turnSurface,
+                currentAppTarget: getRecoveredApplicationContinuationTarget(actionContinuationBridge),
+              },
+            ) : null;
         if (quickResult?.matched && (!quickResult.toolCall || executionDecision.allowToolUse)) {
           console.log('[ChatHandler] Quick command:', text.slice(0, 60));
           let quickResponseText = quickResult.responseText;
