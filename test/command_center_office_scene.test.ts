@@ -38,14 +38,21 @@ describe('command center live agent office', () => {
     expect(world).not.toContain('setTimeout');
   });
 
-  it('keeps the office full-screen and shows active work as a transient floating widget', () => {
+  it('keeps the office and chat in an integrated split workspace with transient task status', () => {
     const chatPage = source('src/components/AgentChatPage.tsx');
     const panel = source('src/components/CommandCenterPanel.tsx');
     const taskWidget = source('src/components/ActiveTaskWidget.tsx');
     const surfaces = source('shared/client_surfaces.ts');
+    const styles = source('src/index.css');
 
-    expect(chatPage).toContain('className="absolute inset-0 z-0"');
-    expect(chatPage).toContain("'pointer-events-auto absolute bottom-4 right-4 top-3 z-40");
+    expect(chatPage).toContain('lumi-command-center-workspace overflow-hidden');
+    expect(chatPage).toContain('lumi-command-center-office relative min-h-0 min-w-0 flex-1');
+    expect(chatPage).toContain('lumi-command-center-chat-rail w-[clamp(420px,30vw,560px)]');
+    expect(chatPage).not.toContain('absolute bottom-4 right-4 top-3');
+    expect(styles).toContain('.lumi-command-center-workspace');
+    expect(styles).toContain('flex-direction: row');
+    expect(styles).toContain('@media (max-width: 900px)');
+    expect(styles).toContain('flex-direction: column');
     expect(chatPage).toContain('<ActiveTaskWidget');
     expect(chatPage).toContain('<VoiceCallButton');
     expect(chatPage).toContain('setShowWeChatSettings(true)');

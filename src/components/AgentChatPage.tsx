@@ -2786,40 +2786,6 @@ export function AgentChatPage({
         )}
       </AnimatePresence>
     <div className={`lumi-chat-layout relative mx-auto flex w-full flex-1 flex-col overflow-hidden ${layout === 'command-center' ? 'max-w-none' : 'max-w-[90rem] space-y-4 pb-32 md:space-y-8 md:pb-0'}`}>
-      {isOfficeCommandCenter && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.35 }}
-          className="absolute inset-0 z-0"
-        >
-          <CommandCenterPanel
-            t={t}
-            view="office"
-            onViewChange={onCommandCenterViewChange || (() => {})}
-            onOpenNexus={onOpenNexus}
-            runtimeStatusOverride={{
-              status: runtimeStatus,
-              loading: runtimeStatusLoading,
-              error: runtimeStatusError,
-              refresh: refreshRuntimeStatus,
-            }}
-          />
-        </motion.div>
-      )}
-
-      {isOfficeCommandCenter && (
-        <ActiveTaskWidget
-          status={runtimeStatus}
-          focusThreads={focusThreads}
-          backgroundTasks={backgroundWorkflowTasks}
-          workflowActive={workflowTaskActive}
-          workflowStatus={workflowStatus}
-          progressText={chatProgressStatusText}
-          isZh={isZh}
-        />
-      )}
-
       {isCommandCenterUtility && (
         <motion.div
           initial={{ opacity: 0 }}
@@ -2837,7 +2803,11 @@ export function AgentChatPage({
       )}
 
       {!isCommandCenterUtility && (
-      <div className={`lumi-chat-toolbar relative z-[55] flex flex-shrink-0 items-center justify-between px-4 ${isOfficeCommandCenter ? 'pt-4' : 'pt-6 md:px-0'}`}>
+      <div className={`lumi-chat-toolbar relative z-[55] flex flex-shrink-0 items-center justify-between ${
+        isOfficeCommandCenter
+          ? 'h-14 border-b border-white/[0.07] bg-[#03070d]/92 px-4 shadow-[0_1px_0_rgba(255,255,255,0.025)]'
+          : 'px-4 pt-6 md:px-0'
+      }`}>
         <div className="flex shrink-0 items-center gap-2">
         <button
           onClick={onClose}
@@ -2947,20 +2917,55 @@ export function AgentChatPage({
       </div>
       )}
 
-      {!isCommandCenterUtility && <div className={`relative z-20 flex min-h-0 flex-1 ${isOfficeCommandCenter ? 'pointer-events-none' : 'gap-3'}`}>
+      {!isCommandCenterUtility && <div className={`relative z-20 flex min-h-0 flex-1 ${
+        isOfficeCommandCenter ? 'lumi-command-center-workspace overflow-hidden' : 'gap-3'
+      }`}>
+
+        {isOfficeCommandCenter && (
+          <motion.section
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.35 }}
+            className="lumi-command-center-office relative min-h-0 min-w-0 flex-1 overflow-hidden border-r border-white/[0.08]"
+          >
+            <div className="absolute inset-0">
+              <CommandCenterPanel
+                t={t}
+                view="office"
+                onViewChange={onCommandCenterViewChange || (() => {})}
+                onOpenNexus={onOpenNexus}
+                runtimeStatusOverride={{
+                  status: runtimeStatus,
+                  loading: runtimeStatusLoading,
+                  error: runtimeStatusError,
+                  refresh: refreshRuntimeStatus,
+                }}
+              />
+            </div>
+            <ActiveTaskWidget
+              status={runtimeStatus}
+              focusThreads={focusThreads}
+              backgroundTasks={backgroundWorkflowTasks}
+              workflowActive={workflowTaskActive}
+              workflowStatus={workflowStatus}
+              progressText={chatProgressStatusText}
+              isZh={isZh}
+            />
+          </motion.section>
+        )}
 
         {/* Chat Panel */}
         <>
         <div
-          className={`lumi-chat-panel flex flex-col glass rounded-[2.5rem] md:rounded-[3rem] border overflow-hidden shadow-2xl min-w-0 ${
+          className={`lumi-chat-panel flex min-h-0 min-w-0 flex-col overflow-hidden ${
             isOfficeCommandCenter
-              ? 'pointer-events-auto absolute bottom-4 right-4 top-3 z-40 w-[min(390px,calc(100%-2rem))]'
-              : 'flex-1'
+              ? 'lumi-command-center-chat-rail w-[clamp(420px,30vw,560px)] shrink-0 border-0 bg-[#070b12]'
+              : 'glass flex-1 rounded-[2.5rem] border shadow-2xl md:rounded-[3rem]'
           }`}
-          style={chatPanelStyle}
+          style={isOfficeCommandCenter ? { ...chatPanelStyle, boxShadow: 'none' } : chatPanelStyle}
         >
           <div
-            className="lumi-chat-panel-header p-4 md:p-6 border-b flex items-center justify-between"
+            className={`lumi-chat-panel-header flex items-center justify-between border-b ${isOfficeCommandCenter ? 'px-5 py-3.5' : 'p-4 md:p-6'}`}
             style={chatHeaderStyle}
           >
             <div className="flex items-center gap-3">
@@ -3086,7 +3091,7 @@ export function AgentChatPage({
           </div>
           <div
             ref={scrollRef}
-            className="flex-1 overflow-y-auto p-4 md:p-8 space-y-4 md:space-y-6 custom-scrollbar"
+            className={`flex-1 overflow-y-auto custom-scrollbar ${isOfficeCommandCenter ? 'space-y-5 px-5 py-4' : 'space-y-4 p-4 md:space-y-6 md:p-8'}`}
           >
             {messages.length === 0 && !searchQuery.trim() && (
               <div className="h-full flex flex-col items-center justify-center text-center space-y-8 px-4">
@@ -3290,7 +3295,7 @@ export function AgentChatPage({
           </div>
 
           <div
-            className="lumi-chat-composer p-6 border-t"
+            className={`lumi-chat-composer border-t ${isOfficeCommandCenter ? 'p-4' : 'p-6'}`}
             style={chatInputPanelStyle}
           >
             {conversationAttachments.length > 0 && (

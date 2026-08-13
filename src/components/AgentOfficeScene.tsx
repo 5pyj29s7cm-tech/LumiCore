@@ -61,9 +61,9 @@ export function AgentOfficeScene({
       </div>
 
       {workers.length === 0 ? (
-        <div className="flex min-h-[520px] flex-1 flex-col items-center justify-center gap-3 text-white/28"><Users size={28} /><span className="max-w-xs text-center text-xs leading-relaxed">{labels.noWorkers}</span></div>
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 text-white/28"><Users size={28} /><span className="max-w-xs text-center text-xs leading-relaxed">{labels.noWorkers}</span></div>
       ) : (
-        <div className="relative min-h-[520px] flex-1 overflow-hidden">
+        <div className="relative min-h-0 flex-1 overflow-hidden">
           <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader2 size={22} className="animate-spin text-cyan-200/50" /></div>}>
             <AgentOfficeWorld workers={visibleWorkers} lumiState={lumiState} labels={labels} />
           </Suspense>
