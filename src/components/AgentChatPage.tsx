@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Send, Loader2, ArrowLeft, Ghost, Zap, Cpu, Sparkles, FileText, Mic, CheckCircle2, Square, ChevronDown, ChevronRight, XCircle, Copy, Check, Paperclip, Image as ImageIcon, MessageCircle, Briefcase, User, ExternalLink, FolderOpen, Upload, Plus, History } from 'lucide-react';
+import { Send, Loader2, ArrowLeft, Ghost, Zap, Cpu, Sparkles, FileText, Mic, CheckCircle2, Square, ChevronDown, ChevronRight, XCircle, Copy, Check, Paperclip, Image as ImageIcon, MessageCircle, Briefcase, User, ExternalLink, FolderOpen, Upload, Plus, History, CalendarClock } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -51,6 +51,8 @@ import { CommandCenterPanel } from './CommandCenterPanel';
 import type { CommandCenterView } from './commandCenterTypes';
 import { ActiveTaskWidget } from './ActiveTaskWidget';
 import { useRuntimeStatus } from '@/hooks/useRuntimeStatus';
+import { CommandCenterPlanner } from './CommandCenterPlanner';
+import { commandCenterPlannerCopy } from '@/i18n/locales/commandCenterPlanner';
 
 const CHAT_HISTORY_LIMIT = 300;
 const CHAT_RENDER_LIMIT = 80;
@@ -414,6 +416,7 @@ export function AgentChatPage({
   const isOfficeCommandCenter = layout === 'command-center' && (commandCenterView === 'office' || commandCenterView === 'team');
   const isCommandCenterUtility = layout === 'command-center' && !isOfficeCommandCenter;
   const isZh = t?.langCode !== 'en';
+  const commandCenterPlannerText = commandCenterPlannerCopy(isZh ? 'zh' : 'en');
   const ui = (zh: string, en: string) => isZh ? zh : en;
   const { platform, isElectron } = usePlatform();
   const { orgConnection, workDomain, operationMode, resolvedAppearanceMode } = useApp();
@@ -602,6 +605,7 @@ export function AgentChatPage({
   const [searchError, setSearchError] = useState('');
   const [isCreatingConversation, setIsCreatingConversation] = useState(false);
   const [conversationHistoryOpen, setConversationHistoryOpen] = useState(false);
+  const [commandCenterPlannerOpen, setCommandCenterPlannerOpen] = useState(false);
   const [conversationHistory, setConversationHistory] = useState<ConversationHistoryItem[]>([]);
   const [conversationHistoryLoading, setConversationHistoryLoading] = useState(false);
   const [restoringConversationId, setRestoringConversationId] = useState('');
@@ -2995,6 +2999,22 @@ export function AgentChatPage({
               {isOfficeCommandCenter && (
                 <button
                   type="button"
+                  onClick={() => { setConversationHistoryOpen(false); setCommandCenterPlannerOpen(value => !value); }}
+                  className={`flex h-8 items-center gap-1.5 rounded-xl border px-2.5 text-[9px] font-bold transition-colors ${
+                    commandCenterPlannerOpen
+                      ? 'border-cyan-300/30 bg-cyan-300/[0.10] text-cyan-50'
+                      : 'border-white/10 bg-white/[0.04] text-white/45 hover:border-cyan-300/25 hover:text-cyan-100'
+                  }`}
+                  title={commandCenterPlannerText.plannerButtonTitle}
+                  aria-pressed={commandCenterPlannerOpen}
+                >
+                  <CalendarClock size={13} />
+                  <span>{commandCenterPlannerText.plannerButton}</span>
+                </button>
+              )}
+              {isOfficeCommandCenter && (
+                <button
+                  type="button"
                   onClick={toggleConversationHistory}
                   className={`flex h-8 w-8 items-center justify-center rounded-xl border transition-colors ${
                     conversationHistoryOpen
@@ -3089,7 +3109,17 @@ export function AgentChatPage({
               </div>}
             </div>
           </div>
-          <div
+          {isOfficeCommandCenter && commandCenterPlannerOpen ? (
+            <CommandCenterPlanner
+              isZh={isZh}
+              conversationId={attachmentConversationIdRef.current}
+              onDiscuss={(prompt) => {
+                setDraftText(prompt);
+                setCommandCenterPlannerOpen(false);
+                window.setTimeout(() => messageInputRef.current?.focus(), 0);
+              }}
+            />
+          ) : (<div
             ref={scrollRef}
             className={`flex-1 overflow-y-auto custom-scrollbar ${isOfficeCommandCenter ? 'space-y-5 px-5 py-4' : 'space-y-4 p-4 md:space-y-6 md:p-8'}`}
           >
@@ -3292,7 +3322,7 @@ export function AgentChatPage({
                 </div>
               </motion.div>
             )}
-          </div>
+          </div>)}
 
           <div
             className={`lumi-chat-composer border-t ${isOfficeCommandCenter ? 'p-4' : 'p-6'}`}

@@ -30,6 +30,8 @@ import {
 import { pushNotification } from '../routes/notifications';
 import { CN_BACKGROUND_DELEGATION_MESSAGES } from '../regions/packs/cn/background_delegation_messages';
 import { isDurableTaskReady, snapshotDurableToolRecords } from '../cognition/durable_task_recovery';
+import { settleBackgroundConversationActionTask } from '../conversation/action_ledger';
+import { readDB, writeDB } from '../../db_layer';
 
 const DEFAULT_POLL_MS = 1_000;
 const DEFAULT_CONCURRENCY = 2;
@@ -86,6 +88,47 @@ function persistResult(task: BackgroundDelegationTask, content: string, toolCall
     source: 'background_delegation_recovery',
     skipActionContinuation: true,
   });
+}
+
+function settlePlanLedger(
+  task: BackgroundDelegationTask,
+  toolCalls: ToolExecutionRecord[],
+  status: 'completed' | 'blocked' | 'cancelled',
+  detail: string,
+): void {
+  if (task.reason !== 'command_center_scheduled_plan' && task.reason !== 'command_center_manual_run') return;
+  const taskId = task.context?.actionTaskId;
+  if (!taskId) return;
+  const finalRecord: ToolExecutionRecord = {
+    id: `receipt_${task.id}_final`,
+    taskId,
+    requestId: task.id,
+    idempotencyKey: `${task.id}:background_orchestration_finalizer`,
+    name: 'background_orchestration_finalizer',
+    arguments: { backgroundTaskId: task.id },
+    result: JSON.stringify({
+      status: status === 'completed' ? 'verified' : status,
+      verified: status === 'completed',
+      backgroundTaskId: task.id,
+      detail,
+    }),
+    ...(status === 'blocked' ? { error: detail || 'Background execution was blocked.' } : {}),
+    terminalVerification: {
+      status: status === 'completed' ? 'verified' : status === 'blocked' ? 'failed' : 'unverified',
+      strategy: 'terminal_receipt',
+      reason: detail,
+    },
+  };
+  const db = readDB();
+  settleBackgroundConversationActionTask(db, {
+    taskId,
+    userId: task.userId,
+    records: [...toolCalls, finalRecord],
+    status,
+    blocker: status === 'blocked' ? detail : '',
+    requestId: task.id,
+  });
+  writeDB(db);
 }
 
 async function executeRecoveredTask(
@@ -223,6 +266,7 @@ async function executeRecoveredTask(
       });
       return;
     }
+    settlePlanLedger(claimed, toolRecords, finalized.blocked ? 'blocked' : 'completed', finalized.reason || finalized.text);
     persistResult(claimed, finalized.text, toolRecords, finalized.blocked);
     emitTask(io, settled);
     io.to(roomFor(claimed)).emit('agent:response', {
@@ -253,6 +297,7 @@ async function executeRecoveredTask(
     if (isBackgroundTaskCancellationRequested(claimed.id)) {
       const cancelled = cancelBackgroundTask(claimed.id);
       if (cancelled) emitTask(io, cancelled);
+      settlePlanLedger(claimed, toolRecords, 'cancelled', 'Background task cancelled.');
       return;
     }
     const message = error instanceof Error ? error.message : String(error || 'Unknown error');
@@ -272,6 +317,7 @@ async function executeRecoveredTask(
       });
       return;
     }
+    settlePlanLedger(claimed, toolRecords, 'blocked', message);
     persistResult(claimed, failureText, toolRecords, true);
     pushNotification(claimed.userId, {
       type: 'background_error',

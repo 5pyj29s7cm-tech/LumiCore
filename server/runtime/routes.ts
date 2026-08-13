@@ -20,6 +20,7 @@ import { mountBranchConnectionRoutes } from "../routes/branch_routes";
 import { mountNotificationRoutes } from "../routes/notifications";
 import { autonomyRoutes } from "../routes/autonomy_routes";
 import { mountExploreRoutes, mountPlanRoutes } from "../routes/plan_explore_routes";
+import { mountCommandCenterPlanRoutes } from "../routes/command_center_plan_routes";
 
 interface RouteContext {
   apiRouter: Router;
@@ -76,6 +77,7 @@ export function mountAllRoutes({ apiRouter, jwtSecret, llm, getCookieOptions, io
   // System Exploration & Plans
   mountExploreRoutes(apiRouter);
   mountPlanRoutes(apiRouter);
+  mountCommandCenterPlanRoutes(apiRouter);
 
   // Autonomy
   apiRouter.use('/autonomy', autonomyRoutes());

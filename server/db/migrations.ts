@@ -71,6 +71,16 @@ export const MIGRATIONS: Migration[] = [
   { version: 34, description: 'Add domain to canvas_sessions', sql: `ALTER TABLE canvas_sessions ADD COLUMN domain TEXT DEFAULT 'personal'` },
   { version: 35, description: 'Add orgId to canvas_sessions', sql: `ALTER TABLE canvas_sessions ADD COLUMN orgId TEXT DEFAULT ''` },
   { version: 36, description: 'Add verifiable ingestion manifest to organization knowledge articles', sql: `ALTER TABLE org_kb_articles ADD COLUMN ingestionManifest TEXT NOT NULL DEFAULT '{}'` },
+  { version: 37, description: 'Create command center plans', sql: `CREATE TABLE IF NOT EXISTS command_center_plans (
+    id TEXT PRIMARY KEY, userId TEXT NOT NULL, domain TEXT NOT NULL DEFAULT 'personal',
+    orgId TEXT NOT NULL DEFAULT '', conversationId TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL, title TEXT NOT NULL, instruction TEXT NOT NULL,
+    cadence TEXT NOT NULL DEFAULT 'none', timeOfDay TEXT NOT NULL DEFAULT '09:00',
+    dayOfWeek INTEGER NOT NULL DEFAULT 1, dayOfMonth INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'active', nextRunAt TEXT NOT NULL DEFAULT '',
+    lastRunAt TEXT NOT NULL DEFAULT '', lastRuntimeTaskId TEXT NOT NULL DEFAULT '',
+    createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
+  )` },
 ];
 
 // Indexes are safe to create repeatedly
@@ -91,6 +101,8 @@ export const INDEXES = [
   `CREATE INDEX IF NOT EXISTS idx_canvas_sessions_user ON canvas_sessions(userId)`,
   `CREATE INDEX IF NOT EXISTS idx_canvas_sessions_user_domain ON canvas_sessions(userId, domain)`,
   `CREATE INDEX IF NOT EXISTS idx_canvas_sessions_org ON canvas_sessions(orgId, userId)`,
+  `CREATE INDEX IF NOT EXISTS idx_command_center_plans_scope_status ON command_center_plans(userId, domain, orgId, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_command_center_plans_due ON command_center_plans(status, nextRunAt)`,
 ];
 
 export function runMigrations(db: sqlite3.Database): Promise<number[]> {

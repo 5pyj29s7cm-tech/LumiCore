@@ -7,7 +7,7 @@ function source(relativePath: string): string {
 }
 
 describe('command center live agent office', () => {
-  it('renders people, desks, and Lumi dispatch animation from real task state', () => {
+  it('renders a native 2D Lumi workspace and dispatch animation from real task state', () => {
     const panel = source('src/components/CommandCenterPanel.tsx');
     const scene = source('src/components/AgentOfficeScene.tsx');
     const world = source('src/components/AgentOfficeWorld.tsx');
@@ -16,12 +16,53 @@ describe('command center live agent office', () => {
     expect(panel).toContain('const state = deskState(agent, backgroundTasks)');
     expect(panel).toContain('taskTitle: task?.title');
     expect(scene).toContain('<AgentOfficeWorld');
-    expect(world).toContain('function Avatar');
-    expect(world).toContain('function Desk');
+    expect(world).toContain('function Employee');
+    expect(world).toContain('function Workstation');
+    expect(world).toContain('function OfficeChair');
     expect(world).toContain('function LumiCommander');
-    expect(world).toContain("const working = worker.state === 'working'");
+    expect(world).toContain('lumi-private-office__glass');
+    expect(world).toContain('lumi-private-office__command-wall');
+    expect(world).toContain('lumi-private-office__guest-seat');
+    expect(world).toContain("worker.state === 'working'");
     expect(world).toContain('worker.taskTitle');
-    expect(world).toContain('function DispatchBeam');
+    expect(world).toContain('function TaskDispatchLayer');
+    expect(world).toContain('const workstationPositions');
+    expect(world).toContain('const officeSlots = workstationPositions.map');
+    expect(world).toContain('is-vacant');
+    expect(world).toContain('lumi-2d-workstation__vacancy');
+    expect(scene).toContain('<AgentOfficeWorld workers={visibleWorkers}');
+    expect(scene).toContain('lumi-office-floor-switch');
+    expect(scene).toContain("workers.length === 0 && <div className=\"lumi-office-empty-note\"");
+    expect(world).toContain('const activityRoutes');
+    expect(world).toContain('function LumiWisp');
+    expect(world).toContain('lumi-wisp__shell');
+    expect(world).toContain('lumi-wisp__tendril--left');
+    expect(world).toContain('lumi-wisp__step--right');
+    expect(world).toContain('lumi-wisp__tail-shape');
+    expect(world).toContain('function OfficeLife');
+    expect(world).toContain('<animateMotion');
+    expect(world).toContain('lumi-2d-node--roaming');
+    expect(world).toContain('lumi-2d-node--seated');
+    expect(world).toContain("worker.state === 'working'");
+    expect(world).not.toContain('@react-three/fiber');
+    expect(world).not.toContain('@react-three/drei');
+    expect(world).not.toContain('useTexture');
+    expect(world).not.toContain('planeGeometry');
+    expect(world).not.toContain('lumi-actor');
+    expect(source('src/index.css')).toContain('@keyframes lumi-wisp-form-walk');
+    expect(source('src/index.css')).toContain('@keyframes lumi-wisp-work-tendril-left');
+    expect(source('src/index.css')).toContain('@keyframes lumi-wisp-tendril-wave');
+    expect(source('src/index.css')).toContain('@keyframes lumi-wisp-form-rest');
+  });
+
+  it('keeps the app topmost when either Command Center or Wallpaper is active', () => {
+    const desktop = source('src/components/DesktopUI.tsx');
+    const systemService = source('src/services/systemService.ts');
+
+    expect(desktop).toContain('chatOpen || isWallpaperMode || isDesktopWidgetMode');
+    expect(desktop).toContain('systemService.setAlwaysOnTop(shouldStayOnTop)');
+    expect(desktop).toContain('systemService.setAlwaysOnTop(chatOpen || isWallpaperModeRef.current)');
+    expect(systemService).toContain('getCurrentWindow().setAlwaysOnTop(enabled)');
   });
 
   it('does not manufacture a fake working state or random activity', () => {
@@ -36,6 +77,18 @@ describe('command center live agent office', () => {
     expect(world).not.toContain('Math.random');
     expect(world).not.toContain('setInterval');
     expect(world).not.toContain('setTimeout');
+  });
+
+  it('keeps the office mounted while task state refreshes silently', () => {
+    const panel = source('src/components/CommandCenterPanel.tsx');
+
+    expect(panel).toContain('const hasLoadedOfficeRef = useRef(false)');
+    expect(panel).toContain('const refreshInFlightRef = useRef<Promise<void> | null>(null)');
+    expect(panel).toContain('if (firstLoad) setLoading(true)');
+    expect(panel).toContain('if (firstLoad) setLoading(false)');
+    expect(panel).toContain('if (refreshInFlightRef.current) return refreshInFlightRef.current');
+    expect(panel).toContain('setTimeout(() => void refresh(), 600)');
+    expect(panel).toContain('setInterval(() => void refresh(), 60_000)');
   });
 
   it('keeps the office and chat in an integrated split workspace with transient task status', () => {

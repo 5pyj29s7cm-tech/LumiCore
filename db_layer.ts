@@ -69,6 +69,8 @@ const PERFORMANCE_INDEX_SQL = [
   `CREATE INDEX IF NOT EXISTS idx_read_only_tool_patterns_scope ON read_only_tool_patterns(userId, domain, orgId, updatedAt)`,
   `CREATE INDEX IF NOT EXISTS idx_background_tasks_user_status ON background_delegation_tasks(userId, status, updatedAt)`,
   `CREATE INDEX IF NOT EXISTS idx_background_tasks_lease ON background_delegation_tasks(status, leaseExpiresAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_command_center_plans_scope_status ON command_center_plans(userId, domain, orgId, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_command_center_plans_due ON command_center_plans(status, nextRunAt)`,
   `CREATE INDEX IF NOT EXISTS idx_autonomous_tasks_user_status ON autonomous_tasks(userId, status, updatedAt)`,
   `CREATE INDEX IF NOT EXISTS idx_autonomous_tasks_lease ON autonomous_tasks(status, leaseExpiresAt)`,
   `CREATE INDEX IF NOT EXISTS idx_external_commit_journal_task ON external_commit_journal(taskId, updatedAt)`,
@@ -758,6 +760,27 @@ function createTables(): Promise<void> {
         payload TEXT NOT NULL DEFAULT '{}'
       );
 
+      CREATE TABLE IF NOT EXISTS command_center_plans (
+        id TEXT PRIMARY KEY,
+        userId TEXT NOT NULL,
+        domain TEXT NOT NULL DEFAULT 'personal',
+        orgId TEXT NOT NULL DEFAULT '',
+        conversationId TEXT NOT NULL DEFAULT '',
+        kind TEXT NOT NULL,
+        title TEXT NOT NULL,
+        instruction TEXT NOT NULL,
+        cadence TEXT NOT NULL DEFAULT 'none',
+        timeOfDay TEXT NOT NULL DEFAULT '09:00',
+        dayOfWeek INTEGER NOT NULL DEFAULT 1,
+        dayOfMonth INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL DEFAULT 'active',
+        nextRunAt TEXT NOT NULL DEFAULT '',
+        lastRunAt TEXT NOT NULL DEFAULT '',
+        lastRuntimeTaskId TEXT NOT NULL DEFAULT '',
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS autonomous_tasks (
         id TEXT PRIMARY KEY,
         userId TEXT NOT NULL,
@@ -1231,6 +1254,7 @@ async function loadMemoryDB(): Promise<void> {
   const modelRoutingReceiptsRaw = await query<any>('SELECT * FROM model_routing_receipts');
   const readOnlyToolPatternsRaw = await query<any>('SELECT * FROM read_only_tool_patterns');
   const backgroundDelegationTasksRaw = await query<any>('SELECT * FROM background_delegation_tasks');
+  const commandCenterPlansRaw = await query<any>('SELECT * FROM command_center_plans');
   const autonomousTasksRaw = await query<any>('SELECT * FROM autonomous_tasks');
   const externalAiSessionsRaw = await query<any>('SELECT * FROM external_ai_sessions');
   const externalAiDispatchesRaw = await query<any>('SELECT * FROM external_ai_dispatches');
@@ -1407,6 +1431,7 @@ async function loadMemoryDB(): Promise<void> {
         return task && typeof task === 'object' ? [{ ...task, id: row.id, userId: row.userId, status: row.status, leaseExpiresAt: row.leaseExpiresAt || '', updatedAt: row.updatedAt }] : [];
       } catch { return []; }
     }),
+    commandCenterPlans: commandCenterPlansRaw || [],
     autonomousTasks: (autonomousTasksRaw || []).flatMap((row: any) => {
       try {
         const task = JSON.parse(row.payload || '{}');
@@ -1908,6 +1933,31 @@ async function persistMemoryDB(): Promise<void> {
         task.leaseExpiresAt || '',
         task.updatedAt || task.createdAt || new Date().toISOString(),
         JSON.stringify(task),
+      ]),
+    },
+    {
+      name: 'command_center_plans',
+      createSQL: `CREATE TABLE _temp_command_center_plans (id TEXT PRIMARY KEY, userId TEXT NOT NULL, domain TEXT NOT NULL DEFAULT 'personal', orgId TEXT NOT NULL DEFAULT '', conversationId TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL, title TEXT NOT NULL, instruction TEXT NOT NULL, cadence TEXT NOT NULL DEFAULT 'none', timeOfDay TEXT NOT NULL DEFAULT '09:00', dayOfWeek INTEGER NOT NULL DEFAULT 1, dayOfMonth INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'active', nextRunAt TEXT NOT NULL DEFAULT '', lastRunAt TEXT NOT NULL DEFAULT '', lastRuntimeTaskId TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
+      insertSQL: `INSERT INTO _temp_command_center_plans (id, userId, domain, orgId, conversationId, kind, title, instruction, cadence, timeOfDay, dayOfWeek, dayOfMonth, status, nextRunAt, lastRunAt, lastRuntimeTaskId, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.commandCenterPlans || []).map((plan: any) => [
+        plan.id,
+        plan.userId,
+        plan.domain || 'personal',
+        plan.orgId || '',
+        plan.conversationId || '',
+        plan.kind || 'daily_task',
+        plan.title || '',
+        plan.instruction || '',
+        plan.cadence || 'none',
+        plan.timeOfDay || '09:00',
+        Number(plan.dayOfWeek) || 0,
+        Number(plan.dayOfMonth) || 1,
+        plan.status || 'active',
+        plan.nextRunAt || '',
+        plan.lastRunAt || '',
+        plan.lastRuntimeTaskId || '',
+        plan.createdAt,
+        plan.updatedAt,
       ]),
     },
     {

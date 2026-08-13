@@ -1668,6 +1668,20 @@ export function DesktopUI({
   const [isCompactWindowMode, setIsCompactWindowMode] = useState(false);
   const isWallpaperModeRef = useRef(false);
   const closeToBackgroundSyncRef = useRef(false);
+
+  // Command Center and Wallpaper are both deliberate focus surfaces. Either
+  // one is enough to keep Lumi above other apps; normal stacking returns only
+  // after both have closed. Widget mode keeps its existing topmost contract.
+  useEffect(() => {
+    const shouldStayOnTop = chatOpen || isWallpaperMode || isDesktopWidgetMode;
+    void systemService.setAlwaysOnTop(shouldStayOnTop).catch(error => {
+      console.error('Failed to synchronize Lumi window level:', error);
+    });
+  }, [chatOpen, isDesktopWidgetMode, isWallpaperMode]);
+
+  useEffect(() => () => {
+    void systemService.setAlwaysOnTop(false).catch(() => {});
+  }, []);
   const desktopWidgetFallbackRef = useRef<DesktopWidgetFallbackState | null>(null);
   const wallpaperAutomationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wallpaperWasEnabledBeforeAutomationRef = useRef(false);
@@ -3711,7 +3725,6 @@ export function DesktopUI({
     const appWindow = windowApi.getCurrentWindow();
 
     await appWindow.show().catch(() => {});
-    await appWindow.setAlwaysOnTop(false).catch(() => {});
     await appWindow.setSkipTaskbar(false).catch(() => {});
     await appWindow.setShadow(false).catch(() => {});
     await appWindow.setResizable(true).catch(() => {});
@@ -3788,11 +3801,14 @@ export function DesktopUI({
           toast.error(fallbackErr?.message || err?.message || (uiMessage('desktop-ui.failed-to-expand-lumi.3f04f30125', (lang === 'zh') ? 'zh' : 'en')));
         }
       }
+      // Native and fallback widget exit both restore ordinary window flags.
+      // Re-apply Lumi's independent Command Center / Wallpaper contract.
+      await systemService.setAlwaysOnTop(chatOpen || isWallpaperModeRef.current).catch(() => {});
     }
     if (nextSurface) {
       window.setTimeout(() => toggleWindow(nextSurface), 120);
     }
-  }, [isTauri, lang, restoreDesktopWidgetFallback, toggleWindow]);
+  }, [chatOpen, isTauri, lang, restoreDesktopWidgetFallback, toggleWindow]);
 
   const hideDesktopWidgetMode = async () => {
     try { sounds.playClick(); } catch {}

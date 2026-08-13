@@ -149,6 +149,12 @@ class SystemService {
     return document.documentElement.classList.contains('lumi-wallpaper-mode');
   }
 
+  async setAlwaysOnTop(enabled: boolean): Promise<void> {
+    if (!this.isTauri) return;
+    const { getCurrentWindow } = await import('@tauri-apps/api/window');
+    await getCurrentWindow().setAlwaysOnTop(enabled);
+  }
+
   /**
    * Get system info (CPU, RAM, etc)
    */

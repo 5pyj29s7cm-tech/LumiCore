@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   ArrowUpRight,
@@ -79,6 +79,8 @@ export function CommandCenterPanel({
   const [agents, setAgents] = useState<CommandAgent[]>([]);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [loading, setLoading] = useState(true);
+  const hasLoadedOfficeRef = useRef(false);
+  const refreshInFlightRef = useRef<Promise<void> | null>(null);
   const officeActive = view === 'office' || view === 'team';
   const localRuntimeStatus = useRuntimeStatus({
     enabled: runtimeStatusOverride === undefined && (officeActive || view === 'core'),
@@ -96,19 +98,28 @@ export function CommandCenterPanel({
   });
 
   const refresh = useCallback(async () => {
-    setLoading(true);
-    const [agentResult, taskResult] = await Promise.allSettled([
-      apiFetch('/api/agents').then(async response => response.ok ? response.json() : []),
-      apiFetch('/api/autonomy/background-tasks').then(async response => response.ok ? response.json() : {}),
-    ]);
-    if (agentResult.status === 'fulfilled') {
-      const payload = agentResult.value;
-      setAgents(Array.isArray(payload) ? payload : Array.isArray(payload?.agents) ? payload.agents : []);
-    }
-    if (taskResult.status === 'fulfilled') {
-      setBackgroundTasks(Array.isArray(taskResult.value?.tasks) ? taskResult.value.tasks : []);
-    }
-    setLoading(false);
+    if (refreshInFlightRef.current) return refreshInFlightRef.current;
+    const firstLoad = !hasLoadedOfficeRef.current;
+    if (firstLoad) setLoading(true);
+    const request = (async () => {
+      const [agentResult, taskResult] = await Promise.allSettled([
+        apiFetch('/api/agents').then(async response => response.ok ? response.json() : []),
+        apiFetch('/api/autonomy/background-tasks').then(async response => response.ok ? response.json() : {}),
+      ]);
+      if (agentResult.status === 'fulfilled') {
+        const payload = agentResult.value;
+        setAgents(Array.isArray(payload) ? payload : Array.isArray(payload?.agents) ? payload.agents : []);
+      }
+      if (taskResult.status === 'fulfilled') {
+        setBackgroundTasks(Array.isArray(taskResult.value?.tasks) ? taskResult.value.tasks : []);
+      }
+      hasLoadedOfficeRef.current = true;
+      if (firstLoad) setLoading(false);
+    })().finally(() => {
+      refreshInFlightRef.current = null;
+    });
+    refreshInFlightRef.current = request;
+    return request;
   }, []);
 
   useEffect(() => {
@@ -117,14 +128,14 @@ export function CommandCenterPanel({
     let timer: ReturnType<typeof setTimeout> | null = null;
     const schedule = () => {
       if (timer) clearTimeout(timer);
-      timer = setTimeout(() => void refresh(), 160);
+      timer = setTimeout(() => void refresh(), 600);
     };
     socket.on('agent:created', schedule);
     socket.on('agent:updated', schedule);
     socket.on('agent:removed', schedule);
     socket.on('agent:delegation', schedule);
     socket.on('agent:background_task_update', schedule);
-    const interval = window.setInterval(() => void refresh(), 15_000);
+    const interval = window.setInterval(() => void refresh(), 60_000);
     return () => {
       if (timer) clearTimeout(timer);
       window.clearInterval(interval);

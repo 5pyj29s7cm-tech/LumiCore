@@ -41,6 +41,7 @@ import type {
   CapabilitySideEffect,
   ToolExecutionRecord,
 } from './tools/types';
+import { dispatchDueCommandCenterPlans } from './command_center/plans';
 
 export interface ScheduledDelivery {
   userId: string;
@@ -739,6 +740,19 @@ export function registerScheduledTasks(
   getGlm?: () => any,
   getRelay?: () => any,
 ) {
+  scheduler.register({
+    id: 'command_center_plan_dispatch',
+    cron: 'every_1m',
+    quiet: true,
+    auditMode: 'compact',
+    lastRun: null,
+    executionClass: 'autonomous_orchestration',
+    handler: async () => {
+      dispatchDueCommandCenterPlans();
+      return null;
+    },
+  });
+
   /** Get all unique user IDs from DB (registered users + anonymous fallback) */
   function getAllUserIds(): string[] {
     const db = readDB();
