@@ -26,6 +26,24 @@ export function formatCnToolFailureDetail(error: string): string {
   return '系统返回执行失败，但原始错误不是可直接展示的中文信息。';
 }
 
+const CLIENT_ACTION_LABELS: Readonly<Record<string, string>> = {
+  open_chat: '聊天界面',
+  open_command_center: '指挥中心',
+  open_team: '指挥中心',
+  open_nexus: 'OS 核心',
+  open_skills: '技能大厅',
+  show_knowledge_base: '知识库',
+  open_computer_adaptation: '运行日志',
+  open_notifications: '通知中心',
+  open_reminders: '提醒面板',
+  open_settings: '设置',
+  focus_home: '主界面',
+};
+
+export function formatCnClientActionTargetLabel(action: string, fallback = ''): string {
+  return CLIENT_ACTION_LABELS[String(action || '').trim()] || fallback || 'Lumi 界面';
+}
+
 export const CN_VOICE_FAST_PATH_MESSAGES = {
   genericToolAction: '请求的操作',
   audible: '能听见。你说。',

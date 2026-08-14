@@ -7,6 +7,8 @@ export interface PersonalClientSurfaceDefinition {
   closeAfterUse?: boolean;
   settingsSection?: string;
   launcherIds?: readonly string[];
+  /** Spoken or typed names that must resolve to this native client surface. */
+  navigationAliases?: readonly string[];
   organizationView?: string;
   organizationViewByAction?: Readonly<Record<string, string>>;
   commandCenterViewByAction?: Readonly<Record<string, 'office' | 'team' | 'core'>>;

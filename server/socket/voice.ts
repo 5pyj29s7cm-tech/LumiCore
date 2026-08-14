@@ -66,7 +66,11 @@ import { executeSkillWorkflowAdapter } from "../skills/workflow_registry";
 import { queryMemories, addMemory } from "../memory/store";
 import { CONVERSATIONAL_MEMORY_EVIDENCE } from "../memory/types";
 import { searchKnowledgeBase } from "../org/kb";
-import { buildQuickCommandToolPolicy, matchQuickCommand } from "../cognition/quick_commands";
+import {
+  buildDeterministicClientNavigationCommand,
+  buildQuickCommandToolPolicy,
+  matchQuickCommand,
+} from "../cognition/quick_commands";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { getScopedPreferredLLM, getUserPreferredLLMConfig } from "../llm/user_preferences";
 import {
@@ -93,6 +97,7 @@ import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_wri
 import { canAutoApproveAction } from "../tools/action_constitution";
 import { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
 import {
+  buildVoiceConfirmationChannelScope,
   clearPendingConfirmation,
   consumePendingConfirmation,
   formatPendingConfirmationPrompt,
@@ -1268,13 +1273,12 @@ async function processVoiceInput(
     startVoiceWorkHeartbeat(socket, session, requestId);
   }
   const voiceScope = { domain: session.domain, orgId: session.orgId };
-  const confirmationScope = {
-    source: 'voice',
-    taskId: requestId,
+  const confirmationScope = buildVoiceConfirmationChannelScope({
     domain: voiceScope.domain,
     orgId: voiceScope.orgId,
     channelId: socket.id,
-  };
+    taskId: conversationTurn.conversation.actionContinuationState?.taskId,
+  });
   const voiceStateKey = getVoiceStateKey(session);
   if (isConfirmationCancellation(userText)) clearPendingConfirmation(session.userId, confirmationScope);
   const pendingConfirmation = isExplicitConfirmationReply(userText)
@@ -1570,6 +1574,11 @@ async function processVoiceInput(
   });
   if (capabilityMetaResponse) {
     preMatchedQuickResult = { matched: true, responseText: capabilityMetaResponse };
+  }
+  if (!preMatchedQuickResult && clientActionOnlyTurn) {
+    preMatchedQuickResult = buildDeterministicClientNavigationCommand(
+      executionPipeline.normalizedIntent,
+    );
   }
   session.isBackgroundWork = executionDecision.allowToolUse;
   session.activeWorkStatus = executionDecision.allowToolUse ? 'planning' : 'idle';
@@ -2783,6 +2792,7 @@ async function processVoiceInput(
       let quickToolRecord: ToolExecutionRecord | null = null;
       if (quickResult.toolCall && session.isActive) {
         const correlationId = `qc-${Date.now()}`;
+        const shouldEmitQuickTool = !isDirectDesktopTool(quickResult.toolCall.name);
         quickToolRecord = await executeToolCall({
           registry: toolRegistry,
           id: correlationId,
@@ -2795,14 +2805,14 @@ async function processVoiceInput(
         });
         quickToolResult = quickToolRecord.result || '';
         quickToolError = quickToolRecord.error;
-        if (quickToolRecord.error) {
+        if (quickToolRecord.error && shouldEmitQuickTool) {
           emitAgent("agent:tool_call", {
             correlationId,
             name: quickResult.toolCall.name,
             arguments: quickResult.toolCall.arguments,
             error: quickToolRecord.error,
           });
-        } else {
+        } else if (shouldEmitQuickTool) {
           emitAgent("agent:tool_call", {
             correlationId,
             name: quickResult.toolCall.name,

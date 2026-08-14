@@ -167,6 +167,21 @@ describe('Wake Detector Factory', () => {
     circuits.resetCircuit();
   });
 
+  it('does not send a second Qwen session update after realtime recognition starts', async () => {
+    process.env.DASHSCOPE_API_KEY = 'sk-test123';
+    vi.doMock('../server/config/keys', () => ({ getKey: () => undefined }));
+    const qwen = await import('../server/stt/providers/qwen');
+    const session = qwen.createStream('zh', true);
+    const socket = MockWebSocket.instances[0];
+
+    socket.open();
+    socket.message({ type: 'session.created' });
+    session.updateEndpointing?.(1_200);
+
+    expect(sentEvents(socket, 'session.update')).toHaveLength(1);
+    session.end();
+  });
+
   it('selects Ark when STT preference is ark and a new-console Doubao API key is configured', async () => {
     process.env.DOUBAO_SPEECH_KEY = 'uuid-api-key-value';
     vi.doMock('../server/config/voice_preference', () => ({

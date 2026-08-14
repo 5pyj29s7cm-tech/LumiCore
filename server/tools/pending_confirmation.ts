@@ -32,6 +32,18 @@ export interface PendingConfirmationScope {
   actionIntent?: string;
 }
 
+/** Stable across separate utterances on the same voice channel. */
+export function buildVoiceConfirmationChannelScope(input: {
+  domain?: string; orgId?: string; channelId?: string; taskId?: string;
+}): PendingConfirmationScope {
+  const taskId = String(input.taskId || '').trim();
+  return {
+    source: 'voice', domain: String(input.domain || ''), orgId: String(input.orgId || ''),
+    channelId: String(input.channelId || ''),
+    ...(taskId ? { taskId } : {}),
+  };
+}
+
 const pendingById = new Map<string, PendingToolConfirmation>();
 const CONFIRMATION_TTL_MS = 10 * 60 * 1000;
 const SECRET_KEY_RE = /password|passkey|secret|token|api.?key|credential|otp|captcha|verification.?code/i;

@@ -43,6 +43,7 @@ export function createStream(
   const errorCallbacks: Array<(err: Error) => void> = [];
   const audioQueue: Buffer[] = [];
   let sessionReady = false;
+  let sessionUpdateSent = false;
   let eventCounter = 0;
   let ending = false;
   let errorNotified = false;
@@ -66,6 +67,8 @@ export function createStream(
   }
 
   function sendSessionUpdate(): void {
+    if (sessionUpdateSent) return;
+    sessionUpdateSent = true;
     ws.send(JSON.stringify({
       event_id: nextId(),
       type: 'session.update',
@@ -208,7 +211,10 @@ export function createStream(
     },
     updateEndpointing(silenceDurationMs: number) {
       endpointSilenceMs = clampEndpointSilenceMs(silenceDurationMs);
-      if (!ending && sessionReady && ws.readyState === WebSocketImpl.OPEN) sendSessionUpdate();
+      // Qwen accepts session.update only once, before the session starts.
+      // Adaptive values computed after an utterance apply to the next stream;
+      // sending another update here terminates the healthy current stream.
+      if (!ending && !sessionUpdateSent && ws.readyState === WebSocketImpl.OPEN) sendSessionUpdate();
     },
     onResult(callback) {
       resultCallbacks.push(callback);

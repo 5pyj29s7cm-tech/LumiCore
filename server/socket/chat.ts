@@ -98,7 +98,11 @@ import {
 } from "../cognition/task_execution_ledger";
 import { hasExplicitTeamExecutionRequest, isUserCorrectionOrExplanationQuestion } from "../cognition/tool_intent";
 import { summarizeToolRecordForPersistence } from "../cognition/tool_record_status";
-import { buildQuickCommandToolPolicy, matchQuickCommand } from "../cognition/quick_commands";
+import {
+  buildDeterministicClientNavigationCommand,
+  buildQuickCommandToolPolicy,
+  matchQuickCommand,
+} from "../cognition/quick_commands";
 import { recordTokenUsage } from "../llm/token_tracker";
 import {
   runOrchestratedTask,
@@ -2393,9 +2397,12 @@ export function registerChatHandler(
           operationMode: turnFlow.effectiveOperationMode,
           source: eventSource,
         });
+        const deterministicClientNavigation = clientActionOnlyTurn
+          ? buildDeterministicClientNavigationCommand(executionPipeline.normalizedIntent)
+          : null;
         const quickResult = capabilityMetaResponse
           ? { matched: true, responseText: capabilityMetaResponse }
-          : shouldRunLegacyDirectExecution() ? await matchQuickCommand(
+          : deterministicClientNavigation || (shouldRunLegacyDirectExecution() ? await matchQuickCommand(
               continuationOpenTarget ? buildInternalOpenCommand(visibleUserText, continuationOpenTarget) : text,
               uid,
               {
@@ -2404,7 +2411,7 @@ export function registerChatHandler(
                 surface: turnSurface,
                 currentAppTarget: getRecoveredApplicationContinuationTarget(actionContinuationBridge),
               },
-            ) : null;
+            ) : null);
         if (quickResult?.matched && (!quickResult.toolCall || executionDecision.allowToolUse)) {
           console.log('[ChatHandler] Quick command:', text.slice(0, 60));
           let quickResponseText = quickResult.responseText;

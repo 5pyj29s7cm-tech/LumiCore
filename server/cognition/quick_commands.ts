@@ -10,11 +10,12 @@ import { readDB } from '../../db_layer';
 import { getWorkTakeoverContinuationQuickCommand, type WorkTakeoverTurnSurface } from '../work_takeover/continuity';
 import { listWorkflows } from '../agents/workflows';
 import {
+  formatCnClientActionTargetLabel,
   CN_VOICE_FAST_PATH_MESSAGES,
   CN_VOICE_QUICK_WORK_MESSAGES,
 } from '../regions/packs/cn/voice_fast_path_messages';
 import type { ToolPolicy } from '../personality/types';
-import { normalizeActionIntent } from './normalized_action_intent';
+import { normalizeActionIntent, type NormalizedActionIntent } from './normalized_action_intent';
 import { listWebLoginSitePresets } from '../web_login/legal_presets';
 import { formatKnownLoginOpening, formatKnownLoginResult } from '../i18n/naturalness_messages';
 import { classifyRuntimeWorkIntent } from './runtime_work_intent';
@@ -23,6 +24,7 @@ import {
   isRunningSoftwareInspectionRequest,
   requestedDesktopWindowAction,
 } from './action_contract';
+import { getPersonalClientSurfaceByAction } from '../../shared/client_surfaces';
 
 export interface QuickCommandResult {
   /** The response text to send back to the user */
@@ -45,6 +47,46 @@ export interface QuickCommandOptions {
   orgId?: string;
   surface?: WorkTakeoverTurnSurface;
   currentAppTarget?: string;
+}
+
+/**
+ * Build the exact native-client action already authorized by the unified
+ * normalized-intent pipeline. This is deliberately narrower than the legacy
+ * quick-command matcher: it cannot launch desktop apps or infer a target.
+ */
+export function buildDeterministicClientNavigationCommand(
+  normalizedIntent: NormalizedActionIntent,
+): QuickCommandResult | null {
+  if (normalizedIntent.kind !== 'client_navigation' || !normalizedIntent.clientAction) return null;
+  const surface = getPersonalClientSurfaceByAction(normalizedIntent.clientAction);
+  const label = formatCnClientActionTargetLabel(
+    normalizedIntent.clientAction,
+    surface?.navigationAliases?.[0] || surface?.label || normalizedIntent.target,
+  );
+  return {
+    responseText: '\u6b63\u5728\u5207\u6362 Lumi \u754c\u9762\u3002', // i18n-allow: reviewed deterministic client-navigation acknowledgement.
+    matched: true,
+    toolCall: {
+      name: 'client_action',
+      arguments: { action: normalizedIntent.clientAction },
+    },
+    formatToolResult: (raw, error) => {
+      if (error) return '\u672a\u80fd\u6253\u5f00' + label + '\uff1a' + error; // i18n-allow: receipt-grounded client-navigation failure.
+      try {
+        const parsed = JSON.parse(String(raw || '{}'));
+        const status = String(parsed?.verification?.status || parsed?.status || '').toLowerCase();
+        if (parsed?.ok !== false && /^(?:verified|not_applicable)$/.test(status)) {
+          return '\u5df2\u6253\u5f00' + label + '\u3002'; // i18n-allow: receipt-grounded client-navigation completion.
+        }
+        const detail = String(parsed?.verification?.message || parsed?.say || '').trim();
+        return detail
+          ? '\u5df2\u53d1\u51fa\u6253\u5f00' + label + '\u7684\u8bf7\u6c42\uff0c\u4f46\u754c\u9762\u8fd8\u6ca1\u6709\u786e\u8ba4\uff1a' + detail // i18n-allow: receipt-grounded client-navigation pending state.
+          : '\u5df2\u53d1\u51fa\u6253\u5f00' + label + '\u7684\u8bf7\u6c42\uff0c\u4f46\u754c\u9762\u8fd8\u6ca1\u6709\u786e\u8ba4\u3002'; // i18n-allow: receipt-grounded client-navigation pending state.
+      } catch {
+        return '\u5df2\u53d1\u51fa\u6253\u5f00' + label + '\u7684\u8bf7\u6c42\uff0c\u4f46\u56de\u6267\u65e0\u6cd5\u9a8c\u8bc1\u3002'; // i18n-allow: receipt-grounded client-navigation unknown state.
+      }
+    },
+  };
 }
 
 function resolveKnownSiteUrl(target: string): string | null {
@@ -654,16 +696,8 @@ export async function matchQuickCommand(
     normalizedIntent.kind === 'correction_explanation'
     || normalizedIntent.kind === 'status_query'
   ) return null;
-  if (normalizedIntent.kind === 'client_navigation' && normalizedIntent.clientAction) {
-    return {
-      responseText: '正在切换 Lumi 界面。', // i18n-allow: reviewed deterministic client-navigation acknowledgement.
-      matched: true,
-      toolCall: {
-        name: 'client_action',
-        arguments: { action: normalizedIntent.clientAction },
-      },
-    };
-  }
+  const clientNavigation = buildDeterministicClientNavigationCommand(normalizedIntent);
+  if (clientNavigation) return clientNavigation;
 
   for (const pattern of patterns) {
     for (const regex of pattern.patterns) {

@@ -1,3 +1,5 @@
+import { PERSONAL_CLIENT_SURFACES } from '../../shared/client_surfaces';
+
 export type NormalizedActionIntentKind =
   | 'none'
   | 'external_ai_history'
@@ -56,6 +58,21 @@ const EMPTY_INTENT: NormalizedActionIntent = {
 const CLIENT_NAVIGATION_VERB_RE = // i18n-allow: Multilingual client-navigation input recognition; not user-visible copy.
   /(?:打开|进入|切换到|切到|回到|返回|显示|展开|关闭|收起|open|show|enter|switch|return|close)/iu;
 
+function escapePattern(value: string): string {
+  return value.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/[\s_-]+/g, '[\\s_-]*');
+}
+
+const REGISTERED_CLIENT_SURFACE_RULES: ReadonlyArray<{ pattern: RegExp; target: string; action: string }> =
+  PERSONAL_CLIENT_SURFACES.flatMap(surface => {
+    const action = surface.actions[0];
+    if (!action) return [];
+    const aliases = Array.from(new Set([
+      surface.id, surface.label, ...(surface.navigationAliases || []),
+    ].map(value => String(value || '').trim()).filter(Boolean)));
+    if (!aliases.length) return [];
+    return [{ pattern: new RegExp(`(?:${aliases.map(escapePattern).join('|')})`, 'iu'), target: surface.target, action }];
+  });
+
 const CLIENT_SURFACE_RULES: ReadonlyArray<{ pattern: RegExp; target: string; action: string }> = [
   { pattern: /(?:聊天界面|聊天窗口|聊天面板|侧边聊天|side\s*chat|chat\s*(?:window|panel)?)/iu, target: 'chat', action: 'open_chat' }, // i18n-allow: Multilingual Lumi surface aliases.
   { pattern: /(?:中枢世界|中枢|世界视图|nexus|world\s*view)/iu, target: 'nexus', action: 'open_nexus' }, // i18n-allow: Multilingual Lumi surface aliases.
@@ -66,6 +83,7 @@ const CLIENT_SURFACE_RULES: ReadonlyArray<{ pattern: RegExp; target: string; act
   { pattern: /(?:提醒面板|提醒中心|reminder\s*(?:center|panel))/iu, target: 'reminders', action: 'open_reminders' }, // i18n-allow: Multilingual Lumi surface aliases.
   { pattern: /(?:设置界面|设置页面|客户端设置|settings)/iu, target: 'settings', action: 'open_settings' }, // i18n-allow: Multilingual Lumi surface aliases.
   { pattern: /(?:主屏幕|主页面|首页|lumi\s*桌面|home)/iu, target: 'home', action: 'focus_home' }, // i18n-allow: Multilingual Lumi surface aliases.
+  ...REGISTERED_CLIENT_SURFACE_RULES,
 ];
 
 function currentTurnText(value: string): string {
@@ -121,6 +139,18 @@ function statusQuery(text: string): NormalizedActionIntent | null {
       relation: 'status',
       confidence: 0.96,
       rule: 'client-state-query',
+    };
+  }
+
+  const registeredSurfaceStatus =
+    /(?:进度|状态|结果呢|做到哪|到哪了|怎么样|做完了吗|完成了吗|好了吗)/u.test(text) // i18n-allow: Reviewed Chinese status-follow-up input recognition.
+      ? REGISTERED_CLIENT_SURFACE_RULES.find(candidate => candidate.pattern.test(text))
+      : undefined;
+  if (registeredSurfaceStatus) {
+    return {
+      kind: 'status_query', operation: 'status', subject: 'lumi', target: registeredSurfaceStatus.target,
+      payload: '', sideEffectClass: 'none', relation: 'status', confidence: 0.97,
+      rule: 'registered-client-surface-status',
     };
   }
 

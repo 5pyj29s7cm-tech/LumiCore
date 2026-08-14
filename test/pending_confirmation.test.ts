@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  buildVoiceConfirmationChannelScope,
   clearAllPendingConfirmationsForTests,
   consumePendingConfirmation,
   formatPendingConfirmationPrompt,
@@ -181,6 +182,24 @@ describe('One-time pending tool confirmations', () => {
       channelId: 'voice-1',
       taskId: 'task-voice',
     })?.id).toBe(voice.id);
+  });
+
+  it('keeps a voice confirmation available across separate utterance request ids', () => {
+    const scope = buildVoiceConfirmationChannelScope({
+      domain: 'personal', orgId: '', channelId: 'voice-stable-channel', taskId: 'durable-task-id',
+    });
+    const pending = recordPendingConfirmation(
+      'voice-stable-user',
+      'wechat_send_message',
+      { contact: '客户甲', message: '固定正文' },
+      'voice',
+      { ...scope, taskId: 'durable-task-id' },
+    );
+
+    expect(getPendingConfirmation('voice-stable-user', scope)?.id).toBe(pending.id);
+    expect(consumePendingConfirmation(
+      'voice-stable-user', pending.id, pending.toolName, pending.exactArgs, scope,
+    )).toBe(true);
   });
 
   it('recognizes a concise confirmation without treating ordinary messages as approval', () => {

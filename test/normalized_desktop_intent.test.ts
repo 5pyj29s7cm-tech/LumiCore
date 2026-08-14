@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
+import { buildDeterministicClientNavigationCommand } from '../server/cognition/quick_commands';
 
 describe('normalized desktop intent priority', () => {
   it('recognizes a concrete local application target', () => {
@@ -12,9 +13,27 @@ describe('normalized desktop intent priority', () => {
   });
 
   it('keeps Lumi client navigation ahead of generic desktop control', () => {
-    expect(normalizeActionIntent('打开聊天界面')).toMatchObject({
+    const intent = normalizeActionIntent('打开聊天界面');
+    expect(intent).toMatchObject({
       kind: 'client_navigation',
       clientAction: 'open_chat',
+    });
+    const deterministic = buildDeterministicClientNavigationCommand(intent);
+    expect(deterministic?.formatToolResult?.(JSON.stringify({
+      ok: true,
+      verification: { status: 'verified' },
+    }))).toBe('已打开聊天界面。');
+  });
+
+  it('derives native navigation from the registered client surface map', () => {
+    expect(normalizeActionIntent('open personalization')).toMatchObject({
+      kind: 'client_navigation',
+      target: 'personalization',
+      clientAction: 'open_personalization',
+    });
+    expect(normalizeActionIntent('personalization 状态怎么样')).toMatchObject({
+      kind: 'status_query',
+      target: 'personalization',
     });
   });
 
