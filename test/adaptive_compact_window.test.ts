@@ -46,6 +46,7 @@ describe('adaptive compact client window', () => {
     expect(desktop).toContain('getCurrentWindow().startDragging()');
     expect(desktop).toContain('onPointerDown={(event) => void handleTopbarPointerDown(event)}');
     expect(desktop).toContain('data-compact-layout={isCompactDesktopLayout');
+    expect(desktop).toContain('data-ui-density={desktopChrome.density}');
     expect(desktop).toContain('getDesktopDockPositionClassName(isCompactDesktopLayout)');
     expect(desktop).toContain('<Square size={12} />');
     expect(desktop).toContain("isWallpaperMode || chatOpen || knowledgeOpen || activeTab === 'org'");
@@ -79,6 +80,8 @@ describe('adaptive compact client window', () => {
     expect(css).toContain('grid-template-columns: 260px minmax(0, 1fr) 280px');
     expect(css).toContain('grid-template-rows: minmax(360px, calc(100dvh - 110px)) auto');
     expect(css).toContain('[data-ui-density="mini"] .lumi-shell-topbar');
+    expect(css).toContain('.lumi-shell-topbar-center');
+    expect(css).toContain('.lumi-shell-window-controls');
     expect(css).toContain('@media (max-width: 820px), (max-height: 700px)');
   });
 });

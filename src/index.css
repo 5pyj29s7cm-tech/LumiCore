@@ -1406,8 +1406,21 @@ body,
 }
 
 .lumi-shell-topbar-left,
+.lumi-shell-topbar-center,
 .lumi-shell-topbar-right {
   min-width: 0;
+}
+
+.lumi-shell-topbar-left {
+  overflow: hidden;
+}
+
+.lumi-shell-topbar-right,
+.lumi-shell-status-actions,
+.lumi-shell-clock,
+.lumi-shell-window-controls {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .lumi-dock {

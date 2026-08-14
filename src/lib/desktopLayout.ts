@@ -65,7 +65,9 @@ export function getDesktopDensity(viewport: ViewportSize): DesktopDensity {
   const height = finiteViewportDimension(viewport.height, 820);
   if (width < 680 || height < 540) return 'mini';
   if (width < 1040 || height < 680) return 'tight';
-  if (width < 1280 || height < 760) return 'compact';
+  // The native compact-window preset is 1280 x 820. Keep its chrome compact
+  // too; otherwise the body switches layouts while the full top bar remains.
+  if (width < 1280 || height < 760 || (width <= 1320 && height <= 860)) return 'compact';
   return 'comfortable';
 }
 

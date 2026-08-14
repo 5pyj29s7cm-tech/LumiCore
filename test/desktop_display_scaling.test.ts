@@ -12,6 +12,8 @@ import {
 describe('desktop display scaling layout', () => {
   it('uses compact chrome for common 125%-150% logical resolutions', () => {
     expect(getDesktopDensity({ width: 1920, height: 1080 })).toBe('comfortable');
+    expect(getDesktopDensity({ width: 1280, height: 820 })).toBe('compact');
+    expect(getDesktopDensity({ width: 1320, height: 860 })).toBe('compact');
     expect(getDesktopDensity({ width: 1280, height: 720 })).toBe('compact');
     expect(getDesktopDensity({ width: 1024, height: 640 })).toBe('tight');
     expect(getDesktopDensity({ width: 720, height: 520 })).toBe('mini');
