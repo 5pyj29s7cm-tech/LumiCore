@@ -21,11 +21,21 @@ export interface VoiceTranscriptMeta {
   speakerMatched?: boolean;
 }
 
+export const LUMI_VOICE_TRANSCRIPT_EVENT = 'lumi:voice-transcript';
+
+export interface VoiceTranscriptEventDetail extends VoiceTranscriptMeta {
+  text: string;
+  isFinal: boolean;
+  source: 'confirm' | 'transcript';
+}
+
 interface UseVoiceCallOptions {
   socket: any;
   onTranscript?: (text: string, isFinal: boolean, meta?: VoiceTranscriptMeta) => void;
   onResponse?: (text: string) => void;
   canSendMicAudio?: () => boolean;
+  /** Keep a compatibility hook mounted without owning sockets or microphone state. */
+  disabled?: boolean;
 }
 
 interface StartCallOptions {
@@ -101,7 +111,13 @@ function releaseAudioBufferSource(source: AudioBufferSourceNode | null, stop = f
   try { source.buffer = null; } catch {}
 }
 
-export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio }: UseVoiceCallOptions) {
+export function useVoiceCall({
+  socket,
+  onTranscript,
+  onResponse,
+  canSendMicAudio,
+  disabled = false,
+}: UseVoiceCallOptions) {
   const [callState, setCallState] = useState<CallState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<string>('');
@@ -284,7 +300,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
   const audioQueue = useRef<Array<ArrayBuffer | VoiceAudioResponse>>([]);
 
   useEffect(() => {
-    if (!socket) return;
+    if (disabled || !socket) return;
 
     const onAudioStatus = (data: { status: string; requestId?: string; lane?: string }) => {
       if (!isCallActive.current) return;
@@ -344,6 +360,11 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
     const onAudioConfirm = (data: { text: string }) => {
       if (!isCallActive.current) return;
       setTranscript(data.text);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent<VoiceTranscriptEventDetail>(LUMI_VOICE_TRANSCRIPT_EVENT, {
+          detail: { text: data.text, isFinal: true, source: 'confirm' },
+        }));
+      }
       if (!transcriptionOnlyRef.current) {
         onTranscript?.(data.text, true);
       }
@@ -452,6 +473,19 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
       if (disconnectTimer.current) { clearTimeout(disconnectTimer.current); disconnectTimer.current = null; }
       if (prevCallState.current === 'passive') setCallState('listening');
       setTranscript(data.text);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent<VoiceTranscriptEventDetail>(LUMI_VOICE_TRANSCRIPT_EVENT, {
+          detail: {
+            text: data.text,
+            isFinal: data.isFinal,
+            source: 'transcript',
+            speakerLabel: data.speakerLabel,
+            speakerConfidence: data.speakerConfidence,
+            speakerSource: data.speakerSource,
+            speakerMatched: data.speakerMatched,
+          },
+        }));
+      }
       onTranscript?.(data.text, data.isFinal, {
         speakerLabel: data.speakerLabel,
         speakerConfidence: data.speakerConfidence,
@@ -604,10 +638,10 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
       socket.off('audio:proactive_speak', onAudioProactiveSpeak);
       clearThinkingWatchdog();
     };
-  }, [socket, onTranscript, onResponse, stopAllPlayback, disposePlaybackContexts, cleanupCapture, clearThinkingWatchdog, endCall, ensureTtsContext, scheduleThinkingWatchdog]);
+  }, [disabled, socket, onTranscript, onResponse, stopAllPlayback, disposePlaybackContexts, cleanupCapture, clearThinkingWatchdog, endCall, ensureTtsContext, scheduleThinkingWatchdog]);
 
   useEffect(() => {
-    if (!socket) return;
+    if (disabled || !socket) return;
     const onDisconnect = () => {
       if (!isCallActive.current) return;
       activeVoiceRequestIdRef.current = null;
@@ -630,11 +664,11 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
       socket.off('disconnect', onDisconnect);
       socket.off('connect', onConnect);
     };
-  }, [socket, clearThinkingWatchdog, stopAllPlayback]);
+  }, [disabled, socket, clearThinkingWatchdog, stopAllPlayback]);
 
   // Push audio emotion perception events when call state changes
   useEffect(() => {
-    if (!socket?.connected || callState === 'idle' || callState === 'connecting') return;
+    if (disabled || !socket?.connected || callState === 'idle' || callState === 'connecting') return;
     const emotionMap: Record<string, { emotion: string; intensity: number }> = {
       listening: { emotion: 'attentive', intensity: 0.4 },
       thinking: { emotion: 'focused', intensity: 0.6 },
@@ -644,9 +678,10 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
     if (entry) {
       socket.emit('perception:audio_emotion', entry);
     }
-  }, [callState, socket]);
+  }, [callState, disabled, socket]);
 
   const startCall = useCallback(async (voiceId?: string, personalityId: string = 'lumi', agentId?: string, options: StartCallOptions = {}) => {
+    if (disabled) return;
     if (isCallActive.current || startInFlightRef.current) return;
     const generation = ++callGenerationRef.current;
     startInFlightRef.current = true;
@@ -801,7 +836,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
     } finally {
       startInFlightRef.current = false;
     }
-  }, [cleanupCapture, stopAllPlayback]);
+  }, [cleanupCapture, disabled, stopAllPlayback]);
 
   useEffect(() => {
     const applyOutputPreference = () => {

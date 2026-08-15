@@ -1,8 +1,7 @@
 import { Socket, Server } from "socket.io";
 import { readDB } from "../../db_layer";
-import { pushActivityEvent, setIdleState, getIdleState, getLastEvent, clearActivityStream } from "../context/activity_stream";
+import { pushActivityEvent, setIdleState, getIdleState, clearActivityStream } from "../context/activity_stream";
 import { detectClipboardChange } from "../context/clipboard_monitor";
-import { processActivityEvent } from "../context/proactive_triggers";
 import { reportIdleState } from "../autonomy/safety_gate";
 import { getTaskHistory } from "../autonomy/task_queue";
 import { reportDesktopUserActivity } from "../desktop/control_lease";
@@ -82,15 +81,10 @@ export function registerAmbientHandlers(socket: Socket, getUserId: (s: Socket) =
     if (isWorkDomainSocket()) return;
     const uid = getUserId(socket);
     if (!uid) return;
-    const prev = getLastEvent(uid, 'window_changed');
-    const prevTitle = prev?.data?.title || '';
-    const prevProc = prev?.data?.process_name || '';
-    const changed = data.title !== prevTitle || data.process_name !== prevProc;
     const event = { type: 'window_changed' as const, timestamp: new Date().toISOString(), data };
     pushActivityEvent(uid, event);
-    if (changed) {
-      processActivityEvent(event, uid, io);
-    }
+    // Passive desktop awareness is context only. It must never initiate a
+    // suggestion, notification, chat message, spoken prompt, or popup.
   }));
 
   socket.on("ambient:idle_report", guard((data: { idle_ms: number; idle_seconds: number }) => {
@@ -158,13 +152,9 @@ export function registerAmbientHandlers(socket: Socket, getUserId: (s: Socket) =
     if (isWorkDomainSocket()) return;
     const uid = getUserId(socket);
     if (!uid) return;
-    const result = detectClipboardChange(uid, data.text || '');
-    if (result.changed) {
-      const event = getLastEvent(uid, 'clipboard_changed');
-      if (event) {
-        processActivityEvent(event, uid, io);
-      }
-    }
+    // Clipboard observations remain available as short-lived context, but do
+    // not turn copied content into unsolicited prompts.
+    detectClipboardChange(uid, data.text || '');
   }));
 
   socket.on("disconnect", () => {

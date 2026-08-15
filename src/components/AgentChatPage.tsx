@@ -13,7 +13,12 @@ import { usePlatform } from '@/hooks/usePlatform';
 import { useApp } from '@/contexts/AppContext';
 import { VoiceCallButton } from './VoiceCallButton';
 import { socketService } from '@/services/socketService';
-import { useVoiceCall } from '@/hooks/useVoiceCall';
+import {
+  LUMI_VOICE_TRANSCRIPT_EVENT,
+  useVoiceCall,
+  type CallState,
+  type VoiceTranscriptEventDetail,
+} from '@/hooks/useVoiceCall';
 import { useVoiceCloning } from '@/hooks/useVoiceCloning';
 import { listVoices } from '@/services/voiceService';
 import {
@@ -58,6 +63,14 @@ const CHAT_HISTORY_LIMIT = 300;
 const CHAT_RENDER_LIMIT = 80;
 const CHAT_SEARCH_LIMIT = 200;
 type WorkflowStatus = 'idle' | 'thinking' | 'background' | 'executing' | 'waiting_confirmation' | 'cancelling' | 'cancelled' | 'done' | 'error';
+
+export interface AgentChatVoiceSession {
+  callState: CallState;
+  audioLevel: number;
+  error: string | null;
+  onStart: () => void;
+  onEnd: () => void;
+}
 
 type ChatExecutionSnapshot = {
   requestId: string;
@@ -396,6 +409,7 @@ export function AgentChatPage({
   commandCenterView = 'office',
   onCommandCenterViewChange,
   onOpenNexus,
+  voiceSession,
 }: {
   t: any;
   user: any;
@@ -411,6 +425,8 @@ export function AgentChatPage({
   commandCenterView?: CommandCenterView;
   onCommandCenterViewChange?: (view: CommandCenterView) => void;
   onOpenNexus?: () => void;
+  /** Desktop command center reuses the shell's single microphone session. */
+  voiceSession?: AgentChatVoiceSession;
 }) {
   const [messages, setMessages] = useState<any[]>([]);
   const isOfficeCommandCenter = layout === 'command-center' && (commandCenterView === 'office' || commandCenterView === 'team');
@@ -521,9 +537,11 @@ export function AgentChatPage({
   ];
 
   const visibleSuggestions = quickSuggestions.filter(s => s.show).slice(0, 4);
+  const usesSharedVoiceSession = Boolean(voiceSession);
 
-  const { callState, audioLevel, startCall, endCall, error: callError } = useVoiceCall({
+  const localVoiceSession = useVoiceCall({
     socket,
+    disabled: usesSharedVoiceSession,
     onTranscript: (text, isFinal) => {
       if (isFinal) {
         if (inputDictationActiveRef.current) {
@@ -545,6 +563,48 @@ export function AgentChatPage({
       }
     },
   });
+  const callState = voiceSession?.callState ?? localVoiceSession.callState;
+  const audioLevel = voiceSession?.audioLevel ?? localVoiceSession.audioLevel;
+  const callError = voiceSession?.error ?? localVoiceSession.error;
+  const localCallState = localVoiceSession.callState;
+  const endLocalVoiceSession = localVoiceSession.endCall;
+  const startVoiceSession = voiceSession?.onStart
+    ?? (() => {
+      void localVoiceSession.startCall(
+        selectedVoiceId,
+        'lumi',
+        agentId,
+        { domain: activeDomain, orgId: activeOrgId },
+      );
+    });
+  const endVoiceSession = voiceSession?.onEnd ?? (() => localVoiceSession.endCall());
+  const lastSharedTranscriptRef = useRef<{ key: string; at: number } | null>(null);
+
+  useEffect(() => {
+    if (!usesSharedVoiceSession || !isOpen) return;
+    const onSharedTranscript = (event: Event) => {
+      const detail = (event as CustomEvent<VoiceTranscriptEventDetail>).detail;
+      const text = String(detail?.text || '').trim();
+      if (!detail?.isFinal || !text || inputDictationActiveRef.current) return;
+      const key = text.toLocaleLowerCase();
+      const now = Date.now();
+      if (
+        lastSharedTranscriptRef.current?.key === key
+        && now - lastSharedTranscriptRef.current.at < 1500
+      ) return;
+      lastSharedTranscriptRef.current = { key, at: now };
+      setMessages(prev => [...prev, {
+        id: makeChatMessageId('voice'),
+        text,
+        userName: user?.displayName || user?.username || 'You',
+        timestamp: new Date().toISOString(),
+        type: 'user',
+        source: 'voice',
+      }]);
+    };
+    window.addEventListener(LUMI_VOICE_TRANSCRIPT_EVENT, onSharedTranscript);
+    return () => window.removeEventListener(LUMI_VOICE_TRANSCRIPT_EVENT, onSharedTranscript);
+  }, [isOpen, user?.displayName, user?.username, usesSharedVoiceSession]);
 
   useEffect(() => {
     listVoices().then(data => {
@@ -637,12 +697,12 @@ export function AgentChatPage({
   }, [pendingAttachments]);
 
   useEffect(() => {
-    if (inputDictationActiveRef.current && callState === 'idle') {
+    if (inputDictationActiveRef.current && localCallState === 'idle') {
       inputDictationActiveRef.current = false;
-      endCall();
+      endLocalVoiceSession();
       setIsListening(false);
     }
-  }, [callState, endCall]);
+  }, [endLocalVoiceSession, localCallState]);
 
   const upsertBackgroundWorkflowTask = useCallback((task: BackgroundWorkflowTask) => {
     if (!task?.id) return;
@@ -2312,7 +2372,7 @@ export function AgentChatPage({
     if (isListening) {
       if (inputDictationActiveRef.current) {
         inputDictationActiveRef.current = false;
-        endCall();
+        localVoiceSession.endCall();
         setIsListening(false);
         return;
       }
@@ -2326,7 +2386,7 @@ export function AgentChatPage({
         }
         inputDictationActiveRef.current = true;
         setIsListening(true);
-        startCall(selectedVoiceId, 'lumi', agentId, {
+        localVoiceSession.startCall(selectedVoiceId, 'lumi', agentId, {
           transcriptionOnly: true,
           domain: activeDomain,
           orgId: activeOrgId,
@@ -2865,8 +2925,8 @@ export function AgentChatPage({
           <VoiceCallButton
             callState={callState}
             audioLevel={audioLevel}
-            onStart={() => startCall(selectedVoiceId, 'lumi', agentId, { domain: activeDomain, orgId: activeOrgId })}
-            onEnd={endCall}
+            onStart={startVoiceSession}
+            onEnd={endVoiceSession}
             hasVoice={voices.length > 0}
           />
           {activeDomain === 'personal' && (
