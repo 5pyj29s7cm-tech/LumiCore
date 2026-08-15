@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { uploadSamples, cloneVoice as apiCloneVoice, listVoices } from '../services/voiceService';
+import { uploadSamples, cloneVoice as apiCloneVoice, getVoiceCloneStatus, listVoices, VOICE_PROVIDER_CHANGED_EVENT, type CloneVoiceOptions } from '../services/voiceService';
 import { requestMicrophoneStream } from '@/services/sensorPermissionService';
 import { closeAudioContext } from '@/lib/audioContextLifecycle';
 
@@ -15,6 +15,9 @@ interface VoiceCloneState {
   cloneStatus: 'idle' | 'uploading' | 'cloning' | 'success' | 'error';
   cloneError: string;
   voices: any[];
+  provider: string | null;
+  providerConfigured: boolean;
+  cloneSupported: boolean;
   error: string | null;
 }
 
@@ -65,6 +68,9 @@ export function useVoiceCloning() {
     cloneStatus: 'idle',
     cloneError: '',
     voices: [],
+    provider: null,
+    providerConfigured: false,
+    cloneSupported: false,
     error: null,
   });
 
@@ -193,7 +199,15 @@ export function useVoiceCloning() {
     }));
   }, []);
 
-  const uploadAndClone = useCallback(async (name: string) => {
+  const uploadAndClone = useCallback(async (name: string, options: CloneVoiceOptions = {}) => {
+    if (!state.cloneSupported) {
+      setState(prev => ({
+        ...prev,
+        cloneError: `Voice cloning is unavailable for the selected ${state.provider || 'voice'} service.`,
+        cloneStatus: 'error',
+      }));
+      return null;
+    }
     if (state.recordings.length === 0) {
       setState(prev => ({ ...prev, cloneError: 'No recordings to clone from', cloneStatus: 'error' }));
       return null;
@@ -208,12 +222,22 @@ export function useVoiceCloning() {
 
       setState(prev => ({ ...prev, isUploading: false, isCloning: true, cloneProgress: 'Cloning voice...', cloneStatus: 'cloning' }));
 
-      const result = await apiCloneVoice(urls, name);
+      let result = await apiCloneVoice(urls, name, state.provider || undefined, options);
+      if (state.provider === 'ark' && result.status === 'training') {
+        setState(prev => ({ ...prev, cloneProgress: '豆包音色已提交，正在等待训练完成…' }));
+        for (let attempt = 0; attempt < 10 && result.status === 'training'; attempt += 1) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          result = await getVoiceCloneStatus(result.voiceId);
+        }
+      }
+      if (result.status === 'failed') {
+        throw new Error(result.message || '豆包声音复刻训练失败');
+      }
 
       setState(prev => ({
         ...prev,
         isCloning: false,
-        cloneProgress: 'Clone complete!',
+        cloneProgress: result.status === 'training' ? '已提交，豆包仍在训练音色。' : '声音复刻完成！',
         cloneStatus: 'success',
         cloneError: '',
         voices: [...prev.voices, result],
@@ -238,16 +262,35 @@ export function useVoiceCloning() {
       }));
       return null;
     }
-  }, [state.recordings]);
+  }, [state.cloneSupported, state.provider, state.recordings]);
 
   const refreshVoices = useCallback(async () => {
     try {
-      const data = await listVoices();
-      setState(prev => ({ ...prev, voices: [...data.cloned, ...data.premade] }));
+      let data = await listVoices();
+      const pending = data.provider === 'ark'
+        ? data.cloned.filter((voice: any) => voice.status === 'training').slice(0, 3)
+        : [];
+      if (pending.length > 0) {
+        await Promise.allSettled(pending.map((voice: any) => getVoiceCloneStatus(voice.voiceId)));
+        data = await listVoices();
+      }
+      setState(prev => ({
+        ...prev,
+        voices: [...data.cloned, ...data.premade],
+        provider: data.provider,
+        providerConfigured: data.configured,
+        cloneSupported: data.capabilities.clone,
+      }));
     } catch {
       // voices unavailable
     }
   }, []);
+
+  useEffect(() => {
+    const handleProviderChanged = () => { void refreshVoices(); };
+    window.addEventListener(VOICE_PROVIDER_CHANGED_EVENT, handleProviderChanged);
+    return () => window.removeEventListener(VOICE_PROVIDER_CHANGED_EVENT, handleProviderChanged);
+  }, [refreshVoices]);
 
   const clearError = useCallback(() => {
     setState(prev => ({ ...prev, error: null }));

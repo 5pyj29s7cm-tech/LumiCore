@@ -20,7 +20,7 @@ import {
   type VoiceTranscriptEventDetail,
 } from '@/hooks/useVoiceCall';
 import { useVoiceCloning } from '@/hooks/useVoiceCloning';
-import { listVoices } from '@/services/voiceService';
+import { listVoices, VOICE_PROVIDER_CHANGED_EVENT } from '@/services/voiceService';
 import {
   describeToolProgress,
   describeTurnCompletionProgress,
@@ -507,6 +507,7 @@ export function AgentChatPage({
   });
   const [selectedVoiceId, setSelectedVoiceId] = useState<string | undefined>();
   const [voices, setVoices] = useState<any[]>([]);
+  const [voiceProviderRevision, setVoiceProviderRevision] = useState(0);
   const [showVoicePicker, setShowVoicePicker] = useState(false);
   const [showWeChatSettings, setShowWeChatSettings] = useState(false);
   const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
@@ -610,11 +611,17 @@ export function AgentChatPage({
     listVoices().then(data => {
       const all = [...data.cloned, ...data.premade];
       setVoices(all);
-      if (all.length > 0 && !selectedVoiceId) {
+      if (all.length > 0 && !all.some(voice => voice.voiceId === selectedVoiceId)) {
         setSelectedVoiceId(all[0].voiceId);
       }
     }).catch(err => toast.error(t.failedToLoadVoices || 'Failed to load voices'));
-  }, [selectedVoiceId, t.failedToLoadVoices]);
+  }, [selectedVoiceId, t.failedToLoadVoices, voiceProviderRevision]);
+
+  useEffect(() => {
+    const handleProviderChanged = () => setVoiceProviderRevision(value => value + 1);
+    window.addEventListener(VOICE_PROVIDER_CHANGED_EVENT, handleProviderChanged);
+    return () => window.removeEventListener(VOICE_PROVIDER_CHANGED_EVENT, handleProviderChanged);
+  }, []);
 
   useEffect(() => {
     if (callError) toast.error(callError);

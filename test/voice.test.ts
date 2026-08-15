@@ -42,8 +42,7 @@ describe('Voice API', () => {
     return { 'Cookie': `token=${token}` };
   }
 
-  function silentWavBlob(durationSec = 0.1): Blob {
-    const sampleRate = 16000;
+  function silentWavBlob(durationSec = 0.1, sampleRate = 16000): Blob {
     const samples = Math.max(1, Math.floor(sampleRate * durationSec));
     const dataSize = samples * 2;
     const buffer = Buffer.alloc(44 + dataSize);
@@ -81,6 +80,124 @@ describe('Voice API', () => {
     expect(body).toHaveProperty('premade');
     expect(Array.isArray(body.cloned)).toBe(true);
     expect(Array.isArray(body.premade)).toBe(true);
+  });
+
+  it('isolates the voice catalogue to the selected provider', async () => {
+    const doubao = await fetch(`${url}/api/voice/voices?provider=ark`, {
+      headers: headers(),
+      signal: AbortSignal.timeout(5000),
+    });
+    const doubaoBody = await doubao.json();
+    expect(doubao.status).toBe(200);
+    expect(doubaoBody.provider).toBe('ark');
+    expect(doubaoBody.premade).toHaveLength(12);
+    expect(doubaoBody.premade.every((voice: any) => voice.provider === 'ark')).toBe(true);
+    expect(doubaoBody.cloned.every((voice: any) => voice.provider === 'ark')).toBe(true);
+    expect(doubaoBody.capabilities).toEqual({ clone: true, design: false });
+
+    const qwen = await fetch(`${url}/api/voice/voices?provider=cosyvoice`, {
+      headers: headers(),
+      signal: AbortSignal.timeout(5000),
+    });
+    const qwenBody = await qwen.json();
+    expect(qwen.status).toBe(200);
+    expect(qwenBody.provider).toBe('cosyvoice');
+    expect(qwenBody.premade.every((voice: any) => voice.provider === 'cosyvoice')).toBe(true);
+    expect(qwenBody.capabilities).toEqual({ clone: true, design: true });
+  });
+
+  it('keeps Doubao cloning provider-bound and requires explicit postpaid slot confirmation', async () => {
+    const response = await fetch(`${url}/api/voice/clone`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({
+        sampleUrls: ['/api/voice/samples/voice_tester/sample.wav'],
+        name: 'Provider-bound clone',
+        provider: 'ark',
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    const body = await response.json();
+    expect(response.status).toBe(409);
+    expect(body.confirmationRequired).toBe(true);
+    expect(body.confirmationType).toBe('doubao_postpaid_voice_slot');
+  });
+
+  it('clones through Doubao 2.0, persists the provider identity, and keeps the demo audio separate from formal synthesis', async () => {
+    const previousKey = process.env.DOUBAO_SPEECH_KEY;
+    const previousFetch = globalThis.fetch;
+    process.env.DOUBAO_SPEECH_KEY = 'test-doubao-api-key';
+    let cloneBody: any = null;
+    globalThis.fetch = (async (input: any, init?: RequestInit) => {
+      const target = typeof input === 'string' ? input : input?.url || String(input);
+      if (target.includes('openspeech.bytedance.com/api/v3/tts/voice_clone')) {
+        cloneBody = JSON.parse(String(init?.body || '{}'));
+        return new Response(JSON.stringify({
+          code: 0,
+          speaker_id: cloneBody.custom_speaker_id,
+          status: 2,
+          available_training_times: 15,
+          speaker_status: [{ model_type: 5, demo_audio: 'https://example.com/doubao-demo.wav' }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return previousFetch(input, init);
+    }) as typeof fetch;
+
+    try {
+      const form = new FormData();
+      form.append('samples', silentWavBlob(0.1, 24000), 'doubao-sample.wav');
+      const upload = await previousFetch(`${url}/api/voice/samples`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: form,
+        signal: AbortSignal.timeout(5000),
+      });
+      const uploaded = await upload.json();
+      expect(upload.status).toBe(200);
+
+      const clone = await previousFetch(`${url}/api/voice/clone`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({
+          sampleUrls: uploaded.urls,
+          name: 'Doubao route voice',
+          provider: 'ark',
+          confirmPostpaidBilling: true,
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
+      const body = await clone.json();
+
+      expect(clone.status).toBe(200);
+      expect(body).toMatchObject({
+        provider: 'ark',
+        model: 'seed-icl-2.0',
+        status: 'ready',
+        demoAudio: 'https://example.com/doubao-demo.wav',
+        billingMode: 'postpaid',
+      });
+      expect(cloneBody.speaker_id).toBe('custom_speaker_id');
+      expect(cloneBody.custom_speaker_id).toMatch(/^lumi_voice_/);
+      expect(cloneBody.extra_params.demo_text).toContain('Lumi');
+      expect((globalThis.fetch as any)).not.toBe(previousFetch);
+
+      const catalog = await previousFetch(`${url}/api/voice/voices?provider=ark`, {
+        headers: authHeaders(),
+        signal: AbortSignal.timeout(5000),
+      }).then(response => response.json());
+      expect(catalog.cloned).toEqual(expect.arrayContaining([
+        expect.objectContaining({ voiceId: body.voiceId, provider: 'ark', status: 'ready' }),
+      ]));
+
+      await previousFetch(`${url}/api/voice/${encodeURIComponent(body.voiceId)}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      });
+    } finally {
+      globalThis.fetch = previousFetch;
+      if (previousKey === undefined) delete process.env.DOUBAO_SPEECH_KEY;
+      else process.env.DOUBAO_SPEECH_KEY = previousKey;
+    }
   });
 
   it('uploads common audio file formats for cloning', async () => {

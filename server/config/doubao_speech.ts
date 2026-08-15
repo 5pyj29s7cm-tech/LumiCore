@@ -6,8 +6,8 @@ export type DoubaoSpeechCredentials = { mode: 'api-key'; apiKey: string };
 
 const DEFAULT_STREAMING_ASR_RESOURCE_ID = 'volc.bigasr.sauc.duration';
 const DEFAULT_FILE_ASR_RESOURCE_ID = 'volc.bigasr.auc_turbo';
-const DEFAULT_TTS_V1_RESOURCE_ID = 'seed-tts-1.0';
 const DEFAULT_TTS_V2_RESOURCE_ID = 'seed-tts-2.0';
+const DEFAULT_VOICE_CLONE_V2_RESOURCE_ID = 'seed-icl-2.0';
 const DEFAULT_V2_VOICE_ID = 'zh_female_vv_uranus_bigtts';
 
 function configuredValue(): string {
@@ -56,7 +56,7 @@ export function getDoubaoFileAsrResourceId(): string {
 
 export function normalizeDoubaoVoiceId(voiceId: string | undefined): string {
   const candidate = String(voiceId || '').trim();
-  return /^(?:BV\d+_streaming|[A-Za-z0-9_-]+_bigtts|S_[A-Za-z0-9_-]+|ICL_[A-Za-z0-9_-]+|saturn_[A-Za-z0-9_-]+)$/i.test(candidate)
+  return /^(?:[A-Za-z0-9_-]+_bigtts|S_[A-Za-z0-9_-]+|ICL_[A-Za-z0-9_-]+|saturn_[A-Za-z0-9_-]+|lumi_voice_[A-Za-z0-9_-]+)$/i.test(candidate)
     ? candidate
     : String(process.env.DOUBAO_TTS_VOICE_ID || DEFAULT_V2_VOICE_ID).trim();
 }
@@ -64,9 +64,10 @@ export function normalizeDoubaoVoiceId(voiceId: string | undefined): string {
 export function getDoubaoTtsResourceId(voiceId: string): string {
   const configured = String(process.env.DOUBAO_TTS_RESOURCE_ID || '').trim();
   if (configured) return configured;
-  return /(?:_uranus_|^S_|^ICL_|^saturn_)/i.test(voiceId)
-    ? DEFAULT_TTS_V2_RESOURCE_ID
-    : DEFAULT_TTS_V1_RESOURCE_ID;
+  if (/^(?:S_|lumi_voice_)/i.test(String(voiceId || '').trim())) {
+    return String(process.env.DOUBAO_VOICE_CLONE_RESOURCE_ID || DEFAULT_VOICE_CLONE_V2_RESOURCE_ID).trim();
+  }
+  return DEFAULT_TTS_V2_RESOURCE_ID;
 }
 
 export function ratioToDoubaoRate(value: number | undefined): number | undefined {

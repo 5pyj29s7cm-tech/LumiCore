@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { Cpu, Cloud } from 'lucide-react';
 import { apiFetch } from '@/services/apiClient';
+import { VOICE_PROVIDER_CHANGED_EVENT } from '@/services/voiceService';
 
 export function VoiceProviderSwitch({ t }: { t?: any }) {
   const [pref, setPref] = useState<{ stt: string; tts: string }>({ stt: 'auto', tts: 'auto' });
@@ -16,7 +17,9 @@ export function VoiceProviderSwitch({ t }: { t?: any }) {
       if (!response.ok) throw new Error(data.error || `Voice status failed (${response.status})`);
       setPref(data.pref);
       setActive(data.active);
+      return data;
     } catch {}
+    return null;
   };
   useEffect(() => { void load(); }, []);
 
@@ -30,7 +33,10 @@ export function VoiceProviderSwitch({ t }: { t?: any }) {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || `Voice provider update failed (${response.status})`);
-      await load();
+      const status = await load();
+      window.dispatchEvent(new CustomEvent(VOICE_PROVIDER_CHANGED_EVENT, {
+        detail: status || { pref: { stt, tts } },
+      }));
     } catch (caught: any) {
       setError(caught?.message || 'Voice provider update failed');
     }
@@ -49,7 +55,7 @@ export function VoiceProviderSwitch({ t }: { t?: any }) {
     { value: 'local-cosyvoice', label: 'Local CosyVoice' },
     { value: 'gptsovits', label: 'GPT-SoVITS' },
     { value: 'ark', label: 'Doubao' },
-    { value: 'cosyvoice', label: 'DashScope CosyVoice' },
+    { value: 'cosyvoice', label: 'Qwen / DashScope CosyVoice' },
   ];
   const providerLabel = (value: string, options: Array<{ value: string; label: string }>) =>
     options.find(o => o.value === value)?.label || value;

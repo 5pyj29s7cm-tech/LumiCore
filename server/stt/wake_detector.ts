@@ -464,6 +464,41 @@ function createQwenWakeDetector(
 
 // ── Provider: Ark (Doubao) polling batch transcription ──
 
+function pcm16MonoToWav(pcm: Buffer, sampleRate = 16_000): Buffer {
+  const header = Buffer.alloc(44);
+  const byteRate = sampleRate * 2;
+  header.write('RIFF', 0, 'ascii');
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write('WAVE', 8, 'ascii');
+  header.write('fmt ', 12, 'ascii');
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36, 'ascii');
+  header.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([header, pcm]);
+}
+
+function containsAudiblePcm(pcm: Buffer): boolean {
+  if (pcm.length < 2) return false;
+  let peak = 0;
+  let squareSum = 0;
+  let samples = 0;
+  for (let offset = 0; offset + 1 < pcm.length; offset += 2) {
+    const value = pcm.readInt16LE(offset);
+    const absolute = Math.abs(value);
+    if (absolute > peak) peak = absolute;
+    squareSum += value * value;
+    samples += 1;
+  }
+  const rms = samples > 0 ? Math.sqrt(squareSum / samples) : 0;
+  return peak >= 800 || rms >= 180;
+}
+
 function createArkWakeDetector(
   echoFilter?: (text: string) => boolean,
 ): WakeDetectorSession {
@@ -479,11 +514,12 @@ function createArkWakeDetector(
     if (stopped || audioChunks.length === 0) return;
     const combined = Buffer.concat(audioChunks);
     audioChunks.length = 0;
+    if (!containsAudiblePcm(combined)) return;
 
     try {
-      const result = await doubaoAsr.transcribe(combined, 'zh', {
-        fileName: 'audio.webm',
-        mimeType: 'audio/webm',
+      const result = await doubaoAsr.transcribe(pcm16MonoToWav(combined), 'zh', {
+        fileName: 'audio.wav',
+        mimeType: 'audio/wav',
         signal: AbortSignal.timeout(5000),
       });
       const transcript = result.text || '';
@@ -500,7 +536,9 @@ function createArkWakeDetector(
         wakeCallbacks.forEach(cb => cb(matched));
       }
     } catch (err: any) {
-      if (err.name !== 'AbortError') {
+      const message = String(err?.message || err || '');
+      const expectedSilence = message.includes('(20000003)') || /no valid speech|normal silence audio/i.test(message);
+      if (err.name !== 'AbortError' && !expectedSilence) {
         logger.warn(`[Wake:Ark] Poll error: ${err.message}`);
       }
     }

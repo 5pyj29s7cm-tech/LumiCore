@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   X, 
@@ -12,7 +12,7 @@ import {
   Trash2,
   Sparkles
 } from 'lucide-react';
-import { uploadSamples, cloneVoice } from '@/services/voiceService';
+import { uploadSamples, cloneVoice, listVoices, VOICE_PROVIDER_CHANGED_EVENT } from '@/services/voiceService';
 import { toast } from 'sonner';
 import { useT } from '../lib/useT';
 
@@ -27,10 +27,28 @@ export function VoiceTrainingDialog({ isOpen, onClose, onSuccess }: VoiceTrainin
   const [step, setStep] = useState<'upload' | 'naming' | 'cloning' | 'success'>('upload');
   const [files, setFiles] = useState<File[]>([]);
   const [voiceName, setVoiceName] = useState('');
-  const [provider, setProvider] = useState<'cosyvoice'>('cosyvoice');
+  const [doubaoSpeakerId, setDoubaoSpeakerId] = useState('');
+  const [confirmDoubaoPostpaid, setConfirmDoubaoPostpaid] = useState(false);
+  const [provider, setProvider] = useState<string | null>(null);
+  const [providerConfigured, setProviderConfigured] = useState(false);
+  const [cloneSupported, setCloneSupported] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [uploadedUrls, setUploadedUrls] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const refreshProvider = () => {
+      void listVoices().then(catalog => {
+        setProvider(catalog.provider);
+        setProviderConfigured(catalog.configured);
+        setCloneSupported(catalog.capabilities.clone);
+      }).catch(() => {});
+    };
+    refreshProvider();
+    window.addEventListener(VOICE_PROVIDER_CHANGED_EVENT, refreshProvider);
+    return () => window.removeEventListener(VOICE_PROVIDER_CHANGED_EVENT, refreshProvider);
+  }, [isOpen]);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
@@ -66,11 +84,26 @@ export function VoiceTrainingDialog({ isOpen, onClose, onSuccess }: VoiceTrainin
       toast.error(t.enterVoiceNameRequired || 'Please enter a voice name');
       return;
     }
+    if (!provider || !providerConfigured || !cloneSupported) {
+      toast.error('当前语音服务不支持声音克隆，请先在语音服务中选择豆包或 Qwen / DashScope CosyVoice。');
+      return;
+    }
+    if (provider === 'ark' && !doubaoSpeakerId.trim() && !confirmDoubaoPostpaid) {
+      toast.error('请确认后付费音色首次正式合成会产生槽位费，或填写已有的豆包音色 ID。');
+      return;
+    }
 
     setIsProcessing(true);
     setStep('cloning');
     try {
-      await cloneVoice(uploadedUrls, voiceName, provider);
+      const result = await cloneVoice(uploadedUrls, voiceName, provider, provider === 'ark' ? {
+        speakerId: doubaoSpeakerId.trim() || undefined,
+        confirmPostpaidBilling: Boolean(doubaoSpeakerId.trim()) || confirmDoubaoPostpaid,
+        language: 0,
+        demoText: '你好，我是 Lumi，这是我的声音复刻试听。',
+        enableAudioDenoise: false,
+      } : {});
+      if (result.status === 'failed') throw new Error(result.message || '豆包声音复刻训练失败');
       setStep('success');
       setTimeout(() => {
         onSuccess();
@@ -89,6 +122,8 @@ export function VoiceTrainingDialog({ isOpen, onClose, onSuccess }: VoiceTrainin
     setStep('upload');
     setFiles([]);
     setVoiceName('');
+    setDoubaoSpeakerId('');
+    setConfirmDoubaoPostpaid(false);
     setIsProcessing(false);
     setUploadedUrls([]);
   };
@@ -224,31 +259,54 @@ export function VoiceTrainingDialog({ isOpen, onClose, onSuccess }: VoiceTrainin
 
                   <div className="space-y-4">
                     <label className="text-xs font-black text-white/40 uppercase tracking-[0.3em]">Engine Architecture</label>
-                    <p className="text-[12px] text-white/45 leading-relaxed">DashScope CosyVoice is the supported cloning engine for custom voices. Add a DashScope key in Voice Services before cloning.</p>
+                    <p className="text-[12px] text-white/45 leading-relaxed">声音复刻严格使用当前语音服务。豆包使用声音复刻 2.0，Qwen 使用 DashScope CosyVoice，不会跨服务回退。</p>
                     <div className="grid grid-cols-2 gap-4">
-                      {(['cosyvoice'] as const).map((p) => (
-                        <button
-                          key={p}
-                          onClick={() => setProvider(p)}
-                          className={`p-4 rounded-2xl border transition-all text-center group relative overflow-hidden ${
-                            provider === p 
-                              ? 'bg-celestial-saturn/10 border-celestial-saturn text-celestial-saturn shadow-lg shadow-celestial-saturn/20' 
-                              : 'bg-white/5 border-white/5 text-white/40 hover:bg-white/10'
-                          }`}
-                        >
-                          {provider === p && (
-                            <motion.div layoutId="provider-bg" className="absolute inset-0 bg-celestial-saturn/5" />
-                          )}
-                          <p className="text-xs font-black uppercase tracking-widest relative z-10">DashScope CosyVoice</p>
-                          <p className="text-xs font-medium opacity-60 mt-1 relative z-10">DashScope clone</p>
-                        </button>
-                      ))}
+                      <div className={`col-span-2 rounded-2xl border p-4 text-center ${
+                        cloneSupported && providerConfigured
+                          ? 'border-celestial-saturn bg-celestial-saturn/10 text-celestial-saturn'
+                          : 'border-amber-400/20 bg-amber-400/10 text-amber-100/70'
+                      }`}>
+                        <p className="text-xs font-black uppercase tracking-widest">
+                          {provider === 'ark' ? '豆包' : provider === 'cosyvoice' ? 'Qwen / DashScope CosyVoice' : provider || '未选择语音服务'}
+                        </p>
+                        <p className="mt-1 text-xs font-medium opacity-60">
+                          {cloneSupported && providerConfigured ? '当前克隆服务已同步' : '当前服务未接入声音克隆，不会切换到其他服务'}
+                        </p>
+                      </div>
                     </div>
                   </div>
 
+                  {provider === 'ark' && (
+                    <div className="space-y-3 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                      <label className="text-xs font-black uppercase tracking-widest text-white/55">已有豆包音色 ID（可选）</label>
+                      <input
+                        type="text"
+                        value={doubaoSpeakerId}
+                        onChange={event => {
+                          setDoubaoSpeakerId(event.target.value);
+                          if (event.target.value.trim()) setConfirmDoubaoPostpaid(false);
+                        }}
+                        placeholder="S_xxxxxxxx"
+                        className="h-12 w-full rounded-xl border border-white/10 bg-white/5 px-4 font-mono text-xs text-white outline-none focus:border-celestial-saturn"
+                      />
+                      <p className="text-xs leading-relaxed text-white/45">留空会创建后付费音色。训练与返回的试听音频不会立即收取槽位费，第一次正式合成会激活并收费。</p>
+                      {!doubaoSpeakerId.trim() && (
+                        <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-amber-400/20 bg-amber-400/10 p-3 text-xs leading-relaxed text-amber-100/80">
+                          <input
+                            type="checkbox"
+                            checked={confirmDoubaoPostpaid}
+                            onChange={event => setConfirmDoubaoPostpaid(event.target.checked)}
+                            className="mt-0.5"
+                          />
+                          <span>我已知晓：第一次用这个音色进行正式语音合成时会产生豆包音色槽位费用。</span>
+                        </label>
+                      )}
+                    </div>
+                  )}
+
                   <button
                     onClick={startClone}
-                    disabled={!voiceName.trim() || isProcessing}
+                    disabled={!voiceName.trim() || isProcessing || !providerConfigured || !cloneSupported || (provider === 'ark' && !doubaoSpeakerId.trim() && !confirmDoubaoPostpaid)}
                     className="w-full py-5 bg-celestial-saturn text-black rounded-[1.5rem] font-black uppercase tracking-[0.2em] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-3 shadow-xl"
                   >
                     {isProcessing ? (

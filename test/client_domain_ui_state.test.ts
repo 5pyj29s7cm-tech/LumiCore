@@ -13,8 +13,23 @@ describe('personal and organization client state boundaries', () => {
 
     expect(context).toContain('lumi_selected_voice_id_${scope}');
     expect(context).toContain('lumi_favorite_voices_${scope}');
-    expect(context).toContain("if (workDomain === 'personal')");
+    expect(context).toContain('${voiceStorageKeys.selected}_provider_${provider}');
+    expect(context).not.toContain('JSON.stringify({ tts: provider })');
     expect(picker).toContain('workDomain, orgConnection?.orgId');
+    expect(picker).toContain('VOICE_PROVIDER_CHANGED_EVENT');
+    expect(picker).toContain('getSelectedVoiceIdForProvider(data.provider)');
+    expect(picker).toContain('preferredVoice.provider || data.provider');
+  });
+
+  it('keeps the personalization voice studio read-only for provider selection', () => {
+    const panel = source('src/components/DesktopPersonalizationSoundPanel.tsx');
+    const desktop = source('src/components/DesktopUI.tsx');
+
+    expect(panel).toContain("ui('当前语音服务', 'Current voice service')");
+    expect(panel).toContain("ui('前往语音服务', 'Voice settings')");
+    expect(panel).toContain('onOpenVoiceSettings');
+    expect(panel).not.toContain('/api/voice/provider');
+    expect(desktop).toContain("setSettingsSection('voice-model')");
   });
 
   it('stores meeting drafts per personal user or organization and stops live scope crossover', () => {

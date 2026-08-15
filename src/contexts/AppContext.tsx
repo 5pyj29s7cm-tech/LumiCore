@@ -151,6 +151,7 @@ interface AppContextType {
   // Voice
   selectedVoiceId: string | undefined;
   setSelectedVoiceId: (id: string, provider?: string) => void;
+  getSelectedVoiceIdForProvider: (provider: string) => string | undefined;
   favoriteVoices: string[];
   toggleFavoriteVoice: (id: string) => void;
   // Notifications
@@ -817,14 +818,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(voiceStorageKeys.selected, id);
     if (provider) {
       localStorage.setItem(voiceStorageKeys.provider, provider);
-      if (workDomain === 'personal') {
-        apiFetch('/api/voice/provider', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tts: provider }),
-        }).catch(() => {});
-      }
+      localStorage.setItem(`${voiceStorageKeys.selected}_provider_${provider}`, id);
     }
+  };
+
+  const getSelectedVoiceIdForProvider = (provider: string) => {
+    if (!provider) return undefined;
+    return localStorage.getItem(`${voiceStorageKeys.selected}_provider_${provider}`) || undefined;
   };
 
   const toggleFavoriteVoice = (id: string) => {
@@ -888,6 +888,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       visionConfig,
       selectedVoiceId,
       setSelectedVoiceId,
+      getSelectedVoiceIdForProvider,
       favoriteVoices,
       toggleFavoriteVoice,
       notifications,

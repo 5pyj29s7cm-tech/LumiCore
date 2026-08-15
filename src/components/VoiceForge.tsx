@@ -22,6 +22,9 @@ export function VoiceForge({ t, compact, onCloneSuccess }: { t: any; compact?: b
     cloneStatus,
     cloneError,
     voices,
+    provider,
+    providerConfigured,
+    cloneSupported,
     error,
     startRecording,
     stopRecording,
@@ -34,10 +37,21 @@ export function VoiceForge({ t, compact, onCloneSuccess }: { t: any; compact?: b
   } = useVoiceCloning();
 
   const [voiceName, setVoiceName] = useState('');
+  const [doubaoSpeakerId, setDoubaoSpeakerId] = useState('');
+  const [confirmDoubaoPostpaid, setConfirmDoubaoPostpaid] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const prevRecordingCount = useRef(0);
   const isZh = t?.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
+  const providerName = provider === 'ark'
+    ? '豆包'
+    : provider === 'cosyvoice'
+      ? 'Qwen / DashScope CosyVoice'
+      : provider === 'local-cosyvoice'
+        ? 'Local CosyVoice'
+        : provider === 'gptsovits'
+          ? 'GPT-SoVITS'
+          : ui('未选择', 'Not selected');
 
   useEffect(() => {
     refreshVoices();
@@ -124,11 +138,19 @@ export function VoiceForge({ t, compact, onCloneSuccess }: { t: any; compact?: b
       return;
     }
     try {
-      const result = await uploadAndClone(voiceName);
+      const result = await uploadAndClone(voiceName, provider === 'ark' ? {
+        speakerId: doubaoSpeakerId.trim() || undefined,
+        confirmPostpaidBilling: Boolean(doubaoSpeakerId.trim()) || confirmDoubaoPostpaid,
+        language: 0,
+        demoText: '你好，我是 Lumi，这是我的声音复刻试听。',
+        enableAudioDenoise: false,
+      } : {});
       console.log('[VoiceForge] uploadAndClone result:', result);
       if (result) {
         toast.success(t.voiceClonedSuccess || "Voice successfully cloned!");
         setVoiceName('');
+        setDoubaoSpeakerId('');
+        setConfirmDoubaoPostpaid(false);
         onCloneSuccess?.();
         refreshVoices();
       }
@@ -171,6 +193,20 @@ export function VoiceForge({ t, compact, onCloneSuccess }: { t: any; compact?: b
       <div className={`${compact ? '' : 'grid grid-cols-1 lg:grid-cols-2 gap-8'} flex-1 overflow-hidden`}>
         {/* Recording & Cloning */}
         <div className={`space-y-6 overflow-y-auto ${compact ? '' : 'pr-4 custom-scrollbar'}`}>
+           <div className={`rounded-2xl border p-4 text-xs leading-relaxed ${
+             cloneSupported
+               ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100/75'
+               : 'border-amber-400/20 bg-amber-400/10 text-amber-100/75'
+           }`}>
+             <div className="font-black uppercase tracking-widest">{ui('当前语音服务', 'Current voice service')} · {providerName}</div>
+             <div className="mt-1 opacity-75">
+               {!providerConfigured
+                 ? ui('该服务尚未配置完成。', 'This service is not configured yet.')
+                 : cloneSupported
+                   ? ui('录音、上传和克隆都会通过当前服务处理。', 'Recording, upload, and cloning all use this provider.')
+                   : ui('当前服务未接入声音克隆，Lumi 不会暗中改用其他服务。', 'Cloning is not connected for this provider; Lumi will not silently switch services.')}
+             </div>
+           </div>
            <div className="lumi-panel relative space-y-8 overflow-hidden p-8">
               <div className="text-center space-y-6 relative z-10">
                  <div className="text-xs font-black uppercase tracking-[0.4em] text-white/45">{t.audioVisualizer || uiMessage('voice-forge.neural-audio-visualizer.dfa074ef39')}</div>
@@ -181,6 +217,7 @@ export function VoiceForge({ t, compact, onCloneSuccess }: { t: any; compact?: b
                         whileHover={{ scale: 1.05 }}
                         whileTap={{ scale: 0.95 }}
                         onClick={startRecording}
+                        disabled={!cloneSupported || !providerConfigured}
                         className="w-32 h-32 rounded-full bg-white/5 border border-white/10 flex items-center justify-center group hover:bg-celestial-saturn/20 hover:border-celestial-saturn/40 transition-all shadow-2xl relative"
                       >
                          <div className="absolute inset-0 rounded-full bg-celestial-saturn/10 animate-ping opacity-20" />
@@ -199,6 +236,7 @@ export function VoiceForge({ t, compact, onCloneSuccess }: { t: any; compact?: b
                  <div className="flex flex-col items-center gap-4">
                     <Button
                       onClick={isRecording ? stopRecording : startRecording}
+                      disabled={!isRecording && (!cloneSupported || !providerConfigured)}
                       className={`h-14 px-10 rounded-full font-black uppercase tracking-widest text-xs transition-all ${
                         isRecording
                           ? 'bg-celestial-mars text-white hover:bg-red-600 shadow-[0_0_30px_rgba(255,102,102,0.3)] animate-pulse'
@@ -260,6 +298,7 @@ export function VoiceForge({ t, compact, onCloneSuccess }: { t: any; compact?: b
                     />
                     <Button
                       onClick={() => fileInputRef.current?.click()}
+                      disabled={!cloneSupported || !providerConfigured}
                       className="lumi-button h-10 rounded-full px-6 text-xs"
                     >
                       <Upload size={14} className="mr-1" />
@@ -306,7 +345,7 @@ export function VoiceForge({ t, compact, onCloneSuccess }: { t: any; compact?: b
                 </div>
 
                 <div className="pt-6 border-t border-white/5 space-y-4">
-                   <div className="space-y-2">
+                    <div className="space-y-2">
                       <label className="text-xs font-black uppercase tracking-widest text-white/55 ml-2">{t.voiceName || uiMessage('voice-forge.voice-name.5fd52ff21d')}</label>
                       <Input
                         value={voiceName}
@@ -314,7 +353,41 @@ export function VoiceForge({ t, compact, onCloneSuccess }: { t: any; compact?: b
                         placeholder="e.g. Master_Essence_v1"
                         className="lumi-field h-12 rounded-2xl focus-visible:ring-celestial-saturn/50"
                       />
-                   </div>
+                    </div>
+
+                    {provider === 'ark' && (
+                      <div className="space-y-3 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                        <label className="text-xs font-black uppercase tracking-widest text-white/55">
+                          {ui('已有豆包音色 ID（可选）', 'Existing Doubao speaker ID (optional)')}
+                        </label>
+                        <Input
+                          value={doubaoSpeakerId}
+                          onChange={event => {
+                            setDoubaoSpeakerId(event.target.value);
+                            if (event.target.value.trim()) setConfirmDoubaoPostpaid(false);
+                          }}
+                          placeholder="S_xxxxxxxx"
+                          className="lumi-field h-11 rounded-xl font-mono text-xs"
+                        />
+                        <p className="text-[11px] leading-relaxed text-white/45">
+                          {ui(
+                            '填写控制台已有的预付费音色 ID；留空则创建后付费音色。后付费音色训练和试听不会立即收取槽位费，第一次正式合成会激活并收取槽位费。',
+                            'Enter an existing prepaid speaker ID, or leave it blank to create a postpaid voice. Training and demo preview do not immediately charge the slot; the first formal synthesis activates and charges it.',
+                          )}
+                        </p>
+                        {!doubaoSpeakerId.trim() && (
+                          <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-amber-400/20 bg-amber-400/10 p-3 text-xs leading-relaxed text-amber-100/80">
+                            <input
+                              type="checkbox"
+                              checked={confirmDoubaoPostpaid}
+                              onChange={event => setConfirmDoubaoPostpaid(event.target.checked)}
+                              className="mt-0.5"
+                            />
+                            <span>{ui('我已知晓：这个音色第一次用于正式语音合成时会产生豆包音色槽位费用。', 'I understand that the first formal synthesis with this voice will charge a Doubao voice slot.')}</span>
+                          </label>
+                        )}
+                      </div>
+                    )}
 
                    {cloneStatus !== 'idle' && (
                      <motion.div
@@ -359,7 +432,7 @@ export function VoiceForge({ t, compact, onCloneSuccess }: { t: any; compact?: b
 
                    <Button
                      onClick={handleClone}
-                     disabled={cloneStatus === 'uploading' || cloneStatus === 'cloning' || !voiceName.trim()}
+                     disabled={!cloneSupported || !providerConfigured || cloneStatus === 'uploading' || cloneStatus === 'cloning' || !voiceName.trim() || (provider === 'ark' && !doubaoSpeakerId.trim() && !confirmDoubaoPostpaid)}
                      className="lumi-button-primary h-14 w-full rounded-2xl bg-celestial-saturn/15 text-celestial-saturn hover:bg-celestial-saturn/25"
                    >
                      {isUploading || isCloning ? (
@@ -441,6 +514,15 @@ function VoiceCard({ voice, onDelete, isCloned = false }: { voice: any, onDelete
     }
     setIsLoading(true);
     try {
+      if (voice.provider === 'ark' && voice.demoAudio) {
+        const audio = new Audio(voice.demoAudio);
+        audioRef.current = audio;
+        audio.onended = () => setIsPlaying(false);
+        audio.onerror = () => { setIsPlaying(false); toast.error(t.playbackFailed || 'Playback failed'); };
+        await audio.play();
+        setIsPlaying(true);
+        return;
+      }
       const buffer = await synthesizeSpeech(translate('voicePreviewSample'), voice.voiceId || voice.id, voice.provider, voice.model);
       const blob = new Blob([buffer], { type: 'audio/mp3' });
       const url = URL.createObjectURL(blob);
@@ -476,6 +558,7 @@ function VoiceCard({ voice, onDelete, isCloned = false }: { voice: any, onDelete
                 <div className="flex items-center gap-2 mt-1">
                    {isCloned && <CheckCircle2 size={10} className="text-celestial-saturn" />}
                    <div className="text-xs font-black uppercase tracking-widest text-white/55">{voice.provider}</div>
+                   {voice.status === 'training' && <div className="text-[10px] font-bold text-amber-300">TRAINING</div>}
                 </div>
              </div>
           </div>

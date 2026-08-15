@@ -198,6 +198,62 @@ describe('Wake Detector Factory', () => {
     session.stop();
   });
 
+  it('wraps microphone PCM in a valid WAV container before Ark wake transcription', async () => {
+    vi.useFakeTimers();
+    process.env.DOUBAO_SPEECH_KEY = 'uuid-api-key-value';
+    const transcribe = vi.fn().mockResolvedValue({ text: '', isFinal: true });
+    vi.doMock('../server/config/voice_preference', () => ({
+      getVoicePreference: () => ({ stt: 'ark', tts: 'auto' }),
+    }));
+    vi.doMock('../server/config/keys', () => ({ getKey: () => undefined }));
+    vi.doMock('../server/stt/providers/ark', () => ({
+      hasDoubaoSpeech: () => true,
+      transcribe,
+    }));
+
+    const { createWakeDetector } = await import('../server/stt/wake_detector');
+    const session = createWakeDetector();
+    session.onWake(() => {});
+    const pcm = Buffer.alloc(64_000);
+    for (let offset = 0; offset < pcm.length; offset += 2) pcm.writeInt16LE(2_000, offset);
+    session.sendAudio(pcm);
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(transcribe).toHaveBeenCalledTimes(1);
+    const [audio, language, options] = transcribe.mock.calls[0];
+    expect(audio.subarray(0, 4).toString('ascii')).toBe('RIFF');
+    expect(audio.subarray(8, 12).toString('ascii')).toBe('WAVE');
+    expect(audio.readUInt32LE(40)).toBe(64_000);
+    expect(language).toBe('zh');
+    expect(options).toMatchObject({ fileName: 'audio.wav', mimeType: 'audio/wav' });
+    session.stop();
+    vi.doUnmock('../server/stt/providers/ark');
+  });
+
+  it('does not submit silent microphone windows to Ark', async () => {
+    vi.useFakeTimers();
+    process.env.DOUBAO_SPEECH_KEY = 'uuid-api-key-value';
+    const transcribe = vi.fn().mockResolvedValue({ text: '', isFinal: true });
+    vi.doMock('../server/config/voice_preference', () => ({
+      getVoicePreference: () => ({ stt: 'ark', tts: 'auto' }),
+    }));
+    vi.doMock('../server/config/keys', () => ({ getKey: () => undefined }));
+    vi.doMock('../server/stt/providers/ark', () => ({
+      hasDoubaoSpeech: () => true,
+      transcribe,
+    }));
+
+    const { createWakeDetector } = await import('../server/stt/wake_detector');
+    const session = createWakeDetector();
+    session.onWake(() => {});
+    session.sendAudio(Buffer.alloc(64_000));
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(transcribe).not.toHaveBeenCalled();
+    session.stop();
+    vi.doUnmock('../server/stt/providers/ark');
+  });
+
   it('rejects legacy Doubao AppID:AccessToken credentials', async () => {
     process.env.DOUBAO_SPEECH_KEY = '12345:token-abc';
     vi.doMock('../server/config/voice_preference', () => ({

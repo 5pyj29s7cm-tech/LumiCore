@@ -16,6 +16,8 @@ import {
 const PROVIDER = 'doubao-stt-stream';
 const DEFAULT_WS_URL = 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel';
 const MAX_PENDING_AUDIO_CHUNKS = 32;
+const TERMINAL_PARTIAL_COMMIT_MS = 700;
+const DEFAULT_PARTIAL_COMMIT_MS = 1_200;
 
 const enum AsrMessageType {
   FullClientRequest = 0x1,
@@ -120,7 +122,7 @@ function buildAudioRequest(sequence: number, audio: Buffer, compress = true): Bu
     header(
       AsrMessageType.AudioOnlyRequest,
       effectiveSequence > 0 ? AsrFlag.PosSequence : AsrFlag.NegWithSequence,
-      Serialization.Json,
+      Serialization.Raw,
       effectiveCompression ? Compression.Gzip : Compression.None,
     ),
     int32(effectiveSequence),
@@ -150,27 +152,27 @@ function parseResponse(data: Buffer): { sequence?: number; isLastPackage: boolea
   const compression = data[2] & 0x0f;
   let payload = data.subarray(headerSize * 4);
   const result: { sequence?: number; isLastPackage: boolean; message?: any; code?: number } = {
-    isLastPackage: Boolean(flags & 0x02),
+    isLastPackage: flags === AsrFlag.NegSequence || flags === AsrFlag.NegWithSequence,
   };
-
-  if ((flags & 0x01) && payload.length >= 4) {
-    result.sequence = payload.readInt32BE(0);
-    payload = payload.subarray(4);
-  }
 
   let payloadBody: Buffer | null = null;
   if (messageType === AsrMessageType.FullServerResponse) {
+    if ((flags === AsrFlag.PosSequence || flags === AsrFlag.NegWithSequence) && payload.length >= 4) {
+      result.sequence = payload.readInt32BE(0);
+      payload = payload.subarray(4);
+    }
     if (payload.length >= 4) {
       const size = payload.readUInt32BE(0);
       payloadBody = payload.subarray(4, 4 + size);
     }
   } else if (messageType === AsrMessageType.ServerAck) {
-    if (payload.length >= 4) {
+    if (flags !== AsrFlag.NoSequence && payload.length >= 4) {
       result.sequence = payload.readInt32BE(0);
-      if (payload.length >= 8) {
-        const size = payload.readUInt32BE(4);
-        payloadBody = payload.subarray(8, 8 + size);
-      }
+      payload = payload.subarray(4);
+    }
+    if (payload.length >= 4) {
+      const size = payload.readUInt32BE(0);
+      payloadBody = payload.subarray(4, 4 + size);
     }
   } else if (messageType === AsrMessageType.ServerErrorResponse) {
     if (payload.length >= 8) {
@@ -188,6 +190,29 @@ function parseResponse(data: Buffer): { sequence?: number; isLastPackage: boolea
     result.isLastPackage = true;
   }
   return result;
+}
+
+export const __doubaoStreamingProtocolForTests = Object.freeze({
+  buildAudioRequest,
+  buildRequest,
+  getStablePartialCommitDelayMs,
+  getUncommittedTranscript,
+  parseResponse,
+  extractText,
+});
+
+function getStablePartialCommitDelayMs(text: string): number {
+  return /[。！？!?…][”’」』】）)]?$/.test(String(text || '').trim())
+    ? TERMINAL_PARTIAL_COMMIT_MS
+    : DEFAULT_PARTIAL_COMMIT_MS;
+}
+
+function getUncommittedTranscript(committed: string, current: string): string {
+  const previous = String(committed || '').trim();
+  const next = String(current || '').trim();
+  if (!next || next === previous || previous.startsWith(next)) return '';
+  if (previous && next.startsWith(previous)) return next.slice(previous.length).trim();
+  return next;
 }
 
 function buildRequest(language?: string): Record<string, unknown> {
@@ -214,7 +239,11 @@ function buildRequest(language?: string): Record<string, unknown> {
       result_type: 'full',
       vad_segment_duration: Number(process.env.DOUBAO_ASR_VAD_SEGMENT_MS || 3000),
       end_window_size: Number(process.env.DOUBAO_ASR_END_WINDOW_MS || 800),
-      force_to_speech_time: Number(process.env.DOUBAO_ASR_FORCE_TO_SPEECH_MS || 10000),
+      // `0` lets the provider's VAD close an utterance after end_window_size.
+      // A positive 10s default kept ordinary microphone sessions in interim
+      // mode until the entire WebSocket was closed: subtitles appeared, but no
+      // final transcript ever reached Lumi's response pipeline.
+      force_to_speech_time: Number(process.env.DOUBAO_ASR_FORCE_TO_SPEECH_MS || 0),
     },
   };
 }
@@ -234,9 +263,12 @@ function extractText(message: any): { text: string; isFinal: boolean } | null {
   if (!text) return null;
 
   const utterances = firstResult?.utterances || msg.utterances || [];
-  const utteranceFinal = Array.isArray(utterances)
-    && utterances.length > 0
-    && utterances.some((item: any) => item?.definite === true || item?.is_final === true);
+  const latestUtterance = Array.isArray(utterances) && utterances.length > 0
+    ? utterances[utterances.length - 1]
+    : null;
+  const utteranceFinal = Boolean(
+    latestUtterance?.definite === true || latestUtterance?.is_final === true,
+  );
   const explicitFinal = firstResult?.definite === true
     || firstResult?.is_final === true
     || firstResult?.final === true
@@ -273,6 +305,9 @@ export function createStream(
   let ending = false;
   let errorNotified = false;
   let lastPartial = '';
+  let committedTranscript = '';
+  let scheduledTranscript = '';
+  let stablePartialTimer: ReturnType<typeof setTimeout> | null = null;
 
   const queueAudio = (chunk: Buffer) => {
     if (audioQueue.length < MAX_PENDING_AUDIO_CHUNKS) audioQueue.push(Buffer.from(chunk));
@@ -281,7 +316,32 @@ export function createStream(
   const notifyError = (error: Error) => {
     if (errorNotified || ending) return;
     errorNotified = true;
+    if (stablePartialTimer) clearTimeout(stablePartialTimer);
+    stablePartialTimer = null;
     emitError(errorCallbacks, error);
+  };
+
+  const emitFinalTranscript = (aggregateText: string, source: 'provider' | 'stable-partial') => {
+    if (stablePartialTimer) clearTimeout(stablePartialTimer);
+    stablePartialTimer = null;
+    scheduledTranscript = '';
+    const text = getUncommittedTranscript(committedTranscript, aggregateText);
+    if (!text) return;
+    committedTranscript = aggregateText.trim();
+    lastPartial = '';
+    logger.info(`[Doubao-ASR] Final (${source}): "${text}"`);
+    resultCallbacks.forEach(cb => cb({ text, isFinal: true, speechFinal: true, model: 'doubao-bigmodel' }));
+  };
+
+  const scheduleStablePartialCommit = (aggregateText: string) => {
+    if (ending || closed || aggregateText === scheduledTranscript) return;
+    if (stablePartialTimer) clearTimeout(stablePartialTimer);
+    scheduledTranscript = aggregateText;
+    stablePartialTimer = setTimeout(() => {
+      stablePartialTimer = null;
+      if (ending || closed || scheduledTranscript !== aggregateText) return;
+      emitFinalTranscript(aggregateText, 'stable-partial');
+    }, getStablePartialCommitDelayMs(aggregateText));
   };
 
   function sendAudioFrame(chunk: Buffer) {
@@ -313,12 +373,14 @@ export function createStream(
       if (extracted) {
         const isFinal = packet.isLastPackage || extracted.isFinal;
         if (isFinal) {
-          lastPartial = '';
-          logger.info(`[Doubao-ASR] Final: "${extracted.text}"`);
-          resultCallbacks.forEach(cb => cb({ text: extracted.text, isFinal: true, speechFinal: true, model: 'doubao-bigmodel' }));
-        } else if (interimResults && shouldEmitStreamingPartial(lastPartial, extracted.text)) {
-          lastPartial = extracted.text;
-          resultCallbacks.forEach(cb => cb({ text: extracted.text, isFinal: false, model: 'doubao-bigmodel' }));
+          emitFinalTranscript(extracted.text, 'provider');
+        } else {
+          const pendingText = getUncommittedTranscript(committedTranscript, extracted.text);
+          if (pendingText && interimResults && shouldEmitStreamingPartial(lastPartial, pendingText)) {
+            lastPartial = pendingText;
+            resultCallbacks.forEach(cb => cb({ text: pendingText, isFinal: false, model: 'doubao-bigmodel' }));
+          }
+          if (pendingText) scheduleStablePartialCommit(extracted.text);
         }
       }
     } catch (err: any) {
@@ -335,6 +397,8 @@ export function createStream(
 
   ws.on('close', (code: number, reason: Buffer) => {
     closed = true;
+    if (stablePartialTimer) clearTimeout(stablePartialTimer);
+    stablePartialTimer = null;
     if (!ending) {
       notifyError(new Error(`Doubao-ASR closed (code=${code}, reason=${reason?.toString() || 'none'})`));
     }
@@ -354,6 +418,8 @@ export function createStream(
     end() {
       if (closed) return;
       ending = true;
+      if (stablePartialTimer) clearTimeout(stablePartialTimer);
+      stablePartialTimer = null;
       audioQueue.length = 0;
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(buildAudioRequest(++sequence, Buffer.alloc(0), false));

@@ -54,8 +54,8 @@ describe('voice assets across personal and organization Lumi', () => {
   afterAll(() => cleanup());
 
   it('lists only the voices in the active Lumi domain', async () => {
-    const personal = await fetch(`${baseUrl}/api/voice/voices`, { headers: headers(ownerId, false) });
-    const work = await fetch(`${baseUrl}/api/voice/voices`, { headers: headers(ownerId, true) });
+    const personal = await fetch(`${baseUrl}/api/voice/voices?provider=cosyvoice`, { headers: headers(ownerId, false) });
+    const work = await fetch(`${baseUrl}/api/voice/voices?provider=cosyvoice`, { headers: headers(ownerId, true) });
     expect(personal.ok).toBe(true);
     expect(work.ok).toBe(true);
     const personalIds = (await personal.json()).cloned.map((voice: any) => voice.voiceId);

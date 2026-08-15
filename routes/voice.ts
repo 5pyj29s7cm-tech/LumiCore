@@ -4,7 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { execFileSync } from 'child_process';
-import { synthesizeSpeech, cloneVoice, designVoice, listVoices, getActiveProvider, isTTSProviderConfigured } from '../server/tts/adapter';
+import { synthesizeSpeech, cloneVoice, getVoiceCloneStatus, designVoice, listVoices, getActiveProvider, isTTSProviderConfigured } from '../server/tts/adapter';
 import { TTSProvider } from '../server/tts/types';
 import { logger } from '../logger';
 import { recordLatency } from '../server/monitor/latency_store';
@@ -16,6 +16,7 @@ import {
   isVoiceProfileAccessible,
   listScopedVoiceProfiles,
   removeScopedVoiceProfile,
+  updateScopedVoiceProfile,
   voiceProfileScope,
   type VoiceProfileScope,
 } from '../server/tts/profile_store';
@@ -159,7 +160,7 @@ function runFfmpeg(args: string[], errorPrefix: string) {
   }
 }
 
-function isPcm16Mono16kWav(filePath: string): boolean {
+function isPcm16MonoWav(filePath: string, expectedSampleRate: number): boolean {
   let buffer: Buffer;
   try {
     buffer = fs.readFileSync(filePath);
@@ -180,7 +181,7 @@ function isPcm16Mono16kWav(filePath: string): boolean {
       const channels = buffer.readUInt16LE(dataOffset + 2);
       const sampleRate = buffer.readUInt32LE(dataOffset + 4);
       const bitsPerSample = buffer.readUInt16LE(dataOffset + 14);
-      return audioFormat === 1 && channels === 1 && sampleRate === 16000 && bitsPerSample === 16;
+      return audioFormat === 1 && channels === 1 && sampleRate === expectedSampleRate && bitsPerSample === 16;
     }
     offset = dataOffset + chunkSize + (chunkSize % 2);
   }
@@ -188,12 +189,12 @@ function isPcm16Mono16kWav(filePath: string): boolean {
   return false;
 }
 
-function prepareCloneSampleFile(inputPaths: string[], userId: string): string {
+function prepareCloneSampleFile(inputPaths: string[], userId: string, sampleRate = 16000): string {
   if (inputPaths.length === 0) {
     throw Object.assign(new Error('At least one sample URL is required'), { statusCode: 400 });
   }
 
-  if (inputPaths.length === 1 && isPcm16Mono16kWav(inputPaths[0])) {
+  if (inputPaths.length === 1 && isPcm16MonoWav(inputPaths[0], sampleRate)) {
     return inputPaths[0];
   }
 
@@ -210,7 +211,7 @@ function prepareCloneSampleFile(inputPaths: string[], userId: string): string {
       '-acodec',
       'pcm_s16le',
       '-ar',
-      '16000',
+      String(sampleRate),
       '-ac',
       '1',
       wavPath,
@@ -232,7 +233,7 @@ function prepareCloneSampleFile(inputPaths: string[], userId: string): string {
     '-acodec',
     'pcm_s16le',
     '-ar',
-    '16000',
+    String(sampleRate),
     '-ac',
     '1',
     combinedPath,
@@ -320,11 +321,39 @@ router.get('/voice/public-samples/:token', (req: Request, res: Response) => {
 });
 
 // POST /api/voice/clone — Trigger voice cloning
+const TTS_PROVIDERS = new Set<TTSProvider>(['local-cosyvoice', 'cosyvoice', 'ark', 'gptsovits']);
+
+function resolveRequestedTtsProvider(value?: unknown): TTSProvider | null {
+  const requested = String(value || '').trim() as TTSProvider;
+  if (requested) return TTS_PROVIDERS.has(requested) ? requested : null;
+  const preference = getVoicePreference();
+  if (preference.tts !== 'auto') return preference.tts;
+  return getActiveProvider();
+}
+
+function providerCapabilities(provider: TTSProvider | null) {
+  return {
+    clone: provider === 'cosyvoice' || provider === 'ark',
+    design: provider === 'cosyvoice',
+  };
+}
+
 router.post('/voice/clone', requireAuth, async (req: Request, res: Response) => {
   const cleanupPaths = new Set<string>();
   try {
     assertCanMutateVoiceAssets(req);
-    const { sampleUrls, name, provider } = req.body;
+    const {
+      sampleUrls,
+      name,
+      provider,
+      speakerId,
+      language,
+      sampleText,
+      demoText,
+      enableAudioDenoise,
+      disableVolumeNormalization,
+      confirmPostpaidBilling,
+    } = req.body;
 
     if (!sampleUrls || !Array.isArray(sampleUrls) || sampleUrls.length === 0) {
       return res.status(400).json({ error: 'At least one sample URL is required' });
@@ -333,12 +362,15 @@ router.post('/voice/clone', requireAuth, async (req: Request, res: Response) => 
       return res.status(400).json({ error: 'Voice name is required' });
     }
 
-    const activeProvider = (provider || 'cosyvoice') as TTSProvider;
-    if (activeProvider !== 'cosyvoice') {
+    const activeProvider = resolveRequestedTtsProvider(provider);
+    if (!activeProvider) {
+      return res.status(400).json({ error: 'Choose and configure a voice service before cloning.' });
+    }
+    if (!['cosyvoice', 'ark'].includes(activeProvider)) {
       return res.status(400).json({
-        error: 'Voice cloning currently supports DashScope CosyVoice only. Choose DashScope CosyVoice in the cloning flow or add a provider adapter.',
+        error: `Voice cloning is not available for the selected ${activeProvider} service. Switch the voice service to Qwen / DashScope CosyVoice to clone, or connect that provider's cloning adapter.`,
         activeProvider,
-        supportedProviders: ['cosyvoice'],
+        supportedProviders: ['cosyvoice', 'ark'],
       });
     }
 
@@ -350,25 +382,56 @@ router.post('/voice/clone', requireAuth, async (req: Request, res: Response) => 
     if (!cleanName) {
       return res.status(400).json({ error: 'Voice name is required' });
     }
-    const localSamplePaths = sampleUrls.map((url: string) => resolveUserSamplePath(req, url));
-    localSamplePaths.forEach(filePath => cleanupPaths.add(filePath));
-    const explicitCloneAudioMode = process.env.COSYVOICE_CLONE_AUDIO_MODE?.toLowerCase();
-    const publicBaseUrl = getPublicBaseUrl(req);
-    const cloneAudioMode = explicitCloneAudioMode || (isLocalOnlyBaseUrl(publicBaseUrl) ? 'data-url' : 'url');
-    if (cloneAudioMode !== 'data-url' && isLocalOnlyBaseUrl(publicBaseUrl)) {
-      return res.status(400).json({
-        error: 'CosyVoice voice cloning needs a public backend URL so DashScope can fetch the prepared audio sample. Set LUMI_PUBLIC_BASE_URL to an HTTPS tunnel or deployed domain, or set COSYVOICE_CLONE_AUDIO_MODE=data-url if your DashScope endpoint supports data URLs.',
-        requiresPublicBaseUrl: true,
+    const requestedSpeakerId = typeof speakerId === 'string' ? speakerId.trim() : '';
+    if (activeProvider === 'ark' && !requestedSpeakerId && confirmPostpaidBilling !== true) {
+      return res.status(409).json({
+        error: 'Creating a new Doubao clone uses a postpaid voice slot. Confirm that the first formal synthesis will activate and charge the slot, or provide an existing prepaid speaker ID.',
+        confirmationRequired: true,
+        confirmationType: 'doubao_postpaid_voice_slot',
       });
     }
+    const localSamplePaths = sampleUrls.map((url: string) => resolveUserSamplePath(req, url));
+    localSamplePaths.forEach(filePath => cleanupPaths.add(filePath));
+    let voiceModel: string;
+    let cloneResult;
 
-    const cloneAudioPath = prepareCloneSampleFile(localSamplePaths, getUserId(req));
-    cleanupPaths.add(cloneAudioPath);
-    const cloneSampleUrls = cloneAudioMode === 'data-url'
-      ? [cloneAudioPath]
-      : [createPublicSampleUrl(req, cloneAudioPath, getUserId(req))];
-    const voiceModel = cloneAudioMode === 'data-url' ? getQwenCloneTargetModel() : getCosyVoiceCloneTargetModel();
-    const voiceId = await cloneVoice({ sampleUrls: cloneSampleUrls, name: cleanName }, activeProvider);
+    if (activeProvider === 'ark') {
+      const cloneAudioPath = prepareCloneSampleFile(localSamplePaths, getUserId(req), 24000);
+      cleanupPaths.add(cloneAudioPath);
+      voiceModel = 'seed-icl-2.0';
+      cloneResult = await cloneVoice({
+        sampleUrls: [cloneAudioPath],
+        name: cleanName,
+        speakerId: requestedSpeakerId || undefined,
+        language: Number.isFinite(Number(language)) ? Number(language) : 0,
+        sampleText: typeof sampleText === 'string' ? sampleText : undefined,
+        demoText: typeof demoText === 'string' && demoText.trim()
+          ? demoText.trim()
+          : '你好，我是 Lumi，这是我的声音复刻试听。',
+        enableAudioDenoise: typeof enableAudioDenoise === 'boolean' ? enableAudioDenoise : false,
+        disableVolumeNormalization: typeof disableVolumeNormalization === 'boolean'
+          ? disableVolumeNormalization
+          : false,
+      }, activeProvider);
+    } else {
+      const explicitCloneAudioMode = process.env.COSYVOICE_CLONE_AUDIO_MODE?.toLowerCase();
+      const publicBaseUrl = getPublicBaseUrl(req);
+      const cloneAudioMode = explicitCloneAudioMode || (isLocalOnlyBaseUrl(publicBaseUrl) ? 'data-url' : 'url');
+      if (cloneAudioMode !== 'data-url' && isLocalOnlyBaseUrl(publicBaseUrl)) {
+        return res.status(400).json({
+          error: 'CosyVoice voice cloning needs a public backend URL so DashScope can fetch the prepared audio sample. Set LUMI_PUBLIC_BASE_URL to an HTTPS tunnel or deployed domain, or set COSYVOICE_CLONE_AUDIO_MODE=data-url if your DashScope endpoint supports data URLs.',
+          requiresPublicBaseUrl: true,
+        });
+      }
+      const cloneAudioPath = prepareCloneSampleFile(localSamplePaths, getUserId(req));
+      cleanupPaths.add(cloneAudioPath);
+      const cloneSampleUrls = cloneAudioMode === 'data-url'
+        ? [cloneAudioPath]
+        : [createPublicSampleUrl(req, cloneAudioPath, getUserId(req))];
+      voiceModel = cloneAudioMode === 'data-url' ? getQwenCloneTargetModel() : getCosyVoiceCloneTargetModel();
+      cloneResult = await cloneVoice({ sampleUrls: cloneSampleUrls, name: cleanName }, activeProvider);
+    }
+    const voiceId = cloneResult.voiceId;
 
     const scope = getRequestVoiceScope(req);
     addScopedVoiceProfile(scope, {
@@ -378,9 +441,26 @@ router.post('/voice/clone', requireAuth, async (req: Request, res: Response) => 
       category: 'cloned',
       model: voiceModel,
       source: 'cloned',
+      status: cloneResult.status,
+      demoAudio: cloneResult.demoAudio,
+      billingMode: cloneResult.billingMode,
+      availableTrainingTimes: cloneResult.availableTrainingTimes,
+      statusMessage: cloneResult.message,
       createdAt: new Date().toISOString(),
     });
-    res.json({ voiceId, name: cleanName, provider: activeProvider, category: 'cloned', model: voiceModel, source: 'cloned' });
+    res.json({
+      voiceId,
+      name: cleanName,
+      provider: activeProvider,
+      category: 'cloned',
+      model: voiceModel,
+      source: 'cloned',
+      status: cloneResult.status,
+      demoAudio: cloneResult.demoAudio,
+      billingMode: cloneResult.billingMode,
+      availableTrainingTimes: cloneResult.availableTrainingTimes,
+      message: cloneResult.message,
+    });
   } catch (err: any) {
     logger.error('[Voice Clone Error]', err);
     res.status(err.statusCode || 500).json({ error: err.message || 'Voice cloning service unavailable' });
@@ -391,6 +471,28 @@ router.post('/voice/clone', requireAuth, async (req: Request, res: Response) => 
         if (entry.filePath === filePath) publicSampleTokens.delete(token);
       }
     }
+  }
+});
+
+router.get('/voice/clone-status/:voiceId', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const scope = getRequestVoiceScope(req);
+    const profile = listScopedVoiceProfiles(scope).find((voice: any) => voice.voiceId === req.params.voiceId);
+    if (!profile) return res.status(404).json({ error: 'Voice not found' });
+    if (profile.provider !== 'ark') return res.json(profile);
+
+    const status = await getVoiceCloneStatus(profile.voiceId, 'ark', profile.billingMode);
+    const updated = updateScopedVoiceProfile(scope, profile.voiceId, {
+      status: status.status,
+      demoAudio: status.demoAudio || profile.demoAudio,
+      availableTrainingTimes: status.availableTrainingTimes,
+      statusMessage: status.message,
+      lastStatusCheckAt: new Date().toISOString(),
+    });
+    res.json(updated || { ...profile, ...status });
+  } catch (err: any) {
+    logger.error('[Voice Clone Status Error]', err);
+    res.status(err.statusCode || 502).json({ error: err.message || 'Voice clone status unavailable' });
   }
 });
 
@@ -405,9 +507,16 @@ router.post('/voice/design', requireAuth, async (req: Request, res: Response) =>
     if (!name || typeof name !== 'string') {
       return res.status(400).json({ error: 'Voice name is required' });
     }
-    const activeProvider = ((req.body?.provider as TTSProvider | undefined) || 'cosyvoice') as TTSProvider;
+    const activeProvider = resolveRequestedTtsProvider(req.body?.provider);
+    if (!activeProvider) {
+      return res.status(400).json({ error: 'Choose and configure a voice service before designing a voice.' });
+    }
     if (activeProvider !== 'cosyvoice') {
-      return res.status(400).json({ error: 'Voice design currently supports DashScope CosyVoice only.' });
+      return res.status(400).json({
+        error: `Voice design is not available for the selected ${activeProvider} service.`,
+        activeProvider,
+        supportedProviders: ['cosyvoice'],
+      });
     }
 
     const cleanName = name.trim();
@@ -438,34 +547,34 @@ router.post('/voice/design', requireAuth, async (req: Request, res: Response) =>
 // GET /api/voice/voices — List user's cloned voices + ALL provider premade voices
 router.get('/voice/voices', requireAuth, async (req: Request, res: Response) => {
   try {
-    const userVoices = listScopedVoiceProfiles(getRequestVoiceScope(req)).map((voice: any) => ({
+    const requested = String(req.query.provider || '').trim();
+    if (requested && !TTS_PROVIDERS.has(requested as TTSProvider)) {
+      return res.status(400).json({ error: 'Unknown TTS provider' });
+    }
+    const provider = resolveRequestedTtsProvider(requested);
+    const userVoices = listScopedVoiceProfiles(getRequestVoiceScope(req)).filter((voice: any) => (
+      provider ? String(voice.provider || 'cosyvoice') === provider : false
+    )).map((voice: any) => ({
       ...voice,
       category: 'cloned' as const,
     }));
 
-    // Fetch premade voices from ALL available providers, not just the active one
+    // Keep the catalogue isolated to the selected service.
     let premadeVoices: any[] = [];
-    const providers: TTSProvider[] = [];
-
-    const knownProviders: TTSProvider[] = ['local-cosyvoice', 'cosyvoice', 'ark', 'gptsovits'];
-    providers.push(...knownProviders.filter(isTTSProviderConfigured));
-    // If nothing configured, fall back to active provider
-    if (providers.length === 0) {
-      const active = getActiveProvider();
-      if (active) providers.push(active);
-    }
-
-    for (const provider of providers) {
+    for (const selectedProvider of provider ? [provider] : []) {
       try {
-        const voices = await listVoices(provider);
-        // Tag each voice with its provider so the frontend can show it
-        premadeVoices.push(...voices.map(v => ({ ...v, category: v.category || 'premade', provider })));
+        const voices = await listVoices(selectedProvider);
+        // Preserve the provider identity for preview and selection.
+        premadeVoices.push(...voices.map(v => ({ ...v, category: v.category || 'premade', provider: selectedProvider })));
       } catch {
         // Provider not available — skip
       }
     }
 
     res.json({
+      provider,
+      configured: provider ? isTTSProviderConfigured(provider) : false,
+      capabilities: providerCapabilities(provider),
       cloned: userVoices,
       premade: premadeVoices,
     });

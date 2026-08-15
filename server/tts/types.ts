@@ -25,6 +25,28 @@ export interface TTSResult {
 export interface VoiceCloneRequest {
   sampleUrls: string[];
   name: string;
+  /** Existing prepaid Doubao speaker ID. Omit to create a postpaid custom speaker. */
+  speakerId?: string;
+  /** Stable custom speaker ID used by the Doubao postpaid workflow. */
+  customSpeakerId?: string;
+  language?: number;
+  sampleText?: string;
+  demoText?: string;
+  enableAudioDenoise?: boolean;
+  disableVolumeNormalization?: boolean;
+}
+
+export type VoiceCloneStatus = 'not_found' | 'training' | 'ready' | 'failed';
+
+export interface VoiceCloneResult {
+  voiceId: string;
+  status: VoiceCloneStatus;
+  model?: string;
+  demoAudio?: string;
+  availableTrainingTimes?: number;
+  createdAt?: number;
+  message?: string;
+  billingMode?: 'prepaid' | 'postpaid';
 }
 
 export interface VoiceListItem {

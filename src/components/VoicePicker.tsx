@@ -2,13 +2,13 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Search, Play, Star, ChevronDown, Volume2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { listVoices, synthesizeSpeech } from '@/services/voiceService';
+import { listVoices, synthesizeSpeech, VOICE_PROVIDER_CHANGED_EVENT } from '@/services/voiceService';
 import { useApp } from '@/contexts/AppContext';
 import { voiceSampleText } from '../i18n/locales/voiceSamples';
 
 export function VoicePicker({ t, direction = 'up', refreshTrigger = 0 }: { t: any; direction?: 'up' | 'down'; refreshTrigger?: number }) {
   const {
-    selectedVoiceId, setSelectedVoiceId, favoriteVoices, toggleFavoriteVoice,
+    selectedVoiceId, setSelectedVoiceId, getSelectedVoiceIdForProvider, favoriteVoices, toggleFavoriteVoice,
     workDomain, orgConnection,
   } = useApp();
   const [voices, setVoices] = useState<any[]>([]);
@@ -18,6 +18,7 @@ export function VoicePicker({ t, direction = 'up', refreshTrigger = 0 }: { t: an
   const [catFilter, setCatFilter] = useState<string>('all');
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [loadingVoices, setLoadingVoices] = useState(false);
+  const [providerRevision, setProviderRevision] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
 
@@ -26,10 +27,27 @@ export function VoicePicker({ t, direction = 'up', refreshTrigger = 0 }: { t: an
     setOpen(false);
     setLoadingVoices(true);
     listVoices()
-      .then(data => { setVoices([...data.cloned, ...data.premade]); })
+      .then(data => {
+        const available = [...data.cloned, ...data.premade];
+        setVoices(available);
+        const selectable = available.filter(voice => voice.status !== 'training' && voice.status !== 'failed');
+        const rememberedVoiceId = data.provider ? getSelectedVoiceIdForProvider(data.provider) : undefined;
+        const preferredVoice = selectable.find(voice => voice.voiceId === rememberedVoiceId)
+          || selectable.find(voice => voice.voiceId === selectedVoiceId)
+          || selectable[0];
+        if (preferredVoice && preferredVoice.voiceId !== selectedVoiceId) {
+          setSelectedVoiceId(preferredVoice.voiceId, preferredVoice.provider || data.provider || undefined);
+        }
+      })
       .catch(() => toast.error(t.failedToLoadVoices || 'Failed to load voices'))
       .finally(() => setLoadingVoices(false));
-  }, [refreshTrigger, workDomain, orgConnection?.orgId]);
+  }, [refreshTrigger, workDomain, orgConnection?.orgId, providerRevision]);
+
+  useEffect(() => {
+    const handleProviderChanged = () => setProviderRevision(value => value + 1);
+    window.addEventListener(VOICE_PROVIDER_CHANGED_EVENT, handleProviderChanged);
+    return () => window.removeEventListener(VOICE_PROVIDER_CHANGED_EVENT, handleProviderChanged);
+  }, []);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -69,6 +87,14 @@ export function VoicePicker({ t, direction = 'up', refreshTrigger = 0 }: { t: an
     }
     try {
       setPlayingId(voice.voiceId);
+      if (voice.provider === 'ark' && voice.demoAudio) {
+        const audio = new Audio(voice.demoAudio);
+        audioRef.current = audio;
+        audio.onended = () => setPlayingId(null);
+        audio.onerror = () => setPlayingId(null);
+        await audio.play();
+        return;
+      }
       const lang = voice.language || 'zh';
       const sampleText = voiceSampleText(lang);
       const buffer = await synthesizeSpeech(sampleText, voice.voiceId, voice.provider, voice.model);
@@ -154,11 +180,17 @@ export function VoicePicker({ t, direction = 'up', refreshTrigger = 0 }: { t: an
                 filtered.map(voice => (
                   <div
                     key={voice.voiceId}
-                    onClick={() => { setSelectedVoiceId(voice.voiceId, voice.provider); setOpen(false); }}
+                    onClick={() => {
+                      if (voice.status === 'training' || voice.status === 'failed') return;
+                      setSelectedVoiceId(voice.voiceId, voice.provider);
+                      setOpen(false);
+                    }}
                     className={`flex items-center gap-3 px-3 py-2 cursor-pointer transition-all group ${
                       selectedVoiceId === voice.voiceId
                         ? 'bg-white/10 text-white'
-                        : 'text-white/60 hover:bg-white/5 hover:text-white/80'
+                        : voice.status === 'training' || voice.status === 'failed'
+                          ? 'cursor-not-allowed text-white/30'
+                          : 'text-white/60 hover:bg-white/5 hover:text-white/80'
                     }`}
                   >
                     {/* Favorite */}
@@ -178,6 +210,8 @@ export function VoicePicker({ t, direction = 'up', refreshTrigger = 0 }: { t: an
                         {voice.provider && <span className="text-white/40">{voice.provider}</span>}
                         {voice.language && <span>· {voice.language}</span>}
                         {voice.category && <span className="opacity-50">· {voice.category}</span>}
+                        {voice.status === 'training' && <span className="text-amber-300">· 训练中</span>}
+                        {voice.status === 'failed' && <span className="text-red-300">· 失败</span>}
                       </div>
                     </div>
 

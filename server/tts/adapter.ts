@@ -1,4 +1,4 @@
-import { TTSConfig, TTSResult, TTSProvider, VoiceCloneRequest, VoiceListItem } from './types';
+import { TTSConfig, TTSResult, TTSProvider, VoiceCloneRequest, VoiceCloneResult, VoiceListItem } from './types';
 import * as localCosyvoice from './providers/local_cosyvoice';
 import * as gptsovits from './providers/gptsovits';
 import * as cosyvoice from './providers/cosyvoice';
@@ -53,12 +53,30 @@ export async function synthesizeSpeech(text: string, config: TTSConfig): Promise
   }
 }
 
-export async function cloneVoice(request: VoiceCloneRequest, provider: TTSProvider): Promise<string> {
+export async function cloneVoice(request: VoiceCloneRequest, provider: TTSProvider): Promise<VoiceCloneResult> {
   switch (provider) {
     case 'cosyvoice':
-      return cosyvoice.cloneVoice(request.sampleUrls, request.name);
+      return {
+        voiceId: await cosyvoice.cloneVoice(request.sampleUrls, request.name),
+        status: 'ready',
+      };
+    case 'ark':
+      return ark.cloneVoice(request);
     default:
       throw new Error(`Voice cloning not supported for provider: ${provider}`);
+  }
+}
+
+export async function getVoiceCloneStatus(
+  voiceId: string,
+  provider: TTSProvider,
+  billingMode?: 'prepaid' | 'postpaid',
+): Promise<VoiceCloneResult> {
+  switch (provider) {
+    case 'ark':
+      return ark.getVoiceCloneStatus(voiceId, billingMode);
+    default:
+      return { voiceId, status: 'ready' };
   }
 }
 

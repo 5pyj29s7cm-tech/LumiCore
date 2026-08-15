@@ -40,6 +40,22 @@ export function addScopedVoiceProfile(scope: VoiceProfileScope, profile: Record<
   return stored;
 }
 
+export function updateScopedVoiceProfile(
+  scope: VoiceProfileScope,
+  voiceId: string,
+  patch: Record<string, any>,
+): any | null {
+  const db = readDB();
+  const key = voiceProfileStorageKey(scope);
+  const profiles = db.voiceProfiles?.[key] || [];
+  const index = profiles.findIndex((profile: any) => profile.voiceId === voiceId);
+  if (index < 0) return null;
+  profiles[index] = { ...profiles[index], ...patch, voiceId: profiles[index].voiceId };
+  db.voiceProfiles[key] = profiles;
+  writeDB(db);
+  return profiles[index];
+}
+
 export function removeScopedVoiceProfile(scope: VoiceProfileScope, voiceId: string): any | null {
   const db = readDB();
   const key = voiceProfileStorageKey(scope);

@@ -4213,7 +4213,19 @@ export function registerVoiceHandlers(
       session.sttSession.sendAudio(data);
       chunkCount++;
       if (chunkCount === 1 || chunkCount % 50 === 0) {
-        logger.info(`[Audio] Sent ${chunkCount} chunks (${data.length} bytes each)`);
+        const pcm = Buffer.isBuffer(data) ? data : Buffer.from(data);
+        let sumSquares = 0;
+        let peak = 0;
+        const sampleCount = Math.floor(pcm.length / 2);
+        for (let offset = 0; offset + 1 < pcm.length; offset += 2) {
+          const normalized = pcm.readInt16LE(offset) / 32768;
+          sumSquares += normalized * normalized;
+          peak = Math.max(peak, Math.abs(normalized));
+        }
+        const rms = sampleCount > 0 ? Math.sqrt(sumSquares / sampleCount) : 0;
+        logger.info(
+          `[Audio] Sent ${chunkCount} chunks (${data.length} bytes each, rms=${rms.toFixed(4)}, peak=${peak.toFixed(4)})`,
+        );
       }
     }
   });
