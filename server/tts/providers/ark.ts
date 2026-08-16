@@ -30,10 +30,12 @@ const PRESET_VOICES: VoiceListItem[] = [
   { voiceId: 'zh_female_meilinvyou_saturn_bigtts', name: '魅力女友 · 亲切女声', category: 'premade', language: 'zh', model: 'seed-tts-2.0' },
   { voiceId: 'zh_female_santongyongns_saturn_bigtts', name: '流畅女声 · 通用播报', category: 'premade', language: 'zh', model: 'seed-tts-2.0' },
   { voiceId: 'zh_male_ruyayichen_saturn_bigtts', name: '儒雅逸辰 · 沉稳男声', category: 'premade', language: 'zh', model: 'seed-tts-2.0' },
-  { voiceId: 'ICL_zh_female_keainvsheng_tob', name: '可爱女生 · 角色音色', category: 'premade', language: 'zh', model: 'seed-tts-2.0' },
-  { voiceId: 'ICL_zh_female_tiaopigongzhu_tob', name: '调皮公主 · 角色音色', category: 'premade', language: 'zh', model: 'seed-tts-2.0' },
+  { voiceId: 'saturn_zh_female_keainvsheng_tob', name: '可爱女生 · 角色音色', category: 'premade', language: 'zh', model: 'seed-tts-2.0' },
+  { voiceId: 'saturn_zh_female_tiaopigongzhu_tob', name: '调皮公主 · 角色音色', category: 'premade', language: 'zh', model: 'seed-tts-2.0' },
   { voiceId: 'zh_female_xueayi_saturn_bigtts', name: '儿童绘本 · 有声阅读', category: 'premade', language: 'zh', model: 'seed-tts-2.0' },
-  { voiceId: 'zh_female_tianmeitaozi_mars_bigtts', name: '甜美桃子 · 甜美女声', category: 'premade', language: 'zh', model: 'seed-tts-2.0' },
+  { voiceId: 'zh_female_xiaohe_uranus_bigtts', name: '小何 2.0 · 甜美女声', category: 'premade', language: 'zh', model: 'seed-tts-2.0' },
+  { voiceId: 'zh_male_m191_uranus_bigtts', name: '云舟 2.0 · 沉稳男声', category: 'premade', language: 'zh', model: 'seed-tts-2.0' },
+  { voiceId: 'zh_male_taocheng_uranus_bigtts', name: '小天 2.0 · 青年男声', category: 'premade', language: 'zh', model: 'seed-tts-2.0' },
 ];
 
 function pitchRatioToRate(value: number | undefined): number | undefined {
@@ -80,10 +82,11 @@ function extractJsonObjects(text: string): any[] {
 }
 
 function responseError(prefix: string, response: Response, payload?: any): Error {
-  const code = payload?.code ?? response.status;
+  const detail = payload?.header && typeof payload.header === 'object' ? payload.header : payload;
+  const code = detail?.code ?? response.status;
   const message = response.headers.get('X-Api-Message')
-    || payload?.message
-    || payload?.error
+    || detail?.message
+    || detail?.error
     || response.statusText
     || 'Unknown error';
   const logId = response.headers.get('X-Tt-Logid');
@@ -303,7 +306,10 @@ async function synthesizeWithApiKey(
     if (!response.ok) throw responseError('Doubao TTS error', response);
     throw new Error(`Doubao TTS response could not be parsed: ${error?.message || error}`);
   }
-  const failure = events.find(event => event?.code !== undefined && ![0, 20000000].includes(Number(event.code)));
+  const failure = events.find(event => {
+    const code = event?.header?.code ?? event?.code;
+    return code !== undefined && ![0, 20000000].includes(Number(code));
+  });
   if (!response.ok || failure) throw responseError('Doubao TTS error', response, failure);
   const chunks = events
     .map(event => typeof event?.data === 'string' && event.data ? Buffer.from(event.data, 'base64') : null)

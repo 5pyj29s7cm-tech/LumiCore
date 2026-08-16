@@ -90,7 +90,7 @@ describe('Voice API', () => {
     const doubaoBody = await doubao.json();
     expect(doubao.status).toBe(200);
     expect(doubaoBody.provider).toBe('ark');
-    expect(doubaoBody.premade).toHaveLength(12);
+    expect(doubaoBody.premade).toHaveLength(14);
     expect(doubaoBody.premade.every((voice: any) => voice.provider === 'ark')).toBe(true);
     expect(doubaoBody.cloned.every((voice: any) => voice.provider === 'ark')).toBe(true);
     expect(doubaoBody.capabilities).toEqual({ clone: true, design: false });

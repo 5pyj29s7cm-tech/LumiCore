@@ -103,10 +103,15 @@ export function VoicePicker({ t, direction = 'up', refreshTrigger = 0 }: { t: an
       const audio = new Audio(url);
       audioRef.current = audio;
       audio.onended = () => { setPlayingId(null); URL.revokeObjectURL(url); };
-      audio.onerror = () => { setPlayingId(null); URL.revokeObjectURL(url); };
-      audio.play();
-    } catch {
+      audio.onerror = () => {
+        setPlayingId(null);
+        URL.revokeObjectURL(url);
+        toast.error(t.voicePreviewFailed || '试听播放失败');
+      };
+      await audio.play();
+    } catch (error: any) {
       setPlayingId(null);
+      toast.error(error?.message || t.voicePreviewFailed || '试听播放失败');
     }
   };
 

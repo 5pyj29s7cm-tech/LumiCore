@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { resetCircuit } from '../server/cloud/circuit_breaker';
+import { isCircuitClosed, resetCircuit } from '../server/cloud/circuit_breaker';
 
 describe('TTS adapter fallback', () => {
   beforeEach(() => {
@@ -52,5 +52,42 @@ describe('TTS adapter fallback', () => {
     expect(result).toEqual(localResult);
     expect(cloudSynthesize).toHaveBeenCalledOnce();
     expect(localSynthesize).toHaveBeenCalledOnce();
+  });
+
+  it('does not disable all Doubao voices after one voice-specific failure', async () => {
+    vi.doMock('../server/tts/providers/local_cosyvoice', () => ({
+      isConfigured: () => false,
+      synthesizeSpeech: vi.fn(),
+      listVoices: () => [],
+    }));
+    vi.doMock('../server/tts/providers/gptsovits', () => ({
+      isConfigured: () => false,
+      isReadyForAutomaticFallback: () => false,
+      synthesizeSpeech: vi.fn(),
+      listVoices: () => [],
+    }));
+    vi.doMock('../server/tts/providers/cosyvoice', () => ({
+      synthesizeSpeech: vi.fn(),
+      cloneVoice: vi.fn(),
+      designVoice: vi.fn(),
+      listVoices: () => [],
+    }));
+    vi.doMock('../server/tts/providers/ark', () => ({
+      hasDoubaoSpeech: () => true,
+      synthesizeSpeech: vi.fn().mockRejectedValue(new Error('resource ID is mismatched with speaker related resource')),
+      listVoices: () => [],
+    }));
+    vi.doMock('../server/config/keys', () => ({ getKey: () => '' }));
+    vi.doMock('../server/config/voice_preference', () => ({
+      getVoicePreference: () => ({ stt: 'ark', tts: 'ark' }),
+    }));
+
+    const adapter = await import('../server/tts/adapter');
+    await expect(adapter.synthesizeSpeech('hello', {
+      provider: 'ark',
+      voiceId: 'invalid-for-resource',
+      allowFallback: false,
+    })).rejects.toThrow('resource ID is mismatched');
+    expect(isCircuitClosed('doubao-tts')).toBe(true);
   });
 });

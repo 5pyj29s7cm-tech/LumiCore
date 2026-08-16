@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildActionContract,
   claimsCurrentAppSaveCompletion,
+  extractExplicitArtifactTextRequirements,
   extractCurrentAppTarget,
   formatActionContractPrompt,
   hasCoreActionEvidence,
@@ -19,6 +20,26 @@ import {
 } from '../server/cognition/action_contract';
 
 describe('Lumi action contract', () => {
+  it('keeps explicit local customer documents on the artifact contract', () => {
+    expect(buildActionContract('读取 D:\\work\\customer-brief.txt，并在 D:\\work\\customer-followup.md 创建客户跟进方案并验证文件').kind)
+      .toBe('artifact_work');
+    expect(buildActionContract('先聊一句：你认为这份方案最需要客户补充什么？不要修改文件。').kind)
+      .toBe('none');
+    expect(buildActionContract('分析这个客户线索并推进销售跟进').kind)
+      .toBe('customer_operations');
+  });
+
+  it('does not treat the letters ai inside a local main path as an external AI surface', () => {
+    const text = '读取 D:\\lumiOS\\.codex-run\\acceptance-main\\customer-brief.txt，然后根据文件里的事实，在 D:\\lumiOS\\.codex-run\\acceptance-main\\customer-followup.md 创建中文跟进方案。这是本地文件任务，直接执行并验证文件。';
+
+    expect(buildActionContract(text).kind).toBe('artifact_work');
+  });
+
+  it('extracts only explicitly required exact artifact strings', () => {
+    expect(extractExplicitArtifactTextRequirements('在“已知风险”里明确写出“负责人：刘工”，其他事实不变。'))
+      .toEqual(['负责人：刘工']);
+  });
+
   it('separates authorized external AI history reads from new external AI submissions', () => {
     const text = '读取 ChatGPT 里的聊天历史并同步新增消息';
     const contract = buildActionContract(text);

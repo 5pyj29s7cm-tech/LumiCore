@@ -2,6 +2,7 @@ import type { LumiExecutionDecision } from './execution_decision';
 import type { LumiTurnDispatch } from './turn_dispatch';
 import {
   buildActionContract,
+  extractExplicitArtifactTextRequirements,
   formatActionContractPrompt,
   requestsBlankAutoCadDocument,
   requiresVisibleAutoCadExecution,
@@ -456,6 +457,9 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
     ...basePreferredTools,
   ]).slice(0, 48);
   const routeCategories = input.execution.toolRoute?.categories || [];
+  const exactArtifactText = actionContract.kind === 'artifact_work'
+    ? extractExplicitArtifactTextRequirements(routeText)
+    : [];
   const promptOverlay = [
     '## Lumi Capability Selection',
     `Selected lane: ${selected.lane}.`,
@@ -468,6 +472,9 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
       : '',
     laneRule(selected, routeText),
     formatActionContractPrompt(actionContract),
+    exactArtifactText.length
+      ? `Exact artifact text requirements: ${JSON.stringify(exactArtifactText)}. Preserve every string exactly, then verify the written artifact with work_product_verify using artifacts[].requiredText before claiming completion. If verification fails, repair the artifact and verify again.`
+      : '',
     'This lane is an execution bias, not a fixed script. If the newest user wording contradicts it, follow the newest wording and update task state when work is persistent.',
   ].filter(Boolean).join('\n');
 

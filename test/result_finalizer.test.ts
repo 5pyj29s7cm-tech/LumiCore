@@ -1,9 +1,24 @@
 import './helpers';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 describe('Lumi result finalizer', () => {
+  it('blocks a fenced legacy tool protocol from leaking into a read-only conversation', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '先聊一句：你认为最需要补充什么？不要修改文件。',
+      responseText: '我先读取文件。```tool\n[{"name":"read_file","arguments":{"path":"D:\\\\brief.txt"}}]\n```',
+      toolRecords: [],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain('protocol leaked');
+    expect(result.text).not.toContain('```tool');
+  });
+
   it.each([
     '\u5f53\u524d\u4f1a\u8bdd\u53ea\u6302\u8f7d\u4e86\u4e24\u4e2a\u5de5\u5177\uff0c\u8bb0\u5fc6\u5e93\u68c0\u7d22\u5de5\u5177\u6ca1\u6302\u8f7d\u3002',
     '\u5f53\u524d\u804a\u5929\u6a21\u5f0f\u672c\u8eab\u6ca1\u5e26\u5de5\u5177\uff0c\u7ffb\u4e0d\u4e86\u8bb0\u5fc6\u5e93\u3002',
@@ -435,6 +450,33 @@ describe('Lumi result finalizer', () => {
     expect(result.text).toContain('\u8fd8\u4e0d\u80fd\u8bf4\u6b63\u5728\u6267\u884c');
   });
 
+  it('keeps a factual denial of tool and task execution outside the completion guard', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const responseText = '没有。这轮对话我没有调用任何工具，也没有创建任务，只是文字交流。';
+    const result = finalizeLumiResponse({
+      taskText: '这轮对话里你有没有真的执行工具或创建任务？只按事实回答。',
+      responseText,
+      toolRecords: [],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(responseText);
+  });
+
+  it('removes invented scheduling and reminder claims from factual restatements', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '现在完整说出明天这件事。',
+      responseText: '明天去看硬件社区合作，重点问交付方式和数据归属。就在日程里记着了，到时候我提醒你。',
+      toolRecords: [],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe('明天去看硬件社区合作，重点问交付方式和数据归属。');
+  });
+
   it('keeps ordinary knowledge answers outside the execution guard', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
     const responseText = '\u201c\u5df2\u5b8c\u6210\u201d\u8868\u793a\u52a8\u4f5c\u7ed3\u675f\uff1b\u201c\u6b63\u5728\u6267\u884c\u201d\u8868\u793a\u52a8\u4f5c\u4ecd\u5728\u8fdb\u884c\u3002';
@@ -448,6 +490,58 @@ describe('Lumi result finalizer', () => {
 
     expect(result.blocked).toBe(false);
     expect(result.text).toBe(responseText);
+  });
+
+  it('keeps a no-mutation follow-up question conversational even when its answer describes file work', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const responseText = '当前最需要客户补充的是完整的数据接口文档；我现在只做判断，不修改文件。';
+
+    const result = finalizeLumiResponse({
+      taskText: '先聊一句：你认为这份方案当前最需要客户补充的唯一信息是什么？不要修改文件。',
+      responseText,
+      toolRecords: [],
+      source: 'chat',
+      flow: { completionEvidenceNeeded: false } as any,
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(responseText);
+  });
+
+  it('does not mark a verified text artifact complete until exact requested text is present', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const root = mkdtempSync(path.join(os.tmpdir(), 'lumi-artifact-finalizer-'));
+    const artifactPath = path.join(root, 'followup.md');
+    try {
+      writeFileSync(artifactPath, '## 已知风险\n负责人刘工\n', 'utf8');
+      const record = {
+        name: 'write_file',
+        arguments: { path: artifactPath },
+        result: `File written: ${artifactPath} (20 bytes)`,
+        terminalVerification: { status: 'verified' as const, strategy: 'artifact' as const, reason: 'non-empty file verified' },
+      };
+      const taskText = `把刚才生成的方案改一下：在“已知风险”里明确写出“负责人：刘工”，其他事实不变，仍保存到 ${artifactPath}，修改后验证。`;
+      const missing = finalizeLumiResponse({
+        taskText,
+        responseText: '已经修改并验证完成。',
+        toolRecords: [record],
+        source: 'chat',
+      });
+      expect(missing.blocked).toBe(true);
+      expect(missing.text).toContain('缺少精确文本“负责人：刘工”');
+
+      writeFileSync(artifactPath, '## 已知风险\n负责人：刘工\n', 'utf8');
+      const satisfied = finalizeLumiResponse({
+        taskText,
+        responseText: '已经修改并验证完成。',
+        toolRecords: [record],
+        source: 'chat',
+      });
+      expect(satisfied.blocked).toBe(false);
+      expect(satisfied.text).toContain(artifactPath);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it.each([
@@ -542,6 +636,95 @@ describe('Lumi result finalizer', () => {
     expect(result.blocked).toBe(false);
     expect(result.text).toContain('AutoCAD');
     expect(result.text).toContain('\u5df2\u6253\u5f00');
+    expect(result.reason).toContain('exact desktop-open success');
+  });
+
+  it('uses a verified client navigation receipt even when model narration says it failed', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '打开 Lumi 指挥中心。只执行客户端内置导航，不做其他操作。',
+      responseText: '这次还没完成，没有可验证结果。',
+      toolRecords: [{
+        name: 'client_action',
+        arguments: { action: 'open_command_center' },
+        result: JSON.stringify({
+          ok: true,
+          action: 'open_command_center',
+          target: 'command-center',
+          relayResult: { ok: true, action: 'open_command_center', view: 'office' },
+          verification: {
+            status: 'verified',
+            matched: ['surface:command-center:open'],
+            missing: [],
+            message: 'Lumi command center is open.',
+          },
+          say: 'Lumi command center is open.',
+        }),
+      }],
+      source: 'chat',
+      flow: { clientActionOnlyTurn: true } as any,
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toContain('指挥中心');
+    expect(result.text).toContain('已打开');
+    expect(result.reason).toContain('verified state-diff receipt');
+  });
+
+  it('treats explicit no-input and no-substitute clauses as open constraints, not remaining work', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '打开记事本，只打开，不输入任何内容，也不要打开替代软件。',
+      responseText: '已打开记事本。',
+      toolRecords: [{
+        name: 'desktop_open',
+        arguments: { target: '记事本' },
+        result: 'Focused running app Notepad (pid 45900, window "无标题 - 记事本")',
+      }, {
+        name: 'desktop_active_window',
+        arguments: {},
+        result: JSON.stringify({ title: '无标题 - 记事本', process_name: 'notepad.exe' }),
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toContain('已打开');
+    expect(result.text).toContain('记事本');
+    expect(result.text).not.toContain('后续操作');
+  });
+
+  it('matches a Chinese Notepad request to the verified native process receipt', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '\u6253\u5f00\u8bb0\u4e8b\u672c\uff0c\u53ea\u6253\u5f00\uff0c\u4e0d\u8f93\u5165\u4efb\u4f55\u5185\u5bb9\uff0c\u4e5f\u4e0d\u8981\u6253\u5f00\u66ff\u4ee3\u8f6f\u4ef6\u3002',
+      responseText: '\u5df2\u6253\u5f00\u8bb0\u4e8b\u672c\u3002',
+      source: 'chat',
+      toolRecords: [{
+        id: 'qc-notepad-native',
+        name: 'desktop_open',
+        arguments: { target: '\u8bb0\u4e8b\u672c' },
+        result: JSON.stringify({
+          ok: true,
+          status: 'verified',
+          target: '\u8bb0\u4e8b\u672c',
+          targetMatched: true,
+          actualTarget: { title: '\u65e0\u6807\u9898 - \u8bb0\u4e8b\u672c', processName: 'notepad.exe' },
+          verification: { status: 'verified' },
+        }),
+        terminalVerification: {
+          status: 'verified',
+          strategy: 'state_diff',
+          reason: 'Exact target focused.',
+        },
+      }],
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe('\u5df2\u6253\u5f00\u8bb0\u4e8b\u672c\u3002');
     expect(result.reason).toContain('exact desktop-open success');
   });
 

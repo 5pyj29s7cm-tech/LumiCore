@@ -22,10 +22,17 @@ export interface LumiPostTurnLearningContext {
   orgId?: string;
   defaultSourceInteractionId?: string;
   agentId?: string;
+  source?: string;
   log?: {
     info?: LogFn;
     warn?: LogFn;
   };
+}
+
+export function shouldPersistPostTurnLearningSource(source?: string): boolean {
+  const normalized = String(source || '').trim().toLowerCase();
+  if (!normalized) return true;
+  return !/^(?:acceptance|e2e|probe|smoke)(?:[-_:]|$)/i.test(normalized);
 }
 
 export interface LumiPostTurnLearningOptions {
@@ -53,6 +60,19 @@ export function persistLumiPostTurnLearning(
 ): LumiPostTurnLearningOutcome {
   const channel = options.channel || context.defaultChannel;
   const label = options.logLabel || channel;
+
+  if (!shouldPersistPostTurnLearningSource(context.source)) {
+    return {
+      ok: true,
+      result: {
+        shouldPersist: false,
+        reasons: ['ephemeral_source'],
+        memoryCandidates: [],
+        capabilityCandidate: null,
+        storedMemories: 0,
+      },
+    };
+  }
 
   try {
     const result = persistLumiLearningTurn({

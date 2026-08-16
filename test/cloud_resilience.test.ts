@@ -29,6 +29,12 @@ describe('cloud provider failure feedback', () => {
     expect(result.isRetryable).toBe(true);
   });
 
+  it('does not mistake Doubao business code 55000000 for an HTTP 500', () => {
+    const result = classifyCloudError(new Error('Doubao TTS error (55000000): resource ID is mismatched with speaker related resource'));
+    expect(result.category).toBe('bad_request');
+    expect(result.isRetryable).toBe(false);
+  });
+
   it('can open a provider circuit immediately for account failures', () => {
     recordFailure('test-provider', undefined, new Error('invalid credentials'), { openImmediately: true });
     expect(isCircuitClosed('test-provider')).toBe(false);

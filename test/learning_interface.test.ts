@@ -124,6 +124,24 @@ describe('Lumi learning interface', () => {
     expect(failed.error).toContain('tool registry unavailable');
   });
 
+  it('does not let acceptance probes mutate durable learning state', async () => {
+    const { persistLumiPostTurnLearning } = await import('../server/cognition/post_turn_learning');
+    const outcome = persistLumiPostTurnLearning({
+      userId: 'learning_interface_acceptance_user',
+      userText: 'Lumi 以后一定要记住，大模型只是学习接口。',
+      defaultChannel: 'chat',
+      getToolNames: () => ['self_extension_plan'],
+      source: 'acceptance-main',
+    }, '收到。');
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.result).toMatchObject({
+      shouldPersist: false,
+      storedMemories: 0,
+      reasons: ['ephemeral_source'],
+    });
+  });
+
   it('keeps chat and voice early-return paths wired into post-turn learning', () => {
     const chatSource = readFileSync(path.join(process.cwd(), 'server/socket/chat.ts'), 'utf8');
     const voiceSource = readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');

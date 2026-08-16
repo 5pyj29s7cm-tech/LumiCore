@@ -51,6 +51,12 @@ import {
   setConversationActionExecutionStatus,
   updateConversationActionFocus,
 } from "../conversation/manager";
+import {
+  formatConversationExecutionFactAnswer,
+  getConversationExecutionFacts,
+  isConversationExecutionFactQuestion,
+} from "../conversation/execution_facts";
+import { resolveExactConversationCorrection } from "../conversation/exact_correction";
 import { scheduleConversationSummary } from "../conversation/summary_scheduler";
 import { processInput, CognitiveContext, extractSentiment } from "../cognition";
 import {
@@ -2262,6 +2268,51 @@ async function processVoiceInput(
     }
   };
 
+  const deterministicConversationResponse = (() => {
+    if (isConversationExecutionFactQuestion(actionIntentText)) {
+      return {
+        text: formatConversationExecutionFactAnswer(getConversationExecutionFacts({
+          conversationId: conversationTurn.conversation.id,
+          userId: session.userId,
+          domain: voiceScope.domain,
+          orgId: voiceScope.orgId,
+        }), actionIntentText),
+        intent: 'execution_facts',
+        source: 'voice_conversation_execution_facts',
+      };
+    }
+    const corrected = resolveExactConversationCorrection(actionIntentText, recentVoiceHistory);
+    return corrected
+      ? { text: corrected, intent: 'exact_correction', source: 'voice_exact_correction' }
+      : null;
+  })();
+  if (deterministicConversationResponse) {
+    responseText = deterministicConversationResponse.text;
+    emitAgent('agent:response', {
+      text: responseText,
+      agentName: 'Lumi',
+      source: deterministicConversationResponse.source,
+      finalized: true,
+      blocked: false,
+      reason: deterministicConversationResponse.intent,
+    });
+    persistVoiceAssistantMessage(conversationTurn.conversation.id, responseText, {
+      cognitiveIntent: deterministicConversationResponse.intent,
+      llmWasCalled: false,
+      source: deterministicConversationResponse.source,
+    });
+    queueFinalizedSpeech(responseText);
+    await Promise.allSettled(ttsPromises);
+    if (!isCurrentTurn()) return;
+    persistSidecarConversation(conversationTurn.conversation.id);
+    session.isProcessing = false;
+    session.isSpeaking = false;
+    session.activeWorkStatus = 'idle';
+    socket.emit('audio:status', { status: 'listening', requestId });
+    emitAgent('agent:status', { status: 'idle' });
+    return;
+  }
+
   if (userObservedCompletion) {
     const conversation = conversationTurn.conversation;
     persistVoiceUserMessage('task_user_observation');
@@ -3462,6 +3513,13 @@ async function processVoiceInput(
     if (finalResponse.blocked) {
       logger.warn(`[Audio] Completion claim blocked: ${finalResponse.reason}`);
       if (finalResponse.notification) emitAgent("agent:notification", finalResponse.notification);
+      if (actionTaskExecution.state?.taskId && turnFlow.allowToolUseForTurn) {
+        setConversationActionExecutionStatus(conversationTurn.conversation.id, session.userId, 'blocked', {
+          blocker: finalResponse.reason || 'The current work product did not pass final verification.',
+          assistantState: responseText,
+          requestId: '',
+        });
+      }
     }
 
     persistVoiceTakeoverExecution(responseText, {

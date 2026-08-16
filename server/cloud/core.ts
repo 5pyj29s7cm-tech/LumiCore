@@ -46,6 +46,7 @@ export interface ClassifiedError {
  */
 export function classifyCloudError(error: Error, provider?: string): ClassifiedError {
   const msg = error.message?.toLowerCase() || '';
+  const hasStatus = (...codes: number[]) => codes.some(code => new RegExp(`(?:^|\\D)${code}(?:\\D|$)`).test(msg));
 
   if (msg.includes('circuit') || msg.includes('circuit breaker')) {
     return { category: 'circuit_open', message: error.message, isRetryable: true, provider };
@@ -56,14 +57,13 @@ export function classifyCloudError(error: Error, provider?: string): ClassifiedE
     msg.includes('invalid api key') ||
     msg.includes('unauthorized') ||
     msg.includes('authentication') ||
-    msg.includes('403') ||
-    msg.includes('401')
+    hasStatus(401, 403)
   ) {
     return { category: 'auth', message: error.message, isRetryable: false, provider };
   }
 
   if (
-    msg.includes('429') ||
+    hasStatus(429) ||
     msg.includes('rate limit') ||
     msg.includes('quota') ||
     msg.includes('too many requests') ||
@@ -93,10 +93,7 @@ export function classifyCloudError(error: Error, provider?: string): ClassifiedE
   }
 
   if (
-    msg.includes('500') ||
-    msg.includes('502') ||
-    msg.includes('503') ||
-    msg.includes('504') ||
+    hasStatus(500, 502, 503, 504) ||
     msg.includes('internal server error') ||
     msg.includes('service unavailable')
   ) {
@@ -104,11 +101,11 @@ export function classifyCloudError(error: Error, provider?: string): ClassifiedE
   }
 
   if (
-    msg.includes('400') ||
-    msg.includes('404') ||
-    msg.includes('422') ||
+    hasStatus(400, 404, 422) ||
     msg.includes('bad request') ||
-    msg.includes('not found')
+    msg.includes('not found') ||
+    msg.includes('resource id is mismatched') ||
+    msg.includes('no readable text')
   ) {
     return { category: 'bad_request', message: error.message, isRetryable: false, provider };
   }

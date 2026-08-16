@@ -30,6 +30,7 @@ import {
   type CapabilityExecutionPlan,
 } from './capability_execution_plan';
 import { recordRoutingShadowComparison } from '../runtime/capability_metrics';
+import { hasExplicitNoMutationInstruction } from './tool_intent';
 
 export interface LumiCapabilityPlan extends LumiCapabilitySelection {
   schemaVersion: 1;
@@ -114,6 +115,29 @@ function applyAdditionalForbiddenTools(
         ? `Entry authorization boundary forbids: ${additions.join(', ')}.`
         : '',
     ].filter(Boolean).join('\n'),
+  };
+}
+
+function applyCurrentTurnNoMutationConstraint(
+  execution: LumiExecutionDecision,
+  registry: ToolRegistry,
+  text: string,
+): LumiExecutionDecision {
+  if (!hasExplicitNoMutationInstruction(text)) return execution;
+  const mutationTools = registry.getCapabilityManifest(undefined)
+    .filter(entry => (
+      entry.operation === 'create'
+      || entry.operation === 'mutate'
+      || entry.sideEffects.some(effect => effect.type !== 'local_read')
+    ))
+    .map(entry => entry.toolName);
+  const restricted = applyAdditionalForbiddenTools(execution, mutationTools);
+  return {
+    ...restricted,
+    promptOverlay: [
+      execution.promptOverlay,
+      'Current-turn read-only boundary: the user explicitly prohibited modification. Read/inspect/answer only; do not create, edit, save, send, submit, control, or mutate any state.',
+    ].join('\n'),
   };
 }
 
@@ -213,12 +237,16 @@ export function buildLumiExecutionPipeline(
     manifest: unrestrictedManifest,
   });
   const execution = applyAdditionalForbiddenTools(
-    applySelectedWorkflowAdapterPolicy(
-      applyLumiRoutingShadowGuard(legacyExecution, shadowComparison),
-      turnIntent,
+    applyCurrentTurnNoMutationConstraint(
+      applySelectedWorkflowAdapterPolicy(
+        applyLumiRoutingShadowGuard(legacyExecution, shadowComparison),
+        turnIntent,
+        input.registry,
+        input.personalityToolPolicy,
+        input.isSanctuary,
+      ),
       input.registry,
-      input.personalityToolPolicy,
-      input.isSanctuary,
+      input.dispatch.text,
     ),
     input.additionalForbiddenTools,
   );

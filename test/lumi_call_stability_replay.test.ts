@@ -124,6 +124,71 @@ describe('Lumi field-call stability replay', () => {
     })).toContain('已完成');
   });
 
+  it('includes the verified output path when a completed artifact status query asks for it', () => {
+    const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
+    const conversation = { id: 'conv_artifact', userId: 'user_artifact', domain: 'personal', orgId: '' };
+    const outputPath = 'D:\\outputs\\customer-followup.md';
+    syncConversationActionTaskLedger(db, {
+      conversation,
+      state: actionState({
+        taskId: 'task_artifact',
+        goal: `创建并验证文件 ${outputPath}`,
+        latestInstruction: `创建并验证文件 ${outputPath}`,
+        sourcePaths: [outputPath],
+        receipts: [{
+          id: 'artifact_receipt',
+          key: `write_file:{\"path\":\"${outputPath.replace(/\\/g, '\\\\')}\"}`,
+          name: 'write_file',
+          arguments: { path: outputPath },
+          result: `File written: ${outputPath} (120 bytes)`,
+          error: '',
+          outcome: 'success',
+          terminalVerification: { status: 'verified', strategy: 'artifact', reason: 'non-empty file verified' },
+          recordedAt: '2026-08-16T00:00:00.000Z',
+        }],
+      }),
+    });
+
+    const status = formatConversationActionLedgerStatus(db, {
+      conversationId: conversation.id,
+      userId: conversation.userId,
+      query: '任务完成了吗？告诉我产物路径。',
+    });
+    expect(status).toContain('已完成');
+    expect(status).toContain(`产物路径：${outputPath}`);
+  });
+
+  it('answers a recent desktop-open receipt question with the concrete target', () => {
+    const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
+    const conversation = { id: 'conv_open', userId: 'user_open', domain: 'personal', orgId: '' };
+    syncConversationActionTaskLedger(db, {
+      conversation,
+      state: actionState({
+        taskId: 'task_open',
+        goal: '\u6253\u5f00\u8bb0\u4e8b\u672c\uff0c\u53ea\u6253\u5f00\u3002',
+        latestInstruction: '\u6253\u5f00\u8bb0\u4e8b\u672c\uff0c\u53ea\u6253\u5f00\u3002',
+        appTarget: '\u8bb0\u4e8b\u672c',
+        receipts: [{
+          id: 'open_receipt',
+          key: 'desktop_open:notepad',
+          name: 'desktop_open',
+          arguments: { target: '\u8bb0\u4e8b\u672c' },
+          result: JSON.stringify({ ok: true, status: 'verified', targetMatched: true }),
+          error: '',
+          outcome: 'success',
+          terminalVerification: { status: 'verified', strategy: 'state_diff', reason: 'target matched' },
+          recordedAt: '2026-08-16T00:00:00.000Z',
+        }],
+      }),
+    });
+
+    expect(formatConversationActionLedgerStatus(db, {
+      conversationId: conversation.id,
+      userId: conversation.userId,
+      query: '\u521a\u624d\u6253\u5f00\u4e86\u4ec0\u4e48\uff1f\u53ea\u6839\u636e\u56de\u6267\u56de\u7b54\u3002',
+    })).toBe('\u521a\u624d\u6253\u5f00\u7684\u662f\u8bb0\u4e8b\u672c\uff0c\u5df2\u901a\u8fc7\u7a97\u53e3\u56de\u6267\u786e\u8ba4\u3002');
+  });
+
   it('links a design follow-up to the CAD task and inherits its artifact context', () => {
     const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
     const conversation = { id: 'conv_2', userId: 'user_2', domain: 'personal', orgId: '' };

@@ -37,7 +37,10 @@ import {
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildCapabilityMetaResponse } from "../cognition/capability_meta";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
-import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
+import {
+  persistLumiPostTurnLearning,
+  shouldPersistPostTurnLearningSource,
+} from "../cognition/post_turn_learning";
 import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
 import { formatClientSelfPrompt } from "../client/self_model";
 import { canAutoApproveAction } from "../tools/action_constitution";
@@ -78,6 +81,12 @@ import {
   updateConversationActionFocus,
 } from "../conversation/manager";
 import { scheduleConversationSummary } from "../conversation/summary_scheduler";
+import {
+  formatConversationExecutionFactAnswer,
+  getConversationExecutionFacts,
+  isConversationExecutionFactQuestion,
+} from "../conversation/execution_facts";
+import { resolveExactConversationCorrection } from "../conversation/exact_correction";
 import { ensureBranch } from "../memory/tree";
 import { retrieveChunks } from "../agents/rag";
 import { getSensory } from "./shared";
@@ -100,6 +109,7 @@ import { hasExplicitTeamExecutionRequest, isUserCorrectionOrExplanationQuestion 
 import { summarizeToolRecordForPersistence } from "../cognition/tool_record_status";
 import {
   buildDeterministicClientNavigationCommand,
+  buildDeterministicLocalDesktopNavigationCommand,
   buildQuickCommandToolPolicy,
   matchQuickCommand,
 } from "../cognition/quick_commands";
@@ -970,6 +980,7 @@ export function registerChatHandler(
       ? data.requestId.trim().slice(0, 120)
       : `chat_${crypto.randomUUID()}`;
     const eventSource = source || 'chat';
+    const allowAdaptiveLearning = shouldPersistPostTurnLearningSource(eventSource);
     const toolResultPreviewLimit = 500;
     const formatToolResultForUi = (value?: string) => value?.slice(0, toolResultPreviewLimit) || '';
     const conversationAgentId = agentId || 'lumi';
@@ -1529,6 +1540,7 @@ export function registerChatHandler(
             orgId: resolvedOrgId,
             defaultSourceInteractionId: interactionId,
             agentId: agentId || '',
+            source: eventSource,
             log: { info: console.log, warn: console.warn },
           },
           assistantText,
@@ -1577,6 +1589,35 @@ export function registerChatHandler(
         visibleUserText,
         conversation?.actionContinuationState,
       );
+      if (conversationId && isConversationExecutionFactQuestion(visibleUserText)) {
+        const factText = formatConversationExecutionFactAnswer(getConversationExecutionFacts({
+          conversationId,
+          userId: uid,
+          domain: resolvedDomain,
+          orgId: resolvedOrgId,
+        }), visibleUserText);
+        emitAgent("agent:status", { status: "responding", agentName: personality.name });
+        emitAgent("agent:response", { text: factText, agentName: personality.name, finalized: true, blocked: false, reason: 'conversation_execution_facts' });
+        addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'execution_facts' });
+        addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: factText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'execution_facts' });
+        socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
+        emitAgent("agent:status", { status: "idle" });
+        releaseChatSession();
+        return;
+      }
+      const exactCorrectionText = conversationId
+        ? resolveExactConversationCorrection(visibleUserText, persistedConversationHistory)
+        : null;
+      if (conversationId && exactCorrectionText) {
+        emitAgent("agent:status", { status: "responding", agentName: personality.name });
+        emitAgent("agent:response", { text: exactCorrectionText, agentName: personality.name, finalized: true, blocked: false, reason: 'exact_conversation_correction' });
+        addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'exact_correction' });
+        addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: exactCorrectionText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'exact_correction', llmWasCalled: false });
+        socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
+        emitAgent("agent:status", { status: "idle" });
+        releaseChatSession();
+        return;
+      }
       if (conversationId && actionFollowupIntent === 'status') {
         const statusText = getConversationActionStatus(conversationId, uid, visibleUserText, conversation?.actionContinuationState);
         emitAgent("agent:status", { status: "responding", agentName: personality.name });
@@ -2400,18 +2441,28 @@ export function registerChatHandler(
         const deterministicClientNavigation = clientActionOnlyTurn
           ? buildDeterministicClientNavigationCommand(executionPipeline.normalizedIntent)
           : null;
+        const deterministicLocalDesktopNavigation = !clientActionOnlyTurn && !explicitTeamOrchestration
+          ? buildDeterministicLocalDesktopNavigationCommand(executionPipeline.normalizedIntent)
+          : null;
+        const nonExecutingNormalizedIntent =
+          executionPipeline.normalizedIntent.kind === 'correction_explanation'
+          || executionPipeline.normalizedIntent.kind === 'status_query';
         const quickResult = capabilityMetaResponse
           ? { matched: true, responseText: capabilityMetaResponse }
-          : deterministicClientNavigation || (shouldRunLegacyDirectExecution() ? await matchQuickCommand(
-              continuationOpenTarget ? buildInternalOpenCommand(visibleUserText, continuationOpenTarget) : text,
-              uid,
-              {
-                domain: resolvedDomain,
-                orgId: resolvedOrgId,
-                surface: turnSurface,
-                currentAppTarget: getRecoveredApplicationContinuationTarget(actionContinuationBridge),
-              },
-            ) : null);
+          : deterministicClientNavigation || deterministicLocalDesktopNavigation || (
+            shouldRunLegacyDirectExecution() && !nonExecutingNormalizedIntent
+              ? await matchQuickCommand(
+                  continuationOpenTarget ? buildInternalOpenCommand(visibleUserText, continuationOpenTarget) : text,
+                  uid,
+                  {
+                    domain: resolvedDomain,
+                    orgId: resolvedOrgId,
+                    surface: turnSurface,
+                    currentAppTarget: getRecoveredApplicationContinuationTarget(actionContinuationBridge),
+                  },
+                )
+              : null
+          );
         if (quickResult?.matched && (!quickResult.toolCall || executionDecision.allowToolUse)) {
           console.log('[ChatHandler] Quick command:', text.slice(0, 60));
           let quickResponseText = quickResult.responseText;
@@ -3840,6 +3891,13 @@ export function registerChatHandler(
       if (finalResponse.blocked) {
         console.warn('[ChatHandler] Completion claim blocked:', finalResponse.reason);
         if (finalResponse.notification) emitAgent("agent:notification", finalResponse.notification);
+        if (conversationId && actionTaskExecution.state?.taskId && executionDecision.allowToolUse) {
+          setConversationActionExecutionStatus(conversationId, uid, 'blocked', {
+            blocker: finalResponse.reason || 'The current work product did not pass final verification.',
+            assistantState: responseText,
+            requestId: '',
+          });
+        }
       }
 
       persistChatTakeoverExecution(responseText, {
@@ -3914,7 +3972,7 @@ export function registerChatHandler(
       // Auto-learn from corrections: when user corrects Lumi, extract high-confidence memories
       const correctionPatterns = [/不是/, /不对/, /错了/, /wrong/i, /incorrect/i, /actually/i, /no,?\s/i, /你弄错了/, /不是这样的/];
       const isCorrection = correctionPatterns.some(p => p.test(text));
-      if (resolvedDomain === 'personal' && isCorrection && responseText && !finalResponse.blocked) {
+      if (allowAdaptiveLearning && resolvedDomain === 'personal' && isCorrection && responseText && !finalResponse.blocked) {
         try {
           const corrected = await extractMemories(
             { userMessage: text, assistantResponse: responseText, existingMemories: relevantMemories.map(m => m.content), provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, treeBranches: [] },
@@ -3964,7 +4022,7 @@ export function registerChatHandler(
 
       // Lightweight per-conversation evolution — micro-shifts after meaningful chats
       // Fires if enough owner_trait memories have accumulated, no 7-day wait needed
-      if (resolvedDomain === 'personal' && !isSanctuary && responseText && !finalResponse.blocked && cognition.intent.category !== 'command' && !personalityRegistry.isEvolutionFrozen(personalityId, uid)) {
+      if (allowAdaptiveLearning && resolvedDomain === 'personal' && !isSanctuary && responseText && !finalResponse.blocked && cognition.intent.category !== 'command' && !personalityRegistry.isEvolutionFrozen(personalityId, uid)) {
         try {
           const evolutionConfig = personalityRegistry.getEvolutionConfig(personalityId, uid);
           const step = await lightweightEvolve(
@@ -3988,7 +4046,7 @@ export function registerChatHandler(
 
       // Async memory extraction — skip trivial/command messages to reduce noise
       const skipExtractionCategories = ['command', 'file', 'unknown'];
-      if (text.length >= 10 && !finalResponse.blocked && !skipExtractionCategories.includes(cognition.intent.category)) {
+      if (allowAdaptiveLearning && text.length >= 10 && !finalResponse.blocked && !skipExtractionCategories.includes(cognition.intent.category)) {
       const branchNodes = queryMemories({ userId: uid, nodeType: 'branch', limit: 50, domain: resolvedDomain, orgId: resolvedOrgId });
       const treeBranches = branchNodes.map(b => b.content);
       const locationTag = sensory.locationTag || undefined;

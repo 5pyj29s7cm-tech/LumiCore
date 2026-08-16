@@ -39,6 +39,7 @@ export interface ToolIntentDecisionTrace {
   blockedBy: string[];
   matchedRules: ToolIntentMatchedRule[];
   signals: {
+    explicitNoToolInstruction: boolean;
     informationOnlyQuestion: boolean;
     diagnosticOrRepair: boolean;
     explicitToolIntent: boolean;
@@ -47,6 +48,39 @@ export interface ToolIntentDecisionTrace {
     visionIntent: boolean;
     autonomousTask: boolean;
   };
+}
+
+const EXPLICIT_NO_TOOL_PATTERNS: RegExp[] = [
+  /(?:\u4e0d\u8981|\u522b|\u65e0\u9700|\u4e0d\u7528)\s*(?:\u518d)?(?:\u6267\u884c|\u8fdb\u884c|\u505a)\s*(?:\u4efb\u4f55|\u65b0\u7684?|\u5176\u4ed6|\u5176\u5b83)?\s*(?:\u64cd\u4f5c|\u52a8\u4f5c|\u4efb\u52a1)/u,
+  /(?:不要|别|无需|不用|禁止|请勿|勿)\s*(?:再|继续)?\s*(?:调用|使用|执行|启动)?\s*(?:任何|这些|外部|其他|其它)?\s*(?:工具|插件|技能|脚本)/u,
+  /(?:只|仅)\s*(?:回复|回答|解释|复述|确认)\s*[,，、]?\s*(?:不要|别|无需|不用)\s*(?:调用|使用|执行)?\s*(?:工具|插件|技能|脚本)/u,
+  /\b(?:do\s+not|don't|without|no)\s+(?:call(?:ing)?|use|using|run(?:ning)?|execute|executing)?\s*(?:any\s+)?(?:tools?|plugins?|skills?|scripts?)\b/i,
+  /\b(?:reply|answer|explain|repeat)\s+only\b[^.!?\n]{0,24}\b(?:no|without)\s+(?:tools?|plugins?|skills?|scripts?)\b/i,
+];
+
+/** A hard, current-turn veto shared by chat and voice tool routing. */
+export function hasExplicitNoToolInstruction(text: string): boolean {
+  const normalized = String(text || '').trim();
+  if (!normalized) return false;
+  if (/(?:不是|并非|并不是)\s*(?:不要|别|不用|无需).{0,8}(?:工具|插件|技能|脚本)/u.test(normalized)) {
+    return false;
+  }
+  return EXPLICIT_NO_TOOL_PATTERNS.some(pattern => pattern.test(normalized));
+}
+
+const EXPLICIT_NO_MUTATION_PATTERNS: RegExp[] = [
+  /(?:不要|别|无需|不用|禁止|请勿|勿)\s*(?:再|继续)?\s*(?:修改|改动|改写|写入|保存|覆盖|创建|新建|生成|删除|发送|提交|操作)(?:这|该|当前|任何)?(?:个|份)?\s*(?:文件|文档|内容|页面|系统|数据)?/u,
+  /\b(?:do\s+not|don't|without)\s+(?:modify|edit|write|save|overwrite|create|delete|send|submit|change)\b/iu,
+];
+
+/** A current-turn veto for side-effecting tools while preserving read-only inspection. */
+export function hasExplicitNoMutationInstruction(text: string): boolean {
+  const normalized = String(text || '').trim();
+  if (!normalized) return false;
+  if (/(?:不是|并非|并不是)\s*(?:不要|别|不用|无需).{0,12}(?:修改|改动|写入|保存|创建|生成|操作)/u.test(normalized)) {
+    return false;
+  }
+  return EXPLICIT_NO_MUTATION_PATTERNS.some(pattern => pattern.test(normalized));
 }
 
 const CLIENT_NAVIGATION_VERBS = /(?:\u6253\u5f00|\u8fdb\u5165|\u53bb|\u770b\u770b|\u5207\u6362|\u5207\u5230|\u6362\u5230|\u542f\u52a8|\u5f00\u542f|\u5f00\u59cb|\u5c55\u5f00|\u9000\u51fa|\u6536\u8d77|\u5173\u95ed|\u5173\u6389|\u56de\u5230|\u8fd4\u56de|\b(?:open|show|enter|switch|start|expand|exit|hide|close|collapse|return|go back)\b)/iu;
@@ -109,9 +143,18 @@ const STRUCTURED_TOOL_INTENT_RULES: IntentGrammarRule[] = [
 ];
 
 const STRUCTURED_CLIENT_ACTION_RULES: IntentGrammarRule[] = [
-  { name: 'client-navigation', all: [CLIENT_NAVIGATION_VERBS, CLIENT_SURFACES] },
-  { name: 'extended-personal-client-navigation', all: [CLIENT_NAVIGATION_VERBS, EXTENDED_PERSONAL_CLIENT_SURFACES] },
-  { name: 'organization-workspace-navigation', all: [CLIENT_NAVIGATION_VERBS, ORGANIZATION_WORKSPACE_SURFACES] },
+  {
+    name: 'client-navigation',
+    all: [new RegExp(`(?:${CLIENT_NAVIGATION_VERBS.source})[^。！？.!?\\n]{0,18}(?:${CLIENT_SURFACES.source})`, 'iu')],
+  },
+  {
+    name: 'extended-personal-client-navigation',
+    all: [new RegExp(`(?:${CLIENT_NAVIGATION_VERBS.source})[^。！？.!?\\n]{0,18}(?:${EXTENDED_PERSONAL_CLIENT_SURFACES.source})`, 'iu')],
+  },
+  {
+    name: 'organization-workspace-navigation',
+    all: [new RegExp(`(?:${CLIENT_NAVIGATION_VERBS.source})[^。！？.!?\\n]{0,18}(?:${ORGANIZATION_WORKSPACE_SURFACES.source})`, 'iu')],
+  },
 ];
 
 const TOOL_INTENT_PATTERNS: RegExp[] = [
@@ -377,6 +420,7 @@ function hasExternalDesktopOrTeamExecutionIntent(text: string): boolean {
 export function hasExplicitToolIntent(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
+  if (hasExplicitNoToolInstruction(normalized)) return false;
   if (isExternalAiHistoryActionRequest(normalized)) return true;
   const canonical = normalizeActionIntent(normalized);
   if (canonical.kind === 'external_ai_history') return !isInformationOnlyQuestion(normalized);
@@ -390,6 +434,7 @@ export function hasExplicitToolIntent(text: string): boolean {
 export function hasClientActionIntent(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
+  if (hasExplicitNoToolInstruction(normalized)) return false;
   if (isExternalAiHistoryActionRequest(normalized)) return false;
   const canonical = normalizeActionIntent(normalized);
   if (canonical.kind === 'client_navigation' || canonical.kind === 'client_state') return true;
@@ -405,6 +450,7 @@ export function hasClientActionIntent(text: string): boolean {
 export function hasClientActionOnlyIntent(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
+  if (hasExplicitNoToolInstruction(normalized)) return false;
   if (isExternalAiHistoryActionRequest(normalized)) return false;
   const canonical = normalizeActionIntent(normalized);
   if (canonical.kind === 'client_navigation' || canonical.kind === 'client_state') return true;
@@ -436,6 +482,7 @@ export function isDiagnosticOrRepairRequest(text: string): boolean {
 }
 
 export function shouldAllowToolUseForTurn(text: string, source?: string, operationMode?: string): boolean {
+  if (hasExplicitNoToolInstruction(text)) return false;
   const mode = normalizeOperationMode(operationMode);
   if (mode === 'chat') return hasClientActionIntent(text);
   if (isDiagnosticOrRepairRequest(text)) return true;
@@ -454,6 +501,7 @@ export function traceToolIntentDecision(text: string, source?: string, operation
   const matchedRules: ToolIntentMatchedRule[] = [];
   pushRule(matchedRules, 'mode', `operation-mode:${mode}`);
   if (requestedMode) pushRule(matchedRules, 'client_action', `operation-mode-request:${requestedMode}`);
+  const explicitNoToolInstruction = normalized ? hasExplicitNoToolInstruction(normalized) : false;
 
   const clientStateInspectionRequest = normalized ? CLIENT_STATE_INSPECTION_REQUEST.test(normalized) : false;
   const externalAiHistoryAction = normalized ? isExternalAiHistoryActionRequest(normalized) : false;
@@ -502,6 +550,7 @@ export function traceToolIntentDecision(text: string, source?: string, operation
     : [];
   const visionIntent = normalized ? hasVisionIntent(normalized) : false;
 
+  if (explicitNoToolInstruction) pushRule(matchedRules, 'information_guard', 'explicit-no-tool-instruction');
   if (informationOnlyQuestion) pushRule(matchedRules, 'information_guard', 'information-only-question');
   for (const name of diagnosticRules) pushRule(matchedRules, 'diagnostic', name);
   for (const name of structuredToolRules) pushRule(matchedRules, 'structured_tool', name);
@@ -535,6 +584,9 @@ export function traceToolIntentDecision(text: string, source?: string, operation
   let decisionReason = 'no action signal matched';
   if (!normalized) {
     decisionReason = 'empty turn';
+  } else if (explicitNoToolInstruction) {
+    allowToolUse = false;
+    decisionReason = 'explicit current-turn no-tool instruction';
   } else if (mode === 'chat') {
     allowToolUse = clientActionIntent;
     decisionReason = allowToolUse
@@ -567,6 +619,7 @@ export function traceToolIntentDecision(text: string, source?: string, operation
   const blockedBy: string[] = [];
   if (!allowToolUse) {
     if (!normalized) blockedBy.push('empty-text');
+    if (explicitNoToolInstruction) blockedBy.push('explicit-no-tool-instruction');
     if (informationOnlyQuestion) blockedBy.push('information-only-question');
     if (mode === 'meeting' && !clientActionIntent) blockedBy.push('meeting-mode-client-actions-only');
     if (mode === 'chat' && !clientActionIntent) {
@@ -585,6 +638,7 @@ export function traceToolIntentDecision(text: string, source?: string, operation
     blockedBy,
     matchedRules,
     signals: {
+      explicitNoToolInstruction,
       informationOnlyQuestion,
       diagnosticOrRepair,
       explicitToolIntent,

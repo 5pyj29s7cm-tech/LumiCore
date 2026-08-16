@@ -153,6 +153,23 @@ describe('systematic naturalness regressions', () => {
     expect(resolveRecentActionOpenTarget('打开浏览器', state)).toBeNull();
   });
 
+  it('does not reopen a receipt target for a retrospective status question', () => {
+    const state: ConversationActionContinuationState = {
+      version: 1,
+      goal: 'open Notepad',
+      latestInstruction: 'open Notepad',
+      appTarget: 'Notepad',
+      sourcePaths: ['Notepad'],
+      latestBlocker: '',
+      unfinished: false,
+      evidenceTools: ['desktop_open'],
+      assistantState: 'opened',
+      toolSummaries: ['desktop_open succeeded'],
+      updatedAt: new Date().toISOString(),
+    };
+    expect(resolveRecentActionOpenTarget('\u521a\u624d\u6253\u5f00\u4e86\u4ec0\u4e48\uff1f\u4e0d\u8981\u6267\u884c\u65b0\u64cd\u4f5c\u3002', state)).toBeNull();
+  });
+
   it('routes a known-site login straight to the visible saved-session runner', async () => {
     const result = await matchQuickCommand('登录中国裁判文书网', 'naturalness-login', { surface: 'voice' });
     expect(result?.matched).toBe(true);

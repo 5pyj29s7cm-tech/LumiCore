@@ -154,8 +154,8 @@ export function getDesktopContext(userId: string): string | null {
     lines.push('- The user is browsing the web. They may want to search, open URLs, or analyze page content. Use `web_search` or `url_fetch`.');
   }
 
-  lines.push('- If the user references "this", "here", or "my screen", they are likely looking at this app.');
-  lines.push('- Adjust your responses based on what they\'re working on. Be context-aware and proactive.');
+  lines.push('- Use this context only when the user refers to "this", "here", the current app, their screen, or when it is necessary to complete the requested work.');
+  lines.push('- Keep ambient desktop context silent otherwise. Do not mention the foreground app, project, file, or inferred activity as conversational small talk unless the user asks or it materially resolves an ambiguity.');
 
   return lines.join('\n');
 }

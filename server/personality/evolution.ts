@@ -586,12 +586,27 @@ export async function lightweightEvolve(
 ): Promise<EvolutionStep | null> {
   const effConfig = existingEvolutionConfig || DEFAULT_EVOLUTION_CONFIG;
 
+  // Reusing the same accumulated owner profile once per message only creates
+  // version and audit noise. A conversational micro-shift still needs a short
+  // cadence boundary, even when the full scheduled cooldown is much longer.
+  const lastEvolvedAt = config.lastEvolvedAt ? new Date(config.lastEvolvedAt).getTime() : 0;
+  const lightweightCooldownMs = Math.min(effConfig.cooldownMs, 60 * 60 * 1000);
+  if (lastEvolvedAt && Number.isFinite(lastEvolvedAt) && Date.now() - lastEvolvedAt < lightweightCooldownMs) {
+    return null;
+  }
+
   // Synthesize owner profile (same as full evolution but halved plasticity)
   const profile = await synthesizeOwnerProfile(
     userId,
     getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen, scope,
   );
   if (!profile) return null; // Not enough owner_trait memories
+
+  const previousProfileCount = config.growthState?.ownerProfile?.memoryCount || 0;
+  const minimumNewSignals = Math.max(3, Math.ceil(effConfig.minMemoriesForEvolution / 3));
+  if (previousProfileCount > 0 && profile.memoryCount - previousProfileCount < minimumNewSignals) {
+    return null;
+  }
 
   // Compute mutations at halved plasticity — only vocabulary + interest
   const effectivePlasticity = Math.min(effConfig.plasticity * 0.5, 0.15);

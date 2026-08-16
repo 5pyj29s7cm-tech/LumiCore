@@ -6,9 +6,15 @@ export type DoubaoSpeechCredentials = { mode: 'api-key'; apiKey: string };
 
 const DEFAULT_STREAMING_ASR_RESOURCE_ID = 'volc.bigasr.sauc.duration';
 const DEFAULT_FILE_ASR_RESOURCE_ID = 'volc.bigasr.auc_turbo';
+const DEFAULT_TTS_V1_RESOURCE_ID = 'seed-tts-1.0';
 const DEFAULT_TTS_V2_RESOURCE_ID = 'seed-tts-2.0';
 const DEFAULT_VOICE_CLONE_V2_RESOURCE_ID = 'seed-icl-2.0';
 const DEFAULT_V2_VOICE_ID = 'zh_female_vv_uranus_bigtts';
+
+const CURRENT_VOICE_ALIASES: Record<string, string> = {
+  ICL_zh_female_keainvsheng_tob: 'saturn_zh_female_keainvsheng_tob',
+  ICL_zh_female_tiaopigongzhu_tob: 'saturn_zh_female_tiaopigongzhu_tob',
+};
 
 function configuredValue(): string {
   const environmentValue = String(process.env.DOUBAO_SPEECH_KEY || '').trim();
@@ -56,17 +62,20 @@ export function getDoubaoFileAsrResourceId(): string {
 
 export function normalizeDoubaoVoiceId(voiceId: string | undefined): string {
   const candidate = String(voiceId || '').trim();
-  return /^(?:[A-Za-z0-9_-]+_bigtts|S_[A-Za-z0-9_-]+|ICL_[A-Za-z0-9_-]+|saturn_[A-Za-z0-9_-]+|lumi_voice_[A-Za-z0-9_-]+)$/i.test(candidate)
-    ? candidate
+  const aliased = CURRENT_VOICE_ALIASES[candidate] || candidate;
+  return /^(?:[A-Za-z0-9_-]+_bigtts|S_[A-Za-z0-9_-]+|ICL_[A-Za-z0-9_-]+|saturn_[A-Za-z0-9_-]+|lumi_voice_[A-Za-z0-9_-]+)$/i.test(aliased)
+    ? aliased
     : String(process.env.DOUBAO_TTS_VOICE_ID || DEFAULT_V2_VOICE_ID).trim();
 }
 
 export function getDoubaoTtsResourceId(voiceId: string): string {
   const configured = String(process.env.DOUBAO_TTS_RESOURCE_ID || '').trim();
   if (configured) return configured;
-  if (/^(?:S_|lumi_voice_)/i.test(String(voiceId || '').trim())) {
+  const normalized = normalizeDoubaoVoiceId(voiceId);
+  if (/^(?:S_|lumi_voice_)/i.test(normalized)) {
     return String(process.env.DOUBAO_VOICE_CLONE_RESOURCE_ID || DEFAULT_VOICE_CLONE_V2_RESOURCE_ID).trim();
   }
+  if (/^ICL_|_(?:mars|moon)_bigtts$/i.test(normalized)) return DEFAULT_TTS_V1_RESOURCE_ID;
   return DEFAULT_TTS_V2_RESOURCE_ID;
 }
 

@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { guardCompletionClaims } from '../work_product/completion_guard';
 import type { ToolExecutionRecord } from '../tools/types';
 import type { LumiTurnFlow } from './turn_flow';
@@ -6,9 +7,17 @@ import {
   formatClientDiagnosticResult,
   hasSuccessfulSubstantiveClientDiagnosticReceipt,
 } from './client_diagnostic_result';
-import { isCurrentClientDiagnosticRequest, isDiagnosticOrRepairRequest } from './tool_intent';
+import {
+  hasExplicitNoMutationInstruction,
+  isCurrentClientDiagnosticRequest,
+  isDiagnosticOrRepairRequest,
+} from './tool_intent';
 import { CN_CAD_MESSAGES } from '../regions/packs/cn/cad_messages';
-import { CN_VOICE_FAST_PATH_MESSAGES, formatCnToolFailureDetail } from '../regions/packs/cn/voice_fast_path_messages';
+import {
+  CN_VOICE_FAST_PATH_MESSAGES,
+  formatCnClientActionTargetLabel,
+  formatCnToolFailureDetail,
+} from '../regions/packs/cn/voice_fast_path_messages';
 import {
   formatArtifactCreatedAndOpened,
   formatArtifactCreatedOpenFailed,
@@ -22,6 +31,7 @@ import {
 import {
   buildActionContract,
   claimsCurrentAppSaveCompletion,
+  extractExplicitArtifactTextRequirements,
   extractSimpleDesktopOpenTarget,
   extractCurrentAppTarget,
   extractRequestedCurrentAppText,
@@ -41,7 +51,7 @@ import {
 import { CN_RESULT_GROUNDING_MESSAGES } from '../regions/packs/cn/voice_fast_path_messages';
 import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../regions/packs/cn/execution_evidence_messages';
 import { CN_EXTERNAL_AI_MESSAGES } from '../regions/packs/cn/external_ai_messages';
-import { coalesceToolExecutionRecords } from './task_execution_ledger';
+import { coalesceToolExecutionRecords, toolRecordSucceeded } from './task_execution_ledger';
 import {
   hasContinuousStockWatchIntent,
   hasContinuousStockWatchEvidence,
@@ -87,9 +97,10 @@ function resultTaskText(input: LumiResultFinalizerInput): string {
 function leakedLegacyToolProtocol(input: LumiResultFinalizerInput): LumiResultFinalizerResult | null {
   const raw = String(input.responseText || '').trim();
   const hasXmlProtocol = /<(?:function_calls|tool_calls|invoke)\b/i.test(raw);
+  const hasFencedToolProtocol = /```\s*(?:tool|tools|tool_call|tool_calls|function_call|function_calls)\b/i.test(raw);
   // i18n-allow: Chinese internal tool-protocol recognition; not user-visible copy.
   const hasBracketProtocol = /\[(?:[^\]\r\n]{1,48})\]\s*[A-Za-z][A-Za-z0-9_.:-]{1,127}\s*\([^\r\n)]*\)|\[(?:调用|call(?:ing)?|tool)\s+[A-Za-z][A-Za-z0-9_.:-]{1,127}\s*\](?:\s*\{)?/iu.test(raw);
-  if (!hasXmlProtocol && !hasBracketProtocol) return null;
+  if (!hasXmlProtocol && !hasFencedToolProtocol && !hasBracketProtocol) return null;
   const names = Array.from(raw.matchAll(/<invoke\s+name=["']([^"']+)["']/gi), match => match[1]);
   const clientStateRequested = names.includes('client_get_state');
   const chinese = isChineseText(resultTaskText(input));
@@ -493,6 +504,68 @@ function recordHasTerminalSuccess(record: ToolExecutionRecord): boolean {
   return !/(?:^|\b)(?:failed|error|blocked|not found|timed out|permission denied)(?:\b|:)/i.test(raw);
 }
 
+function parseVerifiedClientActionReceipt(record: ToolExecutionRecord): {
+  action: string;
+  mode: string;
+  enabled: boolean;
+  target: string;
+  say: string;
+} | null {
+  if (record.error || record.name !== 'client_action') return null;
+  try {
+    const payload = JSON.parse(String(record.result || '{}'));
+    const status = String(payload?.verification?.status || payload?.status || '').trim().toLowerCase();
+    if (payload?.ok !== true || !['verified', 'not_applicable'].includes(status)) return null;
+    return {
+      action: String(payload?.action || record.arguments?.action || '').trim(),
+      mode: String(payload?.mode || record.arguments?.mode || '').trim(),
+      enabled: Boolean(payload?.enabled ?? record.arguments?.enabled),
+      target: String(
+        payload?.target
+        || payload?.expectation?.target
+        || payload?.relayResult?.target
+        || record.arguments?.target
+        || '',
+      ).trim(),
+      say: String(payload?.say || payload?.verification?.message || '').trim(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function formatGroundedClientActionResult(input: LumiResultFinalizerInput): string | null {
+  // The client-action-only route already performed exact target selection and
+  // state-diff verification. A verified native navigation receipt is stronger
+  // evidence than a model sentence that happens to claim the action failed.
+  if (!input.flow?.clientActionOnlyTurn) return null;
+  const receipts = (input.toolRecords || [])
+    .map(parseVerifiedClientActionReceipt)
+    .filter((receipt): receipt is NonNullable<typeof receipt> => Boolean(receipt));
+  const actionable = receipts.filter(receipt => receipt.action !== 'refresh_client_state');
+  const receipt = [...actionable].reverse().find(item => item.action !== 'set_client_mode')
+    || actionable.at(-1)
+    || receipts.at(-1);
+  if (!receipt) return null;
+
+  if (!isChineseText(resultTaskText(input))) {
+    return receipt.say || 'The requested Lumi client action is complete.';
+  }
+  if (receipt.action === 'set_client_mode') {
+    return CN_VOICE_FAST_PATH_MESSAGES.operationModeChanged(receipt.mode || 'assistant');
+  }
+  if (receipt.action === 'set_wallpaper_mode') {
+    return receipt.enabled ? '壁纸模式已开启。' : '壁纸模式已关闭。';
+  }
+  if (receipt.action === 'refresh_client_state') return '客户端状态已刷新。';
+  const label = formatCnClientActionTargetLabel(receipt.action, receipt.target || 'Lumi 界面');
+  if (/^(?:close_|exit_)/.test(receipt.action)) return `${label}已关闭。`;
+  if (/^(?:open_|show_|focus_|enter_)/.test(receipt.action)) {
+    return CN_VOICE_FAST_PATH_MESSAGES.opened(label);
+  }
+  return `已完成${label}操作。`;
+}
+
 function formatGroundedPartialActionResult(
   input: LumiResultFinalizerInput,
 ): LumiResultFinalizerResult | null {
@@ -644,8 +717,45 @@ function formatGroundedArtifactResult(
       reason: 'Grounded artifact creation and open result from current-turn receipts.',
     };
   }
-  // For an ordinary creation-only task, preserve the model's concise wording;
-  // the generic completion guard already accepts the producing receipt.
+  const artifactVerified = (
+    toolRecordSucceeded(created)
+    && created.terminalVerification?.status === 'verified'
+  );
+  if (artifactVerified) {
+    try {
+      const stats = fs.statSync(path);
+      if (stats.isFile() && stats.size > 0) {
+        const exactText = extractExplicitArtifactTextRequirements(actionText);
+        if (exactText.length && /\.(?:txt|md|csv|json|xml|html?|css|svg|dxf|ya?ml|toml|tsx?|jsx?|py|rs)$/iu.test(path)) {
+          const artifactText = fs.readFileSync(path, 'utf8');
+          const missing = exactText.filter(value => !artifactText.includes(value));
+          if (missing.length) {
+            return {
+              text: zh
+                ? `文件已写入，但尚未满足当前要求：缺少精确文本“${missing[0]}”。我不会把它汇报为已完成。产物路径：${path}`
+                : `The file was written, but it is missing the exact required text "${missing[0]}". I will not mark it complete. Artifact path: ${path}`,
+              blocked: true,
+              reason: `Verified artifact is missing exact required text: ${missing[0]}`,
+              notification: {
+                type: 'work_product_guard',
+                level: 'warning',
+                message: `Verified artifact is missing exact required text: ${missing[0]}`,
+              },
+            };
+          }
+        }
+        return {
+          text: zh
+            ? `已完成并验证本地文件：${path}（${stats.size} 字节）。`
+            : `Completed and verified the local file: ${path} (${stats.size} bytes).`,
+          blocked: false,
+          reason: 'Grounded artifact completion from a verified producer receipt and the current local file.',
+        };
+      }
+    } catch {}
+  }
+  // A declaration without a verified non-empty file remains subject to the
+  // generic completion guard below.
   return null;
 }
 
@@ -1361,6 +1471,17 @@ function correctCurrentTurnContractDrift(
   return grounded;
 }
 
+function sanitizeUnsupportedRestatementAdditions(taskText: string, responseText: string, toolRecords: ToolExecutionRecord[]): string {
+  if (toolRecords.length > 0) return responseText;
+  if (!/(?:只|仅)?(?:复述|重复|完整说出|原样说出)|其他不变|只(?:说|保留|复述)事实/u.test(taskText)) return responseText;
+  const unsupportedClaim = /(?:写|放|记)(?:进|到|在).{0,8}(?:日程|计划|任务)|(?:已经|已|我)?\s*(?:记下|记录|保存)(?:了|好)?|(?:到时|到时候|出发前|之后).{0,16}(?:提醒|通知)|(?:创建|新建|安排).{0,8}(?:任务|提醒|日程)/u;
+  const explicitInTask = unsupportedClaim.test(taskText);
+  if (explicitInTask) return responseText;
+  const clauses = String(responseText || '').match(/[^。！？!?\n]+[。！？!?]?/gu) || [];
+  const retained = clauses.filter(clause => !unsupportedClaim.test(clause)).join('').trim();
+  return retained || responseText;
+}
+
 export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResultFinalizerResult {
   input = {
     ...input,
@@ -1375,6 +1496,10 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   );
   if (safeResponseText !== input.responseText) {
     input = { ...input, responseText: safeResponseText };
+  }
+  const factualResponseText = sanitizeUnsupportedRestatementAdditions(actionText, input.responseText, input.toolRecords || []);
+  if (factualResponseText !== input.responseText) {
+    input = { ...input, responseText: factualResponseText };
   }
   // A CAD workflow receipt owns both its execution truth and its user-facing
   // terminal state. Do not let model narration or a later generic guard hide
@@ -1411,12 +1536,28 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       },
     };
   }
-  const guard = guardCompletionClaims({
-    task: actionText,
-    response: input.responseText,
-    toolCalls: input.toolRecords || [],
-    source: input.source,
-  });
+  const groundedClientAction = formatGroundedClientActionResult(input);
+  if (groundedClientAction) {
+    return {
+      text: groundedClientAction,
+      blocked: false,
+      reason: 'Grounded Lumi client action from a verified state-diff receipt.',
+    };
+  }
+  const actionContract = taskActionContract(input);
+  const ordinaryConversation = (
+    !actionContract.applies
+    && (input.toolRecords || []).length === 0
+    && hasExplicitNoMutationInstruction(actionText)
+  );
+  const guard = ordinaryConversation
+    ? { text: input.responseText, blocked: false as const }
+    : guardCompletionClaims({
+        task: actionText,
+        response: input.responseText,
+        toolCalls: input.toolRecords || [],
+        source: input.source,
+      });
   const unsupportedDiagnostic = unsupportedPriorDiagnosticClaim(input);
   if (unsupportedDiagnostic) {
     return {
@@ -1474,15 +1615,17 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       },
     };
   }
-  const actionContract = taskActionContract(input);
   // Ordinary conversation has no execution contract. Keep it natural after
   // the protocol/evidence sanity checks above instead of forcing it through a
   // work-product completion guard.
   if (
-    !actionContract.applies
-    && (input.toolRecords || []).length === 0
-    && input.flow?.completionEvidenceNeeded !== true
-    && !guard.blocked
+    ordinaryConversation
+    || (
+      !actionContract.applies
+      && (input.toolRecords || []).length === 0
+      && input.flow?.completionEvidenceNeeded !== true
+      && !guard.blocked
+    )
   ) {
     return { text: input.responseText, blocked: false };
   }

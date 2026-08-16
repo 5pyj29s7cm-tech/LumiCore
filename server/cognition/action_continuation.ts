@@ -842,6 +842,11 @@ export function resolveRecentActionOpenTarget(
   userText: string,
   persistedState?: ConversationActionContinuationState | null,
 ): string | null {
+  const normalizedIntent = normalizeActionIntent(userText);
+  if (
+    normalizedIntent.kind === 'status_query'
+    || normalizedIntent.kind === 'correction_explanation'
+  ) return null;
   const clean = compact(userText, 120)
     .replace(/[。！？.!?]+$/u, '')
     .trim();

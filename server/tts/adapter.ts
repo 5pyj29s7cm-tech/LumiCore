@@ -38,9 +38,13 @@ export async function synthesizeSpeech(text: string, config: TTSConfig): Promise
     if (config.provider === 'local-cosyvoice') recordSuccess(circuit);
     return result;
   } catch (error: any) {
-    recordFailure(circuit, undefined, error instanceof Error ? error : new Error(String(error)), { openImmediately: true });
+    // Cloud providers own their resilience/circuit state. Recording the same
+    // failure here used to turn one invalid voice into a provider-wide outage.
+    if (config.provider === 'local-cosyvoice') {
+      recordFailure(circuit, undefined, error instanceof Error ? error : new Error(String(error)), { openImmediately: true });
+    }
     if (config.allowFallback !== false) {
-      const fallbackProvider = getActiveProvider({ requireWarmLocal: true });
+      const fallbackProvider = getFallbackProvider(config.provider, { requireWarmLocal: true });
       if (fallbackProvider && fallbackProvider !== config.provider) {
         return synthesizeSpeech(text, {
           ...config,
@@ -51,6 +55,18 @@ export async function synthesizeSpeech(text: string, config: TTSConfig): Promise
     }
     throw error;
   }
+}
+
+function getFallbackProvider(
+  excluded: TTSProvider,
+  options: { requireWarmLocal?: boolean } = {},
+): TTSProvider | null {
+  if (excluded !== 'local-cosyvoice' && localCosyvoice.isConfigured() && isCircuitClosed('local-cosyvoice')) return 'local-cosyvoice';
+  if (excluded !== 'gptsovits' && gptsovits.isConfigured() && isCircuitClosed('gptsovits')
+    && (!options.requireWarmLocal || gptsovits.isReadyForAutomaticFallback())) return 'gptsovits';
+  if (excluded !== 'ark' && hasDoubaoSpeech() && isCircuitClosed('doubao-tts')) return 'ark';
+  if (excluded !== 'cosyvoice' && hasDashScopeKey() && isCircuitClosed('cosyvoice')) return 'cosyvoice';
+  return null;
 }
 
 export async function cloneVoice(request: VoiceCloneRequest, provider: TTSProvider): Promise<VoiceCloneResult> {

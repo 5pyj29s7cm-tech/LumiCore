@@ -89,6 +89,34 @@ export function buildDeterministicClientNavigationCommand(
   };
 }
 
+/**
+ * Execute an exact, side-effect-free local navigation intent without asking a
+ * language model to repeat the already-normalized tool choice. The actual app
+ * resolution and target verification still belong to desktop_open (or the
+ * browser adapter for an explicit URL); this function never guesses a path or
+ * substitutes another application.
+ */
+export function buildDeterministicLocalDesktopNavigationCommand(
+  normalizedIntent: NormalizedActionIntent,
+): QuickCommandResult | null {
+  if (
+    normalizedIntent.kind !== 'desktop_operation'
+    || normalizedIntent.operation !== 'navigate'
+    || normalizedIntent.sideEffectClass !== 'none'
+  ) return null;
+  const target = String(normalizedIntent.target || '').trim();
+  if (!target) return null;
+  const toolCall = quickOpenToolCall(target);
+  return {
+    responseText: CN_VOICE_FAST_PATH_MESSAGES.opening(target),
+    matched: true,
+    toolCall,
+    formatToolResult: (_raw, error) => error
+      ? CN_VOICE_FAST_PATH_MESSAGES.openFailed(target, error)
+      : CN_VOICE_FAST_PATH_MESSAGES.opened(target),
+  };
+}
+
 function resolveKnownSiteUrl(target: string): string | null {
   const clean = String(target || '').trim();
   // i18n-allow: Chinese site-name recognition patterns; not user-visible copy.

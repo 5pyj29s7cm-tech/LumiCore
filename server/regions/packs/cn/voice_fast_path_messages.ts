@@ -67,6 +67,15 @@ export const CN_VOICE_FAST_PATH_MESSAGES = {
     };
     return `当前是${labels[mode] || labels.assistant}。`;
   },
+  operationModeChanged: (mode: string) => {
+    const labels: Record<string, string> = {
+      chat: '聊天模式',
+      assistant: '助理模式',
+      autonomous: '自主模式',
+      meeting: '会议模式',
+    };
+    return `已切到${labels[mode] || labels.assistant}。`;
+  },
   knowledgeStats: (raw: string, error?: string) => {
     if (error) return `这次没能读取知识库统计：${formatCnToolFailureDetail(error)}`;
     try {

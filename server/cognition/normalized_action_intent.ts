@@ -126,6 +126,25 @@ function correctionOrExplanation(text: string): NormalizedActionIntent | null {
 }
 
 function statusQuery(text: string): NormalizedActionIntent | null {
+  // A retrospective question about the immediately preceding action is a
+  // receipt/status lookup. Action verbs inside the question must never be
+  // reinterpreted as a fresh desktop or external mutation.
+  // i18n-allow: Multilingual recent-action receipt recognition; not user-visible copy.
+  const recentActionReceipt = /(?:\u521a\u624d|\u521a\u521a|\u4e0a\u4e00\u8f6e|\u4e0a\u6b21).{0,20}(?:\u6253\u5f00|\u6267\u884c|\u505a|\u53d1\u9001|\u521b\u5efa|\u64cd\u4f5c)(?:\u4e86)?(?:\u4ec0\u4e48|\u54ea\u4e2a|\u54ea\u4e9b)|\bwhat\s+did\s+(?:you|lumi)\s+(?:just\s+)?(?:open|do|run|send|create)\b/iu;
+  if (recentActionReceipt.test(text)) {
+    return {
+      kind: 'status_query',
+      operation: 'status',
+      subject: 'lumi',
+      target: 'previous_action',
+      payload: '',
+      sideEffectClass: 'none',
+      relation: 'status',
+      confidence: 0.99,
+      rule: 'recent-action-receipt-before-action',
+    };
+  }
+
   // i18n-allow: Chinese client-state input recognition; not user-visible copy.
   const clientState = /(?:检查|查看|告诉我|现在).{0,18}(?:你的|lumi\s*的)?(?:模式|模态|运行模式|模)状态|(?:你现在|当前).{0,12}(?:是什么|什么)?模式/iu;
   if (clientState.test(text)) {

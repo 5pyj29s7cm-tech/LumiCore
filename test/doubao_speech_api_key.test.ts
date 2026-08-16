@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { resetCircuit } from '../server/cloud/circuit_breaker';
+import { isCircuitClosed, resetCircuit } from '../server/cloud/circuit_breaker';
 import {
   buildDoubaoApiHeaders,
+  getDoubaoTtsResourceId,
   getDoubaoSpeechCredentials,
   normalizeDoubaoVoiceId,
   parseDoubaoSpeechCredentials,
@@ -68,6 +69,9 @@ describe('Doubao Speech API Key validation', () => {
     expect(normalizeDoubaoVoiceId('longxiaochun_v3')).toBe('zh_female_vv_uranus_bigtts');
     expect(normalizeDoubaoVoiceId('BV001_streaming')).toBe('zh_female_vv_uranus_bigtts');
     expect(normalizeDoubaoVoiceId('zh_male_dayi_uranus_bigtts')).toBe('zh_male_dayi_uranus_bigtts');
+    expect(normalizeDoubaoVoiceId('ICL_zh_female_keainvsheng_tob')).toBe('saturn_zh_female_keainvsheng_tob');
+    expect(getDoubaoTtsResourceId('zh_female_vv_uranus_bigtts')).toBe('seed-tts-2.0');
+    expect(getDoubaoTtsResourceId('zh_female_tianmeitaozi_mars_bigtts')).toBe('seed-tts-1.0');
     expect(ratioToDoubaoRate(0.5)).toBe(-50);
     expect(ratioToDoubaoRate(1)).toBe(0);
     expect(ratioToDoubaoRate(2)).toBe(100);
@@ -75,14 +79,16 @@ describe('Doubao Speech API Key validation', () => {
 
   it('lists only current TTS 2.0 voices', async () => {
     const voices = await doubaoTts.listVoices();
-    expect(voices).toHaveLength(12);
+    expect(voices).toHaveLength(14);
     expect(voices.every(voice => voice.model === 'seed-tts-2.0')).toBe(true);
     expect(voices.some(voice => voice.voiceId.startsWith('BV'))).toBe(false);
     expect(voices.map(voice => voice.voiceId)).toEqual(expect.arrayContaining([
       'zh_female_vv_uranus_bigtts',
       'zh_male_dayi_saturn_bigtts',
-      'zh_female_tianmeitaozi_mars_bigtts',
+      'saturn_zh_female_keainvsheng_tob',
+      'zh_female_xiaohe_uranus_bigtts',
     ]));
+    expect(voices.some(voice => voice.voiceId.startsWith('ICL_') || voice.voiceId.includes('_mars_'))).toBe(false);
   });
 });
 
@@ -138,6 +144,30 @@ describe('Doubao Speech new-console API calls', () => {
 
     await doubaoTts.synthesizeSpeech('hello', 'lumi_voice_12345678', undefined, 1, 1, 1, fetchImpl as typeof fetch);
     expect(headers['X-Api-Resource-Id']).toBe('seed-icl-2.0');
+  });
+
+  it('reports a voice resource grant failure without disabling the provider', async () => {
+    process.env.DOUBAO_SPEECH_KEY = 'uuid-api-key-value';
+    const fetchImpl = async () => new Response(JSON.stringify({
+      header: {
+        code: 45000030,
+        message: '[resource_id=volc.service_type.10029] requested resource not granted',
+      },
+    }), {
+      status: 403,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    await expect(doubaoTts.synthesizeSpeech(
+      'hello',
+      'zh_female_tianmeitaozi_mars_bigtts',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      fetchImpl as typeof fetch,
+    )).rejects.toThrow('45000030');
+    expect(isCircuitClosed('doubao-tts')).toBe(true);
   });
 
   it('trains and queries a Doubao 2.0 clone with the same single API key', async () => {

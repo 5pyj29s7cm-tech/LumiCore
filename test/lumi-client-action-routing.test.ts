@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { hasClientActionOnlyIntent } from '../server/cognition/tool_intent';
+import {
+  hasClientActionOnlyIntent,
+  hasExplicitNoToolInstruction,
+  traceToolIntentDecision,
+} from '../server/cognition/tool_intent';
 import { shouldDelegateWorkInBackground } from '../server/agents/background_delegation';
 import { guardCompletionClaims } from '../server/work_product/completion_guard';
 
@@ -38,6 +42,23 @@ describe('Lumi client action routing', () => {
 
   it('keeps information-only client questions conversational', () => {
     expect(hasClientActionOnlyIntent('中枢世界是什么')).toBe(false);
+  });
+
+  it('gives an explicit no-tool instruction precedence over surface keywords', () => {
+    const text = '我们开始一个连续对话测试，只和我聊天，不要调用工具。';
+    expect(hasExplicitNoToolInstruction(text)).toBe(true);
+    expect(hasClientActionOnlyIntent(text)).toBe(false);
+    expect(traceToolIntentDecision(text, 'chat', 'assistant')).toMatchObject({
+      allowToolUse: false,
+      decisionReason: 'explicit current-turn no-tool instruction',
+      blockedBy: expect.arrayContaining(['explicit-no-tool-instruction']),
+      signals: { explicitNoToolInstruction: true },
+    });
+    expect(hasExplicitNoToolInstruction('不用问我，直接调用工具完成')).toBe(false);
+  });
+
+  it('treats do-not-execute-new-actions as a hard current-turn tool veto', () => {
+    expect(hasExplicitNoToolInstruction('\u53ea\u6839\u636e\u4e0a\u4e00\u8f6e\u56de\u6267\u56de\u7b54\uff0c\u4e0d\u8981\u6267\u884c\u65b0\u64cd\u4f5c\u3002')).toBe(true);
   });
 
   it('does not treat external app chat surfaces as Lumi client navigation', () => {

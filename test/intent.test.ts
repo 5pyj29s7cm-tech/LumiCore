@@ -141,6 +141,10 @@ describe('Intent Classifier', () => {
       expect(c('写测试').category).toBe('code');
       expect(c('写测试').subIntent).toBe('test');
     });
+
+    it('does not classify a conversation continuity test as code work', () => {
+      expect(c('我们开始一个连续对话测试，请记住代号青穹-17').category).not.toBe('code');
+    });
   });
 
   // ── File ──

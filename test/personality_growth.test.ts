@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeMutations, generateReviewPrompt, OwnerProfile } from '../server/personality/evolution';
+import { computeMutations, generateReviewPrompt, lightweightEvolve, OwnerProfile } from '../server/personality/evolution';
 import { generateSystemPrompt } from '../server/personality/engine';
 import { PersonalityConfig } from '../server/personality/types';
 
@@ -116,5 +116,20 @@ describe('personality core and growth split', () => {
       expect(prompt).not.toContain('{label}');
       expect(prompt).not.toContain('{ctx.');
     }
+  });
+
+  it('does not run lightweight evolution again inside its cadence window', async () => {
+    const result = await lightweightEvolve({
+      ...baseConfig,
+      lastEvolvedAt: new Date().toISOString(),
+    }, 'personality-growth-cooldown-user', {
+      plasticity: 0.3,
+      minMemoriesForEvolution: 10,
+      minConnectionForEvolution: 0.2,
+      cooldownMs: 7 * 24 * 60 * 60 * 1000,
+      maxMutationsPerStep: 3,
+    });
+
+    expect(result).toBeNull();
   });
 });

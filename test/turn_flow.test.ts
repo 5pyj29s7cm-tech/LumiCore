@@ -2,6 +2,40 @@ import './helpers';
 import { describe, expect, it } from 'vitest';
 
 describe('Lumi turn flow', () => {
+  it.each(['chat', 'voice'] as const)('keeps explicit no-tool continuity tests conversational in %s', async (channel) => {
+    const { initDatabase } = await import('../db_layer');
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+    await initDatabase();
+    const flow = buildLumiTurnFlow({
+      userId: `turn_flow_no_tools_${channel}`,
+      text: '我们开始一个连续对话测试。请记住代号“青穹-17”，自然确认，不要调用工具。',
+      channel,
+      source: channel,
+      operationMode: 'assistant',
+    });
+
+    expect(flow.clientActionOnlyTurn).toBe(false);
+    expect(flow.selfRepairTurn).toBe(false);
+    expect(flow.allowToolUseForTurn).toBe(false);
+  });
+
+  it('does not join navigation verbs and client-surface nouns across separate clauses', async () => {
+    const { initDatabase } = await import('../db_layer');
+    const { buildLumiTurnFlow, buildInteractionModeOverlay } = await import('../server/cognition/turn_flow');
+    await initDatabase();
+    const flow = buildLumiTurnFlow({
+      userId: 'turn_flow_factual_restatement',
+      text: '先别做计划。我真正的要求是：明天去看硬件社区合作，重点问交付方式和售后责任。你复述一下，只复述事实。',
+      channel: 'chat',
+      source: 'chat',
+      operationMode: 'chat',
+    });
+
+    expect(flow.clientActionOnlyTurn).toBe(false);
+    expect(flow.allowToolUseForTurn).toBe(false);
+    expect(buildInteractionModeOverlay(flow)).toContain('Factual Restatement Fidelity');
+  });
+
   it.each(['chat', 'voice'] as const)('keeps capability access questions conversational in %s', async (channel) => {
     const { initDatabase } = await import('../db_layer');
     const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');

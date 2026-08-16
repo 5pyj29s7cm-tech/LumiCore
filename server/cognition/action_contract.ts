@@ -214,7 +214,19 @@ export function claimsCurrentAppSaveCompletion(input: string): boolean {
 }
 
 export function extractSimpleDesktopOpenTarget(input: string): string {
-  const text = compact(extractPrimaryTaskText(input));
+  const primary = extractPrimaryTaskText(input);
+  const normalizedIntent = normalizeActionIntent(primary);
+  if (
+    /(?:只|仅)(?:需要|要|是)?打开|(?:only|just)s+open/iu.test(primary)
+    &&
+    normalizedIntent.kind === 'desktop_operation'
+    && normalizedIntent.operation === 'navigate'
+    && normalizedIntent.sideEffectClass === 'none'
+    && compact(normalizedIntent.target)
+  ) {
+    return compact(normalizedIntent.target);
+  }
+  const text = compact(primary);
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   const match = text.match(/^(?:(?:请|麻烦|请你|帮我|你帮我|给我|我要|我想)\s*)?(?:打开|启动|运行|开启|launch|open|start|run)\s*(?:程序|应用|app|软件)?\s*(?:一下)?\s*(.+?)[。！？.!?]*$/iu);
   if (!match) return '';
@@ -232,12 +244,29 @@ export function isSimpleDesktopOpenRequest(input: string): boolean {
   return Boolean(extractSimpleDesktopOpenTarget(input));
 }
 
+/** Exact user-authored strings that a generated text artifact must preserve. */
+export function extractExplicitArtifactTextRequirements(input: string): string[] {
+  const text = String(input || '');
+  const requirements: string[] = [];
+  const patterns = [
+    /(?:明确写出|原样写入|精确写入|必须(?:包含|写入))\s*[：:]?\s*[“"]([^”"\r\n]{1,200})[”"]/gu,
+    /\b(?:exactly\s+(?:include|write)|must\s+(?:include|contain))\s*[：:]?\s*[“"]([^”"\r\n]{1,200})[”"]/giu,
+  ];
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const value = String(match[1] || '').trim();
+      if (value && !requirements.includes(value)) requirements.push(value);
+    }
+  }
+  return requirements.slice(0, 20);
+}
+
 export function requiresDesktopAiCollaboration(input: string): boolean {
   const text = compact(extractPrimaryTaskText(input));
   // i18n-allow: multilingual desktop-AI surface recognition; not user-visible copy.
   const hasAiSurface = /(?:WorkBuddy|Codex|ChatGPT|Claude|Gemini|DeepSeek|Kimi|豆包|通义|文心|Perplexity|Cursor|Copilot|Ollama|LM\s*Studio|Cherry\s*Studio|AnythingLLM|外部\s*AI|桌面\s*AI|AI\s*(?:工具|客户端|app))/iu.test(text)
     // i18n-allow: generic AI-target recognition; not user-visible copy.
-    || /(?:AI|模型|agent|智能体)/iu.test(text);
+    || /(?:\bAI\b|\bagent\b|模型|智能体)/iu.test(text);
   // i18n-allow: multilingual collaboration-action recognition; not user-visible copy.
   const hasCollaborationAction = /(?:问(?:一下|问)?|询问|发给|发送给|交给|跟|和|同).{0,48}(?:聊天|聊|对话|说|问|讨论)|(?:聊天|对话|讨论|回答|结果|总结|对比|汇总)|\b(?:ask|send\s+to|hand\s+off|chat|talk|discuss|answer|collect|compare|summari[sz]e)\b/iu.test(text);
   return hasAiSurface && hasCollaborationAction;
@@ -314,7 +343,11 @@ function isCustomerOperationsTurn(text: string): boolean {
   const customerSurface = /(?:\u5ba2\u6237|\u9500\u552e|\u7ebf\u7d22|\u552e\u540e|\u5ba2\u670d|\u5de5\u5355|\u5546\u673a|\u5ba2\u6237\u5173\u7cfb|\bCRM\b|customer|sales|lead|after[-\s]?sales|support\s+ticket)/iu.test(text);
   const operationalIntent = /(?:\u63a5\u7ba1|\u8ddf\u8fdb|\u63a8\u8fdb|\u5904\u7406|\u5206\u6790|\u8bc4\u5206|\u62a5\u4ef7|\u56de\u8bbf|\u6210\u4ea4|\u5f02\u8bae|\u5206\u7c7b|\u6d3e\u5355|\u7ef4\u62a4|\u8fd0\u8425|take\s*over|follow\s*up|advance|triage|qualif|score|quote|handle|operate|manage)/iu.test(text);
   const legalOnly = /(?:\u5408\u540c\u5ba1\u67e5|\u6cd5\u5f8b\u610f\u89c1|\u8d77\u8bc9|\u7b54\u8fa9|\u4ee3\u7406\u8bcd|contract\s+review|legal\s+opinion|pleading)/iu.test(text);
-  return customerSurface && operationalIntent && !legalOnly;
+  const explicitLocalArtifact = /(?:[A-Za-z]:\\[^\n]+\.(?:txt|md|docx?|pdf|xlsx?|pptx?)\b|\b(?:local\s+)?file\b|本地文件)/iu.test(text)
+    && /(?:读取|创建|生成|修改|保存|验证|read|create|generate|write|edit|save|verify)/iu.test(text);
+  const actualCustomerOperation = /(?:发送|联系|回复|回访|派单|成交|CRM|客服工单|销售线索|send|contact|reply|call|ticket|lead\s+score)/iu.test(text);
+  return customerSurface && operationalIntent && !legalOnly
+    && !(explicitLocalArtifact && !actualCustomerOperation);
 }
 
 function isEcommerceOperationsTurn(text: string): boolean {
@@ -962,6 +995,11 @@ export function buildActionContract(input: string): LumiActionContract {
     });
   }
 
+  const conversationalNoArtifactMutation = /[？?]|(?:先聊|只回答|告诉我|你认为|解释)/u.test(text)
+    && /(?:不要|别|无需|不用|禁止|请勿|勿).{0,16}(?:修改|改动|改写|写入|保存|覆盖|创建|新建|生成).{0,12}(?:文件|文档|内容)?/u.test(text)
+    && !/(?:读取|查看|检查|分析|总结).{0,80}(?:文件|文档|路径|[A-Za-z]:\\|\.(?:txt|md|docx?|pdf|xlsx?|pptx?)\b)|(?:read|inspect|review|analy[sz]e|summari[sz]e).{0,80}(?:file|document|path|\.(?:txt|md|docx?|pdf|xlsx?|pptx?)\b)/iu.test(text);
+  if (conversationalNoArtifactMutation) return NONE_CONTRACT;
+
   if (isDesignDeliveryTurn(text)) {
     return buildDesignDeliveryContract();
   }
@@ -1175,6 +1213,9 @@ function requestedDesktopTargetAliases(target: string): string[] {
   }
   if (/(?:mspaint|microsoftpaint|paint|\u753b\u56fe)/u.test(normalized)) {
     add('mspaint', 'mspaint.exe', 'Microsoft Paint', 'Paint', '\u753b\u56fe'); // i18n-allow: Application alias used only for evidence matching.
+  }
+  if (/(?:notepad|\u8bb0\u4e8b\u672c)/u.test(normalized)) {
+    add('notepad', 'notepad.exe', 'Microsoft Notepad', '\u8bb0\u4e8b\u672c'); // i18n-allow: Application alias used only for evidence matching.
   }
   if (/(?:googlechrome|chrome|\u8c37\u6b4c\u6d4f\u89c8\u5668)/u.test(normalized)) {
     add('Google Chrome', 'chrome', 'chrome.exe', '\u8c37\u6b4c\u6d4f\u89c8\u5668'); // i18n-allow: Application alias used only for evidence matching.

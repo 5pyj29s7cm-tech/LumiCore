@@ -460,8 +460,12 @@ export function appendConversationActionReceipts(
       && candidate.outcome === envelope.status
     ));
     if (duplicate) return;
+    const requestedReceiptId = String(record.id || `receipt_${crypto.randomUUID()}_${index}`);
+    const receiptId = receipts.some(candidate => candidate.id === requestedReceiptId)
+      ? `receipt_${crypto.randomUUID()}_${index}`
+      : requestedReceiptId;
     const row: ConversationActionReceiptRow = {
-      id: String(record.id || `receipt_${crypto.randomUUID()}_${index}`),
+      id: receiptId,
       taskId: input.task.id,
       conversationId: input.task.conversationId,
       turnId: envelope.turnId,
@@ -1240,9 +1244,41 @@ export function formatConversationActionLedgerStatus(
   db: any,
   input: { conversationId: string; userId: string; query?: string },
 ): string | null {
-  const state = getConversationActionStateFromLedger(db, input);
+  const task = findConversationActionTask(db, input);
+  const state = conversationActionStateFromTask(task);
   if (!state) return null;
-  return formatConversationActionTaskStatus(state);
+  const query = String(input.query || '');
+  // A receipt question such as “what did you just open?” should answer the
+  // concrete target directly. The generic ledger sentence is useful for task
+  // progress, but sounds unnatural and obscures the requested fact here.
+  // i18n-allow: Multilingual recent desktop-open receipt recognition.
+  const asksRecentOpenedTarget = /(?:\u521a\u624d|\u521a\u521a|\u4e0a\u4e00\u8f6e|\u4e0a\u6b21).{0,20}\u6253\u5f00(?:\u4e86)?(?:\u4ec0\u4e48|\u54ea\u4e2a|\u54ea\u4e9b)|\bwhat\s+did\s+(?:you|lumi)\s+(?:just\s+)?open\b/iu.test(query);
+  if (asksRecentOpenedTarget && state.status === 'completed' && task) {
+    const openReceipt = [...(db.conversationActionReceipts as ConversationActionReceiptRow[])]
+      .reverse()
+      .find(receipt => (
+        receipt.taskId === task.id
+        && receipt.toolName === 'desktop_open'
+        && receipt.outcome === 'verified_success'
+        && Boolean(receipt.targetIdentity)
+      ));
+    const target = openReceipt?.targetIdentity || state.appTarget || task.target;
+    if (target) return `\u521a\u624d\u6253\u5f00\u7684\u662f${target}\uff0c\u5df2\u901a\u8fc7\u7a97\u53e3\u56de\u6267\u786e\u8ba4\u3002`;
+  }
+  const status = formatConversationActionTaskStatus(state);
+  const asksForArtifactPath = /(?:产物|文件).{0,10}(?:路径|位置|在哪)|(?:路径|位置|在哪).{0,10}(?:产物|文件)|\b(?:artifact|file|output)\s+(?:path|location)\b|\bwhere\s+is\s+(?:the\s+)?(?:artifact|file|output)\b/iu.test(String(input.query || ''));
+  if (!asksForArtifactPath || state.status !== 'completed' || !task) return status;
+
+  const producerReceipt = [...(db.conversationActionReceipts as ConversationActionReceiptRow[])]
+    .reverse()
+    .find(receipt => (
+      receipt.taskId === task.id
+      && receipt.outcome === 'verified_success'
+      && /^(?:write_file|create_docx|create_xlsx|create_ppt|create_pdf|modify_docx|modify_xlsx|cad_generate_dxf)$/i.test(receipt.toolName)
+      && /(?:^[A-Za-z]:[\\/]|^\/).+\.[A-Za-z0-9]{1,12}$/u.test(receipt.targetIdentity)
+    ));
+  if (!producerReceipt) return status;
+  return `${status}\n产物路径：${producerReceipt.targetIdentity}`;
 }
 
 export function migrateLegacyConversationActionLedger(db: any): number {

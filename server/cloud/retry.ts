@@ -31,6 +31,7 @@ const DEFAULT_OPTIONS: RetryOptions = {
  */
 export function isCloudRetryable(error: Error): boolean {
   const msg = error.message?.toLowerCase() || '';
+  const hasStatus = (...codes: number[]) => codes.some(code => new RegExp(`(?:^|\\D)${code}(?:\\D|$)`).test(msg));
 
   // Non-retryable — fail fast
   if (
@@ -40,7 +41,9 @@ export function isCloudRetryable(error: Error): boolean {
     msg.includes('authentication') ||
     msg.includes('forbidden') ||
     msg.includes('not found') ||
-    msg.includes('bad request')
+    msg.includes('bad request') ||
+    msg.includes('resource id is mismatched') ||
+    msg.includes('no readable text')
   ) {
     return false;
   }
@@ -53,11 +56,7 @@ export function isCloudRetryable(error: Error): boolean {
     msg.includes('econnreset') ||
     msg.includes('network') ||
     msg.includes('timeout') ||
-    msg.includes('429') ||          // rate limited
-    msg.includes('500') ||          // server error
-    msg.includes('502') ||          // bad gateway
-    msg.includes('503') ||          // service unavailable
-    msg.includes('504') ||          // gateway timeout
+    hasStatus(429, 500, 502, 503, 504) ||
     msg.includes('rate limit') ||
     msg.includes('quota exceeded') ||
     msg.includes('service unavailable') ||

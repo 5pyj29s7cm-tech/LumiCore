@@ -193,7 +193,7 @@ const CODE_PATTERNS: Array<{ regex: RegExp; subIntent: string }> = [
   { regex: /(实现|implement|开发|develop|添加功能|add\s+feature)\s*(这个|那个|一下)?/i, subIntent: 'implement' },
   { regex: /(解释|explain|说明|这段代码|这个文件|这段)/i, subIntent: 'explain' },
   { regex: /(审查|review|检查|check)\s*(代码|code|这个|那个)?/i, subIntent: 'review' },
-  { regex: /(测试|test|写测试|write\s+test|add\s+test)/i, subIntent: 'test' },
+  { regex: /(?:写|编写|新增|添加|补充|运行|执行|跑).{0,6}(?:单元|集成|端到端|回归|自动化)?测试|(?:单元|集成|端到端|回归|自动化)测试|\b(?:write|add|run|execute)\s+(?:unit\s+|integration\s+|e2e\s+|regression\s+)?tests?\b/i, subIntent: 'test' },
   { regex: /(提交|commit|push)\s*(代码|code|修改|changes?)?/i, subIntent: 'commit' },
 ];
 
