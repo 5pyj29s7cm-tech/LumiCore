@@ -163,7 +163,7 @@ jobs:
 
       - name: Download current-commit 24-hour soak evidence
         if: inputs.channel == 'public'
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: lumi-runtime-soak
           path: artifacts/runtime-reliability
