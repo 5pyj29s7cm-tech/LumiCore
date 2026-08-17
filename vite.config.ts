@@ -46,7 +46,6 @@ export default defineConfig(({ mode }) => {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Keep frontend source watching while excluding non-HMR runtime trees.
       hmr: process.env.DISABLE_HMR !== 'true',
-      allowedHosts: ['lumiai.asia', '.lumiai.asia'],
       watch: {
         ignored: createViteWatchIgnored(__dirname),
       },

@@ -32,6 +32,7 @@ import {
   needsRecentActionContinuationContext,
 } from './action_continuation';
 import { isCapabilityMetaQuestion } from './capability_meta';
+import { isReadOnlyKnowledgeBaseInspectionRequest } from './knowledge_intent';
 
 export type LumiTurnChannel = 'chat' | 'voice' | 'task' | 'scheduler' | 'agent';
 export type LumiVerificationIntent = 'none' | 'completion_evidence' | 'work_takeover_result' | 'capability_experiment';
@@ -414,6 +415,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     ? currentActionContract
     : buildActionContract(routingText);
   const actionContractRequiresTools = actionContract.applies && actionContract.kind !== 'none' && !clientActionIntent;
+  const readOnlyKnowledgeInspection = isReadOnlyKnowledgeBaseInspectionRequest(input.text);
   const autoPromoteToAssistant = !conceptualCapabilityQuestion && (shouldAutoPromoteWorkTurn(
     input.text,
     operationMode,
@@ -428,7 +430,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     && operationMode === 'chat'
     && !requestedMode
     && actionContractRequiresTools
-  ));
+  ) || readOnlyKnowledgeInspection);
   const taskEntryTurn = input.channel === 'task';
   const chatModePureConversation = operationMode === 'chat' && !requestedMode && !taskEntryTurn && !autoPromoteToAssistant;
   const shouldPromoteForAction =
@@ -467,6 +469,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
           taskEntryTurn ||
           autoPromoteToAssistant ||
           actionContractRequiresTools ||
+          readOnlyKnowledgeInspection ||
           continuationMayDriveAction ||
           workTakeover.shouldResumeTask ||
           explicitTeamExecution ||

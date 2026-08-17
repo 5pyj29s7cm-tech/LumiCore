@@ -497,12 +497,19 @@ export function buildOrchestrationWorkerToolPolicy(
       ...routeForbidden,
       ...(localCadSource ? availableNames.filter(name => LOCAL_CAD_WORKER_FORBIDDEN_RE.test(name)) : []),
     ]));
+    const inheritedExecutable = (inherited.allowedTools || []).filter(name => available.has(name));
+    const routeNarrowedInheritedPolicy = !inheritedAllowed.has('*') && (
+      allowedTools.length !== inheritedExecutable.length
+      || inheritedExecutable.some(name => !allowedTools.includes(name))
+    );
     return {
       ...inherited,
       allowedTools: Array.from(new Set(allowedTools)),
       requireConfirmation: (inherited.requireConfirmation || []).filter(name => allowedTools.includes(name)),
       forbiddenTools,
-      maxIterations: Math.max(0, Math.min(inherited.maxIterations ?? 8, routeIterationCap)),
+      maxIterations: routeNarrowedInheritedPolicy || inheritedAllowed.has('*')
+        ? Math.max(0, Math.min(inherited.maxIterations ?? 8, routeIterationCap))
+        : Math.max(0, inherited.maxIterations ?? 8),
     };
   }
 

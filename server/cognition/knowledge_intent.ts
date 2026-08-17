@@ -5,6 +5,9 @@
 export function isReadOnlyKnowledgeBaseInspectionRequest(input: string): boolean {
   const text = String(input || '').trim();
   if (!/(?:\u77e5\u8bc6\u5e93|knowledge\s*base)/iu.test(text)) return false;
+  // Capability questions about whether a file can later be sent/exported are
+  // conversational. They do not authorize an inventory read or a transfer.
+  if (/(?:\u6587\u4ef6|\u6587\u6863).{0,24}(?:\u53ef\u4ee5|\u80fd\u5426|\u80fd\u4e0d\u80fd|\u80fd).{0,24}(?:\u53d1\u7ed9|\u53d1\u9001\u7ed9|\u5bfc\u51fa|\u63d0\u4f9b).{0,12}(?:\u6211)?(?:\u5417|\u4e48|[\uff1f?])|\bcan\b.{0,32}\b(?:send|export|provide)\b/iu.test(text)) return false; // i18n-allow: Input-recognition only.
   if (/(?:\u6253\u5f00|\u8fdb\u5165|\u5207\u6362\u5230|\u5207\u5230|\u663e\u793a|\u5c55\u5f00|\u5173\u95ed|\u6536\u8d77).{0,20}(?:\u77e5\u8bc6\u5e93)|\b(?:open|enter|switch|show|expand|close)\b.{0,24}\bknowledge\s*base\b/iu.test(text)) {
     return false;
   }

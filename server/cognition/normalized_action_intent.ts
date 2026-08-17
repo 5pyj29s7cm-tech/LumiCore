@@ -75,6 +75,10 @@ const REGISTERED_CLIENT_SURFACE_RULES: ReadonlyArray<{ pattern: RegExp; target: 
   });
 
 const CLIENT_SURFACE_RULES: ReadonlyArray<{ pattern: RegExp; target: string; action: string }> = [
+  { pattern: /(?:自主模式|autonomy|autonomous\s*mode)/iu, target: 'autonomous', action: 'set_client_mode' }, // i18n-allow: Multilingual Lumi mode aliases.
+  { pattern: /(?:助理模式|assistant\s*mode)/iu, target: 'assistant', action: 'set_client_mode' }, // i18n-allow: Multilingual Lumi mode aliases.
+  { pattern: /(?:聊天模式|chat\s*mode)/iu, target: 'chat', action: 'set_client_mode' }, // i18n-allow: Multilingual Lumi mode aliases.
+  { pattern: /(?:会议模式|meeting\s*mode)/iu, target: 'meeting', action: 'set_client_mode' }, // i18n-allow: Multilingual Lumi mode aliases.
   { pattern: /(?:聊天界面|聊天窗口|聊天面板|侧边聊天|side\s*chat|chat\s*(?:window|panel)?)/iu, target: 'chat', action: 'open_chat' }, // i18n-allow: Multilingual Lumi surface aliases.
   { pattern: /(?:中枢世界|中枢|世界视图|nexus|world\s*view)/iu, target: 'nexus', action: 'open_nexus' }, // i18n-allow: Multilingual Lumi surface aliases.
   { pattern: /(?:技能大厅|技能中心|skill\s*(?:hall|center))/iu, target: 'skills', action: 'open_skills' }, // i18n-allow: Multilingual Lumi surface aliases.

@@ -260,6 +260,7 @@ export function extractDesktopLaunchTarget(input: string): string {
     && normalizedIntent.operation === 'navigate'
     && normalizedIntent.sideEffectClass === 'none'
     && compact(normalizedIntent.target)
+    && isDesktopLaunchVerificationOnly(primary, normalizedIntent)
   ) return compact(normalizedIntent.target);
   return extractSimpleDesktopOpenTarget(primary);
 }
@@ -677,7 +678,7 @@ function isDesktopLaunchVerificationOnly(
   const withoutExclusions = text
     .replace(/(?:\u4e0d\u80fd|\u4e0d\u8981|\u522b|\u7981\u6b62|\u4e0d\u53ef).{0,48}(?:\u66ff\u4ee3|\u5192\u5145|\u4ee3\u66ff)/gu, ' ')
     .replace(/\b(?:do\s+not|don't|never)\b.{0,64}\b(?:substitute|replace|use)\b/giu, ' ');
-  if (/(?:\u767b\u5f55|\u641c\u7d22|\u67e5\u627e|\u627e\u4e00\u4e0b|\u8be2\u95ee|\u95ee\u4e00\u4e0b|\u56de\u590d|\u8f93\u5165|\u7f16\u8f91|\u53d1\u9001|\u64ad\u653e|\u521b\u5efa|\u751f\u6210|\u5199\u5165|\u4fdd\u5b58|\u5bfc\u51fa|\u53d1\u5e03)|\b(?:login|search|find|ask|message|reply|type|edit|send|play|create|generate|write|save|export|publish)\b/iu.test(withoutExclusions)) {
+  if (/(?:\u767b\u5f55|\u641c\u7d22|\u67e5\u627e|\u627e\u4e00\u4e0b|\u8be2\u95ee|\u95ee\u4e00\u4e0b|\u56de\u590d|\u8f93\u5165|\u7f16\u8f91|\u53d1\u9001|\u64ad\u653e|\u521b\u5efa|\u751f\u6210|\u7ed8\u5236|\u753b\u56fe|\u70b9\u51fb|\u62d6\u62fd|\u9f20\u6807|\u952e\u76d8|\u5199\u5165|\u4fdd\u5b58|\u5bfc\u51fa|\u53d1\u5e03)|\b(?:login|search|find|ask|message|reply|type|edit|send|play|create|generate|draw|operate|mouse|keyboard|cursor|click|drag|write|save|export|publish)\b/iu.test(withoutExclusions)) {
     return false;
   }
   return !/(?:\u6253\u5f00\u540e|\u542f\u52a8\u540e|\u8fd0\u884c\u540e|\u7136\u540e|\u63a5\u7740|\u968f\u540e|\u5e76\u4e14).{0,96}(?:\u8f93\u5165|\u7f16\u8f91|\u767b\u5f55|\u641c\u7d22|\u53d1\u9001|\u64ad\u653e|\u521b\u5efa|\u751f\u6210|\u5199\u5165|\u4fdd\u5b58|\u5bfc\u51fa|\u53d1\u5e03)|\b(?:then|after)\b.{0,96}\b(?:type|edit|login|search|send|play|create|generate|write|save|export|publish)\b/iu.test(withoutExclusions);
@@ -860,6 +861,34 @@ export function buildActionContract(input: string): LumiActionContract {
 
   const text = compact(rawInput);
   if (!text) return NONE_CONTRACT;
+  // Runtime status/cancellation has its own exact ledger contract. Classify it
+  // before the generic normalized status guard so a phrase such as
+  // "background task progress" cannot be reduced to a no-tool status turn.
+  const runtimeWorkIntent = classifyRuntimeWorkIntent(text);
+  if (runtimeWorkIntent !== 'none') {
+    const cancelling = runtimeWorkIntent === 'cancel';
+    return withDefaults({
+      kind: 'task_control',
+      label: cancelling ? 'Runtime work cancellation' : 'Runtime work status',
+      coreAction: cancelling
+        ? 'Cancel the active Lumi work recorded in the unified runtime ledger.'
+        : 'Read the active Lumi work recorded in the unified runtime ledger.',
+      preparationIsNotCompletion: [
+        'listing operating-system processes',
+        'checking client health',
+        'saying work was stopped without a runtime cancellation receipt',
+      ],
+      requiredEvidence: [cancelling
+        ? 'runtime_work_cancel result with ok=true and an exact cancelled/cancelling/idle status'
+        : 'runtime_work_status result with ok=true and the exact active item count'],
+      preferredTools: [cancelling ? 'runtime_work_cancel' : 'runtime_work_status'],
+      verificationTools: ['runtime_work_status'],
+      nextStep: cancelling
+        ? 'Cancel the matching runtime work and report whether cancellation completed, is still draining, or there was nothing active.'
+        : 'Read the runtime work ledger and report its current items without substituting a process list.',
+      caution: 'Only runtime ledger receipts prove Lumi task status or cancellation.',
+    });
+  }
   if (
     normalizedIntent.kind === 'correction_explanation'
     || normalizedIntent.kind === 'client_navigation'
@@ -889,31 +918,6 @@ export function buildActionContract(input: string): LumiActionContract {
   // Literal values such as "channel: command-center chat" or "status: pending"
   // must not be reclassified as messaging, navigation, or task-status work.
   if (isExplicitArtifactCreationText(text)) return buildArtifactWorkContract();
-  const runtimeWorkIntent = classifyRuntimeWorkIntent(text);
-  if (runtimeWorkIntent !== 'none') {
-    const cancelling = runtimeWorkIntent === 'cancel';
-    return withDefaults({
-      kind: 'task_control',
-      label: cancelling ? 'Runtime work cancellation' : 'Runtime work status',
-      coreAction: cancelling
-        ? 'Cancel the active Lumi work recorded in the unified runtime ledger.'
-        : 'Read the active Lumi work recorded in the unified runtime ledger.',
-      preparationIsNotCompletion: [
-        'listing operating-system processes',
-        'checking client health',
-        'saying work was stopped without a runtime cancellation receipt',
-      ],
-      requiredEvidence: [cancelling
-        ? 'runtime_work_cancel result with ok=true and an exact cancelled/cancelling/idle status'
-        : 'runtime_work_status result with ok=true and the exact active item count'],
-      preferredTools: [cancelling ? 'runtime_work_cancel' : 'runtime_work_status'],
-      verificationTools: ['runtime_work_status'],
-      nextStep: cancelling
-        ? 'Cancel the matching runtime work and report whether cancellation completed, is still draining, or there was nothing active.'
-        : 'Read the runtime work ledger and report its current items without substituting a process list.',
-      caution: 'Only runtime ledger receipts prove Lumi task status or cancellation.',
-    });
-  }
   const extensionRegistryTool = extensionRegistryToolForAction(text);
   if (extensionRegistryTool) {
     const mutating = ['extension_registry_install', 'extension_registry_rollback', 'extension_registry_disable'].includes(extensionRegistryTool);
