@@ -1,5 +1,8 @@
 name: Windows 24-hour Reliability
 
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
 

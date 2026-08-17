@@ -1,12 +1,12 @@
 # Lumi OS Commercial Release
 
-This repository is the private release track for Lumi OS 3.x.
+This repository contains the public source track for Lumi OS 3.x. Source availability and signed binary distribution are separate release decisions.
 
 ## Positioning
 
-- The previous public repository remains the fan preview track.
-- `lumi-oeo` is the private development track for newer builds before the official website launch.
-- After the official website and distribution flow are ready, selected builds can reopen for free public download.
+- The public repository is the canonical source and community collaboration track.
+- A commit or pull request is not a signed public installer by itself.
+- Official binaries are published only after the platform-specific release gates below pass.
 
 ## Current Channel
 
@@ -37,14 +37,14 @@ The desktop client currently has no Free / Light / Pro / Org runtime plan gate.
 
 Any future billing or managed-service entitlement system must be introduced as a separate, explicit product decision. It must not silently create a default plan or intercept local model execution.
 
-## Reopen Checklist
+## Public Binary Checklist
 
-Before public free downloads reopen on the official website:
+Before a build is offered as a public download on the official website:
 
 - Publish a stable download page and update `LUMI_DOWNLOAD_URL`.
 - Add release notes for each distributed build.
 - Document any future hosted-service costs independently from local provider access.
-- Confirm source/license strategy. The current repository includes `AGPL-3.0`; closed-source commercial distribution needs a separate licensing decision.
+- Confirm source/license compliance. This repository uses `AGPL-3.0`; closed-source commercial distribution needs a separate licensing agreement.
 - Validate updater endpoint and signing keys.
 - Run `npm run release:check -- --strict-publish` and resolve every failure.
 

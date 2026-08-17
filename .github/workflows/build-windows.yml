@@ -1,5 +1,8 @@
 name: Build Windows Installer
 
+permissions:
+  contents: write
+
 on:
   push:
     branches:

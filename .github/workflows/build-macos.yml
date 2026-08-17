@@ -1,5 +1,8 @@
 name: Build macOS Installer
 
+permissions:
+  contents: write
+
 on:
   push:
     branches:

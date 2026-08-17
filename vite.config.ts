@@ -11,14 +11,12 @@ const __dirname = path.dirname(__filename);
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
-  const target = env.LUMI_TARGET || (['desktop', 'web', 'mobile', 'all'].includes(mode) ? mode : 'desktop');
-  const inputs: Record<string, string> = target === 'web'
-    ? { web: 'index.web.html' }
-    : target === 'mobile'
-      ? { mobile: 'index.mobile.html' }
-      : target === 'all'
-        ? { desktop: 'index.html', web: 'index.web.html', mobile: 'index.mobile.html' }
-        : { desktop: 'index.html' };
+  const target = env.LUMI_TARGET || (['desktop', 'mobile', 'all'].includes(mode) ? mode : 'desktop');
+  const inputs: Record<string, string> = target === 'mobile'
+    ? { mobile: 'index.mobile.html' }
+    : target === 'all'
+      ? { desktop: 'index.html', mobile: 'index.mobile.html' }
+      : { desktop: 'index.html' };
   const outDir = target === 'all' ? 'dist' : `dist/${target}`;
 
   return {
@@ -28,11 +26,7 @@ export default defineConfig(({ mode }) => {
       {
         name: 'lumi-platform-html-output',
         writeBundle() {
-          const htmlName = target === 'web'
-            ? 'index.web.html'
-            : target === 'mobile'
-              ? 'index.mobile.html'
-              : '';
+          const htmlName = target === 'mobile' ? 'index.mobile.html' : '';
           if (!htmlName) return;
           const source = path.join(__dirname, outDir, htmlName);
           const dest = path.join(__dirname, outDir, 'index.html');

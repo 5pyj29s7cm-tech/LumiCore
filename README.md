@@ -4,6 +4,9 @@
 
 **浙江灵序科技有限公司 · [lumiai.asia](https://lumiai.asia)**
 
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-orange.svg)](./LICENSE)
+[![LumiOS CI](https://github.com/5pyj29s7cm-tech/LumiOS/actions/workflows/ci.yml/badge.svg)](https://github.com/5pyj29s7cm-tech/LumiOS/actions/workflows/ci.yml)
+
 ---
 
 > LumiOS 不是又一个 AI 助手。
@@ -12,11 +15,13 @@
 
 ---
 
-## 商业发布状态
+## 项目状态与开源边界
 
-当前 `lumi-oeo` 仓库是 Lumi OS 3.x 的私有开发与发布主线。旧公开仓库继续作为粉丝尝鲜版保留，后续新版本先在本仓库迭代，并在官网上线和分发流程稳定后，再选择合适版本对外发布。
+LumiOS 3.x 核心代码以 AGPL-3.0 许可证公开。项目仍在快速迭代，桌面控制、语音连续对话、外部平台协作和行业工作流会受到系统环境、模型、第三方软件与账号权限影响；请将未经真实回执验证的能力视为开发者预览，而不是无条件完成承诺。
 
-LumiOS 当前没有在客户端内实施 Free / Light / Pro 套餐或模型提供商限制。用户可使用自己已配置且可用的本地或云端模型，其中 LM Studio 和 Ollama 不经过套餐校验。发布检查见 [COMMERCIAL_RELEASE.md](./COMMERCIAL_RELEASE.md)。
+源码公开不等于所有安装包都自动成为正式发行版。Windows/macOS 安装包仍需通过签名、冒烟、生命周期与发布门禁后才能标记为公开发行。详情见 [COMMERCIAL_RELEASE.md](./COMMERCIAL_RELEASE.md)。
+
+LumiOS 当前没有在客户端内实施 Free / Light / Pro 套餐或模型提供商限制。用户可使用自己已配置且可用的本地或云端模型，其中 LM Studio 和 Ollama 不经过套餐校验。
 
 ---
 
@@ -61,7 +66,7 @@ LumiOS 是这个愿景的第一个落地形态。
 - 语音唤醒、实时流式识别、情感自适应语速/音调
 
 ### MCP 生态系统
-工具能力和维护中的 Skill 均由运行时清单生成，不再手工维护容易过期的数量。当前构建统计见 [Runtime capability statistics](docs/generated/capability-stats.md)。
+工具能力和维护中的 Skill 均由运行时清单生成，不再手工维护容易过期的数量。运行 `npm run docs:capability-stats` 可生成当前工作树的[能力统计](./docs/generated/capability-stats.md)。
 
 ### 跨终端同步
 - 设备状态与记忆跨终端实时同步
@@ -69,7 +74,7 @@ LumiOS 是这个愿景的第一个落地形态。
 - 断网时本地独立运行，联网后自动合并
 
 ### 技能市场
-- **维护中的内置技能** — 实际清单与数量由构建脚本从 `server/skills/bundled` 生成，见 [构建统计](docs/generated/capability-stats.md)
+- **维护中的内置技能** — 实际清单与数量由构建脚本从 `server/skills/bundled` 生成
 - **社区生态** — 从 npm（`lumi-skill-*`）或 GitHub（topic: `lumi-skill`）发现安装第三方技能
 - **评分系统** — 社区技能评分与排行
 - 开发者可提交自定义技能，持续扩展 Lumi 的能力边界
@@ -145,14 +150,14 @@ LumiOS 是这个愿景的第一个落地形态。
 | Windows 桌面（Tauri v2 + WebView2） | 主要目标，稳定运行 |
 | macOS 桌面（Tauri v2） | 支持 |
 | Linux 桌面（Tauri v2） | 支持 |
-| Web（React SPA） | 官网独立发布，不随桌面安装包打包 |
+| 官方网站 | 独立静态工程发布，不再包含在本仓库构建图中 |
 | iOS / Android（Capacitor） | 实验阶段，不随桌面安装包打包 |
 
 ---
 
 ## 技术栈
 
-**前端：** React 19, TypeScript, Tailwind CSS v4, Vite, Framer Motion  
+**客户端前端：** React 19, TypeScript, Tailwind CSS v4, Vite, Framer Motion
 **后端：** Node.js, Express, Socket.io, SQLite3  
 **桌面：** Tauri v2 (Rust), WebView2  
 **AI：** 11 个 LLM 提供商, MCP SDK, GPT-SoVITS, CosyVoice, Whisper  
@@ -176,8 +181,8 @@ LumiOS 是这个愿景的第一个落地形态。
 
 ```powershell
 # Windows (PowerShell)
-git clone https://github.com/maoxiansheng946-dev/-lumi-OS.git
-cd lumi-OS
+git clone https://github.com/5pyj29s7cm-tech/LumiOS.git
+cd LumiOS
 copy .env.example .env
 # 编辑 .env，填入 API Key
 ./scripts/deploy-windows.ps1                                    # 管理员安装到 Program Files
@@ -186,8 +191,8 @@ copy .env.example .env
 
 ```bash
 # macOS
-git clone https://github.com/maoxiansheng946-dev/-lumi-OS.git
-cd lumi-OS
+git clone https://github.com/5pyj29s7cm-tech/LumiOS.git
+cd LumiOS
 cp .env.example .env
 # 编辑 .env，填入 API Key
 bash scripts/deploy-macos.sh
@@ -195,8 +200,8 @@ bash scripts/deploy-macos.sh
 
 ```bash
 # Linux (Ubuntu/Debian)
-git clone https://github.com/maoxiansheng946-dev/-lumi-OS.git
-cd lumi-OS
+git clone https://github.com/5pyj29s7cm-tech/LumiOS.git
+cd LumiOS
 cp .env.example .env
 # 编辑 .env，填入 API Key
 bash scripts/deploy-linux.sh
@@ -298,7 +303,7 @@ LumiOS 是灵序科技 Personal AI 生态的软件核心，配合以下硬件终
 
 ## 参与贡献
 
-欢迎提交 Issue 和 Pull Request。
+欢迎提交 Issue 和 Pull Request。开始前请阅读 [贡献指南](./CONTRIBUTING.md)、[安全策略](./SECURITY.md) 和 [行为准则](./CODE_OF_CONDUCT.md)。不要提交 API Key、访问令牌、客户资料、个人数据库、语音样本或可识别真实账号的配置。
 
 如果你是 AI 工程方向的工程师，对 Personal AI 和孵化机制感兴趣，我们正在寻找技术联合创始人（CTO），股权 5%-15%，联合创始人身份。
 
@@ -324,3 +329,5 @@ LumiOS 是灵序科技 Personal AI 生态的软件核心，配合以下硬件终
 GNU Affero General Public License v3.0 (AGPL-3.0)。详见 [LICENSE](./LICENSE)。
 
 **简言之：** 个人使用、修改和分发自由。若在网络服务中商用使用，必须以相同许可证开源你的修改。闭源商业许可请联系版权方。
+
+Lumi、LumiOS、灵序科技及相关视觉标识不随开源许可证自动授权，详见 [商标说明](./TRADEMARKS.md)。

@@ -12,7 +12,6 @@
     "serve": "node dist-server/entry.cjs",
     "build": "npm run build:desktop-ui",
     "build:desktop-ui": "npm run check:command-center-css && vite build --mode desktop",
-    "build:web": "vite build --mode web",
     "build:mobile": "vite build --mode mobile",
     "build:frontends": "vite build --mode all",
     "docs:capability-stats": "tsx scripts/write-capability-stats.ts",

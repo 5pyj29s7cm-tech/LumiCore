@@ -1,0 +1,47 @@
+name: Bug report
+description: 报告可复现的 LumiOS 问题
+title: "[Bug]: "
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: 请先移除截图、日志和配置中的密钥、个人数据与客户资料。
+  - type: input
+    id: version
+    attributes:
+      label: 版本或提交
+      placeholder: v3.0.3 / commit SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 平台
+      options: [Windows, macOS, Linux, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 写出输入、操作顺序和实际结果。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 已脱敏证据
+      description: 可附日志片段、截图和回执 ID，不要包含凭据或隐私数据。
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: 数据确认
+      options:
+        - label: 我已移除密钥、令牌、个人数据和客户资料。
+          required: true
