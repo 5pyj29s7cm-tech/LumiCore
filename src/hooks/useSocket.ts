@@ -440,12 +440,22 @@ async function dispatchClientAction(args: Record<string, any>): Promise<string> 
   });
 }
 
+/**
+ * Register the desktop device and native tool relay as part of shell startup,
+ * not only when a page component happens to mount. This is idempotent for the
+ * shared Socket.IO instance and is also reused by React consumers.
+ */
+export function initializeSharedSocketRuntime(): Socket {
+  const socket = socketService.connect();
+  registerSharedSocketHandlers(socket);
+  return socket;
+}
+
 export function useSocket() {
   const [socket, setSocket] = useState<Socket | null>(null);
 
   useEffect(() => {
-    const s = socketService.connect();
-    registerSharedSocketHandlers(s);
+    const s = initializeSharedSocketRuntime();
     setSocket(s);
   }, []);
 

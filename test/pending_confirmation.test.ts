@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  buildConversationConfirmationChannelScope,
   buildVoiceConfirmationChannelScope,
   clearAllPendingConfirmationsForTests,
   consumePendingConfirmation,
   formatPendingConfirmationPrompt,
   formatPendingConfirmationRequest,
   getPendingConfirmation,
+  isConfirmationCancellation,
   isExplicitConfirmationReply,
   recordPendingConfirmation,
 } from '../server/tools/pending_confirmation';
@@ -202,6 +204,22 @@ describe('One-time pending tool confirmations', () => {
     )).toBe(true);
   });
 
+  it('keeps chat confirmation scope stable across transport reconnects', () => {
+    const scope = buildConversationConfirmationChannelScope({
+      source: 'chat', domain: 'personal', conversationId: 'conversation-1',
+    });
+    const pending = recordPendingConfirmation(
+      'chat-user',
+      'wechat_send_message',
+      { contact: '客户甲', message: '固定正文' },
+      'chat',
+      { ...scope, taskId: 'task-1' },
+    );
+
+    expect(scope.channelId).toBe('conversation:conversation-1');
+    expect(getPendingConfirmation('chat-user', scope)?.id).toBe(pending.id);
+  });
+
   it('recognizes a concise confirmation without treating ordinary messages as approval', () => {
     expect(isExplicitConfirmationReply('确认')).toBe(true);
     expect(isExplicitConfirmationReply('确认执行')).toBe(true);
@@ -209,5 +227,13 @@ describe('One-time pending tool confirmations', () => {
     expect(isExplicitConfirmationReply('好的')).toBe(true);
     expect(isExplicitConfirmationReply('可以')).toBe(true);
     expect(isExplicitConfirmationReply('确认一下这个文件内容')).toBe(false);
+  });
+
+  it('recognizes natural cancellation of the pending external confirmation', () => {
+    expect(isConfirmationCancellation('取消刚才的外发确认，不要发送。')).toBe(true);
+    expect(isConfirmationCancellation('取消刚才给“验收占位联系人”的外发确认，不要发送，不要打开微信。请明确告诉我是否已经取消以及消息是否发出。')).toBe(true);
+    expect(isConfirmationCancellation('取消')).toBe(true);
+    expect(isConfirmationCancellation('取消订单')).toBe(false);
+    expect(isConfirmationCancellation('取消明天下午的会议')).toBe(false);
   });
 });

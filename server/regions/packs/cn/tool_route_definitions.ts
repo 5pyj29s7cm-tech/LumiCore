@@ -73,6 +73,7 @@ export const ROUTES: RouteDefinition[] = [
     reason: 'document, office, PDF, spreadsheet, or presentation workflow',
     patterns: [
       /文档|文件夹|文件|资料|报告|表格|PPT|幻灯片|PDF|DOCX|Excel|整理|汇总|导出|保存|生成.*文/u,
+      /(?:^|[\s\\/])[^\s，。！？!?\n]{1,160}\.(?:txt|md|docx?|xlsx?|pptx?|pdf|csv)\b/iu,
       /(?:\u603b\u7ed3|\u6458\u8981|\u5f52\u7eb3|\u63d0\u70bc|\u5206\u6790).*(?:\u6587\u4ef6|\u6587\u6863|\u8d44\u6599|\u8fd9\u4efd|\u8fd9\u4e2a)|(?:\u6587\u4ef6|\u6587\u6863|\u8d44\u6599|\u8fd9\u4efd|\u8fd9\u4e2a).*(?:\u603b\u7ed3|\u6458\u8981|\u5f52\u7eb3|\u63d0\u70bc|\u5206\u6790)/u,
       /\b(document|file|folder|report|spreadsheet|ppt|presentation|pdf|docx|xlsx|export|save)\b/i,
     ],
@@ -202,8 +203,17 @@ export const ROUTES: RouteDefinition[] = [
     patterns: [
       // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
       /工作接管|接管.*微信|接管.*客户|闭环执行|先跑一遍|跑出结果|能力复用|压测|重复能力|会不会重复|稳不稳定|稳定性|任务中心/u,
+      /(?:创建|新建|建立).{0,28}(?:持久任务|长期任务|工作接管任务|可跨重启继续的任务)/u,
       /(?:\u7ee7\u7eed|\u63a5\u7740|\u5f80\u4e0b).*(?:\u4efb\u52a1|\u5ba2\u6237|\u4ea4\u4ed8|\u63a5\u7ba1|\u5de5\u4f5c|\u9879\u76ee)/u,
       /\b(work\s*takeover|closed\s*loop|capability\s*reuse|pressure\s*test|task\s*center|take\s*over)\b/i,
+    ],
+    exact: [
+      'work_takeover_task_create',
+      'work_takeover_task_list',
+      'work_takeover_task_get',
+      'work_takeover_task_continue',
+      'work_takeover_task_advance',
+      'work_takeover_task_verify_result',
     ],
     groups: ['workTakeover', 'skills'],
   },

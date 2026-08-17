@@ -22,6 +22,7 @@ import {
 import { WPS_CREATE_DOCUMENT_TOOL } from '../external_control/wps_automation';
 import type { ConversationActionContinuationState } from './action_continuation';
 import { applyTaskPolicySnapshot } from './task_execution_ledger';
+import { buildActionContract } from './action_contract';
 
 type ToolDeclaration = ReturnType<ToolRegistry['getToolDeclarations']>[number];
 
@@ -181,6 +182,7 @@ function enhanceToolRouteForFlow(
   const reasons = [...route.reasons];
   const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(flow.routeText);
   const recoveredWpsCreateAndType = isRecoveredWpsCreateTask(flow.routeText);
+  const actionContract = buildActionContract(flow.routeText);
   const discoveredEvidenceTools = registry?.findRelevant(flow.routeText, {
     limit: 8,
     evidenceOperations: ['observe', 'test'],
@@ -285,7 +287,15 @@ function enhanceToolRouteForFlow(
   ));
   const priority = recoveredWpsCreateAndType && available.has(WPS_CREATE_DOCUMENT_TOOL)
     ? [WPS_CREATE_DOCUMENT_TOOL]
-    : [];
+    : flow.workSurfaceRoute.artifactFirst && actionContract.kind === 'artifact_work'
+      ? [
+          'write_file',
+          'work_product_verify',
+          'desktop_path_info',
+          'read_file',
+          'read_files_batch',
+        ].filter(name => available.has(name))
+      : [];
   const merged = unique([...priority, ...routeNames, ...Array.from(additions)]);
   if (
     merged.length === route.toolNames.length
@@ -340,7 +350,9 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     taskMarker
     && (input.flow.routeText || input.text).includes(taskMarker)
     && input.actionTaskState?.policySnapshot
-    && !statusOnlyContinuation,
+    && !statusOnlyContinuation
+    && !clientActionToolPolicy
+    && !selfRepairToolPolicy,
   );
   const uncappedToolPolicy = resumesPinnedTask && toolRoute?.hardAllowlist !== true
     ? applyTaskPolicySnapshot(routedPolicy, input.actionTaskState?.policySnapshot)

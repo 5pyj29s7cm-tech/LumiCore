@@ -22,6 +22,7 @@ import {
   serializeChatAttachmentContext,
   type ChatAttachmentReference,
 } from '../../lib/chatAttachmentReferences';
+import { shouldReloadPersistedConversation } from '../../lib/conversationSync';
 
 type ChatAttachment = ChatAttachmentReference;
 
@@ -583,13 +584,36 @@ export function CentralLumiChat() {
     const onConversationUpdated = (data: {
       conversationId?: string;
       agentId?: string;
+      requestId?: string;
+      originSocketId?: string;
       rolledOver?: boolean;
+      previousConversationId?: string;
     }) => {
       if (data.agentId !== 'lumi' || !data.conversationId) return;
-      if (data.conversationId === attachmentConversationIdRef.current) return;
-      bindAttachmentContextToConversation(data.conversationId, {
-        carryCurrent: data.rolledOver === true || !attachmentConversationIdRef.current,
+      const currentConversationId = attachmentConversationIdRef.current;
+      const shouldReload = shouldReloadPersistedConversation({
+        event: data,
+        currentConversationId,
+        currentSocketId: socket.id,
+        activeRequestId: activeRequestIdRef.current,
       });
+      if (!shouldReload) return;
+      if (data.conversationId !== currentConversationId) {
+        bindAttachmentContextToConversation(data.conversationId, {
+          carryCurrent: data.rolledOver === true || !currentConversationId,
+        });
+      }
+      streamingMessageIdRef.current = null;
+      fetch(`/api/conversations/${data.conversationId}/messages?domain=work&limit=80`, {
+        credentials: 'include',
+      })
+        .then(response => response.json().then(body => ({ ok: response.ok, body })))
+        .then(({ ok, body }) => {
+          if (!ok || !Array.isArray(body.messages)) return;
+          const history = body.messages.map(normalizeHistoryMessage).filter(Boolean) as Message[];
+          setMessages(history.length > 0 ? history : [greeting()]);
+        })
+        .catch(() => {});
     };
 
     socket.on('agent:chunk', onChunk);
@@ -606,7 +630,7 @@ export function CentralLumiChat() {
       socket.off('chat:conversation_updated', onConversationUpdated);
       clearActiveRequest();
     };
-  }, [bindAttachmentContextToConversation, clearActiveRequest, socket]);
+  }, [bindAttachmentContextToConversation, clearActiveRequest, greeting, socket]);
 
   const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();

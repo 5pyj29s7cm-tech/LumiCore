@@ -9,6 +9,7 @@ const INCOMPLETE_STATUSES = new Set([
   'in_progress',
   'partial',
   'pending',
+  'waiting_confirmation',
   'queued',
   'requires_setup',
   'submitted_unverified',
@@ -34,7 +35,10 @@ export function summarizeToolRecordForPersistence(record: ToolExecutionRecord): 
   if (record.error) return `[Tool: ${record.name}] Error: ${record.error}`;
 
   const payload = parseStructuredResult(String(record.result || '').trim());
-  const status = typeof payload?.status === 'string' ? payload.status.trim().toLowerCase() : '';
+  const envelopeStatus = typeof record.envelope?.status === 'string'
+    ? record.envelope.status.trim().toLowerCase()
+    : '';
+  const status = envelopeStatus || (typeof payload?.status === 'string' ? payload.status.trim().toLowerCase() : '');
   if (status && INCOMPLETE_STATUSES.has(status)) {
     return `[Tool: ${record.name}] Status: ${status}`;
   }

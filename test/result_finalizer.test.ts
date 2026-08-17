@@ -492,6 +492,34 @@ describe('Lumi result finalizer', () => {
     expect(result.text).toBe(responseText);
   });
 
+  it.each([
+    {
+      taskText: '你好 Lumi，我正在和你进行现场验收。请用两句话说明你是谁、能做什么，并明确今天只按我的指令行动。不要调用工具。',
+      responseText: '我是 Lumi，你的本地私人智能体，可以和你交流、记忆上下文并在你授权时调用工具处理事务。今天我只按你的明确指令行动。',
+    },
+    {
+      taskText: '接着刚才的验收，请记住验收代号是晨星716，只回复已记住，不执行工具。',
+      responseText: '已记住。',
+    },
+  ])('does not apply work completion gates to an authoritative no-tool turn', async ({ taskText, responseText }) => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText,
+      responseText,
+      toolRecords: [],
+      source: 'chat',
+      flow: {
+        allowToolUseForTurn: false,
+        completionEvidenceNeeded: false,
+        clientActionOnlyTurn: false,
+        selfRepairTurn: false,
+      } as any,
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(responseText);
+  });
+
   it('keeps a no-mutation follow-up question conversational even when its answer describes file work', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
     const responseText = '当前最需要客户补充的是完整的数据接口文档；我现在只做判断，不修改文件。';
@@ -539,6 +567,102 @@ describe('Lumi result finalizer', () => {
       });
       expect(satisfied.blocked).toBe(false);
       expect(satisfied.text).toContain(artifactPath);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps requested encoding, line count, and full text in a same-path readback result', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const root = mkdtempSync(path.join(os.tmpdir(), 'lumi-artifact-readback-'));
+    const artifactPath = path.join(root, 'field-test.txt');
+    const content = '验收对象：Lumi 主程序\n验收项目：本地文件创建与回读\n验收代号：青穹-17';
+    try {
+      writeFileSync(artifactPath, content, 'utf8');
+      const taskText = `请在 ${artifactPath} 新建 TXT，只写入以下三行：第一行“验收对象：Lumi 主程序”；第二行“验收项目：本地文件创建与回读”；第三行“验收代号：青穹-17”。写入后重新读取，核验 UTF-8 编码、总行数和三行全文。`;
+      const result = finalizeLumiResponse({
+        taskText,
+        responseText: '已经完成。',
+        toolRecords: [{
+          name: 'write_file',
+          arguments: { path: artifactPath, content },
+          result: `File written: ${artifactPath}`,
+          terminalVerification: { status: 'verified' as const, strategy: 'artifact' as const, reason: 'non-empty file verified' },
+        }, {
+          name: 'read_file',
+          arguments: { path: artifactPath },
+          result: content,
+          terminalVerification: { status: 'verified' as const, strategy: 'terminal_receipt' as const, reason: 'read returned' },
+        }],
+        source: 'chat',
+      });
+      expect(result.blocked).toBe(false);
+      expect(result.text).toContain('编码：UTF-8');
+      expect(result.text).toContain('总行数：3');
+      expect(result.text).toContain(content);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('blocks source-grounded artifacts that still contain dependency placeholders', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const root = mkdtempSync(path.join(os.tmpdir(), 'lumi-source-grounding-'));
+    const artifactPath = path.join(root, 'report.md');
+    const content = '# \u9a8c\u6536\u62a5\u544a\n\n\u9a8c\u6536\u5bf9\u8c61\uff1a\uff08\u6839\u636e\u6e90\u6587\u4ef6\u5185\u5bb9\u586b\u5199\uff09\n';
+    try {
+      writeFileSync(artifactPath, content, 'utf8');
+      const result = finalizeLumiResponse({
+        taskText: `\u8bf7\u8bfb\u53d6\u6e90\u6587\u4ef6\uff0c\u4ee5\u5b83\u7684\u771f\u5b9e\u5185\u5bb9\u4e3a\u552f\u4e00\u6765\u6e90\uff0c\u5728 ${artifactPath} \u521b\u5efa\u9a8c\u6536\u62a5\u544a\u5e76\u56de\u8bfb\u3002`,
+        responseText: '\u5df2\u5b8c\u6210\u3002',
+        toolRecords: [{
+          name: 'write_file',
+          arguments: { path: artifactPath, content },
+          result: `File written: ${artifactPath}`,
+          terminalVerification: { status: 'verified' as const, strategy: 'artifact' as const, reason: 'non-empty file verified' },
+        }, {
+          name: 'read_file',
+          arguments: { path: artifactPath },
+          result: content,
+          terminalVerification: { status: 'verified' as const, strategy: 'terminal_receipt' as const, reason: 'read returned' },
+        }],
+        source: 'chat',
+      });
+      expect(result.blocked).toBe(true);
+      expect(result.reason).toContain('unresolved placeholders');
+      expect(result.text).toContain('\u4e0d\u80fd\u62a5\u544a\u5b8c\u6210');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports UTF-8 encoding, line count, and full text for a Chinese readback request', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const root = mkdtempSync(path.join(os.tmpdir(), 'lumi-chinese-readback-'));
+    const artifactPath = path.join(root, 'report.md');
+    const content = '# \u9a8c\u6536\u62a5\u544a\n\n\u9a8c\u6536\u5bf9\u8c61\uff1aLumi \u4e3b\u7a0b\u5e8f\n';
+    try {
+      writeFileSync(artifactPath, content, 'utf8');
+      const result = finalizeLumiResponse({
+        taskText: `\u5728 ${artifactPath} \u521b\u5efa\u62a5\u544a\uff0c\u5199\u5165\u540e\u91cd\u65b0\u8bfb\u53d6\uff0c\u6700\u540e\u62a5\u544a\u7f16\u7801\u3001\u603b\u884c\u6570\u548c\u5168\u6587\u3002`,
+        responseText: '\u5df2\u5b8c\u6210\u3002',
+        toolRecords: [{
+          name: 'write_file',
+          arguments: { path: artifactPath, content },
+          result: `File written: ${artifactPath}`,
+          terminalVerification: { status: 'verified' as const, strategy: 'artifact' as const, reason: 'non-empty file verified' },
+        }, {
+          name: 'read_file',
+          arguments: { path: artifactPath },
+          result: content,
+          terminalVerification: { status: 'verified' as const, strategy: 'terminal_receipt' as const, reason: 'read returned' },
+        }],
+        source: 'chat',
+      });
+      expect(result.blocked).toBe(false);
+      expect(result.text).toContain('\u7f16\u7801\uff1aUTF-8');
+      expect(result.text).toContain('\u603b\u884c\u6570\uff1a3');
+      expect(result.text).toContain(content.replace(/\n$/, ''));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -681,7 +805,14 @@ describe('Lumi result finalizer', () => {
       toolRecords: [{
         name: 'desktop_open',
         arguments: { target: '记事本' },
-        result: 'Focused running app Notepad (pid 45900, window "无标题 - 记事本")',
+        result: JSON.stringify({
+          ok: true,
+          status: 'verified',
+          target: '记事本',
+          targetMatched: true,
+          actualTarget: { title: '无标题 - 记事本', processName: 'notepad.exe' },
+        }),
+        terminalVerification: { status: 'verified', strategy: 'state_diff', reason: 'target matched' },
       }, {
         name: 'desktop_active_window',
         arguments: {},
@@ -726,6 +857,31 @@ describe('Lumi result finalizer', () => {
     expect(result.blocked).toBe(false);
     expect(result.text).toBe('\u5df2\u6253\u5f00\u8bb0\u4e8b\u672c\u3002');
     expect(result.reason).toContain('exact desktop-open success');
+  });
+
+  it('accepts a verified Windows Calculator window even when the host process is generic', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '现在请打开 Windows 计算器。只打开计算器并核验窗口确实出现，不输入任何数字，不打开替代软件。',
+      responseText: '已打开 Windows 计算器。',
+      source: 'chat',
+      toolRecords: [{
+        name: 'desktop_open',
+        arguments: { target: '计算器' },
+        result: JSON.stringify({
+          ok: true,
+          status: 'verified',
+          target: '计算器',
+          targetMatched: true,
+          actualTarget: { title: '计算器', processName: 'ApplicationFrameHost.exe' },
+        }),
+        terminalVerification: { status: 'verified', strategy: 'state_diff', reason: 'target matched' },
+      }],
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toContain('已打开');
+    expect(result.text).not.toContain('后续操作');
   });
 
   it('blocks the real WPS false-success ledger instead of accepting write_file as in-app editing', async () => {
@@ -1035,10 +1191,29 @@ describe('Lumi result finalizer', () => {
     expect(result.blocked).toBe(true);
     expect(result.text).toContain('\u8fd9\u6b21\u8fd8\u6ca1\u5b8c\u6210');
     expect(result.text).toContain('\u6253\u5f00\u6216\u805a\u7126\u76ee\u6807\u7a97\u53e3');
-    expect(result.text).toContain('\u7cfb\u7edf\u8fd4\u56de\u6267\u884c\u5931\u8d25');
+    expect(result.text).toContain('\u7a97\u53e3\u56de\u6267\u65f6\u8d85\u65f6');
     expect(result.text).not.toContain('timed out');
     expect(result.text).not.toContain('\u56de\u590d\u58f0\u79f0');
     expect(result.text).not.toContain('\u76ee\u524d\u80fd\u786e\u8ba4\u7684\u6210\u529f\u6b65\u9aa4');
+  });
+
+  it('surfaces an actionable visual-provider account blocker for desktop launch verification', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '打开记事本，只打开，不输入任何内容，也不要打开替代软件。',
+      responseText: '这次没有完成。',
+      toolRecords: [{
+        name: 'desktop_open',
+        arguments: { target: '记事本' },
+        result: '',
+        error: 'Qwen Vision returned 400 Access denied, please make sure your account is in good standing',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.text).toContain('视觉核验服务拒绝了请求');
+    expect(result.text).toContain('账号状态、余额和访问权限');
   });
 
   it('keeps blocked foreground WeChat desktop results in messaging context', async () => {
@@ -1793,6 +1968,53 @@ describe('Lumi result finalizer', () => {
     expect(result.blocked).toBe(true);
     expect(result.reason).toBe('Missing legal document production evidence.');
     expect(result.text).toContain('\u6cd5\u5f8b\u6587\u4e66\u8fd8\u4e0d\u80fd\u6807\u8bb0\u4e3a\u5b8c\u6210');
+  });
+
+  it('preserves verified process and window details for an exact desktop launch', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const taskText = '\u4e3b\u7a0b\u5e8f\u81ea\u6062\u590d\u9a8c\u6536\uff1a\u8bf7\u6253\u5f00 Windows \u8bb0\u4e8b\u672c\uff0c\u53ea\u6253\u5f00\u8fd9\u4e2a\u7cbe\u786e\u76ee\u6807\uff0c\u4e0d\u8981\u6253\u5f00\u66ff\u4ee3\u8f6f\u4ef6\u3002\u5982\u679c\u89c6\u89c9\u670d\u52a1\u4e0d\u53ef\u7528\uff0c\u8bf7\u4f7f\u7528\u5b89\u5168\u7684\u672c\u5730\u7a97\u53e3\u56de\u6267\u5b8c\u6210\u6838\u9a8c\u3002\u5b8c\u6210\u540e\u8bf4\u660e\u5b9e\u9645\u8fdb\u7a0b\u3001\u7a97\u53e3\u548c\u9a8c\u8bc1\u72b6\u6001\u3002';
+    const result = finalizeLumiResponse({
+      taskText,
+      responseText: '\u5df2\u6253\u5f00Windows \u8bb0\u4e8b\u672c\u3002',
+      toolRecords: [{
+        name: 'desktop_open',
+        arguments: { target: '\u8bb0\u4e8b\u672c' },
+        result: JSON.stringify({
+          ok: true,
+          status: 'verified',
+          target: '\u8bb0\u4e8b\u672c',
+          targetMatched: true,
+          actualTarget: {
+            title: '\u65e0\u6807\u9898 - \u8bb0\u4e8b\u672c',
+            processName: 'notepad.exe',
+          },
+          verification: { status: 'verified', targetMatched: true },
+        }),
+        terminalVerification: {
+          status: 'verified',
+          strategy: 'state_diff',
+          reason: 'Exact target focused.',
+        },
+      }, {
+        name: 'desktop_active_window',
+        arguments: {},
+        result: JSON.stringify({
+          executable: 'C:\\Windows\\System32\\notepad.exe',
+          pid: 18612,
+          title: '\u65e0\u6807\u9898 - \u8bb0\u4e8b\u672c',
+        }),
+      }],
+      source: 'command-center-chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.reason).toContain('Grounded exact desktop-open success');
+    expect(result.text).toBe([
+      '\u5df2\u6253\u5f00Windows \u8bb0\u4e8b\u672c\u3002',
+      '\u5b9e\u9645\u8fdb\u7a0b\uff1anotepad.exe (PID 18612)',
+      '\u7a97\u53e3\uff1a\u65e0\u6807\u9898 - \u8bb0\u4e8b\u672c',
+      '\u9a8c\u8bc1\u72b6\u6001\uff1a\u5df2\u9a8c\u8bc1\uff08\u76ee\u6807\u7cbe\u786e\u5339\u914d\uff09',
+    ].join('\n'));
   });
 
   it('keeps socket entrypoints on the shared finalizer path', () => {

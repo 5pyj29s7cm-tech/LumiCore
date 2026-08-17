@@ -16,6 +16,117 @@ function createRegistry(): ToolRegistry {
 }
 
 describe('unified execution pipeline', () => {
+  it('routes a new persistent task to the task hub while keeping external sends fenced', () => {
+    const registry = createRegistry();
+    const text = '\u8bf7\u521b\u5efa\u4e00\u4e2a\u53ef\u8de8\u91cd\u542f\u7ee7\u7eed\u7684\u6301\u4e45\u4efb\u52a1\u3002\u6807\u9898\u201c\u9752\u7a79\u5ba2\u6237\u8ddf\u8fdb\u95ed\u73af\u201d\uff0c\u7c7b\u522b customer\uff0c\u6765\u6e90 chat\u3002\u73b0\u5728\u53ea\u521b\u5efa\u5e76\u6301\u4e45\u5316\u4efb\u52a1\uff0c\u4e0d\u8981\u53d1\u9001\u4efb\u4f55\u6d88\u606f\u3002';
+    const pipeline = buildLumiExecutionPipeline({
+      dispatch: {
+        userId: 'pipeline-work-task-user',
+        text,
+        channel: 'chat',
+        source: 'command-center-chat',
+        operationMode: 'assistant',
+        targetIsLumi: true,
+      },
+      registry,
+      personalityToolPolicy: {
+        allowedTools: ['*'],
+        requireConfirmation: [],
+        forbiddenTools: [],
+        maxIterations: 25,
+      },
+    });
+
+    expect(pipeline.normalizedIntent).toMatchObject({
+      kind: 'work_task',
+      operation: 'create',
+      relation: 'new',
+    });
+    expect(pipeline.execution.allowToolUse).toBe(true);
+    expect(pipeline.execution.toolRoute?.toolNames).toContain('work_takeover_task_create');
+    expect(pipeline.execution.toolPolicy.forbiddenTools).not.toContain('work_takeover_task_create');
+    expect(pipeline.execution.toolPolicy.requireConfirmation).not.toContain('work_takeover_task_create');
+  });
+
+  it('keeps exact Lumi client navigation when the user forbids other programs and content changes', () => {
+    const registry = createRegistry();
+    const text = '主程序实机验收·原生导航闭环第一步：请返回 Lumi 个人主页，只执行客户端导航，不要打开其他程序，不要修改任何内容。完成后只根据本轮真实回执回答。';
+    const pipeline = buildLumiExecutionPipeline({
+      dispatch: {
+        userId: 'pipeline-client-navigation-user',
+        text,
+        channel: 'chat',
+        source: 'command-center-chat',
+        operationMode: 'assistant',
+        targetIsLumi: true,
+      },
+      registry,
+      personalityToolPolicy: {
+        allowedTools: ['*'],
+        requireConfirmation: [],
+        forbiddenTools: [],
+        maxIterations: 25,
+      },
+    });
+
+    expect(pipeline.normalizedIntent).toMatchObject({
+      kind: 'client_navigation',
+      operation: 'navigate',
+      target: 'home',
+      clientAction: 'focus_home',
+      sideEffectClass: 'none',
+    });
+    expect(pipeline.turnIntent.flow.clientActionOnlyTurn).toBe(true);
+    expect(pipeline.execution.toolPolicy.allowedTools).toEqual([
+      'client_get_state',
+      'client_action',
+    ]);
+    expect(pipeline.execution.toolPolicy.forbiddenTools).not.toContain('client_action');
+  });
+
+  it('keeps the exact requested local write when the user forbids all other file and external mutations', () => {
+    const registry = createRegistry();
+    const text = '请在 C:\\Users\\Administrator\\Documents\\Lumi主程序实机验收_20260817.txt 新建一个 TXT 文件，只写入以下三行：第一行“验收对象：Lumi 主程序”；第二行“验收项目：本地文件创建与回读”；第三行“验收代号：青穹-17”。写入后必须重新读取。除这个文件外不得修改其他文件，不要打开其他应用，不要发送、上传或发布任何内容。';
+    const pipeline = buildLumiExecutionPipeline({
+      dispatch: {
+        userId: 'pipeline-user',
+        text,
+        channel: 'chat',
+        source: 'chat',
+        operationMode: 'assistant',
+        targetIsLumi: true,
+      },
+      registry,
+      personalityToolPolicy: {
+        allowedTools: ['*'],
+        requireConfirmation: [],
+        forbiddenTools: [],
+        maxIterations: 25,
+      },
+    });
+    expect(pipeline.execution.toolRoute?.toolNames).toEqual(expect.arrayContaining(['write_file', 'read_file']));
+    expect(pipeline.execution.toolPolicy.forbiddenTools).not.toContain('write_file');
+    expect(pipeline.execution.toolPolicy.allowedTools).toContain('write_file');
+  });
+
+  it('keeps an exact app launch when the user forbids file edits and substitute apps', () => {
+    const registry = createRegistry();
+    const text = '主程序实机验收：请打开 Windows 计算器。不得用浏览器、同名文件或其他应用替代；打开后读取当前活动窗口。不要输入算式，不要修改文件。';
+    const pipeline = buildLumiExecutionPipeline({
+      dispatch: {
+        userId: 'pipeline-user', text, channel: 'chat', source: 'chat',
+        operationMode: 'assistant', targetIsLumi: true,
+      },
+      registry,
+      personalityToolPolicy: {
+        allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 25,
+      },
+    });
+    expect(pipeline.normalizedIntent).toMatchObject({ kind: 'desktop_operation', target: 'Windows 计算器' });
+    expect(pipeline.execution.toolRoute?.toolNames).toEqual(expect.arrayContaining(['desktop_open', 'desktop_active_window']));
+    expect(pipeline.execution.toolPolicy.forbiddenTools).not.toContain('desktop_open');
+  });
+
   it('builds turn intent, capability plan, policy and trace from one call', () => {
     const registry = createRegistry();
     const pipeline = buildLumiExecutionPipeline({
@@ -121,6 +232,42 @@ describe('unified execution pipeline', () => {
       reconcileUnknownOutcome: true,
       allowLegacyRoute: false,
       onUnknownOutcome: 'reconcile_then_stop',
+    });
+  });
+
+  it('keeps confirmation-only external commits executable only up to the confirmation gate', () => {
+    const registry = createRegistry();
+    const text = '请准备给测试联系人“验收占位联系人”发送消息“Lumi外发确认测试”，但在真正发送前必须向我确认；现在只到等待确认，不要发送。';
+    const pipeline = buildLumiExecutionPipeline({
+      dispatch: {
+        userId: 'pipeline-user',
+        text,
+        channel: 'chat',
+        source: 'chat',
+        operationMode: 'assistant',
+        targetIsLumi: true,
+      },
+      registry,
+      personalityToolPolicy: {
+        allowedTools: ['*'],
+        requireConfirmation: [],
+        forbiddenTools: [],
+        maxIterations: 25,
+      },
+    });
+
+    expect(pipeline.normalizedIntent).toMatchObject({
+      kind: 'messaging_send',
+      target: '验收占位联系人',
+      payload: 'Lumi外发确认测试',
+      sideEffectClass: 'external_commit',
+    });
+    expect(pipeline.execution.toolRoute?.toolNames).toEqual(['wechat_send_message']);
+    expect(pipeline.execution.toolPolicy.allowedTools).toEqual(['wechat_send_message']);
+    expect(pipeline.execution.toolPolicy.forbiddenTools).not.toContain('wechat_send_message');
+    expect(pipeline.executionPlan.risk).toMatchObject({
+      requiresConfirmation: true,
+      failClosed: true,
     });
   });
 

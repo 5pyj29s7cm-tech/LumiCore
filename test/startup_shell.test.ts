@@ -16,6 +16,7 @@ describe('desktop startup shell', () => {
     const startup = fs.readFileSync(path.join(process.cwd(), 'src/components/StartupSequence.tsx'), 'utf8');
 
     expect(desktopEntry).toContain('<StartupSequence ready={!shell.loading} />');
+    expect(desktopEntry).toContain('initializeSharedSocketRuntime();');
     expect(desktopUi).not.toContain('HardcoreBootSequence');
     expect(startup).not.toContain('Core Temperature');
     expect(startup).not.toContain('absolute inset-0 bg-white');

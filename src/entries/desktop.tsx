@@ -12,8 +12,10 @@ import { LoginRequired } from '../core/components/Auth';
 import { useAppShell } from './useAppShell';
 import { useApp } from '../contexts/AppContext';
 import { StartupSequence } from '../components/StartupSequence';
+import { initializeSharedSocketRuntime } from '../hooks/useSocket';
 
 installApiBridge();
+initializeSharedSocketRuntime();
 
 const SETUP_DONE_KEY = 'lumi_setup_complete';
 const AgentChatPage = lazy(() => import('../components/AgentChatPage').then(m => ({ default: m.AgentChatPage })));

@@ -42,6 +42,7 @@ describe('Lumi client action routing', () => {
 
   it('keeps information-only client questions conversational', () => {
     expect(hasClientActionOnlyIntent('中枢世界是什么')).toBe(false);
+    expect(hasClientActionOnlyIntent('请检查当前个人知识库是否可用，报告文档数量、已索引数量和最近错误。只读取真实状态，不导入、不修改任何内容。')).toBe(false);
   });
 
   it('gives an explicit no-tool instruction precedence over surface keywords', () => {

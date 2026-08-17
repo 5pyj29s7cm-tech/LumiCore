@@ -44,6 +44,20 @@ export function buildVoiceConfirmationChannelScope(input: {
   };
 }
 
+/** Stable across Socket.IO reconnects for one persisted conversation. */
+export function buildConversationConfirmationChannelScope(input: {
+  source?: string; domain?: string; orgId?: string; conversationId: string; taskId?: string;
+}): PendingConfirmationScope {
+  const taskId = String(input.taskId || '').trim();
+  return {
+    source: String(input.source || 'chat'),
+    domain: String(input.domain || ''),
+    orgId: String(input.orgId || ''),
+    channelId: `conversation:${String(input.conversationId || '').trim()}`,
+    ...(taskId ? { taskId } : {}),
+  };
+}
+
 const pendingById = new Map<string, PendingToolConfirmation>();
 const CONFIRMATION_TTL_MS = 10 * 60 * 1000;
 const SECRET_KEY_RE = /password|passkey|secret|token|api.?key|credential|otp|captcha|verification.?code/i;
@@ -209,7 +223,18 @@ export function isExplicitConfirmationReply(text: string): boolean {
 }
 
 export function isConfirmationCancellation(text: string): boolean {
-  return /^(?:\u53d6\u6d88|\u4e0d\u8981\u6267\u884c|\u505c\u6b62\u6267\u884c|\u4e0d\u540c\u610f|\u62d2\u7edd|cancel|deny|reject|stop)[\u3002\uff01\uff1f.!?\s]*$/iu.test(String(text || '').trim());
+  const normalized = String(text || '').trim();
+  if (/^(?:\u4e0d\u8981\u6267\u884c|\u505c\u6b62\u6267\u884c|\u4e0d\u540c\u610f|\u62d2\u7edd|cancel|deny|reject|stop)[\u3002\uff01\uff1f.!?\s]*$/iu.test(normalized)) {
+    return true;
+  }
+  if (/^(?:\u53d6\u6d88|\u505c\u6b62)[\u3002\uff01\uff1f.!?\s]*$/u.test(normalized)) return true;
+  if (!/^(?:\u53d6\u6d88|\u505c\u6b62)/u.test(normalized)) return false;
+  // Natural cancellations often name the pending recipient/action and then
+  // ask Lumi to confirm that nothing was sent. Accept that full sentence as
+  // long as it explicitly refers to a confirmation/action boundary. Do not
+  // classify unrelated domain commands such as "取消订单" as confirmation
+  // cancellation.
+  return /(?:\u521a\u624d|\u521a\u521a|\u4e4b\u524d|\u4e0a\u4e00\u4e2a|\u5916\u53d1|\u53d1\u9001|\u63d0\u4ea4|\u53d1\u5e03|\u786e\u8ba4|\u64cd\u4f5c|\u4efb\u52a1)/u.test(normalized.slice(0, 180));
 }
 
 export function formatPendingConfirmationPrompt(pending: PendingToolConfirmation): string {

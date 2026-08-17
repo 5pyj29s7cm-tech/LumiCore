@@ -98,6 +98,13 @@ describe('background delegation', () => {
       ...BASE,
       directDesktop: true,
     }).shouldDelegate).toBe(false);
+
+    expect(shouldDelegateWorkInBackground({
+      ...BASE,
+      text: '请打开 Windows 计算器，打开后核验当前活动窗口。',
+      complexity: 'moderate',
+      capabilityLane: 'desktop_control',
+    })).toEqual({ shouldDelegate: false, reason: 'desktop_control_foreground' });
   });
 
   it('keeps foreground WeChat sends out of background delegation', () => {
@@ -124,6 +131,20 @@ describe('background delegation', () => {
     });
 
     expect(read).toEqual({ shouldDelegate: false, reason: 'foreground_messaging_read' });
+  });
+
+  it('keeps explicit no-new-task status recall in the foreground', () => {
+    const decision = shouldDelegateWorkInBackground({
+      ...BASE,
+      text: '\u540c\u6b65\u9a8c\u6536\uff1a\u8bf7\u7528\u4e00\u53e5\u8bdd\u786e\u8ba4\u4f60\u8fd8\u8bb0\u5f97\u56db\u53f7\u6848\u4ef6\u7684\u6848\u4ef6ID\u548c\u4e89\u8bae\u91d1\u989d\uff0c\u4e0d\u8981\u521b\u5efa\u65b0\u4efb\u52a1\uff0c\u4e0d\u8981\u8c03\u7528\u5916\u90e8\u5e73\u53f0\u3002',
+      category: 'question',
+      complexity: 'moderate',
+    });
+
+    expect(decision).toEqual({
+      shouldDelegate: false,
+      reason: 'explicit_foreground_only',
+    });
   });
 
   it('builds a concise foreground acknowledgement', () => {

@@ -442,9 +442,15 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     capabilityLearningPreview.capabilityLearningIntent === 'inspect_reuse'
     || capabilityLearningPreview.capabilityLearningIntent === 'stabilize_existing';
   const selfRepairTurn = !conceptualCapabilityQuestion
+    && !explicitNoToolInstruction
     && !statusOnlyContinuation
     && !chatModePureConversation
     && !explicitCapabilityMaintenance
+    // A concrete work contract stays the primary boundary even when the user
+    // also describes how Lumi should recover if that work fails. Otherwise a
+    // phrase such as “if vision is unavailable” can strip `desktop_open` from
+    // an explicit “open Notepad” request and leave only diagnostic tools.
+    && !actionContractRequiresTools
     && isDiagnosticOrRepairRequest(input.text);
   const clientActionOnlyTurn = !selfRepairTurn && clientActionIntent;
   const visionIntent = hasVisionIntent(routingText);
@@ -466,7 +472,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
           explicitTeamExecution ||
           explicitBackgroundDelegation ||
           shouldAllowToolUseForTurn(input.text, input.source, effectiveOperationMode);
-  const specialWorkflow = conceptualCapabilityQuestion || recoveredCurrentAppEdit
+  const specialWorkflow = conceptualCapabilityQuestion || recoveredCurrentAppEdit || explicitNoToolInstruction
     ? null
     : matchSkillWorkflow(routingText, { targetIsLumi: input.targetIsLumi });
   const exposeAgentWork = !conceptualCapabilityQuestion && (explicitTeamExecution || shouldExposeAgentWork(input.text));
@@ -479,22 +485,28 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     workSurfaceRoute,
     workTakeover,
   });
-  const execution = conceptualCapabilityQuestion || readOnlyConversationTurn
+  const execution = conceptualCapabilityQuestion || readOnlyConversationTurn || explicitNoToolInstruction
     ? {
         completionEvidenceNeeded: false,
         governance: {
           verificationIntent: 'none' as const,
           verificationReason: conceptualCapabilityQuestion
             ? 'conceptual capability explanation does not execute work'
-            : 'the current turn explicitly requests conversation without modifying the prior work product',
+            : explicitNoToolInstruction
+              ? 'the current turn explicitly forbids tool execution'
+              : 'the current turn explicitly requests conversation without modifying the prior work product',
           delegationIntent: 'none' as const,
           delegationReason: conceptualCapabilityQuestion
             ? 'conceptual capability explanation stays in the foreground conversation'
-            : 'a read-only conversational follow-up stays in the foreground conversation',
+            : explicitNoToolInstruction
+              ? 'a no-tool turn stays in the foreground conversation'
+              : 'a read-only conversational follow-up stays in the foreground conversation',
           capabilityLearningIntent: 'none' as const,
           capabilityLearningReason: conceptualCapabilityQuestion
             ? 'the user asked how existing capability routing works'
-            : 'the current turn does not request capability learning',
+            : explicitNoToolInstruction
+              ? 'the user explicitly requested no tool or capability execution'
+              : 'the current turn does not request capability learning',
           shouldInspectCapabilitiesFirst: false,
         },
       }

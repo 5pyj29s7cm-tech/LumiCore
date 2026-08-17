@@ -2,7 +2,10 @@ import fs from 'node:fs';
 import { guardCompletionClaims } from '../work_product/completion_guard';
 import type { ToolExecutionRecord } from '../tools/types';
 import type { LumiTurnFlow } from './turn_flow';
-import { formatDesktopObservationResult } from './desktop_observation';
+import {
+  formatDesktopObservationResult,
+  requiresActiveWindowObservation,
+} from './desktop_observation';
 import {
   formatClientDiagnosticResult,
   hasSuccessfulSubstantiveClientDiagnosticReceipt,
@@ -42,6 +45,7 @@ import {
   hasCurrentAppUiMutationEvidence,
   hasVerifiedCadGeometryExtractionEvidence,
   hasVisibleAutoCadExecutionEvidence,
+  requiresArtifactPostWriteReadback,
   requiresCadGeometryExtractionOnly,
   requiresCurrentAppUiMutation,
   requiresAuthenticatedWebResult,
@@ -437,9 +441,16 @@ function formatCompactBlockedResponse(input: LumiResultFinalizerInput, reason?: 
             : '\u6211\u4e0d\u4f1a\u628a\u8fd9\u79cd\u672a\u786e\u8ba4\u7684\u7ed3\u679c\u8bf4\u6210\u5df2\u5b8c\u6210\uff1b\u9700\u8981\u7ee7\u7eed\u524d\u53f0\u6267\u884c\u5e76\u9a8c\u8bc1\u7ed3\u679c\u3002',
       ].join('\n');
     }
+    const hasSuccessfulEvidence = (input.toolRecords || []).some(record => (
+      !record.error && String(record.result || '').trim().length > 0
+    ));
     return [
       'This is not complete yet.',
-      failure ? `Blocked at: ${failure}.` : 'Reason: I do not have verifiable completion evidence yet.',
+      failure
+        ? `Blocked at: ${failure}.`
+        : hasSuccessfulEvidence
+          ? 'The requested core action has not actually started: the successful tool evidence does not verify it.'
+          : 'The requested action has not actually started: there is no successful tool evidence for it.',
       'I will not mark that as done until the real action is verified.',
     ].join('\n');
   }
@@ -486,6 +497,57 @@ function formatGroundedSimpleDesktopOpenResult(
     || !hasCoreActionEvidence(contract, input.toolRecords || [], actionText)
   ) {
     return null;
+  }
+
+  // A launch request may explicitly require the real foreground process and
+  // window as its completion proof. Keep that receipt detail instead of
+  // collapsing the answer to the generic "opened" acknowledgement below.
+  // This is intentionally derived from the desktop receipts, never from the
+  // model's prose, so the final response cannot invent verification evidence.
+  if (requiresActiveWindowObservation(actionText)) {
+    const activeRecord = [...(input.toolRecords || [])].reverse().find(record => (
+      /^(?:desktop_active_window|get_active_window_info)$/i.test(String(record.name || ''))
+      && !record.error
+      && String(record.result || '').trim()
+    ));
+    if (activeRecord) {
+      let openResult: Record<string, any> = {};
+      let activeResult: Record<string, any> = {};
+      try { openResult = JSON.parse(String(successfulOpen.result || '{}')); } catch {}
+      try { activeResult = JSON.parse(String(activeRecord.result || '{}')); } catch {}
+      const processName = String(
+        activeResult.process_name
+        || activeResult.processName
+        || activeResult.executable
+        || '',
+      ).trim().replace(/^.*[\\/]/, '');
+      const processId = Number(activeResult.pid || activeResult.processId) || 0;
+      const windowTitle = String(activeResult.title || activeResult.windowTitle || '').trim();
+      const verificationStatus = String(
+        openResult.verification?.status
+        || openResult.status
+        || '',
+      ).trim().toLowerCase();
+      const targetMatched = openResult.targetMatched === true
+        || openResult.verification?.targetMatched === true;
+      const verified = targetMatched
+        && Boolean(processName || windowTitle)
+        && !/^(?:failed|error|blocked|unknown|unverified)$/i.test(verificationStatus);
+      if (isChineseText(actionText)) {
+        return [
+          CN_VOICE_FAST_PATH_MESSAGES.opened(requestedTarget),
+          `实际进程：${processName || '回执未记录'}${processId ? ` (PID ${processId})` : ''}`,
+          `窗口：${windowTitle || '回执未记录'}`,
+          `验证状态：${verified ? '已验证（目标精确匹配）' : '未验证'}`,
+        ].join('\n');
+      }
+      return [
+        `Opened ${requestedTarget}.`,
+        `Actual process: ${processName || 'not recorded'}${processId ? ` (PID ${processId})` : ''}`,
+        `Window: ${windowTitle || 'not recorded'}`,
+        `Verification: ${verified ? 'verified (exact target match)' : 'unverified'}`,
+      ].join('\n');
+    }
   }
   return isChineseText(actionText)
     ? CN_VOICE_FAST_PATH_MESSAGES.opened(requestedTarget)
@@ -661,12 +723,29 @@ function sanitizeContradictoryOperationModeText(input: LumiResultFinalizerInput)
 }
 
 function artifactPathFromRecord(record: ToolExecutionRecord): string {
+  const args = record.arguments || {};
+  const direct = String(
+    args.path || args.filePath || args.outputPath || args.targetPath || args.destination || '',
+  ).trim();
+  if (direct) return direct;
   const text = `${String(record.result || '')}\n${JSON.stringify(record.arguments || {})}`;
   const extension = '(?:docx|xlsx|pptx|pdf|md|txt|csv|dxf|dwg)';
   const windows = text.match(new RegExp(`([A-Za-z]:[\\\\/][^\\r\\n"<>|*?]+?\\.${extension})`, 'i'));
   if (windows?.[1]) return windows[1].trim();
   const unix = text.match(new RegExp(`((?:/[^\\s"']+)+\\.${extension})`, 'i'));
   return unix?.[1]?.trim() || '';
+}
+
+function requiresSourceGroundedArtifactContent(actionText: string): boolean {
+  return /(?:\u4ee5|\u6839\u636e|\u57fa\u4e8e|\u53c2\u7167).{0,80}(?:\u771f\u5b9e\u5185\u5bb9|\u6e90\u6587\u4ef6|\u6750\u6599|\u6587\u4ef6\u5185\u5bb9).{0,100}(?:\u6765\u6e90|\u751f\u6210|\u521b\u5efa|\u586b\u5199|\u6574\u7406)|(?:\u771f\u5b9e\u5185\u5bb9|\u6e90\u6587\u4ef6).{0,100}(?:\u552f\u4e00\u6765\u6e90|\u751f\u6210|\u521b\u5efa|\u586b\u5199|\u6574\u7406)/iu.test(actionText);
+}
+
+function findUnresolvedArtifactPlaceholder(artifactText: string): string {
+  const line = String(artifactText || '')
+    .split(/\r?\n/u)
+    .map(value => value.trim())
+    .find(value => /(?:\u6839\u636e|\u57fa\u4e8e|\u53c2\u7167).{0,24}(?:\u586b\u5199|\u8865\u5145|\u751f\u6210|\u66ff\u6362)|\u5f85(?:\u586b\u5199|\u8865\u5145|\u751f\u6210|\u66ff\u6362)|\b(?:TBD|TODO)\b|\{\{[^}]+\}\}/iu.test(value));
+  return line || '';
 }
 
 function formatGroundedArtifactResult(
@@ -683,6 +762,12 @@ function formatGroundedArtifactResult(
   if (!created) return null;
   const path = artifactPathFromRecord(created);
   const actionText = resultTaskText(input);
+  const createdIndex = records.indexOf(created);
+  const readback = records.slice(Math.max(0, createdIndex + 1)).find(record => (
+    /^(?:read_file|read_docx|read_pdf|pdf_to_text|extract_document_text)$/i.test(String(record.name || ''))
+    && artifactPathFromRecord(record).replace(/\//g, '\\').toLowerCase() === path.replace(/\//g, '\\').toLowerCase()
+  ));
+  const readbackRequired = requiresArtifactPostWriteReadback(actionText);
   const asksToOpen = /(?:\u6253\u5f00|\u6253\u5f00\u770b\u770b|\u76f4\u63a5\u6253\u5f00)|\bopen\b/iu.test(actionText);
   const openRecord = [...records].reverse().find(record => /^(?:desktop_open|browser_open_task)$/i.test(String(record.name || '')));
   const verified = records.some(record => (
@@ -726,8 +811,21 @@ function formatGroundedArtifactResult(
       const stats = fs.statSync(path);
       if (stats.isFile() && stats.size > 0) {
         const exactText = extractExplicitArtifactTextRequirements(actionText);
-        if (exactText.length && /\.(?:txt|md|csv|json|xml|html?|css|svg|dxf|ya?ml|toml|tsx?|jsx?|py|rs)$/iu.test(path)) {
-          const artifactText = fs.readFileSync(path, 'utf8');
+        let artifactText = '';
+        if ((exactText.length || requiresSourceGroundedArtifactContent(actionText)) && /\.(?:txt|md|csv|json|xml|html?|css|svg|dxf|ya?ml|toml|tsx?|jsx?|py|rs)$/iu.test(path)) {
+          artifactText = fs.readFileSync(path, 'utf8');
+          if (requiresSourceGroundedArtifactContent(actionText)) {
+            const unresolvedPlaceholder = findUnresolvedArtifactPlaceholder(artifactText);
+            if (unresolvedPlaceholder) {
+              return {
+                text: zh
+                  ? `\u6587\u4ef6\u5df2\u5199\u5165\uff0c\u4f46\u4ecd\u5305\u542b\u672a\u7528\u6e90\u6587\u4ef6\u771f\u5b9e\u5185\u5bb9\u66ff\u6362\u7684\u5360\u4f4d\u7b26\u201c${unresolvedPlaceholder}\u201d\uff0c\u4e0d\u80fd\u62a5\u544a\u5b8c\u6210\u3002\u4ea7\u7269\u8def\u5f84\uff1a${path}`
+                  : `The file was written, but it still contains an unresolved source placeholder "${unresolvedPlaceholder}". It cannot be reported as complete. Artifact path: ${path}`,
+                blocked: true,
+                reason: 'Source-grounded artifact still contains unresolved placeholders.',
+              };
+            }
+          }
           const missing = exactText.filter(value => !artifactText.includes(value));
           if (missing.length) {
             return {
@@ -741,6 +839,91 @@ function formatGroundedArtifactResult(
                 level: 'warning',
                 message: `Verified artifact is missing exact required text: ${missing[0]}`,
               },
+            };
+          }
+          if (/(?:只写入|仅写入|only\s+write)/iu.test(actionText)) {
+            const expected = exactText.join('\n').replace(/\r\n/g, '\n');
+            if (artifactText.replace(/\r\n/g, '\n') !== expected) {
+              return {
+                text: zh
+                  ? `文件已写入，但全文并非用户指定的逐行内容，不能报告完成。产物路径：${path}`
+                  : `The file was written, but its full text does not exactly match the requested lines. Artifact path: ${path}`,
+                blocked: true,
+                reason: 'Verified artifact contains extra, missing, or reordered text.',
+              };
+            }
+          }
+        }
+        if (readbackRequired && (!readback || readback.error || !String(readback.result || '').trim())) {
+          return {
+            text: zh
+              ? `文件已经写入，但没有取得同一路径的成功回读回执，不能报告完成。产物路径：${path}`
+              : `The file was written, but no successful same-path readback receipt was recorded. Artifact path: ${path}`,
+            blocked: true,
+            reason: 'Requested post-write readback is missing or failed.',
+          };
+        }
+        if (readbackRequired && readback && /\.(?:txt|md|csv|json|xml|html?|css|svg|dxf|ya?ml|toml|tsx?|jsx?|py|rs)$/iu.test(path)) {
+          if (!artifactText) artifactText = fs.readFileSync(path, 'utf8');
+          const receiptText = String(readback.result || '').replace(/\r\n/g, '\n');
+          const actualText = artifactText.replace(/\r\n/g, '\n');
+          if (receiptText !== actualText) {
+            return {
+              text: zh
+                ? `文件已经写入，但回读回执与磁盘全文不一致，不能报告完成。产物路径：${path}`
+                : `The file was written, but the readback receipt differs from the current file. Artifact path: ${path}`,
+              blocked: true,
+              reason: 'Post-write readback differs from the current artifact.',
+            };
+          }
+          if (/(?:\u7f16\u7801|\u603b\u884c\u6570|\u884c\u6570|\u5168\u6587|encoding|line\s*count|full\s*text)/iu.test(actionText)) {
+            const normalizedText = actualText.replace(/\n$/, '');
+            const lineCount = normalizedText ? normalizedText.split('\n').length : 0;
+            return {
+              text: zh
+                ? [
+                    '\u5df2\u5b8c\u6210\u672c\u5730\u6587\u4ef6\u521b\u5efa\u4e0e\u56de\u8bfb\u6838\u9a8c\u3002',
+                    `\u8def\u5f84\uff1a${path}`,
+                    '\u7f16\u7801\uff1aUTF-8',
+                    `\u603b\u884c\u6570\uff1a${lineCount}`,
+                    '\u5168\u6587\uff1a',
+                    normalizedText,
+                  ].join('\n')
+                : [
+                    'Completed the local file and verified it by reading it back.',
+                    `Path: ${path}`,
+                    'Encoding: UTF-8',
+                    `Line count: ${lineCount}`,
+                    'Full text:',
+                    normalizedText,
+                  ].join('\n'),
+              blocked: false,
+              reason: 'Grounded artifact completion with exact same-path post-write readback.',
+            };
+          }
+          if (/(?:编码|总行数|行数|全文|encoding|line\s*count|full\s*text)/iu.test(actionText)) {
+            const normalizedText = actualText.replace(/\n$/, '');
+            const lineCount = normalizedText ? normalizedText.split('\n').length : 0;
+            return {
+              text: zh
+                ? [
+                    '已完成本地文件创建与回读核验。',
+                    `路径：${path}`,
+                    '编码：UTF-8',
+                    `总行数：${lineCount}`,
+                    '全文：',
+                    normalizedText,
+                  ].join('\n')
+                : [
+                    'Completed the local file and verified it by reading it back.',
+                    `Path: ${path}`,
+                    'Encoding: UTF-8',
+                    `Line count: ${lineCount}`,
+                    'Full text:',
+                    normalizedText,
+                  ].join('\n'),
+              blocked: false,
+              reason: 'Grounded artifact completion with exact same-path post-write readback.',
             };
           }
         }
@@ -1545,10 +1728,20 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     };
   }
   const actionContract = taskActionContract(input);
+  const chatOnlyConversationTurn = Boolean(
+    (input.toolRecords || []).length === 0
+    && input.flow?.allowToolUseForTurn === false
+    && input.flow?.completionEvidenceNeeded !== true
+    && input.flow?.clientActionOnlyTurn !== true
+    && input.flow?.selfRepairTurn !== true
+  );
   const ordinaryConversation = (
-    !actionContract.applies
-    && (input.toolRecords || []).length === 0
-    && hasExplicitNoMutationInstruction(actionText)
+    chatOnlyConversationTurn
+    || (
+      !actionContract.applies
+      && (input.toolRecords || []).length === 0
+      && hasExplicitNoMutationInstruction(actionText)
+    )
   );
   const guard = ordinaryConversation
     ? { text: input.responseText, blocked: false as const }
@@ -1688,12 +1881,18 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     && failedToolRecord
     && (actionContract.applies || input.flow?.completionEvidenceNeeded),
   );
+  const hasActionableVisualProviderBlocker = Boolean(
+    failedToolRecord?.error
+    && /access denied.{0,160}account is in good standing|account is in good standing.{0,160}access denied/i.test(failedToolRecord.error),
+  );
   if (reportsToolIterationLimit || reportsFailedExecutionIncomplete) {
     const reason = reportsToolIterationLimit
       ? 'Tool iteration limit reached before a verified final response.'
       : `Execution remained incomplete after ${String(failedToolRecord?.name || 'a tool')} failed.`;
     return {
-      text: input.responseText,
+      text: hasActionableVisualProviderBlocker
+        ? formatCompactBlockedResponse(input, reason)
+        : input.responseText,
       blocked: true,
       reason,
       notification: {
@@ -1883,6 +2082,18 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     };
   }
   if (shouldEnforceCoreActionContract(actionContract, actionText) && claimsActionDone && !legalExternalHandoffOnly && !hasCoreActionEvidence(actionContract, input.toolRecords || [], actionText)) {
+    if (guard.blocked && /content-read\/open\/review/i.test(guard.reason || '')) {
+      return {
+        text: formatCompactBlockedResponse(input, guard.reason),
+        blocked: true,
+        reason: guard.reason,
+        notification: {
+          type: 'work_product_guard',
+          level: 'warning',
+          message: guard.reason || 'Requested content-read/open/review work was not verified.',
+        },
+      };
+    }
     if (guard.blocked && guard.reasonCode === 'successful_irrelevant_evidence') {
       return {
         text: guard.text,

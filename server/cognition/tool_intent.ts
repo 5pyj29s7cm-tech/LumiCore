@@ -6,6 +6,7 @@ import {
 } from './operation_modes';
 import { hasVisionIntent } from './vision_routing';
 import { normalizeActionIntent } from './normalized_action_intent';
+import { isReadOnlyKnowledgeBaseInspectionRequest } from './knowledge_intent';
 
 interface IntentGrammarRule {
   name: string;
@@ -52,7 +53,8 @@ export interface ToolIntentDecisionTrace {
 
 const EXPLICIT_NO_TOOL_PATTERNS: RegExp[] = [
   /(?:\u4e0d\u8981|\u522b|\u65e0\u9700|\u4e0d\u7528)\s*(?:\u518d)?(?:\u6267\u884c|\u8fdb\u884c|\u505a)\s*(?:\u4efb\u4f55|\u65b0\u7684?|\u5176\u4ed6|\u5176\u5b83)?\s*(?:\u64cd\u4f5c|\u52a8\u4f5c|\u4efb\u52a1)/u,
-  /(?:不要|别|无需|不用|禁止|请勿|勿)\s*(?:再|继续)?\s*(?:调用|使用|执行|启动)?\s*(?:任何|这些|外部|其他|其它)?\s*(?:工具|插件|技能|脚本)/u,
+  /(?:不要|别|无需|不用|禁止|请勿|勿)\s*(?:再|继续)?\s*(?:调用|使用|执行|启动)?\s*(?:任何|这些|外部|新(?:的)?|其他|其它)?\s*(?:工具|插件|技能|脚本)/u,
+  /不\s*(?:再|继续)?\s*(?:调用|使用|执行|启动)\s*(?:任何|这些|外部|其他|其它)?\s*(?:工具|插件|技能|脚本)/u,
   /(?:只|仅)\s*(?:回复|回答|解释|复述|确认)\s*[,，、]?\s*(?:不要|别|无需|不用)\s*(?:调用|使用|执行)?\s*(?:工具|插件|技能|脚本)/u,
   /\b(?:do\s+not|don't|without|no)\s+(?:call(?:ing)?|use|using|run(?:ning)?|execute|executing)?\s*(?:any\s+)?(?:tools?|plugins?|skills?|scripts?)\b/i,
   /\b(?:reply|answer|explain|repeat)\s+only\b[^.!?\n]{0,24}\b(?:no|without)\s+(?:tools?|plugins?|skills?|scripts?)\b/i,
@@ -89,6 +91,25 @@ const EXTENDED_PERSONAL_CLIENT_SURFACES = /(?:\u4e2a\u4eba\u57df|\u4e2a\u4eba\u5
 const ORGANIZATION_WORKSPACE_SURFACES = /(?:\u7ec4\u7ec7\u77e5\u8bc6\u5e93|\u516c\u53f8\s*lumi|\u7ec4\u7ec7\s*lumi|\u6d88\u606f\u63a5\u5165|\u667a\u80fd\u4f53\u6a21\u677f|\u6a21\u677f\u5ba1\u6838|\u6210\u5458\u4e0e\u6743\u9650|\u5ba1\u8ba1\u65e5\u5fd7|\u5f8b\u6240\u5de5\u4f5c\u53f0|\u7a7a\u95f4\u5efa\u7b51\u8bbe\u8ba1|\u54c1\u724c\u521b\u610f\u8bbe\u8ba1|\u7ec4\u7ec7\u8bbe\u7f6e|\u5206\u652f\u8fde\u63a5|\b(?:organization knowledge|company lumi|organization lumi|org lumi|message access|agent templates?|template review|members and permissions|audit log|law firm workspace|spatial and architecture|brand and creative|organization settings|branch connection)\b)/iu;
 const EXTERNAL_APP_CONTEXT = /(?:\u5fae\u4fe1|\u4f01\u4e1a\u5fae\u4fe1|\u98de\u4e66|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9|\u6d4f\u89c8\u5668|WPS|Word|Excel|PowerPoint|Office|\u7f51\u6613\u4e91\u97f3\u4e50|QQ\s*\u97f3\u4e50|\u9177\u72d7\u97f3\u4e50|Chrome|Edge|CAD|AutoCAD|Revit|\b(?:wechat|weixin|wecom|feishu|lark|browser|wps|word|excel|powerpoint|office|spotify|chrome|edge|autocad|revit)\b)/iu;
 const LUMI_CLIENT_CONTEXT = /(?:Lumi|\u5ba2\u6237\u7aef|\u4e2d\u67a2|\u4e16\u754c\u89c6\u56fe|\u4e91\u7aef\u753b\u5e03|\u6280\u80fd\u5927\u5385|\u8fd0\u884c\u65e5\u5fd7|\u8bbe\u7f6e|\u5c0f\u7ec4\u4ef6|\b(?:client|nexus|cloud canvas|world view|skill center|settings|runtime log|widget)\b)/iu;
+
+function canonicalIntentOwnsNonClientAction(
+  kind: ReturnType<typeof normalizeActionIntent>['kind'],
+  text: string,
+): boolean {
+  if (kind === 'desktop_operation') return EXTERNAL_APP_CONTEXT.test(text);
+  return [
+    'external_ai_history',
+    'messaging_read',
+    'messaging_send',
+    'public_publish',
+    'external_submit',
+    'payment',
+    'signature',
+    'cad_drafting',
+    'scheduled_task',
+    'work_task',
+  ].includes(kind);
+}
 const SKILL_TERMS = /(?:\u6280\u80fd|\u6280\u80fd\u5927\u5385|\b(?:skill|skills|plugin|mcp)\b)/iu;
 const INSTALL_VERBS = /(?:\u5b89\u88c5|\u88c5\u4e0a|\u88c5\u4e00\u4e0b|\binstall\b)/iu;
 const DOCUMENT_TERMS = /(?:\u6587\u4ef6|\u6587\u6863|\u8d44\u6599|\u8fd9\u4efd|\u8fd9\u4e2a|PDF|pdf|DOCX|docx|\b(?:file|document|pdf|docx)\b)/iu;
@@ -425,6 +446,7 @@ export function hasExplicitToolIntent(text: string): boolean {
   const canonical = normalizeActionIntent(normalized);
   if (canonical.kind === 'external_ai_history') return !isInformationOnlyQuestion(normalized);
   if (canonical.kind === 'messaging_read' || canonical.kind === 'messaging_send') return true;
+  if (canonical.kind === 'work_task') return true;
   if (canonical.kind === 'correction_explanation' || canonical.kind === 'status_query') return false;
   if (isInformationOnlyQuestion(normalized)) return false;
   if (matchesIntentGrammar(normalized, STRUCTURED_TOOL_INTENT_RULES)) return true;
@@ -436,8 +458,14 @@ export function hasClientActionIntent(text: string): boolean {
   if (!normalized) return false;
   if (hasExplicitNoToolInstruction(normalized)) return false;
   if (isExternalAiHistoryActionRequest(normalized)) return false;
+  if (isReadOnlyKnowledgeBaseInspectionRequest(normalized)) return false;
   const canonical = normalizeActionIntent(normalized);
   if (canonical.kind === 'client_navigation' || canonical.kind === 'client_state') return true;
+  // Once the shared normalizer has identified a concrete non-client action,
+  // broad legacy surface words must not steal the turn.  This matters for
+  // payloads such as "Open WPS and type: Lumi ...": the word Lumi describes
+  // document content, not a request to navigate the Lumi client.
+  if (canonicalIntentOwnsNonClientAction(canonical.kind, normalized)) return false;
   if (isInformationOnlyQuestion(normalized)) return false;
   if (isDesktopMusicControlRequest(normalized)) return false;
   if (detectRequestedOperationMode(normalized)) return true;
@@ -452,8 +480,10 @@ export function hasClientActionOnlyIntent(text: string): boolean {
   if (!normalized) return false;
   if (hasExplicitNoToolInstruction(normalized)) return false;
   if (isExternalAiHistoryActionRequest(normalized)) return false;
+  if (isReadOnlyKnowledgeBaseInspectionRequest(normalized)) return false;
   const canonical = normalizeActionIntent(normalized);
   if (canonical.kind === 'client_navigation' || canonical.kind === 'client_state') return true;
+  if (canonicalIntentOwnsNonClientAction(canonical.kind, normalized)) return false;
   if (isInformationOnlyQuestion(normalized)) return false;
   if (isDesktopMusicControlRequest(normalized)) return false;
   if (hasExternalDesktopOrTeamExecutionIntent(normalized)) return false;
@@ -467,18 +497,22 @@ export function hasClientActionOnlyIntent(text: string): boolean {
 export function isDiagnosticOrRepairRequest(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
+  // File and directory names are data, not instructions. A deliverable such as
+  // `C:\\...\\repair-retest.txt` must stay on the artifact lane merely because
+  // its path happens to contain a diagnostic keyword.
+  const diagnosticText = normalized.replace(/\b[A-Za-z]:[\\/][^\s，。；;！？!?]+/gu, ' ');
   if (isUserCorrectionOrExplanationQuestion(normalized)) return false;
   // A requested learning check is an evidence-only self inspection. Route it
   // through the diagnostic lane so Lumi must read the learning ledger and
   // client health instead of merely promising to perform a check later. i18n-allow: Reviewed input recognition.
   if (/(?:跑|做|进行|执行|查|查看|检查).{0,10}(?:一轮)?(?:学习检查|学习状态检查|学习记录检查|能力学习检查)/u.test(normalized)) return true;
-  if (isClientRuntimeMutationRequest(normalized)) return true;
-  if (isCurrentClientDiagnosticRequest(normalized)) return true;
+  if (isClientRuntimeMutationRequest(diagnosticText)) return true;
+  if (isCurrentClientDiagnosticRequest(diagnosticText)) return true;
   if (
     CLIENT_SELF_DIAGNOSTIC_ARTIFACT_RE.test(normalized)
     && !CLIENT_OR_APP_RUNTIME_FAILURE_RE.test(normalized)
   ) return false;
-  return DIAGNOSTIC_OR_REPAIR_PATTERNS.some((pattern) => pattern.test(normalized));
+  return DIAGNOSTIC_OR_REPAIR_PATTERNS.some((pattern) => pattern.test(diagnosticText));
 }
 
 export function shouldAllowToolUseForTurn(text: string, source?: string, operationMode?: string): boolean {
@@ -514,7 +548,10 @@ export function traceToolIntentDecision(text: string, source?: string, operation
       || (isInformationOnlyQuestion(normalized) && !clientStateInspectionRequest && !externalAiHistoryAction)
     : false;
   const externalDesktopOrTeamExecution = normalized
-    ? hasExternalDesktopOrTeamExecutionIntent(normalized)
+    ? (
+        canonicalIntentOwnsNonClientAction(canonical.kind, normalized)
+        || hasExternalDesktopOrTeamExecutionIntent(normalized)
+      )
     : false;
   const desktopMusicControl = normalized ? isDesktopMusicControlRequest(normalized) : false;
   const diagnosticOrRepair = normalized && !informationOnlyQuestion

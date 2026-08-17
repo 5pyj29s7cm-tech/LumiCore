@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mergeToolPolicyWithRoute, routeToolsForTurn } from '../server/cognition/tool_router';
+import { isDiagnosticOrRepairRequest } from '../server/cognition/tool_intent';
 
 function declaration(name: string, description = name) {
   return {
@@ -174,6 +175,53 @@ const DECLARATIONS = [
 ].map(name => declaration(name));
 
 describe('tool router', () => {
+  it('does not treat a repair keyword inside a file path as a self-repair request', () => {
+    expect(isDiagnosticOrRepairRequest(
+      '请在 C:\\Users\\Administrator\\Documents\\Lumi现场验收_修复复测.txt 创建一个 TXT 文件并读取验证。',
+    )).toBe(false);
+  });
+
+  it('routes the field TXT creation request to write and verification tools', () => {
+    const route = routeToolsForTurn(
+      '在 C:\\Users\\Administrator\\Documents 创建 Lumi现场验收_晨星716.txt，写三行，重读核验，不外发，不开其他软件',
+      DECLARATIONS,
+      { enableMcpHealthGate: false },
+    );
+
+    expect(route.categories).toContain('documents');
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'write_file',
+      'read_file',
+      'work_product_verify',
+    ]));
+    expect(route.categories).not.toContain('messaging');
+    expect(route.categories).not.toContain('desktop_launch');
+  });
+
+  it('keeps literal chat and status fields inside a TXT deliverable on the document route', () => {
+    const route = routeToolsForTurn(
+      '请在 C:\\Users\\Administrator\\Documents\\Lumi主程序实机验收_20260816.txt 创建文件，内容为“渠道：指挥中心文字聊天”和“状态：待回读验证”，写入后必须重读。',
+      DECLARATIONS,
+      { enableMcpHealthGate: false },
+    );
+
+    expect(route.categories).toContain('documents');
+    expect(route.toolNames).toEqual(expect.arrayContaining(['write_file', 'read_file', 'work_product_verify']));
+    expect(route.categories).not.toContain('messaging');
+  });
+
+  it('routes an app launch plus exact-window verification as desktop launch, not document review', () => {
+    const route = routeToolsForTurn(
+      '请打开 Windows 计算器。必须打开精确目标，不能用浏览器、同名文件或其他应用替代；打开后读取当前活动窗口，只有窗口标题和进程能证明是计算器时才报告完成。',
+      DECLARATIONS,
+      { enableMcpHealthGate: false },
+    );
+    expect(route.categories).toEqual(['desktop_launch']);
+    expect(route.toolNames).toEqual(expect.arrayContaining(['desktop_open', 'desktop_active_window']));
+    expect(route.toolNames).not.toContain('read_file');
+    expect(route.hardAllowlist).toBe(true);
+  });
+
   it('aligns exact voice fast-path tools with routed permissions', () => {
     const browser = routeToolsForTurn('打开浏览器。', DECLARATIONS);
     expect(browser.toolNames).toContain('browser_open_task');
@@ -186,6 +234,24 @@ describe('tool router', () => {
     expect(knowledge.toolNames).toContain('knowledge_file_stats');
     expect(knowledge.toolNames).toContain('knowledge_coverage_report');
     expect(knowledge.toolNames).not.toContain('client_get_state');
+
+    const fieldInspection = routeToolsForTurn('请检查当前个人知识库是否可用，报告文档数量、已索引数量和最近错误。只读取真实状态，不导入、不修改任何内容。', DECLARATIONS);
+    expect(fieldInspection.categories).toContain('knowledge');
+    expect(fieldInspection.toolNames).toEqual(expect.arrayContaining(['knowledge_file_stats', 'knowledge_coverage_report']));
+    expect(fieldInspection.toolNames).not.toContain('client_get_state');
+  });
+
+  it('hard-isolates confirmation-only messaging from unrelated database or discovery tools', () => {
+    const route = routeToolsForTurn(
+      '请准备给测试联系人“验收占位联系人”发送消息“Lumi外发确认测试”，但在真正发送前必须向我确认；现在只到等待确认，不要发送。',
+      DECLARATIONS,
+      { enableMcpHealthGate: false },
+    );
+    expect(route.categories).toEqual(['messaging']);
+    expect(route.toolNames).toEqual(['wechat_send_message']);
+    expect(route.toolNames).not.toContain('database_query');
+    expect(route.hardAllowlist).toBe(true);
+    expect(route.maxIterations).toBe(1);
   });
 
   it('routes legal case-folder work to legal, auth-web, and file tools', () => {

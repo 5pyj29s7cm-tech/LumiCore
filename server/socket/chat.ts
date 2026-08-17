@@ -28,7 +28,12 @@ import { createDesktopExecutionTracker, withDesktopExecutionReceipt } from "../d
 import { buildDesktopObservationPlan, formatDesktopObservationResult } from "../cognition/desktop_observation";
 import { buildClientDiagnosticPlan, formatClientDiagnosticResult } from "../cognition/client_diagnostic_result";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
-import { buildActionContract, summarizeActionContractBlocker } from "../cognition/action_contract";
+import {
+  buildActionContract,
+  requiresArtifactPostWriteReadback,
+  summarizeActionContractBlocker,
+} from "../cognition/action_contract";
+import { isExplicitArtifactCreationText } from "../cognition/normalized_action_intent";
 import {
   createPreFinalizationTextGate,
   shouldDeferModelOutputUntilFinalized,
@@ -45,9 +50,11 @@ import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_wri
 import { formatClientSelfPrompt } from "../client/self_model";
 import { canAutoApproveAction } from "../tools/action_constitution";
 import {
+  buildConversationConfirmationChannelScope,
   clearPendingConfirmation,
   consumePendingConfirmation,
   formatPendingConfirmationPrompt,
+  formatPendingConfirmationRequest,
   getPendingConfirmation,
   isConfirmationCancellation,
   isExplicitConfirmationReply,
@@ -109,7 +116,12 @@ import { hasExplicitTeamExecutionRequest, isUserCorrectionOrExplanationQuestion 
 import { summarizeToolRecordForPersistence } from "../cognition/tool_record_status";
 import {
   buildDeterministicClientNavigationCommand,
+  buildDeterministicExternalCommitConfirmationCommand,
+  buildDeterministicKnowledgeInspectionCommand,
   buildDeterministicLocalDesktopNavigationCommand,
+  buildDeterministicTextArtifactCommand,
+  buildDeterministicWorkTaskCreateCommand,
+  buildDeterministicWpsDocumentCommand,
   buildQuickCommandToolPolicy,
   matchQuickCommand,
 } from "../cognition/quick_commands";
@@ -520,6 +532,7 @@ export function buildClientSurfaceContinuationBridge(userText: string, history: 
 export function shouldRunVisibleActionPreflight(userText: string, attachments: ChatIncomingAttachment[]): boolean {
   if (attachments.some(item => item.path && !shouldSkipPreflightForAttachment(item))) return true;
   const text = userText || '';
+  if (isExplicitArtifactCreationText(text)) return false;
   if (extractExplicitLocalPaths(text).length > 0) return true;
   const mentionsFileLocation = /\b(?:desktop|downloads?|documents?)\b|(?:\u684c\u9762|\u4e0b\u8f7d|\u6587\u6863)/iu.test(text);
   const namesSpecificFile = LOCAL_READABLE_EXT_RE.test(text) || /["“][^"”]{2,}["”]/u.test(text);
@@ -738,6 +751,42 @@ function toolForLocalFile(filePath: string, searchText: string, kind?: ChatIncom
 function toolForLocalPath(localPath: string, searchText: string, kind?: ChatIncomingAttachment['kind']): { name: string; arguments: Record<string, any> } {
   if (kind || LOCAL_READABLE_EXT_RE.test(localPath)) return toolForLocalFile(localPath, searchText, kind);
   return { name: 'desktop_list_files', arguments: { path: localPath, limit: 120 } };
+}
+
+function localArtifactTarget(record: ToolExecutionRecord): string {
+  const args = record.arguments || {};
+  return String(args.path || args.filePath || args.outputPath || args.targetPath || '').trim();
+}
+
+function sameLocalArtifact(left: string, right: string): boolean {
+  return Boolean(left && right && path.normalize(left).toLowerCase() === path.normalize(right).toLowerCase());
+}
+
+export function buildRequestedArtifactReadback(
+  userText: string,
+  records: ToolExecutionRecord[],
+): { name: string; arguments: Record<string, any> } | null {
+  if (!requiresArtifactPostWriteReadback(userText)) return null;
+  let writeIndex = -1;
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index];
+    if (
+      !record.error
+      && /^(?:write_file|create_docx|create_xlsx|create_ppt|create_pdf)$/i.test(String(record.name || ''))
+    ) {
+      writeIndex = index;
+      break;
+    }
+  }
+  if (writeIndex < 0) return null;
+  const target = localArtifactTarget(records[writeIndex]);
+  if (!target) return null;
+  const hasPostWriteReadback = records.slice(writeIndex + 1).some(record => (
+    !record.error
+    && /^(?:read_file|read_docx|read_pdf|pdf_to_text|extract_document_text)$/i.test(String(record.name || ''))
+    && sameLocalArtifact(target, localArtifactTarget(record))
+  ));
+  return hasPostWriteReadback ? null : toolForLocalFile(target, userText);
 }
 
 function shouldSkipPreflightForAttachment(item: ChatIncomingAttachment): boolean {
@@ -1007,15 +1056,16 @@ export function registerChatHandler(
       return;
     }
     const selectedConversationId = selectedConversation.id;
-    const confirmationScope = {
+    const confirmationScope = buildConversationConfirmationChannelScope({
       source: eventSource,
       domain: resolvedDomain,
       orgId: resolvedOrgId,
-      channelId: `${socket.id}:${selectedConversationId}`,
-    };
-    if (isConfirmationCancellation(visibleUserText)) {
-      clearPendingConfirmation(uid, confirmationScope);
-    }
+      conversationId: selectedConversationId,
+    });
+    const confirmationCancellationRequested = isConfirmationCancellation(visibleUserText);
+    const pendingConfirmationCleared = confirmationCancellationRequested
+      ? clearPendingConfirmation(uid, confirmationScope)
+      : false;
     pendingConfirmation = isExplicitConfirmationReply(visibleUserText)
       ? getPendingConfirmation(uid, confirmationScope)
       : null;
@@ -1040,6 +1090,13 @@ export function registerChatHandler(
       };
       if (!recordChatExecutionEvent(executionScope, requestId, event, normalizedPayload)) return;
       io.to(executionRoom).emit(event, normalizedPayload);
+    };
+    const emitConversationUpdated = (payload: Record<string, any>) => {
+      io.to(executionRoom).emit('chat:conversation_updated', {
+        ...payload,
+        requestId,
+        originSocketId: socket.id,
+      });
     };
     console.log('[ChatHandler] domain:', resolvedDomain, 'orgId:', resolvedOrgId);
 
@@ -1304,18 +1361,28 @@ export function registerChatHandler(
       }
       console.log('[ChatHandler] conversationId:', conversationId, 'mode:', conversationMode);
 
-      if (conversationId && isConfirmationCancellation(visibleUserText)) {
+      if (conversationId && confirmationCancellationRequested) {
         const cancelled = cancelConversationActionExecution(conversationId, uid);
-        if (cancelled) {
-          const responseText = CN_TASK_EXECUTION_MESSAGES.cancelled;
+        if (cancelled || pendingConfirmationCleared) {
+          const responseText = pendingConfirmationCleared
+            ? '已取消刚才等待确认的操作；它没有执行，也不会继续发送。'
+            : CN_TASK_EXECUTION_MESSAGES.cancelled;
           emitAgent("agent:response", { text: responseText, agentName: "Lumi", finalized: true, blocked: false, reason: '' });
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'task_cancel' });
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'task_cancel' });
-          socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
+          emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
           emitAgent("agent:status", { status: "idle" });
           releaseChatSession();
           return;
         }
+        const responseText = '当前没有等待确认或正在执行的操作。';
+        emitAgent("agent:response", { text: responseText, agentName: "Lumi", finalized: true, blocked: false, reason: '' });
+        addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'task_cancel' });
+        addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'task_cancel' });
+        emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
+        emitAgent("agent:status", { status: "idle" });
+        releaseChatSession();
+        return;
       }
 
       const persistedConversationHistory = conversationId ? getMessages(conversationId, 18) : [];
@@ -1600,7 +1667,7 @@ export function registerChatHandler(
         emitAgent("agent:response", { text: factText, agentName: personality.name, finalized: true, blocked: false, reason: 'conversation_execution_facts' });
         addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'execution_facts' });
         addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: factText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'execution_facts' });
-        socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
+        emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
         emitAgent("agent:status", { status: "idle" });
         releaseChatSession();
         return;
@@ -1613,7 +1680,7 @@ export function registerChatHandler(
         emitAgent("agent:response", { text: exactCorrectionText, agentName: personality.name, finalized: true, blocked: false, reason: 'exact_conversation_correction' });
         addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'exact_correction' });
         addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: exactCorrectionText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'exact_correction', llmWasCalled: false });
-        socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
+        emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
         emitAgent("agent:status", { status: "idle" });
         releaseChatSession();
         return;
@@ -1624,7 +1691,7 @@ export function registerChatHandler(
         emitAgent("agent:response", { text: statusText, agentName: personality.name, finalized: true, blocked: false, reason: '' });
         addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
         addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: statusText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'task_status' });
-        socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
+        emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
         emitAgent("agent:status", { status: "idle" });
         releaseChatSession();
         return;
@@ -1639,7 +1706,7 @@ export function registerChatHandler(
         if (conversationId) {
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: recentFailureExplanation, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
-          socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
+          emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
         }
         persistChatLearning(recentFailureExplanation, {
           sourceInteractionId: `${interactionId}_recent_failure_explanation`,
@@ -1681,7 +1748,7 @@ export function registerChatHandler(
         const pending = recordPendingConfirmation(uid, toolName, args, eventSource, {
           domain: resolvedDomain,
           orgId: resolvedOrgId,
-          channelId: socket.id,
+          channelId: confirmationScope.channelId,
           taskId: conversation?.actionContinuationState?.taskId,
           actionIntent: visibleUserText,
         });
@@ -1763,7 +1830,7 @@ export function registerChatHandler(
           if (conversationId) {
             addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, mode: directlyAppliedMode, domain: resolvedDomain, orgId: resolvedOrgId });
             addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, personality: personality.id, mode: directlyAppliedMode, cognitiveIntent: finalizedMode.blocked ? 'work_product_guard' : undefined, domain: resolvedDomain, orgId: resolvedOrgId });
-            socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat_mode', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
+            emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat_mode', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
           }
           if (!finalizedMode.blocked) {
             persistChatLearning(responseText, {
@@ -1930,7 +1997,7 @@ export function registerChatHandler(
           reason: finalizedWorkflow.reason || '',
         });
         if (conversationId) {
-          socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: specialWorkflow.source, rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
+          emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: specialWorkflow.source, rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
         }
         if (!finalizedWorkflow.blocked) {
           persistChatLearning(workflowResponseText, {
@@ -1968,7 +2035,7 @@ export function registerChatHandler(
       const desktopExecutionTracker = createDesktopExecutionTracker(desktopExecutionPolicy.executionPlan);
       const toolRoute = executionDecision.toolRoute;
       const routedToolPolicy = executionDecision.toolPolicy;
-      const actionTaskExecution = turnFlow.conceptualCapabilityQuestion
+      const actionTaskExecution = turnFlow.conceptualCapabilityQuestion || !executionDecision.allowToolUse
         ? { state: null, kind: 'conversation' as const }
         : conversationId
         ? prepareConversationActionExecution({
@@ -1978,6 +2045,7 @@ export function registerChatHandler(
             requestId,
             toolPolicy: routedToolPolicy,
             forceResume: Boolean(pendingConfirmation || actionFollowupIntent === 'execute'),
+            forceTask: turnFlow.clientActionOnlyTurn,
           })
         : { state: null, kind: 'conversation' as const };
       if (conversationId && actionTaskExecution.state?.taskId) {
@@ -2265,7 +2333,7 @@ export function registerChatHandler(
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: finalized.text, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: confirmationRecords, cognitiveIntent: finalized.blocked ? 'work_product_guard' : 'confirmation' });
           scheduleChatSummary(conversationId);
-          socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
+          emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
         }
         persistChatTakeoverExecution(finalized.text, {
           toolRecords: confirmationRecords,
@@ -2404,7 +2472,7 @@ export function registerChatHandler(
           reason: finalizedWorkflowQuick.reason || '',
         });
         if (conversationId) {
-          socket.emit('chat:conversation_updated', {
+          emitConversationUpdated({
             conversationId,
             agentId: conversationAgentId,
             source: 'workflow',
@@ -2441,15 +2509,33 @@ export function registerChatHandler(
         const deterministicClientNavigation = clientActionOnlyTurn
           ? buildDeterministicClientNavigationCommand(executionPipeline.normalizedIntent)
           : null;
+        const deterministicKnowledgeInspection = !clientActionOnlyTurn
+          ? buildDeterministicKnowledgeInspectionCommand(visibleUserText)
+          : null;
+        const deterministicExternalCommitConfirmation = !clientActionOnlyTurn
+          ? buildDeterministicExternalCommitConfirmationCommand(
+              executionPipeline.normalizedIntent,
+              visibleUserText,
+            )
+          : null;
         const deterministicLocalDesktopNavigation = !clientActionOnlyTurn && !explicitTeamOrchestration
-          ? buildDeterministicLocalDesktopNavigationCommand(executionPipeline.normalizedIntent)
+          ? buildDeterministicLocalDesktopNavigationCommand(executionPipeline.normalizedIntent, visibleUserText)
+          : null;
+        const deterministicWpsDocument = !clientActionOnlyTurn && !explicitTeamOrchestration
+          ? buildDeterministicWpsDocumentCommand(visibleUserText)
+          : null;
+        const deterministicTextArtifact = !clientActionOnlyTurn
+          ? buildDeterministicTextArtifactCommand(visibleUserText)
+          : null;
+        const deterministicWorkTaskCreate = !clientActionOnlyTurn
+          ? buildDeterministicWorkTaskCreateCommand(visibleUserText)
           : null;
         const nonExecutingNormalizedIntent =
           executionPipeline.normalizedIntent.kind === 'correction_explanation'
           || executionPipeline.normalizedIntent.kind === 'status_query';
         const quickResult = capabilityMetaResponse
           ? { matched: true, responseText: capabilityMetaResponse }
-          : deterministicClientNavigation || deterministicLocalDesktopNavigation || (
+          : deterministicClientNavigation || deterministicExternalCommitConfirmation || deterministicKnowledgeInspection || deterministicWorkTaskCreate || deterministicTextArtifact || deterministicWpsDocument || deterministicLocalDesktopNavigation || (
             shouldRunLegacyDirectExecution() && !nonExecutingNormalizedIntent
               ? await matchQuickCommand(
                   continuationOpenTarget ? buildInternalOpenCommand(visibleUserText, continuationOpenTarget) : text,
@@ -2526,14 +2612,74 @@ export function registerChatHandler(
               quickResponseText = `\u8fd9\u6b21\u6ca1\u6709\u5b8c\u6210\uff1a${quickToolError}`;
             }
             quickToolRecords.push(quickToolRecord);
+            if (!quickToolRecord.error && quickResult.followUpToolCalls?.length) {
+              for (const followUp of quickResult.followUpToolCalls) {
+                const followUpCid = `qc-verify-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                const shouldEmitFollowUp = !isDirectDesktopTool(followUp.name);
+                if (shouldEmitFollowUp) {
+                  emitToolLifecycle({
+                    correlationId: followUpCid,
+                    name: followUp.name,
+                    arguments: followUp.arguments,
+                  });
+                }
+                const followUpRecord = await executeToolCall({
+                  registry: toolRegistry,
+                  id: followUpCid,
+                  name: followUp.name,
+                  arguments: followUp.arguments,
+                  context: {
+                    userId: uid,
+                    domain: resolvedDomain,
+                    orgId: resolvedOrgId,
+                    desktopRelay,
+                    llmGetters,
+                    source: 'quick_command_verification',
+                    supervisedExternalCommits: true,
+                    allowLocalFileWrites,
+                    localWriteIntentReason,
+                    requestConfirmation: requestToolConfirmation,
+                    actionIntent: visibleUserText,
+                    ...(routedToolPolicy ? {
+                      toolPolicy: buildQuickCommandToolPolicy(routedToolPolicy, followUp.name),
+                    } : {}),
+                  },
+                });
+                quickToolRecords.push(followUpRecord);
+                if (followUpRecord.error && !quickToolError) quickToolError = followUpRecord.error;
+                if (shouldEmitFollowUp) {
+                  emitToolLifecycle({
+                    correlationId: followUpCid,
+                    name: followUp.name,
+                    arguments: followUp.arguments,
+                    ...(followUpRecord.error
+                      ? { error: followUpRecord.error }
+                      : { result: formatToolResultForUi(followUpRecord.result) }),
+                  });
+                }
+              }
+            }
+            if (quickResult.formatToolRecords) {
+              quickResponseText = quickResult.formatToolRecords(quickToolRecords);
+            }
           }
-          const quickFinalized = finalizeLumiResponse({
-            taskText: executionTaskText,
-            responseText: quickResponseText,
-            toolRecords: quickToolRecords,
-            source: 'chat',
-            flow: turnFlow,
-          });
+          if (pendingConfirmationCreatedThisTurn) {
+            quickResponseText = formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn);
+          }
+          const quickFinalized = pendingConfirmationCreatedThisTurn
+            ? {
+                text: quickResponseText,
+                blocked: false,
+                reason: 'waiting_confirmation',
+                notification: undefined,
+              }
+            : finalizeLumiResponse({
+                taskText: executionTaskText,
+                responseText: quickResponseText,
+                toolRecords: quickToolRecords,
+                source: 'chat',
+                flow: turnFlow,
+              });
           quickResponseText = quickFinalized.text;
           if (quickFinalized.notification) emitAgent('agent:notification', quickFinalized.notification);
           persistChatTakeoverExecution(quickResponseText, {
@@ -2545,6 +2691,12 @@ export function registerChatHandler(
             assistantTextTrusted: !quickFinalized.blocked,
             finalizationReason: quickFinalized.reason,
           });
+          if (pendingConfirmationCreatedThisTurn && conversationId) {
+            setConversationActionExecutionStatus(conversationId, uid, 'waiting_confirmation', {
+              assistantState: formatPendingConfirmationPrompt(pendingConfirmationCreatedThisTurn),
+              requestId,
+            });
+          }
           emitAgent("agent:response", {
             text: quickResponseText,
             agentName: personality.name,
@@ -2554,12 +2706,14 @@ export function registerChatHandler(
           });
           if (conversationId) {
             addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
-            if (quickResult.toolCall) {
-              addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'tool', content: `[Tool: ${quickResult.toolCall.name}] Called`, domain: resolvedDomain, orgId: resolvedOrgId });
+            if (quickToolRecords.length) {
+              for (const record of quickToolRecords) {
+                addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'tool', content: summarizeToolRecordForPersistence(record), domain: resolvedDomain, orgId: resolvedOrgId });
+              }
             }
             addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: quickResponseText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: quickToolRecords.length ? quickToolRecords : undefined, cognitiveIntent: quickFinalized.blocked ? 'work_product_guard' : undefined });
             scheduleChatSummary(conversationId);
-            socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
+            emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
           }
           if (!quickFinalized.blocked) {
             persistChatLearning(quickResponseText, {
@@ -3063,6 +3217,7 @@ export function registerChatHandler(
           selfRepair: selfRepairTurn,
           sanctuary: isSanctuary,
           directDesktop: workSurfaceRoute.directDesktop,
+          capabilityLane: capabilitySelection.lane,
           prefersSequentialWorkflow,
           availableAgentCount: availableWorkerAgents.length,
         });
@@ -3162,7 +3317,7 @@ export function registerChatHandler(
                     toolCalls: toolCalls?.length ? toolCalls : undefined,
                     cognitiveIntent: guarded ? 'work_product_guard' : undefined,
                   });
-                  socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'background_delegation', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
+                  emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'background_delegation', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
                 }
                 if (deliverToConversation) {
                   const db = readDB();
@@ -3199,6 +3354,7 @@ export function registerChatHandler(
             (async () => {
               let backgroundLeaseHeartbeat: ReturnType<typeof setInterval> | null = null;
               let backgroundLeaseLost = false;
+              let backgroundDesktopRelay: ReturnType<typeof createDesktopRelay> | null = null;
               try {
                 const runningTask = markBackgroundTaskRunning(backgroundTaskId);
                 if (runningTask) emitTaskUpdate(runningTask);
@@ -3225,6 +3381,18 @@ export function registerChatHandler(
                   phase: 'background',
                   detail: `后台子 agent 正在处理 ${backgroundTaskId}`,
                 });
+                backgroundDesktopRelay = createDesktopRelay({
+                  io,
+                  userId: uid,
+                  domain: resolvedDomain,
+                  orgId: resolvedOrgId,
+                  source: 'background_delegation',
+                  taskId: backgroundTaskId,
+                  requestSocket: socket,
+                  emitToolLifecycle,
+                  formatResultForLifecycle: formatToolResultForUi,
+                  cancelOnRequestSocketDisconnect: false,
+                });
                 const backgroundModelRecovery = conversationId && actionTaskExecution.state?.taskId
                   ? getConversationModelExecutionRecovery({
                       conversationId,
@@ -3239,7 +3407,7 @@ export function registerChatHandler(
                     personalityId,
                     domain: resolvedDomain,
                     orgId: resolvedOrgId,
-                    desktopRelay,
+                    desktopRelay: backgroundDesktopRelay,
                     toolPolicy: routedToolPolicy,
                     taskId: actionTaskExecution.state?.taskId,
                     desktopExecutionTracker,
@@ -3521,6 +3689,7 @@ export function registerChatHandler(
                 }
               } finally {
                 if (backgroundLeaseHeartbeat) clearInterval(backgroundLeaseHeartbeat);
+                backgroundDesktopRelay?.releaseControlLease('background_task_complete');
               }
             })().catch((err) => {
               console.error('[BackgroundDelegation] Unhandled error:', err);
@@ -3876,17 +4045,33 @@ export function registerChatHandler(
       }
 
       chatTextGate.finish();
+      const requestedArtifactReadback = buildRequestedArtifactReadback(executionTaskText, allToolRecords);
+      if (requestedArtifactReadback && !abortController.signal.aborted) {
+        await runPreflightTool(requestedArtifactReadback.name, requestedArtifactReadback.arguments);
+      }
       const finalizedDesktopRecords = withDesktopExecutionReceipt(allToolRecords, desktopExecutionTracker);
       if (finalizedDesktopRecords.length > allToolRecords.length) {
         allToolRecords.push(...finalizedDesktopRecords.slice(allToolRecords.length));
       }
-      const finalResponse = finalizeLumiResponse({
-        taskText: executionTaskText,
-        responseText,
-        toolRecords: taskAwareRecords(allToolRecords),
-        source: 'chat',
-        flow: turnFlow,
-      });
+      // Waiting for an immutable one-time confirmation is a valid terminal
+      // state for this turn, not a failed completion attempt. The model/tool
+      // path must render the same confirmation receipt as the deterministic
+      // quick-command path and must not let the completion guard overwrite it
+      // with a generic "missing core evidence" failure.
+      const finalResponse = pendingConfirmationCreatedThisTurn
+        ? {
+            text: formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn),
+            blocked: false,
+            reason: 'waiting_confirmation',
+            notification: undefined,
+          }
+        : finalizeLumiResponse({
+            taskText: executionTaskText,
+            responseText,
+            toolRecords: taskAwareRecords(allToolRecords),
+            source: 'chat',
+            flow: turnFlow,
+          });
       responseText = finalResponse.text;
       if (finalResponse.blocked) {
         console.warn('[ChatHandler] Completion claim blocked:', finalResponse.reason);
@@ -3958,7 +4143,7 @@ export function registerChatHandler(
       });
       // Re-emit conversation_updated AFTER response so the client syncs from API with complete data
       if (conversationId) {
-        socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
+        emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
       }
       emitAgent("agent:status", { status: "idle" });
 

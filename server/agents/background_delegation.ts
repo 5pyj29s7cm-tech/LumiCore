@@ -13,6 +13,7 @@ export interface BackgroundDelegationDecisionInput {
   selfRepair: boolean;
   sanctuary: boolean;
   directDesktop: boolean;
+  capabilityLane?: string;
   prefersSequentialWorkflow: boolean;
   availableAgentCount: number;
 }
@@ -44,6 +45,12 @@ const SHORT_FOREGROUND_SEND_FOLLOWUP_RE =
 
 const FOREGROUND_MESSAGING_READ_RE =
   /(?:wechat|weixin|\u5fae\u4fe1|\u804a\u5929|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9|\u6d88\u606f).*(?:\u770b\u770b|\u67e5\u770b|\u770b\u4e00\u4e0b|\u8bfb\u53d6|\u8bfb|\u6700\u8fd1|\u804a\u5929\u5185\u5bb9|\u804a\u5929\u8bb0\u5f55|\u603b\u7ed3)|(?:\u770b\u770b|\u67e5\u770b|\u770b\u4e00\u4e0b|\u8bfb\u53d6|\u8bfb|\u6700\u8fd1|\u603b\u7ed3).*(?:wechat|weixin|\u5fae\u4fe1|\u804a\u5929|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9|\u6d88\u606f)/iu;
+
+const EXPLICIT_FOREGROUND_ONLY_RE =
+  /(?:\u4e0d\u8981|\u522b|\u65e0\u9700|\u4e0d\u7528|\u4e0d\u9700\u8981).{0,12}(?:\u65b0\u5efa|\u521b\u5efa|\u5efa\u7acb|\u542f\u52a8|\u5f00\u542f).{0,8}(?:\u65b0)?\u4efb\u52a1/iu;
+
+const FOREGROUND_STATUS_OR_RECALL_RE =
+  /(?:\u786e\u8ba4|\u544a\u8bc9\u6211|\u56de\u7b54|\u67e5\u8be2|\u67e5\u770b|\u8fd8\u8bb0\u5f97|\u56de\u5fc6|\u6838\u5bf9).{0,96}(?:\u72b6\u6001|\u8fdb\u5ea6|\u56de\u6267|\u4efb\u52a1\u53f7|\u6848\u4ef6\s*id|\u4e89\u8bae\u91d1\u989d|\u5df2\u77e5\u4e8b\u5b9e|\u5f53\u524d\u6848\u4ef6)|(?:\u5f53\u524d|\u521a\u624d|\u521a\u521a|\u4e4b\u524d|\u4e0a\u4e00\u4e2a).{0,72}(?:\u6848\u4ef6|\u4efb\u52a1|\u8349\u7a3f|\u5de5\u4f5c\u6d41).{0,32}(?:\u72b6\u6001|\u8fdb\u5ea6|\u56de\u6267|id|\u91d1\u989d|\u4e8b\u5b9e|\u7ed3\u679c)/iu;
 
 const WORK_CATEGORY_ALLOWLIST = new Set(['command', 'code', 'question', 'analysis']);
 
@@ -87,9 +94,15 @@ export function shouldDelegateWorkInBackground(input: BackgroundDelegationDecisi
   if (!input.allowToolUse) return { shouldDelegate: false, reason: 'tools_disabled' };
   if (input.clientActionOnly) return { shouldDelegate: false, reason: 'client_action_only' };
   if (input.clientSurfaceRequest) return { shouldDelegate: false, reason: 'client_surface_foreground' };
+  if (EXPLICIT_FOREGROUND_ONLY_RE.test(input.text)) return { shouldDelegate: false, reason: 'explicit_foreground_only' };
+  if (FOREGROUND_STATUS_OR_RECALL_RE.test(input.text)) return { shouldDelegate: false, reason: 'foreground_status_or_recall' };
   if (input.selfRepair) return { shouldDelegate: false, reason: 'self_repair' };
   if (input.sanctuary) return { shouldDelegate: false, reason: 'sanctuary_agent' };
+  const explicitlyRequested = hasExplicitBackgroundDelegationPreference(input.text);
   if (input.directDesktop) return { shouldDelegate: false, reason: 'direct_desktop_visible_work' };
+  if (input.capabilityLane === 'desktop_control' && !explicitlyRequested) {
+    return { shouldDelegate: false, reason: 'desktop_control_foreground' };
+  }
   if (input.prefersSequentialWorkflow) return { shouldDelegate: false, reason: 'artifact_first_sequential_workflow' };
   if (isBackgroundMetaInquiry(input.text)) return { shouldDelegate: false, reason: 'background_meta_inquiry' };
   if (isBackgroundAppInspection(input.text)) return { shouldDelegate: false, reason: 'background_app_inspection' };
@@ -98,7 +111,6 @@ export function shouldDelegateWorkInBackground(input: BackgroundDelegationDecisi
   if (isForegroundMessagingSend(input.text)) return { shouldDelegate: false, reason: 'foreground_messaging_send' };
   if (!WORK_CATEGORY_ALLOWLIST.has(input.category || '')) return { shouldDelegate: false, reason: 'non_work_category' };
 
-  const explicitlyRequested = hasExplicitBackgroundDelegationPreference(input.text);
   if (input.continuationContext && !explicitlyRequested) {
     return { shouldDelegate: false, reason: 'foreground_task_continuation' };
   }

@@ -127,6 +127,7 @@ import {
   shouldUseCompactDesktopLayout,
   type ViewportSize,
 } from '@/lib/desktopLayout';
+import { isClientSurfaceRendered, waitForClientSurfaceRendered } from '../lib/clientSurfaceCommit';
 
 const IDLE_AWAY_SECONDS = 5 * 60;
 const RETURN_IDLE_SECONDS = 30;
@@ -395,6 +396,7 @@ function OSWindow({
       {/* Invisible drag boundary fills the viewport so windows can be dragged freely */}
       <div ref={constrainRef} className="fixed inset-0 pointer-events-none z-0" />
       <motion.div
+        data-lumi-rendered-surface={isMinimized ? undefined : id}
         drag={!isMaximized && !isMinimized}
         dragListener={false}
         dragControls={dragControls}
@@ -3854,6 +3856,14 @@ export function DesktopUI({
           return;
         }
 
+        if (windowId !== 'command-center') {
+          setChatOpen(false);
+          if (windowId !== 'knowledge') setKnowledgeOpen(false);
+          if (windowId !== 'app-launcher') setIsSearchOpen(false);
+          if (windowId !== 'memory-avatar') setMemoryLabOpen(false);
+          if (windowId !== 'nexus') setViewMode('personal');
+        }
+
         if (windowId === 'home') {
           setOpenWindows([]);
           setMinimizedWindows([]);
@@ -4036,7 +4046,18 @@ export function DesktopUI({
         }
         if (action === 'refresh_client_state') {
           window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
-          respond({ ok: true, action, mode: operationMode, activeTab, openWindows, widgetMode: isDesktopWidgetMode });
+          respond({
+            ok: true,
+            action,
+            mode: operationMode,
+            activeTab,
+            openWindows,
+            widgetMode: isDesktopWidgetMode,
+            renderedSurfaces: [
+              isClientSurfaceRendered('command-center') ? 'command-center' : null,
+              isClientSurfaceRendered('chat') ? 'chat' : null,
+            ].filter(Boolean),
+          });
           return;
         }
         if (action === 'enter_widget_mode' || action === 'show_desktop_widget') {
@@ -4158,24 +4179,50 @@ export function DesktopUI({
           const requestedCommandView = registeredSurface.commandCenterViewByAction?.[action];
           if (requestedCommandView) {
             openCommandCenter(requestedCommandView);
+            const rendered = await waitForClientSurfaceRendered('command-center');
+            if (!rendered) {
+              reject('Lumi command center state changed, but the visible surface did not render.');
+              return;
+            }
+            window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
             respond({
               ok: true,
               action,
               target: registeredSurface.target,
               surface: registeredSurface.id,
               view: requestedCommandView,
+              rendered: true,
             });
             return;
           }
           if (action === 'open_avatar_studio') setPersonalizationSection('appearance');
           if (action === 'open_sound_studio') setPersonalizationSection('voice');
           openSurface(registeredSurface.target);
+          const requiresWindowCommit = ![
+            'home',
+            'nexus',
+            'app-launcher',
+            'org',
+            'knowledge',
+            'command-center',
+            'notifications',
+            'memory-avatar',
+          ].includes(registeredSurface.target);
+          if (requiresWindowCommit) {
+            const rendered = await waitForClientSurfaceRendered(registeredSurface.target);
+            if (!rendered) {
+              reject(`Lumi client state changed, but ${registeredSurface.target} did not render visibly.`);
+              return;
+            }
+            window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
+          }
           respond({
             ok: true,
             action,
             target: registeredSurface.target,
             surface: registeredSurface.id,
             section: registeredSurface.settingsSection || '',
+            rendered: requiresWindowCommit ? true : undefined,
           });
           return;
         }

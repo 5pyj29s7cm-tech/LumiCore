@@ -8,6 +8,7 @@ import {
 import { isGuardGeneratedConversationRecord } from '../conversation/guard_history';
 import { buildActionContract } from './action_contract';
 import type { ToolPolicy } from '../personality/types';
+import { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
 import {
   coalesceToolExecutionRecords,
   applyTaskPolicySnapshot,
@@ -573,7 +574,7 @@ export function normalizeConversationActionState(
       .map(path => compact(path, 500))
       .filter(Boolean)
       .slice(0, 8),
-    latestBlocker: status === 'completed'
+    latestBlocker: status === 'completed' || status === 'waiting_confirmation' || status === 'cancelled'
       ? ''
       : compact(receiptCompletion?.blocker || value.latestBlocker, 380),
     unfinished: Boolean(value.unfinished),
@@ -602,7 +603,10 @@ export function classifyConversationActionFollowupIntent(
 ): RecentActionFollowupIntent {
   const normalizedIntent = normalizeActionIntent(text);
   if (normalizedIntent.kind === 'status_query') return 'status';
-  if (normalizedIntent.kind === 'correction_explanation') return 'none';
+  if (
+    normalizedIntent.kind === 'correction_explanation'
+    || normalizedIntent.kind === 'work_task'
+  ) return 'none';
   const direct = classifyRecentActionFollowupIntent(text);
   if (direct !== 'none') return direct;
   const durableState = normalizeConversationActionState(state);
@@ -655,11 +659,14 @@ export function buildConversationActionContinuationState(
     : goal;
   const completion = taskCompletionFromReceipts(completionGoal, receipts);
   const currentFailure = [...calls].reverse().find(record => !toolCallSucceeded(record));
+  const waitingForConfirmation = calls.some(isConfirmationBlockedToolRecord);
   const hasFailure = completion.records.some(record => !toolCallSucceeded(record));
   const status: ConversationTaskStatus = followupIntent === 'status' && currentFailure
     ? 'blocked'
     : completion.complete
     ? 'completed'
+    : waitingForConfirmation
+      ? 'waiting_confirmation'
     : hasFailure
       ? 'blocked'
       : 'executing';
@@ -682,7 +689,9 @@ export function buildConversationActionContinuationState(
       ...(inheritsPrevious ? previous!.sourcePaths : []),
       ...current.sourcePaths,
     ])).slice(0, 8),
-    latestBlocker: completion.blocker || (currentFailure ? toolCallFailure(currentFailure) : ''),
+    latestBlocker: waitingForConfirmation
+      ? ''
+      : completion.blocker || (currentFailure ? toolCallFailure(currentFailure) : ''),
     unfinished: status !== 'completed',
     evidenceTools: Array.from(new Set([
       ...(inheritsPrevious ? previous!.evidenceTools : []),

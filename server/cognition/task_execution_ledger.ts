@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import type { ToolPolicy } from '../personality/types';
 import type { ToolExecutionRecord } from '../tools/types';
 import { buildActionContract, hasCoreActionEvidence } from './action_contract';
@@ -257,7 +258,18 @@ export function toolRecordSucceeded(record: ToolExecutionRecord): boolean {
         || verification.status,
       80,
     ).toLowerCase();
-    const explicitlyFailedOutcome = SEMANTIC_FALSE_FIELDS.some(field => payload[field] === false);
+    // The dedicated WPS create adapter deliberately leaves a newly-created
+    // document unsaved unless the user explicitly requested a save path.
+    // `saved: false` is therefore a verified state of that create operation,
+    // not evidence that document creation failed. Save contracts are checked
+    // separately by the action contract and still require `saved: true` plus
+    // a concrete path.
+    const ignoredFalseFields = /^(?:wps_create_document|wps_create_document_with_text)$/i.test(record.name)
+      ? new Set<string>(['saved'])
+      : new Set<string>();
+    const explicitlyFailedOutcome = SEMANTIC_FALSE_FIELDS.some(field => (
+      !ignoredFalseFields.has(field) && payload[field] === false
+    ));
     if (
       payload.ok === false
       || payload.success === false
@@ -411,7 +423,18 @@ export function recordsToTaskReceipts(
   records: ToolExecutionRecord[] = [],
   recordedAt = new Date().toISOString(),
 ): ConversationTaskReceipt[] {
-  return coalesceToolExecutionRecords(records).map((record, index) => ({
+  return coalesceToolExecutionRecords(records).map((record, index) => {
+    const rawResult = String(record.result || '');
+    const textReadbackMetadata = record.name === 'read_file' && toolRecordSucceeded(record) && rawResult
+      ? {
+          kind: 'text_readback_metadata',
+          encoding: 'UTF-8',
+          lineCount: rawResult.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n').length,
+          byteLength: Buffer.byteLength(rawResult, 'utf8'),
+          contentDigest: crypto.createHash('sha256').update(rawResult, 'utf8').digest('hex'),
+        }
+      : null;
+    return ({
     id: compact(record.id, 180) || `receipt_${Date.now()}_${index}`,
     key: toolRecordKey(record),
     name: compact(record.name, 160),
@@ -421,6 +444,8 @@ export function recordsToTaskReceipts(
       ? { receipt: stableValue(record.receipt) }
       : structuredRecordPayload(record) !== null
         ? { receipt: stableValue(structuredRecordPayload(record)) }
+        : textReadbackMetadata
+          ? { receipt: stableValue(textReadbackMetadata) }
         : {}),
     error: toolRecordSucceeded(record) ? '' : toolRecordFailureDetail(record),
     outcome: !toolRecordSucceeded(record)
@@ -431,8 +456,9 @@ export function recordsToTaskReceipts(
       : 'success',
     terminalVerification: cloneTerminalVerification(record.terminalVerification),
     capability: cloneCapability(record.capability),
-    recordedAt,
-  }));
+      recordedAt,
+    });
+  });
 }
 
 export function mergeTaskReceipts(

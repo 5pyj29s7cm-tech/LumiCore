@@ -56,7 +56,7 @@ function stripNegativeConstraints(value: string): string {
 }
 
 export function requiresActiveWindowObservation(input: string): boolean {
-  return /\b(?:active|foreground|current)\s+window\b|\bwindow\s+title\b|(?:\u5f53\u524d|\u6d3b\u52a8|\u524d\u53f0)\u7a97\u53e3|\u7a97\u53e3\u6807\u9898/iu.test(String(input || ''));
+  return /\b(?:active|foreground|current)\s+window\b|\bwindow\s+title\b|(?:\u5f53\u524d|\u6d3b\u52a8|\u524d\u53f0)\u7a97\u53e3|\u7a97\u53e3\u6807\u9898|(?:\u8bf4\u660e|\u62a5\u544a|\u56de\u62a5).{0,16}(?:\u5b9e\u9645|\u771f\u5b9e).{0,16}(?:\u8fdb\u7a0b|\u7a97\u53e3)|\b(?:report|show|state)\b.{0,24}\b(?:actual|real)\b.{0,20}\b(?:process|window)\b/iu.test(String(input || ''));
 }
 
 export function requiresDesktopFileListingObservation(input: string): boolean {

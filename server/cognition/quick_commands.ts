@@ -15,26 +15,181 @@ import {
   CN_VOICE_QUICK_WORK_MESSAGES,
 } from '../regions/packs/cn/voice_fast_path_messages';
 import type { ToolPolicy } from '../personality/types';
-import { normalizeActionIntent, type NormalizedActionIntent } from './normalized_action_intent';
+import {
+  isExternalCommitConfirmationOnlyRequest,
+  normalizeActionIntent,
+  type NormalizedActionIntent,
+} from './normalized_action_intent';
 import { listWebLoginSitePresets } from '../web_login/legal_presets';
 import { formatKnownLoginOpening, formatKnownLoginResult } from '../i18n/naturalness_messages';
 import { classifyRuntimeWorkIntent } from './runtime_work_intent';
 import {
   extractCurrentAppTarget,
+  extractExplicitArtifactTextRequirements,
+  extractRequestedCurrentAppText,
   isRunningSoftwareInspectionRequest,
+  requiresCurrentAppUiMutation,
   requestedDesktopWindowAction,
 } from './action_contract';
 import { getPersonalClientSurfaceByAction } from '../../shared/client_surfaces';
+import { requiresActiveWindowObservation } from './desktop_observation';
+import { isReadOnlyKnowledgeBaseInspectionRequest } from './knowledge_intent';
+import {
+  isRecoveredWpsCreateAndTypeTask,
+  isRecoveredWpsCreateTask,
+} from './current_app_execution';
+import { WPS_CREATE_DOCUMENT_TOOL } from '../external_control/wps_automation';
 
 export interface QuickCommandResult {
   /** The response text to send back to the user */
   responseText: string;
   /** Optional tool call to execute alongside the response */
   toolCall?: { name: string; arguments: Record<string, any> };
+  /** Deterministic read-only verification calls that must follow toolCall. */
+  followUpToolCalls?: Array<{ name: string; arguments: Record<string, any> }>;
   /** Optional formatter for commands whose reply depends on the tool result */
   formatToolResult?: (raw: string, error?: string) => string;
+  /** Optional formatter that may verify the complete primary + follow-up receipt chain. */
+  formatToolRecords?: (records: Array<{
+    name: string;
+    arguments?: Record<string, any>;
+    result?: string;
+    error?: string;
+  }>) => string;
   /** Whether this input was matched as a quick command */
   matched: boolean;
+}
+
+function extractExactTextArtifactRequest(text: string): { path: string; content: string; lines: string[] } | null {
+  const source = String(text || '');
+  if (!/(?:创建|新建|写入|生成)/u.test(source)) return null;
+  if (!/(?:只写入|写入以下|以下.+行|第(?:[一二三四五六七八九十百\d]+)行)/u.test(source)) return null;
+  const target = source.match(/([A-Za-z]:[\\/][^"\r\n<>|*?]+?\.(?:txt|md))\b/iu)?.[1]?.trim() || '';
+  if (!target) return null;
+
+  const lines = extractExplicitArtifactTextRequirements(source);
+  if (!lines.length) return null;
+  return { path: target, content: lines.join('\n'), lines };
+}
+
+/**
+ * Exact local TXT/Markdown creation does not need a model to rediscover the
+ * path or rewrite user-authored lines. Execute the requested write, then read
+ * the same file back and format the answer only from those two receipts.
+ */
+export function buildDeterministicTextArtifactCommand(text: string): QuickCommandResult | null {
+  const request = extractExactTextArtifactRequest(text);
+  if (!request) return null;
+  return {
+    responseText: '正在写入指定文本文件并回读核验。',
+    matched: true,
+    toolCall: {
+      name: 'write_file',
+      arguments: { path: request.path, content: request.content },
+    },
+    followUpToolCalls: [{ name: 'read_file', arguments: { path: request.path } }],
+    formatToolResult: (_raw, error) => error
+      ? `未能写入指定文本文件：${error}`
+      : '文件已写入，正在回读核验。',
+    formatToolRecords: records => {
+      const write = records.find(record => record.name === 'write_file');
+      const read = records.find(record => record.name === 'read_file');
+      if (write?.error) return `未能写入指定文本文件：${write.error}`;
+      if (!write) return '未能写入指定文本文件：没有写入回执。';
+      if (read?.error) return `文件已经写入，但回读核验失败：${read.error}`;
+      if (!read) return '文件已经写入，但没有取得回读回执，不能报告完成。';
+      const actual = String(read.result || '').replace(/\r\n/g, '\n');
+      const expected = request.content.replace(/\r\n/g, '\n');
+      if (actual !== expected) {
+        return '文件已经写入，但回读内容与用户指定的逐行文本不一致，不能报告完成。';
+      }
+      return [
+        '已完成本地文件创建与回读核验。',
+        `路径：${request.path}`,
+        '编码：UTF-8',
+        `总行数：${request.lines.length}`,
+        '全文：',
+        request.content,
+      ].join('\n');
+    },
+  };
+}
+
+/**
+ * Persist an explicitly structured long-running task without asking a model to
+ * reconstruct fields the user already supplied. This path only creates Lumi's
+ * internal task record; confirmation-gated external steps remain unexecuted.
+ */
+export function buildDeterministicWorkTaskCreateCommand(text: string): QuickCommandResult | null {
+  const intent = normalizeActionIntent(text);
+  if (intent.kind !== 'work_task' || intent.operation !== 'create') return null;
+
+  const title = intent.target;
+  const rawCategory = text.match(/(?:\u7c7b\u522b|category)\s*[\uff1a:=]?\s*([\p{L}\p{N}_-]{1,40})/iu)?.[1]?.trim().toLowerCase() || 'general_work';
+  const categoryAliases: Record<string, string> = {
+    '\u5ba2\u6237': 'customer',
+    customer: 'customer',
+    '\u5e97\u94fa': 'store',
+    store: 'store',
+    '\u6cd5\u5f8b': 'legal_case',
+    '\u6848\u4ef6': 'legal_case',
+    legal: 'legal_case',
+    legal_case: 'legal_case',
+    '\u8bbe\u8ba1': 'design_delivery',
+    design: 'design_delivery',
+    design_delivery: 'design_delivery',
+    '\u901a\u7528': 'general_work',
+    general: 'general_work',
+    general_work: 'general_work',
+  };
+  const category = categoryAliases[rawCategory] || rawCategory;
+  const source = text.match(/(?:\u6765\u6e90|source)\s*[\uff1a:=]?\s*([\p{L}\p{N}_-]{1,40})/iu)?.[1]?.trim() || 'chat';
+  const goalText = text.match(/(?:\u76ee\u6807\u662f|\u76ee\u6807|goal)\s*[\uff1a:]\s*([\s\S]*?)(?=(?:\u73b0\u5728\u53ea|\u5b8c\u6210\u540e|$))/iu)?.[1]?.trim() || text;
+  const nextActions = Array.from(goalText.matchAll(
+    /\u7b2c[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\d]+\u6b65\s*([^\uff0c,\u3002\uff1b;]+)(?=[\uff0c,\u3002\uff1b;]|$)/gu,
+  )).map(match => String(match[1] || '').trim()).filter(Boolean);
+  const confirmationRequired = nextActions.filter(action => /(?:\u786e\u8ba4|\u6279\u51c6|\u540c\u610f|\u5916\u53d1|\u53d1\u9001|\u63d0\u4ea4|\u53d1\u5e03)/u.test(action));
+  if (confirmationRequired.length === 0 && /(?:\u786e\u8ba4|\u6279\u51c6|\u540c\u610f).{0,24}(?:\u5916\u53d1|\u53d1\u9001|\u63d0\u4ea4|\u53d1\u5e03)/u.test(text)) {
+    confirmationRequired.push('\u5916\u90e8\u53d1\u9001\u6216\u63d0\u4ea4');
+  }
+  const allowedNow = nextActions.filter(action => !confirmationRequired.includes(action));
+
+  return {
+    responseText: '\u6b63\u5728\u521b\u5efa\u5e76\u6301\u4e45\u5316\u65b0\u4efb\u52a1\u3002',
+    matched: true,
+    toolCall: {
+      name: 'work_takeover_task_create',
+      arguments: {
+        title,
+        category,
+        source,
+        sourceMessage: text,
+        summary: goalText,
+        nextActions,
+        allowedNow,
+        confirmationRequired,
+      },
+    },
+    formatToolResult: (raw, error) => {
+      if (error) return `\u4efb\u52a1\u521b\u5efa\u5931\u8d25\uff1a${error}`;
+      let data: Record<string, any> = {};
+      try { data = JSON.parse(String(raw || '{}')); } catch {}
+      const task = data.task && typeof data.task === 'object' ? data.task : {};
+      const id = String(task.id || '').trim();
+      const status = String(task.status || data.status || 'created').trim();
+      const persisted = data.persisted === true && Boolean(id);
+      const actions = Array.isArray(task.nextActions) ? task.nextActions.map(String).filter(Boolean) : nextActions;
+      const confirmations = Array.isArray(task.confirmationRequired)
+        ? task.confirmationRequired.map(String).filter(Boolean)
+        : confirmationRequired;
+      return [
+        `\u4efb\u52a1\u7f16\u53f7\uff1a${id || '\u56de\u6267\u672a\u8bb0\u5f55'}`,
+        `\u72b6\u6001\uff1a${persisted ? `\u5df2\u521b\u5efa\u5e76\u6301\u4e45\u5316\uff08${status}\uff09` : `\u672a\u9a8c\u8bc1\uff08${status}\uff09`}`,
+        `\u4e0b\u4e00\u6b65\uff1a${actions.length ? actions.join('\u2192') : '\u5f85\u8865\u5145'}`,
+        `\u9700\u8981\u786e\u8ba4\uff1a${confirmations.length ? confirmations.join('\uff1b') : '\u65e0'}`,
+      ].join('\n');
+    },
+  };
 }
 
 interface QuickPattern {
@@ -89,6 +244,33 @@ export function buildDeterministicClientNavigationCommand(
   };
 }
 
+export function buildDeterministicExternalCommitConfirmationCommand(
+  normalizedIntent: NormalizedActionIntent,
+  text: string,
+): QuickCommandResult | null {
+  if (
+    normalizedIntent.kind !== 'messaging_send'
+    || normalizedIntent.sideEffectClass !== 'external_commit'
+    || !normalizedIntent.target
+    || !normalizedIntent.payload
+    || !isExternalCommitConfirmationOnlyRequest(text)
+  ) return null;
+  return {
+    responseText: '\u6b63\u5728\u751f\u6210\u5916\u53d1\u786e\u8ba4\uff0c\u5c1a\u672a\u53d1\u9001\u3002',
+    toolCall: {
+      name: 'wechat_send_message',
+      arguments: {
+        contact: normalizedIntent.target,
+        message: normalizedIntent.payload,
+        applicationTarget: 'wechat',
+        useSearch: true,
+        useVirtualCursor: true,
+      },
+    },
+    matched: true,
+  };
+}
+
 /**
  * Execute an exact, side-effect-free local navigation intent without asking a
  * language model to repeat the already-normalized tool choice. The actual app
@@ -98,22 +280,94 @@ export function buildDeterministicClientNavigationCommand(
  */
 export function buildDeterministicLocalDesktopNavigationCommand(
   normalizedIntent: NormalizedActionIntent,
+  taskText = '',
 ): QuickCommandResult | null {
   if (
     normalizedIntent.kind !== 'desktop_operation'
     || normalizedIntent.operation !== 'navigate'
     || normalizedIntent.sideEffectClass !== 'none'
+    || requiresCurrentAppUiMutation(taskText)
   ) return null;
   const target = String(normalizedIntent.target || '').trim();
   if (!target) return null;
-  const toolCall = quickOpenToolCall(target);
+  // The Windows app resolver accepts canonical app aliases. Preserve the
+  // user-facing label, but remove a redundant OS/vendor prefix before handing
+  // the target to the native launcher so `Windows 计算器` cannot fall
+  // through to `cmd /c start` as a window title.
+  const launchTarget = /^(?:windows|microsoft)\s*(?:计算器|calculator)$/iu.test(target)
+    ? (/计算器/u.test(target) ? '计算器' : 'calculator')
+    : /^(?:windows|microsoft)\s*(?:记事本|notepad)$/iu.test(target)
+      ? (/记事本/u.test(target) ? '记事本' : 'notepad')
+      : target;
+  const toolCall = quickOpenToolCall(launchTarget);
+  const observeActiveWindow = requiresActiveWindowObservation(taskText);
   return {
     responseText: CN_VOICE_FAST_PATH_MESSAGES.opening(target),
     matched: true,
     toolCall,
+    followUpToolCalls: observeActiveWindow
+      ? [{ name: 'desktop_active_window', arguments: {} }]
+      : undefined,
     formatToolResult: (_raw, error) => error
       ? CN_VOICE_FAST_PATH_MESSAGES.openFailed(target, error)
       : CN_VOICE_FAST_PATH_MESSAGES.opened(target),
+    formatToolRecords: observeActiveWindow
+      ? records => {
+          const open = records.find(record => record.name === 'desktop_open');
+          const active = [...records].reverse().find(record => record.name === 'desktop_active_window');
+          if (open?.error) return CN_VOICE_FAST_PATH_MESSAGES.openFailed(target, open.error);
+          if (active?.error) return CN_VOICE_FAST_PATH_MESSAGES.openFailed(target, active.error);
+          let openResult: Record<string, any> = {};
+          let activeResult: Record<string, any> = {};
+          try { openResult = JSON.parse(String(open?.result || '{}')); } catch {}
+          try { activeResult = JSON.parse(String(active?.result || '{}')); } catch {}
+          const processName = String(activeResult.process_name || activeResult.processName || '').trim();
+          const processId = Number(activeResult.pid || activeResult.processId) || 0;
+          const windowTitle = String(activeResult.title || activeResult.windowTitle || '').trim();
+          const verified = openResult.targetMatched === true && Boolean(processName || windowTitle);
+          return [
+            `已打开${target}。`,
+            `实际进程：${processName || '回执未记录'}${processId ? ` (PID ${processId})` : ''}`,
+            `窗口：${windowTitle || '回执未记录'}`,
+            `验证状态：${verified ? '已验证（目标精确匹配）' : '未验证'}`,
+          ].join('\n');
+        }
+      : undefined,
+  };
+}
+
+/**
+ * Execute the dedicated, receipt-verified WPS create path without depending
+ * on a reasoning model to reconstruct the tool call. This is still a normal
+ * governed tool execution: the current-app guard binds the exact user payload
+ * and the completion finalizer requires WPS COM readback evidence.
+ */
+export function buildDeterministicWpsDocumentCommand(
+  taskText: string,
+): QuickCommandResult | null {
+  if (!isRecoveredWpsCreateTask(taskText)) return null;
+  // The dedicated adapter intentionally leaves the document unsaved. A save
+  // request must continue through the full current-app state machine.
+  if (/(?:\u4fdd\u5b58|\u53e6\u5b58|\b(?:save|save as)\b)/iu.test(taskText)) return null;
+  const requestedText = extractRequestedCurrentAppText(taskText);
+  if (isRecoveredWpsCreateAndTypeTask(taskText) && !requestedText) return null;
+  return {
+    responseText: '',
+    matched: true,
+    toolCall: {
+      name: WPS_CREATE_DOCUMENT_TOOL,
+      arguments: { text: requestedText },
+    },
+  };
+}
+
+export function buildDeterministicKnowledgeInspectionCommand(taskText: string): QuickCommandResult | null {
+  if (!isReadOnlyKnowledgeBaseInspectionRequest(taskText)) return null;
+  return {
+    responseText: CN_VOICE_FAST_PATH_MESSAGES.readingKnowledgeStats,
+    matched: true,
+    toolCall: { name: 'knowledge_file_stats', arguments: {} },
+    formatToolResult: (raw, error) => CN_VOICE_FAST_PATH_MESSAGES.knowledgeStats(raw, error),
   };
 }
 

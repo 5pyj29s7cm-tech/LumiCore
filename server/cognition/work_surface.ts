@@ -17,7 +17,8 @@ export interface WorkSurfaceRoute {
 }
 
 const ARTIFACT_TASK_PATTERNS: RegExp[] = [
-  /\b(cad|dxf|dwg|floor\s*plan|draft(?:ing)?|drawing|blueprint|construction\s*drawing|interior\s*design|renovation|design\s*scheme|proposal|report|document|deck|ppt|pdf)\b/i,
+  /\b(cad|dxf|dwg|floor\s*plan|draft(?:ing)?|drawing|blueprint|construction\s*drawing|interior\s*design|renovation|design\s*scheme|proposal|report|document|file|deck|txt|md|docx?|xlsx?|pptx?|pdf)\b/i,
+  /(?:^|[\s\\/])[^\s，。！？!?\n]{1,160}\.(?:txt|md|docx?|xlsx?|pptx?|pdf|csv)\b/iu,
   /(?:CAD|cad|DXF|DWG|\u56fe\u7eb8|\u8349\u7a3f\u56fe|\u6237\u578b|\u5e73\u9762\u56fe|\u65bd\u5de5\u56fe|\u8bbe\u8ba1\u56fe|\u88c5\u4fee|\u5ba4\u5185|\u65b9\u6848|\u62a5\u544a|\u6587\u6863|\u6750\u6599|\u9884\u7b97|\u6587\u4ef6\u5939|\u56fe\u7247|\u7167\u7247)/u,
 ];
 

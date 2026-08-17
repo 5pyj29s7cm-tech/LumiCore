@@ -17,6 +17,51 @@ describe('Lumi turn flow', () => {
     expect(flow.clientActionOnlyTurn).toBe(false);
     expect(flow.selfRepairTurn).toBe(false);
     expect(flow.allowToolUseForTurn).toBe(false);
+    expect(flow.completionEvidenceNeeded).toBe(false);
+    expect(flow.executionGovernance.verificationIntent).toBe('none');
+  });
+
+  it.each([
+    '你好 Lumi，我正在和你进行现场验收。请用两句话说明你是谁、能做什么，并明确今天只按我的指令行动。不要调用工具。',
+    '接着刚才的验收，请记住验收代号是晨星716，只回复已记住，不执行工具。',
+    '最终同步验收：只回复“修复复测已完成”，不调用工具。',
+  ])('keeps the field no-tool dialogue outside completion evidence: %s', async (text) => {
+    const { initDatabase } = await import('../db_layer');
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+    await initDatabase();
+    const flow = buildLumiTurnFlow({
+      userId: 'turn_flow_field_dialogue',
+      text,
+      channel: 'chat',
+      source: 'command-center-chat',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+
+    expect(flow.allowToolUseForTurn).toBe(false);
+    expect(flow.selfRepairTurn).toBe(false);
+    expect(flow.completionEvidenceNeeded).toBe(false);
+    expect(flow.executionGovernance.verificationIntent).toBe('none');
+    expect(flow.executionGovernance.delegationIntent).toBe('none');
+  });
+
+  it('keeps a quoted old action inside an explicit no-tool correction off the client-action lane', async () => {
+    const { initDatabase } = await import('../db_layer');
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+    await initDatabase();
+    const flow = buildLumiTurnFlow({
+      userId: 'turn_flow_task_identity_correction',
+      text: '不对，我刚才给的是一个新的 TXT 文件创建任务，你却回答了旧的“打开指挥中心”回执。只解释，不要执行新工具。',
+      channel: 'chat',
+      source: 'command-center-chat',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+
+    expect(flow.allowToolUseForTurn).toBe(false);
+    expect(flow.clientActionOnlyTurn).toBe(false);
+    expect(flow.selfRepairTurn).toBe(false);
+    expect(flow.completionEvidenceNeeded).toBe(false);
   });
 
   it('does not join navigation verbs and client-surface nouns across separate clauses', async () => {
@@ -136,6 +181,25 @@ describe('Lumi turn flow', () => {
     });
 
     expect(flow.selfRepairTurn).toBe(true);
+    expect(flow.allowToolUseForTurn).toBe(true);
+  });
+
+  it('keeps a concrete desktop action primary when repair wording only describes the fallback', async () => {
+    const { initDatabase } = await import('../db_layer');
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+    await initDatabase();
+
+    const text = '\u4e3b\u7a0b\u5e8f\u81ea\u6062\u590d\u9a8c\u6536\uff1a\u8bf7\u6253\u5f00 Windows \u8bb0\u4e8b\u672c\uff0c\u53ea\u6253\u5f00\u8fd9\u4e2a\u7cbe\u786e\u76ee\u6807\uff0c\u4e0d\u8981\u6253\u5f00\u66ff\u4ee3\u8f6f\u4ef6\u3002\u5982\u679c\u89c6\u89c9\u670d\u52a1\u4e0d\u53ef\u7528\uff0c\u8bf7\u4f7f\u7528\u5b89\u5168\u7684\u672c\u5730\u7a97\u53e3\u56de\u6267\u5b8c\u6210\u6838\u9a8c\u3002\u5b8c\u6210\u540e\u8bf4\u660e\u5b9e\u9645\u8fdb\u7a0b\u3001\u7a97\u53e3\u548c\u9a8c\u8bc1\u72b6\u6001\u3002';
+    const flow = buildLumiTurnFlow({
+      userId: 'turn_flow_primary_work_with_repair_fallback',
+      text,
+      channel: 'chat',
+      source: 'command-center-chat',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+
+    expect(flow.selfRepairTurn).toBe(false);
     expect(flow.allowToolUseForTurn).toBe(true);
   });
 
@@ -318,6 +382,21 @@ describe('Lumi turn flow', () => {
     });
     expect(channelCorrection.clientActionOnlyTurn).toBe(false);
     expect(channelCorrection.allowToolUseForTurn).toBe(false);
+  });
+
+  it('routes knowledge inventory as read-only knowledge work, not client navigation', async () => {
+    const { initDatabase } = await import('../db_layer');
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+    await initDatabase();
+    const flow = buildLumiTurnFlow({
+      userId: 'turn_flow_knowledge_inventory',
+      text: '请检查当前个人知识库是否可用，报告文档数量、已索引数量和最近错误。只读取真实状态，不导入、不修改任何内容。',
+      channel: 'chat',
+      source: 'chat',
+      operationMode: 'assistant',
+    });
+    expect(flow.clientActionOnlyTurn).toBe(false);
+    expect(flow.allowToolUseForTurn).toBe(true);
   });
 
   it('describes Lumi as the orchestrator over skills, tasks, and external systems', async () => {

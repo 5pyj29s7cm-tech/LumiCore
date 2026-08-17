@@ -2,6 +2,24 @@ import { describe, expect, it } from 'vitest';
 import { guardCompletionClaims } from '../server/work_product/completion_guard';
 
 describe('completion guard desktop action handling', () => {
+  it('does not mistake a source-access instruction inside verified legal research for an open claim', () => {
+    const task = '律师版实机验收·法条与类案：基于案件ID case-001，只使用可核验来源输出结果；禁止凭模型记忆编造法条，不要登录外部网站。';
+    const response = '法条候选来自本地权威快照。未配置来源只能由律师打开授权网页人工核验；本轮未自动登录任何外部网站。任务回执状态：已验证。';
+    const result = guardCompletionClaims({
+      task,
+      response,
+      toolCalls: [{
+        name: 'legal_search_statute',
+        arguments: { query: '买卖合同纠纷' },
+        result: '{"ok":true,"status":"observed","content":"现行有效候选"}',
+        terminalVerification: { status: 'verified', strategy: 'terminal_receipt', reason: 'Observed source result.' },
+      }],
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(response);
+  });
+
   it('does not replace an attempted desktop action with a file-reading guard', () => {
     const response = 'I will open WeChat from the desktop shortcut and check the process.';
 

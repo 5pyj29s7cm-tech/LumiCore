@@ -13,6 +13,7 @@ import {
   type ConversationTaskStatus,
 } from '../cognition/task_execution_ledger';
 import { buildToolExecutionEnvelope, toolRecordIdempotencyKey } from '../tools/execution_envelope';
+import { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
 import type { ToolExecutionRecord } from '../tools/types';
 import type { CapabilityExecutionPlan } from '../cognition/capability_execution_plan';
 import type {
@@ -389,11 +390,14 @@ export function archiveBoundConversationActionReceipts(
     if (state) {
       const receipts = mergeTaskReceipts(state.receipts || [], records, now);
       const completion = taskCompletionFromReceipts(state.goal || task.goal, receipts);
+      const waitingForConfirmation = records.some(isConfirmationBlockedToolRecord);
       const hasFailure = records.some(record => !toolRecordSucceeded(record));
       const status: ConversationTaskStatus = completion.complete
         ? 'completed'
         : task.status === 'cancelled'
           ? 'cancelled'
+          : waitingForConfirmation
+            ? 'waiting_confirmation'
           : hasFailure
             ? 'blocked'
             : task.status;
@@ -413,7 +417,11 @@ export function archiveBoundConversationActionReceipts(
       if (nextState) context.actionState = sanitizeState(nextState);
       task.context = JSON.stringify(context);
       task.status = status;
-      task.blocker = nextState?.latestBlocker || task.blocker;
+      task.blocker = status === 'blocked'
+        ? nextState?.latestBlocker || task.blocker
+        : status === 'cancelled'
+          ? task.blocker
+          : '';
       task.activeRequestId = nextState?.activeRequestId || '';
       task.completionSource = nextState?.completionSource || task.completionSource;
       task.updatedAt = now;
@@ -1182,15 +1190,50 @@ export function findConversationActionTask(
   ensureTables(db);
   const intent = normalizeActionIntent(input.query || '');
   const query = String(input.query || '').toLowerCase();
+  const queryMentionsWps = /\bwps\b/iu.test(query);
+  const explicitTargets = Array.from(String(input.query || '').matchAll(
+    /([^\s\\/:*?"<>|\r\n]{1,160}\.(?:txt|md|docx?|xlsx?|pptx?|pdf|csv))\b/giu,
+  )).map(match => String(match[1] || '').trim().toLowerCase()).filter(Boolean);
+  const scopedReceipts = (db.conversationActionReceipts as ConversationActionReceiptRow[])
+    .filter(receipt => receipt.conversationId === input.conversationId);
   return (db.conversationActionTasks as ConversationActionTaskRow[])
     .filter(task => task.conversationId === input.conversationId && task.userId === input.userId)
     .map(task => {
-      const haystack = `${task.intentKind} ${task.goal} ${task.target}`.toLowerCase();
+      const context = parseObject(task.context);
+      const actionState = normalizeConversationActionState(context.actionState);
+      const haystack = `${task.intentKind} ${task.goal} ${task.target} ${task.context}`.toLowerCase();
+      // Receipt context contains before/after snapshots. Those observations
+      // prove an action but do not identify its target: a command-center action
+      // may legitimately contain before.activeTab=home, for example.
+      const targetHaystack = [
+        task.intentKind,
+        task.goal,
+        task.target,
+        actionState?.appTarget || '',
+        actionState?.latestInstruction || '',
+      ].join(' ').toLowerCase();
+      const taskReceipts = scopedReceipts.filter(receipt => receipt.taskId === task.id);
       let score = 0;
-      if (intent.target && haystack.includes(intent.target.toLowerCase())) score += 8;
-      if (intent.target === 'AutoCAD' && /cad|图纸|平面图/i.test(haystack)) score += 8; // i18n-allow: Chinese CAD task matching; not user-visible copy.
+      if (intent.target && targetHaystack.includes(intent.target.toLowerCase())) score += 8;
+      if (intent.target === 'AutoCAD' && /cad|图纸|平面图/i.test(targetHaystack)) score += 8; // i18n-allow: Chinese CAD task matching; not user-visible copy.
       if (intent.kind !== 'status_query' && intent.kind !== 'none' && task.intentKind === intent.kind) score += 6;
       if (query && haystack.includes(query)) score += 3;
+      for (const target of explicitTargets) {
+        if (haystack.includes(target)) score += 16;
+        if (taskReceipts.some(receipt => (
+          receipt.targetIdentity.toLowerCase().includes(target)
+          || receipt.envelope.toLowerCase().includes(target)
+        ))) score += 32;
+      }
+      // WPS creation receipts are stronger task identity evidence than
+      // recency. A later client navigation (for example, returning to the
+      // command center to inspect the result) must not steal a status query
+      // that explicitly names WPS.
+      if (queryMentionsWps) {
+        if (/\bwps\b/iu.test(targetHaystack)) score += 12;
+        if (taskReceipts.some(receipt => /^wps_/i.test(receipt.toolName))) score += 32;
+      }
+      if (taskReceipts.some(receipt => receipt.outcome === 'verified_success')) score += 4;
       return { task, score };
     })
     .sort((left, right) => (
@@ -1248,10 +1291,99 @@ export function formatConversationActionLedgerStatus(
   const state = conversationActionStateFromTask(task);
   if (!state) return null;
   const query = String(input.query || '');
+  const taskReceipts = task
+    ? (db.conversationActionReceipts as ConversationActionReceiptRow[])
+      .filter(receipt => receipt.taskId === task.id)
+    : [];
+  const asksForArtifactReceiptChain = /(?:\u5199\u5165|\u56de\u8bfb|\u6700\u7ec8\u72b6\u6001)|\b(?:written|read\s*back|final\s+status)\b/iu.test(query);
+  if (task && asksForArtifactReceiptChain) {
+    const writeIndex = taskReceipts.map(receipt => (
+      receipt.outcome === 'verified_success'
+      && /^(?:write_file|create_docx|create_xlsx|create_ppt|create_pdf|modify_docx|modify_xlsx)$/i.test(receipt.toolName)
+      && /(?:^[A-Za-z]:[\\/]|^\/).+\.[A-Za-z0-9]{1,12}$/u.test(receipt.targetIdentity)
+    )).lastIndexOf(true);
+    const writeReceipt = writeIndex >= 0 ? taskReceipts[writeIndex] : undefined;
+    const asksForSourceRead = /(?:\u6e90\u6587\u4ef6\u8bfb\u53d6|\u8bfb\u53d6\u6e90\u6587\u4ef6|\u4e09\u6b65|source\s+file\s+read)/iu.test(query);
+    const sourceReadReceipt = writeReceipt && writeIndex > 0
+      ? [...taskReceipts.slice(0, writeIndex)].reverse().find(receipt => (
+          receipt.outcome === 'verified_success'
+          && /^(?:read_file|read_docx|read_xlsx|read_pdf|extract_document_text)$/i.test(receipt.toolName)
+          && Boolean(receipt.targetIdentity)
+          && receipt.targetIdentity.toLowerCase() !== writeReceipt.targetIdentity.toLowerCase()
+        ))
+      : undefined;
+    const readReceipt = writeReceipt
+      ? taskReceipts.slice(writeIndex + 1).find(receipt => (
+          receipt.outcome === 'verified_success'
+          && /^(?:read_file|read_docx|read_xlsx|read_pdf|extract_document_text)$/i.test(receipt.toolName)
+          && receipt.targetIdentity.toLowerCase() === writeReceipt.targetIdentity.toLowerCase()
+        ))
+      : undefined;
+    if (writeReceipt) {
+      const path = writeReceipt?.targetIdentity || state.sourcePaths?.[0] || task.target;
+      const finalStatus = task.status === 'completed' && writeReceipt
+        ? '\u5df2\u5b8c\u6210\uff08\u6301\u4e45\u56de\u6267\u5df2\u9a8c\u8bc1\uff09'
+        : formatConversationActionTaskStatus(state);
+      const readbackEnvelope = readReceipt ? parseObject(readReceipt.envelope) : {};
+      const readbackText = typeof readbackEnvelope.result === 'string'
+        ? readbackEnvelope.result.replace(/\r\n/g, '\n')
+        : '';
+      const readbackMetadata = readbackEnvelope.result && typeof readbackEnvelope.result === 'object'
+        ? readbackEnvelope.result as Record<string, any>
+        : {};
+      const asksEncoding = /(?:\u7f16\u7801|encoding)/iu.test(query);
+      const asksLineCount = /(?:\u603b\u884c\u6570|\u884c\u6570)|\bline\s*count\b/iu.test(query);
+      const lineCount = Number(readbackMetadata.lineCount) > 0
+        ? Number(readbackMetadata.lineCount)
+        : readbackText
+        ? readbackText.replace(/\n$/, '').split('\n').length
+        : 0;
+      return [
+        `\u8def\u5f84\uff1a${path || '\u672a\u8bb0\u5f55'}`,
+        asksForSourceRead
+          ? `\u6e90\u6587\u4ef6\u8bfb\u53d6\uff1a${sourceReadReceipt ? `\u5df2\u9a8c\u8bc1\uff08${sourceReadReceipt.toolName}\uff0c${sourceReadReceipt.targetIdentity}\uff09` : '\u672a\u9a8c\u8bc1'}`
+          : '',
+        `\u5199\u5165\uff1a${writeReceipt ? `\u5df2\u9a8c\u8bc1\uff08${writeReceipt.toolName}\uff09` : '\u672a\u9a8c\u8bc1'}`,
+        `\u5199\u5165\u540e\u56de\u8bfb\uff1a${readReceipt ? `\u662f\uff08${readReceipt.toolName}\uff09` : '\u5426'}`,
+        asksEncoding ? `\u7f16\u7801\uff1a${writeReceipt.toolName === 'write_file' && readReceipt ? String(readbackMetadata.encoding || 'UTF-8') : '\u56de\u6267\u672a\u8bb0\u5f55'}` : '',
+        asksLineCount ? `\u603b\u884c\u6570\uff1a${readReceipt && lineCount ? lineCount : '\u56de\u6267\u672a\u8bb0\u5f55'}` : '',
+        `\u6700\u7ec8\u72b6\u6001\uff1a${finalStatus}`,
+      ].filter(Boolean).join('\n');
+    }
+  }
   // A receipt question such as “what did you just open?” should answer the
   // concrete target directly. The generic ledger sentence is useful for task
   // progress, but sounds unnatural and obscures the requested fact here.
   // i18n-allow: Multilingual recent desktop-open receipt recognition.
+  const asksForWpsDocumentDetails = /(?:\bWPS\b|\u6b63\u6587\u9a8c\u8bc1|\u4fdd\u5b58\u72b6\u6001|\u6587\u6863\u540d)|\b(?:wps|body\s+verification|save\s+status|document\s+name)\b/iu.test(query);
+  if (task && asksForWpsDocumentDetails) {
+    const wpsReceipt = [...taskReceipts].reverse().find(receipt => (
+      receipt.toolName === 'wps_create_document_with_text'
+      && receipt.outcome === 'verified_success'
+    ));
+    if (wpsReceipt) {
+      const result = parseObject(parseObject(wpsReceipt.envelope).result);
+      const documentName = String(result.documentName || '').trim();
+      const windowTitle = String(result.windowTitle || '').trim();
+      const processName = String(result.processName || '').trim();
+      const processId = Number(result.processId) || 0;
+      const exactTextMatch = result.exactTextMatch === true;
+      const charactersRequested = Number(result.charactersRequested) || 0;
+      const charactersReadBack = Number(result.charactersReadBack) || 0;
+      const saved = result.saved === true;
+      const savePath = String(result.savePath || '').trim();
+      return [
+        `\u6587\u6863\uff1a${documentName || '\u56de\u6267\u672a\u8bb0\u5f55'}`,
+        `\u7a97\u53e3\uff1a${windowTitle || '\u56de\u6267\u672a\u8bb0\u5f55'}`,
+        `\u8fdb\u7a0b\uff1a${processName || '\u56de\u6267\u672a\u8bb0\u5f55'}${processId ? ` (PID ${processId})` : ''}`,
+        `\u6b63\u6587\u9a8c\u8bc1\uff1a${exactTextMatch ? `\u5df2\u9a8c\u8bc1\uff08\u5199\u5165 ${charactersRequested} \u5b57\u7b26\uff0c\u56de\u8bfb ${charactersReadBack} \u5b57\u7b26\uff09` : '\u672a\u9a8c\u8bc1'}`,
+        `\u4fdd\u5b58\u72b6\u6001\uff1a${saved ? `\u5df2\u4fdd\u5b58${savePath ? `\uff08${savePath}\uff09` : ''}` : '\u672a\u4fdd\u5b58'}`,
+        `\u6700\u7ec8\u72b6\u6001\uff1a${exactTextMatch
+          ? '\u5df2\u5b8c\u6210\uff08\u6301\u4e45\u56de\u6267\u5df2\u9a8c\u8bc1\uff09'
+          : formatConversationActionTaskStatus(state)}`,
+      ].join('\n');
+    }
+  }
   const asksRecentOpenedTarget = /(?:\u521a\u624d|\u521a\u521a|\u4e0a\u4e00\u8f6e|\u4e0a\u6b21).{0,20}\u6253\u5f00(?:\u4e86)?(?:\u4ec0\u4e48|\u54ea\u4e2a|\u54ea\u4e9b)|\bwhat\s+did\s+(?:you|lumi)\s+(?:just\s+)?open\b/iu.test(query);
   if (asksRecentOpenedTarget && state.status === 'completed' && task) {
     const openReceipt = [...(db.conversationActionReceipts as ConversationActionReceiptRow[])]
@@ -1264,6 +1396,69 @@ export function formatConversationActionLedgerStatus(
       ));
     const target = openReceipt?.targetIdentity || state.appTarget || task.target;
     if (target) return `\u521a\u624d\u6253\u5f00\u7684\u662f${target}\uff0c\u5df2\u901a\u8fc7\u7a97\u53e3\u56de\u6267\u786e\u8ba4\u3002`;
+  }
+  const asksForDesktopReceiptDetails = /(?:\u5b9e\u9645\u8fdb\u7a0b|\u7a97\u53e3\u6807\u9898|\u7cbe\u786e\u5339\u914d)|\b(?:actual\s+process|window\s+title|exact\s+(?:target\s+)?match)\b/iu.test(query);
+  if (asksForDesktopReceiptDetails && task) {
+    const openReceipt = [...taskReceipts].reverse().find(receipt => (
+      receipt.toolName === 'desktop_open'
+      && receipt.outcome === 'verified_success'
+    ));
+    const activeWindowReceipt = [...taskReceipts].reverse().find(receipt => (
+      receipt.toolName === 'desktop_active_window'
+      && receipt.outcome === 'verified_success'
+    ));
+    if (openReceipt) {
+      const openResult = parseObject(parseObject(openReceipt.envelope).result);
+      const activeWindowResult = activeWindowReceipt
+        ? parseObject(parseObject(activeWindowReceipt.envelope).result)
+        : {};
+      const actualTarget = parseObject(openResult.actualTarget);
+      const processName = String(
+        activeWindowResult.process_name
+        || activeWindowResult.processName
+        || actualTarget.processName
+        || actualTarget.process_name
+        || '',
+      ).trim();
+      const windowTitle = String(
+        activeWindowResult.title
+        || actualTarget.title
+        || '',
+      ).trim();
+      const targetMatched = openResult.targetMatched === true
+        && Boolean(processName)
+        && Boolean(windowTitle);
+      return [
+        `\u51c6\u786e\u76ee\u6807\uff1a${task.target || state.appTarget || openReceipt.targetIdentity || '\u672a\u8bb0\u5f55'}`,
+        `\u5b9e\u9645\u8fdb\u7a0b\uff1a${processName || '\u56de\u6267\u672a\u8bb0\u5f55'}`,
+        `\u5b9e\u9645\u7a97\u53e3\u6807\u9898\uff1a${windowTitle || '\u56de\u6267\u672a\u8bb0\u5f55'}`,
+        `\u7cbe\u786e\u5339\u914d\uff1a${targetMatched ? '\u662f\uff08\u6253\u5f00\u56de\u6267\u4e0e\u6d3b\u52a8\u7a97\u53e3\u56de\u6267\u4e00\u81f4\uff09' : '\u5426\u6216\u56de\u6267\u4e0d\u5b8c\u6574'}`,
+        `\u6700\u7ec8\u72b6\u6001\uff1a${targetMatched && task.status === 'completed' ? '\u5df2\u5b8c\u6210\uff08\u6301\u4e45\u56de\u6267\u5df2\u9a8c\u8bc1\uff09' : formatConversationActionTaskStatus(state)}`,
+      ].join('\n');
+    }
+  }
+  const asksForClientNavigationDetails = /(?:\u6267\u884c\u52a8\u4f5c|\u76ee\u6807\u9875\u9762|\u9a8c\u8bc1\u72b6\u6001)|\b(?:client\s+action|target\s+(?:page|surface)|verification\s+status)\b/iu.test(query);
+  if (asksForClientNavigationDetails && task?.intentKind === 'client_navigation') {
+    const clientReceipt = [...taskReceipts].reverse().find(receipt => (
+      receipt.toolName === 'client_action'
+      && receipt.outcome === 'verified_success'
+    ));
+    if (clientReceipt) {
+      const envelope = parseObject(clientReceipt.envelope);
+      const result = parseObject(envelope.result);
+      const verification = parseObject(result.verification);
+      const action = String(result.action || parseObject(result.expectation).action || '').trim();
+      const target = String(result.target || parseObject(result.expectation).target || task.target || state.appTarget || '').trim();
+      const verificationStatus = String(verification.status || parseObject(envelope.verification).status || '').trim();
+      return [
+        `\u6267\u884c\u52a8\u4f5c\uff1a${action || '\u56de\u6267\u672a\u8bb0\u5f55'}`,
+        `\u76ee\u6807\u9875\u9762\uff1a${target || '\u56de\u6267\u672a\u8bb0\u5f55'}`,
+        `\u9a8c\u8bc1\u72b6\u6001\uff1a${verificationStatus || '\u56de\u6267\u672a\u8bb0\u5f55'}`,
+        `\u6700\u7ec8\u72b6\u6001\uff1a${task.status === 'completed' && verificationStatus === 'verified'
+          ? '\u5df2\u5b8c\u6210\uff08\u6301\u4e45\u56de\u6267\u5df2\u9a8c\u8bc1\uff09'
+          : formatConversationActionTaskStatus(state)}`,
+      ].join('\n');
+    }
   }
   const status = formatConversationActionTaskStatus(state);
   const asksForArtifactPath = /(?:产物|文件).{0,10}(?:路径|位置|在哪)|(?:路径|位置|在哪).{0,10}(?:产物|文件)|\b(?:artifact|file|output)\s+(?:path|location)\b|\bwhere\s+is\s+(?:the\s+)?(?:artifact|file|output)\b/iu.test(String(input.query || ''));
@@ -1450,6 +1645,29 @@ export function repairContradictoryConversationActionReceipts(db: any): number {
       task.completedAt = task.completedAt || task.updatedAt;
     }
     task.revision = nextState?.revision || task.revision;
+  }
+
+  // Terminal and confirmation-waiting states cannot simultaneously carry a
+  // live execution blocker. Older builds could leave the confirmation-denial
+  // text behind after cancellation, which made the command-center widget show
+  // a contradictory cancelled+error state. Repair those rows on bootstrap.
+  for (const task of tasks) {
+    if (!['completed', 'cancelled', 'waiting_confirmation'].includes(task.status)) continue;
+    if (!String(task.blocker || '').trim()) continue;
+    const context = parseObject(task.context);
+    const state = normalizeConversationActionState(context.actionState);
+    if (state) {
+      const nextState = normalizeConversationActionState({
+        ...state,
+        status: task.status,
+        latestBlocker: '',
+        unfinished: task.status !== 'completed' && task.status !== 'cancelled',
+      });
+      if (nextState) context.actionState = sanitizeState(nextState);
+      task.context = JSON.stringify(context);
+    }
+    task.blocker = '';
+    repaired += 1;
   }
   return repaired;
 }

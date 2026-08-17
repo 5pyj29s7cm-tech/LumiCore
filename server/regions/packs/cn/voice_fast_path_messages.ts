@@ -21,6 +21,12 @@ export function formatCnToolFailureDetail(error: string): string {
   if (/WeChat is not the foreground|no longer foreground|did not leave WeChat in the foreground/i.test(raw)) {
     return '微信没有保持在前台，已停止后续操作。';
   }
+  if (/access denied.{0,160}account is in good standing|account is in good standing.{0,160}access denied/i.test(raw)) {
+    return '桌面视觉核验服务拒绝了请求；请检查当前视觉模型账号状态、余额和访问权限，恢复后再重试。';
+  }
+  if (/timed?\s*out|timeout/i.test(raw)) {
+    return '桌面操作在等待启动或窗口回执时超时，已停止本次执行，没有重复打开。';
+  }
   if (/not found|cannot find|could not find|ENOENT/i.test(raw)) return '系统没有找到对应的应用、文件或网址入口。';
   if (/[㐀-鿿]/u.test(raw) && !/(?:锟斤拷|鈥|Ã|â€|�)/u.test(raw)) return raw.slice(0, 180);
   return '系统返回执行失败，但原始错误不是可直接展示的中文信息。';
@@ -84,14 +90,27 @@ export const CN_VOICE_FAST_PATH_MESSAGES = {
       const indexed = Number(stats.indexedFiles || 0);
       const partial = Number(stats.partialFiles || 0);
       const failed = Number(stats.failedFiles || 0);
-      const names = (Array.isArray(stats.files) ? stats.files : [])
+      const files = Array.isArray(stats.files) ? stats.files : [];
+      const pending = files.filter((file: any) => String(file?.status || '') === 'pending').length;
+      const names = files
         .map((file: any) => String(file?.name || '').trim())
         .filter(Boolean)
         .slice(0, 5);
+      const blocked = files
+        .filter((file: any) => Array.isArray(file?.blockers) && file.blockers.length > 0)
+        .slice(0, 3)
+        .map((file: any) => `${String(file?.name || '未命名文件')}：${file.blockers.join('、')}`);
       const status = total > 0
-        ? `，其中已索引${indexed}个${partial ? `、部分索引${partial}个` : ''}${failed ? `、异常${failed}个` : ''}`
+        ? `，其中已索引${indexed}个${pending ? `、待索引${pending}个` : ''}${partial ? `、部分索引${partial}个` : ''}${failed ? `、异常${failed}个` : ''}`
         : '';
-      return `知识库现在有${total}个文件${status}${names.length ? `。最近的文件包括：${names.join('、')}` : '。'}`;
+      const availability = total === 0
+        ? '当前知识库为空'
+        : indexed === total && failed === 0 && blocked.length === 0
+          ? '当前知识库可用'
+          : indexed > 0
+            ? '当前知识库部分可用'
+            : '当前知识库尚不可用';
+      return `${availability}，共有${total}个文件${status}${names.length ? `。文件包括：${names.join('、')}` : '。'}${blocked.length ? `。当前阻塞：${blocked.join('；')}` : '。当前没有文件级错误或阻塞记录。'}`;
     } catch {
       return '这次没有拿到可解析的知识库统计结果。';
     }

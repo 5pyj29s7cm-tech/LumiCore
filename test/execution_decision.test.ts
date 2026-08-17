@@ -136,6 +136,67 @@ describe('Lumi execution decision', () => {
     expect(decision.toolRoute).toBeNull();
   });
 
+  it('retains desktop execution tools when recovery wording is only a fallback condition', async () => {
+    const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+    const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
+    const text = '\u4e3b\u7a0b\u5e8f\u81ea\u6062\u590d\u9a8c\u6536\uff1a\u8bf7\u6253\u5f00 Windows \u8bb0\u4e8b\u672c\uff0c\u53ea\u6253\u5f00\u8fd9\u4e2a\u7cbe\u786e\u76ee\u6807\uff0c\u4e0d\u8981\u6253\u5f00\u66ff\u4ee3\u8f6f\u4ef6\u3002\u5982\u679c\u89c6\u89c9\u670d\u52a1\u4e0d\u53ef\u7528\uff0c\u8bf7\u4f7f\u7528\u5b89\u5168\u7684\u672c\u5730\u7a97\u53e3\u56de\u6267\u5b8c\u6210\u6838\u9a8c\u3002';
+    const dispatch = buildLumiTurnDispatch({
+      userId: 'execution_decision_primary_desktop_with_recovery_fallback',
+      text,
+      channel: 'chat',
+      source: 'command-center-chat',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+    const decision = buildLumiExecutionDecision({
+      flow: dispatch.flow,
+      text,
+      toolDeclarations: declarations,
+    });
+
+    expect(dispatch.boundary).toBe('tool_action');
+    expect(dispatch.flow.selfRepairTurn).toBe(false);
+    expect(decision.allowToolUse).toBe(true);
+    expect(decision.toolPolicy.allowedTools).toContain('desktop_open');
+    expect(decision.toolRoute?.toolNames).toContain('desktop_open');
+  });
+
+  it('prioritizes direct file write and verification for the field TXT request', async () => {
+    const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+    const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
+    const text = '在 C:\\Users\\Administrator\\Documents 创建 Lumi现场验收_晨星716.txt，写三行，重读核验，不外发，不开其他软件';
+    const dispatch = buildLumiTurnDispatch({
+      userId: 'execution_decision_field_txt',
+      text,
+      channel: 'chat',
+      source: 'command-center-chat',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+    const decision = buildLumiExecutionDecision({
+      flow: dispatch.flow,
+      text,
+      toolDeclarations: declarations,
+    });
+
+    expect(dispatch.flow.workSurfaceRoute.artifactFirst).toBe(true);
+    expect(decision.toolRoute?.categories).toEqual(expect.arrayContaining([
+      'documents',
+      'artifact_work',
+    ]));
+    expect(decision.toolRoute?.toolNames.slice(0, 4)).toEqual(expect.arrayContaining([
+      'write_file',
+      'work_product_verify',
+      'desktop_path_info',
+    ]));
+    expect(decision.toolPolicy.allowedTools).toEqual(expect.arrayContaining([
+      'write_file',
+      'work_product_verify',
+      'desktop_path_info',
+    ]));
+    expect(decision.toolPolicy.forbiddenTools).toContain('computer_use');
+  });
+
   it('promotes an explicit external action from Chat to Assistant execution', async () => {
     const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
     const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
@@ -183,6 +244,57 @@ describe('Lumi execution decision', () => {
 
     expect(dispatch.boundary).toBe('client_action');
     expect(decision.toolPolicy.allowedTools).toEqual(['client_get_state', 'client_action']);
+    expect(decision.maxIterations).toBe(4);
+  });
+
+  it('does not let an older task policy block a fresh client navigation turn', async () => {
+    const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+    const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
+    const taskId = 'task_prior_artifact';
+    const text = '返回 Lumi 个人主页';
+    const dispatch = buildLumiTurnDispatch({
+      userId: 'execution_decision_client_policy_isolation_user',
+      text,
+      continuationContext: [
+        '## Recent action continuation context',
+        `- taskId: ${taskId}`,
+        '- unfinished: yes',
+      ].join('\n'),
+      channel: 'chat',
+      source: 'command-center-chat',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+    const decision = buildLumiExecutionDecision({
+      flow: dispatch.flow,
+      text,
+      toolDeclarations: declarations,
+      actionTaskState: {
+        version: 2,
+        taskId,
+        status: 'blocked',
+        goal: '生成旧文件',
+        latestInstruction: '继续生成旧文件',
+        appTarget: '',
+        sourcePaths: [],
+        latestBlocker: 'write_file unavailable',
+        unfinished: true,
+        evidenceTools: ['write_file'],
+        assistantState: '',
+        toolSummaries: [],
+        updatedAt: '2026-08-17T00:00:00.000Z',
+        policySnapshot: {
+          allowedTools: ['write_file'],
+          requireConfirmation: [],
+          forbiddenTools: ['client_action'],
+          maxIterations: 8,
+        },
+      },
+    });
+
+    expect(dispatch.boundary).toBe('client_action');
+    expect(decision.toolPolicy.allowedTools).toEqual(['client_get_state', 'client_action']);
+    expect(decision.toolPolicy.forbiddenTools).toEqual([]);
     expect(decision.maxIterations).toBe(4);
   });
 

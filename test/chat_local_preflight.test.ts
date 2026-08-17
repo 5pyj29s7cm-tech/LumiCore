@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { shouldRunVisibleActionPreflight } from '../server/socket/chat';
+import {
+  buildRequestedArtifactReadback,
+  shouldRunVisibleActionPreflight,
+} from '../server/socket/chat';
 import {
   classifyComplexity,
   shouldAttemptOrchestration,
@@ -22,6 +25,29 @@ describe('chat local action preflight', () => {
       'Please review the contract.pdf file on the desktop',
       [],
     )).toBe(true);
+  });
+
+  it('does not pre-read an explicit artifact output path before creating it', () => {
+    expect(shouldRunVisibleActionPreflight(
+      '请在 C:\\Users\\Administrator\\Documents\\Lumi主程序实机验收_20260816.txt 创建文件，写入后必须重读核验。',
+      [],
+    )).toBe(false);
+  });
+
+  it('requires the requested readback to occur after the file write', () => {
+    const task = '请在 C:\\Users\\Administrator\\Documents\\Lumi主程序实机验收_20260816.txt 创建文件，写入后必须重读核验。';
+    const target = 'C:\\Users\\Administrator\\Documents\\Lumi主程序实机验收_20260816.txt';
+    const staleRead = { name: 'extract_document_text', arguments: { filePath: target }, result: 'old' };
+    const write = { name: 'write_file', arguments: { path: target }, result: `File written: ${target}` };
+    expect(buildRequestedArtifactReadback(task, [staleRead, write])).toEqual({
+      name: 'extract_document_text',
+      arguments: { filePath: target },
+    });
+    expect(buildRequestedArtifactReadback(task, [staleRead, write, {
+      name: 'extract_document_text',
+      arguments: { filePath: target },
+      result: 'new',
+    }])).toBeNull();
   });
 
   it('keeps ordinary desktop control on Lumi but honors an explicit team request', () => {

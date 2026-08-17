@@ -262,7 +262,7 @@ describe('finalized output paths', () => {
     expect(workflowPath).toContain('toolCalls: workflowQuickToolRecords.length ? workflowQuickToolRecords : undefined');
     expect(workflowPath).toContain("cognitiveIntent: finalizedWorkflowQuick.blocked ? 'work_product_guard' : undefined");
     expect(workflowPath.indexOf('emitAgent("agent:response"')).toBeLessThan(
-      workflowPath.indexOf("socket.emit('chat:conversation_updated'"),
+      workflowPath.indexOf('emitConversationUpdated('),
     );
     expect(workflowPath).toContain('if (!finalizedWorkflowQuick.blocked) {');
     expect(workflowPath).toContain('trackTopic(conversationId, topic)');

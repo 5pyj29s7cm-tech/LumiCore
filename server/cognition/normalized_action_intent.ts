@@ -14,6 +14,7 @@ export type NormalizedActionIntentKind =
   | 'desktop_operation'
   | 'cad_drafting'
   | 'scheduled_task'
+  | 'work_task'
   | 'status_query'
   | 'correction_explanation';
 
@@ -82,7 +83,7 @@ const CLIENT_SURFACE_RULES: ReadonlyArray<{ pattern: RegExp; target: string; act
   { pattern: /(?:通知中心|通知面板|notification\s*(?:center|panel))/iu, target: 'notifications', action: 'open_notifications' }, // i18n-allow: Multilingual Lumi surface aliases.
   { pattern: /(?:提醒面板|提醒中心|reminder\s*(?:center|panel))/iu, target: 'reminders', action: 'open_reminders' }, // i18n-allow: Multilingual Lumi surface aliases.
   { pattern: /(?:设置界面|设置页面|客户端设置|settings)/iu, target: 'settings', action: 'open_settings' }, // i18n-allow: Multilingual Lumi surface aliases.
-  { pattern: /(?:主屏幕|主页面|首页|lumi\s*桌面|home)/iu, target: 'home', action: 'focus_home' }, // i18n-allow: Multilingual Lumi surface aliases.
+  { pattern: /(?:个人主页|个人主界面|个人桌面|主屏幕|主页面|主界面|首页|lumi\s*桌面|home)/iu, target: 'home', action: 'focus_home' }, // i18n-allow: Multilingual Lumi surface aliases.
   ...REGISTERED_CLIENT_SURFACE_RULES,
 ];
 
@@ -98,6 +99,18 @@ function trimSlot(value: string): string {
     .trim();
 }
 
+export function isExplicitArtifactCreationText(text: string): boolean {
+  return /(?:创建|新建|生成|写入)/u.test(text)
+    && /(?:[A-Za-z]:[\\/]|\.(?:txt|md|csv|json|docx?|xlsx?|pptx?|pdf)\b)/iu.test(text);
+}
+
+export function isExternalCommitConfirmationOnlyRequest(text: string): boolean {
+  const value = String(text || '');
+  const asksForConfirmation = /(?:真正发送前|发送之前|发送前).{0,24}(?:确认|同意|批准)|(?:只到|停在|保持在).{0,16}(?:等待确认|待确认)|\bbefore\s+(?:actually\s+)?sending\b.{0,32}\b(?:confirm|approval)\b/iu.test(value);
+  const forbidsCurrentCommit = /(?:现在|当前|这一轮)?(?:只到|停在).{0,20}(?:等待确认|待确认)|(?:不要|别|禁止).{0,16}(?:真正)?(?:发送|发出|提交|发布)|\b(?:do\s+not|don't|never)\b.{0,40}\b(?:send|submit|publish)\b/iu.test(value);
+  return asksForConfirmation && forbidsCurrentCommit;
+}
+
 function correctionOrExplanation(text: string): NormalizedActionIntent | null {
   // A time-bounded activity question is a status lookup, even though phrases
   // such as "做了什么" are superficially similar to an action complaint. i18n-allow: Reviewed input recognition.
@@ -111,7 +124,12 @@ function correctionOrExplanation(text: string): NormalizedActionIntent | null {
   // i18n-allow: Chinese terse-complaint input recognition; not user-visible copy.
   const terseComplaint = // i18n-allow: Chinese terse-complaint input recognition; not user-visible copy.
     /^(?:(?:我操|卧槽|靠|妈的|搞什么|什么鬼)[，,\s]*)?(?:你|lumi)[^。！？!?\n]{0,20}(?:打开|发送|执行|操作|做|画)了[^。！？!?\n]{0,28}(?:什么|啥|为什么|怎么回事)[^。！？!?\n]*[啊呀呢吧。！？!?]*$/iu;
-  if (!negativeAuthorization.test(text) && !actionComplaint.test(text) && !terseComplaint.test(text)) return null;
+  // A user can correct task identity while quoting the wrongly selected old
+  // action. Quoted verbs remain evidence about the previous turn and must not
+  // become a fresh command.
+  const taskIdentityCorrection = // i18n-allow: Chinese correction input recognition; not user-visible copy.
+    /(?:不对|错了|搞错了|误判|误识别|答非所问).{0,180}(?:(?:我)?(?:刚才|刚刚|上一条).{0,100}(?:新(?:的)?|任务|指令|要求).{0,100}(?:你却|却|但你|而你).{0,80}(?:回答|执行|调用).{0,80}(?:旧|之前|上一)|误判|误识别|答非所问)/u;
+  if (!negativeAuthorization.test(text) && !actionComplaint.test(text) && !terseComplaint.test(text) && !taskIdentityCorrection.test(text)) return null;
   return {
     kind: 'correction_explanation',
     operation: 'explain',
@@ -126,11 +144,54 @@ function correctionOrExplanation(text: string): NormalizedActionIntent | null {
 }
 
 function statusQuery(text: string): NormalizedActionIntent | null {
+  // Reporting the id/status after creating a specifically described new task
+  // is part of that creation contract, not a query about an older task.
+  if (persistentWorkTaskCreation(text)) return null;
+  const namedArtifact = text.match(/([^\s\\/:*?"<>|\r\n]{1,160}\.(?:txt|md|docx?|xlsx?|pptx?|pdf|csv))\b/iu)?.[1]?.trim();
+  const asksNamedArtifactStatus = Boolean(
+    namedArtifact
+    && /(?:\u6587\u4ef6|\u4ea7\u7269|\u4efb\u52a1).{0,24}(?:\u73b0\u5728)?(?:\u662f\u4ec0\u4e48|\u4ec0\u4e48|\u5565)\u72b6\u6001|\u662f\u5426(?:\u5df2\u7ecf)?(?:\u5199\u5165|\u56de\u8bfb).{0,12}[\uff1f?]|\u6700\u7ec8\u72b6\u6001|\b(?:what\s+is|final)\b.{0,24}\bstatus\b|\bwas\b.{0,32}\b(?:written|read\s*back)\b/iu.test(text)
+  );
+  if (namedArtifact && asksNamedArtifactStatus) {
+    return {
+      kind: 'status_query',
+      operation: 'status',
+      subject: 'lumi',
+      target: namedArtifact,
+      payload: '',
+      sideEffectClass: 'none',
+      relation: 'status',
+      confidence: 0.99,
+      rule: 'named-artifact-status-before-action',
+    };
+  }
+
+  // A status question can name an exact desktop target while still containing
+  // an action verb, for example "打开 Windows 计算器的任务最终状态是什么".
+  // Preserve that target so the persistent ledger does not fall back to the
+  // most recently updated (and possibly unrelated) task.
+  const namedDesktopStatus = text.match(
+    /(?:\u6253\u5f00|\u542f\u52a8)\s*([^\u3002\uff01\uff1f?\n]{1,80}?)(?:\u7684)?(?:\u4efb\u52a1)?(?:\u6700\u7ec8)?(?:\u72b6\u6001|\u7ed3\u679c)(?:\u662f\u4ec0\u4e48|\u5982\u4f55|\u600e\u4e48\u6837|\u4e3a)?/iu,
+  )?.[1]?.trim();
+  if (namedDesktopStatus) {
+    return {
+      kind: 'status_query',
+      operation: 'status',
+      subject: 'lumi',
+      target: namedDesktopStatus,
+      payload: '',
+      sideEffectClass: 'none',
+      relation: 'status',
+      confidence: 0.99,
+      rule: 'named-desktop-status-before-action',
+    };
+  }
+
   // A retrospective question about the immediately preceding action is a
   // receipt/status lookup. Action verbs inside the question must never be
   // reinterpreted as a fresh desktop or external mutation.
   // i18n-allow: Multilingual recent-action receipt recognition; not user-visible copy.
-  const recentActionReceipt = /(?:\u521a\u624d|\u521a\u521a|\u4e0a\u4e00\u8f6e|\u4e0a\u6b21).{0,20}(?:\u6253\u5f00|\u6267\u884c|\u505a|\u53d1\u9001|\u521b\u5efa|\u64cd\u4f5c)(?:\u4e86)?(?:\u4ec0\u4e48|\u54ea\u4e2a|\u54ea\u4e9b)|\bwhat\s+did\s+(?:you|lumi)\s+(?:just\s+)?(?:open|do|run|send|create)\b/iu;
+  const recentActionReceipt = /(?:\u521a\u624d|\u521a\u521a|\u4e0a\u4e00\u8f6e|\u4e0a\u6b21).{0,28}(?:\u6253\u5f00|\u6267\u884c|\u505a|\u53d1\u9001|\u521b\u5efa|\u64cd\u4f5c)(?:\u4e86)?(?:\u4ec0\u4e48|\u54ea\u4e2a|\u54ea\u4e9b|.{0,24}(?:\u6210\u529f|\u5b8c\u6210)(?:\u4e86)?(?:\u5417|\u6ca1\u6709|\u6ca1))|\bwhat\s+did\s+(?:you|lumi)\s+(?:just\s+)?(?:open|do|run|send|create)\b|\bdid\s+(?:you|lumi)\s+(?:just\s+)?(?:open|run|send|create).{0,40}\bsuccessfully\b/iu;
   if (recentActionReceipt.test(text)) {
     return {
       kind: 'status_query',
@@ -161,9 +222,14 @@ function statusQuery(text: string): NormalizedActionIntent | null {
     };
   }
 
+  // A new artifact instruction may contain literal field values such as
+  // "状态：..." or text mentioning a Lumi surface. Those nouns do not make
+  // the turn a status follow-up; the explicit create/write action wins.
+  if (isExplicitArtifactCreationText(text)) return null;
+
   const registeredSurfaceStatus =
     /(?:进度|状态|结果呢|做到哪|到哪了|怎么样|做完了吗|完成了吗|好了吗)/u.test(text) // i18n-allow: Reviewed Chinese status-follow-up input recognition.
-      ? REGISTERED_CLIENT_SURFACE_RULES.find(candidate => candidate.pattern.test(text))
+      ? CLIENT_SURFACE_RULES.find(candidate => candidate.pattern.test(text))
       : undefined;
   if (registeredSurfaceStatus) {
     return {
@@ -255,6 +321,7 @@ function externalAiHistoryRead(text: string): NormalizedActionIntent | null {
 }
 
 function inboundMessageRead(text: string): NormalizedActionIntent | null {
+  if (isExplicitArtifactCreationText(text)) return null;
   const inboundPatterns = [ // i18n-allow: Chinese inbound-message semantic-role recognition; not user-visible copy.
     /^(?!(?:看|查|读|告诉我))([^\s，。！？!?]{1,24}?)\s*(?:最近|刚刚|刚才)?\s*给我发(?:了)?(?:的)?(?:什么|哪些)?\s*(?:消息|内容|微信)/u, // i18n-allow: Chinese inbound-message semantic-role recognition.
     /(?:看(?:一下|看)?|查(?:一下|看)?|读(?:一下|取)?|告诉我)?\s*([^\s，。！？!?]{1,24}?)(?:最近|刚刚|刚才)?\s*给我发(?:了)?(?:的)?(?:什么|哪些)?\s*(?:消息|内容|微信)?/u, // i18n-allow: Chinese inbound-message semantic-role recognition.
@@ -296,9 +363,12 @@ function inboundMessageRead(text: string): NormalizedActionIntent | null {
 }
 
 function outgoingMessageSend(text: string): NormalizedActionIntent | null {
+  if (isExplicitArtifactCreationText(text)) return null;
+  const confirmationOnly = isExternalCommitConfirmationOnlyRequest(text);
   // i18n-allow: Chinese negative-send input recognition; not user-visible copy.
-  if (/(?:不要|别|无需|不用).{0,12}(?:发|发送|回复)|(?:没有|没|并未).{0,30}(?:让我|叫我|让你).{0,20}(?:发|发送|回复)/u.test(text)) return null;
+  if (!confirmationOnly && /(?:不要|别|无需|不用).{0,12}(?:发|发送|回复)|(?:没有|没|并未).{0,30}(?:让我|叫我|让你).{0,20}(?:发|发送|回复)/u.test(text)) return null;
   const patterns = [ // i18n-allow: Chinese outbound-message semantic-role recognition; not user-visible copy.
+    /(?:请)?(?:准备)?给(?:测试联系人)?\s*[「『“"']([^」』”"']{1,32})[」』”"']\s*(?:发送消息|发消息|发)\s*[「『“"']([\s\S]{1,1000}?)[」』”"']/u, // i18n-allow: confirmation-only outbound-message semantic-role recognition.
     /(?:发|发送|回复)给\s*([^\s，。！？!?：:；;、「」『』“”"']{1,32})\s*[「『“"']([\s\S]{1,1000}?)[」』”"']/u, // i18n-allow: Chinese outbound-message semantic-role recognition.
     /(?:我|帮我|替我|麻烦你|请你|你)?\s*给\s*([^\s，。！？!?：:；;、]{1,32})\s*(?:发|发送|回复|说|告诉)\s*([\s\S]{1,1000})/u, // i18n-allow: Chinese outbound-message semantic-role recognition.
     /(?:我|帮我|替我|麻烦你|请你|你)?\s*(?:发|发送|回复)给\s*([^\s，。！？!?：:；;、]{1,32})\s*([\s\S]{1,1000})/u, // i18n-allow: Chinese outbound-message semantic-role recognition.
@@ -384,7 +454,7 @@ function localDesktopOperation(text: string): NormalizedActionIntent | null {
   // action-shaped word is never enough to create executable work.
   const match = text.match(
     // i18n-allow: Chinese local desktop semantic-role input recognition.
-    /(?:^|[，。！？!?\s])(?:请|请你|帮我|麻烦你|给我)?\s*(打开|启动|运行|切换到|聚焦|最大化|最小化|还原|关闭|open|launch|start|focus|maximi[sz]e|minimi[sz]e|restore|close)\s*(?:程序|应用|软件|窗口|app|application)?\s*([^，。！？!?\n]{1,120})/iu,
+    /(?:^|[，。！？!?：:；;\s])(?:现在\s*)?(?:请|请你|帮我|麻烦你|给我)?\s*(打开|启动|运行|切换到|聚焦|最大化|最小化|还原|关闭|\b(?:open|launch|start|focus|maximi[sz]e|minimi[sz]e|restore|close)\b)\s*(?:程序|应用|软件|窗口|app|application)?\s*([^，。！？!?；;\n]{1,120})/iu,
   );
   if (!match) return null;
   const verb = trimSlot(match[1]);
@@ -405,9 +475,29 @@ function localDesktopOperation(text: string): NormalizedActionIntent | null {
   };
 }
 
+function persistentWorkTaskCreation(text: string): NormalizedActionIntent | null {
+  const createsTask = /(?:\u521b\u5efa|\u65b0\u5efa|\u5efa\u7acb)\s*(?:\u4e00\u4e2a|\u4e00\u9879)?[^\u3002\uff01\uff1f?\n]{0,28}(?:\u6301\u4e45\u4efb\u52a1|\u957f\u671f\u4efb\u52a1|\u5de5\u4f5c\u63a5\u7ba1\u4efb\u52a1|\u5de5\u4f5c\u4efb\u52a1)|\b(?:create|start)\b.{0,36}\b(?:persistent|long[-\s]?running|work[-\s]?takeover)\s+task\b/iu.test(text);
+  if (!createsTask) return null;
+  const title = text.match(/(?:\u6807\u9898|title)\s*[\uff1a:=\u4e3a]?\s*[\u201c"']([^\u201d"'\r\n]{1,120})[\u201d"']/iu)?.[1]?.trim()
+    || text.match(/(?:\u6807\u9898|title)\s*[\uff1a:=\u4e3a]\s*([^\uff0c,\u3002\uff01\uff1f?\r\n]{1,120})/iu)?.[1]?.trim()
+    || 'persistent_work_task';
+  return {
+    kind: 'work_task',
+    operation: 'create',
+    subject: 'user',
+    target: title,
+    payload: text,
+    sideEffectClass: 'local_write',
+    relation: 'new',
+    confidence: 0.98,
+    rule: 'explicit-persistent-work-task-create',
+  };
+}
+
 export function normalizeActionIntent(value: string): NormalizedActionIntent {
   const text = currentTurnText(value);
   if (!text) return { ...EMPTY_INTENT };
+  const explicitArtifactCreation = isExplicitArtifactCreationText(text);
 
   // Order is a safety invariant. Later action-shaped words cannot override a
   // correction, status query, client-native route, external-AI read, or
@@ -415,12 +505,13 @@ export function normalizeActionIntent(value: string): NormalizedActionIntent {
   const priority = [
     correctionOrExplanation(text),
     statusQuery(text),
-    clientNavigation(text),
-    externalAiHistoryRead(text),
-    inboundMessageRead(text),
-    outgoingMessageSend(text),
-    genericExternalCommit(text),
-    localDesktopOperation(text),
+    persistentWorkTaskCreation(text),
+    explicitArtifactCreation ? null : clientNavigation(text),
+    explicitArtifactCreation ? null : externalAiHistoryRead(text),
+    explicitArtifactCreation ? null : inboundMessageRead(text),
+    explicitArtifactCreation ? null : outgoingMessageSend(text),
+    explicitArtifactCreation ? null : genericExternalCommit(text),
+    explicitArtifactCreation ? null : localDesktopOperation(text),
   ].find(Boolean);
   if (priority) return priority;
 

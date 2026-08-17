@@ -14,12 +14,20 @@ import {
   requiresCadGeometryExtractionOnly,
   requiresCurrentAppUiMutation,
   requiresAutoCadMcpPlayback,
+  requiresDesktopAiCollaboration,
   requiresAuthenticatedWebResult,
   requiresVisibleAutoCadExecution,
   requiresExternalAiHistory,
+  requiresArtifactPostWriteReadback,
 } from '../server/cognition/action_contract';
 
 describe('Lumi action contract', () => {
+  it('recognizes an explicit arrow-ordered write then readback requirement', () => {
+    expect(requiresArtifactPostWriteReadback(
+      '\u5fc5\u987b\u4e25\u683c\u6309\u201c\u8bfb\u53d6\u6e90\u6587\u4ef6\u2192\u5199\u5165\u76ee\u6807\u6587\u4ef6\u2192\u91cd\u65b0\u8bfb\u53d6\u76ee\u6807\u6587\u4ef6\u201d\u7684\u987a\u5e8f\u6267\u884c\u3002',
+    )).toBe(true);
+  });
+
   it('keeps explicit local customer documents on the artifact contract', () => {
     expect(buildActionContract('读取 D:\\work\\customer-brief.txt，并在 D:\\work\\customer-followup.md 创建客户跟进方案并验证文件').kind)
       .toBe('artifact_work');
@@ -27,6 +35,50 @@ describe('Lumi action contract', () => {
       .toBe('none');
     expect(buildActionContract('分析这个客户线索并推进销售跟进').kind)
       .toBe('customer_operations');
+  });
+
+  it('keeps the field TXT creation request on the artifact contract despite a negated software clause', () => {
+    const contract = buildActionContract('在 C:\\Users\\Administrator\\Documents 创建 Lumi现场验收_晨星716.txt，写三行，重读核验，不外发，不开其他软件');
+    expect(contract.kind).toBe('artifact_work');
+    expect(contract.preferredTools).toContain('write_file');
+    expect(contract.verificationTools).toEqual(expect.arrayContaining([
+      'desktop_path_info',
+      'work_product_verify',
+    ]));
+  });
+
+  it('does not treat a read-only knowledge-base inventory as artifact creation', () => {
+    const contract = buildActionContract('请检查当前个人知识库是否可用，报告文档数量、已索引数量和最近错误。只读取真实状态，不导入、不修改任何内容。');
+    expect(contract.kind).toBe('none');
+  });
+
+  it('accepts a requested artifact readback only when it follows the write', () => {
+    const task = '在 C:\\Users\\Administrator\\Documents 创建 Lumi现场验收_晨星716.txt，写入后重读核验';
+    const contract = buildActionContract(task);
+    const target = 'C:\\Users\\Administrator\\Documents\\Lumi现场验收_晨星716.txt';
+    const read = { name: 'extract_document_text', arguments: { filePath: target }, result: '三行内容' };
+    const write = { name: 'write_file', arguments: { path: target }, result: `File written: ${target}` };
+    expect(hasCoreActionEvidence(contract, [read, write], task)).toBe(false);
+    expect(hasCoreActionEvidence(contract, [write, read], task)).toBe(true);
+  });
+
+  it('requires both exact launch and matching active-window evidence for launch verification', () => {
+    const task = '请打开 Windows 计算器。打开后读取当前活动窗口，只有窗口标题和进程能证明是计算器时才报告完成。';
+    const contract = buildActionContract(task);
+    const opened = {
+      name: 'desktop_open',
+      arguments: { target: '计算器' },
+      result: JSON.stringify({ status: 'verified', targetMatched: true, verified: true, actualTarget: { title: '计算器', processName: 'CalculatorApp.exe' } }),
+      terminalVerification: { status: 'verified' as const, strategy: 'state_diff' as const, reason: 'matched' },
+    };
+    const active = {
+      name: 'desktop_active_window',
+      arguments: {},
+      result: JSON.stringify({ title: '计算器', processName: 'CalculatorApp.exe' }),
+    };
+    expect(contract.kind).toBe('desktop_operation');
+    expect(hasCoreActionEvidence(contract, [opened], task)).toBe(false);
+    expect(hasCoreActionEvidence(contract, [opened, active], task)).toBe(true);
   });
 
   it('does not treat the letters ai inside a local main path as an external AI surface', () => {
@@ -54,6 +106,14 @@ describe('Lumi action contract', () => {
 
     const collaboration = buildActionContract('Ask ChatGPT and Claude for independent answers, then collect and compare them.');
     expect(collaboration.kind).toBe('external_ai_collaboration');
+  });
+
+  it('keeps negated model-memory and browser constraints out of active collaboration routes', () => {
+    const text = '律师版实机验收·法条与类案：基于案件ID case-001，只使用当前已配置且可核验的权威来源，输出检索问题、来源状态和可核验结果。禁止凭模型记忆编造法条，不要登录外部网站；完成后告诉我任务回执状态。';
+    expect(requiresDesktopAiCollaboration(text)).toBe(false);
+    expect(requiresAuthenticatedWebResult(text)).toBe(false);
+    expect(buildActionContract(text).kind).not.toBe('external_ai_collaboration');
+    expect(buildActionContract(text).kind).not.toBe('browser_account');
   });
   it('treats editing inside the current app as a desktop action contract', () => {
     const contract = buildActionContract('\u5728\u8fd9\u91cc\u9762\u5199\u4e00\u7bc7\u68c0\u8ba8\u4e66\u7ed9\u6211');

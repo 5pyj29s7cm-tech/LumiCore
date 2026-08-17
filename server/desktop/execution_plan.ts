@@ -1,7 +1,10 @@
 import crypto from 'node:crypto';
 import type { CapabilityExecutionPlan } from '../cognition/capability_execution_plan';
 import type { LumiCapabilityLane } from '../cognition/capability_selection';
-import type { NormalizedSideEffectClass } from '../cognition/normalized_action_intent';
+import {
+  normalizeActionIntent,
+  type NormalizedSideEffectClass,
+} from '../cognition/normalized_action_intent';
 
 export type DesktopApplicationFamily =
   | 'lumi'
@@ -10,6 +13,7 @@ export type DesktopApplicationFamily =
   | 'messaging'
   | 'cad'
   | 'desktop_ai'
+  | 'utility'
   | 'unknown';
 
 export type DesktopControlLayer =
@@ -65,6 +69,12 @@ export interface ApplicationIdentity {
   displayName: string;
   aliases: string[];
   processPatterns: string[];
+  /**
+   * Generic Windows host processes that may own this app's foreground
+   * window. A host match is accepted only together with a matching title, so
+   * ApplicationFrameHost.exe by itself can never prove an app identity.
+   */
+  hostedProcessPatterns?: string[];
   windowTitlePatterns: string[];
   executablePatterns: string[];
   certification: 'certified' | 'conditional' | 'fallback_only';
@@ -287,6 +297,11 @@ const CERTIFICATION_POLICIES = {
     publisherPatterns: ['openai', 'anthropic', 'google llc', 'google inc'],
     productNamePatterns: ['chatgpt', 'claude', 'codex', 'gemini'],
   }),
+  calculator: certificationPolicy({
+    requiredSignals: ['process_name'],
+    requireValidSignature: false,
+    versionPolicy: 'unconstrained',
+  }),
   unknown: certificationPolicy({
     requiredSignals: ['process_name', 'executable_path'],
     requireValidSignature: false,
@@ -479,6 +494,20 @@ export const DESKTOP_APPLICATION_REGISTRY: readonly ApplicationIdentity[] = [
     controlLayers: ['dedicated_adapter', 'windows_uia', 'vision'],
   },
   {
+    id: 'windows-calculator',
+    family: 'utility',
+    displayName: 'Windows Calculator',
+    // i18n-allow: Reviewed multilingual application aliases for exact target matching.
+    aliases: ['windows calculator', 'microsoft calculator', 'calculator', 'windows 计算器', '计算器'],
+    processPatterns: ['calculatorapp', 'calculator'],
+    hostedProcessPatterns: ['applicationframehost'],
+    windowTitlePatterns: ['windows calculator', 'calculator', '计算器'],
+    executablePatterns: ['calculatorapp.exe', 'calculator.exe'],
+    certification: 'conditional',
+    certificationPolicy: CERTIFICATION_POLICIES.calculator,
+    controlLayers: ['windows_uia', 'vision'],
+  },
+  {
     id: 'chatgpt-desktop',
     family: 'desktop_ai',
     displayName: 'ChatGPT desktop',
@@ -563,6 +592,9 @@ function cloneApplicationIdentity(application: ApplicationIdentity): Application
     ...application,
     aliases: [...application.aliases],
     processPatterns: [...application.processPatterns],
+    ...(application.hostedProcessPatterns
+      ? { hostedProcessPatterns: [...application.hostedProcessPatterns] }
+      : {}),
     windowTitlePatterns: [...application.windowTitlePatterns],
     executablePatterns: [...application.executablePatterns],
     certificationPolicy: {
@@ -585,6 +617,22 @@ export function resolveDesktopApplicationIdentity(
   const fileOrArtifactTarget = /(?:[a-z]:[\\/]|(?:^|[\\/])[^\\/]+\.(?:pdf|pptx?|docx?|xlsx?|dwg|dxf|txt|md|csv|zip)|\b(?:pdf|pptx?|docx?|xlsx?|dwg|dxf|file|folder|document|presentation|spreadsheet|drawing)\b|文件夹|文件|资料|文档|图纸|演示文稿)/iu.test(normalized);
   // i18n-allow: Reviewed multilingual Lumi client-surface recognition; not user-visible copy.
   const explicitLumiClientTarget = /(?:lumi\s*(?:os|客户端|client|界面|窗口)|聊天界面|客户端(?:的|里)?(?:知识库|设置|聊天|壁纸)|client_action)/iu.test(normalized);
+  // Prefer the semantic target of the requested desktop action over nouns in
+  // the follow-on payload. In "Open WPS and create a Word document", WPS is
+  // the application identity while Word is the requested document type.
+  const normalizedIntent = normalizeActionIntent(text);
+  const semanticTarget = normalizedIntent.kind === 'desktop_operation'
+    ? String(normalizedIntent.target || '').trim().toLowerCase()
+    : '';
+  const semanticApplication = semanticTarget
+    ? DESKTOP_APPLICATION_REGISTRY
+        .flatMap(application => application.aliases
+          .filter(alias => desktopTextMatchesAlias(semanticTarget, alias))
+          .filter(() => application.family !== 'lumi' || !fileOrArtifactTarget || explicitLumiClientTarget)
+          .map(alias => ({ application, aliasLength: alias.length })))
+        .sort((left, right) => right.aliasLength - left.aliasLength)[0]?.application
+    : undefined;
+  if (semanticApplication) return cloneApplicationIdentity(semanticApplication);
   const explicit = DESKTOP_APPLICATION_REGISTRY
     .flatMap(application => application.aliases
       .filter(alias => desktopTextMatchesAlias(normalized, alias))
@@ -669,6 +717,11 @@ export function assessDesktopApplicationIdentity(
     application.processPatterns.some(pattern => processMatchesPattern(processName, pattern))
     || application.executablePatterns.some(pattern => processMatchesPattern(processName, pattern))
   );
+  const hostedProcessMatched = Boolean(processName)
+    && Boolean(application.hostedProcessPatterns?.some(pattern => processMatchesPattern(processName, pattern)));
+  const hostedWindowTitleMatched = hostedProcessMatched
+    && application.windowTitlePatterns.some(pattern => titleMatchesPattern(fingerprint.title || '', pattern));
+  const effectiveProcessMatched = processMatched || hostedWindowTitleMatched;
   const executableMatched = Boolean(executablePath) && application.executablePatterns.some(
     pattern => processMatchesPattern(executableName, pattern),
   );
@@ -685,7 +738,7 @@ export function assessDesktopApplicationIdentity(
     (matches ? matchedSignals : conflictingSignals).push(signal);
   };
 
-  evaluate('process_name', processName, processMatched);
+  evaluate('process_name', processName, effectiveProcessMatched);
   evaluate('executable_path', executablePath, executableMatched);
   evaluate(
     'publisher',
@@ -713,7 +766,7 @@ export function assessDesktopApplicationIdentity(
   // Process and executable path are authoritative. A browser tab or renamed
   // executable must never inherit identity from a matching window title.
   const strongIdentityMatched = processName
-    ? processMatched
+    ? effectiveProcessMatched
     : executablePath
       ? executableMatched
       : application.windowTitlePatterns.some(pattern => titleMatchesPattern(fingerprint.title || '', pattern));

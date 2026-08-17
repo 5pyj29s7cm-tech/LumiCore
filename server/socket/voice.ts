@@ -74,6 +74,11 @@ import { CONVERSATIONAL_MEMORY_EVIDENCE } from "../memory/types";
 import { searchKnowledgeBase } from "../org/kb";
 import {
   buildDeterministicClientNavigationCommand,
+  buildDeterministicExternalCommitConfirmationCommand,
+  buildDeterministicKnowledgeInspectionCommand,
+  buildDeterministicLocalDesktopNavigationCommand,
+  buildDeterministicWorkTaskCreateCommand,
+  buildDeterministicWpsDocumentCommand,
   buildQuickCommandToolPolicy,
   matchQuickCommand,
 } from "../cognition/quick_commands";
@@ -1586,6 +1591,27 @@ async function processVoiceInput(
       executionPipeline.normalizedIntent,
     );
   }
+  if (!preMatchedQuickResult && !clientActionOnlyTurn) {
+    preMatchedQuickResult = buildDeterministicExternalCommitConfirmationCommand(
+      executionPipeline.normalizedIntent,
+      userText,
+    );
+  }
+  if (!preMatchedQuickResult && !clientActionOnlyTurn) {
+    preMatchedQuickResult = buildDeterministicKnowledgeInspectionCommand(userText);
+  }
+  if (!preMatchedQuickResult && !clientActionOnlyTurn) {
+    preMatchedQuickResult = buildDeterministicWorkTaskCreateCommand(userText);
+  }
+  if (!preMatchedQuickResult && !clientActionOnlyTurn) {
+    preMatchedQuickResult = buildDeterministicWpsDocumentCommand(userText);
+  }
+  if (!preMatchedQuickResult && !clientActionOnlyTurn) {
+    preMatchedQuickResult = buildDeterministicLocalDesktopNavigationCommand(
+      executionPipeline.normalizedIntent,
+      userText,
+    );
+  }
   session.isBackgroundWork = executionDecision.allowToolUse;
   session.activeWorkStatus = executionDecision.allowToolUse ? 'planning' : 'idle';
   if (executionDecision.allowToolUse && !session.workHeartbeatTimer) {
@@ -2841,6 +2867,7 @@ async function processVoiceInput(
       let quickToolResult = '';
       let quickToolError: string | undefined;
       let quickToolRecord: ToolExecutionRecord | null = null;
+      const quickToolRecords: ToolExecutionRecord[] = [];
       if (quickResult.toolCall && session.isActive) {
         const correlationId = `qc-${Date.now()}`;
         const shouldEmitQuickTool = !isDirectDesktopTool(quickResult.toolCall.name);
@@ -2854,6 +2881,7 @@ async function processVoiceInput(
             toolPolicy: buildQuickCommandToolPolicy(routedToolPolicy, quickResult.toolCall.name),
           },
         });
+        quickToolRecords.push(quickToolRecord);
         quickToolResult = quickToolRecord.result || '';
         quickToolError = quickToolRecord.error;
         if (quickToolRecord.error && shouldEmitQuickTool) {
@@ -2876,18 +2904,45 @@ async function processVoiceInput(
         } else if (quickToolError) {
           quickResponseText = `\u8fd9\u6b21\u6ca1\u6709\u5b8c\u6210\uff1a${quickToolError}`;
         }
+        if (!quickToolRecord.error && quickResult.followUpToolCalls?.length) {
+          for (const followUp of quickResult.followUpToolCalls) {
+            const followUpCorrelationId = `qc-verify-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const followUpRecord = await executeToolCall({
+              registry: toolRegistry,
+              id: followUpCorrelationId,
+              name: followUp.name,
+              arguments: followUp.arguments,
+              context: {
+                ...toolContext,
+                source: 'voice_quick_command_verification',
+                toolPolicy: buildQuickCommandToolPolicy(routedToolPolicy, followUp.name),
+              },
+            });
+            quickToolRecords.push(followUpRecord);
+            if (!isDirectDesktopTool(followUp.name)) {
+              emitAgent("agent:tool_call", {
+                correlationId: followUpCorrelationId,
+                name: followUp.name,
+                arguments: followUp.arguments,
+                ...(followUpRecord.error
+                  ? { error: followUpRecord.error }
+                  : { result: formatToolResultForUi(followUpRecord.result) }),
+              });
+            }
+          }
+        }
       }
       const quickFinalized = finalizeLumiResponse({
         taskText: actionIntentText,
         responseText: quickResponseText,
-        toolRecords: quickToolRecord ? [quickToolRecord] : [],
+        toolRecords: quickToolRecords,
         source: 'voice',
         flow: turnFlow,
       });
       quickResponseText = quickFinalized.text;
       if (quickFinalized.notification) emitAgent('agent:notification', quickFinalized.notification);
       persistVoiceTakeoverExecution(quickResponseText, {
-        toolRecords: quickToolRecord ? [quickToolRecord] : [],
+        toolRecords: quickToolRecords,
         source: 'voice_quick_command',
         sourceInteractionId: `voice_quick_${Date.now()}`,
         finalizationBlocked: quickFinalized.blocked,
@@ -2903,7 +2958,7 @@ async function processVoiceInput(
         reason: quickFinalized.reason || '',
       });
       persistVoiceAssistantMessage(conversationTurn.conversation.id, quickResponseText, {
-        toolCalls: quickToolRecord ? [quickToolRecord] : undefined,
+        toolCalls: quickToolRecords.length ? quickToolRecords : undefined,
         cognitiveIntent: quickFinalized.blocked ? 'work_product_guard' : 'quick_command',
         llmWasCalled: false,
         source: 'quick_command',
@@ -2922,7 +2977,7 @@ async function processVoiceInput(
       emitAgent("agent:status", { status: "idle" });
       if (!quickFinalized.blocked) {
         persistVoiceLearning(responseText, {
-          toolRecords: quickToolRecord ? [quickToolRecord] : [],
+          toolRecords: quickToolRecords,
           sourceInteractionId: `voice_quick_${Date.now()}`,
           logLabel: 'voice quick command',
         });

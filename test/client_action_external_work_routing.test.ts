@@ -8,6 +8,7 @@ beforeAll(async () => {
 
 const TEAM_DESKTOP_TASK = '\u7ec4\u5efa\u56e2\u961f\uff0c\u5206\u4e24\u6b65\u6267\u884c\uff1a\u5148\u67e5\u770b\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\uff0c\u518d\u5217\u51fa\u684c\u9762\u6587\u4ef6\uff0c\u6700\u540e\u6309\u771f\u5b9e\u7ed3\u679c\u6c47\u62a5\u3002';
 const SINGLE_DESKTOP_TASK = '\u5217\u51fa\u684c\u9762\u6587\u4ef6';
+const WPS_MULTI_STEP_TASK = '\u4e3b\u7a0b\u5e8f\u5b9e\u673a\u9a8c\u6536\uff1a\u8bf7\u6253\u5f00 WPS\uff0c\u7136\u540e\u65b0\u5efa\u4e00\u4e2a Word \u6587\u6863\uff0c\u5728\u6b63\u6587\u5199\u5165\uff1aLumi\u4e3b\u7a0b\u5e8fWPS\u534f\u540c\u9a8c\u6536\u901a\u8fc7\u3002\u4e0d\u8981\u4fdd\u5b58\u3001\u4e0d\u8981\u53d1\u9001\u3002';
 
 describe('external work versus Lumi client actions', () => {
   it('does not treat desktop observation or team execution wording as a client surface action', async () => {
@@ -23,6 +24,7 @@ describe('external work versus Lumi client actions', () => {
       '\u67e5\u770b\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3',
       '\u5217\u51fa\u684c\u9762\u6587\u4ef6',
       '\u7ec4\u5efa\u56e2\u961f\u6267\u884c\u8fd9\u9879\u4efb\u52a1',
+      WPS_MULTI_STEP_TASK,
     ]) {
       expect(hasClientActionIntent(request), request).toBe(false);
       expect(hasClientActionOnlyIntent(request), request).toBe(false);
@@ -33,6 +35,13 @@ describe('external work versus Lumi client actions', () => {
     expect(trace.signals.clientActionIntent).toBe(false);
     expect(trace.signals.clientActionOnlyIntent).toBe(false);
     expect(trace.matchedRules.some(rule => rule.layer === 'client_action_only')).toBe(false);
+
+    const wpsTrace = traceToolIntentDecision(WPS_MULTI_STEP_TASK, 'command-center-chat', 'assistant');
+    expect(wpsTrace.signals.clientActionIntent).toBe(false);
+    expect(wpsTrace.signals.clientActionOnlyIntent).toBe(false);
+    expect(wpsTrace.matchedRules.some(rule => (
+      rule.layer === 'client_action' || rule.layer === 'client_action_only'
+    ))).toBe(false);
 
     for (const request of [
       TEAM_DESKTOP_TASK,

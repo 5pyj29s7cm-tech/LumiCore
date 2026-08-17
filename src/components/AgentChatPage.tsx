@@ -51,6 +51,7 @@ import {
   shouldDisplayAgentResponse,
 } from '@/lib/agentResponseDelivery';
 import { buildChatConversationScopeKey } from '@/lib/chatConversationScope';
+import { shouldReloadPersistedConversation } from '@/lib/conversationSync';
 import { useFocusThreads } from '@/hooks/useFocusThreads';
 import { CommandCenterPanel } from './CommandCenterPanel';
 import type { CommandCenterView } from './commandCenterTypes';
@@ -1685,6 +1686,8 @@ export function AgentChatPage({
       conversationId: string;
       agentId: string;
       source?: string;
+      requestId?: string;
+      originSocketId?: string;
       rolledOver?: boolean;
       previousConversationId?: string;
     }) => {
@@ -1699,8 +1702,12 @@ export function AgentChatPage({
         });
       }
       if (currentConversationId && data.conversationId !== currentConversationId && !isCurrentRollover) return;
-      const isExternalMessagingSync = /^(wechat|feishu|wecom)_bot$/.test(String(data.source || ''));
-      if (data.source === 'chat' || (textChatActiveRef.current && !isExternalMessagingSync)) return;
+      if (!shouldReloadPersistedConversation({
+        event: data,
+        currentConversationId,
+        currentSocketId: socket.id,
+        activeRequestId: activeChatRequestIdRef.current,
+      })) return;
       if (streamingMsgId.current) streamingMsgId.current = null;
       fetch(scopedConversationUrl(`/api/conversations/${data.conversationId}/messages?limit=${CHAT_HISTORY_LIMIT}`))
         .then(r => r.json())
@@ -2774,6 +2781,8 @@ export function AgentChatPage({
     <AnimatePresence>
       {isOpen && (
         <motion.div
+          data-lumi-rendered-surface={layout === 'command-center' ? 'command-center' : 'chat'}
+          data-lumi-command-center-view={layout === 'command-center' ? commandCenterView : undefined}
           initial={{ opacity: 0, y: 18, scale: 0.985 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 10, scale: 0.99 }}

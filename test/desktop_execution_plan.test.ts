@@ -13,6 +13,13 @@ describe('desktop execution plan', () => {
     expect(resolveDesktopApplicationIdentity('在 WPS 里新建文档').id).toBe('wps-writer');
     expect(resolveDesktopApplicationIdentity('打开 AutoCAD 图纸').id).toBe('autocad-desktop');
     expect(resolveDesktopApplicationIdentity('check the page in Chrome').id).toBe('chrome-browser');
+    const wpsWorkflow = '\u4e3b\u7a0b\u5e8f\u5b9e\u673a\u9a8c\u6536\u00b7WPS\u591a\u6b65\u95ed\u73af\uff1a\u8bf7\u6253\u5f00 WPS\uff0c\u7136\u540e\u65b0\u5efa\u4e00\u4e2a Word \u6587\u6863\u5e76\u5199\u5165\u6b63\u6587\u3002';
+    expect(resolveDesktopApplicationIdentity(wpsWorkflow).id).toBe('wps-writer');
+    expect(buildDesktopExecutionPlan({
+      text: wpsWorkflow,
+      lane: 'desktop_control',
+      taskId: 'wps-multi-step',
+    }).application.id).toBe('wps-writer');
     expect(resolveDesktopApplicationIdentity('查看微信消息').id).toBe('wechat-desktop');
   });
 
@@ -44,6 +51,23 @@ describe('desktop execution plan', () => {
     expect(desktopFingerprintMatchesApplication({ processName: 'acad.exe', title: 'Drawing1.dwg' }, cad)).toBe(true);
     const wps = resolveDesktopApplicationIdentity('WPS');
     expect(desktopFingerprintMatchesApplication({ processName: 'WINWORD.EXE', title: 'WPS migration.docx' }, wps)).toBe(false);
+  });
+
+  it('accepts a UWP-hosted calculator only when the host window title matches', () => {
+    const calculator = resolveDesktopApplicationIdentity('Windows 计算器');
+    expect(calculator.id).toBe('windows-calculator');
+    expect(desktopFingerprintMatchesRequestedTarget({
+      processName: 'ApplicationFrameHost.exe',
+      title: '计算器',
+    }, 'Windows 计算器')).toBe(true);
+    expect(desktopFingerprintMatchesRequestedTarget({
+      processName: 'ApplicationFrameHost.exe',
+      title: '照片',
+    }, 'Windows 计算器')).toBe(false);
+    expect(desktopFingerprintMatchesRequestedTarget({
+      processName: 'ApplicationFrameHost.exe',
+      title: '',
+    }, 'Windows 计算器')).toBe(false);
   });
 
   it('certifies an application only from complete runtime binary and window evidence', () => {

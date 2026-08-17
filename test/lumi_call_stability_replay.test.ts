@@ -12,6 +12,7 @@ import {
 } from '../server/conversation/action_ledger';
 import type { ConversationActionContinuationState } from '../server/cognition/action_continuation';
 import { ToolRegistry } from '../server/tools/registry';
+import { formatCnToolFailureDetail } from '../server/regions/packs/cn/voice_fast_path_messages';
 
 function actionState(overrides: Partial<ConversationActionContinuationState>): ConversationActionContinuationState {
   return {
@@ -36,6 +37,11 @@ function actionState(overrides: Partial<ConversationActionContinuationState>): C
 }
 
 describe('Lumi field-call stability replay', () => {
+  it('reports desktop relay timeouts as actionable Chinese instead of an opaque failure', () => {
+    expect(formatCnToolFailureDetail('Desktop tool "desktop_open" timed out (60s)'))
+      .toContain('窗口回执时超时');
+  });
+
   it('treats inbound sender language as read-only in both channel routes', () => {
     const variants = [
       '看一下张勇最近给我发什么消息了',
@@ -124,6 +130,42 @@ describe('Lumi field-call stability replay', () => {
     })).toContain('已完成');
   });
 
+  it('keeps a failed desktop launch queryable with the actionable provider blocker', () => {
+    const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
+    const conversation = { id: 'conv_notepad', userId: 'user_notepad', domain: 'personal', orgId: '' };
+    syncConversationActionTaskLedger(db, {
+      conversation,
+      state: actionState({
+        taskId: 'task_notepad',
+        status: 'blocked',
+        goal: '打开记事本，只打开，不输入任何内容，也不要打开替代软件。',
+        latestInstruction: '打开记事本，只打开，不输入任何内容，也不要打开替代软件。',
+        appTarget: '记事本',
+        unfinished: true,
+        latestBlocker: 'desktop_open: Qwen Vision returned 400 Access denied, please make sure your account is in good standing',
+        completionSource: undefined,
+        receipts: [{
+          id: 'notepad_receipt',
+          key: 'desktop_open:{"target":"记事本"}',
+          name: 'desktop_open',
+          arguments: { target: '记事本' },
+          result: '',
+          error: 'Qwen Vision returned 400 Access denied, please make sure your account is in good standing',
+          outcome: 'failure',
+          recordedAt: '2026-08-16T12:00:00.000Z',
+        }],
+      }),
+    });
+
+    const status = formatConversationActionLedgerStatus(db, {
+      conversationId: 'conv_notepad',
+      userId: 'user_notepad',
+      query: '刚才打开记事本成功了吗？只根据最近一次任务的真实回执回答。',
+    });
+    expect(status).toContain('视觉核验服务拒绝了请求');
+    expect(status).toContain('账号状态、余额和访问权限');
+  });
+
   it('includes the verified output path when a completed artifact status query asks for it', () => {
     const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
     const conversation = { id: 'conv_artifact', userId: 'user_artifact', domain: 'personal', orgId: '' };
@@ -158,6 +200,144 @@ describe('Lumi field-call stability replay', () => {
     expect(status).toContain(`产物路径：${outputPath}`);
   });
 
+  it('finds a completed named artifact through persistent receipts and reports the post-write readback', () => {
+    const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
+    const conversation = { id: 'conv_named_artifact', userId: 'user_named_artifact', domain: 'personal', orgId: '' };
+    const outputPath = 'C:\\Users\\Administrator\\Documents\\Lumi主程序实机验收_20260816.txt';
+    syncConversationActionTaskLedger(db, {
+      conversation,
+      state: actionState({
+        taskId: 'task_named_artifact',
+        goal: `创建并验证文件 ${outputPath}`,
+        latestInstruction: `创建并验证文件 ${outputPath}`,
+        sourcePaths: [outputPath],
+        status: 'completed',
+        unfinished: false,
+        completionSource: 'tool_receipt',
+        receipts: [
+          {
+            id: 'write_receipt',
+            key: 'write_receipt',
+            name: 'write_file',
+            arguments: { path: outputPath },
+            result: `File written: ${outputPath} (96 bytes)`,
+            error: '',
+            outcome: 'success',
+            terminalVerification: { status: 'verified', strategy: 'artifact', reason: 'non-empty file verified' },
+            recordedAt: '2026-08-16T00:00:00.000Z',
+          },
+          {
+            id: 'read_receipt',
+            key: 'read_receipt',
+            name: 'read_file',
+            arguments: { path: outputPath },
+            result: '版本：主程序\n状态：已回读\n代号：青穹-17',
+            receipt: {
+              kind: 'text_readback_metadata',
+              encoding: 'UTF-8',
+              lineCount: 3,
+            },
+            error: '',
+            outcome: 'success',
+            terminalVerification: { status: 'verified', strategy: 'terminal_receipt', reason: 'readback returned content' },
+            recordedAt: '2026-08-16T00:00:01.000Z',
+          },
+        ],
+      }),
+    });
+    syncConversationActionTaskLedger(db, {
+      conversation,
+      state: actionState({
+        taskId: 'task_bad_status_turn',
+        goal: `刚才那个 ${outputPath.split('\\').at(-1)} 文件任务现在是什么状态？`,
+        latestInstruction: 'status question',
+        status: 'blocked',
+        unfinished: true,
+        receipts: [],
+      }),
+    });
+
+    const query = '刚才那个 Lumi主程序实机验收_20260816.txt 文件任务现在是什么状态？请只根据持久任务账本和回执回答，告诉我路径、是否写入后回读、编码、行数以及最终状态，不要执行新工具。';
+    expect(findConversationActionTask(db, {
+      conversationId: conversation.id,
+      userId: conversation.userId,
+      query,
+    })?.id).toBe('task_named_artifact');
+    const status = formatConversationActionLedgerStatus(db, {
+      conversationId: conversation.id,
+      userId: conversation.userId,
+      query,
+    });
+    expect(status).toContain(`路径：${outputPath}`);
+    expect(status).toContain('写入：已验证（write_file）');
+    expect(status).toContain('写入后回读：是（read_file）');
+    expect(status).toContain('编码：UTF-8');
+    expect(status).toContain('总行数：3');
+    expect(status).toContain('最终状态：已完成（持久回执已验证）');
+  });
+
+  it('separates source reading from target readback in a three-step artifact status', () => {
+    const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
+    const conversation = { id: 'conv_three_step_artifact', userId: 'user_three_step_artifact', domain: 'personal', orgId: '' };
+    const sourcePath = 'C:\\Users\\Administrator\\Documents\\source.txt';
+    const outputPath = 'C:\\Users\\Administrator\\Documents\\report.md';
+    syncConversationActionTaskLedger(db, {
+      conversation,
+      state: actionState({
+        taskId: 'task_three_step_artifact',
+        goal: `\u8bfb\u53d6 ${sourcePath}\uff0c\u521b\u5efa ${outputPath}\uff0c\u518d\u56de\u8bfb\u3002`,
+        latestInstruction: `\u8bfb\u53d6 ${sourcePath}\uff0c\u521b\u5efa ${outputPath}\uff0c\u518d\u56de\u8bfb\u3002`,
+        sourcePaths: [sourcePath, outputPath],
+        status: 'completed',
+        unfinished: false,
+        completionSource: 'tool_receipt',
+        receipts: [{
+          id: 'source_read',
+          key: 'source_read',
+          name: 'read_file',
+          arguments: { path: sourcePath },
+          result: '\u9a8c\u6536\u5bf9\u8c61\uff1aLumi \u4e3b\u7a0b\u5e8f',
+          error: '',
+          outcome: 'success',
+          terminalVerification: { status: 'verified', strategy: 'terminal_receipt', reason: 'source returned content' },
+          recordedAt: '2026-08-17T00:00:00.000Z',
+        }, {
+          id: 'target_write',
+          key: 'target_write',
+          name: 'write_file',
+          arguments: { path: outputPath },
+          result: `File written: ${outputPath}`,
+          error: '',
+          outcome: 'success',
+          terminalVerification: { status: 'verified', strategy: 'artifact', reason: 'artifact exists' },
+          recordedAt: '2026-08-17T00:00:01.000Z',
+        }, {
+          id: 'target_readback',
+          key: 'target_readback',
+          name: 'read_file',
+          arguments: { path: outputPath },
+          result: '# \u62a5\u544a\n\u9a8c\u6536\u5bf9\u8c61\uff1aLumi \u4e3b\u7a0b\u5e8f',
+          receipt: { kind: 'text_readback_metadata', encoding: 'UTF-8', lineCount: 2 },
+          error: '',
+          outcome: 'success',
+          terminalVerification: { status: 'verified', strategy: 'terminal_receipt', reason: 'target readback returned content' },
+          recordedAt: '2026-08-17T00:00:02.000Z',
+        }],
+      }),
+    });
+
+    const status = formatConversationActionLedgerStatus(db, {
+      conversationId: conversation.id,
+      userId: conversation.userId,
+      query: '\u8bf7\u5217\u51fa\u6e90\u6587\u4ef6\u8bfb\u53d6\u3001\u76ee\u6807\u5199\u5165\u3001\u76ee\u6807\u56de\u8bfb\u4e09\u6b65\u72b6\u6001\uff0c\u5e76\u62a5\u544a\u7f16\u7801\u548c\u603b\u884c\u6570\u3002',
+    });
+    expect(status).toContain(`\u6e90\u6587\u4ef6\u8bfb\u53d6\uff1a\u5df2\u9a8c\u8bc1\uff08read_file\uff0c${sourcePath}\uff09`);
+    expect(status).toContain('\u5199\u5165\uff1a\u5df2\u9a8c\u8bc1\uff08write_file\uff09');
+    expect(status).toContain('\u5199\u5165\u540e\u56de\u8bfb\uff1a\u662f\uff08read_file\uff09');
+    expect(status).toContain('\u7f16\u7801\uff1aUTF-8');
+    expect(status).toContain('\u603b\u884c\u6570\uff1a2');
+  });
+
   it('answers a recent desktop-open receipt question with the concrete target', () => {
     const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
     const conversation = { id: 'conv_open', userId: 'user_open', domain: 'personal', orgId: '' };
@@ -187,6 +367,243 @@ describe('Lumi field-call stability replay', () => {
       userId: conversation.userId,
       query: '\u521a\u624d\u6253\u5f00\u4e86\u4ec0\u4e48\uff1f\u53ea\u6839\u636e\u56de\u6267\u56de\u7b54\u3002',
     })).toBe('\u521a\u624d\u6253\u5f00\u7684\u662f\u8bb0\u4e8b\u672c\uff0c\u5df2\u901a\u8fc7\u7a97\u53e3\u56de\u6267\u786e\u8ba4\u3002');
+  });
+
+  it('selects a named desktop task ahead of a newer client navigation and reports verified window identity', () => {
+    const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
+    const conversation = { id: 'conv_named_desktop', userId: 'user_named_desktop', domain: 'personal', orgId: '' };
+    syncConversationActionTaskLedger(db, {
+      conversation,
+      state: actionState({
+        taskId: 'task_calculator',
+        goal: '\u6253\u5f00 Windows \u8ba1\u7b97\u5668\uff0c\u5e76\u6838\u9a8c\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\u3002',
+        latestInstruction: '\u6253\u5f00 Windows \u8ba1\u7b97\u5668\uff0c\u5e76\u6838\u9a8c\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\u3002',
+        appTarget: 'Windows \u8ba1\u7b97\u5668',
+        receipts: [
+          {
+            id: 'calculator_open',
+            key: 'desktop_open:calculator',
+            name: 'desktop_open',
+            arguments: { target: '\u8ba1\u7b97\u5668' },
+            result: JSON.stringify({
+              ok: true,
+              status: 'verified',
+              targetMatched: true,
+              actualTarget: { processName: 'ApplicationFrameHost.exe', title: '\u8ba1\u7b97\u5668' },
+            }),
+            error: '',
+            outcome: 'success',
+            terminalVerification: { status: 'verified', strategy: 'state_diff', reason: 'target matched' },
+            recordedAt: '2026-08-17T04:39:00.000Z',
+          },
+          {
+            id: 'calculator_active_window',
+            key: 'desktop_active_window:{}',
+            name: 'desktop_active_window',
+            arguments: {},
+            result: JSON.stringify({ process_name: 'ApplicationFrameHost.exe', title: '\u8ba1\u7b97\u5668' }),
+            error: '',
+            outcome: 'success',
+            terminalVerification: { status: 'verified', strategy: 'terminal_receipt', reason: 'active window returned' },
+            recordedAt: '2026-08-17T04:39:01.000Z',
+          },
+        ],
+      }),
+    });
+    syncConversationActionTaskLedger(db, {
+      conversation,
+      state: actionState({
+        taskId: 'task_command_center',
+        goal: '\u6253\u5f00 Lumi \u6307\u6325\u4e2d\u5fc3\u3002',
+        latestInstruction: '\u6253\u5f00 Lumi \u6307\u6325\u4e2d\u5fc3\u3002',
+        appTarget: 'command-center',
+        receipts: [{
+          id: 'command_center_open',
+          key: 'client_action:command-center',
+          name: 'client_action',
+          arguments: { action: 'open_command_center' },
+          result: JSON.stringify({ ok: true, verification: { status: 'verified' } }),
+          error: '',
+          outcome: 'success',
+          terminalVerification: { status: 'verified', strategy: 'state_diff', reason: 'surface rendered' },
+          recordedAt: '2026-08-17T04:41:00.000Z',
+        }],
+      }),
+    });
+
+    const query = '\u6253\u5f00 Windows \u8ba1\u7b97\u5668\u7684\u4efb\u52a1\u6700\u7ec8\u72b6\u6001\u662f\u4ec0\u4e48\uff1f\u8bf7\u544a\u8bc9\u6211\u51c6\u786e\u76ee\u6807\u3001\u5b9e\u9645\u8fdb\u7a0b\u3001\u5b9e\u9645\u7a97\u53e3\u6807\u9898\u3001\u662f\u5426\u7cbe\u786e\u5339\u914d\u548c\u6700\u7ec8\u72b6\u6001\u3002';
+    expect(findConversationActionTask(db, {
+      conversationId: conversation.id,
+      userId: conversation.userId,
+      query,
+    })?.id).toBe('task_calculator');
+    const status = formatConversationActionLedgerStatus(db, {
+      conversationId: conversation.id,
+      userId: conversation.userId,
+      query,
+    });
+    expect(status).toContain('\u51c6\u786e\u76ee\u6807\uff1aWindows \u8ba1\u7b97\u5668');
+    expect(status).toContain('\u5b9e\u9645\u8fdb\u7a0b\uff1aApplicationFrameHost.exe');
+    expect(status).toContain('\u5b9e\u9645\u7a97\u53e3\u6807\u9898\uff1a\u8ba1\u7b97\u5668');
+    expect(status).toContain('\u7cbe\u786e\u5339\u914d\uff1a\u662f');
+    expect(status).toContain('\u6700\u7ec8\u72b6\u6001\uff1a\u5df2\u5b8c\u6210');
+  });
+
+  it('selects a named completed client surface ahead of a newer navigation task', () => {
+    const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
+    const conversation = { id: 'conv_named_client_surface', userId: 'user_named_client_surface', domain: 'personal', orgId: '' };
+    syncConversationActionTaskLedger(db, {
+      conversation,
+      state: actionState({
+        taskId: 'task_home',
+        goal: '返回 Lumi 个人主页。',
+        latestInstruction: '返回 Lumi 个人主页。',
+        appTarget: 'home',
+        status: 'completed',
+        unfinished: false,
+        completionSource: 'tool_receipt',
+        receipts: [{
+          id: 'home_open',
+          key: 'client_action:focus_home',
+          name: 'client_action',
+          arguments: { action: 'focus_home' },
+          result: JSON.stringify({
+            ok: true,
+            action: 'focus_home',
+            target: 'home',
+            verification: { status: 'verified' },
+          }),
+          error: '',
+          outcome: 'success',
+          terminalVerification: { status: 'verified', strategy: 'state_diff', reason: 'home surface rendered' },
+          recordedAt: '2026-08-17T09:00:00.000Z',
+        }],
+      }),
+    });
+    syncConversationActionTaskLedger(db, {
+      conversation,
+      state: actionState({
+        taskId: 'task_newer_command_center',
+        goal: '打开 Lumi 指挥中心。',
+        latestInstruction: '打开 Lumi 指挥中心。',
+        appTarget: 'command-center',
+        status: 'completed',
+        unfinished: false,
+        completionSource: 'tool_receipt',
+        receipts: [{
+          id: 'command_center_open_newer',
+          key: 'client_action:open_command_center',
+          name: 'client_action',
+          arguments: { action: 'open_command_center' },
+          result: JSON.stringify({
+            ok: true,
+            action: 'open_command_center',
+            target: 'command-center',
+            verification: {
+              status: 'verified',
+              before: { activeTab: 'home', openSurfaces: ['home'] },
+              after: { activeTab: 'command-center', openSurfaces: ['command-center'] },
+            },
+          }),
+          error: '',
+          outcome: 'success',
+          terminalVerification: { status: 'verified', strategy: 'state_diff', reason: 'command center rendered' },
+          recordedAt: '2026-08-17T09:01:00.000Z',
+        }],
+      }),
+    });
+
+    const query = '刚才“返回 Lumi 个人主页”的任务最终状态是什么？请只根据持久任务账本和真实回执回答，说明执行动作、目标页面和验证状态。不要执行任何新工具。';
+    expect(findConversationActionTask(db, {
+      conversationId: conversation.id,
+      userId: conversation.userId,
+      query,
+    })?.id).toBe('task_home');
+    expect(formatConversationActionLedgerStatus(db, {
+      conversationId: conversation.id,
+      userId: conversation.userId,
+      query,
+    })).toBe([
+      '执行动作：focus_home',
+      '目标页面：home',
+      '验证状态：verified',
+      '最终状态：已完成（持久回执已验证）',
+    ].join('\n'));
+  });
+
+  it('reports verified WPS document, body readback, and unsaved state from the durable receipt', () => {
+    const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
+    const conversation = { id: 'conv_wps', userId: 'user_wps', domain: 'personal', orgId: '' };
+    syncConversationActionTaskLedger(db, {
+      conversation,
+      state: actionState({
+        taskId: 'task_wps',
+        status: 'cancelled',
+        goal: '\u6253\u5f00 WPS\uff0c\u65b0\u5efa Word \u6587\u6863\u5e76\u5199\u5165\u9a8c\u6536\u6b63\u6587',
+        latestInstruction: '\u6253\u5f00 WPS\uff0c\u65b0\u5efa Word \u6587\u6863\u5e76\u5199\u5165\u9a8c\u6536\u6b63\u6587',
+        appTarget: 'WPS',
+        receipts: [{
+          id: 'wps_receipt',
+          key: 'wps_create_document_with_text:verified',
+          name: 'wps_create_document_with_text',
+          arguments: { text: 'Lumi WPS' },
+          result: JSON.stringify({
+            ok: true,
+            status: 'verified',
+            automation: 'KWPS.Application',
+            processName: 'wps.exe',
+            processId: 17472,
+            documentCreated: true,
+            documentName: '\u6587\u5b57\u6587\u7a3f1',
+            windowTitle: '\u6587\u5b57\u6587\u7a3f1 - WPS Office',
+            exactTextMatch: true,
+            charactersRequested: 8,
+            charactersReadBack: 8,
+            saved: false,
+            savePath: '',
+          }),
+          error: '',
+          outcome: 'success',
+          terminalVerification: { status: 'verified', strategy: 'state_diff', reason: 'exact body readback' },
+          recordedAt: '2026-08-17T09:33:00.000Z',
+        }],
+      }),
+    });
+    syncConversationActionTaskLedger(db, {
+      conversation,
+      state: actionState({
+        taskId: 'task_newer_command_center',
+        goal: '\u8bf7\u6253\u5f00 Lumi \u6307\u6325\u4e2d\u5fc3\uff0c\u53ea\u6267\u884c\u5ba2\u6237\u7aef\u5bfc\u822a\u3002',
+        latestInstruction: '\u8bf7\u6253\u5f00 Lumi \u6307\u6325\u4e2d\u5fc3\uff0c\u53ea\u6267\u884c\u5ba2\u6237\u7aef\u5bfc\u822a\u3002',
+        appTarget: 'command-center',
+        updatedAt: '2026-08-17T09:34:00.000Z',
+        receipts: [{
+          id: 'command_center_receipt',
+          key: 'client_action:command-center',
+          name: 'client_action',
+          arguments: { action: 'open_command_center' },
+          result: JSON.stringify({ ok: true, status: 'verified', activeTab: 'command-center' }),
+          error: '',
+          outcome: 'success',
+          terminalVerification: { status: 'verified', strategy: 'state_diff', reason: 'command center visible' },
+          recordedAt: '2026-08-17T09:34:00.000Z',
+        }],
+      }),
+    });
+
+    const query = '\u6253\u5f00 WPS \u7684\u4efb\u52a1\u6700\u7ec8\u72b6\u6001\u662f\u4ec0\u4e48\uff1f\u8bf4\u660e\u6587\u6863\u3001\u6b63\u6587\u9a8c\u8bc1\u548c\u4fdd\u5b58\u72b6\u6001\u3002';
+    expect(formatConversationActionLedgerStatus(db, {
+      conversationId: conversation.id,
+      userId: conversation.userId,
+      query,
+    })).toBe([
+      '\u6587\u6863\uff1a\u6587\u5b57\u6587\u7a3f1',
+      '\u7a97\u53e3\uff1a\u6587\u5b57\u6587\u7a3f1 - WPS Office',
+      '\u8fdb\u7a0b\uff1awps.exe (PID 17472)',
+      '\u6b63\u6587\u9a8c\u8bc1\uff1a\u5df2\u9a8c\u8bc1\uff08\u5199\u5165 8 \u5b57\u7b26\uff0c\u56de\u8bfb 8 \u5b57\u7b26\uff09',
+      '\u4fdd\u5b58\u72b6\u6001\uff1a\u672a\u4fdd\u5b58',
+      '\u6700\u7ec8\u72b6\u6001\uff1a\u5df2\u5b8c\u6210\uff08\u6301\u4e45\u56de\u6267\u5df2\u9a8c\u8bc1\uff09',
+    ].join('\n'));
   });
 
   it('links a design follow-up to the CAD task and inherits its artifact context', () => {
