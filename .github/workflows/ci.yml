@@ -1,5 +1,8 @@
 name: LumiOS CI
 
+permissions:
+  contents: read
+
 on:
   pull_request:
   push:
@@ -27,7 +30,7 @@ jobs:
         run: npm test -- --reporter=json --outputFile=vitest-results.json
       - name: Enforce test inventory
         run: npm run test:inventory -- vitest-results.json
-      - name: Build desktop, web and mobile frontends
+      - name: Build desktop and mobile frontends
         run: npm run build:frontends
       - name: Enforce desktop initial-load budget
         env:
@@ -75,28 +78,3 @@ jobs:
       - name: Cargo release check
         working-directory: src-tauri
         run: cargo check --release --locked
-
-  internal-diagnostic:
-    name: Internal diagnostic package
-    if: github.event_name != 'pull_request'
-    needs: [quality, rust-check]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-      - name: Build internal diagnostic resources
-        env:
-          LUMI_RELEASE_CHANNEL: internal
-        run: npm run build:desktop
-      - uses: actions/upload-artifact@v7
-        with:
-          name: lumi-os-internal-diagnostic-${{ github.sha }}
-          path: |
-            dist/desktop/**
-            desktop-resources/dist-server/**
-          if-no-files-found: error
-          retention-days: 7

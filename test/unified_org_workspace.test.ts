@@ -26,16 +26,13 @@ describe('unified organization workspace boundary', () => {
     expect(compose).not.toContain('LUMI_ROLE');
   });
 
-  it('keeps the organization portal in the main desktop and web clients', () => {
+  it('keeps the organization portal in the main desktop client', () => {
     const desktop = read('src/entries/desktop.tsx');
-    const web = read('src/entries/web.tsx');
     const portal = read('src/components/OrgPortal.tsx');
     const hub = read('src/components/org/OrgHub.tsx');
 
     expect(desktop).toContain("case 'org'");
     expect(desktop).toContain('<OrgPortal />');
-    expect(web).toContain("case 'org'");
-    expect(web).toContain('<OrgPortal />');
     expect(portal).toContain("await switchDomain('work')");
     expect(portal).toContain('<OrgHub />');
     expect(hub).toContain("switchDomain('personal')");

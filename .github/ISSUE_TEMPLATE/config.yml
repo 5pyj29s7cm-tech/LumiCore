@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: mailto:3565286431@qq.com
+    about: 请私下报告安全漏洞，不要公开密钥或用户数据。

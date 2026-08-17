@@ -1,0 +1,30 @@
+name: Feature request
+description: 建议可复用的产品或工程能力
+title: "[Feature]: "
+labels: [enhancement, needs-triage]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 用户问题
+      description: 描述真实工作场景和当前阻碍。
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: 期望结果与验收方式
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: 适用范围
+      options: [主程序通用能力, 行业版本候选能力, 工具或技能, 文档与开发体验]
+    validations:
+      required: true
+  - type: textarea
+    id: risk
+    attributes:
+      label: 外部副作用与风险
+      description: 是否涉及发送、发布、付款、桌面控制、账号权限或第三方平台？

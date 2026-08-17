@@ -81,11 +81,9 @@ describe('frontend dynamic output path audit', () => {
     const displayGated = [
       'src/components/AgentChatPage.tsx',
       'src/components/ChatPanel.tsx',
-      'src/components/FloatingAgent.tsx',
       'src/components/UnifiedAgent.tsx',
       'src/components/Sanctuary.tsx',
       'src/components/org/CentralLumiChat.tsx',
-      'src/components/ProductDetailPage.tsx',
       'src/components/ProactiveNotifications.tsx',
       'src/hooks/useVoiceCall.ts',
     ];
@@ -105,7 +103,6 @@ describe('frontend dynamic output path audit', () => {
 
   it('does not keep a browser system-voice fallback in chat surfaces', () => {
     for (const relativePath of [
-      'src/components/FloatingAgent.tsx',
       'src/components/UnifiedAgent.tsx',
     ]) {
       const source = read(relativePath);
