@@ -660,6 +660,21 @@ export function AgentChatPage({
   const [optimizationProgress, setOptimizationProgress] = useState(0);
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
   const pendingAttachmentsRef = useRef<ChatAttachment[]>([]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const frame = requestAnimationFrame(() => messageInputRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const focusCommandInput = () => {
+      requestAnimationFrame(() => messageInputRef.current?.focus());
+    };
+    window.addEventListener('lumi:focus-command-input', focusCommandInput);
+    return () => window.removeEventListener('lumi:focus-command-input', focusCommandInput);
+  }, [isOpen]);
   const [conversationAttachments, setConversationAttachments] = useState<ChatAttachment[]>([]);
   const conversationAttachmentsRef = useRef<ChatAttachment[]>([]);
   const attachmentConversationIdRef = useRef('');

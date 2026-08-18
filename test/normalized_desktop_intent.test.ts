@@ -8,6 +8,7 @@ import {
   buildDeterministicWpsDocumentCommand,
   buildDeterministicTextArtifactCommand,
   buildDeterministicWorkTaskCreateCommand,
+  buildDeterministicWorkTaskStatusCommand,
 } from '../server/cognition/quick_commands';
 
 describe('normalized desktop intent priority', () => {
@@ -49,6 +50,29 @@ describe('normalized desktop intent priority', () => {
     expect(response).toContain('\u4efb\u52a1\u7f16\u53f7\uff1atakeover_123');
     expect(response).toContain('\u5df2\u521b\u5efa\u5e76\u6301\u4e45\u5316');
     expect(response).toContain('\u9700\u8981\u786e\u8ba4\uff1a\u7b49\u5f85\u7528\u6237\u786e\u8ba4\u540e\u518d\u5916\u53d1');
+  });
+
+  it('queries an explicitly named persistent task instead of the older conversation action ledger', () => {
+    const text = '主程序任务状态验收：请查询任务“青穹客户跟进闭环”的持久状态，只根据任务账本回答任务编号、当前状态、当前步骤、后续步骤和确认边界，不要执行任何外部动作。';
+    const command = buildDeterministicWorkTaskStatusCommand(text);
+    expect(command?.toolCall).toEqual({
+      name: 'work_takeover_task_list',
+      arguments: { limit: 200 },
+    });
+    const response = command?.formatToolResult?.(JSON.stringify({
+      tasks: [{
+        id: 'wt_task_acceptance',
+        title: '青穹客户跟进闭环',
+        status: 'in_progress',
+        currentActionIndex: 0,
+        nextActions: ['整理客户需求', '生成跟进草稿', '等待用户确认后再外发'],
+        confirmationRequired: ['等待用户确认后再外发'],
+      }],
+    }));
+    expect(response).toContain('任务编号：wt_task_acceptance');
+    expect(response).toContain('当前步骤：整理客户需求');
+    expect(response).toContain('后续步骤：生成跟进草稿→等待用户确认后再外发');
+    expect(response).toContain('确认边界：等待用户确认后再外发');
   });
 
   it('builds an exact write then readback chain for enumerated local text lines', () => {

@@ -121,6 +121,7 @@ import {
   buildDeterministicLocalDesktopNavigationCommand,
   buildDeterministicTextArtifactCommand,
   buildDeterministicWorkTaskCreateCommand,
+  buildDeterministicWorkTaskStatusCommand,
   buildDeterministicWpsDocumentCommand,
   buildQuickCommandToolPolicy,
   matchQuickCommand,
@@ -1157,6 +1158,7 @@ export function registerChatHandler(
     ) : null;
     if (
       existingSession
+      && !buildDeterministicWorkTaskStatusCommand(visibleUserText)
       && classifyConversationActionFollowupIntent(
         visibleUserText,
         activeConversationForStatus?.actionContinuationState,
@@ -1656,6 +1658,7 @@ export function registerChatHandler(
         visibleUserText,
         conversation?.actionContinuationState,
       );
+      const deterministicWorkTaskStatus = buildDeterministicWorkTaskStatusCommand(visibleUserText);
       if (conversationId && isConversationExecutionFactQuestion(visibleUserText)) {
         const factText = formatConversationExecutionFactAnswer(getConversationExecutionFacts({
           conversationId,
@@ -1685,7 +1688,7 @@ export function registerChatHandler(
         releaseChatSession();
         return;
       }
-      if (conversationId && actionFollowupIntent === 'status') {
+      if (conversationId && actionFollowupIntent === 'status' && !deterministicWorkTaskStatus) {
         const statusText = getConversationActionStatus(conversationId, uid, visibleUserText, conversation?.actionContinuationState);
         emitAgent("agent:status", { status: "responding", agentName: personality.name });
         emitAgent("agent:response", { text: statusText, agentName: personality.name, finalized: true, blocked: false, reason: '' });
@@ -2535,7 +2538,7 @@ export function registerChatHandler(
           || executionPipeline.normalizedIntent.kind === 'status_query';
         const quickResult = capabilityMetaResponse
           ? { matched: true, responseText: capabilityMetaResponse }
-          : deterministicClientNavigation || deterministicExternalCommitConfirmation || deterministicKnowledgeInspection || deterministicWorkTaskCreate || deterministicTextArtifact || deterministicWpsDocument || deterministicLocalDesktopNavigation || (
+          : deterministicClientNavigation || deterministicExternalCommitConfirmation || deterministicKnowledgeInspection || deterministicWorkTaskStatus || deterministicWorkTaskCreate || deterministicTextArtifact || deterministicWpsDocument || deterministicLocalDesktopNavigation || (
             shouldRunLegacyDirectExecution() && !nonExecutingNormalizedIntent
               ? await matchQuickCommand(
                   continuationOpenTarget ? buildInternalOpenCommand(visibleUserText, continuationOpenTarget) : text,

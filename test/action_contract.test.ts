@@ -22,6 +22,12 @@ import {
 } from '../server/cognition/action_contract';
 
 describe('Lumi action contract', () => {
+  it('keeps a named persistent-task ledger status query out of runtime task control', () => {
+    const text = '\u4e3b\u7a0b\u5e8f\u4efb\u52a1\u72b6\u6001\u9a8c\u6536\uff1a\u8bf7\u67e5\u8be2\u4efb\u52a1\u201c\u9752\u7a79\u5ba2\u6237\u8ddf\u8fdb\u95ed\u73af\u201d\u7684\u6301\u4e45\u72b6\u6001\uff0c\u53ea\u6839\u636e\u4efb\u52a1\u8d26\u672c\u56de\u7b54\u4efb\u52a1\u7f16\u53f7\u3001\u5f53\u524d\u72b6\u6001\u3001\u5f53\u524d\u6b65\u9aa4\u3001\u540e\u7eed\u6b65\u9aa4\u548c\u786e\u8ba4\u8fb9\u754c\uff0c\u4e0d\u8981\u6267\u884c\u4efb\u4f55\u5916\u90e8\u52a8\u4f5c\u3002';
+
+    expect(buildActionContract(text)).toMatchObject({ applies: false, kind: 'none' });
+  });
+
   it('recognizes an explicit arrow-ordered write then readback requirement', () => {
     expect(requiresArtifactPostWriteReadback(
       '\u5fc5\u987b\u4e25\u683c\u6309\u201c\u8bfb\u53d6\u6e90\u6587\u4ef6\u2192\u5199\u5165\u76ee\u6807\u6587\u4ef6\u2192\u91cd\u65b0\u8bfb\u53d6\u76ee\u6807\u6587\u4ef6\u201d\u7684\u987a\u5e8f\u6267\u884c\u3002',

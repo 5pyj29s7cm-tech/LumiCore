@@ -554,6 +554,13 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
   const actionContract = buildActionContract(task);
   const hasDomainCompletionEvidence = actionContract.applies
     && hasCoreActionEvidence(actionContract, toolCalls, task);
+  // Persistent-task creation has its own receipt contract. Once that exact
+  // contract is satisfied, do not run the response through generic
+  // file/desktop heuristics: wording such as "created and persisted" is about
+  // the internal task ledger, not a file artifact or desktop mutation.
+  if (actionContract.kind === 'work_task' && hasDomainCompletionEvidence) {
+    return { text: response, blocked: false };
+  }
   const unverifiedReceipts = hasDomainCompletionEvidence
     ? []
     : unverifiedCompletionReceipts(claimText, successful);

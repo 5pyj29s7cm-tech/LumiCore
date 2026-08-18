@@ -102,6 +102,43 @@ describe('completion guard desktop action handling', () => {
 });
 
 describe('completion guard generic execution claims', () => {
+  it('accepts a verified persistent-task creation receipt before generic desktop or file heuristics', () => {
+    const task = '请创建一个可跨重启继续的持久任务。标题“青穹客户跟进闭环”，类别 customer，来源 chat。现在只创建并持久化任务，不要发送任何消息。';
+    const response = [
+      '任务编号：wt_task_acceptance',
+      '状态：已创建并持久化（in_progress）',
+      '下一步：整理客户需求→生成跟进草稿→等待用户确认后再外发',
+      '需要确认：等待用户确认后再外发',
+    ].join('\n');
+    const result = guardCompletionClaims({
+      task,
+      response,
+      toolCalls: [{
+        name: 'work_takeover_task_create',
+        arguments: { title: '青穹客户跟进闭环', category: 'customer', source: 'chat' },
+        result: JSON.stringify({
+          ok: true,
+          status: 'created',
+          persisted: true,
+          task: {
+            id: 'wt_task_acceptance',
+            status: 'in_progress',
+            nextActions: ['整理客户需求', '生成跟进草稿', '等待用户确认后再外发'],
+            confirmationRequired: ['等待用户确认后再外发'],
+          },
+        }),
+        terminalVerification: {
+          status: 'verified',
+          strategy: 'terminal_receipt',
+          reason: 'Persistent task receipt verified.',
+        },
+      }],
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(response);
+  });
+
   const stateDiffCapability = {
     capabilityId: 'desktop.open',
     lane: 'desktop' as const,

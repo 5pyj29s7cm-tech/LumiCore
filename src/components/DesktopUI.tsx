@@ -1722,6 +1722,9 @@ export function DesktopUI({
     setChatLoaded(true);
     setChatOpen(true);
     setActiveTab('command-center');
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('lumi:focus-command-input'));
+    }, 80);
   }, [setActiveTab]);
 
   const openProactiveChat = useCallback((detail: ProactiveChatDetail) => {
@@ -3522,6 +3525,20 @@ export function DesktopUI({
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'Enter') {
+        e.preventDefault();
+        setIsSearchOpen(false);
+        setIsControlCenterOpen(false);
+        setIsNotificationPanelOpen(false);
+        openCommandCenter('office');
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'v') {
+        e.preventDefault();
+        if (callStateRef.current === 'idle') startStandardVoiceCall();
+        else endCall();
+        return;
+      }
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
         setIsSearchOpen(true);
@@ -3563,7 +3580,7 @@ export function DesktopUI({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [endCall, getVoiceScopeOptions, interrupt, isControlCenterOpen, isSearchOpen, isWallpaperMode, selectedVoiceId, startCall, toggleWallpaperMode]);
+  }, [endCall, getVoiceScopeOptions, interrupt, isControlCenterOpen, isSearchOpen, isWallpaperMode, openCommandCenter, selectedVoiceId, startCall, startStandardVoiceCall, toggleWallpaperMode]);
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);

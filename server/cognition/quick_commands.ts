@@ -192,6 +192,53 @@ export function buildDeterministicWorkTaskCreateCommand(text: string): QuickComm
   };
 }
 
+/**
+ * Resolve an explicitly named persistent-task status question from the
+ * takeover ledger. This must stay separate from the conversation action
+ * ledger: the latter tracks the most recent foreground execution and can
+ * otherwise answer with an unrelated older desktop/navigation receipt.
+ */
+export function buildDeterministicWorkTaskStatusCommand(text: string): QuickCommandResult | null {
+  const value = String(text || '').trim();
+  if (!/(?:\u6301\u4e45\u72b6\u6001|\u4efb\u52a1\u8d26\u672c|\u6301\u4e45\u4efb\u52a1).{0,40}(?:\u72b6\u6001|\u8fdb\u5ea6|\u67e5\u8be2)|(?:\u67e5\u8be2|\u67e5\u770b).{0,40}(?:\u6301\u4e45\u72b6\u6001|\u4efb\u52a1\u8d26\u672c)|\b(?:persistent task|task ledger)\b.{0,40}\b(?:status|progress|query)\b/iu.test(value)) {
+    return null;
+  }
+  if (/(?:\u521b\u5efa|\u65b0\u5efa|\u6dfb\u52a0).{0,12}(?:\u6301\u4e45)?\u4efb\u52a1/iu.test(value)) return null;
+  const title = value.match(/(?:\u4efb\u52a1|task)\s*[\u201c"']([^\u201d"']{1,140})[\u201d"']/iu)?.[1]?.trim();
+  if (!title) return null;
+
+  return {
+    responseText: '\u6b63\u5728\u67e5\u8be2\u6301\u4e45\u4efb\u52a1\u8d26\u672c\u3002',
+    matched: true,
+    toolCall: {
+      name: 'work_takeover_task_list',
+      arguments: { limit: 200 },
+    },
+    formatToolResult: (raw, error) => {
+      if (error) return `\u4efb\u52a1\u72b6\u6001\u67e5\u8be2\u5931\u8d25\uff1a${error}`;
+      let data: Record<string, any> = {};
+      try { data = JSON.parse(String(raw || '{}')); } catch {}
+      const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+      const task = tasks.find((candidate: any) => String(candidate?.title || '').trim() === title);
+      if (!task) return `\u4efb\u52a1\u8d26\u672c\u4e2d\u672a\u627e\u5230\u201c${title}\u201d\u3002`;
+      const actions = Array.isArray(task.nextActions) ? task.nextActions.map(String).filter(Boolean) : [];
+      const index = Math.max(0, Math.min(Number(task.currentActionIndex) || 0, Math.max(0, actions.length - 1)));
+      const current = actions[index] || '\u5f85\u8865\u5145';
+      const remaining = actions.slice(index + 1);
+      const confirmations = Array.isArray(task.confirmationRequired)
+        ? task.confirmationRequired.map(String).filter(Boolean)
+        : [];
+      return [
+        `\u4efb\u52a1\u7f16\u53f7\uff1a${String(task.id || '\u56de\u6267\u672a\u8bb0\u5f55')}`,
+        `\u5f53\u524d\u72b6\u6001\uff1a${String(task.status || '\u672a\u77e5')}`,
+        `\u5f53\u524d\u6b65\u9aa4\uff1a${current}`,
+        `\u540e\u7eed\u6b65\u9aa4\uff1a${remaining.length ? remaining.join('\u2192') : '\u65e0'}`,
+        `\u786e\u8ba4\u8fb9\u754c\uff1a${confirmations.length ? confirmations.join('\uff1b') : '\u65e0'}`,
+      ].join('\n');
+    },
+  };
+}
+
 interface QuickPattern {
   patterns: RegExp[];
   handler: (match: RegExpMatchArray, userId: string, options?: QuickCommandOptions) => QuickCommandResult | Promise<QuickCommandResult>;

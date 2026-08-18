@@ -104,6 +104,15 @@ function compact(value: unknown): string {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
+function isNamedPersistentWorkTaskStatusQuery(text: string): boolean {
+  const value = compact(text);
+  const namesExactTask = /(?:\u4efb\u52a1|task)\s*[\u201c"']([^\u201d"']{1,140})[\u201d"']/iu.test(value);
+  const namesPersistentLedger = /(?:\u6301\u4e45\u72b6\u6001|\u4efb\u52a1\u8d26\u672c|\u6301\u4e45\u4efb\u52a1)|\b(?:persistent task|task ledger)\b/iu.test(value);
+  const asksStatus = /(?:\u67e5\u8be2|\u67e5\u770b|\u72b6\u6001|\u8fdb\u5ea6)|\b(?:query|status|progress)\b/iu.test(value);
+  const createsTask = /(?:\u521b\u5efa|\u65b0\u5efa|\u6dfb\u52a0).{0,12}(?:\u6301\u4e45)?\u4efb\u52a1|\b(?:create|add)\b.{0,20}\b(?:persistent\s+)?task\b/iu.test(value);
+  return namesExactTask && namesPersistentLedger && asksStatus && !createsTask;
+}
+
 function unique(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
 }
@@ -861,6 +870,11 @@ export function buildActionContract(input: string): LumiActionContract {
 
   const text = compact(rawInput);
   if (!text) return NONE_CONTRACT;
+  // A named persistent takeover-task query belongs to the takeover ledger,
+  // not the active runtime-work ledger. Its deterministic quick command emits
+  // a verified work_takeover_task_list receipt, so do not demand the unrelated
+  // runtime_work_status tool in the final completion gate.
+  if (isNamedPersistentWorkTaskStatusQuery(text)) return NONE_CONTRACT;
   // Runtime status/cancellation has its own exact ledger contract. Classify it
   // before the generic normalized status guard so a phrase such as
   // "background task progress" cannot be reduced to a no-tool status turn.

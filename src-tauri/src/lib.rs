@@ -2214,6 +2214,22 @@ fn list_windows_native_apps(query: Option<&str>, limit: usize) -> Vec<NativeAppE
 }
 
 #[cfg(target_os = "windows")]
+#[derive(Debug, Clone)]
+struct RecentlyFocusedWindowsApp {
+    hwnd: isize,
+    pid: u32,
+    title: String,
+    recorded_at: Instant,
+}
+
+#[cfg(target_os = "windows")]
+fn recently_focused_windows_app() -> &'static Mutex<Option<RecentlyFocusedWindowsApp>> {
+    use std::sync::OnceLock;
+    static RECENT: OnceLock<Mutex<Option<RecentlyFocusedWindowsApp>>> = OnceLock::new();
+    RECENT.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(target_os = "windows")]
 fn focus_running_windows_app(def: &WindowsAppDefinition) -> Option<CommandResult> {
     let executable_names: Vec<String> = def
         .executable_names
@@ -2299,7 +2315,23 @@ fn focus_running_windows_app(def: &WindowsAppDefinition) -> Option<CommandResult
         if state.hwnd != 0 {
             const SW_RESTORE: i32 = 9;
             ShowWindow(state.hwnd, SW_RESTORE);
-            SetForegroundWindow(state.hwnd);
+            if SetForegroundWindow(state.hwnd) == 0 {
+                return Some(CommandResult {
+                    success: false,
+                    output: format!(
+                        "Found running app {} (pid {}, window \"{}\") but Windows refused to focus it",
+                        def.label, state.pid, state.title
+                    ),
+                });
+            }
+            if let Ok(mut recent) = recently_focused_windows_app().lock() {
+                *recent = Some(RecentlyFocusedWindowsApp {
+                    hwnd: state.hwnd,
+                    pid: state.pid,
+                    title: state.title.clone(),
+                    recorded_at: Instant::now(),
+                });
+            }
             return Some(CommandResult {
                 success: true,
                 output: format!(
@@ -3664,13 +3696,37 @@ fn get_active_window_info() -> ActiveWindowInfo {
         }
         extern "system" {
             fn GetForegroundWindow() -> isize;
+            fn IsWindow(hwnd: isize) -> i32;
+            fn IsWindowVisible(hwnd: isize) -> i32;
             fn GetWindowTextW(hwnd: isize, lpString: *mut u16, nMaxCount: i32) -> i32;
             fn GetWindowThreadProcessId(hwnd: isize, lpdwProcessId: *mut u32) -> u32;
             fn GetWindowRect(hwnd: isize, lpRect: *mut Rect) -> i32;
             fn GetClassNameW(hwnd: isize, lpClassName: *mut u16, nMaxCount: i32) -> i32;
         }
         unsafe {
-            let hwnd = GetForegroundWindow();
+            let mut hwnd = GetForegroundWindow();
+            // Remote-control overlays and a few UWP focus transitions can leave
+            // Windows without a foreground HWND even though SetForegroundWindow
+            // just succeeded. In that narrow case, retain the exact visible
+            // HWND/PID/title that the native app resolver focused. The fallback
+            // expires quickly and is never used when Windows reports another
+            // foreground window, so ordinary target-mismatch checks stay strict.
+            if hwnd == 0 {
+                if let Ok(mut recent) = recently_focused_windows_app().lock() {
+                    let valid = recent.as_ref().is_some_and(|focused| {
+                        focused.recorded_at.elapsed() <= Duration::from_secs(5)
+                            && IsWindow(focused.hwnd) != 0
+                            && IsWindowVisible(focused.hwnd) != 0
+                    });
+                    if valid {
+                        if let Some(focused) = recent.as_ref() {
+                            hwnd = focused.hwnd;
+                        }
+                    } else {
+                        *recent = None;
+                    }
+                }
+            }
             if hwnd != 0 {
                 window_id = hwnd.to_string();
                 let mut buf: [u16; 512] = [0; 512];
@@ -3682,6 +3738,15 @@ fn get_active_window_info() -> ActiveWindowInfo {
                     window_class = String::from_utf16_lossy(&class_buf[..class_len as usize]);
                 }
                 GetWindowThreadProcessId(hwnd, &mut pid);
+                if let Ok(recent) = recently_focused_windows_app().lock() {
+                    if let Some(focused) = recent.as_ref() {
+                        if hwnd == focused.hwnd && (pid != focused.pid || title != focused.title) {
+                            window_id.clear();
+                            title.clear();
+                            pid = 0;
+                        }
+                    }
+                }
                 let mut rect = Rect {
                     left: 0,
                     top: 0,

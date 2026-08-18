@@ -232,6 +232,24 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       const { userId, domain, orgId } = contextUser(context);
       const category = args.category || 'general_work';
       const sourceMessage = compact(args.sourceMessage || args.summary || args.title || '');
+      const requestedTitle = compact(args.title);
+      const recentReplay = sourceMessage && requestedTitle
+        ? listWorkTakeoverTasks({ userId, domain, orgId, limit: 200 }).find(existing => (
+            compact(existing.title) === requestedTitle
+            && compact(existing.sourceMessage) === sourceMessage
+            && Date.now() - Date.parse(existing.createdAt) <= 15 * 60_000
+          ))
+        : undefined;
+      if (recentReplay) {
+        return JSON.stringify({
+          ok: true,
+          status: 'created',
+          persisted: true,
+          replayed: true,
+          task: requirePersistedTask(userId, recentReplay),
+          note: 'Replayed the persisted task receipt without creating a duplicate.',
+        }, null, 2);
+      }
       const parsedParameters = sourceMessage
         ? parseWorkTakeoverIndustryParameters(sourceMessage, category as any)
         : undefined;

@@ -1210,13 +1210,17 @@ export async function makeLLMCallStreamingDirect(
     params.stream = true;
 
     const executeStream = async (): Promise<NormalizedLLMResponse> => {
-      const localSignal = isLocal
-        ? config.signal
-          ? AbortSignal.any([config.signal, AbortSignal.timeout(60_000)])
-          : AbortSignal.timeout(60_000)
-        : config.signal;
+      // The OpenAI-compatible client resolves `create()` as soon as the HTTP
+      // stream is established. A provider can therefore stop producing bytes
+      // after a successful handshake and leave the `for await` loop pending
+      // forever. Keep the caller's cancellation signal, but also bound the
+      // lifetime of every stream (cloud and local) so the chat UI can recover.
+      const streamTimeoutSignal = AbortSignal.timeout(60_000);
+      const streamSignal = config.signal
+        ? AbortSignal.any([config.signal, streamTimeoutSignal])
+        : streamTimeoutSignal;
       const stream: any = await withCloudResilience(
-        () => client.chat.completions.create(params, { signal: localSignal }),
+        () => client.chat.completions.create(params, { signal: streamSignal }),
         { provider: config.provider, model: config.model, maxRetries: isLocal ? 1 : undefined },
       );
       const accumulatedText: string[] = [];
