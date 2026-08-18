@@ -1052,6 +1052,26 @@ export async function makeLLMCallDirect(
 
 export type StreamCallback = (chunk: string) => void;
 
+const STREAM_IDLE_TIMEOUT_MS = 20_000;
+
+export async function nextStreamItemWithIdleTimeout<T>(
+  iterator: AsyncIterator<T>,
+  timeoutMs: number,
+): Promise<{ timedOut: true } | { timedOut: false; item: IteratorResult<T> }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<{ timedOut: true }>(resolve => {
+    timer = setTimeout(() => resolve({ timedOut: true }), timeoutMs);
+  });
+  try {
+    return await Promise.race([
+      iterator.next().then(item => ({ timedOut: false as const, item })),
+      timeout,
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function isReasoningModel(model: string): boolean {
   return /reasoner|v4-(pro|flash)|gpt-5|o[134]|r1/i.test(model);
 }
@@ -1216,9 +1236,10 @@ export async function makeLLMCallStreamingDirect(
       // forever. Keep the caller's cancellation signal, but also bound the
       // lifetime of every stream (cloud and local) so the chat UI can recover.
       const streamTimeoutSignal = AbortSignal.timeout(60_000);
+      const idleAbortController = new AbortController();
       const streamSignal = config.signal
-        ? AbortSignal.any([config.signal, streamTimeoutSignal])
-        : streamTimeoutSignal;
+        ? AbortSignal.any([config.signal, streamTimeoutSignal, idleAbortController.signal])
+        : AbortSignal.any([streamTimeoutSignal, idleAbortController.signal]);
       const stream: any = await withCloudResilience(
         () => client.chat.completions.create(params, { signal: streamSignal }),
         { provider: config.provider, model: config.model, maxRetries: isLocal ? 1 : undefined },
@@ -1228,8 +1249,19 @@ export async function makeLLMCallStreamingDirect(
       const toolCallAccumulators: Map<number, { id: string; name: string; args: string }> = new Map();
       const legacyProtocolFilter = createLegacyProtocolChunkFilter(onChunk);
       let streamUsage: any = undefined;
+      let streamIncomplete = false;
 
-      for await (const chunk of stream) {
+      const iterator: AsyncIterator<any> = stream[Symbol.asyncIterator]();
+      while (true) {
+        const next = await nextStreamItemWithIdleTimeout(iterator, STREAM_IDLE_TIMEOUT_MS);
+        if (!('item' in next)) {
+          streamIncomplete = true;
+          idleAbortController.abort(new Error(`Model stream idle for ${STREAM_IDLE_TIMEOUT_MS}ms`));
+          void iterator.return?.().catch(() => {});
+          break;
+        }
+        if (next.item.done) break;
+        const chunk = next.item.value;
         const delta = chunk.choices?.[0]?.delta;
         if (delta) {
           if (delta.content) {
@@ -1267,13 +1299,13 @@ export async function makeLLMCallStreamingDirect(
           try { args = JSON.parse(acc.args || '{}'); } catch { /* ignore parse errors */ }
           return { id: acc.id, name: acc.name, arguments: args };
         });
-        return { text, toolCalls, reasoningContent, usage };
+        return { text, toolCalls, reasoningContent, usage, streamIncomplete };
       }
       const legacyToolCalls = parseLegacyXmlToolCalls(text, toolDeclarations);
       if (legacyToolCalls) {
         return { text: null, toolCalls: legacyToolCalls, reasoningContent, usage };
       }
-      return { text, toolCalls: null, reasoningContent, usage };
+      return { text, toolCalls: null, reasoningContent, usage, streamIncomplete };
     };
     try {
       return supervisedLocal

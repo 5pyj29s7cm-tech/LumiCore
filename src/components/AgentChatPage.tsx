@@ -670,6 +670,7 @@ export function AgentChatPage({
   useEffect(() => {
     if (!isOpen) return;
     const focusCommandInput = () => {
+      messageInputRef.current?.focus();
       requestAnimationFrame(() => messageInputRef.current?.focus());
     };
     window.addEventListener('lumi:focus-command-input', focusCommandInput);
@@ -817,6 +818,33 @@ export function AgentChatPage({
     updateDraftText(value);
     if (messageInputRef.current) messageInputRef.current.value = value;
   }, [updateDraftText]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const pasteIntoCommandInput = (event: ClipboardEvent) => {
+      const active = document.activeElement;
+      if (active && active !== document.body && active !== document.documentElement) return;
+      const text = event.clipboardData?.getData('text/plain') || '';
+      if (!text || !messageInputRef.current) return;
+      event.preventDefault();
+      setDraftText(`${messageInputRef.current.value || ''}${text}`);
+      messageInputRef.current.focus();
+    };
+    window.addEventListener('paste', pasteIntoCommandInput);
+    return () => window.removeEventListener('paste', pasteIntoCommandInput);
+  }, [isOpen, setDraftText]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const replaceCommandInput = (event: Event) => {
+      const text = String((event as CustomEvent<{ text?: string }>).detail?.text || '');
+      if (!text) return;
+      setDraftText(text);
+      messageInputRef.current?.focus();
+    };
+    window.addEventListener('lumi:replace-command-input', replaceCommandInput);
+    return () => window.removeEventListener('lumi:replace-command-input', replaceCommandInput);
+  }, [isOpen, setDraftText]);
 
   // Escape to close panels
   useEffect(() => {
@@ -1963,6 +1991,13 @@ export function AgentChatPage({
     }
   }, [activeDomain, agentId, bindAttachmentContextToConversation, clearChatProgress, clearPersistedExecution, isCreatingConversation, scopedConversationUrl, setDraftText]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const startNewConversation = () => { void startNewTextConversation(); };
+    window.addEventListener('lumi:new-conversation', startNewConversation);
+    return () => window.removeEventListener('lumi:new-conversation', startNewConversation);
+  }, [isOpen, startNewTextConversation]);
+
   const loadConversationHistory = useCallback(async () => {
     setConversationHistoryLoading(true);
     try {
@@ -2210,7 +2245,49 @@ export function AgentChatPage({
       clearPersistedExecution(requestId);
       if (activeChatRequestIdRef.current === requestId) activeChatRequestIdRef.current = null;
     };
-    const onResponse = (data?: { requestId?: string; source?: string; conversationId?: string }) => { if (isCurrentResponse(data)) resolve(); };
+    const onResponse = (data?: {
+      text?: string;
+      agentName?: string;
+      requestId?: string;
+      source?: string;
+      conversationId?: string;
+      finalized?: boolean;
+      blocked?: boolean;
+      reason?: string;
+    }) => {
+      if (!isCurrentResponse(data)) return;
+      const finalText = String(data?.text || '').trim();
+      currentResponseFinalizationRef.current = {
+        finalized: data?.finalized,
+        blocked: data?.blocked,
+        reason: data?.reason,
+      };
+      if (shouldDisplayAgentResponse(data || {})) {
+        if (streamingMsgId.current) {
+          const sid = streamingMsgId.current;
+          setMessages(prev => prev.map(message => (
+            message.id === sid && finalText ? { ...message, text: finalText } : message
+          )));
+          streamingMsgId.current = null;
+        } else if (finalText) {
+          setMessages(prev => prev.some(message => message.type === 'agent' && message.text === finalText)
+            ? prev
+            : [...prev, {
+                id: makeChatMessageId('agent'),
+                text: finalText,
+                userName: data?.agentName || agentNameRef.current || 'Lumi',
+                timestamp: new Date().toISOString(),
+                type: 'agent',
+              }]);
+        }
+      } else if (streamingMsgId.current) {
+        const sid = streamingMsgId.current;
+        setMessages(prev => prev.filter(message => message.id !== sid));
+        streamingMsgId.current = null;
+      }
+      setWorkflowStatus(data?.blocked ? 'error' : data?.finalized ? 'done' : 'idle');
+      resolve();
+    };
     const onError = (data?: { requestId?: string; source?: string; conversationId?: string }) => { if (isCurrentResponse(data)) resolve(); };
     const onStatus = (data: { status: string; requestId?: string; source?: string; conversationId?: string }) => {
       if (!isCurrentResponse(data)) return;
@@ -2396,6 +2473,15 @@ export function AgentChatPage({
     e.preventDefault();
     sendText(draftTextRef.current.trim(), pendingAttachments);
   };
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const submitCommandInput = () => {
+      sendText(draftTextRef.current.trim(), pendingAttachmentsRef.current);
+    };
+    window.addEventListener('lumi:submit-command-input', submitCommandInput);
+    return () => window.removeEventListener('lumi:submit-command-input', submitCommandInput);
+  }, [isOpen, sendText]);
 
   const toggleListening = () => {
     if (isListening) {

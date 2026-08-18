@@ -31,6 +31,14 @@ export function isCapabilityMetaQuestion(text: string): boolean {
   const normalized = String(text || '').replace(/\s+/g, ' ').trim();
   if (isSelfIntroductionMetaQuestion(normalized)) return true;
   if (!normalized || !CAPABILITY_SUBJECT_RE.test(normalized)) return false;
+  // A no-tool clause is often an execution boundary attached to a substantive
+  // question (for example, "do not call tools; explain how you would verify
+  // opening Calculator"). It must not become the subject of the turn and
+  // trigger the canned capability/mode answer merely because the sentence also
+  // contains words such as "how" or "permissions".
+  const explicitNoToolBoundary =
+    /(?:\u4e0d\u8981|\u522b|\u65e0\u9700|\u4e0d\u7528|\u4e0d\u5f97|\u7981\u6b62).{0,20}(?:\u8c03\u7528|\u4f7f\u7528|\u5f00\u542f).{0,8}(?:\u5de5\u5177|\u6280\u80fd|\u63d2\u4ef6)|\b(?:do\s+not|don'?t|without)\s+(?:call(?:ing)?|use|using|run(?:ning)?)\s+(?:any\s+)?(?:tools?|skills?|plugins?)\b/iu;
+  if (explicitNoToolBoundary.test(normalized)) return false;
   if (/(?:\u521a\u624d|\u521a\u521a|\u4e0a\u6b21|\u4e0a\u4e00\u8f6e|\u6ca1.{0,12}\u6210\u529f|\u5931\u8d25|\u62a5\u9519|\u5361\u4f4f|\u4e3a\u4ec0\u4e48.{0,20}\u6ca1.{0,12}(?:\u6267\u884c|\u8c03\u7528)|\b(?:earlier|last\s+time|failed|error|stuck|didn'?t\s+(?:run|call))\b)/iu.test(normalized)) {
     return false;
   }

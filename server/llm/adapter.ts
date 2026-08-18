@@ -813,7 +813,7 @@ function recordWorkflowIfToolsUsed(
   config: Pick<LLMConfig, 'userId' | 'domain' | 'orgId'>,
 ): void {
   if (executionLog.length === 0) return;
-  const rawContent = messages.find(m => m.role === 'user')?.content || '';
+  const rawContent = [...messages].reverse().find(m => m.role === 'user')?.content || '';
   const userMsg = typeof rawContent === 'string' ? rawContent : Array.isArray(rawContent) ? rawContent.filter(c => c.type === 'text').map(c => (c as any).text).join(' ') : '';
   const safeMsg = userMsg || '';
   recordWorkflow({

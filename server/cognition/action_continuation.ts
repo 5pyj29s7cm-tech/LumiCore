@@ -719,6 +719,8 @@ export function prepareConversationActionTaskState(
     requestId: string;
     toolPolicy: ToolPolicy;
     forceResume?: boolean;
+    /** The current explicit workflow must supersede, never resume, older unfinished work. */
+    forceNewTask?: boolean;
     /** Canonical capability planning determined that this turn needs a ledger. */
     forceTask?: boolean;
     now?: string;
@@ -727,7 +729,9 @@ export function prepareConversationActionTaskState(
   const userText = compact(input.userText, 700);
   const previous = normalizeConversationActionState(previousValue);
   const followupIntent = classifyConversationActionFollowupIntent(userText, previous);
-  const resume = Boolean(previous && previous.unfinished && (input.forceResume || followupIntent === 'execute'));
+  const resume = !input.forceNewTask && Boolean(
+    previous && previous.unfinished && (input.forceResume || followupIntent === 'execute'),
+  );
   if (followupIntent === 'status' && previous) return { state: previous, kind: 'status' };
   const contract = buildActionContract(userText);
   const isAction = (contract.applies && contract.kind !== 'none') || input.forceTask === true;

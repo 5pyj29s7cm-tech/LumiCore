@@ -115,6 +115,21 @@ describe('durable conversation task execution ledger', () => {
     expect(resumed.state?.policySnapshot?.allowedTools).toEqual(expect.arrayContaining(initialPolicy.allowedTools));
   });
 
+  it('lets an explicitly selected workflow supersede an unrelated unfinished task', () => {
+    const policy = { allowedTools: ['industry_output_create'], requireConfirmation: [], forbiddenTools: [], maxIterations: 5 };
+    const oldTask = prepareConversationActionTaskState(null, {
+      userText: 'Read the old task ledger only.', requestId: 'old', toolPolicy: policy, forceTask: true,
+    });
+    const currentTask = prepareConversationActionTaskState(oldTask.state, {
+      userText: 'Continue the current project and create a new verified output.',
+      requestId: 'current', toolPolicy: policy, forceTask: true, forceNewTask: true,
+    });
+
+    expect(currentTask.kind).toBe('new');
+    expect(currentTask.state?.taskId).not.toBe(oldTask.state?.taskId);
+    expect(currentTask.state?.supersededTaskId).toBe(oldTask.state?.taskId);
+  });
+
   it('keeps prior permissions on terse replies and deliberately expands them for a real follow-up', () => {
     const merged = applyTaskPolicySnapshot(
       {

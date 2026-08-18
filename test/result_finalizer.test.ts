@@ -55,6 +55,57 @@ describe('Lumi result finalizer', () => {
     expect(result.text).toBe(responseText);
   });
 
+  it('does not mistake a hypothetical desktop plan for a tool-availability excuse', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const taskText = '意图识别验收：不要打开计算器，不要启动任何应用，也不要调用工具。你只需说明未来会怎么执行和核验。';
+    const responseText = '未来会用桌面打开工具直接启动 Windows 计算器这个精确目标，不打开替代软件；随后核验窗口和进程。本轮没有执行任何动作，未调用工具。';
+    const result = finalizeLumiResponse({
+      taskText,
+      responseText,
+      toolRecords: [],
+      source: 'chat',
+      flow: {
+        allowToolUseForTurn: false,
+        completionEvidenceNeeded: false,
+        clientActionOnlyTurn: false,
+        selfRepairTurn: false,
+      } as any,
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(responseText);
+  });
+
+  it('accepts an in-chat checklist that is present in a persisted internal task update receipt', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const draft = '1. \u4efb\u52a1\u5f15\u7528\u5df2\u6838\u5bf9\n2. \u9a8c\u6536\u9700\u6c42\u5df2\u8bb0\u5f55\n3. \u804a\u5929\u4ea4\u4ed8\u5df2\u751f\u6210\n4. \u672a\u5199\u6587\u4ef6\u3001\u672a\u5916\u53d1\n5. \u540e\u7eed\u6b65\u9aa4\u4ecd\u7b49\u5f85\u786e\u8ba4';
+    const responseText = `\u5df2\u5b8c\u6210\u6b65\u9aa4\uff1a\u8bb0\u5f55\u9a8c\u6536\u9700\u6c42\u2192\u751f\u6210\u6e05\u5355\n5\u9879\u68c0\u67e5\u6e05\u5355\uff1a\n${draft}\n\u5f53\u524d\u72b6\u6001\uff1awaiting_confirmation\n\u5269\u4f59\u6b65\u9aa4\uff1a\u7b49\u5f85\u786e\u8ba4`;
+    const result = finalizeLumiResponse({
+      taskText: '\u7ee7\u7eed\u6301\u4e45\u4efb\u52a1 wt_task_acceptance\uff0c\u4e0d\u8981\u5199\u6587\u4ef6\uff0c\u4e0d\u8981\u5916\u53d1\u3002',
+      responseText,
+      toolRecords: [{
+        name: 'work_takeover_task_update',
+        arguments: { id: 'wt_task_acceptance' },
+        result: JSON.stringify({
+          ok: true,
+          status: 'updated',
+          persisted: true,
+          task: {
+            id: 'wt_task_acceptance',
+            status: 'waiting_confirmation',
+            updatedAt: new Date().toISOString(),
+            drafts: [{ text: draft }],
+          },
+        }),
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(responseText);
+    expect(result.reason).toContain('persisted update receipt');
+  });
+
   it('blocks raw legacy function-call markup from reaching the user', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
     const result = finalizeLumiResponse({

@@ -8,10 +8,42 @@ import {
   buildDeterministicWpsDocumentCommand,
   buildDeterministicTextArtifactCommand,
   buildDeterministicWorkTaskCreateCommand,
+  buildDeterministicWorkTaskProgressCommand,
   buildDeterministicWorkTaskStatusCommand,
 } from '../server/cognition/quick_commands';
 
 describe('normalized desktop intent priority', () => {
+  it('writes an explicitly enumerated internal task continuation back to the named ledger task', () => {
+    const text = '\u7ee7\u7eed\u521a\u624d\u7684\u6301\u4e45\u4efb\u52a1\u201c\u4e3b\u7a0b\u5e8f\u6587\u5b57\u957f\u4efb\u52a1-20260818\u201d\uff08\u4efb\u52a1\u7f16\u53f7 wt_task_1787031027377_c8a3v\uff09\uff1a\u5b8c\u6210\u7b2c\u4e00\u6b65\u201c\u8bb0\u5f55\u9a8c\u6536\u9700\u6c42\u201d\u548c\u7b2c\u4e8c\u6b65\u201c\u5728\u804a\u5929\u4e2d\u751f\u6210\u4e94\u9879\u68c0\u67e5\u6e05\u5355\u201d\uff1b\u7b2c\u4e09\u6b65\u4ecd\u4fdd\u6301\u7b49\u5f85\u786e\u8ba4\u3002\u4e0d\u8981\u5199\u6587\u4ef6\uff0c\u4e0d\u8981\u5916\u53d1\u3002';
+    const command = buildDeterministicWorkTaskProgressCommand(text);
+    expect(command?.toolCall).toMatchObject({
+      name: 'work_takeover_task_update',
+      arguments: {
+        id: 'wt_task_1787031027377_c8a3v',
+        title: '\u4e3b\u7a0b\u5e8f\u6587\u5b57\u957f\u4efb\u52a1-20260818',
+        status: 'waiting_confirmation',
+        currentActionIndex: 2,
+      },
+    });
+    expect(command?.toolCall?.arguments.draftReply.split('\n')).toHaveLength(5);
+
+    const response = command?.formatToolResult?.(JSON.stringify({
+      ok: true,
+      status: 'updated',
+      persisted: true,
+      task: {
+        id: 'wt_task_1787031027377_c8a3v',
+        status: 'waiting_confirmation',
+        currentActionIndex: 2,
+        nextActions: ['\u8bb0\u5f55\u9a8c\u6536\u9700\u6c42', '\u5728\u804a\u5929\u4e2d\u751f\u6210\u4e94\u9879\u68c0\u67e5\u6e05\u5355', '\u7b49\u5f85\u6211\u786e\u8ba4\u540e\u518d\u7ee7\u7eed'],
+      },
+    }));
+    expect(response).toContain('\u5df2\u5b8c\u6210\u6b65\u9aa4\uff1a\u8bb0\u5f55\u9a8c\u6536\u9700\u6c42\u2192\u5728\u804a\u5929\u4e2d\u751f\u6210\u4e94\u9879\u68c0\u67e5\u6e05\u5355');
+    expect(response).toContain('5\u9879\u68c0\u67e5\u6e05\u5355');
+    expect(response).toContain('\u5f53\u524d\u72b6\u6001\uff1awaiting_confirmation');
+    expect(response).toContain('\u5269\u4f59\u6b65\u9aa4\uff1a\u7b49\u5f85\u6211\u786e\u8ba4\u540e\u518d\u7ee7\u7eed');
+  });
+
   it('creates a new persistent work task instead of inheriting an older receipt', () => {
     const text = '\u4e3b\u7a0b\u5e8f\u957f\u4efb\u52a1\u9a8c\u6536\uff1a\u8bf7\u521b\u5efa\u4e00\u4e2a\u53ef\u8de8\u91cd\u542f\u7ee7\u7eed\u7684\u6301\u4e45\u4efb\u52a1\u3002\u6807\u9898\u201c\u9752\u7a79\u5ba2\u6237\u8ddf\u8fdb\u95ed\u73af\u201d\uff0c\u7c7b\u522b customer\uff0c\u6765\u6e90 chat\u3002\u76ee\u6807\u662f\uff1a\u7b2c\u4e00\u6b65\u6574\u7406\u5ba2\u6237\u9700\u6c42\uff0c\u7b2c\u4e8c\u6b65\u751f\u6210\u8ddf\u8fdb\u8349\u7a3f\uff0c\u7b2c\u4e09\u6b65\u7b49\u5f85\u7528\u6237\u786e\u8ba4\u540e\u518d\u5916\u53d1\u3002\u73b0\u5728\u53ea\u521b\u5efa\u5e76\u6301\u4e45\u5316\u4efb\u52a1\uff0c\u4e0d\u8981\u53d1\u9001\u4efb\u4f55\u6d88\u606f\u3002\u5b8c\u6210\u540e\u544a\u8bc9\u6211\u4efb\u52a1\u7f16\u53f7\u3001\u72b6\u6001\u3001\u4e0b\u4e00\u6b65\u548c\u54ea\u4e9b\u52a8\u4f5c\u9700\u8981\u786e\u8ba4\u3002';
     expect(normalizeActionIntent(text)).toMatchObject({
@@ -52,6 +84,17 @@ describe('normalized desktop intent priority', () => {
     expect(response).toContain('\u9700\u8981\u786e\u8ba4\uff1a\u7b49\u5f85\u7528\u6237\u786e\u8ba4\u540e\u518d\u5916\u53d1');
   });
 
+  it('uses the Chinese task-name field as the persistent task title', () => {
+    const text = '\u8bf7\u521b\u5efa\u4e00\u4e2a\u6301\u4e45\u4efb\u52a1\uff0c\u4efb\u52a1\u540d\u201c\u4e3b\u7a0b\u5e8f\u6587\u5b57\u957f\u4efb\u52a1-20260818\u201d\uff0c\u7c7b\u522b\uff1a\u901a\u7528\u3002';
+    expect(normalizeActionIntent(text)).toMatchObject({
+      kind: 'work_task',
+      operation: 'create',
+      target: '\u4e3b\u7a0b\u5e8f\u6587\u5b57\u957f\u4efb\u52a1-20260818',
+    });
+    expect(buildDeterministicWorkTaskCreateCommand(text)?.toolCall?.arguments.title)
+      .toBe('\u4e3b\u7a0b\u5e8f\u6587\u5b57\u957f\u4efb\u52a1-20260818');
+  });
+
   it('queries an explicitly named persistent task instead of the older conversation action ledger', () => {
     const text = '主程序任务状态验收：请查询任务“青穹客户跟进闭环”的持久状态，只根据任务账本回答任务编号、当前状态、当前步骤、后续步骤和确认边界，不要执行任何外部动作。';
     const command = buildDeterministicWorkTaskStatusCommand(text);
@@ -73,6 +116,13 @@ describe('normalized desktop intent priority', () => {
     expect(response).toContain('当前步骤：整理客户需求');
     expect(response).toContain('后续步骤：生成跟进草稿→等待用户确认后再外发');
     expect(response).toContain('确认边界：等待用户确认后再外发');
+  });
+
+  it('does not let a requested status receipt shadow an explicit task progress update', () => {
+    const text = '续接持久任务“主程序文字长任务-20260818-2031” wt_task_acceptance：完成第一步“整理三项能力”，给出五项检查清单；不要写文件，不要外发；第三步等待我确认。请把进度写回同一任务账本并返回当前状态与剩余步骤。';
+    expect(buildDeterministicWorkTaskProgressCommand(text)?.toolCall?.name)
+      .toBe('work_takeover_task_update');
+    expect(buildDeterministicWorkTaskStatusCommand(text)).toBeNull();
   });
 
   it('builds an exact write then readback chain for enumerated local text lines', () => {

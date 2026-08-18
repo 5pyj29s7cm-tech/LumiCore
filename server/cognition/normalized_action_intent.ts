@@ -482,8 +482,8 @@ function localDesktopOperation(text: string): NormalizedActionIntent | null {
 function persistentWorkTaskCreation(text: string): NormalizedActionIntent | null {
   const createsTask = /(?:\u521b\u5efa|\u65b0\u5efa|\u5efa\u7acb)\s*(?:\u4e00\u4e2a|\u4e00\u9879)?[^\u3002\uff01\uff1f?\n]{0,28}(?:\u6301\u4e45\u4efb\u52a1|\u957f\u671f\u4efb\u52a1|\u5de5\u4f5c\u63a5\u7ba1\u4efb\u52a1|\u5de5\u4f5c\u4efb\u52a1)|\b(?:create|start)\b.{0,36}\b(?:persistent|long[-\s]?running|work[-\s]?takeover)\s+task\b/iu.test(text);
   if (!createsTask) return null;
-  const title = text.match(/(?:\u6807\u9898|title)\s*[\uff1a:=\u4e3a]?\s*[\u201c"']([^\u201d"'\r\n]{1,120})[\u201d"']/iu)?.[1]?.trim()
-    || text.match(/(?:\u6807\u9898|title)\s*[\uff1a:=\u4e3a]\s*([^\uff0c,\u3002\uff01\uff1f?\r\n]{1,120})/iu)?.[1]?.trim()
+  const title = text.match(/(?:\u6807\u9898|\u4efb\u52a1\u540d|task\s+name|title)\s*[\uff1a:=\u4e3a]?\s*[\u201c"']([^\u201d"'\r\n]{1,120})[\u201d"']/iu)?.[1]?.trim()
+    || text.match(/(?:\u6807\u9898|\u4efb\u52a1\u540d|task\s+name|title)\s*[\uff1a:=\u4e3a]\s*([^\uff0c,\u3002\uff01\uff1f?\r\n]{1,120})/iu)?.[1]?.trim()
     || 'persistent_work_task';
   return {
     kind: 'work_task',

@@ -323,6 +323,8 @@ export interface NormalizedLLMResponse {
   toolCalls: ParsedToolCall[] | null;
   reasoningContent?: string | null;
   usage?: LLMUsage;
+  /** The provider produced usable output but stopped delivering stream frames before a terminal frame. */
+  streamIncomplete?: boolean;
   /** Exact model route used for this call, including explicit fallback evidence. */
   routing?: ModelRoutingTrace;
 }

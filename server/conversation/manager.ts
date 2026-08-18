@@ -604,6 +604,7 @@ export function prepareConversationActionExecution(input: {
   requestId: string;
   toolPolicy: ToolPolicy;
   forceResume?: boolean;
+  forceNewTask?: boolean;
   forceTask?: boolean;
 }): ReturnType<typeof prepareConversationActionTaskState> {
   const db = readDB();

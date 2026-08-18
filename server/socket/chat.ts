@@ -40,6 +40,10 @@ import {
   shouldForwardPreFinalizationProgress,
 } from "../cognition/response_delivery";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
+import {
+  getExplicitSentenceCountConstraint,
+  sentenceCountCorrectionInstruction,
+} from "../cognition/response_constraints";
 import { buildCapabilityMetaResponse } from "../cognition/capability_meta";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import {
@@ -121,6 +125,7 @@ import {
   buildDeterministicLocalDesktopNavigationCommand,
   buildDeterministicTextArtifactCommand,
   buildDeterministicWorkTaskCreateCommand,
+  buildDeterministicWorkTaskProgressCommand,
   buildDeterministicWorkTaskStatusCommand,
   buildDeterministicWpsDocumentCommand,
   buildQuickCommandToolPolicy,
@@ -1089,7 +1094,27 @@ export function registerChatHandler(
         requestId,
         conversationId: selectedConversationId,
       };
-      if (!recordChatExecutionEvent(executionScope, requestId, event, normalizedPayload)) return;
+      if (!recordChatExecutionEvent(executionScope, requestId, event, normalizedPayload)) {
+        if (event === 'agent:response') {
+          const snapshot = getChatExecution(executionScope, requestId);
+          if (snapshot?.terminalEvent?.event === 'agent:response') {
+            socket.emit('agent:response', {
+              ...snapshot.terminalEvent.payload,
+              replayed: true,
+            });
+          }
+        }
+        return;
+      }
+      if (event === 'agent:response') {
+        // The originating native client must receive the terminal frame even
+        // if its room membership changed during reconnect or conversation
+        // rollover. Other signed-in clients still receive the same terminal
+        // event through the user/workspace room without duplicating it here.
+        socket.emit(event, normalizedPayload);
+        socket.to(executionRoom).emit(event, normalizedPayload);
+        return;
+      }
       io.to(executionRoom).emit(event, normalizedPayload);
     };
     const emitConversationUpdated = (payload: Record<string, any>) => {
@@ -1658,7 +1683,10 @@ export function registerChatHandler(
         visibleUserText,
         conversation?.actionContinuationState,
       );
-      const deterministicWorkTaskStatus = buildDeterministicWorkTaskStatusCommand(visibleUserText);
+      const deterministicWorkTaskProgress = buildDeterministicWorkTaskProgressCommand(visibleUserText);
+      const deterministicWorkTaskStatus = deterministicWorkTaskProgress
+        ? null
+        : buildDeterministicWorkTaskStatusCommand(visibleUserText);
       if (conversationId && isConversationExecutionFactQuestion(visibleUserText)) {
         const factText = formatConversationExecutionFactAnswer(getConversationExecutionFacts({
           conversationId,
@@ -1688,7 +1716,12 @@ export function registerChatHandler(
         releaseChatSession();
         return;
       }
-      if (conversationId && actionFollowupIntent === 'status' && !deterministicWorkTaskStatus) {
+      if (
+        conversationId
+        && actionFollowupIntent === 'status'
+        && !deterministicWorkTaskStatus
+        && !deterministicWorkTaskProgress
+      ) {
         const statusText = getConversationActionStatus(conversationId, uid, visibleUserText, conversation?.actionContinuationState);
         emitAgent("agent:status", { status: "responding", agentName: personality.name });
         emitAgent("agent:response", { text: statusText, agentName: personality.name, finalized: true, blocked: false, reason: '' });
@@ -1859,6 +1892,7 @@ export function registerChatHandler(
               requestId,
               toolPolicy: workflowExecutionDecision.toolPolicy,
               forceResume: Boolean(pendingConfirmation),
+              forceNewTask: !pendingConfirmation,
             })
           : { state: null, kind: 'conversation' as const };
         if (conversationId && workflowTaskExecution.state?.taskId) {
@@ -2538,7 +2572,7 @@ export function registerChatHandler(
           || executionPipeline.normalizedIntent.kind === 'status_query';
         const quickResult = capabilityMetaResponse
           ? { matched: true, responseText: capabilityMetaResponse }
-          : deterministicClientNavigation || deterministicExternalCommitConfirmation || deterministicKnowledgeInspection || deterministicWorkTaskStatus || deterministicWorkTaskCreate || deterministicTextArtifact || deterministicWpsDocument || deterministicLocalDesktopNavigation || (
+          : deterministicClientNavigation || deterministicExternalCommitConfirmation || deterministicKnowledgeInspection || deterministicWorkTaskProgress || deterministicWorkTaskStatus || deterministicWorkTaskCreate || deterministicTextArtifact || deterministicWpsDocument || deterministicLocalDesktopNavigation || (
             shouldRunLegacyDirectExecution() && !nonExecutingNormalizedIntent
               ? await matchQuickCommand(
                   continuationOpenTarget ? buildInternalOpenCommand(visibleUserText, continuationOpenTarget) : text,
@@ -3945,6 +3979,39 @@ export function registerChatHandler(
                 totalTokens: response.usage.totalTokens,
               }, interactionId);
             }
+            const sentenceConstraint = getExplicitSentenceCountConstraint(text, responseText);
+            if (response.streamIncomplete || (sentenceConstraint && sentenceConstraint.actual !== sentenceConstraint.expected)) {
+              const recoveryInstruction = sentenceConstraint
+                ? sentenceCountCorrectionInstruction(sentenceConstraint.expected)
+                : '上一条是流式连接中断前的草稿。请基于用户原请求完整重写最终回答，补齐遗漏内容；只输出可直接交付给用户的最终回答。';
+              const corrected = await makeLLMCallStreaming(
+                [
+                  ...messages,
+                  { role: 'assistant', content: responseText },
+                  { role: 'user', content: recoveryInstruction },
+                ],
+                [],
+                { provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, signal: abortController.signal, ...reasoningRoutePolicy },
+                () => {},
+                llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
+                llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
+              );
+              const correctedText = String(corrected.text || '').trim();
+              const correctedConstraint = getExplicitSentenceCountConstraint(text, correctedText);
+              if (
+                correctedText
+                && (!sentenceConstraint || correctedConstraint?.actual === correctedConstraint.expected)
+              ) {
+                responseText = correctedText;
+              }
+              if (corrected.usage) {
+                recordTokenUsage(uid, corrected.routing?.selectedProvider || activeProvider, corrected.routing?.selectedModel || activeModel, {
+                  promptTokens: corrected.usage.promptTokens,
+                  completionTokens: corrected.usage.completionTokens,
+                  totalTokens: corrected.usage.totalTokens,
+                }, interactionId);
+              }
+            }
             const totalUsage = response.usage?.totalTokens || 0;
             socket.emit('token:usage_update', {
               userId: uid,
@@ -4088,6 +4155,19 @@ export function registerChatHandler(
         }
       }
 
+      // A completed model turn must unlock the native chat surface before
+      // synchronous persistence, topic extraction, or summary scheduling.
+      // Those durability steps can be slower than the final Socket.IO frame;
+      // holding the terminal event behind them leaves the user staring at a
+      // stale streaming fragment with the send button disabled.
+      emitAgent("agent:response", {
+        text: responseText,
+        agentName: personality.name,
+        finalized: true,
+        blocked: finalResponse.blocked,
+        reason: finalResponse.reason || '',
+      });
+
       persistChatTakeoverExecution(responseText, {
         toolRecords: allToolRecords,
         source: 'chat',
@@ -4136,14 +4216,6 @@ export function registerChatHandler(
         scheduleChatSummary(conversationId);
       }
 
-      // Emit response BEFORE conversation_updated so the client finalizes streaming first
-      emitAgent("agent:response", {
-        text: responseText,
-        agentName: personality.name,
-        finalized: true,
-        blocked: finalResponse.blocked,
-        reason: finalResponse.reason || '',
-      });
       // Re-emit conversation_updated AFTER response so the client syncs from API with complete data
       if (conversationId) {
         emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });

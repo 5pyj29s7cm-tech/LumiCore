@@ -227,7 +227,10 @@ function unsupportedToolAvailabilityExcuse(input: LumiResultFinalizerInput): str
     '',
   );
   // i18n-allow: Unsupported user-switchable tool-state excuse recognition; not user-visible copy.
-  const claimsToolsAreOff = /(?:当前|现在|这轮|我这边|当前会话|这个会话)?[^。！？!?\n]{0,32}(?:工具|tool)[^。！？!?\n]{0,36}(?:没(?:有)?打开|未打开|没开启|未开启|不可用|没有开放|没(?:有)?挂载|未挂载|没带|只有|只(?:挂载|有)|not (?:open|enabled|available|mounted|loaded)|disabled)|(?:当前|现在|这轮|我这边|当前会话|这个会话)?[^。！？!?\n]{0,28}(?:只有|只(?:挂载|有)|没(?:有)?挂载|未挂载|没带)[^。！？!?\n]{0,20}(?:工具|tool)|(?:需要|要不要|可以)(?:我)?[^。！？!?\n]{0,28}(?:切换|切到|进入|开启)[^。！？!?\n]{0,24}(?:工具可用|工具模式|tool mode|tools? enabled)/iu.test(availabilityClaimText);
+  // Keep the state word close to the tool noun. A broad wildcard here makes
+  // truthful plans such as “用桌面打开工具启动计算器，不打开替代软件” look as
+  // if they claimed the tool itself was not open.
+  const claimsToolsAreOff = /(?:当前|现在|这轮|我这边|当前会话|这个会话)?[^。！？!?\n]{0,32}(?:工具|tool)(?:\s*(?:本身|列表|集合|状态|权限|能力|链路|路由|is|are)){0,2}[\s:：]*(?:没(?:有)?打开|未打开|没开启|未开启|不可用|没有开放|没(?:有)?挂载|未挂载|没带|只有|只(?:挂载|有)|not (?:open|enabled|available|mounted|loaded)|disabled)|(?:当前|现在|这轮|我这边|当前会话|这个会话)?[^。！？!?\n]{0,28}(?:只有|只(?:挂载|有)|没(?:有)?挂载|未挂载|没带)[^。！？!?\n]{0,20}(?:工具|tool)|(?:需要|要不要|可以)(?:我)?[^。！？!?\n]{0,28}(?:切换|切到|进入|开启)[^。！？!?\n]{0,24}(?:工具可用|工具模式|tool mode|tools? enabled)/iu.test(availabilityClaimText);
   if (!claimsToolsAreOff) return null;
   const actualUnavailableReceipt = (input.toolRecords || []).some(record => (
     String(record.error || '').trim()
@@ -1665,6 +1668,28 @@ function sanitizeUnsupportedRestatementAdditions(taskText: string, responseText:
   return retained || responseText;
 }
 
+function groundedInternalWorkTaskProgress(input: LumiResultFinalizerInput): string | null {
+  const taskText = resultTaskText(input);
+  if (!/\bwt_task_[A-Za-z0-9_-]+\b/u.test(taskText)) return null;
+  if (!/\u6301\u4e45\u4efb\u52a1/u.test(taskText) || !/\u4e0d\u8981\u5199\u6587\u4ef6/u.test(taskText) || !/\u4e0d\u8981\u5916\u53d1/u.test(taskText)) return null;
+  const record = [...(input.toolRecords || [])].reverse().find(item => (
+    item.name === 'work_takeover_task_update' && !item.error && String(item.result || '').trim()
+  ));
+  if (!record) return null;
+  let parsed: any;
+  try { parsed = JSON.parse(String(record.result || '{}')); } catch { return null; }
+  const task = parsed?.task;
+  if (parsed?.ok !== true || parsed?.persisted !== true || parsed?.status !== 'updated' || !task?.id || !task?.updatedAt) return null;
+  if (!['in_progress', 'waiting_confirmation'].includes(String(task.status || ''))) return null;
+  const drafts = Array.isArray(task.drafts) ? task.drafts : [];
+  const latestDraft = String(drafts[drafts.length - 1]?.text || '').trim();
+  if (!latestDraft) return null;
+  const response = String(input.responseText || '').trim();
+  const draftLines = latestDraft.split(/\r?\n/u).map((line: string) => line.trim()).filter(Boolean);
+  if (!response || !draftLines.every((line: string) => response.includes(line))) return null;
+  return response;
+}
+
 export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResultFinalizerResult {
   input = {
     ...input,
@@ -1689,6 +1714,14 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   // a verified completion or a concrete workflow blocker.
   const earlyGroundedCadRun = formatGroundedCadRunResult(input);
   if (earlyGroundedCadRun) return earlyGroundedCadRun;
+  const groundedWorkTaskProgress = groundedInternalWorkTaskProgress(input);
+  if (groundedWorkTaskProgress) {
+    return {
+      text: groundedWorkTaskProgress,
+      blocked: false,
+      reason: 'Grounded internal work-task progress from a persisted update receipt and matching chat draft.',
+    };
+  }
   const modeSafeResponseText = sanitizeContradictoryOperationModeText(input);
   if (modeSafeResponseText !== input.responseText) {
     input = { ...input, responseText: modeSafeResponseText };

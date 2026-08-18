@@ -3525,12 +3525,52 @@ export function DesktopUI({
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (chatOpen && e.key === 'F6') {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent('lumi:focus-command-input'));
+        return;
+      }
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'Enter') {
         e.preventDefault();
         setIsSearchOpen(false);
         setIsControlCenterOpen(false);
         setIsNotificationPanelOpen(false);
         openCommandCenter('office');
+        return;
+      }
+      if (chatOpen && (e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent('lumi:new-conversation'));
+        return;
+      }
+      if (chatOpen && (e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'v' && !isInputFocused()) {
+        e.preventDefault();
+        void (async () => {
+          let text = '';
+          try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            text = await invoke<string>('get_clipboard_text');
+          } catch {
+            try {
+              text = await navigator.clipboard.readText();
+            } catch {}
+          }
+          if (text) window.dispatchEvent(new CustomEvent('lumi:replace-command-input', { detail: { text } }));
+        })();
+        return;
+      }
+      if (
+        chatOpen
+        && e.key === 'Enter'
+        && !e.metaKey
+        && !e.ctrlKey
+        && !e.altKey
+        && !e.shiftKey
+        && !isInputFocused()
+        && !['BUTTON', 'A'].includes((document.activeElement as HTMLElement | null)?.tagName || '')
+      ) {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent('lumi:submit-command-input'));
         return;
       }
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'v') {
@@ -3580,7 +3620,7 @@ export function DesktopUI({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [endCall, getVoiceScopeOptions, interrupt, isControlCenterOpen, isSearchOpen, isWallpaperMode, openCommandCenter, selectedVoiceId, startCall, startStandardVoiceCall, toggleWallpaperMode]);
+  }, [chatOpen, endCall, getVoiceScopeOptions, interrupt, isControlCenterOpen, isSearchOpen, isWallpaperMode, openCommandCenter, selectedVoiceId, startCall, startStandardVoiceCall, toggleWallpaperMode]);
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
