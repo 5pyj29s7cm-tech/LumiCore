@@ -16,13 +16,13 @@ describe('command center durable plans', () => {
   });
 
   it('computes wall-clock daily, weekly and monthly schedules', () => {
-    const now = new Date('2026-08-13T02:00:00.000Z');
+    const now = new Date(2026, 7, 13, 10, 0, 0, 0);
     expect(nextCommandCenterPlanRun({ cadence: 'daily', timeOfDay: '11:00', dayOfWeek: 1, dayOfMonth: 1 }, now))
-      .toBe('2026-08-13T03:00:00.000Z');
+      .toBe(new Date(2026, 7, 13, 11, 0, 0, 0).toISOString());
     expect(nextCommandCenterPlanRun({ cadence: 'weekly', timeOfDay: '09:00', dayOfWeek: 5, dayOfMonth: 1 }, now))
-      .toBe('2026-08-14T01:00:00.000Z');
+      .toBe(new Date(2026, 7, 14, 9, 0, 0, 0).toISOString());
     expect(nextCommandCenterPlanRun({ cadence: 'monthly', timeOfDay: '09:00', dayOfWeek: 1, dayOfMonth: 20 }, now))
-      .toBe('2026-08-20T01:00:00.000Z');
+      .toBe(new Date(2026, 7, 20, 9, 0, 0, 0).toISOString());
   });
 
   it('binds each run to one background task and one durable action row', () => {
