@@ -1,7 +1,7 @@
 import './helpers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { buildActionContract } from '../server/cognition/action_contract';
-import { buildLumiCapabilitySelection } from '../server/cognition/capability_selection';
+import { buildLumiCapabilitySelection, buildModelCapabilityPolicy } from '../server/cognition/capability_selection';
 import { buildLumiExecutionDecision } from '../server/cognition/execution_decision';
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import { buildLumiTurnDispatch } from '../server/cognition/turn_dispatch';
@@ -40,15 +40,18 @@ function mcpDeclaration(name: string) {
   };
 }
 
-function buildDeclarations() {
+function buildToolRuntime() {
   const registry = new ToolRegistry();
   registerAllTools(registry);
   const declarations = registry.getToolDeclarations();
   const existing = new Set(declarations.map(item => item.function.name));
-  return [
-    ...declarations,
-    ...MCP_DECLARATION_NAMES.filter(name => !existing.has(name)).map(mcpDeclaration),
-  ];
+  return {
+    registry,
+    declarations: [
+      ...declarations,
+      ...MCP_DECLARATION_NAMES.filter(name => !existing.has(name)).map(mcpDeclaration),
+    ],
+  };
 }
 
 function evaluateTurn(input: {
@@ -57,6 +60,7 @@ function evaluateTurn(input: {
   channel?: 'chat' | 'voice' | 'task';
   operationMode?: 'chat' | 'assistant' | 'autonomous';
 }) {
+  const runtime = buildToolRuntime();
   const dispatch = buildLumiTurnDispatch({
     userId: input.userId || 'requirement_matrix_user',
     text: input.text,
@@ -68,12 +72,14 @@ function evaluateTurn(input: {
   const execution = buildLumiExecutionDecision({
     flow: dispatch.flow,
     text: input.text,
-    toolDeclarations: buildDeclarations(),
+    toolDeclarations: runtime.declarations,
+    toolRegistry: runtime.registry,
   });
   const selection = buildLumiCapabilitySelection({
     dispatch,
     execution,
     text: input.text,
+    registry: runtime.registry,
   });
   return {
     contract: buildActionContract(input.text),
@@ -97,14 +103,14 @@ describe('Lumi requirement matrix pressure', () => {
     });
   });
 
-  it('promotes explicit Chat actions while keeping Assistant and Autonomy execution depths distinct', () => {
+  it('keeps natural-language Chat actions model-owned while preserving execution depth', () => {
     const text = '微信给阿陆发晚安';
     const chat = evaluateTurn({ text, operationMode: 'chat' });
     const assistant = evaluateTurn({ text, operationMode: 'assistant' });
     const autonomous = evaluateTurn({ text, operationMode: 'autonomous' });
 
     expect(chat.dispatch.flow.autoPromoteToAssistant).toBe(true);
-    expect(chat.dispatch.flow.effectiveOperationMode).toBe('assistant');
+    expect(chat.dispatch.flow.effectiveOperationMode).toBe('chat');
     expect(chat.dispatch.flow.allowToolUseForTurn).toBe(true);
     expect(chat.execution.allowToolUse).toBe(true);
     expect(chat.execution.toolRoute?.categories).toContain('messaging');
@@ -114,7 +120,7 @@ describe('Lumi requirement matrix pressure', () => {
       expect(result.dispatch.boundary).toBe('tool_action');
       expect(result.execution.allowToolUse).toBe(true);
       expect(result.selection.lane).toBe('messaging');
-      expect(result.route?.toolNames.slice(0, 6)).toContain('wechat_send_message');
+      expect(buildModelCapabilityPolicy(result.execution).allowedTools).toContain('wechat_send_message');
       expect(result.selection.preferredTools).toEqual(expect.arrayContaining([
         'wechat_send_message',
         'desktop_mouse_click_at',
@@ -122,6 +128,11 @@ describe('Lumi requirement matrix pressure', () => {
       ]));
       expect(result.execution.toolPolicy.requireConfirmation || []).not.toContain('wechat_send_message');
     }
+
+    // Chat remains the visible UI posture, but an explicit foreground task is
+    // executable in the same turn without a persistent regex-driven mode flip.
+    expect(chat.dispatch.flow.effectiveOperationMode).toBe('chat');
+    expect(buildModelCapabilityPolicy(chat.execution).allowedTools).toContain('desktop_open');
 
     expect(assistant.execution.maxIterations).toBeGreaterThanOrEqual(80);
     expect(autonomous.execution.maxIterations).toBeGreaterThan(assistant.execution.maxIterations);

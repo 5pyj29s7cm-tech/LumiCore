@@ -7,9 +7,9 @@ describe('chat and voice finalized delivery paths', () => {
   const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
   const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
 
-  it('buffers special workflow narration and finalizes the shared tool ledger', () => {
-    expect(chat).toContain('speak: async () => 0');
-    expect(chat).toContain('const finalizedWorkflow = finalizeLumiResponse({');
+  it('keeps special workflow adapters out of main chat and isolated on voice', () => {
+    expect(chat).not.toContain('executeSkillWorkflowAdapter');
+    expect(chat).not.toContain('const finalizedWorkflow = finalizeLumiResponse({');
     expect(chat).not.toContain('estimateSkillWorkflowChatSpeechMs');
 
     expect(voice).toContain('speak: async () => 0');
@@ -17,10 +17,10 @@ describe('chat and voice finalized delivery paths', () => {
     expect(voice).toContain('source: specialWorkflow.source');
   });
 
-  it('runs named workflow shortcuts through the same finalizer', () => {
-    expect(chat).toContain('const workflowQuickToolRecords: ToolExecutionRecord[] = []');
-    expect(chat).toContain('const finalizedWorkflowQuick = finalizeLumiResponse({');
-    expect(chat).toContain('toolRecords: workflowQuickToolRecords');
+  it('does not run named workflow regex shortcuts in main chat', () => {
+    expect(chat).not.toContain('runWorkflowMatch');
+    expect(chat).not.toContain('workflowQuickToolRecords');
+    expect(chat).not.toContain('finalizedWorkflowQuick');
   });
 
   it('does not forward background orchestrator chunks before finalization', () => {

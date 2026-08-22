@@ -1,7 +1,8 @@
 /**
  * Operation modes describe Lumi's execution posture.
  * The desktop presents three permission tiers:
- * - chat: conversation only
+ * - chat: visible conversation posture; model-owned foreground turns may
+ *   borrow the Assistant manifest without persisting a mode change
  * - assistant: foreground helper with full local/tool/desktop permissions
  * - autonomous: assistant permissions plus long-running 24h background autonomy
  *
@@ -26,20 +27,20 @@ export const OPERATION_MODE_CONFIGS: Record<OperationMode, OperationModeConfig> 
     id: 'chat',
     label: 'Chat',
     labelCN: 'Chat',
-    description: 'Pure conversation. Lumi answers, thinks, and explains without tools. A clear request for real action transitions the client and that turn to Assistant before execution; long-running work uses Autonomy.',
+    description: 'Visible conversational posture. A user-present model-owned turn may use the ordinary foreground Assistant manifest without persistently changing the client mode; long-running work uses Autonomy.',
     promptOverlay: [
       'You are in chat mode.',
-      'This mode is pure conversation: answer, reason, explain, brainstorm, and help the user decide.',
-      'Do not call tools, operate the desktop, run commands, write files, open apps, assemble teams, or claim that external work has started.',
-      'If the user clearly asks for real action, transition the client and that turn to Assistant before using tools. Do not run the action inside Chat itself.',
-      'A direct action request is enough authorization for this Chat-to-Assistant transition; do not add a redundant permission question. Use Autonomy for explicit continuous or long-running work.',
+      'Answer, reason, explain, brainstorm, and help the user decide naturally.',
+      'When the current model-owned turn exposes a foreground capability manifest, decide whether the user wants an answer or real execution and use only that manifest. The visible client may remain in Chat.',
+      'Do not persistently change the client mode merely because semantic routing matched an action. A direct request is enough authorization for ordinary foreground work; hard confirmation and consequence boundaries still apply.',
+      'Use Autonomy only for explicit continuous, unattended, or long-running work.',
       'When the task can be answered naturally without tools, just answer.',
     ].join('\n'),
     toolPolicy: {
-      allowedTools: [],
+      allowedTools: ['client_get_state', 'client_action'],
       requireConfirmation: [],
-      forbiddenTools: ['*'],
-      maxIterations: 0,
+      forbiddenTools: [],
+      maxIterations: 4,
     },
   },
 
@@ -128,8 +129,9 @@ export function getOperationModeConfig(mode?: string): OperationModeConfig {
 
 /**
  * Build mode permissions from the same runtime capability manifest used by
- * model exposure and execution. Chat/meeting stay tool-free; executable tools
- * opt into assistant/autonomous through their capability metadata.
+ * model exposure and execution. Chat keeps only bounded native-client tools,
+ * meeting stays tool-free, and executable tools opt into assistant/autonomous
+ * through their capability metadata.
  */
 export function buildOperationModeToolPolicy(
   mode: string | undefined,

@@ -7,6 +7,7 @@ import {
 } from '../server/cognition/routing_shadow_guard';
 import { executeForegroundMessagingAction } from '../server/cognition/foreground_messaging_execution';
 import { ToolRegistry } from '../server/tools/registry';
+import { buildModelCapabilityPolicy } from '../server/cognition/capability_selection';
 
 function messagingPlanFor(toolName: string): any {
   return {
@@ -80,6 +81,8 @@ describe('normalized/legacy routing shadow guard', () => {
     const guarded = applyLumiRoutingShadowGuard(legacy, comparison);
     expect(comparison.externalCommitBlocked).toBe(true);
     expect(guarded.toolPolicy.forbiddenTools).toContain('wechat_send_message');
+    expect(buildModelCapabilityPolicy(guarded).forbiddenTools).toContain('wechat_send_message');
+    expect(buildModelCapabilityPolicy(guarded).allowedTools).not.toContain('wechat_send_message');
     expect(guarded.toolRoute?.toolNames).toEqual(['wechat_read_recent_chat']);
   });
 

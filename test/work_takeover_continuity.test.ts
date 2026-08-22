@@ -57,6 +57,94 @@ describe('work takeover continuity', () => {
     expect(getWorkTakeoverContinuationQuickCommand('下一步呢', 'continuity_chat_user', { surface: 'chat' })).toBeNull();
   });
 
+  it('does not turn work-support questions into persisted-task continuation', async () => {
+    const { initDatabase } = await import('../db_layer');
+    const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');
+    const { buildWorkTakeoverContinuityContext, getWorkTakeoverContinuationQuickCommand } = await import('../server/work_takeover/continuity');
+    await initDatabase();
+
+    createWorkTakeoverTask({
+      userId: 'continuity_work_support_question_user',
+      category: 'general_work',
+      title: '旧的未完成工作',
+      nextActions: ['继续旧任务'],
+      source: 'manual',
+      status: 'in_progress',
+    });
+
+    const questions = [
+      '请分三句简短回答：你今天会如何陪我完成工作？每句不超过十五个字。',
+      '请分三句简短回答：你今天会如何陪我完成任务？每句不超过十五个字。',
+      '你会怎么帮助我完成任务？',
+      '请简短回答你会如何帮我完成工作，只回答，不执行任何任务。',
+      'Please answer in three short sentences: how will you help me complete my work today? Keep each under fifteen words.',
+      '你喜欢这个游戏吗？现在开始。',
+    ];
+    for (const text of questions) {
+      const context = buildWorkTakeoverContinuityContext('continuity_work_support_question_user', text, { surface: 'chat' });
+      expect(context.intent, text).toBeNull();
+      expect(context.strength, text).toBe('none');
+      expect(context.shouldResumeTask, text).toBe(false);
+      expect(context.routeText, text).toBe(text);
+      expect(getWorkTakeoverContinuationQuickCommand(text, 'continuity_work_support_question_user', { surface: 'chat' }), text).toBeNull();
+    }
+  });
+
+  it.each([
+    '现在帮我完成这项工作。',
+    '现在继续完成这项工作。',
+    'Help me complete this work now.',
+    'Continue this work now.',
+    '你会如何帮我完成工作？现在就开始。',
+    'How would you help me complete this work? Start now.',
+  ])('treats an explicit work imperative as advance, not status: %s', async (text) => {
+    const { initDatabase } = await import('../db_layer');
+    const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');
+    const { buildWorkTakeoverContinuityContext, getWorkTakeoverContinuationQuickCommand } = await import('../server/work_takeover/continuity');
+    await initDatabase();
+
+    const userId = `continuity_work_imperative_${Buffer.from(text).toString('hex')}`;
+    const task = createWorkTakeoverTask({
+      userId,
+      category: 'general_work',
+      title: '需要继续的工作',
+      nextActions: ['执行下一步'],
+      source: 'manual',
+      status: 'in_progress',
+    });
+
+    const context = buildWorkTakeoverContinuityContext(userId, text, { surface: 'chat' });
+    expect(context.intent).toBe('advance');
+    expect(context.strength).toBe('direct');
+    expect(context.shouldResumeTask).toBe(true);
+    const command = getWorkTakeoverContinuationQuickCommand(text, userId, { surface: 'chat' });
+    expect(command?.toolCall.name).toBe('work_takeover_task_advance');
+    expect(command?.toolCall.arguments.id).toBe(task.id);
+  });
+
+  it('keeps an explicit completion question on the status path', async () => {
+    const { initDatabase } = await import('../db_layer');
+    const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');
+    const { buildWorkTakeoverContinuityContext } = await import('../server/work_takeover/continuity');
+    await initDatabase();
+
+    createWorkTakeoverTask({
+      userId: 'continuity_completion_question_user',
+      category: 'general_work',
+      title: '需要查询的工作',
+      nextActions: ['等待查询'],
+      source: 'manual',
+      status: 'in_progress',
+    });
+
+    const context = buildWorkTakeoverContinuityContext(
+      'continuity_completion_question_user',
+      '完成这个工作了吗？',
+      { surface: 'chat' },
+    );
+    expect(context.intent).toBe('status');
+  });
+
   it('binds short chat follow-ups to the failed task recovery point', async () => {
     const { initDatabase } = await import('../db_layer');
     const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');

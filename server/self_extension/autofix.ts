@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import { buildSelfExtensionPlan } from './pipeline';
 import {
+  isCapabilityLearningRecordVerified,
   listCapabilityLearningRecords,
   upsertCapabilityLearningRecord,
   type CapabilityExperimentRecord,
@@ -157,7 +158,7 @@ function reusableLearnedRecord(
   goal: string,
 ): CapabilityLearningRecord | undefined {
   return listCapabilityLearningRecords({ userId, scopeDomain, orgId, domain, goal, limit: 6 })
-    .find(record => ['learned', 'experiment_prepared', 'experiment_passed'].includes(record.status));
+    .find(isCapabilityLearningRecordVerified);
 }
 
 function routeFromExistingCoverage(plan: ReturnType<typeof buildSelfExtensionPlan>, toolNamesForRoute: string[]): CapabilityRoute {
@@ -193,7 +194,7 @@ function transientCoverageRecord(
     orgId,
     domain: plan.domain,
     goal: plan.goal,
-    status: 'learned',
+    status: 'hypothesis',
     selectedRoute: route,
     planReadiness: plan.readiness,
     existingTools: unique([
@@ -350,10 +351,11 @@ async function runMinimalExperiment(options: CapabilityGapAutofixOptions, route:
 function recordStatusFromExperiment(route: CapabilityRoute, experiment: CapabilityExperimentRecord, needsResearch: boolean): CapabilityLearningStatus {
   if (experiment.status === 'passed') return 'experiment_passed';
   if (experiment.status === 'prepared') return 'experiment_prepared';
+  if (experiment.status === 'needs_review') return 'experiment_failed';
   if (experiment.status === 'blocked') return 'blocked';
   if (needsResearch) return 'needs_research';
   if (route.interfacePattern === 'core') return 'needs_core_work';
-  return 'learned';
+  return 'hypothesis';
 }
 
 function triggerHints(goal: string, route: CapabilityRoute): string[] {

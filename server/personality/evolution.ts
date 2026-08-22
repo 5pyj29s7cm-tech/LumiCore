@@ -17,12 +17,30 @@ import { PersonalityConfig, ExpressionStyle, PersonalityGrowthState } from './ty
 import { Memory } from '../memory/types';
 import { queryMemories } from '../memory/store';
 import { NormalizedMessage, makeLLMCall } from '../llm/providers';
-import { readDB } from '../../db_layer';
 import { getScopedPreferredLLM } from '../llm/user_preferences';
+import {
+  beginEvolutionSynthesis,
+  buildEvolutionEvidenceCursor,
+  evolutionScopeKey,
+  observeEvolutionEvidence,
+  recordEvolutionSynthesisFailure,
+  recordEvolutionSynthesisSuccess,
+  type EvolutionScope,
+} from './evolution_synthesis_guard';
 
 export interface PersonalityLearningScope {
   domain?: 'personal' | 'work';
   orgId?: string;
+}
+
+export interface EvolutionSynthesisOptions {
+  /** Explicit user-triggered evolution may bypass a previous failure backoff. */
+  force?: boolean;
+  minimumMemoryCount?: number;
+}
+
+export interface EvolutionExecutionOptions {
+  forceSynthesis?: boolean;
 }
 
 // ── Types ──
@@ -158,6 +176,33 @@ function addGrowthStateMutation(
  * Build a structured OwnerProfile by having an LLM analyze accumulated
  * owner_trait memories. Returns null if insufficient data.
  */
+const ownerProfileSynthesisFlights = new Map<string, Promise<OwnerProfile | null>>();
+
+function normalizedEvolutionScope(userId: string, scope: PersonalityLearningScope): EvolutionScope {
+  const domain = scope.domain === 'work' && scope.orgId ? 'work' : 'personal';
+  return {
+    userId: userId || 'anonymous',
+    domain,
+    orgId: domain === 'work' ? String(scope.orgId) : '',
+  };
+}
+
+function classifyEvolutionSynthesisFailure(error: unknown): { category: string; message: string } {
+  const name = error instanceof Error ? error.name : '';
+  const message = error instanceof Error ? error.message : String(error || 'unknown failure');
+  const normalized = `${name} ${message}`.toLowerCase();
+  const category = normalized.includes('timeout') || normalized.includes('timed out')
+    ? 'timeout'
+    : normalized.includes('429') || normalized.includes('rate limit')
+      ? 'rate_limit'
+      : normalized.includes('401') || normalized.includes('403') || normalized.includes('auth')
+        ? 'authentication'
+        : error instanceof SyntaxError
+          ? 'invalid_response'
+          : 'provider_failure';
+  return { category, message: `${name || 'Error'}: ${message}` };
+}
+
 export async function synthesizeOwnerProfile(
   userId: string,
   getDeepSeek: () => any,
@@ -166,21 +211,82 @@ export async function synthesizeOwnerProfile(
   getAnthropic: () => any,
   getQwen: () => any,
   scope: PersonalityLearningScope = { domain: 'personal', orgId: '' },
+  options: EvolutionSynthesisOptions = {},
 ): Promise<OwnerProfile | null> {
-  const domain = scope.domain === 'work' && scope.orgId ? 'work' : 'personal';
-  const orgId = domain === 'work' ? String(scope.orgId) : '';
+  const normalizedScope = normalizedEvolutionScope(userId, scope);
   const memories = queryMemories({
     userId,
     perspective: 'owner_trait',
     limit: 50,
     minConfidence: 0.3,
-    domain,
-    orgId,
+    domain: normalizedScope.domain,
+    orgId: normalizedScope.orgId,
   });
+  const minimumMemoryCount = Math.max(
+    1,
+    Math.floor(options.minimumMemoryCount || DEFAULT_EVOLUTION_CONFIG.minMemoriesForEvolution),
+  );
+  if (memories.length < minimumMemoryCount) return null;
 
-  if (memories.length < DEFAULT_EVOLUTION_CONFIG.minMemoriesForEvolution) {
+  const evidence = buildEvolutionEvidenceCursor(memories);
+  const flightKey = evolutionScopeKey(normalizedScope);
+  const existingFlight = ownerProfileSynthesisFlights.get(flightKey);
+  if (existingFlight) {
+    // Do not return the leader's profile to another mutation/apply caller.
+    // Evidence arriving mid-flight remains pending for the next trigger.
+    observeEvolutionEvidence(normalizedScope, evidence);
+    await existingFlight;
     return null;
   }
+
+  const flight = (async (): Promise<OwnerProfile | null> => {
+    const admission = beginEvolutionSynthesis(normalizedScope, evidence, { force: options.force });
+    if (!admission.allowed) return null;
+    try {
+      const profile = await synthesizeOwnerProfileAttempt(
+        userId,
+        getDeepSeek,
+        getGemini,
+        getOpenAI,
+        getAnthropic,
+        getQwen,
+        normalizedScope,
+        memories,
+      );
+      recordEvolutionSynthesisSuccess(normalizedScope, evidence);
+      return profile;
+    } catch (error) {
+      const failure = classifyEvolutionSynthesisFailure(error);
+      const state = recordEvolutionSynthesisFailure(normalizedScope, evidence, failure);
+      console.warn(
+        `[Evolution] Owner profile synthesis failed (${failure.category}); `
+        + `retry after ${state.retryAfter}: ${failure.message}`,
+      );
+      return null;
+    }
+  })();
+
+  ownerProfileSynthesisFlights.set(flightKey, flight);
+  try {
+    return await flight;
+  } finally {
+    if (ownerProfileSynthesisFlights.get(flightKey) === flight) {
+      ownerProfileSynthesisFlights.delete(flightKey);
+    }
+  }
+}
+
+async function synthesizeOwnerProfileAttempt(
+  userId: string,
+  getDeepSeek: () => any,
+  getGemini: () => any,
+  getOpenAI: () => any,
+  getAnthropic: () => any,
+  getQwen: () => any,
+  scope: EvolutionScope,
+  memories: Memory[],
+): Promise<OwnerProfile | null> {
+  const { domain, orgId } = scope;
 
   const memoryTexts = memories.map((m, i) =>
     `[${i + 1}] confidence=${m.confidence.toFixed(2)} | ${m.content}`
@@ -252,9 +358,8 @@ ${memoryTexts}`;
     if (!Array.isArray(profile.communicationPatterns)) profile.communicationPatterns = [];
 
     return profile;
-  } catch (err) {
-    console.error('[Evolution] Failed to synthesize owner profile:', err);
-    return null;
+  } catch (error) {
+    throw error;
   }
 }
 
@@ -510,6 +615,7 @@ export async function evolvePersonality(
   getQwen: () => any,
   evolutionConfig: EvolutionConfig = DEFAULT_EVOLUTION_CONFIG,
   scope: PersonalityLearningScope = { domain: 'personal', orgId: '' },
+  options: EvolutionExecutionOptions = {},
 ): Promise<EvolutionStep | null> {
   // Gate: connection score
   if (connectionScore < evolutionConfig.minConnectionForEvolution) {
@@ -519,7 +625,19 @@ export async function evolvePersonality(
 
   // Synthesize owner profile (evolves when there's enough data, cooldown is now
   // handled externally via the scheduler's memory-count gate, not a fixed timer)
-  const profile = await synthesizeOwnerProfile(userId, getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen, scope);
+  const profile = await synthesizeOwnerProfile(
+    userId,
+    getDeepSeek,
+    getGemini,
+    getOpenAI,
+    getAnthropic,
+    getQwen,
+    scope,
+    {
+      force: options.forceSynthesis,
+      minimumMemoryCount: evolutionConfig.minMemoriesForEvolution,
+    },
+  );
   if (!profile) {
     console.log(`[Evolution] Insufficient owner_trait memories for ${userId}`);
     return null;
@@ -599,6 +717,7 @@ export async function lightweightEvolve(
   const profile = await synthesizeOwnerProfile(
     userId,
     getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen, scope,
+    { minimumMemoryCount: effConfig.minMemoriesForEvolution },
   );
   if (!profile) return null; // Not enough owner_trait memories
 

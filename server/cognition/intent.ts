@@ -1,9 +1,9 @@
 /**
- * Intent Classifier — Lumi's rule-based understanding layer.
+ * Legacy intent classifier — read-only routing telemetry.
  *
- * Classifies user input into intent categories WITHOUT calling any LLM.
- * This is the first stage of Lumi's independent cognitive pipeline.
- * The LLM is only invoked later for text generation, not for decision-making.
+ * These categories are compatibility hints for traces, analytics, and prompt
+ * context. They never authorize a tool, select a terminal response, or replace
+ * the model's respond-versus-act decision over the current capability manifest.
  */
 
 import { isUserCorrectionOrExplanationQuestion } from './tool_intent';
@@ -126,7 +126,7 @@ export interface IntentResult {
   entities: Record<string, string>;  // Extracted entities (file names, URLs, queries, etc.)
   subIntent?: string;       // e.g. for command: "open", "create", "delete"
   needsLLM: boolean;        // Whether this intent requires LLM text generation
-  directToolCall?: {        // If set, skip LLM and call this tool directly
+  directToolCall?: {        // Legacy tool candidate; advisory only
     name: string;
     args: Record<string, any>;
   };
@@ -167,6 +167,17 @@ function isSimpleDirectOpenTarget(target: string): boolean {
   // requests need the normal planner so every requested outcome is preserved.
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   return !/(?:然后|接着|随后|之后|并且|同时|打开后|启动后|运行后|看一下|看下|看看|查看|检查|读取|分析|统计|记住|画图|画出来|绘制|生成|创建|新建|修改|编辑|保存|导出|登录|搜索|发送|发布|播放|执行脚本|运行脚本|问一下|询问|回复|告诉|[，,；;].{0,80}(?:在|用|去|再|把|将)|\b(?:then|after|inspect|read|analy[sz]e|count|remember|draw|draft|create|generate|edit|save|export|login|search|send|publish|play|script|ask|reply|tell)\b)/iu.test(normalized);
+}
+
+/**
+ * Architectural contract for natural-language turns. Regex classification is
+ * retained as shadow telemetry only; execution authority stays with the model
+ * and the policy-filtered capability manifest.
+ */
+export const LEGACY_INTENT_CLASSIFIER_AUTHORITY = 'advisory' as const;
+
+export function legacyIntentCanOwnNaturalLanguageDecision(): false {
+  return false;
 }
 
 const NEGATED_COMMAND_PREFIX_RE =

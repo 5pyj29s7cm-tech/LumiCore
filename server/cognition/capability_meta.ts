@@ -1,5 +1,6 @@
 import type { OperationMode } from './operation_modes';
 import { formatCnCapabilityMetaResponse } from '../regions/packs/cn/capability_meta_messages';
+import { normalizeActionIntent } from './normalized_action_intent';
 
 export interface CapabilityMetaResponseInput {
   text: string;
@@ -19,8 +20,30 @@ const CAPABILITY_ACCESS_RE =
 const SELF_INTRODUCTION_META_RE =
   /(?:\u81ea\u6211\u4ecb\u7ecd|\u4ecb\u7ecd(?:\u4e00\u4e0b)?\u4f60\u81ea\u5df1|\u4ecb\u7ecd\u4f60\u662f\u8c01|\u4f60\u662f\u8c01.{0,40}\u80fd\u505a\u4ec0\u4e48|\u50cf\u7b2c\u4e00\u6b21\u9762\u5bf9\u65b0\u7528\u6237|introduce\s+yourself|who\s+are\s+you.{0,80}what\s+can\s+you\s+do)/iu;
 
+const INDEPENDENT_IMMEDIATE_ACTION_RE =
+  /(?:^|[\uff0c,\u3002\uff1b;\uff01\uff1f!?]\s*)(?:(?:\u8bf7|\u73b0\u5728|\u9a6c\u4e0a|\u7acb\u5373|\u76f4\u63a5|\u7136\u540e|\u63a5\u7740|\u540c\u65f6|\u5e76\u4e14|\u5e2e\u6211|\u7ed9\u6211)\s*)+(?:\u6253\u5f00|\u542f\u52a8|\u8fd0\u884c|\u6267\u884c|\u67e5\u8be2|\u641c\u7d22|\u8bfb\u53d6|\u521b\u5efa|\u5199\u5165|\u53d1\u9001|\u63d0\u4ea4|\u53d1\u5e03|\u5207\u6362|\u6f14\u793a|\u5c55\u793a|\u64cd\u4f5c|\u5904\u7406|\u7ee7\u7eed|\u91cd\u8bd5)|(?:\u4ecb\u7ecd|\u81ea\u6211\u4ecb\u7ecd).{0,28}(?:\u5e76|\u540c\u65f6|\u7136\u540e|\u8fb9.{0,8}\u8fb9).{0,12}(?:\u6f14\u793a|\u5c55\u793a|\u6253\u5f00|\u64cd\u4f5c)|(?:^|[,.!?;]\s*)(?:(?:please|now|immediately|then|also)\s+)+(?:open|launch|run|execute|search|read|create|write|send|submit|publish|switch|show|demonstrate|operate|continue|resume|retry)\b/iu;
+
+const PURE_CAPABILITY_EXPLANATION_FORM_RE =
+  /(?:\u5982\u4f55|\u600e\u4e48|\u600e\u6837).{0,36}(?:\u4f7f\u7528|\u8c03\u7528|\u5f00\u542f).{0,24}(?:\u5de5\u5177|\u6280\u80fd)|\bhow\b.{0,48}\b(?:use|using|call|access|enable)\b.{0,32}\b(?:tools?|skills?|capabilit(?:y|ies))\b/iu;
+
+function hasConcreteExecutionIntent(text: string): boolean {
+  const normalized = String(text || '').replace(/\s+/gu, ' ').trim();
+  if (!normalized) return false;
+  if (INDEPENDENT_IMMEDIATE_ACTION_RE.test(normalized)) return true;
+  if (PURE_CAPABILITY_EXPLANATION_FORM_RE.test(normalized)) return false;
+  const intent = normalizeActionIntent(normalized);
+  return ![
+    'none',
+    'status_query',
+    'correction_explanation',
+    'client_state',
+  ].includes(intent.kind) && intent.operation !== 'status';
+}
+
 export function isSelfIntroductionMetaQuestion(text: string): boolean {
-  return SELF_INTRODUCTION_META_RE.test(String(text || '').replace(/\s+/g, ' ').trim());
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  return SELF_INTRODUCTION_META_RE.test(normalized)
+    && !hasConcreteExecutionIntent(normalized);
 }
 
 /**
@@ -29,6 +52,7 @@ export function isSelfIntroductionMetaQuestion(text: string): boolean {
  */
 export function isCapabilityMetaQuestion(text: string): boolean {
   const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  if (hasConcreteExecutionIntent(normalized)) return false;
   if (isSelfIntroductionMetaQuestion(normalized)) return true;
   if (!normalized || !CAPABILITY_SUBJECT_RE.test(normalized)) return false;
   // A no-tool clause is often an execution boundary attached to a substantive

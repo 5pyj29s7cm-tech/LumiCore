@@ -17,6 +17,7 @@ import {
   shouldDisplayAgentResponse,
   type AgentResponseDelivery,
 } from '@/lib/agentResponseDelivery';
+import { ChatTerminalReceiptLedger } from '@/lib/chatEventReceipts';
 
 export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any; onEnterSanctuary?: () => void }) {
   const isZh = t?.langCode !== 'en';
@@ -29,6 +30,8 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
   const [visionData, setVisionData] = useState<string[]>([]);
   const [founderVision, setFounderVision] = useState('');
   const [isFounderEditing, setIsFounderEditing] = useState(false);
+  const activeRequestIdRef = useRef<string | null>(null);
+  const terminalReceiptsRef = useRef(new ChatTerminalReceiptLedger());
   
   const socket = useSocket();
   const { callState, audioLevel, startCall, endCall, transcript } = useVoiceCall({
@@ -67,7 +70,17 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
   useEffect(() => {
     if (!socket) return;
 
-    const handleAgentResponse = (data: AgentResponseDelivery & { agentName?: string }) => {
+    const isCurrentUnifiedEvent = (data?: { requestId?: string; source?: string }) => {
+      const source = String(data?.source || '').trim();
+      if (source && source !== 'unified_agent') return false;
+      const requestId = String(data?.requestId || '').trim();
+      const activeRequestId = String(activeRequestIdRef.current || '').trim();
+      if (requestId) return Boolean(activeRequestId) && requestId === activeRequestId;
+      return Boolean(activeRequestId);
+    };
+
+    const handleAgentResponse = (data: AgentResponseDelivery & { agentName?: string; requestId?: string; source?: string; conversationId?: string }) => {
+      if (!isCurrentUnifiedEvent(data) || !terminalReceiptsRef.current.claim(data)) return;
       if (shouldDisplayAgentResponse(data)) {
         const agentMsg = {
           id: Date.now().toString(),
@@ -78,10 +91,12 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
         };
         setMessages(prev => [...prev, agentMsg]);
       }
-      
+      activeRequestIdRef.current = null;
+      setIsTyping(false);
     };
 
-    const handleStatus = (data: { status: string }) => {
+    const handleStatus = (data: { status: string; requestId?: string; source?: string }) => {
+      if (!isCurrentUnifiedEvent(data)) return;
       if (data.status === 'thinking' || data.status === 'responding') {
         setIsTyping(true);
       } else if (isTerminalAgentStatus(data.status)) {
@@ -89,9 +104,11 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
       }
     };
 
-    const handleError = (data: { message: string }) => {
+    const handleError = (data: { message: string; requestId?: string; source?: string; conversationId?: string }) => {
+      if (!isCurrentUnifiedEvent(data) || !terminalReceiptsRef.current.claim(data)) return;
       console.error("Socket Agent Error:", data.message);
       setIsTyping(false);
+      activeRequestIdRef.current = null;
     };
 
     const handleProactive = (data: {
@@ -239,13 +256,18 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
     setNewMessage('');
     
     if (socket) {
+      const requestId = `unified_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      activeRequestIdRef.current = requestId;
+      setIsTyping(true);
       socket.emit("agent:chat", {
         text: messageText,
         history: messages.map(m => ({
           role: m.type === 'user' ? 'user' : 'assistant',
           content: m.text
         })),
-        personalityId: 'lumi'
+        personalityId: 'lumi',
+        requestId,
+        source: 'unified_agent',
       });
     }
   };

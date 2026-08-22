@@ -204,7 +204,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       label: 'Design Operations',
       category: 'client',
       status: !hasState ? 'requires_setup' : staleState ? 'attention' : 'ready',
-      actions: ['desktop_list_files', 'read_file', 'read_pdf', 'ocr_image_file', 'floorplan_extract_geometry', 'create_ppt', 'create_pdf', 'cad_generate_dxf', 'cad_prepare_autocad_operations', 'mcp_cad-drafting_autocad_playback_file', 'work_product_verify', 'wechat_send_file'],
+      actions: ['desktop_list_files', 'desktop_write_text_file', 'read_file', 'read_pdf', 'ocr_image_file', 'floorplan_extract_geometry', 'create_ppt', 'create_pdf', 'cad_generate_dxf', 'cad_prepare_autocad_operations', 'mcp_cad-drafting_autocad_playback_file', 'work_product_verify', 'wechat_send_file'],
       surfaces: ['Lumi desktop', 'work takeover task record', 'WPS or editor', 'client-facing PPT/PDF proposal files', 'desktop CAD apps', 'CAD DXF draft', 'AutoCAD MCP/COM stroke-by-stroke playback', 'Revit/BIM application results', 'personal WeChat or WeCom'],
       requiresConfirmation: false,
       setup: hasState ? [] : ['Open Lumi desktop client and provide the measured source drawings or project files required by the design task.'],

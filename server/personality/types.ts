@@ -63,6 +63,10 @@ export interface ToolPolicy {
   forbiddenTools: string[];
   /** Maximum tool loop iterations */
   maxIterations: number;
+  /** Optional hard budget for one provider/model candidate attempt. */
+  modelAttemptTimeoutMs?: number;
+  /** Optional cumulative model-provider wait budget; tool runtime is excluded. */
+  modelWaitBudgetMs?: number;
   /** Per-tool security level overrides — takes precedence over the tool's built-in level */
   securityOverrides?: Record<string, 'safe' | 'confirm' | 'forbidden'>;
 }

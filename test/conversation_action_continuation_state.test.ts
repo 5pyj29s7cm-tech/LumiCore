@@ -91,6 +91,7 @@ describe('conversation action continuation state', () => {
       conversationId: conversation.id,
       role: 'user',
       content: '在桌面创建文件。',
+      deferActionPreparation: true,
       domain: 'personal',
     });
     addMessage({
@@ -99,6 +100,7 @@ describe('conversation action continuation state', () => {
       conversationId: conversation.id,
       role: 'assistant',
       content: '已经创建好了。',
+      taskIntent: 'task',
       domain: 'personal',
     });
 
@@ -110,6 +112,121 @@ describe('conversation action continuation state', () => {
         receipts: [],
         goal: '在桌面创建文件。',
       });
+  });
+
+  it('does not create a durable task from user wording or ordinary model conversation alone', () => {
+    const userId = `conversation-no-heuristic-task-${Date.now()}-${Math.random()}`;
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'user',
+      content: '打开客户端设置。',
+      domain: 'personal',
+    });
+    expect(getOrCreateActiveConversation(userId, 'lumi', 'personal', '').actionContinuationState)
+      .toBeUndefined();
+
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'assistant',
+      content: '我们可以先确认你想调整哪一项。',
+      taskIntent: 'conversation',
+      domain: 'personal',
+    });
+    expect(getOrCreateActiveConversation(userId, 'lumi', 'personal', '').actionContinuationState)
+      .toBeUndefined();
+  });
+
+  it('keeps canonical observation receipts ephemeral unless the model selects a durable capability', () => {
+    const userId = `conversation-observation-ephemeral-${Date.now()}-${Math.random()}`;
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    const verification = {
+      strategy: 'terminal_receipt' as const,
+      required: true,
+      requiredFields: [] as string[],
+      successSignals: [] as string[],
+      limitations: [] as string[],
+    };
+
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'user',
+      content: '读取一下当前客户端状态。',
+      domain: 'personal',
+    });
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'assistant',
+      content: '当前客户端状态正常。',
+      toolCalls: [{
+        name: 'client_get_state',
+        arguments: {},
+        result: '{"status":"ready"}',
+        capability: {
+          capabilityId: 'client.state.observe',
+          lane: 'client',
+          operation: 'observe',
+          risk: 'low',
+          sideEffects: [{ type: 'local_read', scope: 'client_state', reversible: true }],
+          verification,
+        },
+        terminalVerification: {
+          status: 'verified',
+          strategy: 'terminal_receipt',
+          reason: 'Client state returned.',
+        },
+      }],
+      domain: 'personal',
+    });
+
+    expect(getOrCreateActiveConversation(userId, 'lumi', 'personal', '').actionContinuationState)
+      .toBeUndefined();
+
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'user',
+      content: '打开客户端设置。',
+      domain: 'personal',
+    });
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'assistant',
+      content: '设置已打开。',
+      toolCalls: [{
+        name: 'client_action',
+        arguments: { action: 'open_settings' },
+        result: '{"status":"verified"}',
+        capability: {
+          capabilityId: 'client.navigation',
+          lane: 'client',
+          operation: 'mutate',
+          risk: 'low',
+          sideEffects: [{ type: 'local_state_change', scope: 'client_surface', reversible: true }],
+          verification,
+        },
+        terminalVerification: {
+          status: 'verified',
+          strategy: 'terminal_receipt',
+          reason: 'Client surface changed.',
+        },
+      }],
+      domain: 'personal',
+    });
+
+    expect(getOrCreateActiveConversation(userId, 'lumi', 'personal', '').actionContinuationState)
+      .toMatchObject({ goal: '打开客户端设置。', evidenceTools: ['client_action'] });
   });
 
   it('does not let an unrelated proactive message consume an in-flight task pointer', () => {
@@ -215,6 +332,19 @@ describe('conversation action continuation state', () => {
       role: 'user',
       content: '打开 WPS 并新建 Word 文档',
       domain: 'personal',
+    });
+    prepareConversationActionExecution({
+      conversationId: conversation.id,
+      userId,
+      userText: '打开 WPS 并新建 Word 文档',
+      requestId: 'restart-recovery-request',
+      toolPolicy: {
+        allowedTools: ['desktop_open'],
+        requireConfirmation: [],
+        forbiddenTools: [],
+        maxIterations: 5,
+      },
+      forceTask: true,
     });
     expect(getOrCreateActiveConversation(userId, 'lumi', 'personal', '').actionContinuationState)
       .toMatchObject({ status: 'planning', unfinished: true });

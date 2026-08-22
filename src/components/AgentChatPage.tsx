@@ -51,7 +51,21 @@ import {
   shouldDisplayAgentResponse,
 } from '@/lib/agentResponseDelivery';
 import { buildChatConversationScopeKey } from '@/lib/chatConversationScope';
-import { shouldReloadPersistedConversation } from '@/lib/conversationSync';
+import {
+  resolveChatExecutionEvent,
+  shouldApplyInitialConversationMessages,
+  shouldReloadPersistedConversation,
+} from '@/lib/conversationSync';
+import {
+  ChatTerminalReceiptLedger,
+  ChatRequestLedger,
+  ChatTurnTimerGuard,
+  finalizeStreamedChatMessage,
+  normalizePersistedPendingChatExecutions,
+  removePersistedPendingChatExecution,
+  upsertPersistedPendingChatExecution,
+  type PersistedPendingChatExecution,
+} from '@/lib/chatEventReceipts';
 import { useFocusThreads } from '@/hooks/useFocusThreads';
 import { CommandCenterPanel } from './CommandCenterPanel';
 import type { CommandCenterView } from './commandCenterTypes';
@@ -64,6 +78,13 @@ const CHAT_HISTORY_LIMIT = 300;
 const CHAT_RENDER_LIMIT = 80;
 const CHAT_SEARCH_LIMIT = 200;
 type WorkflowStatus = 'idle' | 'thinking' | 'background' | 'executing' | 'waiting_confirmation' | 'cancelling' | 'cancelled' | 'done' | 'error';
+
+type ChatTurnUiMeta = {
+  hadTool: boolean;
+  needsEvidence: boolean;
+  finalization: ChatResponseFinalization | null;
+  steps: WorkflowStep[];
+};
 
 export interface AgentChatVoiceSession {
   callState: CallState;
@@ -80,16 +101,8 @@ type ChatExecutionSnapshot = {
   createdAt: string;
   updatedAt: string;
   terminal: boolean;
+  queued?: boolean;
   terminalEvent?: { event: string; payload: Record<string, any> };
-};
-
-type PersistedChatExecution = {
-  requestId: string;
-  source: string;
-  domain: 'personal' | 'work';
-  orgId?: string;
-  conversationId?: string;
-  startedAt: string;
 };
 
 type ConversationHistoryItem = {
@@ -663,18 +676,33 @@ export function AgentChatPage({
 
   useEffect(() => {
     if (!isOpen) return;
-    const frame = requestAnimationFrame(() => messageInputRef.current?.focus());
+    const frame = requestAnimationFrame(() => messageInputRef.current?.focus({ preventScroll: true }));
     return () => cancelAnimationFrame(frame);
   }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;
+    let focusFrame: number | null = null;
     const focusCommandInput = () => {
-      messageInputRef.current?.focus();
-      requestAnimationFrame(() => messageInputRef.current?.focus());
+      messageInputRef.current?.focus({ preventScroll: true });
+      if (focusFrame !== null) cancelAnimationFrame(focusFrame);
+      focusFrame = requestAnimationFrame(() => {
+        focusFrame = null;
+        messageInputRef.current?.focus({ preventScroll: true });
+      });
+    };
+    const restoreVisibleCommandInput = () => {
+      if (document.visibilityState === 'visible') focusCommandInput();
     };
     window.addEventListener('lumi:focus-command-input', focusCommandInput);
-    return () => window.removeEventListener('lumi:focus-command-input', focusCommandInput);
+    window.addEventListener('focus', focusCommandInput);
+    document.addEventListener('visibilitychange', restoreVisibleCommandInput);
+    return () => {
+      window.removeEventListener('lumi:focus-command-input', focusCommandInput);
+      window.removeEventListener('focus', focusCommandInput);
+      document.removeEventListener('visibilitychange', restoreVisibleCommandInput);
+      if (focusFrame !== null) cancelAnimationFrame(focusFrame);
+    };
   }, [isOpen]);
   const [conversationAttachments, setConversationAttachments] = useState<ChatAttachment[]>([]);
   const conversationAttachmentsRef = useRef<ChatAttachment[]>([]);
@@ -709,7 +737,11 @@ export function AgentChatPage({
   const currentRequestNeedsEvidenceRef = useRef(false);
   const currentResponseFinalizationRef = useRef<ChatResponseFinalization | null>(null);
   const messagesRef = useRef<any[]>([]);
-  const activeChatViewDetachRef = useRef<(() => void) | null>(null);
+  const activeChatViewDetachersRef = useRef(new Set<() => void>());
+  const terminalReceiptsRef = useRef(new ChatTerminalReceiptLedger());
+  const chatRequestLedgerRef = useRef(new ChatRequestLedger());
+  const chatTurnTimerGuardRef = useRef(new ChatTurnTimerGuard());
+  const chatTurnUiMetaRef = useRef(new Map<string, ChatTurnUiMeta>());
   const conversationHistoryRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -786,8 +818,17 @@ export function AgentChatPage({
     }, 4200);
   }, [pushChatProgress]);
 
+  const scheduleWorkflowReset = useCallback((requestId?: string) => {
+    chatTurnTimerGuardRef.current.schedule(String(requestId || ''), 5000, () => {
+      setWorkflowStatus('idle');
+      setWorkflowSteps([]);
+      seenWorkflowToolEvents.current.clear();
+    });
+  }, []);
+
   useEffect(() => () => {
     if (chatProgressClearTimerRef.current) clearTimeout(chatProgressClearTimerRef.current);
+    chatTurnTimerGuardRef.current.dispose();
   }, []);
 
   const cancelBackgroundWorkflowTask = useCallback((taskId: string) => {
@@ -1310,6 +1351,15 @@ export function AgentChatPage({
     if (conversationScopeKey !== lastConversationScopeRef.current) {
       lastConversationScopeRef.current = conversationScopeKey;
       initialLoadDoneRef.current = false;
+      chatTurnTimerGuardRef.current.invalidate();
+      terminalReceiptsRef.current.clear();
+      chatRequestLedgerRef.current.clear();
+      chatTurnUiMetaRef.current.clear();
+      streamingMsgIdsRef.current.clear();
+      for (const detach of activeChatViewDetachersRef.current) detach();
+      activeChatViewDetachersRef.current.clear();
+      activeChatRequestIdRef.current = null;
+      textChatActiveRef.current = false;
       try {
         // Remove the pre-fix scope-only key, which could contain plaintext and
         // could incorrectly survive into a different conversation.
@@ -1326,21 +1376,50 @@ export function AgentChatPage({
     if (initialLoadDoneRef.current) return;
     initialLoadDoneRef.current = true;
 
-    // Load the single active conversation messages
-    fetch(scopedConversationUrl('/api/conversations/active'))
-        .then(r => r.json())
-        .then(async (data) => {
-          const conv = data.activeConversation;
-          if (conv) {
-            bindAttachmentContextToConversation(conv.id);
-            const msgRes = await fetch(scopedConversationUrl(`/api/conversations/${conv.id}/messages?limit=${CHAT_HISTORY_LIMIT}`));
-            const msgData = await msgRes.json();
-            if (msgData.messages && Array.isArray(msgData.messages)) {
-              setMessages(normalizePersistedMessages(msgData.messages));
-            }
-          }
-        })
-        .catch(() => {});
+    const initialConversationId = attachmentConversationIdRef.current;
+    const initialMessageCount = messagesRef.current.length;
+    let cancelled = false;
+
+    // Load the single active conversation messages. The request may resolve
+    // after the user has already started a live turn or switched transcripts;
+    // in that case the persisted snapshot must not replace the visible chat.
+    void (async () => {
+      try {
+        const activeResponse = await fetch(scopedConversationUrl('/api/conversations/active'));
+        const data = await activeResponse.json();
+        const conversationId = String(data.activeConversation?.id || '').trim();
+        if (!conversationId) return;
+        if (
+          cancelled
+          || lastConversationScopeRef.current !== conversationScopeKey
+          || activeChatRequestIdRef.current
+          || textChatActiveRef.current
+          || attachmentConversationIdRef.current !== initialConversationId
+          || messagesRef.current.length !== initialMessageCount
+        ) return;
+
+        bindAttachmentContextToConversation(conversationId);
+        const msgRes = await fetch(scopedConversationUrl(`/api/conversations/${conversationId}/messages?limit=${CHAT_HISTORY_LIMIT}`));
+        const msgData = await msgRes.json();
+        if (!Array.isArray(msgData.messages)) return;
+        if (!shouldApplyInitialConversationMessages({
+          cancelled,
+          expectedScopeKey: conversationScopeKey,
+          currentScopeKey: lastConversationScopeRef.current,
+          loadedConversationId: conversationId,
+          currentConversationId: attachmentConversationIdRef.current,
+          activeRequestId: activeChatRequestIdRef.current,
+          textChatActive: textChatActiveRef.current,
+          messageCountAtStart: initialMessageCount,
+          currentMessageCount: messagesRef.current.length,
+        })) return;
+        const persistedMessages = normalizePersistedMessages(msgData.messages);
+        messagesRef.current = persistedMessages;
+        setMessages(persistedMessages);
+      } catch {}
+    })();
+
+    return () => { cancelled = true; };
   }, [activeDomain, activeOrgId, agentId, attachmentContextStoragePrefix, bindAttachmentContextToConversation, isFounder, normalizePersistedMessages, scopedConversationUrl, user?.id, user?.username]);
 
   useEffect(() => {
@@ -1382,16 +1461,16 @@ export function AgentChatPage({
     };
   }, [agentId, isFounder, normalizePersistedMessages, scopedConversationUrl, searchQuery]);
 
-  const streamingMsgId = useRef<string | null>(null);
+  const streamingMsgIdsRef = useRef(new Map<string, string>());
   const textChatActiveRef = useRef(false);
   const activeChatRequestIdRef = useRef<string | null>(null);
-  const lastResumedRequestIdRef = useRef<string | null>(null);
+  const lastResumedRequestIdsRef = useRef(new Set<string>());
   const initialLoadDoneRef = useRef(false);
   const lastConversationScopeRef = useRef<string>('');
   const activeExecutionStorageKey = `lumi_active_chat_execution:${agentId}:${activeDomain}:${activeOrgId || ''}`;
   const persistActiveExecution = useCallback((requestId: string) => {
     try {
-      const execution: PersistedChatExecution = {
+      const execution: PersistedPendingChatExecution = {
         requestId,
         source: chatExecutionSource,
         domain: activeDomain,
@@ -1399,30 +1478,66 @@ export function AgentChatPage({
         conversationId: attachmentConversationIdRef.current || undefined,
         startedAt: new Date().toISOString(),
       };
-      localStorage.setItem(activeExecutionStorageKey, JSON.stringify(execution));
+      const current = JSON.parse(localStorage.getItem(activeExecutionStorageKey) || 'null');
+      localStorage.setItem(
+        activeExecutionStorageKey,
+        JSON.stringify(upsertPersistedPendingChatExecution(current, execution)),
+      );
     } catch {}
   }, [activeDomain, activeExecutionStorageKey, activeOrgId, chatExecutionSource]);
   const clearPersistedExecution = useCallback((requestId?: string) => {
     try {
-      if (requestId) {
-        const current = JSON.parse(localStorage.getItem(activeExecutionStorageKey) || 'null') as PersistedChatExecution | null;
-        if (current?.requestId && current.requestId !== requestId) return;
-      }
-      localStorage.removeItem(activeExecutionStorageKey);
+      if (!requestId) return localStorage.removeItem(activeExecutionStorageKey);
+      const current = JSON.parse(localStorage.getItem(activeExecutionStorageKey) || 'null');
+      const next = removePersistedPendingChatExecution(current, requestId);
+      if (next.pending.length > 0) localStorage.setItem(activeExecutionStorageKey, JSON.stringify(next));
+      else localStorage.removeItem(activeExecutionStorageKey);
     } catch {}
   }, [activeExecutionStorageKey]);
+  const settleTrackedChatRequest = useCallback((requestId?: string) => {
+    const normalizedRequestId = String(requestId || '').trim();
+    const result = chatRequestLedgerRef.current.settle(normalizedRequestId);
+    activeChatRequestIdRef.current = result.foregroundRequestId || null;
+    textChatActiveRef.current = result.remaining > 0;
+    clearPersistedExecution(normalizedRequestId || undefined);
+    if (result.foregroundRequestId) {
+      chatTurnTimerGuardRef.current.begin(result.foregroundRequestId);
+    }
+    return result;
+  }, [clearPersistedExecution]);
+  const acceptChatExecutionEvent = useCallback((
+    data?: { requestId?: string; source?: string; conversationId?: string },
+    expectedRequestId?: string | null,
+  ) => {
+    const eventRequestId = String(data?.requestId || '').trim();
+    const resolvedExpectedRequestId = expectedRequestId !== undefined
+      ? expectedRequestId
+      : eventRequestId && chatRequestLedgerRef.current.has(eventRequestId)
+        ? eventRequestId
+        : activeChatRequestIdRef.current;
+    const resolution = resolveChatExecutionEvent({
+      event: data,
+      currentConversationId: attachmentConversationIdRef.current,
+      expectedRequestId: resolvedExpectedRequestId,
+      expectedSource: chatExecutionSource,
+      textChatActive: textChatActiveRef.current,
+    });
+    if (!resolution.accepted) return false;
+    if (resolution.adoptedConversationId) {
+      bindAttachmentContextToConversation(resolution.adoptedConversationId, { carryCurrent: true });
+      if (resolvedExpectedRequestId && chatRequestLedgerRef.current.has(resolvedExpectedRequestId)) {
+        persistActiveExecution(resolvedExpectedRequestId);
+      }
+    }
+    return true;
+  }, [bindAttachmentContextToConversation, chatExecutionSource, persistActiveExecution]);
 
   useEffect(() => {
     if (isFounder || !socket) return;
 
-    const isCurrentChatEvent = (data?: { requestId?: string; source?: string; conversationId?: string }) => {
-      if (data?.conversationId && data.conversationId !== attachmentConversationIdRef.current) return false;
-      const activeRequestId = activeChatRequestIdRef.current;
-      if (activeRequestId) return data?.requestId === activeRequestId;
-      if (data?.requestId) return false;
-      if (data?.source && data.source !== chatExecutionSource) return false;
-      return textChatActiveRef.current;
-    };
+    const isCurrentChatEvent = (data?: { requestId?: string; source?: string; conversationId?: string }) => (
+      acceptChatExecutionEvent(data)
+    );
 
     const onProactive = (data: {
       message: string;
@@ -1455,13 +1570,16 @@ export function AgentChatPage({
 
     const onChunk = (data: { text: string; agentName: string; requestId?: string; source?: string; conversationId?: string }) => {
       if (!isCurrentChatEvent(data)) return;
-      if (streamingMsgId.current) {
+      const streamKey = String(data.requestId || '__legacy__');
+      const currentStreamId = streamingMsgIdsRef.current.get(streamKey);
+      if (currentStreamId) {
+        const sid = currentStreamId;
         setMessages(prev => prev.map(m =>
-          m.id === streamingMsgId.current ? { ...m, text: m.text + data.text } : m
+          m.id === sid ? { ...m, text: m.text + data.text } : m
         ));
       } else {
         const id = makeChatMessageId('stream');
-        streamingMsgId.current = id;
+        streamingMsgIdsRef.current.set(streamKey, id);
         setMessages(prev => [...prev, {
           id,
           text: data.text,
@@ -1474,44 +1592,58 @@ export function AgentChatPage({
 
     const onTool = (data: { correlationId?: string; name: string; args?: any; arguments?: any; result?: string; error?: string; requestId?: string; source?: string; conversationId?: string }) => {
       if (!isCurrentChatEvent(data)) return;
+      const requestId = String(data.requestId || '').trim();
       const args = data.arguments ?? data.args;
       const phase = data.error !== undefined ? 'error' : data.result !== undefined ? 'result' : 'start';
+      const eventRequestKey = requestId || '__legacy__';
       const workflowEventKey = data.correlationId
-        ? `${data.correlationId}:${phase}`
-        : `${data.name}:${phase}:${String(data.result ?? data.error ?? '').slice(0, 120)}`;
+        ? `${eventRequestKey}:${data.correlationId}:${phase}`
+        : `${eventRequestKey}:${data.name}:${phase}:${String(data.result ?? data.error ?? '').slice(0, 120)}`;
       if (seenWorkflowToolEvents.current.has(workflowEventKey)) return;
       seenWorkflowToolEvents.current.add(workflowEventKey);
 
       setWorkflowStatus('executing');
-      currentRequestHadToolRef.current = true;
+      const turnMeta = chatTurnUiMetaRef.current.get(requestId);
+      if (turnMeta) turnMeta.hadTool = true;
+      if (!requestId || chatRequestLedgerRef.current.foreground === requestId) {
+        currentRequestHadToolRef.current = true;
+      }
+      const appendTurnStep = (step: WorkflowStep) => {
+        if (turnMeta) {
+          turnMeta.steps = [...turnMeta.steps, step];
+          if (chatRequestLedgerRef.current.foreground === requestId) setWorkflowSteps(turnMeta.steps);
+        } else {
+          setWorkflowSteps(prev => [...prev, step]);
+        }
+      };
       pushChatProgress(describeToolProgress(data.name, phase, isZh), phase === 'error' ? 'error' : 'tool');
       if (data.result !== undefined) {
-        setWorkflowSteps(prev => [...prev, {
+        appendTurnStep({
           id: `chat-tool-ok-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
           type: 'tool_result',
           text: `${data.name}: ${uiMessage('chat-progress.tool-returned-result-awaiting-task-verification.4f8d02cb71', (isZh) ? 'zh' : 'en')}`,
           detail: data.result?.slice(0, 100),
           time: Date.now(),
-        }]);
+        });
       } else if (data.error !== undefined) {
-        setWorkflowSteps(prev => [...prev, {
+        appendTurnStep({
           id: `chat-tool-err-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
           type: 'error',
           text: `${data.name} ${t.workflowToolFailed || 'failed'}`,
           detail: data.error?.slice(0, 100),
           time: Date.now(),
-        }]);
+        });
       } else {
         const argsSummary = args
           ? Object.entries(args).map(([k, v]) => `${k}=${typeof v === 'string' ? v.slice(0, 30) : String(v).slice(0, 30)}`).join(', ')
           : '';
-        setWorkflowSteps(prev => [...prev, {
+        appendTurnStep({
           id: `chat-tool-start-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
           type: 'tool_start',
           text: `${t.workflowCalling || 'Calling'} ${data.name}`,
           detail: argsSummary || undefined,
           time: Date.now(),
-        }]);
+        });
       }
     };
 
@@ -1529,25 +1661,63 @@ export function AgentChatPage({
       finalized?: boolean;
       blocked?: boolean;
       reason?: string;
+      sidecar?: boolean;
     }) => {
       if (!isCurrentChatEvent(data)) return;
-      clearPersistedExecution(data.requestId);
-      if (!data.requestId || activeChatRequestIdRef.current === data.requestId) {
-        activeChatRequestIdRef.current = null;
-        textChatActiveRef.current = false;
+      if (!terminalReceiptsRef.current.claim(data)) return;
+      const requestId = String(data.requestId || '').trim();
+      const turnMeta = chatTurnUiMetaRef.current.get(requestId);
+      const streamKey = requestId || '__legacy__';
+      const streamId = streamingMsgIdsRef.current.get(streamKey);
+      const tracked = settleTrackedChatRequest(requestId);
+      const hasRemainingRequests = tracked.remaining > 0;
+      setIsTyping(hasRemainingRequests);
+
+      const displayable = shouldDisplayAgentResponse(data);
+      if (streamId) {
+        if (displayable && data.text?.trim()) {
+          // Capture the id before deleting its request bucket. React may run
+          // this updater after the handler returns.
+          setMessages(prev => finalizeStreamedChatMessage(prev, streamId, data.text));
+        } else if (!displayable) {
+          setMessages(prev => prev.filter(message => message.id !== streamId));
+        }
+        streamingMsgIdsRef.current.delete(streamKey);
+      } else if (displayable && data.text?.trim()) {
+        setMessages(prev => [...prev, {
+          id: makeChatMessageId('agent'),
+          text: data.text,
+          userName: data.agentName,
+          timestamp: new Date().toISOString(),
+          type: 'agent'
+        }]);
       }
+
+      if (hasRemainingRequests) {
+        const nextMeta = chatTurnUiMetaRef.current.get(tracked.foregroundRequestId);
+        currentRequestHadToolRef.current = nextMeta?.hadTool || false;
+        currentRequestNeedsEvidenceRef.current = nextMeta?.needsEvidence || false;
+        currentResponseFinalizationRef.current = nextMeta?.finalization || null;
+        setWorkflowSteps(nextMeta?.steps || []);
+        setWorkflowStatus('thinking');
+        chatTurnUiMetaRef.current.delete(requestId);
+        // Every terminal owns only its own UI bucket. This applies to an
+        // ordinary FIFO predecessor as well as a sidecar.
+        return;
+      }
+
       const finalization: ChatResponseFinalization = {
         finalized: data.finalized,
         blocked: data.blocked,
         reason: data.reason,
       };
+      if (turnMeta) turnMeta.finalization = finalization;
       currentResponseFinalizationRef.current = finalization;
-      setIsTyping(false);
-      if (!shouldDisplayAgentResponse(data)) {
+      if (!displayable) {
         setWorkflowStatus('error');
         const rejected = describeTurnCompletionProgress(
           isZh,
-          currentRequestHadToolRef.current,
+          turnMeta?.hadTool ?? currentRequestHadToolRef.current,
           true,
           { finalized: false, blocked: true, reason: data.reason },
         );
@@ -1559,16 +1729,7 @@ export function AgentChatPage({
           detail: data.reason,
           time: Date.now(),
         }]);
-        if (streamingMsgId.current) {
-          const sid = streamingMsgId.current;
-          setMessages(prev => prev.filter(m => m.id !== sid));
-          streamingMsgId.current = null;
-        }
-        setTimeout(() => {
-          setWorkflowStatus('idle');
-          setWorkflowSteps([]);
-          seenWorkflowToolEvents.current.clear();
-        }, 5000);
+        if (!hasRemainingRequests) scheduleWorkflowReset(data.requestId);
         return;
       }
       const finalizedSuccess = isFinalizedSuccessfulResponse(data);
@@ -1581,8 +1742,8 @@ export function AgentChatPage({
       );
       const completion = describeTurnCompletionProgress(
         isZh,
-        currentRequestHadToolRef.current,
-        currentRequestNeedsEvidenceRef.current,
+        turnMeta?.hadTool ?? currentRequestHadToolRef.current,
+        turnMeta?.needsEvidence ?? currentRequestNeedsEvidenceRef.current,
         finalization,
       );
       finishChatProgress(completion.text, completion.tone);
@@ -1596,39 +1757,22 @@ export function AgentChatPage({
           detail: (data.reason || data.text)?.slice(0, 100),
           time: Date.now(),
         }]);
-        setTimeout(() => {
-          setWorkflowStatus('idle');
-          setWorkflowSteps([]);
-          seenWorkflowToolEvents.current.clear();
-        }, 5000);
+        if (!hasRemainingRequests) scheduleWorkflowReset(data.requestId);
       }
-      if (streamingMsgId.current) {
-        // Finalize streamed message; keep chunked text if response text is empty.
-        const finalText = (data.text && data.text.trim()) ? data.text : null;
-        setMessages(prev => prev.map(m =>
-          m.id === streamingMsgId.current
-            ? { ...m, text: finalText || m.text }
-            : m
-        ));
-        streamingMsgId.current = null;
-      } else if (data.text && data.text.trim()) {
-        // No streaming; add as new message only if non-empty.
-        setMessages(prev => [...prev, {
-          id: makeChatMessageId('agent'),
-          text: data.text,
-          userName: data.agentName,
-          timestamp: new Date().toISOString(),
-          type: 'agent'
-        }]);
-      }
+      chatTurnUiMetaRef.current.delete(requestId);
       // Auto-speak disabled
     };
 
     const onStatus = (data: { status: string; requestId?: string; source?: string; conversationId?: string }) => {
       if (!isCurrentChatEvent(data)) return;
-      const activeStatus = ['thinking', 'responding', 'executing', 'waiting_confirmation', 'cancelling'].includes(data.status);
-      setIsTyping(activeStatus);
+      const activeStatus = ['queued', 'replacing', 'acknowledged', 'planning', 'thinking', 'responding', 'executing', 'waiting_confirmation', 'cancelling'].includes(data.status);
+      const terminalStatus = isTerminalAgentStatus(data.status);
+      const terminalTracking = terminalStatus
+        ? settleTrackedChatRequest(data.requestId)
+        : null;
+      setIsTyping(activeStatus || chatRequestLedgerRef.current.size > 0 || Boolean(terminalTracking?.remaining));
       if (data.status === 'thinking') {
+        if (String(data.requestId || '') !== chatRequestLedgerRef.current.foreground) return;
         setWorkflowStatus('thinking');
         pushChatProgress(uiMessage('agent-chat-page.i-am-figuring-out-how.017a8f967e', (isZh) ? 'zh' : 'en'), 'thinking');
         setWorkflowSteps(prev => {
@@ -1648,64 +1792,72 @@ export function AgentChatPage({
       } else if (data.status === 'cancelling') {
         setWorkflowStatus('cancelling');
       } else if (data.status === 'idle') {
-        setIsTyping(false);
-        if (currentResponseFinalizationRef.current) return;
-        setWorkflowStatus('idle');
-        clearChatProgress();
-        setWorkflowSteps([]);
-        seenWorkflowToolEvents.current.clear();
+        if (!terminalTracking?.remaining) {
+          setIsTyping(false);
+          if (!currentResponseFinalizationRef.current) {
+            setWorkflowStatus('idle');
+            clearChatProgress();
+            setWorkflowSteps([]);
+            seenWorkflowToolEvents.current.clear();
+          }
+        }
       } else if (isTerminalAgentStatus(data.status)) {
-        setIsTyping(false);
+        if (!terminalTracking?.remaining) {
+          setIsTyping(false);
+          setWorkflowStatus('error');
+          finishChatProgress(
+            uiMessage('agent-chat-page.something-went-wrong-i-am.01c198a67b', (isZh) ? 'zh' : 'en'),
+            'error'
+          );
+          scheduleWorkflowReset(data.requestId);
+        }
+      }
+      if (terminalStatus) {
+        // Drop partial streaming chunks that were never finalized
+        const streamKey = String(data.requestId || '__legacy__');
+        const sid = streamingMsgIdsRef.current.get(streamKey);
+        if (sid) {
+          setMessages(prev => prev.filter(m => m.id !== sid));
+          streamingMsgIdsRef.current.delete(streamKey);
+        }
+      }
+    };
+
+    const onError = (data: { message: string; code?: string; requestId?: string; source?: string; conversationId?: string; sidecar?: boolean }) => {
+      if (!isCurrentChatEvent(data)) return;
+      if (!terminalReceiptsRef.current.claim(data)) return;
+      const tracked = settleTrackedChatRequest(data.requestId);
+      const hasRemainingRequests = tracked.remaining > 0;
+      setIsTyping(hasRemainingRequests);
+      chatTurnUiMetaRef.current.delete(String(data.requestId || '').trim());
+      if (hasRemainingRequests) {
+        const nextMeta = chatTurnUiMetaRef.current.get(tracked.foregroundRequestId);
+        currentRequestHadToolRef.current = nextMeta?.hadTool || false;
+        currentRequestNeedsEvidenceRef.current = nextMeta?.needsEvidence || false;
+        currentResponseFinalizationRef.current = nextMeta?.finalization || null;
+        setWorkflowSteps(nextMeta?.steps || []);
+        setWorkflowStatus('thinking');
+      }
+      if (!hasRemainingRequests) {
         setWorkflowStatus('error');
         finishChatProgress(
           uiMessage('agent-chat-page.something-went-wrong-i-am.01c198a67b', (isZh) ? 'zh' : 'en'),
           'error'
         );
-        setTimeout(() => {
-          setWorkflowStatus('idle');
-          setWorkflowSteps([]);
-          seenWorkflowToolEvents.current.clear();
-        }, 5000);
+        setWorkflowSteps(prev => [...prev, {
+          id: `chat-err-${Date.now()}`,
+          type: 'error',
+          text: t.workflowError || 'Processing failed',
+          detail: data.message,
+          time: Date.now(),
+        }]);
+        scheduleWorkflowReset(data.requestId);
       }
-      if (isTerminalAgentStatus(data.status)) {
-        // Drop partial streaming chunks that were never finalized
-        if (streamingMsgId.current) {
-          const sid = streamingMsgId.current;
-          setMessages(prev => prev.filter(m => m.id !== sid));
-          streamingMsgId.current = null;
-        }
-      }
-    };
-
-    const onError = (data: { message: string; code?: string; requestId?: string; source?: string; conversationId?: string }) => {
-      if (!isCurrentChatEvent(data)) return;
-      clearPersistedExecution(data.requestId);
-      if (!data.requestId || activeChatRequestIdRef.current === data.requestId) {
-        activeChatRequestIdRef.current = null;
-        textChatActiveRef.current = false;
-      }
-      setIsTyping(false);
-      setWorkflowStatus('error');
-      finishChatProgress(
-        uiMessage('agent-chat-page.something-went-wrong-i-am.01c198a67b', (isZh) ? 'zh' : 'en'),
-        'error'
-      );
-      setWorkflowSteps(prev => [...prev, {
-        id: `chat-err-${Date.now()}`,
-        type: 'error',
-        text: t.workflowError || 'Processing failed',
-        detail: data.message,
-        time: Date.now(),
-      }]);
-      setTimeout(() => {
-        setWorkflowStatus('idle');
-        setWorkflowSteps([]);
-        seenWorkflowToolEvents.current.clear();
-      }, 5000);
-      if (streamingMsgId.current) {
-        const sid = streamingMsgId.current;
+      const streamKey = String(data.requestId || '__legacy__');
+      const sid = streamingMsgIdsRef.current.get(streamKey);
+      if (sid) {
         setMessages(prev => prev.filter(m => m.id !== sid));
-        streamingMsgId.current = null;
+        streamingMsgIdsRef.current.delete(streamKey);
       }
       const message = data.message || (t.failedToRouteNeuralMesh || 'Failed to route through Neural Mesh.');
       setMessages(prev => {
@@ -1751,7 +1903,7 @@ export function AgentChatPage({
         currentSocketId: socket.id,
         activeRequestId: activeChatRequestIdRef.current,
       })) return;
-      if (streamingMsgId.current) streamingMsgId.current = null;
+      streamingMsgIdsRef.current.clear();
       fetch(scopedConversationUrl(`/api/conversations/${data.conversationId}/messages?limit=${CHAT_HISTORY_LIMIT}`))
         .then(r => r.json())
         .then(result => {
@@ -1857,6 +2009,7 @@ export function AgentChatPage({
   }, [
     activeDomain,
     activeOrgId,
+    acceptChatExecutionEvent,
     agentId,
     agentName,
     bindAttachmentContextToConversation,
@@ -1868,7 +2021,9 @@ export function AgentChatPage({
     isZh,
     normalizePersistedMessages,
     pushChatProgress,
+    scheduleWorkflowReset,
     scopedConversationUrl,
+    settleTrackedChatRequest,
     socket,
     t.failedToRouteNeuralMesh,
     t.requestFailed,
@@ -1884,63 +2039,91 @@ export function AgentChatPage({
   useEffect(() => {
     if (isFounder || !socket) return;
 
-    const resumeActiveExecution = () => {
-      let persisted: PersistedChatExecution | null = null;
+    const resumeActiveExecution = async () => {
+      let pending: PersistedPendingChatExecution[] = [];
       try {
-        persisted = JSON.parse(localStorage.getItem(activeExecutionStorageKey) || 'null');
+        pending = normalizePersistedPendingChatExecutions(
+          JSON.parse(localStorage.getItem(activeExecutionStorageKey) || 'null'),
+        );
       } catch {
         localStorage.removeItem(activeExecutionStorageKey);
       }
-      if (!persisted?.requestId) return;
+      pending = pending.filter((execution) => {
+        const startedAt = Date.parse(execution.startedAt);
+        const valid = Number.isFinite(startedAt)
+          && Date.now() - startedAt <= ACTIVE_CHAT_EXECUTION_TTL_MS;
+        if (!valid) clearPersistedExecution(execution.requestId);
+        return valid;
+      });
+      if (pending.length === 0) return;
 
-      const startedAt = Date.parse(persisted.startedAt);
-      if (!Number.isFinite(startedAt) || Date.now() - startedAt > ACTIVE_CHAT_EXECUTION_TTL_MS) {
-        clearPersistedExecution(persisted.requestId);
-        return;
+      for (const execution of pending) {
+        if (!chatRequestLedgerRef.current.has(execution.requestId)) {
+          chatRequestLedgerRef.current.begin(execution.requestId);
+        }
       }
-
-      activeChatRequestIdRef.current = persisted.requestId;
-      textChatActiveRef.current = true;
+      activeChatRequestIdRef.current = chatRequestLedgerRef.current.foreground || pending[0].requestId;
+      textChatActiveRef.current = chatRequestLedgerRef.current.size > 0;
+      chatTurnTimerGuardRef.current.begin(activeChatRequestIdRef.current);
       setIsTyping(true);
-      if (lastResumedRequestIdRef.current !== persisted.requestId) {
-        lastResumedRequestIdRef.current = persisted.requestId;
+      if (pending.some(execution => !lastResumedRequestIdsRef.current.has(execution.requestId))) {
+        pending.forEach(execution => lastResumedRequestIdsRef.current.add(execution.requestId));
         pushChatProgress(uiMessage('agent-chat-page.restoring-task-state.0fb759a4dc', isZh ? 'zh' : 'en'), 'thinking');
       }
 
-      socket.emit('agent:execution_resume', {
-        requestId: persisted.requestId,
-        source: persisted.source || chatExecutionSource,
-        domain: persisted.domain,
-        orgId: persisted.orgId || null,
-        conversationId: persisted.conversationId,
-      }, (result?: { ok?: boolean; snapshot?: ChatExecutionSnapshot; error?: string }) => {
-        if (activeChatRequestIdRef.current !== persisted?.requestId) return;
-        const snapshot = result?.snapshot;
-        if (!result?.ok || !snapshot) {
-          clearPersistedExecution(persisted?.requestId);
-          activeChatRequestIdRef.current = null;
-          textChatActiveRef.current = false;
-          setIsTyping(false);
-          setWorkflowStatus('error');
-          pushChatProgress(
-            result?.error || uiMessage('agent-chat-page.previous-task-not-recoverable.17e6ad375c', isZh ? 'zh' : 'en'),
-            'error',
-          );
-          return;
-        }
+      let fallbackConversationId = String(attachmentConversationIdRef.current || '').trim();
+      if (!fallbackConversationId && pending.some(execution => !execution.conversationId)) {
+        try {
+          const activeResponse = await fetch(scopedConversationUrl('/api/conversations/active'), { credentials: 'include' });
+          const activeData = await activeResponse.json();
+          fallbackConversationId = String(activeData.activeConversation?.id || '').trim();
+          if (fallbackConversationId && !attachmentConversationIdRef.current) {
+            bindAttachmentContextToConversation(fallbackConversationId, { carryCurrent: true });
+            pending.forEach(execution => persistActiveExecution(execution.requestId));
+          }
+        } catch {}
+      }
 
-        if (snapshot.terminal) return; // The server replays the terminal event.
-        if (snapshot.status === 'waiting_confirmation') setWorkflowStatus('waiting_confirmation');
-        else if (snapshot.status === 'cancelling') setWorkflowStatus('cancelling');
-        else if (snapshot.status === 'executing') setWorkflowStatus('executing');
-        else setWorkflowStatus('thinking');
-      });
+      for (const execution of pending) {
+        const recoveryConversationId = String(
+          execution.conversationId || fallbackConversationId || '',
+        ).trim();
+        socket.emit('agent:execution_resume', {
+          requestId: execution.requestId,
+          source: execution.source || chatExecutionSource,
+          domain: execution.domain,
+          orgId: execution.orgId || null,
+          conversationId: recoveryConversationId || undefined,
+        }, (result?: { ok?: boolean; snapshot?: ChatExecutionSnapshot; error?: string }) => {
+          if (!chatRequestLedgerRef.current.has(execution.requestId)) return;
+          const snapshot = result?.snapshot;
+          if (!result?.ok || !snapshot) {
+            const tracked = settleTrackedChatRequest(execution.requestId);
+            setIsTyping(tracked.remaining > 0);
+            if (tracked.remaining === 0) {
+              setWorkflowStatus('error');
+              pushChatProgress(
+                result?.error || uiMessage('agent-chat-page.previous-task-not-recoverable.17e6ad375c', isZh ? 'zh' : 'en'),
+                'error',
+              );
+            }
+            return;
+          }
+
+          if (snapshot.terminal) return; // The server replays the terminal event.
+          if (snapshot.status === 'waiting_confirmation') setWorkflowStatus('waiting_confirmation');
+          else if (snapshot.status === 'cancelling') setWorkflowStatus('cancelling');
+          else if (snapshot.status === 'executing') setWorkflowStatus('executing');
+          else setWorkflowStatus('thinking');
+          setIsTyping(chatRequestLedgerRef.current.size > 0);
+        });
+      }
     };
 
     socket.on('connect', resumeActiveExecution);
     if (socket.connected) resumeActiveExecution();
     return () => { socket.off('connect', resumeActiveExecution); };
-  }, [activeExecutionStorageKey, chatExecutionSource, clearPersistedExecution, isFounder, isZh, pushChatProgress, socket]);
+  }, [activeExecutionStorageKey, bindAttachmentContextToConversation, chatExecutionSource, clearPersistedExecution, isFounder, isZh, persistActiveExecution, pushChatProgress, scopedConversationUrl, settleTrackedChatRequest, socket]);
 
   const startNewTextConversation = useCallback(async () => {
     if (isCreatingConversation) return;
@@ -1960,12 +2143,16 @@ export function AgentChatPage({
       // Detach the text surface from the previous execution without cancelling
       // its durable task. Any late receipt remains attached to the archived
       // conversation and the task widget continues to report its real status.
-      activeChatViewDetachRef.current?.();
+      for (const detach of activeChatViewDetachersRef.current) detach();
+      activeChatViewDetachersRef.current.clear();
       clearPersistedExecution();
+      chatRequestLedgerRef.current.clear();
+      chatTurnUiMetaRef.current.clear();
       activeChatRequestIdRef.current = null;
       textChatActiveRef.current = false;
-      lastResumedRequestIdRef.current = null;
-      streamingMsgId.current = null;
+      lastResumedRequestIdsRef.current.clear();
+      streamingMsgIdsRef.current.clear();
+      chatTurnTimerGuardRef.current.invalidate();
       currentResponseFinalizationRef.current = null;
       bindAttachmentContextToConversation(result.conversation.id);
       setConversationHistoryOpen(false);
@@ -2047,12 +2234,16 @@ export function AgentChatPage({
 
       // Switching transcripts only detaches this chat surface. Durable tasks
       // keep running and remain visible exclusively in the task widget.
-      activeChatViewDetachRef.current?.();
+      for (const detach of activeChatViewDetachersRef.current) detach();
+      activeChatViewDetachersRef.current.clear();
       clearPersistedExecution();
+      chatRequestLedgerRef.current.clear();
+      chatTurnUiMetaRef.current.clear();
       activeChatRequestIdRef.current = null;
       textChatActiveRef.current = false;
-      lastResumedRequestIdRef.current = null;
-      streamingMsgId.current = null;
+      lastResumedRequestIdsRef.current.clear();
+      streamingMsgIdsRef.current.clear();
+      chatTurnTimerGuardRef.current.invalidate();
       currentResponseFinalizationRef.current = null;
       bindAttachmentContextToConversation(conversationId);
       const restoredMessages = normalizePersistedMessages(Array.isArray(messageResult?.messages) ? messageResult.messages : []);
@@ -2166,27 +2357,36 @@ export function AgentChatPage({
       type: 'user'
     };
     const priorMessages = messagesRef.current.length > 0 ? messagesRef.current : messages;
-    textChatActiveRef.current = true;
-    seenWorkflowToolEvents.current.clear();
-    currentRequestHadToolRef.current = false;
-    currentRequestNeedsEvidenceRef.current = needsVisibleToolEvidence(outgoingText, outgoingAttachments.length > 0);
-    currentResponseFinalizationRef.current = null;
-    clearChatProgress();
-    pushChatProgress(
-      reusedConversationAttachmentContext
-        ? uiMessage('agent-chat-page.using-session-materials.66f4979b61', (isZh) ? 'zh' : 'en')
-        : outgoingAttachments.length > 0
-        ? (uiMessage('agent-chat-page.i-am-checking-your-attachments.79cfe8a290', (isZh) ? 'zh' : 'en'))
-        : (uiMessage('agent-chat-page.i-am-checking-your-request.05a5e81231', (isZh) ? 'zh' : 'en')),
-      'thinking'
-    );
-    setWorkflowStatus('thinking');
-    setWorkflowSteps([{
+    const requestId = `chat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const wasIdle = chatRequestLedgerRef.current.size === 0;
+    const initialTurnStep: WorkflowStep = {
       id: makeChatMessageId('chat-start'),
       type: 'thinking',
       text: t.workflowAnalyzing || 'Analyzing your request...',
       time: Date.now(),
-    }]);
+    };
+    chatTurnUiMetaRef.current.set(requestId, {
+      hadTool: false,
+      needsEvidence: needsVisibleToolEvidence(outgoingText, outgoingAttachments.length > 0),
+      finalization: null,
+      steps: [initialTurnStep],
+    });
+    if (wasIdle) {
+      currentRequestHadToolRef.current = false;
+      currentRequestNeedsEvidenceRef.current = needsVisibleToolEvidence(outgoingText, outgoingAttachments.length > 0);
+      currentResponseFinalizationRef.current = null;
+      clearChatProgress();
+      pushChatProgress(
+        reusedConversationAttachmentContext
+          ? uiMessage('agent-chat-page.using-session-materials.66f4979b61', (isZh) ? 'zh' : 'en')
+          : outgoingAttachments.length > 0
+          ? (uiMessage('agent-chat-page.i-am-checking-your-attachments.79cfe8a290', (isZh) ? 'zh' : 'en'))
+          : (uiMessage('agent-chat-page.i-am-checking-your-request.05a5e81231', (isZh) ? 'zh' : 'en')),
+        'thinking'
+      );
+      setWorkflowStatus('thinking');
+      setWorkflowSteps([initialTurnStep]);
+    }
 
     setMessages(prev => {
       const base = prev.length >= priorMessages.length ? prev : priorMessages;
@@ -2202,8 +2402,10 @@ export function AgentChatPage({
     });
     if (outgoingAttachments.length > 0) rememberAttachmentContext(outgoingAttachments);
     setIsTyping(true);
-    const requestId = `chat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    activeChatRequestIdRef.current = requestId;
+    const { controlTargetRequestId } = chatRequestLedgerRef.current.begin(requestId);
+    if (wasIdle) chatTurnTimerGuardRef.current.begin(requestId);
+    activeChatRequestIdRef.current = chatRequestLedgerRef.current.foreground || requestId;
+    textChatActiveRef.current = true;
     persistActiveExecution(requestId);
 
     let resolved = false;
@@ -2212,20 +2414,16 @@ export function AgentChatPage({
     let socketAckTimer: ReturnType<typeof setTimeout> | null = null;
     let socketAcknowledged = false;
     let lastProbeStatus = '';
-    activeChatViewDetachRef.current = () => {
+    const detachThisChatView = () => {
       resolved = true;
       clearTimeout(safetyTimer);
       if (resumeProbeTimer) clearTimeout(resumeProbeTimer);
       if (socketAckTimer) clearTimeout(socketAckTimer);
       cleanupSocketWaiters();
     };
-    const requestConversationId = attachmentConversationIdRef.current;
+    activeChatViewDetachersRef.current.add(detachThisChatView);
     const isCurrentResponse = (data?: { requestId?: string; source?: string; conversationId?: string }) => {
-      if (data?.conversationId && data.conversationId !== requestConversationId) return false;
-      if (data?.requestId) return data.requestId === requestId;
-      if (activeChatRequestIdRef.current) return false;
-      if (data?.source && data.source !== chatExecutionSource) return false;
-      return textChatActiveRef.current;
+      return acceptChatExecutionEvent(data, requestId);
     };
     const cleanupSocketWaiters = () => {
       socket.off('agent:response', onResponse);
@@ -2239,11 +2437,9 @@ export function AgentChatPage({
       if (resumeProbeTimer) clearTimeout(resumeProbeTimer);
       if (socketAckTimer) clearTimeout(socketAckTimer);
       cleanupSocketWaiters();
-      if (activeChatViewDetachRef.current) activeChatViewDetachRef.current = null;
-      setIsTyping(false);
-      textChatActiveRef.current = false;
-      clearPersistedExecution(requestId);
-      if (activeChatRequestIdRef.current === requestId) activeChatRequestIdRef.current = null;
+      activeChatViewDetachersRef.current.delete(detachThisChatView);
+      const tracked = settleTrackedChatRequest(requestId);
+      setIsTyping(tracked.remaining > 0);
     };
     const onResponse = (data?: {
       text?: string;
@@ -2256,36 +2452,9 @@ export function AgentChatPage({
       reason?: string;
     }) => {
       if (!isCurrentResponse(data)) return;
-      const finalText = String(data?.text || '').trim();
-      currentResponseFinalizationRef.current = {
-        finalized: data?.finalized,
-        blocked: data?.blocked,
-        reason: data?.reason,
-      };
-      if (shouldDisplayAgentResponse(data || {})) {
-        if (streamingMsgId.current) {
-          const sid = streamingMsgId.current;
-          setMessages(prev => prev.map(message => (
-            message.id === sid && finalText ? { ...message, text: finalText } : message
-          )));
-          streamingMsgId.current = null;
-        } else if (finalText) {
-          setMessages(prev => prev.some(message => message.type === 'agent' && message.text === finalText)
-            ? prev
-            : [...prev, {
-                id: makeChatMessageId('agent'),
-                text: finalText,
-                userName: data?.agentName || agentNameRef.current || 'Lumi',
-                timestamp: new Date().toISOString(),
-                type: 'agent',
-              }]);
-        }
-      } else if (streamingMsgId.current) {
-        const sid = streamingMsgId.current;
-        setMessages(prev => prev.filter(message => message.id !== sid));
-        streamingMsgId.current = null;
-      }
-      setWorkflowStatus(data?.blocked ? 'error' : data?.finalized ? 'done' : 'idle');
+      // The persistent socket listener is the sole owner of terminal UI
+      // delivery. This request-local listener only settles ack/probe timers.
+      // Having both append the same terminal produced the native duplicate.
       resolve();
     };
     const onError = (data?: { requestId?: string; source?: string; conversationId?: string }) => { if (isCurrentResponse(data)) resolve(); };
@@ -2298,7 +2467,7 @@ export function AgentChatPage({
       safetyTimer = setTimeout(() => {
         if (resolved) return;
         if (!socketAcknowledged) {
-          streamingMsgId.current = null;
+          streamingMsgIdsRef.current.delete(requestId);
           resolve();
           return;
         }
@@ -2335,7 +2504,7 @@ export function AgentChatPage({
               result?.error || uiMessage('agent-chat-page.backend-lost-task.8bbc4d5800', isZh ? 'zh' : 'en'),
               'error',
             );
-            streamingMsgId.current = null;
+            streamingMsgIdsRef.current.delete(requestId);
             resolve();
             return;
           }
@@ -2369,6 +2538,7 @@ export function AgentChatPage({
       source: chatExecutionSource,
       operationMode,
       requestId,
+      controlTargetRequestId: controlTargetRequestId || undefined,
       conversationId: attachmentConversationIdRef.current || undefined,
     };
 

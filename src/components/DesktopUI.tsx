@@ -1723,9 +1723,40 @@ export function DesktopUI({
     setChatOpen(true);
     setActiveTab('command-center');
     window.setTimeout(() => {
-      window.dispatchEvent(new CustomEvent('lumi:focus-command-input'));
+      void (async () => {
+        if (isTauri) {
+          try {
+            const { getCurrentWindow } = await import('@tauri-apps/api/window');
+            const { getCurrentWebview } = await import('@tauri-apps/api/webview');
+            await getCurrentWindow().setFocus();
+            await getCurrentWebview().setFocus();
+          } catch {}
+        }
+        window.dispatchEvent(new CustomEvent('lumi:focus-command-input'));
+      })();
     }, 80);
-  }, [setActiveTab]);
+  }, [isTauri, setActiveTab]);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    let disposed = false;
+    let unlisten: undefined | (() => void);
+
+    void import('@tauri-apps/api/event')
+      .then(({ listen }) => listen('lumi:open-command-center', () => {
+        if (!disposed) openCommandCenter('office');
+      }))
+      .then(stop => {
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch(() => {});
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [isTauri, openCommandCenter]);
 
   const openProactiveChat = useCallback((detail: ProactiveChatDetail) => {
     setIsNotificationPanelOpen(false);

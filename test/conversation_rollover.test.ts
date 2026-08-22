@@ -6,6 +6,7 @@ import {
   getConversationSummary,
   getOrCreateActiveConversation,
   getOrCreateConversationForTurn,
+  prepareConversationActionExecution,
   setConversationSummary,
 } from '../server/conversation/manager';
 
@@ -154,5 +155,70 @@ describe('conversation rollover', () => {
     );
     expect(result.rolledOver).toBe(false);
     expect(result.conversation.id).toBe(conversation.id);
+  });
+
+  it('keeps a newer task pointer when an older request persists a late terminal reply', () => {
+    const userId = `request-isolation-${Date.now()}-${Math.random()}`;
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    const toolPolicy = {
+      allowedTools: ['desktop_open'],
+      requireConfirmation: [],
+      forbiddenTools: [],
+      maxIterations: 5,
+    };
+    const older = prepareConversationActionExecution({
+      conversationId: conversation.id,
+      userId,
+      userText: '\u6253\u5f00\u8bb0\u4e8b\u672c',
+      requestId: 'request-older',
+      toolPolicy,
+      forceTask: true,
+    });
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'user',
+      content: '\u6253\u5f00\u8bb0\u4e8b\u672c',
+      requestId: 'request-older',
+    });
+
+    const newer = prepareConversationActionExecution({
+      conversationId: conversation.id,
+      userId,
+      userText: '\u6253\u5f00\u8ba1\u7b97\u5668',
+      requestId: 'request-newer',
+      toolPolicy,
+      forceTask: true,
+      forceNewTask: true,
+    });
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'user',
+      content: '\u6253\u5f00\u8ba1\u7b97\u5668',
+      requestId: 'request-newer',
+    });
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'assistant',
+      content: '\u65e7\u8bf7\u6c42\u7684\u8fdf\u5230\u56de\u590d',
+      requestId: 'request-older',
+      toolCalls: [{
+        name: 'desktop_open',
+        arguments: { target: '\u8bb0\u4e8b\u672c' },
+        result: JSON.stringify({ ok: true, status: 'verified', targetMatched: true }),
+        taskId: older.state?.taskId,
+        requestId: 'request-older',
+      }],
+    });
+
+    const stored = readDB().conversations.find((item: any) => item.id === conversation.id);
+    expect(stored?.actionContinuationState?.taskId).toBe(newer.state?.taskId);
+    expect(stored?.actionContinuationState?.activeRequestId).toBe('request-newer');
+    expect(stored?.pendingActionContinuation?.requestId).toBe('request-newer');
   });
 });

@@ -40,6 +40,28 @@ const EN_WORK_CONTEXT_RE = /\b(task|work|customer|client|wechat|message|takeover
 const EN_WORK_STATUS_RE = /\b(status|progress|done|finished|complete|completed|result|blocked|failed|success|verify|check|what\s+happened)\b/i;
 const EN_WORK_ACTION_RE = /\b(continue|resume|advance|next\s+step|keep\s+going|go\s+on|run\s+next|proceed|carry\s+on|push\s+forward)\b/i;
 
+// A question about how Lumi would help with work is ordinary conversation, not
+// evidence that the user is referring to the latest persisted task.  In
+// particular, the words “工作/任务” plus “完成/complete” are not sufficient:
+// both appear naturally in hypothetical support questions.
+const CN_WORK_SUPPORT_QUESTION_RE = /(?:(?:你|lumi)[^。！？!?；;\n]{0,32}(?:如何|怎么|怎样)[^。！？!?；;\n]{0,32}(?:陪|帮(?:助)?|协助|支持)[^。！？!?；;\n]{0,32}(?:完成|处理|推进|做)[^。！？!?；;\n]{0,20}(?:工作|任务)|(?:如何|怎么|怎样)[^。！？!?；;\n]{0,32}(?:你|lumi)[^。！？!?；;\n]{0,32}(?:陪|帮(?:助)?|协助|支持)[^。！？!?；;\n]{0,32}(?:工作|任务))/iu;
+const EN_WORK_SUPPORT_QUESTION_RE = /\b(?:how|in\s+what\s+ways?)\b[^.!?;\n]{0,48}\b(?:would|will|can|could)\s+(?:you|lumi)\b[^.!?;\n]{0,48}\b(?:help|support|assist|accompany)\b[^.!?;\n]{0,64}\b(?:work|task)\b/i;
+const INDEPENDENT_IMMEDIATE_WORK_ACTION_RE = /(?:[。！？?!；;：:]\s*)(?:(?:那|那么|然后)\s*)?(?:(?:现在|马上|立即|立刻|直接)(?:就)?\s*)?(?:开始|继续|执行|推进|处理|着手|做(?:吧|它|这个|这项|该任务|该工作)?)(?:[。！？.!?]|$)|(?:[.!?;:]\s*)(?:(?:then|and)\s+)?(?:(?:now|immediately|right\s+now)\s+)?(?:start|continue|resume|execute|proceed|do\s+it)\b/i;
+const CN_EXPLICIT_WORK_EXECUTION_RE = /(?:^|[。！？?!；;：:]\s*)(?:请\s*)?(?:(?:你|lumi)[，,\s]*)?(?:(?:现在|马上|立即|立刻|直接|赶紧)(?:就)?\s*)?(?:(?:帮|替|给)\s*我\s*)?(?:继续|接着|开始|着手|执行|推进|处理|完成|做)[^。！？!?；;\n]{0,28}(?:工作|任务)/iu;
+const EN_EXPLICIT_WORK_EXECUTION_RE = /(?:^|[.!?;:]\s*)(?:please\s+)?(?:(?:you|lumi)\s+)?(?:(?:now|immediately|directly|right\s+now)\s+)?(?:help\s+me\s+(?:complete|finish|handle|do)|continue|resume|start|execute|advance|proceed|complete|finish|handle|do)\b[^.!?;\n]{0,48}\b(?:work|task)\b/i;
+const CN_WORK_EXECUTION_QUESTION_RE = /(?:完成|处理|执行|推进|做)[^。！？!?；;\n]{0,28}(?:工作|任务)[^。！？!?；;\n]{0,12}(?:了吗|了没|没有|没)[？?]?$/u;
+
+function isConversationalWorkSupportQuestion(text: string): boolean {
+  const supportQuestion = CN_WORK_SUPPORT_QUESTION_RE.test(text) || EN_WORK_SUPPORT_QUESTION_RE.test(text);
+  return supportQuestion && !INDEPENDENT_IMMEDIATE_WORK_ACTION_RE.test(text);
+}
+
+function hasExplicitWorkExecutionRequest(text: string): boolean {
+  if (INDEPENDENT_IMMEDIATE_WORK_ACTION_RE.test(text)) return true;
+  if (CN_WORK_EXECUTION_QUESTION_RE.test(text.trim())) return false;
+  return CN_EXPLICIT_WORK_EXECUTION_RE.test(text) || EN_EXPLICIT_WORK_EXECUTION_RE.test(text);
+}
+
 function compact(value: unknown): string {
   return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
 }
@@ -100,6 +122,15 @@ function classifyWorkTakeoverContinuationSignal(
 
   const hasWorkContext = WORK_CONTEXT_RE.test(clean);
   const hasEnglishWorkContext = EN_WORK_CONTEXT_RE.test(text);
+  if (isConversationalWorkSupportQuestion(text)) return { intent: null, strength: 'none' };
+  // Explicit execution wording must win over the generic status vocabulary.
+  // Otherwise “现在帮我完成这项工作” is misread as a status query merely
+  // because it contains “完成”.
+  if (
+    (hasWorkContext || hasEnglishWorkContext)
+    && hasExplicitWorkExecutionRequest(text)
+  ) return { intent: 'advance', strength: 'direct' };
+
   const isWorkSurface = normalizedSurface === 'work';
   const recoveryPressure = hasRecoveryPressure(latestTask);
 

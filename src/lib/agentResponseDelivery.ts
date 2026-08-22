@@ -7,6 +7,7 @@ export type AgentResponseDelivery = {
 };
 
 const FAILURE_STATUS_RE = /^(?:blocked|cancelled|canceled|error|failed|timeout|timed_out)$/i;
+const WAITING_STATUS_RE = /^(?:waiting_confirmation|waiting_for_confirmation)$/i;
 
 const CHINESE_ACTION_SUCCESS_RE = new RegExp(
   [
@@ -34,9 +35,25 @@ export function isAgentResponseBlocked(data: AgentResponseDelivery): boolean {
   return data.blocked === true || FAILURE_STATUS_RE.test(String(data.status || '').trim());
 }
 
+/**
+ * A terminal notice must remain visible even when it quotes the part of an
+ * operation that did succeed. For example, "the file was written, but its
+ * readback failed" contains a concrete success fragment while the response as
+ * a whole is the only user-visible blocker receipt. Silencing that receipt
+ * strands the request in a perpetual-looking busy state.
+ */
+export function isAgentResponseTerminalNotice(data: AgentResponseDelivery): boolean {
+  const status = String(data.status || '').trim();
+  const reason = String(data.reason || '').trim();
+  return isAgentResponseBlocked(data)
+    || WAITING_STATUS_RE.test(status)
+    || WAITING_STATUS_RE.test(reason);
+}
+
 export function isUnverifiedActionClaim(data: AgentResponseDelivery): boolean {
   return isActionSuccessClaim(String(data.text || ''))
-    && (data.finalized !== true || isAgentResponseBlocked(data));
+    && data.finalized !== true
+    && !isAgentResponseTerminalNotice(data);
 }
 
 export function shouldDisplayAgentResponse(data: AgentResponseDelivery): boolean {

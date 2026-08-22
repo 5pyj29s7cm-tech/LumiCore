@@ -100,15 +100,11 @@ describe('orchestration and replan tool policy', () => {
 
     expect(voice).toMatch(/runOrchestratedTask\([\s\S]{0,700}toolPolicy:\s*routedToolPolicy/);
     expect(voice).toContain('if (isTerminalOrchestrationToolEvent(record))');
-    expect((chat.match(/if \(isTerminalOrchestrationToolEvent\(record\)\)/g) || [])).toHaveLength(2);
+    expect(chat).not.toContain('runOrchestratedTask(');
+    expect(chat).not.toContain('if (isTerminalOrchestrationToolEvent(record))');
     expect(voice).toMatch(
       /if \(isTerminalOrchestrationToolEvent\(record\)\)[\s\S]{0,800}if \(isDirectDesktopTool\(record\.name\)\) return;/,
     );
-    expect((
-      chat.match(
-        /if \(isTerminalOrchestrationToolEvent\(record\)\)[\s\S]{0,1800}?if \(isDirectDesktopTool\(record\.name\)\) return;/g,
-      ) || []
-    )).toHaveLength(2);
     expect(orchestrator).toContain('context.toolPolicy');
     expect(orchestrator).toContain('toolPolicy: workerToolPolicy');
     expect(adapter).toContain('getToolDeclarationsForPolicy(');

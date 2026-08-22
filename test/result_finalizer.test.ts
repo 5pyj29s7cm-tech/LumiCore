@@ -76,7 +76,7 @@ describe('Lumi result finalizer', () => {
     expect(result.text).toBe(responseText);
   });
 
-  it('accepts an in-chat checklist that is present in a persisted internal task update receipt', async () => {
+  it('does not treat a persisted task update and matching draft as execution evidence', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
     const draft = '1. \u4efb\u52a1\u5f15\u7528\u5df2\u6838\u5bf9\n2. \u9a8c\u6536\u9700\u6c42\u5df2\u8bb0\u5f55\n3. \u804a\u5929\u4ea4\u4ed8\u5df2\u751f\u6210\n4. \u672a\u5199\u6587\u4ef6\u3001\u672a\u5916\u53d1\n5. \u540e\u7eed\u6b65\u9aa4\u4ecd\u7b49\u5f85\u786e\u8ba4';
     const responseText = `\u5df2\u5b8c\u6210\u6b65\u9aa4\uff1a\u8bb0\u5f55\u9a8c\u6536\u9700\u6c42\u2192\u751f\u6210\u6e05\u5355\n5\u9879\u68c0\u67e5\u6e05\u5355\uff1a\n${draft}\n\u5f53\u524d\u72b6\u6001\uff1awaiting_confirmation\n\u5269\u4f59\u6b65\u9aa4\uff1a\u7b49\u5f85\u786e\u8ba4`;
@@ -101,9 +101,38 @@ describe('Lumi result finalizer', () => {
       source: 'chat',
     });
 
+    expect(result.blocked).toBe(true);
+    expect(result.text).toContain('\u53ea\u8bc1\u660e\u4e86\u8bb0\u8d26\u6216\u72b6\u6001\u5199\u56de');
+    expect(result.text).toContain('\u6ca1\u6709\u771f\u5b9e\u52a8\u4f5c\u7684\u5df2\u9a8c\u8bc1\u7ec8\u6001\u56de\u6267');
+    expect(result.reason).toContain('without a verified action receipt');
+  });
+
+  it('does not apply the ledger-only completion blocker when a real action has verified terminal evidence', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const responseText = '\u5df2\u5b8c\u6210\u7b2c\u4e00\u6b65\u201c\u8bfb\u53d6\u5e76\u6838\u5bf9\u5ba2\u6237\u8d44\u6599\u201d\u3002';
+    const result = finalizeLumiResponse({
+      taskText: '\u7ee7\u7eed\u6301\u4e45\u4efb\u52a1 wt_task_acceptance\uff0c\u6267\u884c\u7b2c\u4e00\u6b65\u3002',
+      responseText,
+      toolRecords: [{
+        name: 'customer_profile_read',
+        arguments: { customerId: 'customer-1' },
+        result: '{"customerId":"customer-1","verified":true}',
+        terminalVerification: {
+          status: 'verified',
+          strategy: 'terminal_receipt',
+          reason: 'Customer profile was returned and matched the target.',
+        },
+      }, {
+        name: 'work_takeover_task_update',
+        arguments: { id: 'wt_task_acceptance', currentActionIndex: 1 },
+        result: '{"ok":true,"persisted":true,"status":"updated"}',
+      }],
+      source: 'chat',
+    });
+
     expect(result.blocked).toBe(false);
-    expect(result.text).toBe(responseText);
-    expect(result.reason).toContain('persisted update receipt');
+    expect(result.reason || '').not.toContain('without a verified action receipt');
+    expect(result.text).not.toContain('\u53ea\u8bc1\u660e\u4e86\u8bb0\u8d26\u6216\u72b6\u6001\u5199\u56de');
   });
 
   it('blocks raw legacy function-call markup from reaching the user', async () => {
@@ -206,7 +235,7 @@ describe('Lumi result finalizer', () => {
 
     expect(result.blocked).toBe(false);
     expect(result.reason).toContain('Grounded client diagnostic summary');
-    expect(result.text).toContain('自检完成');
+    expect(result.text).toBe('刚刚已经完成自检。');
     expect(result.reason).not.toContain('prior diagnostic run');
   });
 
@@ -382,8 +411,7 @@ describe('Lumi result finalizer', () => {
     });
 
     expect(result.blocked).toBe(false);
-    expect(result.text).toContain('自检完成');
-    expect(result.text).toContain(name);
+    expect(result.text).toBe(`已检查 ${name}。`);
     expect(result.text).not.toContain('没有取得任何客户端自检工具回执');
   });
 
@@ -719,6 +747,37 @@ describe('Lumi result finalizer', () => {
     }
   });
 
+  it('grounds native semantic text writes from the same shared artifact receipts', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const root = mkdtempSync(path.join(os.tmpdir(), 'lumi-native-artifact-finalizer-'));
+    const artifactPath = path.join(root, 'native-note.txt');
+    const content = 'native semantic write';
+    try {
+      writeFileSync(artifactPath, content, 'utf8');
+      const result = finalizeLumiResponse({
+        taskText: `After creating the file, read it back and report the exact content. Target: ${artifactPath}`,
+        responseText: 'The file and readback are complete.',
+        toolRecords: [{
+          name: 'desktop_write_text_file',
+          arguments: { path: artifactPath, content },
+          result: JSON.stringify({ ok: true, status: 'verified', path: artifactPath, readBackMatched: true }),
+          terminalVerification: { status: 'verified' as const, strategy: 'measured' as const, reason: 'native byte read-back matched' },
+        }, {
+          name: 'read_file',
+          arguments: { path: artifactPath },
+          result: content,
+          terminalVerification: { status: 'verified' as const, strategy: 'terminal_receipt' as const, reason: 'text read returned' },
+        }],
+        source: 'chat',
+      });
+
+      expect(result.blocked).toBe(false);
+      expect(result.text).toContain(artifactPath);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     '我正在继续改进自己的任务理解和执行能力。',
     '我现在就开始检查自己哪些能力还需要提升。',
@@ -785,6 +844,55 @@ describe('Lumi result finalizer', () => {
     expect(result.text).not.toBe('\u5df2\u6253\u5f00 AutoCAD\u3002');
   });
 
+  it('keeps model-authored chat wording unchanged when the success receipt is grounded', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const responseText = '嗯，AutoCAD 已经替你打开了。';
+    const result = finalizeLumiResponse({
+      taskText: '打开 AutoCAD。',
+      responseText,
+      toolRecords: [{
+        name: 'desktop_open',
+        arguments: { target: 'AutoCAD' },
+        result: JSON.stringify({
+          ok: true,
+          status: 'verified',
+          target: 'AutoCAD',
+          targetMatched: true,
+          actualTarget: { processName: 'acad.exe', title: 'Autodesk AutoCAD' },
+        }),
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(responseText);
+    expect(result.reason).not.toContain('Model-authored wording preserved');
+  });
+
+  it('keeps a natural paraphrase without requiring every receipt detail to be repeated', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const responseText = '搞定啦，记事本窗口已经在前台。';
+    const result = finalizeLumiResponse({
+      taskText: '打开记事本。',
+      responseText,
+      toolRecords: [{
+        name: 'desktop_open',
+        arguments: { target: '记事本' },
+        result: JSON.stringify({
+          ok: true,
+          status: 'verified',
+          target: '记事本',
+          targetMatched: true,
+          actualTarget: { processName: 'notepad.exe', title: '无标题 - 记事本' },
+        }),
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(responseText);
+  });
+
   it('keeps an exact desktop-open receipt successful even if the model hits its tool limit', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
 
@@ -845,6 +953,7 @@ describe('Lumi result finalizer', () => {
     expect(result.text).toContain('指挥中心');
     expect(result.text).toContain('已打开');
     expect(result.reason).toContain('verified state-diff receipt');
+    expect(result.reason).toContain('Structured evidence correction');
   });
 
   it('treats explicit no-input and no-substitute clauses as open constraints, not remaining work', async () => {
@@ -2080,8 +2189,8 @@ describe('Lumi result finalizer', () => {
       expect(source).not.toContain('guardCompletionClaims');
     }
     expect(chatSource).toContain('responseText = finalResponse.text;');
-    expect(chatSource).toContain('responseText: completionCandidate');
-    expect(chatSource).toContain('const completionText = finalizedBackground.text;');
+    expect(chatSource).not.toContain('responseText: completionCandidate');
+    expect(chatSource).not.toContain('const completionText = finalizedBackground.text;');
     expect(voiceSource).toContain('responseText = finalResponse.text;');
     expect(taskSource).toContain('orchestratedText = finalOrchestrated.text;');
     expect(taskSource).toContain('finalTaskText = finalTaskResponse.text;');

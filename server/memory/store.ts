@@ -420,6 +420,7 @@ export function queryMemories(q: MemoryQuery): Memory[] {
     internalized: 2,
     episodic: 3,
   };
+  const priorityForTier = (tier: string): number => tierPriority[tier] ?? tierPriority.episodic;
 
   // Retrieve personality-driven retrieval biases (cross-system fusion: vector→memory)
   const typeBias = q.retrievalTypeWeights || {};
@@ -441,7 +442,7 @@ export function queryMemories(q: MemoryQuery): Memory[] {
       .filter(({ score }) => score > 0)
       .sort((a, b) => {
         // Tier priority overrides score within same magnitude
-        const tierDiff = (tierPriority[a.m.tier] || 3) - (tierPriority[b.m.tier] || 3);
+        const tierDiff = priorityForTier(a.m.tier) - priorityForTier(b.m.tier);
         if (Math.abs(tierDiff) >= 2) return tierDiff;
         return b.score - a.score;
       });
@@ -450,7 +451,7 @@ export function queryMemories(q: MemoryQuery): Memory[] {
     // Sort by tier priority, then importance, then confidence, then recency
     // Apply personality-driven perspective bias to priority sorting
     memories.sort((a, b) => {
-      const tierDiff = (tierPriority[a.tier] || 3) - (tierPriority[b.tier] || 3);
+      const tierDiff = priorityForTier(a.tier) - priorityForTier(b.tier);
       if (tierDiff !== 0) return tierDiff;
       if (b.importance !== a.importance) return b.importance - a.importance;
       // self-perspective memories take priority over owner traits (boosted by personality bias)
@@ -986,7 +987,10 @@ export function markConsolidated(ids: string[], parentId: string): void {
   saveMemoryStore(all);
 }
 
-export function formatMemoriesForContext(memories: Memory[]): string {
+export function formatMemoriesForContext(
+  memories: Memory[],
+  options: { currentTurnText?: string } = {},
+): string {
   if (memories.length === 0) return '';
 
   // Separate branches and leaves
@@ -995,8 +999,14 @@ export function formatMemoriesForContext(memories: Memory[]): string {
 
   const lines: string[] = [
     '## Retrieved memory evidence',
-    'Treat these as recalled candidates, not unquestionable truth. Owner statements are direct evidence; owner observations are inferences that may be wrong; shared context is not proof of an owner trait; Lumi narrative describes Lumi and must never be used as evidence about the owner.',
+    'Each item below is a recalled candidate from an earlier source, not part of the current user message and not unquestionable truth. The current turn and same-conversation evidence take priority.',
+    'Memory confidence describes the stored extraction, not whether a current name, code, person, customer, project, or task is the same entity. Every recalled entity binding starts unconfirmed. A shared word, exact token, name fragment, code prefix, or semantic similarity is retrieval evidence only; never transfer attributes, status, plans, or actions until the user or same-conversation history explicitly establishes the identity. Ask one short clarification when that binding matters.',
+    'Owner statements prove that the owner previously said something; owner observations are inferences that may be wrong; shared context is not proof of an owner trait; Lumi narrative describes Lumi and must never be used as evidence about the owner.',
   ];
+
+  if (options.currentTurnText?.trim()) {
+    lines.push('Current-turn binding status: no recalled candidate has been entity-bound by the retrieval layer; reason over the current message before using any candidate.');
+  }
 
   const evidenceLabel = (memory: Memory): string => {
     switch (classifyMemoryEvidence(memory)) {
@@ -1006,6 +1016,19 @@ export function formatMemoriesForContext(memories: Memory[]): string {
       case 'lumi_narrative': return 'Lumi narrative';
       case 'operational_trace': return 'operational trace';
     }
+  };
+
+  const provenanceLabel = (memory: Memory): string => {
+    const source = memory.knowledgeProvenance?.sourceLabel
+      ? `knowledge:${memory.knowledgeProvenance.sourceLabel}`
+      : (memory.source || 'legacy/unknown');
+    const interaction = String(memory.sourceInteractionId || 'unknown').replace(/\s+/g, ' ').slice(0, 120);
+    const recorded = memory.createdAt || memory.updatedAt || 'unknown';
+    const confidence = Number.isFinite(memory.confidence)
+      ? Math.max(0, Math.min(1, memory.confidence)).toFixed(2)
+      : 'unknown';
+    const conflict = memory.conflict?.status === 'unresolved' ? '; conflict=unresolved' : '';
+    return `source=${source}; interaction=${interaction}; recorded=${recorded}; memory-confidence=${confidence}; entity-binding=unconfirmed${conflict}`;
   };
 
   // Group leaves by parent
@@ -1023,10 +1046,10 @@ export function formatMemoriesForContext(memories: Memory[]): string {
   for (const branch of branches) {
     const children = byParent.get(branch.id) || [];
     if (children.length === 0) continue;
-    lines.push(`### ${branch.content}`);
+    lines.push(`### [topic container; not evidence] ${branch.content}`);
     children.sort((a, b) => b.importance - a.importance || b.confidence - a.confidence);
     for (const m of children) {
-      lines.push(`- [${evidenceLabel(m)}] ${m.content}`);
+      lines.push(`- [${evidenceLabel(m)}] [${provenanceLabel(m)}] ${m.content}`);
     }
   }
 
@@ -1036,7 +1059,7 @@ export function formatMemoriesForContext(memories: Memory[]): string {
     for (const m of orphans) {
       // Filter out branches from the root display
       if (m.nodeType !== 'branch') {
-        lines.push(`- [${evidenceLabel(m)}] ${m.content}`);
+        lines.push(`- [${evidenceLabel(m)}] [${provenanceLabel(m)}] ${m.content}`);
       }
     }
   }

@@ -16,6 +16,7 @@ function flow(overrides: Partial<LumiTurnFlow> = {}): LumiTurnFlow {
     requestedMode: null,
     autoPromoteToAssistant: false,
     allowToolUseForTurn: false,
+    modelToolAccess: 'hard_off',
     selfRepairTurn: false,
     clientActionOnlyTurn: false,
     visionIntent: false,
@@ -140,5 +141,27 @@ describe('finalized output delivery gate', () => {
     const snapshot = gate.finish();
     expect(snapshot.emittedText).toBe('Hello there.');
     expect(snapshot.withheldText).toBe(' How are');
+  });
+
+  it('streams a long safe conversational sentence before its final punctuation', () => {
+    const gate = createPreFinalizationTextGate();
+
+    const chunk = '\u6211\u4f1a\u5148\u542c\u4f60\u8bf4\u6e05\u76ee\u6807\uff0c\u518d\u548c\u4f60\u4e00\u8d77\u628a\u590d\u6742\u95ee\u9898\u62c6\u6210\u5c0f\u6b65\u9aa4';
+    const streamed = gate.push(chunk);
+
+    expect(streamed.length).toBeGreaterThan(0);
+    expect(chunk.startsWith(streamed)).toBe(true);
+    const snapshot = gate.finish();
+    expect(snapshot.emittedText).toBe(streamed);
+    expect(snapshot.withheldText).toBe(chunk.slice(streamed.length));
+  });
+
+  it('still latches an unpunctuated terminal claim before exposing it', () => {
+    const gate = createPreFinalizationTextGate();
+
+    expect(gate.push('\u6211\u5df2\u7ecf\u6253\u5f00\u5fae\u4fe1\u4e86')).toBe('');
+    const snapshot = gate.finish();
+    expect(snapshot.emittedText).toBe('');
+    expect(snapshot.withheldText).toBe('\u6211\u5df2\u7ecf\u6253\u5f00\u5fae\u4fe1\u4e86');
   });
 });

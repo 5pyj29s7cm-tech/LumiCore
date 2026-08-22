@@ -49,7 +49,7 @@ describe('shared Lumi operation mode commands', () => {
     expect(trace.matchedRules.some(rule => rule.layer === 'client_action_only')).toBe(true);
   });
 
-  it('keeps ordinary Chat pure and promotes explicit work to Assistant', async () => {
+  it('keeps ordinary Chat pure and treats explicit work as an advisory Assistant transition', async () => {
     const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
     const ordinary = buildLumiTurnFlow({
       userId: 'operation_mode_chat_user',
@@ -77,13 +77,13 @@ describe('shared Lumi operation mode commands', () => {
     expect(ordinary.allowToolUseForTurn).toBe(false);
     for (const action of [messagingAction, desktopAction]) {
       expect(action.autoPromoteToAssistant).toBe(true);
-      expect(action.effectiveOperationMode).toBe('assistant');
+      expect(action.effectiveOperationMode).toBe('chat');
       expect(action.allowToolUseForTurn).toBe(true);
       expect(action.clientActionOnlyTurn).toBe(false);
     }
   });
 
-  it('makes a requested Autonomy switch executable without exposing unrelated work tools', async () => {
+  it('keeps a natural-language Autonomy switch on the verified client transition boundary', async () => {
     const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
     const flow = buildLumiTurnFlow({
       userId: 'operation_mode_switch_user',
@@ -94,7 +94,7 @@ describe('shared Lumi operation mode commands', () => {
     });
 
     expect(flow.requestedMode).toBe('autonomous');
-    expect(flow.effectiveOperationMode).toBe('autonomous');
+    expect(flow.effectiveOperationMode).toBe('chat');
     expect(flow.clientActionOnlyTurn).toBe(true);
     expect(flow.allowToolUseForTurn).toBe(true);
   });

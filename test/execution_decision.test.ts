@@ -112,7 +112,7 @@ describe('Lumi execution decision', () => {
     await initDatabase();
   });
 
-  it('keeps ordinary conversation tool-free', async () => {
+  it('keeps ordinary conversation model-owned with the foreground hard manifest', async () => {
     const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
     const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
 
@@ -131,8 +131,9 @@ describe('Lumi execution decision', () => {
     });
 
     expect(dispatch.boundary).toBe('conversation');
-    expect(decision.allowToolUse).toBe(false);
-    expect(decision.toolPolicy.forbiddenTools).toContain('*');
+    expect(decision.allowToolUse).toBe(true);
+    expect(decision.toolPolicy.allowedTools).toEqual(['*']);
+    expect(decision.toolPolicy.forbiddenTools).not.toContain('*');
     expect(decision.toolRoute).toBeNull();
   });
 
@@ -194,10 +195,10 @@ describe('Lumi execution decision', () => {
       'work_product_verify',
       'desktop_path_info',
     ]));
-    expect(decision.toolPolicy.forbiddenTools).toContain('computer_use');
+    expect(decision.toolPolicy.forbiddenTools).not.toContain('computer_use');
   });
 
-  it('promotes an explicit external action from Chat to Assistant execution', async () => {
+  it('executes an explicit external action from Chat without a persistent mode switch', async () => {
     const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
     const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
 
@@ -218,10 +219,13 @@ describe('Lumi execution decision', () => {
 
     expect(dispatch.boundary).toBe('tool_action');
     expect(dispatch.flow.autoPromoteToAssistant).toBe(true);
-    expect(dispatch.flow.effectiveOperationMode).toBe('assistant');
+    expect(dispatch.flow.effectiveOperationMode).toBe('chat');
     expect(decision.allowToolUse).toBe(true);
-    expect(decision.toolRoute?.categories).toContain('messaging');
-    expect(decision.toolRoute?.toolNames).toContain('wechat_send_message');
+    expect(decision.baseToolPolicy.allowedTools).toEqual(['*']);
+    expect(decision.toolPolicy.allowedTools).toEqual(expect.arrayContaining([
+      'wechat_send_message',
+      'desktop_open',
+    ]));
   });
 
   it('restricts client action turns to client state/action tools', async () => {
@@ -293,9 +297,9 @@ describe('Lumi execution decision', () => {
     });
 
     expect(dispatch.boundary).toBe('client_action');
-    expect(decision.toolPolicy.allowedTools).toEqual(['client_get_state', 'client_action']);
+    expect(decision.toolPolicy.allowedTools).toContain('*');
     expect(decision.toolPolicy.forbiddenTools).toEqual([]);
-    expect(decision.maxIterations).toBe(4);
+    expect(decision.maxIterations).toBe(80);
   });
 
   it('keeps generic self-checks on the minimal read-only diagnostic set', async () => {
@@ -794,7 +798,7 @@ describe('Lumi execution decision', () => {
       'desktop_open',
     ]));
     expect(decision.maxIterations).toBeLessThanOrEqual(10);
-    expect(decision.toolPolicy.forbiddenTools).toContain('computer_use');
+    expect(decision.toolPolicy.forbiddenTools).not.toContain('computer_use');
     expect(decision.promptOverlay).toContain('Editor-ready gate');
     expect(decision.promptOverlay).toContain('Never repeat the same New/Blank selector');
     for (const forbidden of [
@@ -836,8 +840,8 @@ describe('Lumi execution decision', () => {
       toolDeclarations: declarations,
     });
     expect(skillHallDispatch.boundary).toBe('client_action');
-    expect(skillHallDecision.toolPolicy.allowedTools).toEqual(['client_get_state', 'client_action']);
-    expect(skillHallDecision.promptOverlay).toContain('verification.status');
+    expect(skillHallDecision.toolPolicy.allowedTools).toEqual(['*']);
+    expect(skillHallDecision.promptOverlay).toContain('Lumi Execution Decision');
 
     const stockDispatch = buildLumiTurnDispatch({
       userId: 'execution_decision_regression_user',
@@ -910,7 +914,7 @@ describe('Lumi execution decision', () => {
       toolDeclarations: declarations,
     });
     expect(browseDispatch.boundary).toBe('client_action');
-    expect(browseDecision.toolPolicy.allowedTools).toEqual(['client_get_state', 'client_action']);
+    expect(browseDecision.toolPolicy.allowedTools).toEqual(['*']);
   });
 
   it('routes natural follow-up wording to action paths instead of empty chat', async () => {
@@ -935,8 +939,9 @@ describe('Lumi execution decision', () => {
 
     const autonomousMode = decide('\u5f00\u59cb\u81ea\u4e3b\u6267\u884c\u6a21\u5f0f', 'chat');
     expect(autonomousMode.dispatch.boundary).toBe('client_action');
-    expect(autonomousMode.decision.toolPolicy.allowedTools).toEqual(['client_get_state', 'client_action']);
-    expect(autonomousMode.decision.promptOverlay).toContain('verification.status');
+    expect(autonomousMode.dispatch.flow.effectiveOperationMode).toBe('chat');
+    expect(autonomousMode.decision.toolPolicy.allowedTools).toEqual(['*']);
+    expect(autonomousMode.decision.promptOverlay).toContain('Lumi Execution Decision');
 
     const deliveryReport = decide('\u7ed9\u6211\u505a\u4e00\u4e2a\u5ba2\u6237\u4ea4\u4ed8\u62a5\u544a\u5e76\u5bfc\u51fa');
     expect(deliveryReport.decision.allowToolUse).toBe(true);
@@ -1024,28 +1029,28 @@ describe('Lumi execution decision', () => {
 
     const whyPush = decide('\u4e3a\u4ec0\u4e48\u8981\u63a8\u9001');
     expect(whyPush.dispatch.boundary).toBe('conversation');
-    expect(whyPush.decision.allowToolUse).toBe(false);
+    expect(whyPush.decision.allowToolUse).toBe(true);
     expect(whyPush.decision.toolRoute).toBeNull();
 
     const naturalnessQuestion = decide('lumi \u80fd\u4e0d\u80fd\u66f4\u81ea\u7136\u4e00\u70b9');
     expect(naturalnessQuestion.dispatch.boundary).toBe('conversation');
-    expect(naturalnessQuestion.decision.allowToolUse).toBe(false);
+    expect(naturalnessQuestion.decision.allowToolUse).toBe(true);
     expect(naturalnessQuestion.decision.toolRoute).toBeNull();
 
     const stockModeQuestion = decide('\u770b\u76d8\u8f85\u52a9\u6a21\u5f0f\u662f\u4ec0\u4e48');
     expect(stockModeQuestion.dispatch.boundary).toBe('conversation');
-    expect(stockModeQuestion.decision.allowToolUse).toBe(false);
+    expect(stockModeQuestion.decision.allowToolUse).toBe(true);
     expect(stockModeQuestion.decision.toolRoute).toBeNull();
 
     const skillInstallQuestion = decide('\u6280\u80fd\u5927\u5385\u7684\u5b89\u88c5\u53ef\u4ee5\u7528\u5417');
     expect(skillInstallQuestion.dispatch.boundary).toBe('conversation');
-    expect(skillInstallQuestion.decision.allowToolUse).toBe(false);
+    expect(skillInstallQuestion.decision.allowToolUse).toBe(true);
     expect(skillInstallQuestion.decision.toolRoute).toBeNull();
 
     const knowledgeFileCapabilityQuestion = decide('\u77e5\u8bc6\u5e93\u91cc\u7684\u6587\u4ef6\u53ef\u4ee5\u53d1\u7ed9\u6211\u5417');
     expect(knowledgeFileCapabilityQuestion.dispatch.boundary).toBe('conversation');
     expect(knowledgeFileCapabilityQuestion.dispatch.flow.autoPromoteToAssistant).toBe(false);
-    expect(knowledgeFileCapabilityQuestion.decision.allowToolUse).toBe(false);
+    expect(knowledgeFileCapabilityQuestion.decision.allowToolUse).toBe(true);
     expect(knowledgeFileCapabilityQuestion.decision.toolRoute).toBeNull();
 
     const knowledgeFileSendCommand = decide('\u628a\u77e5\u8bc6\u5e93\u91cc\u7684\u9886\u822a\u5458\u624b\u518c\u53d1\u7ed9\u6211');
@@ -1055,27 +1060,27 @@ describe('Lumi execution decision', () => {
 
     const installerQuestion = decide('\u7f16\u8bd1\u6210\u5b89\u88c5\u5305\u4e5f\u80fd\u7528\u5417');
     expect(installerQuestion.dispatch.boundary).toBe('conversation');
-    expect(installerQuestion.decision.allowToolUse).toBe(false);
+    expect(installerQuestion.decision.allowToolUse).toBe(true);
     expect(installerQuestion.decision.toolRoute).toBeNull();
 
     const mcpWhyQuestion = decide('lumi \u4e3a\u4ec0\u4e48\u8981\u63a5\u5165\u5916\u90e8 MCP');
     expect(mcpWhyQuestion.dispatch.boundary).toBe('conversation');
-    expect(mcpWhyQuestion.decision.allowToolUse).toBe(false);
+    expect(mcpWhyQuestion.decision.allowToolUse).toBe(true);
     expect(mcpWhyQuestion.decision.toolRoute).toBeNull();
 
     const marketHowQuestion = decide('\u770b\u76d8\u8f85\u52a9\u6a21\u5f0f\u600e\u4e48\u7528');
     expect(marketHowQuestion.dispatch.boundary).toBe('conversation');
-    expect(marketHowQuestion.decision.allowToolUse).toBe(false);
+    expect(marketHowQuestion.decision.allowToolUse).toBe(true);
     expect(marketHowQuestion.decision.toolRoute).toBeNull();
 
     const installerCanQuestion = decide('\u5b89\u88c5\u5305\u80fd\u4e0d\u80fd\u7528');
     expect(installerCanQuestion.dispatch.boundary).toBe('conversation');
-    expect(installerCanQuestion.decision.allowToolUse).toBe(false);
+    expect(installerCanQuestion.decision.allowToolUse).toBe(true);
     expect(installerCanQuestion.decision.toolRoute).toBeNull();
 
     const marketRiskQuestion = decide('\u770b\u76d8\u8f85\u52a9\u4f1a\u4e0d\u4f1a\u6709\u98ce\u9669');
     expect(marketRiskQuestion.dispatch.boundary).toBe('conversation');
-    expect(marketRiskQuestion.decision.allowToolUse).toBe(false);
+    expect(marketRiskQuestion.decision.allowToolUse).toBe(true);
     expect(marketRiskQuestion.decision.toolRoute).toBeNull();
 
     const whyFailed = decide('\u4e3a\u4ec0\u4e48\u6ca1\u505a\u5b8c');
@@ -1114,7 +1119,7 @@ describe('Lumi execution decision', () => {
     expect(openSkillHall.trace.boundary).toBe('client_action');
     expect(openSkillHall.trace.allowed).toBe(true);
     expect(openSkillHall.trace.matched.clientActionOnlyTurn).toBe(true);
-    expect(openSkillHall.trace.toolPolicy.allowedTools).toEqual(['client_get_state', 'client_action']);
+    expect(openSkillHall.trace.toolPolicy.allowedTools).toEqual(['*']);
     expect(openSkillHall.trace.matchedRules).toEqual(expect.arrayContaining([
       expect.objectContaining({ layer: 'structured_client', name: 'client-navigation' }),
       expect.objectContaining({ layer: 'turn_flow', name: 'client-action-only-turn' }),
@@ -1122,9 +1127,9 @@ describe('Lumi execution decision', () => {
 
     const skillInstallQuestion = decide('\u6280\u80fd\u5927\u5385\u7684\u5b89\u88c5\u53ef\u4ee5\u7528\u5417', 'chat');
     expect(skillInstallQuestion.trace.boundary).toBe('conversation');
-    expect(skillInstallQuestion.trace.allowed).toBe(false);
+    expect(skillInstallQuestion.trace.allowed).toBe(true);
     expect(skillInstallQuestion.trace.matched.informationOnlyQuestion).toBe(true);
-    expect(skillInstallQuestion.trace.blockedBy).toContain('information-only-question');
+    expect(skillInstallQuestion.trace.blockedBy).not.toContain('information-only-question');
     expect(skillInstallQuestion.trace.toolRoute).toBeNull();
 
     const checkMcp = decide('\u5e2e\u6211\u68c0\u67e5 MCP \u72b6\u6001');
@@ -1151,8 +1156,8 @@ describe('Lumi execution decision', () => {
 
     const mcpConceptQuestion = decide('lumi \u4e3a\u4ec0\u4e48\u8981\u63a5\u5165\u5916\u90e8 MCP', 'chat');
     expect(mcpConceptQuestion.trace.boundary).toBe('conversation');
-    expect(mcpConceptQuestion.trace.allowed).toBe(false);
+    expect(mcpConceptQuestion.trace.allowed).toBe(true);
     expect(mcpConceptQuestion.trace.matched.informationOnlyQuestion).toBe(true);
-    expect(mcpConceptQuestion.trace.blockedBy).toContain('information-only-question');
+    expect(mcpConceptQuestion.trace.blockedBy).not.toContain('information-only-question');
   });
 });

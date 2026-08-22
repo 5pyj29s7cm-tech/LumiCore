@@ -77,10 +77,11 @@ describe('unified execution pipeline', () => {
       sideEffectClass: 'none',
     });
     expect(pipeline.turnIntent.flow.clientActionOnlyTurn).toBe(true);
-    expect(pipeline.execution.toolPolicy.allowedTools).toEqual([
+    expect(pipeline.execution.toolPolicy.allowedTools).toEqual(expect.arrayContaining([
       'client_get_state',
       'client_action',
-    ]);
+    ]));
+    expect(pipeline.execution.toolPolicy.allowedTools.length).toBeGreaterThan(2);
     expect(pipeline.execution.toolPolicy.forbiddenTools).not.toContain('client_action');
   });
 
@@ -295,7 +296,7 @@ describe('unified execution pipeline', () => {
     });
   });
 
-  it('compiles a matched skill workflow as an adapter with declared tool candidates', () => {
+  it('compiles a chat workflow match as a model-owned capability candidate', () => {
     const registry = createRegistry();
     const pipeline = buildLumiExecutionPipeline({
       dispatch: {
@@ -310,17 +311,20 @@ describe('unified execution pipeline', () => {
       source: 'chat',
     });
 
-    expect(pipeline.turnIntent.boundary).toBe('skill_workflow');
+    expect(pipeline.turnIntent.boundary).not.toBe('skill_workflow');
+    expect(pipeline.turnIntent.flow.specialWorkflow).toBeNull();
+    expect(pipeline.turnIntent.flow.workflowHint?.id).toBe('self_intro_demo');
+    expect(pipeline.turnIntent.flow.workflowRouting).toBe('model_hint');
     expect(pipeline.executionPlan.nodes).toContainEqual(expect.objectContaining({
       type: 'skill',
       executionRole: 'adapter',
       capabilityId: 'desktop-automation/self_intro_demo',
     }));
-    for (const toolName of ['client_action', 'desktop_list_apps', 'desktop_open', 'desktop_active_window']) {
-      expect(pipeline.executionPlan.nodes).toContainEqual(expect.objectContaining({
-        toolName,
-        executionRole: 'adapter',
-      }));
-    }
+    expect(pipeline.executionPlan.decisionAuthority).toBe('semantic_planner');
+    expect(pipeline.executionPlan.nodes.filter(node => node.toolName).length).toBeGreaterThan(0);
+    expect(pipeline.executionPlan.nodes).toContainEqual(expect.objectContaining({
+      toolName: 'client_action',
+      state: 'candidate',
+    }));
   });
 });

@@ -191,6 +191,7 @@ export function classifyActionRisk(
   // MCP configuration, and restart a process. Its built-in confirmation must
   // never be auto-approved as a generic low-risk "observe" action.
   if (name === 'client_repair_skill') return 'high';
+  if (name === 'desktop_write_text_file') return 'high';
   if (domain === 'destructive' || DESTRUCTIVE_ARG_PATTERN.test(argText)) return 'high';
   if (name.includes('install') || name.includes('uninstall') || name.includes('delete') || name.includes('remove')) return 'high';
   if (GIT_MUTATION_PATTERN.test(argText) || PACKAGE_INSTALL_PATTERN.test(argText) || SHELL_DOWNLOAD_EXEC_PATTERN.test(argText)) return 'high';
@@ -238,6 +239,7 @@ export function classifyAction(
   if (DESTRUCTIVE_ARG_PATTERN.test(argText) || /\b(delete|remove|wipe|format|kill|shutdown|reboot)\b/.test(name)) return 'destructive';
   if (name === 'desktop_ai_list_targets' || name === 'desktop_ai_discovery_plan') return 'observe';
   if (name === 'desktop_ai_register_target') return 'local_write';
+  if (name === 'desktop_write_text_file') return 'local_write';
   if (name === 'desktop_capability_status' || name === 'desktop_system_info' || name === 'desktop_list_files' || name === 'desktop_list_apps' || name === 'desktop_path_info' || name === 'desktop_show_lumi_window' || name === 'desktop_idle_time' || name === 'desktop_poll_activity' || name === 'desktop_active_window' || name === 'get_active_window_info' || name === 'desktop_running_processes' || name === 'desktop_ui_snapshot' || name === 'desktop_capture_screen' || name === 'desktop_clipboard_read') return 'observe';
   if (isTrustedDesktopRunCommand(toolName, args)) return 'desktop_control';
   if (name === 'cad_prepare_autocad_operations') return 'local_write';

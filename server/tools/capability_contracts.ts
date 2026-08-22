@@ -3,6 +3,7 @@ import type {
   CapabilityOperation,
   CapabilityRisk,
   CapabilitySideEffect,
+  CapabilityReconciliationContract,
   CapabilityVerification,
   ToolCapabilityMetadata,
   ToolDefinition,
@@ -20,6 +21,7 @@ export interface CapabilityContractInput {
   deprecated?: boolean;
   /** Stable capability id that owns all new planning and execution. */
   replacedBy?: string;
+  reconciliation?: CapabilityReconciliationContract;
 }
 
 export interface CapabilityEvidenceInput {
@@ -46,6 +48,7 @@ export function capabilityContract(input: CapabilityContractInput): ToolCapabili
     verification: input.verification,
     ...(input.deprecated === true ? { deprecated: true } : {}),
     ...(input.replacedBy ? { replacedBy: input.replacedBy } : {}),
+    ...(input.reconciliation ? { reconciliation: input.reconciliation } : {}),
   };
 }
 

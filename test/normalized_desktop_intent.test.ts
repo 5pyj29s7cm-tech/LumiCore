@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
+import {
+  hasMixedStatusExecutionIntent,
+  normalizeActionIntent,
+} from '../server/cognition/normalized_action_intent';
 import {
   buildDeterministicClientNavigationCommand,
   buildDeterministicExternalCommitConfirmationCommand,
@@ -13,35 +16,43 @@ import {
 } from '../server/cognition/quick_commands';
 
 describe('normalized desktop intent priority', () => {
-  it('writes an explicitly enumerated internal task continuation back to the named ledger task', () => {
+  it('routes an enumerated persistent-task execution request to the shared planner', () => {
     const text = '\u7ee7\u7eed\u521a\u624d\u7684\u6301\u4e45\u4efb\u52a1\u201c\u4e3b\u7a0b\u5e8f\u6587\u5b57\u957f\u4efb\u52a1-20260818\u201d\uff08\u4efb\u52a1\u7f16\u53f7 wt_task_1787031027377_c8a3v\uff09\uff1a\u5b8c\u6210\u7b2c\u4e00\u6b65\u201c\u8bb0\u5f55\u9a8c\u6536\u9700\u6c42\u201d\u548c\u7b2c\u4e8c\u6b65\u201c\u5728\u804a\u5929\u4e2d\u751f\u6210\u4e94\u9879\u68c0\u67e5\u6e05\u5355\u201d\uff1b\u7b2c\u4e09\u6b65\u4ecd\u4fdd\u6301\u7b49\u5f85\u786e\u8ba4\u3002\u4e0d\u8981\u5199\u6587\u4ef6\uff0c\u4e0d\u8981\u5916\u53d1\u3002';
     const command = buildDeterministicWorkTaskProgressCommand(text);
-    expect(command?.toolCall).toMatchObject({
-      name: 'work_takeover_task_update',
-      arguments: {
-        id: 'wt_task_1787031027377_c8a3v',
-        title: '\u4e3b\u7a0b\u5e8f\u6587\u5b57\u957f\u4efb\u52a1-20260818',
-        status: 'waiting_confirmation',
-        currentActionIndex: 2,
+    expect(command).toMatchObject({ matched: false, responseText: '' });
+    expect(command?.toolCall).toBeUndefined();
+    expect(buildDeterministicWorkTaskStatusCommand(text)).toBeNull();
+  });
+
+  it('keeps an explicit bookkeeping-only task note on the deterministic ledger lane', () => {
+    const command = buildDeterministicWorkTaskProgressCommand(
+      '\u6301\u4e45\u4efb\u52a1 wt_task_acceptance\uff1a\u53ea\u628a\u4ee5\u4e0b\u5907\u6ce8\u5199\u5165\u4efb\u52a1\u8d26\u672c\uff0c\u4e0d\u8981\u6267\u884c\u6216\u63a8\u8fdb\u4efb\u4f55\u6b65\u9aa4\uff0c\u4e0d\u4fee\u6539\u5f53\u524d\u72b6\u6001\u3002\u5907\u6ce8\uff1a\u5ba2\u6237\u8d44\u6599\u5df2\u7531\u7528\u6237\u8865\u9f50\uff0c\u7b49\u5f85\u4e0b\u4e00\u8f6e\u6267\u884c\u3002',
+    );
+    expect(command).toMatchObject({
+      matched: true,
+      toolCall: {
+        name: 'work_takeover_task_update',
+        arguments: {
+          id: 'wt_task_acceptance',
+          note: '\u5ba2\u6237\u8d44\u6599\u5df2\u7531\u7528\u6237\u8865\u9f50\uff0c\u7b49\u5f85\u4e0b\u4e00\u8f6e\u6267\u884c\u3002',
+        },
       },
     });
-    expect(command?.toolCall?.arguments.draftReply.split('\n')).toHaveLength(5);
-
+    expect(command?.toolCall?.arguments).not.toHaveProperty('currentActionIndex');
+    expect(command?.toolCall?.arguments).not.toHaveProperty('status');
+    expect(command?.toolCall?.arguments).not.toHaveProperty('result');
     const response = command?.formatToolResult?.(JSON.stringify({
-      ok: true,
-      status: 'updated',
       persisted: true,
       task: {
-        id: 'wt_task_1787031027377_c8a3v',
-        status: 'waiting_confirmation',
-        currentActionIndex: 2,
-        nextActions: ['\u8bb0\u5f55\u9a8c\u6536\u9700\u6c42', '\u5728\u804a\u5929\u4e2d\u751f\u6210\u4e94\u9879\u68c0\u67e5\u6e05\u5355', '\u7b49\u5f85\u6211\u786e\u8ba4\u540e\u518d\u7ee7\u7eed'],
+        id: 'wt_task_acceptance',
+        status: 'in_progress',
+        currentActionIndex: 0,
+        nextActions: ['\u6574\u7406\u5ba2\u6237\u9700\u6c42', '\u751f\u6210\u8ddf\u8fdb\u8349\u7a3f'],
       },
     }));
-    expect(response).toContain('\u5df2\u5b8c\u6210\u6b65\u9aa4\uff1a\u8bb0\u5f55\u9a8c\u6536\u9700\u6c42\u2192\u5728\u804a\u5929\u4e2d\u751f\u6210\u4e94\u9879\u68c0\u67e5\u6e05\u5355');
-    expect(response).toContain('5\u9879\u68c0\u67e5\u6e05\u5355');
-    expect(response).toContain('\u5f53\u524d\u72b6\u6001\uff1awaiting_confirmation');
-    expect(response).toContain('\u5269\u4f59\u6b65\u9aa4\uff1a\u7b49\u5f85\u6211\u786e\u8ba4\u540e\u518d\u7ee7\u7eed');
+    expect(response).toContain('\u5907\u6ce8\u5df2\u6301\u4e45\u5316');
+    expect(response).toContain('\u672a\u6267\u884c\u4efb\u52a1\u6b65\u9aa4');
+    expect(response).toContain('\u5f53\u524d\u6b65\u9aa4\uff1a\u6574\u7406\u5ba2\u6237\u9700\u6c42');
   });
 
   it('creates a new persistent work task instead of inheriting an older receipt', () => {
@@ -118,10 +129,45 @@ describe('normalized desktop intent priority', () => {
     expect(response).toContain('确认边界：等待用户确认后再外发');
   });
 
+  it('keeps an explicit id-based status query read-only even when it says not to execute', () => {
+    const text = '\u8bf7\u67e5\u8be2\u6301\u4e45\u4efb\u52a1 wt_task_acceptance \u7684\u72b6\u6001\u548c\u8fdb\u5ea6\uff0c\u53ea\u8bfb\u4efb\u52a1\u8d26\u672c\uff0c\u4e0d\u8981\u6267\u884c\u6216\u63a8\u8fdb\u4efb\u4f55\u6b65\u9aa4\u3002';
+    expect(buildDeterministicWorkTaskProgressCommand(text)).toBeNull();
+    const command = buildDeterministicWorkTaskStatusCommand(text);
+    expect(command?.toolCall).toEqual({
+      name: 'work_takeover_task_get',
+      arguments: { id: 'wt_task_acceptance' },
+    });
+    expect(command?.formatToolResult?.(JSON.stringify({
+      task: {
+        id: 'wt_task_acceptance',
+        status: 'in_progress',
+        currentActionIndex: 1,
+        nextActions: ['\u6574\u7406\u5ba2\u6237\u9700\u6c42', '\u751f\u6210\u8ddf\u8fdb\u8349\u7a3f'],
+      },
+    }))).toContain('\u5f53\u524d\u6b65\u9aa4\uff1a\u751f\u6210\u8ddf\u8fdb\u8349\u7a3f');
+  });
+
+  it('treats whether a persistent task is complete as a read-only status question', () => {
+    const text = '请查询持久任务 wt_task_acceptance 是否完成和当前状态，只读任务账本，不要执行新动作。';
+    expect(buildDeterministicWorkTaskProgressCommand(text)).toBeNull();
+    expect(buildDeterministicWorkTaskStatusCommand(text)?.toolCall).toEqual({
+      name: 'work_takeover_task_get',
+      arguments: { id: 'wt_task_acceptance' },
+    });
+  });
+
+  it('keeps affirmative step execution after a separate no-external-action clause', () => {
+    const text = '持久任务 wt_task_acceptance：不要执行外发动作；现在完成第一步“整理客户需求”，然后返回状态。';
+    expect(buildDeterministicWorkTaskProgressCommand(text)).toMatchObject({
+      matched: false,
+      responseText: '',
+    });
+    expect(buildDeterministicWorkTaskStatusCommand(text)).toBeNull();
+  });
+
   it('does not let a requested status receipt shadow an explicit task progress update', () => {
     const text = '续接持久任务“主程序文字长任务-20260818-2031” wt_task_acceptance：完成第一步“整理三项能力”，给出五项检查清单；不要写文件，不要外发；第三步等待我确认。请把进度写回同一任务账本并返回当前状态与剩余步骤。';
-    expect(buildDeterministicWorkTaskProgressCommand(text)?.toolCall?.name)
-      .toBe('work_takeover_task_update');
+    expect(buildDeterministicWorkTaskProgressCommand(text)).toMatchObject({ matched: false });
     expect(buildDeterministicWorkTaskStatusCommand(text)).toBeNull();
   });
 
@@ -164,6 +210,25 @@ describe('normalized desktop intent priority', () => {
       sideEffectClass: 'none',
       relation: 'status',
     });
+  });
+
+  it.each([
+    '这个任务完成了吗？没完成就继续执行。',
+    '检查任务状态；如果还没完成，就重试。',
+    'Is this task complete? If not, continue executing it.',
+    'Check the task status; if unfinished, retry it.',
+  ])('does not reduce a mixed status and execution turn to status-only: %s', (text) => {
+    expect(hasMixedStatusExecutionIntent(text)).toBe(true);
+    expect(normalizeActionIntent(text).kind).not.toBe('status_query');
+  });
+
+  it.each([
+    '这个任务完成了吗？',
+    '这个任务完成了吗？继续执行了吗？',
+    'AutoCAD 任务现在什么状态？',
+  ])('keeps a pure task-status question read-only: %s', (text) => {
+    expect(hasMixedStatusExecutionIntent(text)).toBe(false);
+    expect(normalizeActionIntent(text).kind).toBe('status_query');
   });
 
   it('binds a confirmation-only outbound message without treating do-not-send as cancellation', () => {
@@ -286,6 +351,23 @@ describe('normalized desktop intent priority', () => {
       ok: true,
       verification: { status: 'verified' },
     }))).toBe('已打开聊天界面。');
+  });
+
+  it.each([
+    ['你能不能使用桌面工具打开记事本？现在打开它。', '记事本'],
+    ['Can you use desktop tools to open Notepad? Open it now.', 'Notepad'],
+  ])('keeps the concrete desktop target after a tool-capability clause: %s', (text, target) => {
+    const intent = normalizeActionIntent(text);
+    expect(intent).toMatchObject({
+      kind: 'desktop_operation',
+      operation: 'navigate',
+      target,
+      sideEffectClass: 'none',
+    });
+    expect(buildDeterministicLocalDesktopNavigationCommand(intent, text)?.toolCall).toEqual({
+      name: 'desktop_open',
+      arguments: { target },
+    });
   });
 
   it('derives native navigation from the registered client surface map', () => {

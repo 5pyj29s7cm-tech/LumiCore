@@ -14,6 +14,7 @@ import { buildUnifiedLegalEntryPrompt } from "../cognition/legal_entry";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
 import { buildLumiExecutionDecision } from "../cognition/execution_decision";
+import { buildModelCapabilityPolicy } from "../cognition/capability_selection";
 import {
   createPreFinalizationTextGate,
   shouldDeferModelOutputUntilFinalized,
@@ -237,7 +238,9 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       text: routeText,
       toolDeclarations: toolRegistry.getToolDeclarations(),
       toolRegistry,
+      isSanctuary: !req.user,
     });
+    const restModelToolPolicy = buildModelCapabilityPolicy(restExecutionDecision);
     const deferRestStream =
       restExecutionDecision.allowToolUse
       || shouldDeferModelOutputUntilFinalized({
@@ -252,7 +255,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       source: 'rest_chat',
       actionIntent: routeText,
       routedTaskText: restTurnDispatch.flow.routeText,
-      toolPolicy: restExecutionDecision.toolPolicy,
+      toolPolicy: restModelToolPolicy,
     };
     const systemInstruction = buildRestChatSystemInstruction({
       routeText,
@@ -336,7 +339,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
             normalizedMessages,
             toolRegistry,
             { provider, model, userId, domain, orgId },
-            undefined, 3,
+            undefined, restModelToolPolicy.maxIterations || 3,
             llm.getDeepSeek, llm.getGemini, llm.getOpenAI, llm.getAnthropic, llm.getQwen,
             (chunk) => {
               if (!deferRestStream) {
@@ -382,7 +385,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
           normalizedMessages,
           toolRegistry,
           { provider, model, userId, domain, orgId },
-          undefined, 3,
+          undefined, restModelToolPolicy.maxIterations || 3,
           llm.getDeepSeek, llm.getGemini, llm.getOpenAI, llm.getAnthropic, llm.getQwen,
           undefined,
           toolContext,

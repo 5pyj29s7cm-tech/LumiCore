@@ -8,6 +8,18 @@ const REFERENTIAL_EXECUTION_RE =
 const PRE_FINALIZATION_TERMINAL_PROGRESS_RE =
   /(?:\b(?:workflow|task|step|operation|action|write|open|send|save|transcription|verification|review)?\s*(?:completed|succeeded|successful|done|finished|saved|written|opened|sent|verified)\b|\b(?:workflow|task|operation|file|document|transcription|verification|review)\s+(?:is\s+)?(?:complete|completed|done|finished|saved|written|verified)\b|\b(?:i(?:'ve| have| am|'m)|we(?:'ve| have| are|'re))\b[^.!?\n]{0,48}\b(?:completed|finished|saved|written|opened|sent|created|generated|executing|processing)\b|\bsuccess(?:fully)?\b|\u5df2(?:\u7ecf)?(?:\u5b8c\u6210|\u5199\u597d|\u5199\u5b8c|\u6253\u5f00|\u521b\u5efa|\u65b0\u5efa|\u53d1\u9001|\u4fdd\u5b58|\u5199\u5165|\u5bfc\u51fa|\u751f\u6210|\u6267\u884c|\u5904\u7406)|(?:\u6587\u4ef6|\u6587\u6863|\u4efb\u52a1|\u5de5\u4f5c|\u8f6c\u5199|\u8bc6\u522b|\u590d\u6838|\u9a8c\u8bc1|\u4e0b\u8f7d|\u5904\u7406)[^\u3002\uff01\uff1f.!?\n]{0,18}(?:\u5df2(?:\u7ecf)?|\u6210\u529f)?(?:\u5b8c\u6210|\u5199\u5b8c|\u5199\u597d|\u641e\u5b9a|\u4fdd\u5b58|\u6210\u529f)(?:\u4e86)?|(?:\u5b8c\u6210|\u5199\u597d|\u5199\u5b8c|\u641e\u5b9a|\u4fdd\u5b58|\u6253\u5f00|\u521b\u5efa|\u65b0\u5efa|\u53d1\u9001|\u5bfc\u51fa|\u751f\u6210|\u6267\u884c|\u5904\u7406)(?:\u597d|\u5b8c)?\u4e86|\u6267\u884c\u6210\u529f|\u64cd\u4f5c\u6210\u529f|\u6210\u529f(?:\u5b8c\u6210|\u6253\u5f00|\u5199\u5165|\u521b\u5efa|\u53d1\u9001|\u4fdd\u5b58|\u5bfc\u51fa)|(?:\u6211|\u6211\u4eec|\u8fd9\u8fb9)[^\u3002\uff01\uff1f.!?\n]{0,24}(?:\u73b0\u5728|\u9a6c\u4e0a|\u6b63\u5728)[^\u3002\uff01\uff1f.!?\n]{0,18}(?:\u6267\u884c|\u5904\u7406|\u5199\u5165|\u6253\u5f00|\u4fdd\u5b58|\u53d1\u9001|\u751f\u6210))/iu;
 
+// Keep only a short suffix while ordinary conversation is streaming. That
+// suffix is enough to catch an execution/completion phrase split across model
+// chunks, without holding an entire long sentence until its final punctuation.
+const CJK_PARTIAL_STREAM_HOLDBACK = 12;
+const LATIN_PARTIAL_STREAM_HOLDBACK = 32;
+
+function partialStreamHoldback(value: string): number {
+  return /[\u3400-\u9fff]/u.test(value)
+    ? CJK_PARTIAL_STREAM_HOLDBACK
+    : LATIN_PARTIAL_STREAM_HOLDBACK;
+}
+
 export interface PreFinalizationTextGateSnapshot {
   emittedText: string;
   withheldText: string;
@@ -115,6 +127,27 @@ export function createPreFinalizationTextGate(): PreFinalizationTextGate {
 
         safeOutput += sentence;
         emittedText += sentence;
+      }
+
+      if (withholding && buffer) {
+        withheldText += buffer;
+        buffer = '';
+      } else if (buffer) {
+        // A terminal claim may arrive without punctuation. Latch before
+        // exposing any part of the suspicious suffix.
+        if (!shouldForwardPreFinalizationProgress(buffer)) {
+          withholding = true;
+          withheldText += buffer;
+          buffer = '';
+        } else {
+          const holdback = partialStreamHoldback(buffer);
+          if (buffer.length > holdback) {
+            const prefix = buffer.slice(0, buffer.length - holdback);
+            buffer = buffer.slice(-holdback);
+            safeOutput += prefix;
+            emittedText += prefix;
+          }
+        }
       }
 
       return safeOutput;

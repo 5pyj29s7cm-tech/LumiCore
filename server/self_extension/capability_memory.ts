@@ -1,12 +1,15 @@
 import { readDB, writeDB } from '../../db_layer';
 
 export type CapabilityLearningStatus =
+  | 'hypothesis'
   | 'learned'
   | 'experiment_prepared'
   | 'experiment_passed'
+  | 'experiment_failed'
   | 'needs_confirmation'
   | 'needs_research'
   | 'needs_core_work'
+  | 'deprecated'
   | 'blocked';
 
 export interface CapabilityRoute {
@@ -51,6 +54,21 @@ export interface CapabilityLearningRecord {
   safety: string[];
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * A persisted idea is not a learned capability. Reuse is allowed only after a
+ * real experiment completed and every declared verification criterion passed.
+ * Legacy records remain readable but cannot promote themselves merely because
+ * they were written to the database.
+ */
+export function isCapabilityLearningRecordVerified(record: CapabilityLearningRecord): boolean {
+  if (record.status !== 'learned' && record.status !== 'experiment_passed') return false;
+  if (record.experiment?.status !== 'passed') return false;
+  const checks = Array.isArray(record.experiment.verification)
+    ? record.experiment.verification
+    : [];
+  return checks.length > 0 && checks.every(check => check.passed === true);
 }
 
 const SETTINGS_KEY = 'capability_learning_records_v1';
@@ -124,8 +142,7 @@ function scoreRecord(record: CapabilityLearningRecord, goal: string, domain?: st
   ].join(' ').toLowerCase();
   let score = 0;
   if (domain && record.domain === domain) score += 40;
-  if (record.status === 'experiment_passed' || record.status === 'learned') score += 20;
-  if (record.status === 'experiment_prepared') score += 12;
+  if (isCapabilityLearningRecordVerified(record)) score += 20;
   for (const term of terms) {
     if (term && haystack.includes(term.toLowerCase())) score += 3;
   }
@@ -154,10 +171,18 @@ function mergeIndexFor(input: Omit<CapabilityLearningRecord, 'id' | 'createdAt' 
 
 function mergeRecord(previous: CapabilityLearningRecord | null, incoming: CapabilityLearningRecord): CapabilityLearningRecord {
   if (!previous) return incoming;
+  const preserveVerifiedExperience = isCapabilityLearningRecordVerified(previous)
+    && !isCapabilityLearningRecordVerified(incoming);
   return {
     ...incoming,
     id: previous.id,
     createdAt: previous.createdAt,
+    ...(preserveVerifiedExperience ? {
+      status: previous.status,
+      selectedRoute: previous.selectedRoute,
+      planReadiness: previous.planReadiness,
+      experiment: previous.experiment,
+    } : {}),
     existingTools: unique([...previous.existingTools, ...incoming.existingTools]),
     nextUse: {
       ...incoming.nextUse,

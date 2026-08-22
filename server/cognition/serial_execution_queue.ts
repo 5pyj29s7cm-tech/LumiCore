@@ -107,6 +107,14 @@ export class SerialExecutionQueue {
     return Promise.all(leases.map(lease => lease.finished)).then(() => undefined);
   }
 
+  /** Cancel only the request named by a durable control intent. */
+  cancelRequest(key: string, requestId: string): Promise<boolean> {
+    const lease = this.getByRequestId(key, requestId);
+    if (!lease) return Promise.resolve(false);
+    lease.cancel();
+    return lease.finished.then(() => true);
+  }
+
   activate(lease: SerialExecutionLease): void {
     const state = this.states.get(lease.key);
     if (!state || state.leases.get(lease.requestId) !== lease) return;

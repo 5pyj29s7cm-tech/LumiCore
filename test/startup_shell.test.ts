@@ -29,7 +29,10 @@ describe('desktop startup shell', () => {
     expect(tauriConfig.app.windows[0].visible).toBe(false);
     expect(rustEntry).toContain('.on_page_load(move |webview, payload|');
     expect(rustEntry).toContain('PageLoadEvent::Finished');
-    expect(rustEntry).toContain('webview.window().show()');
+    expect(rustEntry).toContain('let _ = window.show();');
+    expect(rustEntry).toContain('let _ = window.unminimize();');
+    expect(rustEntry).toContain('let _ = window.set_focus();');
+    expect(rustEntry).toContain('let _ = webview.set_focus();');
   });
 
   it('keeps macOS media, automation, and protected-folder permission prompts in source configuration', () => {

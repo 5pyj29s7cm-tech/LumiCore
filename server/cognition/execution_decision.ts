@@ -146,7 +146,50 @@ function fallbackPolicy(
   personalityToolPolicy?: ToolPolicy,
   registry?: ToolRegistry,
 ): ToolPolicy {
-  const opModePolicy = buildOperationModeToolPolicy(flow.effectiveOperationMode, registry);
+  // The visible Chat posture is not a second permission prompt. For an open
+  // model-owned chat turn, expose the ordinary foreground Assistant manifest
+  // without persisting a UI-mode change. Semantic routing still only ranks
+  // candidates, while explicit no-tool/read-only/meeting and sanctuary
+  // boundaries keep modelToolAccess hard-off before this point.
+  const manifestMode = flow.channel === 'chat'
+    && flow.modelToolAccess === 'manifest'
+    && flow.operationMode === 'chat'
+      ? 'assistant'
+      : flow.operationMode;
+  const opModePolicy = buildOperationModeToolPolicy(manifestMode, registry);
+  if (flow.channel === 'chat' && flow.modelToolAccess === 'manifest') {
+    if (!personalityToolPolicy) return opModePolicy;
+    const hardAllowed = new Set(opModePolicy.allowedTools || []);
+    const personalityAllowed = new Set(personalityToolPolicy.allowedTools || []);
+    const hardWildcard = hardAllowed.has('*');
+    const personalityWildcard = personalityAllowed.has('*');
+    const allowedTools = hardWildcard
+      ? [...personalityAllowed]
+      : personalityWildcard
+        ? [...hardAllowed]
+        : [...hardAllowed].filter(name => personalityAllowed.has(name));
+    const forbiddenTools = unique([
+      ...(opModePolicy.forbiddenTools || []),
+      ...(personalityToolPolicy.forbiddenTools || []),
+    ]);
+    const forbidden = new Set(forbiddenTools);
+    const allowed = allowedTools.filter(name => name === '*' || !forbidden.has(name));
+    const hardMax = opModePolicy.maxIterations ?? Number.MAX_SAFE_INTEGER;
+    const personalityMax = personalityToolPolicy.maxIterations ?? Number.MAX_SAFE_INTEGER;
+    return {
+      allowedTools: allowed,
+      forbiddenTools,
+      requireConfirmation: unique([
+        ...(opModePolicy.requireConfirmation || []),
+        ...(personalityToolPolicy.requireConfirmation || []),
+      ]).filter(name => !forbidden.has(name)),
+      securityOverrides: {
+        ...(opModePolicy.securityOverrides || {}),
+        ...(personalityToolPolicy.securityOverrides || {}),
+      },
+      maxIterations: Math.min(hardMax, personalityMax),
+    };
+  }
   return flow.workSurfaceRoute.toolPolicy || opModePolicy || personalityToolPolicy || NO_TOOLS_POLICY;
 }
 
@@ -277,6 +320,7 @@ function enhanceToolRouteForFlow(
       'create_ppt',
       'create_pdf',
       'write_file',
+      'desktop_write_text_file',
     ]);
     categories.push('artifact_work');
     reasons.push('artifact-first turns need production and verification tools');
@@ -290,6 +334,7 @@ function enhanceToolRouteForFlow(
     : flow.workSurfaceRoute.artifactFirst && actionContract.kind === 'artifact_work'
       ? [
           'write_file',
+          'desktop_write_text_file',
           'work_product_verify',
           'desktop_path_info',
           'read_file',
@@ -314,14 +359,20 @@ function enhanceToolRouteForFlow(
 }
 
 export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): LumiExecutionDecision {
+  const modelOwnedMainChat = input.flow.channel === 'chat';
   const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(input.flow.routeText || input.text);
   const statusOnlyContinuation =
     /Recovered structured action state:[\s\S]{0,500}- followupIntent:\s*status\b/i.test(input.flow.routeText || input.text);
-  const allowToolUse = input.flow.allowToolUseForTurn && !input.isSanctuary && !statusOnlyContinuation;
-  const selfRepairToolPolicy = input.flow.selfRepairTurn && !statusOnlyContinuation
+  const allowToolUse = (
+    input.flow.allowToolUseForTurn
+    || input.flow.modelToolAccess === 'manifest'
+  ) && !input.isSanctuary && !statusOnlyContinuation;
+  const selfRepairToolPolicy = input.flow.selfRepairTurn && !statusOnlyContinuation && !modelOwnedMainChat
     ? buildSelfRepairToolPolicy(input.flow.routeText || input.text, input.toolRegistry)
     : null;
-  const clientActionToolPolicy = input.flow.clientActionOnlyTurn && !statusOnlyContinuation ? CLIENT_ACTION_TOOL_POLICY : null;
+  const clientActionToolPolicy = input.flow.clientActionOnlyTurn && !statusOnlyContinuation && !modelOwnedMainChat
+    ? CLIENT_ACTION_TOOL_POLICY
+    : null;
   const baseToolPolicy = input.isSanctuary || statusOnlyContinuation
     ? NO_TOOLS_POLICY
     : selfRepairToolPolicy

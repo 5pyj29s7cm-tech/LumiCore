@@ -215,7 +215,10 @@ export function buildLumiIntentTrace(input: BuildLumiIntentTraceInput): LumiInte
       completionEvidenceNeeded: flow.completionEvidenceNeeded,
     },
     matchedRules,
-    blockedBy: [...toolIntent.blockedBy],
+    // Legacy intent classifiers may still report advisory blockers. Once the
+    // hard execution decision exposes a manifest, do not mislabel those
+    // semantic hints as authorization denials in telemetry.
+    blockedBy: execution.allowToolUse ? [] : [...toolIntent.blockedBy],
     reasons: buildReasons({ dispatch, execution, toolIntent }),
     toolIntent,
     toolPolicy: compactPolicy(execution.toolPolicy),

@@ -5,7 +5,7 @@ import { Server, Socket } from "socket.io";
 import { readDB, writeDB } from "../../db_layer";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { NormalizedMessage } from "../llm/providers";
-import { runWithTools, LLMUsageRecord } from "../llm/adapter";
+import { buildConfirmedStepContinuationMessages, runWithTools, LLMUsageRecord } from "../llm/adapter";
 import { toolRegistry } from "../tools/registry";
 import { executeToolCall } from "../tools/execution_engine";
 import { queryMemories, addMemory, addReminder, extractMemories, CONVERSATIONAL_MEMORY_EVIDENCE } from "../memory";
@@ -78,7 +78,6 @@ import {
   formatConversationActionTaskStatus,
 } from "../cognition/action_continuation";
 import {
-  buildConfirmedStepContinuationNote,
   coalesceToolExecutionRecords,
   confirmedStepNeedsContinuation,
   taskReceiptsToRecords,
@@ -90,9 +89,14 @@ import { resolveSocketScope, scopedEmotionalStateKey } from "./scope";
 import { CN_TASK_EXECUTION_MESSAGES } from "../regions/packs/cn/voice_fast_path_messages";
 import {
   beginChatExecution,
+  beginQueuedChatExecution,
+  beginChatSidecarExecution,
   getChatExecution,
+  getChatSidecarCancellationTarget,
   markChatExecutionCancelling,
+  persistChatSidecarCancellationIntent,
   recordChatExecutionEvent,
+  waitForChatSidecarCancellationIntent,
   type ChatExecutionScope,
 } from "./chat_execution_registry";
 import { classifyActiveTaskMessage } from "../cognition/task_concurrency";
@@ -188,7 +192,7 @@ export function registerTaskHandler(
   });
 
   socket.on("agent:task", async (
-    data: { text: string; history?: any[]; personalityId?: string; conversationId?: string; domain?: 'personal' | 'work'; orgId?: string; requestId?: string },
+    data: { text: string; history?: any[]; personalityId?: string; conversationId?: string; domain?: 'personal' | 'work'; orgId?: string; requestId?: string; controlTargetRequestId?: string },
     ack?: (payload: { ok: boolean; requestId?: string; receivedAt?: string; error?: string }) => void,
   ) => {
     const uid = userIdFn(socket);
@@ -206,8 +210,9 @@ export function registerTaskHandler(
     const executionKey = taskExecutionKey(executionScope);
     const emitAgent = (event: string, payload: Record<string, any> = {}) => {
       const normalizedPayload = { ...payload, source: payload.source || 'task', requestId };
-      if (!recordChatExecutionEvent(executionScope, requestId, event, normalizedPayload)) return;
+      if (!recordChatExecutionEvent(executionScope, requestId, event, normalizedPayload)) return false;
       io.to(executionRoom).emit(event, normalizedPayload);
+      return true;
     };
     const emitTask = (event: string, payload: Record<string, any> = {}) => {
       const normalizedPayload = { ...payload, source: payload.source || 'task', requestId };
@@ -215,11 +220,43 @@ export function registerTaskHandler(
       io.to(executionRoom).emit(event, normalizedPayload);
     };
 
-    const existingExecution = getChatExecution(executionScope, requestId);
+    let existingExecution = getChatExecution(executionScope, requestId);
     if (existingExecution) {
+      if (existingExecution.sidecar === true && !existingExecution.terminal) {
+        try {
+          await waitForChatSidecarCancellationIntent(executionScope, requestId);
+        } catch (error: any) {
+          try { ack?.({ ok: false, requestId, error: String(error?.message || 'Control receipt is not durable') }); } catch {}
+          return;
+        }
+        existingExecution = getChatExecution(executionScope, requestId) || existingExecution;
+        const durableTarget = getChatSidecarCancellationTarget(executionScope, requestId);
+        if (durableTarget && !taskExecutionQueue.getByRequestId(executionKey, durableTarget)) {
+          recordChatExecutionEvent(executionScope, requestId, 'agent:response', {
+            text: CN_TASK_EXECUTION_MESSAGES.staleControl,
+            agentName: 'Lumi',
+            source: 'task',
+            requestId,
+            sidecar: true,
+            finalized: true,
+            blocked: false,
+            reason: 'stale_control',
+          });
+          existingExecution = getChatExecution(executionScope, requestId) || existingExecution;
+        }
+      }
       try { ack?.({ ok: true, requestId, receivedAt: existingExecution.createdAt }); } catch {}
       if (existingExecution.terminalEvent) {
         socket.emit(existingExecution.terminalEvent.event, { ...existingExecution.terminalEvent.payload, replayed: true });
+      } else {
+        socket.emit('agent:status', {
+          status: existingExecution.status === 'acknowledged' || existingExecution.status === 'planning'
+            ? existingExecution.queued === true ? 'queued' : 'thinking'
+            : existingExecution.status,
+          source: 'task',
+          requestId,
+          resumed: true,
+        });
       }
       return;
     }
@@ -246,6 +283,7 @@ export function registerTaskHandler(
     }
 
     const runningTask = taskExecutionQueue.getCurrent(executionKey);
+    const controlTargetRequestId = String(data.controlTargetRequestId || '').trim().slice(0, 120);
     const activeConversationForStatus = runningTask
       ? getOrCreateActiveConversation(uid, '', taskScope.domain, taskScope.orgId)
       : null;
@@ -256,6 +294,19 @@ export function registerTaskHandler(
         )
       : null;
     if (runningTask && activeMessageRelation === 'status') {
+      if (!beginChatSidecarExecution(executionScope, requestId)) return;
+      if (!controlTargetRequestId || controlTargetRequestId !== runningTask.requestId) {
+        try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
+        emitAgent('agent:response', {
+          text: CN_TASK_EXECUTION_MESSAGES.staleControl,
+          agentName: 'Lumi',
+          sidecar: true,
+          finalized: true,
+          blocked: false,
+          reason: 'stale_control',
+        });
+        return;
+      }
       const activeConversation = activeConversationForStatus!;
       const statusText = getConversationActionStatus(
         activeConversation.id,
@@ -264,7 +315,7 @@ export function registerTaskHandler(
         activeConversation.actionContinuationState,
       ) || CN_TASK_EXECUTION_MESSAGES.activeWithoutReceipt;
       try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
-      socket.emit('agent:response', {
+      const statusCommitted = emitAgent('agent:response', {
         text: statusText,
         agentName: 'Lumi',
         source: 'task',
@@ -274,20 +325,69 @@ export function registerTaskHandler(
         blocked: false,
         reason: '',
       });
-      addMessage({ userId: uid, agentId: '', conversationId: activeConversation.id, role: 'user', content: data.text, domain: taskScope.domain, orgId: taskScope.orgId, cognitiveIntent: 'task_status' });
-      addMessage({ userId: uid, agentId: '', conversationId: activeConversation.id, role: 'assistant', content: statusText, domain: taskScope.domain, orgId: taskScope.orgId, cognitiveIntent: 'task_status' });
+      if (statusCommitted) {
+        addMessage({ userId: uid, agentId: '', conversationId: activeConversation.id, role: 'user', content: data.text, domain: taskScope.domain, orgId: taskScope.orgId, cognitiveIntent: 'task_status', requestId });
+        addMessage({ userId: uid, agentId: '', conversationId: activeConversation.id, role: 'assistant', content: statusText, domain: taskScope.domain, orgId: taskScope.orgId, cognitiveIntent: 'task_status', requestId });
+      }
       return;
     }
 
     const previous = taskExecutionQueue.getTail(executionKey);
     let acknowledged = false;
     if (previous && activeMessageRelation === 'cancel') {
+      if (!beginChatSidecarExecution(executionScope, requestId)) return;
+      if (!controlTargetRequestId) {
+        emitAgent('agent:response', {
+          text: CN_TASK_EXECUTION_MESSAGES.staleControl,
+          agentName: 'Lumi',
+          sidecar: true,
+          finalized: true,
+          blocked: false,
+          reason: 'missing_control_target',
+        });
+        try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
+        return;
+      }
+      try {
+        await persistChatSidecarCancellationIntent(executionScope, requestId, controlTargetRequestId);
+      } catch (error: any) {
+        const message = String(error?.message || 'Unable to reserve task cancellation request');
+        emitAgent('agent:error', {
+          message,
+          code: 'TASK_CONTROL_RECEIPT_WRITE_FAILED',
+          sidecar: true,
+        });
+        try { ack?.({ ok: false, requestId, error: message }); } catch {}
+        return;
+      }
       try {
         ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() });
         acknowledged = true;
       } catch {}
-      await taskExecutionQueue.cancelAll(executionKey);
-      socket.emit('agent:response', {
+      emitAgent('agent:status', { status: 'cancelling', sidecar: true });
+      const currentTarget = taskExecutionQueue.getByRequestId(executionKey, controlTargetRequestId);
+      if (!currentTarget) {
+        emitAgent('agent:response', {
+          text: CN_TASK_EXECUTION_MESSAGES.staleControl,
+          agentName: 'Lumi',
+          sidecar: true,
+          finalized: true,
+          blocked: false,
+          reason: 'stale_control',
+        });
+        return;
+      }
+      try {
+        await taskExecutionQueue.cancelRequest(executionKey, controlTargetRequestId);
+      } catch (error: any) {
+        emitAgent('agent:error', {
+          message: String(error?.message || 'Task cancellation did not settle'),
+          code: 'TASK_CONTROL_CANCEL_FAILED',
+          sidecar: true,
+        });
+        return;
+      }
+      emitAgent('agent:response', {
         text: CN_TASK_EXECUTION_MESSAGES.cancelled,
         agentName: 'Lumi',
         source: 'task',
@@ -303,6 +403,7 @@ export function registerTaskHandler(
     if (previous && activeMessageRelation === 'replace') {
       void taskExecutionQueue.cancelAll(executionKey);
     }
+    beginQueuedChatExecution(executionScope, requestId);
     const taskLease = taskExecutionQueue.reserve(executionKey, requestId);
     const taskAbortController = taskLease.controller;
     let releaseDesktopControlLease: (() => void) | null = null;
@@ -325,6 +426,13 @@ export function registerTaskHandler(
       });
     }
     if (!await taskLease.waitForTurn()) {
+      emitAgent('agent:response', {
+        text: CN_TASK_EXECUTION_MESSAGES.cancelled,
+        agentName: 'Lumi',
+        finalized: true,
+        blocked: true,
+        reason: 'cancelled',
+      });
       releaseTask();
       return;
     }
@@ -758,8 +866,7 @@ export function registerTaskHandler(
         const continuation = await runWithTools(
           [
             { role: 'system', content: effectiveSystemPrompt },
-            { role: 'system', content: buildConfirmedStepContinuationNote(confirmationRecord) },
-            { role: 'user', content: confirmedTask },
+            ...buildConfirmedStepContinuationMessages(confirmedTask, confirmationRecord),
           ],
           toolRegistry,
           {
@@ -795,6 +902,7 @@ export function registerTaskHandler(
             actionIntent: confirmedTask,
             routedTaskText: confirmedTask,
             toolPolicy: executionDecision.toolPolicy,
+            priorToolRecords: [confirmationRecord],
             desktopExecutionTracker,
             isCancelled: () => taskAbortController.signal.aborted,
             llmGetters,
@@ -809,7 +917,9 @@ export function registerTaskHandler(
           llmGetters.getGlm,
           llmGetters.getRelay,
         );
-        confirmationRecords = [confirmationRecord, ...(continuation.toolCalls || [])];
+        confirmationRecords = continuation.toolCalls?.length
+          ? continuation.toolCalls
+          : [confirmationRecord];
         confirmationResponse = pendingConfirmationCreatedThisTurn
           ? CN_TASK_EXECUTION_MESSAGES.waitingConfirmation(confirmedTask)
           : continuation.text || confirmationResponse;

@@ -333,7 +333,9 @@ export function generateSystemPrompt(
 
   // Memory context
   if (options?.memories && options.memories.length > 0) {
-    const formatted = formatMemoriesForContext(options.memories);
+    const formatted = formatMemoriesForContext(options.memories, {
+      currentTurnText: options.userText,
+    });
     if (formatted) {
       blocks.push(formatted);
     }

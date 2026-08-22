@@ -66,6 +66,8 @@ export interface LumiTurnFlow {
   requestedMode: OperationMode | null;
   autoPromoteToAssistant: boolean;
   conceptualCapabilityQuestion?: boolean;
+  /** Whether the main model receives the hard-policy capability manifest. */
+  modelToolAccess: 'manifest' | 'hard_off';
   allowToolUseForTurn: boolean;
   selfRepairTurn: boolean;
   clientActionOnlyTurn: boolean;
@@ -73,6 +75,10 @@ export interface LumiTurnFlow {
   exposeAgentWork: boolean;
   workSurfaceRoute: ReturnType<typeof resolveWorkSurfaceRoute>;
   workTakeover: WorkTakeoverContinuityContext;
+  /** Matched reusable workflow exposed to the model as a capability hint. */
+  workflowHint?: SkillWorkflowDescriptor | null;
+  /** Chat keeps workflow matching advisory; isolated execution surfaces may opt into the adapter. */
+  workflowRouting?: 'none' | 'model_hint' | 'isolated_adapter';
   specialWorkflow: SkillWorkflowDescriptor | null;
   executionGovernance: LumiExecutionGovernance;
   completionEvidenceNeeded: boolean;
@@ -133,7 +139,9 @@ export function shouldAutoPromoteWorkTurn(
 
 function buildTurnFlowPromptOverlay(flow: Omit<LumiTurnFlow, 'promptOverlay'>): string {
   const focus: string[] = [];
-  if (flow.specialWorkflow) focus.push(`skill_workflow=${flow.specialWorkflow.skillId}`);
+  if (flow.workflowHint || flow.specialWorkflow) {
+    focus.push(`skill_workflow_hint=${(flow.workflowHint || flow.specialWorkflow)?.skillId}`);
+  }
   if (!flow.conceptualCapabilityQuestion && flow.workTakeover.shouldResumeTask) focus.push(`active_task=${flow.workTakeover.latestTask?.id || 'unknown'}`);
   if (!flow.conceptualCapabilityQuestion && flow.workTakeover.strength === 'hint') focus.push(`task_hint=${flow.workTakeover.latestTask?.id || 'unknown'}`);
   if (flow.conceptualCapabilityQuestion) focus.push('capability_explanation');
@@ -160,7 +168,7 @@ function buildTurnFlowPromptOverlay(flow: Omit<LumiTurnFlow, 'promptOverlay'>): 
       ? 'The command-center office text panel is Lumi\'s only text entry. Never direct the user to another chat screen or tell them to go to the command center; they are already there.'
       : '',
     '3. Use the task center only for persistent work with state, follow-up, artifacts, blockers, and confirmation boundaries.',
-    '4. Use skill workflows for learned repeatable capabilities, but never let a demo/script override the current user wording or task parameters.',
+    '4. Treat matched skill workflows as capability candidates. The model decides whether they fit the current turn; never let a demo/script override the current user wording or task parameters.',
     '5. Use external software, browser, desktop control, and MCP/tools as Lumi\'s hands, not as separate agents. Verify visible or file results before claiming completion.',
     '6. Delegate to background agents only for explicit delegation or genuinely multi-step work; keep Lumi responsible for the user-facing summary and next decision.',
     'Execution governance:',
@@ -416,6 +424,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     : buildActionContract(routingText);
   const actionContractRequiresTools = actionContract.applies && actionContract.kind !== 'none' && !clientActionIntent;
   const readOnlyKnowledgeInspection = isReadOnlyKnowledgeBaseInspectionRequest(input.text);
+  const directWorkTakeoverExecution = workTakeover.shouldResumeTask && workTakeover.intent === 'advance';
   const autoPromoteToAssistant = !conceptualCapabilityQuestion && (shouldAutoPromoteWorkTurn(
     input.text,
     operationMode,
@@ -430,6 +439,10 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     && operationMode === 'chat'
     && !requestedMode
     && actionContractRequiresTools
+  ) || Boolean(
+    directWorkTakeoverExecution
+    && operationMode === 'chat'
+    && !requestedMode
   ) || readOnlyKnowledgeInspection);
   const taskEntryTurn = input.channel === 'task';
   const chatModePureConversation = operationMode === 'chat' && !requestedMode && !taskEntryTurn && !autoPromoteToAssistant;
@@ -438,7 +451,12 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     !requestedMode &&
     !chatModePureConversation &&
     (taskEntryTurn || autoPromoteToAssistant || workTakeover.shouldResumeTask || actionContractRequiresTools);
-  const effectiveOperationMode = requestedMode || (shouldPromoteForAction ? 'assistant' : operationMode);
+  // Natural-language mode detection and action promotion are advisory only.
+  // The hard execution mode may change only through an explicit structured
+  // input or a previously verified client_action receipt persisted by the
+  // client. This prevents regex wording from widening the current manifest.
+  const effectiveOperationMode = input.requestedMode
+    || (input.channel === 'chat' ? operationMode : (shouldPromoteForAction ? 'assistant' : operationMode));
   const capabilityLearningPreview = classifyCapabilityLearningIntent(input.text, input);
   const explicitCapabilityMaintenance =
     capabilityLearningPreview.capabilityLearningIntent === 'inspect_reuse'
@@ -475,9 +493,31 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
           explicitTeamExecution ||
           explicitBackgroundDelegation ||
           shouldAllowToolUseForTurn(input.text, input.source, effectiveOperationMode);
-  const specialWorkflow = conceptualCapabilityQuestion || recoveredCurrentAppEdit || explicitNoToolInstruction
+  // Legacy action detection still describes the likely lane, but it no longer
+  // decides whether the main chat model can inspect/use the manifest. Only
+  // explicit no-tool/read-only/status/meeting boundaries turn model access off.
+  const modelToolAccess = input.channel === 'chat'
+    && !explicitNoToolInstruction
+    && !readOnlyConversationTurn
+    && !statusOnlyContinuation
+    && effectiveOperationMode !== 'meeting'
+      ? 'manifest' as const
+      : allowToolUseForTurn
+        ? 'manifest' as const
+        : 'hard_off' as const;
+  const matchedWorkflow = conceptualCapabilityQuestion || recoveredCurrentAppEdit || explicitNoToolInstruction
     ? null
     : matchSkillWorkflow(routingText, { targetIsLumi: input.targetIsLumi });
+  // Main chat is open-ended natural language. A regex workflow match may enrich
+  // the capability prompt, but it cannot own dispatch, expand permissions, or
+  // produce a terminal answer before the model sees the manifest. Task/agent
+  // entry points remain the isolated deterministic adapter boundary.
+  const workflowRouting = !matchedWorkflow
+    ? 'none' as const
+    : input.channel === 'chat'
+      ? 'model_hint' as const
+      : 'isolated_adapter' as const;
+  const specialWorkflow = workflowRouting === 'isolated_adapter' ? matchedWorkflow : null;
   const exposeAgentWork = !conceptualCapabilityQuestion && (explicitTeamExecution || shouldExposeAgentWork(input.text));
   const derivedExecution = buildExecutionGovernance({
     text: routingText,
@@ -526,6 +566,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     requestedMode,
     autoPromoteToAssistant,
     conceptualCapabilityQuestion,
+    modelToolAccess,
     allowToolUseForTurn,
     selfRepairTurn,
     clientActionOnlyTurn,
@@ -533,6 +574,8 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     exposeAgentWork,
     workSurfaceRoute,
     workTakeover,
+    workflowHint: matchedWorkflow,
+    workflowRouting,
     specialWorkflow,
     executionGovernance: execution.governance,
     completionEvidenceNeeded: execution.completionEvidenceNeeded,
@@ -570,12 +613,20 @@ export function buildInteractionModeOverlay(flow: LumiTurnFlow): string {
     return '## Capability Explanation\nThis turn only explains how Lumi modes and per-turn capability routing work. Do not call tools, inspect client state, resume an existing task, or delegate work. A routed subset is not the installed tool inventory; never ask the user to enable, mount, or switch to a fictional tool mode.' + restatementOverlay;
   }
   if (flow.clientActionOnlyTurn) {
-    return '## Client Mode Control\nThe user is asking Lumi to change a client mode or open a client-native surface. You may only use client_get_state and client_action. Do not use file, terminal, desktop mouse/keyboard, web, team, or external-app tools. For meeting/autonomous mode, use the client action confirmation flow when required.' + restatementOverlay;
+    return '## Client Surface Capability Hint\nThe user may be asking to change a Lumi mode or open a client-native surface. Treat client_get_state and client_action as the strongest candidates, but let the model decide from the current manifest whether to respond or act. This hint cannot grant capabilities or narrow the hard operation-mode policy. For meeting/autonomous mode, keep the client action confirmation boundary when required.' + restatementOverlay;
   }
   if (flow.selfRepairTurn) {
-    return '## Client Self-Repair Turn\nThe user is reporting that Lumi or one of its client workflows is failing. Do not only apologize or repeat the raw error. Use client_get_state first when tools are available, inspect relevant status/log/config surfaces, apply one safe recovery or retry when the cause is clear, verify the result, and then give a concise report. Reads and status checks are allowed; writes, desktop control, external app automation, and system changes still require confirmation.' + restatementOverlay;
+    return '## Client Self-Repair Capability Hint\nThe user may be reporting that Lumi or one of its client workflows is failing. Prefer evidence-bearing inspection and a safe verified recovery when the manifest and current receipts support it; do not merely repeat the raw error. This semantic hint does not grant or remove capabilities. Writes, desktop control, external app automation, and system changes remain governed by hard policy and confirmation.' + restatementOverlay;
   }
-  if (opModeConfig && (flow.allowToolUseForTurn || flow.effectiveOperationMode === 'meeting')) {
+  if (flow.effectiveOperationMode === 'chat' && flow.modelToolAccess === 'manifest') {
+    return [
+      '## Model-owned Chat Turn',
+      'The visible client remains in Chat; do not persistently switch its UI mode merely because wording matched an action route.',
+      'For this user-present turn, the declared hard-policy manifest is the ordinary foreground execution ceiling. Decide naturally whether to answer, inspect, or act; semantic lanes and preferred tools are ranking hints only.',
+      'A direct user request authorizes ordinary foreground work without an extra mode-change question. Keep hard confirmation, identity, no-mutation, destructive-action, external-commit, and other consequence boundaries intact, and verify real work before claiming completion.',
+    ].join('\n') + restatementOverlay;
+  }
+  if (opModeConfig && (flow.modelToolAccess === 'manifest' || flow.effectiveOperationMode === 'meeting')) {
     return opModeConfig.promptOverlay + restatementOverlay;
   }
   return '## Interaction Mode\nThis turn is chat-only. Do not call tools, operate the desktop, or claim that you are taking actions. Answer naturally unless the user gives an explicit command.' + restatementOverlay;

@@ -28,11 +28,17 @@ describe('focus thread client projection', () => {
     expect(widget).toContain('primaryThread?.nextAction');
   });
 
-  it('binds chat, task, and voice work to the durable commitment record', () => {
-    for (const file of ['server/socket/chat.ts', 'server/socket/task.ts', 'server/socket/voice.ts']) {
+  it('binds explicit task channels to durable focus without prebuilding Chat tasks', () => {
+    for (const file of ['server/socket/task.ts', 'server/socket/voice.ts']) {
       const contents = source(file);
       expect(contents).toContain('updateConversationActionFocus({');
-      expect(contents).toContain('commitment: actionTaskExecution.state.goal');
     }
+
+    const chat = source('server/socket/chat.ts');
+    const manager = source('server/conversation/manager.ts');
+    expect(chat).not.toContain('updateConversationActionFocus({');
+    expect(manager).toContain("msg.taskIntent === 'task'");
+    expect(manager).toContain('hasDurableCapabilityReceipt');
+    expect(manager).toContain('never creates a durable task');
   });
 });

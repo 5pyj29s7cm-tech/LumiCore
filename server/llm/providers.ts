@@ -45,12 +45,85 @@ export interface LLMCallConfig {
   source?: string;
   responseFormat?: LLMResponseFormat;
   signal?: AbortSignal;
+  /** Provider-independent lifecycle deadlines for one model attempt. */
+  attemptTimeouts?: Partial<ModelAttemptTimeouts>;
   role?: 'reasoning' | 'vision' | 'world';
   selectionMode?: UserLLMSelectionMode;
   fallbackCandidates?: UserLLMFallbackCandidate[];
   allowCloudFallback?: boolean;
   /** True only for a candidate compiled from the user's stored route policy. */
   authorizedRoutingCandidate?: boolean;
+}
+
+export interface ModelAttemptTimeouts {
+  /** Time allowed to establish the provider response/stream. */
+  requestMs: number;
+  /** Time allowed before the first transport frame arrives. */
+  firstByteMs: number;
+  /** Time allowed before text or a tool call is produced. */
+  semanticContentMs: number;
+  /** Maximum gap between transport frames after streaming starts. */
+  idleMs: number;
+  /** Hard wall-clock limit for the complete attempt. */
+  absoluteMs: number;
+}
+
+export const DEFAULT_MODEL_ATTEMPT_TIMEOUTS: Readonly<ModelAttemptTimeouts> = Object.freeze({
+  requestMs: 20_000,
+  firstByteMs: 20_000,
+  semanticContentMs: 45_000,
+  idleMs: 20_000,
+  absoluteMs: 60_000,
+});
+
+export type ModelAttemptDeadlineStage =
+  | 'request'
+  | 'first_byte'
+  | 'semantic_content'
+  | 'idle'
+  | 'absolute'
+  | 'cancelled';
+
+export class ModelAttemptDeadlineError extends Error {
+  readonly stage: ModelAttemptDeadlineStage;
+  readonly timeoutMs: number;
+  readonly callerCancelled: boolean;
+
+  constructor(stage: ModelAttemptDeadlineStage, timeoutMs: number, options: { cause?: unknown; completedEmpty?: boolean } = {}) {
+    const message = stage === 'cancelled'
+      ? 'Model attempt cancelled by caller'
+      : options.completedEmpty
+        ? 'Model attempt completed without semantic content'
+        : `Model attempt ${stage} timeout after ${timeoutMs}ms`;
+    super(message, options.cause === undefined ? undefined : { cause: options.cause });
+    this.name = 'ModelAttemptDeadlineError';
+    this.stage = stage;
+    this.timeoutMs = timeoutMs;
+    this.callerCancelled = stage === 'cancelled';
+  }
+}
+
+function positiveTimeout(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.max(1, Math.trunc(parsed)) : fallback;
+}
+
+export function resolveModelAttemptTimeouts(config?: Partial<ModelAttemptTimeouts>): ModelAttemptTimeouts {
+  const resolved: ModelAttemptTimeouts = {
+    requestMs: positiveTimeout(config?.requestMs, DEFAULT_MODEL_ATTEMPT_TIMEOUTS.requestMs),
+    firstByteMs: positiveTimeout(config?.firstByteMs, DEFAULT_MODEL_ATTEMPT_TIMEOUTS.firstByteMs),
+    semanticContentMs: positiveTimeout(config?.semanticContentMs, DEFAULT_MODEL_ATTEMPT_TIMEOUTS.semanticContentMs),
+    idleMs: positiveTimeout(config?.idleMs, DEFAULT_MODEL_ATTEMPT_TIMEOUTS.idleMs),
+    absoluteMs: positiveTimeout(config?.absoluteMs, DEFAULT_MODEL_ATTEMPT_TIMEOUTS.absoluteMs),
+  };
+  // Stage deadlines cannot outlive the enclosing attempt. Keeping the values
+  // configurable makes this mechanism usable by future models without adding
+  // provider- or model-name branches.
+  resolved.requestMs = Math.min(resolved.requestMs, resolved.absoluteMs);
+  resolved.firstByteMs = Math.min(resolved.firstByteMs, resolved.absoluteMs);
+  resolved.semanticContentMs = Math.min(resolved.semanticContentMs, resolved.absoluteMs);
+  resolved.idleMs = Math.min(resolved.idleMs, resolved.absoluteMs);
+  return resolved;
 }
 
 export interface NormalizedMessage {
@@ -253,6 +326,7 @@ function autoDispatchPreference(config: LLMCallConfig) {
     domain: config.domain,
     orgId: config.orgId,
     signal: config.signal,
+    attemptTimeouts: config.attemptTimeouts,
     allowCloudFallback: config.allowCloudFallback !== false
       && preferred?.allowCloudFallback !== false
       && !isStrictPrivacy(),
@@ -958,18 +1032,19 @@ export async function makeLLMCallDirect(
       delete params.max_tokens;
     }
 
+    const attemptTimeouts = resolveModelAttemptTimeouts(config.attemptTimeouts);
     const execute = () => withCloudResilience(
-        () => client.chat.completions.create(
+        operationSignal => client.chat.completions.create(
           params,
-          isLocal
-            ? {
-                signal: config.signal
-                  ? AbortSignal.any([config.signal, AbortSignal.timeout(60_000)])
-                  : AbortSignal.timeout(60_000),
-              }
-            : config.signal ? { signal: config.signal } : undefined,
+          operationSignal ? { signal: operationSignal } : undefined,
         ),
-        { provider: config.provider, model: config.model, maxRetries: isLocal ? 1 : undefined },
+        {
+          provider: config.provider,
+          model: config.model,
+          maxRetries: isLocal ? 1 : undefined,
+          signal: config.signal,
+          timeoutMs: attemptTimeouts.absoluteMs,
+        },
       );
     let response: any;
     try {
@@ -997,8 +1072,16 @@ export async function makeLLMCallDirect(
 
     const modelInstance = client.getGenerativeModel(modelConfig);
     const result = await withCloudResilience(
-      () => modelInstance.generateContent({ contents }),
-      { provider: 'gemini', model: config.model },
+      operationSignal => (modelInstance as any).generateContent(
+        { contents },
+        operationSignal ? { signal: operationSignal } : undefined,
+      ),
+      {
+        provider: 'gemini',
+        model: config.model,
+        signal: config.signal,
+        timeoutMs: resolveModelAttemptTimeouts(config.attemptTimeouts).absoluteMs,
+      },
     );
     return parseGeminiResponse(result);
   }
@@ -1021,8 +1104,16 @@ export async function makeLLMCallDirect(
     }
 
     const response = await withCloudResilience(
-      () => client.chat.completions.create(params),
-      { provider: 'openai', model: config.model },
+      operationSignal => client.chat.completions.create(
+        params,
+        operationSignal ? { signal: operationSignal } : undefined,
+      ),
+      {
+        provider: 'openai',
+        model: config.model,
+        signal: config.signal,
+        timeoutMs: resolveModelAttemptTimeouts(config.attemptTimeouts).absoluteMs,
+      },
     );
     return parseOpenAIResponse(response);
   }
@@ -1039,8 +1130,16 @@ export async function makeLLMCallDirect(
     });
 
     const response = await withCloudResilience(
-      () => client.messages.create(params),
-      { provider: 'anthropic', model: config.model },
+      operationSignal => client.messages.create(
+        params,
+        operationSignal ? { signal: operationSignal } : undefined,
+      ),
+      {
+        provider: 'anthropic',
+        model: config.model,
+        signal: config.signal,
+        timeoutMs: resolveModelAttemptTimeouts(config.attemptTimeouts).absoluteMs,
+      },
     );
     return parseAnthropicResponse(response);
   }
@@ -1069,6 +1168,145 @@ export async function nextStreamItemWithIdleTimeout<T>(
     ]);
   } finally {
     if (timer) clearTimeout(timer);
+  }
+}
+
+type AttemptDeadline = { stage: Exclude<ModelAttemptDeadlineStage, 'cancelled'>; dueAt: number; timeoutMs: number };
+
+/**
+ * Supervises one provider attempt from request creation through the terminal
+ * stream frame. Every wait is raced outside the SDK, so an implementation that
+ * ignores AbortSignal cannot hold the chat execution open indefinitely.
+ */
+class ModelAttemptSupervisor {
+  readonly signal: AbortSignal;
+  readonly timeouts: ModelAttemptTimeouts;
+  private readonly startedAt = Date.now();
+  private readonly controller = new AbortController();
+  private firstByteSeen = false;
+  private semanticContentSeen = false;
+  private lastFrameAt = this.startedAt;
+
+  constructor(private readonly callerSignal: AbortSignal | undefined, config?: Partial<ModelAttemptTimeouts>) {
+    this.timeouts = resolveModelAttemptTimeouts(config);
+    this.signal = callerSignal
+      ? AbortSignal.any([callerSignal, this.controller.signal])
+      : this.controller.signal;
+  }
+
+  request<T>(operation: () => PromiseLike<T>): Promise<T> {
+    return this.wait(
+      Promise.resolve().then(operation),
+      [
+        { stage: 'request', dueAt: this.startedAt + this.timeouts.requestMs, timeoutMs: this.timeouts.requestMs },
+        this.absoluteDeadline(),
+      ],
+    );
+  }
+
+  async next<T>(iterator: AsyncIterator<T>): Promise<IteratorResult<T>> {
+    const lifecycleDeadline: AttemptDeadline = this.firstByteSeen
+      ? { stage: 'idle', dueAt: this.lastFrameAt + this.timeouts.idleMs, timeoutMs: this.timeouts.idleMs }
+      : { stage: 'first_byte', dueAt: this.startedAt + this.timeouts.firstByteMs, timeoutMs: this.timeouts.firstByteMs };
+    const deadlines = [lifecycleDeadline, this.absoluteDeadline()];
+    if (!this.semanticContentSeen) {
+      deadlines.push({
+        stage: 'semantic_content',
+        dueAt: this.startedAt + this.timeouts.semanticContentMs,
+        timeoutMs: this.timeouts.semanticContentMs,
+      });
+    }
+    const item = await this.wait(Promise.resolve().then(() => iterator.next()), deadlines);
+    if (!item.done) {
+      this.firstByteSeen = true;
+      this.lastFrameAt = Date.now();
+    }
+    return item;
+  }
+
+  completion<T>(operation: PromiseLike<T>): Promise<T> {
+    const deadlines = [this.absoluteDeadline()];
+    if (!this.semanticContentSeen) {
+      deadlines.push({
+        stage: 'semantic_content',
+        dueAt: this.startedAt + this.timeouts.semanticContentMs,
+        timeoutMs: this.timeouts.semanticContentMs,
+      });
+    }
+    return this.wait(Promise.resolve(operation), deadlines);
+  }
+
+  markSemanticContent(): void {
+    this.semanticContentSeen = true;
+  }
+
+  assertSemanticContent(): void {
+    if (this.semanticContentSeen) return;
+    const error = new ModelAttemptDeadlineError('semantic_content', this.timeouts.semanticContentMs, { completedEmpty: true });
+    this.abort(error);
+    throw error;
+  }
+
+  abort(error: Error): void {
+    if (!this.controller.signal.aborted) this.controller.abort(error);
+  }
+
+  private absoluteDeadline(): AttemptDeadline {
+    return {
+      stage: 'absolute',
+      dueAt: this.startedAt + this.timeouts.absoluteMs,
+      timeoutMs: this.timeouts.absoluteMs,
+    };
+  }
+
+  private wait<T>(operation: Promise<T>, deadlines: AttemptDeadline[]): Promise<T> {
+    if (this.callerSignal?.aborted) {
+      void operation.catch(() => {});
+      return Promise.reject(new ModelAttemptDeadlineError('cancelled', 0, { cause: this.callerSignal.reason }));
+    }
+    const deadline = deadlines.reduce((earliest, candidate) => candidate.dueAt < earliest.dueAt ? candidate : earliest);
+    const remainingMs = deadline.dueAt - Date.now();
+    if (remainingMs <= 0) {
+      const error = new ModelAttemptDeadlineError(deadline.stage, deadline.timeoutMs);
+      this.abort(error);
+      void operation.catch(() => {});
+      return Promise.reject(error);
+    }
+
+    return new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const finish = (callback: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.callerSignal?.removeEventListener('abort', onCallerAbort);
+        callback();
+      };
+      const onCallerAbort = () => finish(() => {
+        reject(new ModelAttemptDeadlineError('cancelled', 0, { cause: this.callerSignal?.reason }));
+      });
+      const timer = setTimeout(() => finish(() => {
+        const error = new ModelAttemptDeadlineError(deadline.stage, deadline.timeoutMs);
+        this.abort(error);
+        reject(error);
+      }), remainingMs);
+      this.callerSignal?.addEventListener('abort', onCallerAbort, { once: true });
+      operation.then(
+        value => finish(() => resolve(value)),
+        error => finish(() => reject(error)),
+      );
+    });
+  }
+}
+
+function stopIterator(iterator: AsyncIterator<unknown> | undefined): void {
+  if (!iterator?.return) return;
+  try {
+    const stopped = iterator.return();
+    void Promise.resolve(stopped).catch(() => {});
+  } catch {
+    // The attempt has already reached a terminal error; iterator cleanup is
+    // best-effort and must never replace that error.
   }
 }
 
@@ -1229,84 +1467,89 @@ export async function makeLLMCallStreamingDirect(
     }
     params.stream = true;
 
-    const executeStream = async (): Promise<NormalizedLLMResponse> => {
-      // The OpenAI-compatible client resolves `create()` as soon as the HTTP
-      // stream is established. A provider can therefore stop producing bytes
-      // after a successful handshake and leave the `for await` loop pending
-      // forever. Keep the caller's cancellation signal, but also bound the
-      // lifetime of every stream (cloud and local) so the chat UI can recover.
-      const streamTimeoutSignal = AbortSignal.timeout(60_000);
-      const idleAbortController = new AbortController();
-      const streamSignal = config.signal
-        ? AbortSignal.any([config.signal, streamTimeoutSignal, idleAbortController.signal])
-        : AbortSignal.any([streamTimeoutSignal, idleAbortController.signal]);
-      const stream: any = await withCloudResilience(
-        () => client.chat.completions.create(params, { signal: streamSignal }),
-        { provider: config.provider, model: config.model, maxRetries: isLocal ? 1 : undefined },
-      );
+    const consumeStream = async (operationSignal?: AbortSignal): Promise<NormalizedLLMResponse> => {
+      const supervisor = new ModelAttemptSupervisor(operationSignal, config.attemptTimeouts);
       const accumulatedText: string[] = [];
       const accumulatedReasoning: string[] = [];
       const toolCallAccumulators: Map<number, { id: string; name: string; args: string }> = new Map();
       const legacyProtocolFilter = createLegacyProtocolChunkFilter(onChunk);
       let streamUsage: any = undefined;
-      let streamIncomplete = false;
+      let iterator: AsyncIterator<any> | undefined;
 
-      const iterator: AsyncIterator<any> = stream[Symbol.asyncIterator]();
-      while (true) {
-        const next = await nextStreamItemWithIdleTimeout(iterator, STREAM_IDLE_TIMEOUT_MS);
-        if (!('item' in next)) {
-          streamIncomplete = true;
-          idleAbortController.abort(new Error(`Model stream idle for ${STREAM_IDLE_TIMEOUT_MS}ms`));
-          void iterator.return?.().catch(() => {});
-          break;
-        }
-        if (next.item.done) break;
-        const chunk = next.item.value;
-        const delta = chunk.choices?.[0]?.delta;
-        if (delta) {
-          if (delta.content) {
-            accumulatedText.push(delta.content);
-            legacyProtocolFilter.emit(delta.content);
-          }
+      try {
+        const stream: any = await supervisor.request(() => client.chat.completions.create(
+          params,
+          { signal: supervisor.signal },
+        ));
+        iterator = stream[Symbol.asyncIterator]();
+        while (true) {
+          const next = await supervisor.next(iterator);
+          if (next.done) break;
+          const chunk = next.value;
+          const delta = chunk.choices?.[0]?.delta;
+          if (delta) {
+            if (delta.content) {
+              accumulatedText.push(delta.content);
+              if (String(delta.content).trim()) supervisor.markSemanticContent();
+              legacyProtocolFilter.emit(delta.content);
+            }
 
-          if (delta.reasoning_content) {
-            accumulatedReasoning.push(delta.reasoning_content);
-          }
+            if (delta.reasoning_content) {
+              accumulatedReasoning.push(delta.reasoning_content);
+            }
 
-          if (delta.tool_calls) {
-            for (const tc of delta.tool_calls) {
-              const idx = tc.index ?? 0;
-              if (!toolCallAccumulators.has(idx)) {
-                toolCallAccumulators.set(idx, { id: tc.id || '', name: tc.function?.name || '', args: '' });
+            if (delta.tool_calls) {
+              for (const tc of delta.tool_calls) {
+                const idx = tc.index ?? 0;
+                if (!toolCallAccumulators.has(idx)) {
+                  toolCallAccumulators.set(idx, { id: tc.id || '', name: tc.function?.name || '', args: '' });
+                }
+                const acc = toolCallAccumulators.get(idx)!;
+                if (tc.id) acc.id = tc.id;
+                if (tc.function?.name) acc.name = tc.function.name;
+                if (tc.function?.arguments) acc.args += tc.function.arguments;
+                if (tc.id || tc.function?.name || tc.function?.arguments) supervisor.markSemanticContent();
               }
-              const acc = toolCallAccumulators.get(idx)!;
-              if (tc.id) acc.id = tc.id;
-              if (tc.function?.name) acc.name = tc.function.name;
-              if (tc.function?.arguments) acc.args += tc.function.arguments;
             }
           }
+          if (chunk.usage) streamUsage = chunk.usage;
         }
-        if (chunk.usage) streamUsage = chunk.usage;
-      }
-      legacyProtocolFilter.flush();
+        supervisor.assertSemanticContent();
+        legacyProtocolFilter.flush();
 
-      const usage = extractUsage({ usage: streamUsage });
-      const text = accumulatedText.length > 0 ? accumulatedText.join('') : null;
-      const reasoningContent = accumulatedReasoning.length > 0 ? accumulatedReasoning.join('') : null;
-      if (toolCallAccumulators.size > 0) {
-        const toolCalls: ParsedToolCall[] = [...toolCallAccumulators.values()].map(acc => {
-          let args: Record<string, any> = {};
-          try { args = JSON.parse(acc.args || '{}'); } catch { /* ignore parse errors */ }
-          return { id: acc.id, name: acc.name, arguments: args };
-        });
-        return { text, toolCalls, reasoningContent, usage, streamIncomplete };
+        const usage = extractUsage({ usage: streamUsage });
+        const text = accumulatedText.length > 0 ? accumulatedText.join('') : null;
+        const reasoningContent = accumulatedReasoning.length > 0 ? accumulatedReasoning.join('') : null;
+        if (toolCallAccumulators.size > 0) {
+          const toolCalls: ParsedToolCall[] = [...toolCallAccumulators.values()].map(acc => {
+            let args: Record<string, any> = {};
+            try { args = JSON.parse(acc.args || '{}'); } catch { /* ignore parse errors */ }
+            return { id: acc.id, name: acc.name, arguments: args };
+          });
+          return { text, toolCalls, reasoningContent, usage };
+        }
+        const legacyToolCalls = parseLegacyXmlToolCalls(text, toolDeclarations);
+        if (legacyToolCalls) {
+          return { text: null, toolCalls: legacyToolCalls, reasoningContent, usage };
+        }
+        return { text, toolCalls: null, reasoningContent, usage };
+      } catch (error) {
+        supervisor.abort(error instanceof Error ? error : new Error(String(error)));
+        stopIterator(iterator);
+        throw error;
       }
-      const legacyToolCalls = parseLegacyXmlToolCalls(text, toolDeclarations);
-      if (legacyToolCalls) {
-        return { text: null, toolCalls: legacyToolCalls, reasoningContent, usage };
-      }
-      return { text, toolCalls: null, reasoningContent, usage, streamIncomplete };
     };
+    const executeStream = () => withCloudResilience(
+      consumeStream,
+      {
+        provider: config.provider,
+        model: config.model,
+        // Retrying an acquired stream can replay partial output. Candidate
+        // failover is owned by dispatch, which buffers until a full success.
+        maxRetries: 0,
+        signal: config.signal,
+      },
+    );
     try {
       return supervisedLocal
         ? await runLocalModelInference(config.provider as LocalModelProvider, executeStream, { signal: config.signal })
@@ -1330,41 +1573,60 @@ export async function makeLLMCallStreamingDirect(
     });
 
     const modelInstance = client.getGenerativeModel(modelConfig);
-    const result: any = await withCloudResilience(
-      () => modelInstance.generateContentStream({ contents }),
-      { provider: 'gemini', model: config.model },
-    );
+    return withCloudResilience(
+      async operationSignal => {
+        const supervisor = new ModelAttemptSupervisor(operationSignal, config.attemptTimeouts);
+        const accumulatedText: string[] = [];
+        const toolCalls: ParsedToolCall[] = [];
+        let iterator: AsyncIterator<any> | undefined;
+        try {
+          const result: any = await supervisor.request(() => (modelInstance as any).generateContentStream(
+            { contents },
+            { signal: supervisor.signal },
+          ));
+          iterator = result.stream[Symbol.asyncIterator]();
+          while (true) {
+            const next = await supervisor.next(iterator);
+            if (next.done) break;
+            const chunk = next.value;
+            const text = chunk.text();
+            if (text) {
+              accumulatedText.push(text);
+              if (String(text).trim()) supervisor.markSemanticContent();
+              onChunk(text);
+            }
+            const calls = chunk.functionCalls();
+            if (calls) {
+              for (let i = 0; i < calls.length; i++) {
+                toolCalls.push({
+                  id: `gemini-${Date.now()}-${toolCalls.length}`,
+                  name: calls[i].name || '',
+                  arguments: calls[i].args || {},
+                });
+                supervisor.markSemanticContent();
+              }
+            }
+          }
 
-    const accumulatedText: string[] = [];
-    const toolCalls: ParsedToolCall[] = [];
-
-    for await (const chunk of result.stream) {
-      const text = chunk.text();
-      if (text) {
-        accumulatedText.push(text);
-        onChunk(text);
-      }
-      const calls = chunk.functionCalls();
-      if (calls) {
-        for (let i = 0; i < calls.length; i++) {
-          toolCalls.push({
-            id: `gemini-${Date.now()}-${toolCalls.length}`,
-            name: calls[i].name || '',
-            arguments: calls[i].args || {},
-          });
+          // The aggregate promise is part of the same health attempt. A
+          // handshake and terminal stream are not success until it settles.
+          const aggregated = await supervisor.completion(result.response);
+          const parsed = parseGeminiResponse(aggregated);
+          if (parsed.text?.trim() || (parsed.toolCalls?.length || 0) > 0) supervisor.markSemanticContent();
+          supervisor.assertSemanticContent();
+          return {
+            text: accumulatedText.length > 0 ? accumulatedText.join('') : parsed.text,
+            toolCalls: parsed.toolCalls && parsed.toolCalls.length > 0 ? parsed.toolCalls : (toolCalls.length > 0 ? toolCalls : null),
+            usage: parsed.usage,
+          };
+        } catch (error) {
+          supervisor.abort(error instanceof Error ? error : new Error(String(error)));
+          stopIterator(iterator);
+          throw error;
         }
-      }
-    }
-
-    // Also check the aggregated response for function calls + usage
-    const aggregated = await result.response;
-    const parsed = parseGeminiResponse(aggregated);
-
-    return {
-      text: accumulatedText.length > 0 ? accumulatedText.join('') : parsed.text,
-      toolCalls: parsed.toolCalls && parsed.toolCalls.length > 0 ? parsed.toolCalls : (toolCalls.length > 0 ? toolCalls : null),
-      usage: parsed.usage,
-    };
+      },
+      { provider: 'gemini', model: config.model, maxRetries: 0, signal: config.signal },
+    );
   }
 
   // ── Anthropic streaming ──
@@ -1379,59 +1641,74 @@ export async function makeLLMCallStreamingDirect(
       maxTokens: maxTokens,
     });
 
-    const stream: any = await withCloudResilience(
-      () => client.messages.stream(params),
-      { provider: 'anthropic', model: config.model },
+    return withCloudResilience(
+      async operationSignal => {
+        const supervisor = new ModelAttemptSupervisor(operationSignal, config.attemptTimeouts);
+        const textParts: string[] = [];
+        const toolCalls: ParsedToolCall[] = [];
+        const toolUseAccumulators: Map<string, { id: string; name: string; args: Record<string, any> }> = new Map();
+        let iterator: AsyncIterator<any> | undefined;
+        try {
+          const stream: any = await supervisor.request(() => client.messages.stream(
+            params,
+            { signal: supervisor.signal },
+          ));
+          iterator = stream[Symbol.asyncIterator]();
+          while (true) {
+            const next = await supervisor.next(iterator);
+            if (next.done) break;
+            const event = next.value;
+            if (event.type === 'text' && event.text) {
+              textParts.push(event.text);
+              if (String(event.text).trim()) supervisor.markSemanticContent();
+              onChunk(event.text);
+            }
+            if (event.type === 'content_block_start' && (event as any).content_block?.type === 'tool_use') {
+              const block = (event as any).content_block;
+              toolUseAccumulators.set(block.id, { id: block.id, name: block.name, args: {} });
+              supervisor.markSemanticContent();
+            }
+            if (event.type === 'content_block_delta' && (event as any).delta?.type === 'input_json_delta') {
+              const delta = (event as any).delta;
+              const acc = [...toolUseAccumulators.values()].find(a => !a.name || Object.keys(a.args).length === 0);
+              if (acc) {
+                try { acc.args = { ...acc.args, ...JSON.parse(delta.partial_json || '{}') }; } catch {}
+              }
+              if (delta.partial_json) supervisor.markSemanticContent();
+            }
+          }
+
+          const finalMessage: any = await supervisor.completion<any>(stream.finalMessage());
+          if (toolUseAccumulators.size > 0) {
+            for (const acc of toolUseAccumulators.values()) {
+              toolCalls.push({ id: acc.id, name: acc.name, arguments: acc.args });
+            }
+          } else {
+            for (const block of finalMessage.content) {
+              if (block.type === 'tool_use') {
+                toolCalls.push({
+                  id: block.id,
+                  name: block.name,
+                  arguments: block.input || {},
+                });
+                supervisor.markSemanticContent();
+              }
+            }
+          }
+          supervisor.assertSemanticContent();
+          return {
+            text: textParts.length > 0 ? textParts.join('') : null,
+            toolCalls: toolCalls.length > 0 ? toolCalls : null,
+            usage: extractUsage(finalMessage),
+          };
+        } catch (error) {
+          supervisor.abort(error instanceof Error ? error : new Error(String(error)));
+          stopIterator(iterator);
+          throw error;
+        }
+      },
+      { provider: 'anthropic', model: config.model, maxRetries: 0, signal: config.signal },
     );
-
-    const textParts: string[] = [];
-    const toolCalls: ParsedToolCall[] = [];
-    // Accumulate tool_use blocks during stream (not just from finalMessage)
-    const toolUseAccumulators: Map<string, { id: string; name: string; args: Record<string, any> }> = new Map();
-
-    for await (const event of stream) {
-      if (event.type === 'text' && event.text) {
-        textParts.push(event.text);
-        onChunk(event.text);
-      }
-      if (event.type === 'content_block_start' && (event as any).content_block?.type === 'tool_use') {
-        const block = (event as any).content_block;
-        toolUseAccumulators.set(block.id, { id: block.id, name: block.name, args: {} });
-      }
-      if (event.type === 'content_block_delta' && (event as any).delta?.type === 'input_json_delta') {
-        const delta = (event as any).delta;
-        // Partial JSON — accumulate for complete parse at end
-        const acc = [...toolUseAccumulators.values()].find(a => !a.name || Object.keys(a.args).length === 0);
-        if (acc) {
-          try { acc.args = { ...acc.args, ...JSON.parse(delta.partial_json || '{}') }; } catch {}
-        }
-      }
-    }
-
-    // Get final message for complete tool use blocks + usage
-    const finalMessage = await stream.finalMessage();
-    // Prefer stream-accumulated tool calls; fall back to finalMessage blocks
-    if (toolUseAccumulators.size > 0) {
-      for (const acc of toolUseAccumulators.values()) {
-        toolCalls.push({ id: acc.id, name: acc.name, arguments: acc.args });
-      }
-    } else {
-      for (const block of finalMessage.content) {
-        if (block.type === 'tool_use') {
-          toolCalls.push({
-            id: block.id,
-            name: block.name,
-            arguments: block.input || {},
-          });
-        }
-      }
-    }
-
-    return {
-      text: textParts.length > 0 ? textParts.join('') : null,
-      toolCalls: toolCalls.length > 0 ? toolCalls : null,
-      usage: extractUsage(finalMessage),
-    };
   }
 
   throw new Error(`Unsupported streaming provider: ${config.provider}`);

@@ -38,6 +38,9 @@ describe('Lumi learning interface', () => {
     expect(result.shouldPersist).toBe(true);
     expect(result.storedMemories).toBeGreaterThan(0);
     expect(result.capabilityRecord?.selectedRoute.id).toBe('lumi.model_independent_learning_interface');
+    expect(['hypothesis', 'needs_core_work']).toContain(result.capabilityRecord?.status);
+    expect(result.capabilityRecord?.planReadiness).not.toBe('ready_to_reuse_or_test');
+    expect(result.capabilityRecord?.experiment.verification.every(item => item.passed)).toBe(false);
 
     const memories = queryMemories({
       userId: 'learning_interface_user',
@@ -53,6 +56,82 @@ describe('Lumi learning interface', () => {
       limit: 5,
     });
     expect(records.some(record => record.selectedRoute.id === 'lumi.model_independent_learning_interface')).toBe(true);
+  });
+
+  it('never treats persistence or a prepared experiment as verified capability learning', async () => {
+    const {
+      isCapabilityLearningRecordVerified,
+      upsertCapabilityLearningRecord,
+    } = await import('../server/self_extension/capability_memory');
+    const { buildSelfExtensionPlan } = await import('../server/self_extension/pipeline');
+    const userId = `learning_truth_${Date.now()}`;
+    const route = {
+      id: 'test.outcome_grounded_route',
+      label: 'Outcome-grounded route',
+      interfacePattern: 'skill' as const,
+      preferredTools: ['verified_probe_tool'],
+      fallbackTools: [],
+      avoid: [],
+      reason: 'Test route',
+      confirmationRequired: [],
+    };
+    const base = {
+      userId,
+      scopeDomain: 'personal' as const,
+      orgId: '',
+      domain: 'outcome_grounded_test',
+      goal: 'outcome grounded capability',
+      selectedRoute: route,
+      existingTools: ['verified_probe_tool'],
+      nextUse: {
+        triggerHints: ['outcome grounded capability'],
+        preferredTools: ['verified_probe_tool'],
+        firstStep: 'verified_probe_tool',
+        reportRule: 'Report verified outcomes only.',
+      },
+      safety: [],
+    };
+
+    const candidate = upsertCapabilityLearningRecord({
+      ...base,
+      status: 'experiment_prepared',
+      planReadiness: 'candidate_needs_experiment',
+      experiment: {
+        status: 'prepared',
+        summary: 'Only persisted.',
+        toolCalls: [],
+        artifacts: [],
+        verification: [{ label: 'database write', passed: true, detail: 'Persisted only.' }],
+      },
+    });
+    expect(isCapabilityLearningRecordVerified(candidate)).toBe(false);
+    expect(buildSelfExtensionPlan({
+      userId,
+      goal: base.goal,
+      domain: base.domain,
+      tools: [],
+    }).resolution.decision).not.toBe('reuse_learned_route');
+
+    const verified = upsertCapabilityLearningRecord({
+      ...base,
+      id: candidate.id,
+      status: 'experiment_passed',
+      planReadiness: 'verified_reusable',
+      experiment: {
+        status: 'passed',
+        summary: 'Real experiment completed.',
+        toolCalls: [{ name: 'verified_probe_tool', args: {}, status: 'success', result: 'ok' }],
+        artifacts: [],
+        verification: [{ label: 'terminal receipt', passed: true, detail: 'Verified.' }],
+      },
+    });
+    expect(isCapabilityLearningRecordVerified(verified)).toBe(true);
+    expect(buildSelfExtensionPlan({
+      userId,
+      goal: base.goal,
+      domain: base.domain,
+      tools: [],
+    }).resolution.decision).toBe('reuse_learned_route');
   });
 
   it('plans natural autonomy learning without writing ordinary chat', async () => {
@@ -142,7 +221,7 @@ describe('Lumi learning interface', () => {
     });
   });
 
-  it('keeps chat and voice early-return paths wired into post-turn learning', () => {
+  it('keeps model-owned chat and voice terminal paths wired into post-turn learning', () => {
     const chatSource = readFileSync(path.join(process.cwd(), 'server/socket/chat.ts'), 'utf8');
     const voiceSource = readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
     const taskSource = readFileSync(path.join(process.cwd(), 'server/socket/task.ts'), 'utf8');
@@ -153,11 +232,10 @@ describe('Lumi learning interface', () => {
 
     expect(chatSource).toContain('const persistChatLearning');
     expect(chatSource).toContain('persistLumiPostTurnLearning');
-    expect(chatSource).toContain("channel: 'workflow'");
-    expect(chatSource).toContain('workflow quick path');
-    expect(chatSource).toContain('chat quick command');
-    expect(chatSource).toContain('background delegation');
-    expect(chatSource.match(/persistChatLearning\(/g)?.length || 0).toBeGreaterThanOrEqual(6);
+    expect(chatSource).not.toContain('workflow quick path');
+    expect(chatSource).not.toContain('chat quick command');
+    expect(chatSource).not.toContain('registerBackgroundTask');
+    expect(chatSource.match(/persistChatLearning\(/g)?.length || 0).toBeGreaterThanOrEqual(2);
 
     expect(voiceSource).toContain('const persistVoiceLearning');
     expect(voiceSource).toContain('persistLumiPostTurnLearning');

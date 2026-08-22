@@ -24,8 +24,19 @@ describe('capability access explanations', () => {
     '\u90a3\u8981\u600e\u4e48\u624d\u80fd\u8ba9\u4f60\u4f7f\u7528\u5176\u5b83\u5de5\u5177',
     '\u5f53\u524d\u4f1a\u8bdd\u662f\u4e0d\u662f\u53ea\u6302\u8f7d\u4e86\u4e24\u4e2a\u5de5\u5177',
     'How can I make Lumi use other tools?',
+    '如何使用桌面工具打开记事本？',
+    'How can I use desktop tools to open Notepad?',
   ])('recognizes a conceptual question without treating it as work: %s', (text) => {
     expect(isCapabilityMetaQuestion(text)).toBe(true);
+  });
+
+  it.each([
+    '你能不能使用桌面工具打开记事本？现在打开它。',
+    'Can you use desktop tools to open Notepad? Open it now.',
+    '介绍一下你自己并演示桌面操作。',
+  ])('does not consume a concrete immediate action as capability meta: %s', (text) => {
+    expect(isCapabilityMetaQuestion(text)).toBe(false);
+    expect(buildCapabilityMetaResponse({ text, operationMode: 'assistant' })).toBeNull();
   });
 
   it.each([

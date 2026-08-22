@@ -2,29 +2,18 @@
  * Lumi Cognitive Engine — the independent decision-making layer.
  *
  * This engine sits BETWEEN the socket handlers and the LLM. It:
- * 1. Classifies every user input before it reaches any LLM
- * 2. Preserves legacy deterministic classifications as read-only hints
- * 3. Passes execution through the shared semantic capability plan
- * 4. Falls back to local responses when the LLM is unavailable
+ * 1. Preserves legacy deterministic classifications as read-only hints
+ * 2. Passes response/action ownership to the shared model capability loop
+ * 3. Falls back to a transport-safe response only after model recovery fails
  *
  * Architecture:
- *   User Input → [Cognitive Engine] → Direct Tool OR LLM → Response
- *
- * Lumi is the dominant decision-maker. The LLM is just a swappable
- * text generation module — Lumi's identity, intent understanding,
- * and tool routing all work independently of it.
+ *   User Input → [advisory cognition] → Model + capability manifest → Response
  */
 
 import { classifyIntent, classifyIntentLLM, extractSentiment, IntentResult, SentimentResult } from './intent';
 import { generateFallback, isLLMDown } from './fallback';
-import { toolRegistry } from '../tools/registry';
 import { getModeConfig, ConversationMode, ModeConfig } from './modes';
 import type { ToolContext, ToolExecutionRecord } from '../tools/types';
-import { hasExplicitTeamExecutionRequest } from './tool_intent';
-import { buildDesktopObservationPlan, formatDesktopObservationResult } from './desktop_observation';
-import { formatDesktopObservationUnavailable } from '../i18n/naturalness_messages';
-import { executeToolCall } from '../tools/execution_engine';
-import { shouldRunLegacyDirectExecution } from './legacy_route_policy';
 
 export { classifyIntent, classifyIntentLLM, extractSentiment, generateFallback, isLLMDown, getModeConfig };
 export type { IntentResult, SentimentResult } from './intent';
@@ -65,11 +54,11 @@ export interface CognitiveResult {
  *
  * Flow:
  * 1. Classify intent
- * 2. If direct tool call possible and confidence high → execute and return
- * 3. Otherwise → caller should invoke LLM (we return null for responseText,
- *    signaling "pass through to LLM")
+ * 2. Return the classification as an advisory hint
+ * 3. The caller invokes the model with the policy-filtered capability manifest
  *
- * Returns a CognitiveResult with responseText = null if the LLM should handle it.
+ * Returns a CognitiveResult with an empty response when the model should own
+ * the turn.
  */
 export async function processInput(
   input: string,
@@ -89,91 +78,11 @@ export async function processInput(
     intent = await classifyIntentLLM(input, regexIntent, llmClassifier);
   }
 
-  // ── Path A: Direct tool call (skip LLM entirely) ──
-  // Read-only compatibility branch. The policy is fail-closed; this code is
-  // retained for one release solely to compare old/new routing. An explicit
-  // team request may contain a simple sub-step such as "list the
-  // desktop files". That sub-step must not consume the whole turn before the
-  // orchestrator sees the user's requested decomposition/delegation contract.
-  const explicitTeamExecution = hasExplicitTeamExecutionRequest(input);
-  const desktopObservationPlan = shouldRunLegacyDirectExecution() && !explicitTeamExecution
-    ? buildDesktopObservationPlan(input)
-    : [];
-  if (desktopObservationPlan.length > 0 && toolContext) {
-    const records: ToolExecutionRecord[] = [];
-    for (const call of desktopObservationPlan) {
-      const record = await executeToolCall({
-        registry: toolRegistry,
-        id: `cognition-observation-${Date.now()}-${records.length}`,
-        name: call.name,
-        arguments: call.arguments,
-        context: toolContext,
-      });
-      records.push(record);
-    }
-    const formatted = formatDesktopObservationResult(records, input);
-    return {
-      responseText: formatted || formatDesktopObservationUnavailable(input),
-      intent: {
-        category: 'system',
-        confidence: 0.98,
-        entities: {},
-        subIntent: 'desktop_observation',
-        needsLLM: false,
-      },
-      llmWasCalled: false,
-      directToolExecuted: true,
-      toolResult: records.map(record => record.result).filter(Boolean).join('\n'),
-      toolRecord: records[0],
-      toolRecords: records,
-      isFallback: false,
-    };
-  }
-  if (
-    shouldRunLegacyDirectExecution()
-    && !explicitTeamExecution
-    && intent.directToolCall
-    && intent.confidence >= 0.75
-    && !intent.needsLLM
-  ) {
-    const toolRecord = await executeToolCall({
-      registry: toolRegistry,
-      id: `cognition-${Date.now()}`,
-      name: intent.directToolCall.name,
-      arguments: intent.directToolCall.args,
-      context: toolContext,
-    });
-    if (!toolRecord.error) {
-      const toolResult = toolRecord.result;
-      const fallback = generateFallback(intent, toolResult);
-      return {
-        responseText: fallback?.text || toolResult,
-        intent,
-        llmWasCalled: false,
-        directToolExecuted: true,
-        toolResult,
-        toolRecord,
-        toolRecords: [toolRecord],
-        isFallback: !!fallback,
-      };
-    }
-      // Direct tool failed — fall through to LLM path
-    console.log(
-      `[Cognition] Direct tool '${intent.directToolCall.name}' failed: ${toolRecord.error}, falling through to LLM`,
-    );
-    return {
-      responseText: '',
-      intent,
-      llmWasCalled: false,
-      directToolExecuted: false,
-      toolResult: toolRecord.error,
-      toolRecord,
-      toolRecords: [toolRecord],
-      isFallback: false,
-    };
-  }
-
-  // ── Path B: Needs LLM — signal caller to invoke LLM ──
+  // Natural-language cognition is advisory. `directToolCall` remains available
+  // for shadow comparison, but cannot execute here or synthesize a terminal
+  // answer. Tool choice belongs to the model over the authorized manifest.
+  void ctx;
+  void toolContext;
   return {
     responseText: '',
     intent,
@@ -184,42 +93,22 @@ export async function processInput(
 }
 
 /**
- * Handle LLM failure by generating a fallback response based on the intent.
+ * Last-resort transport response after the configured model recovery chain is
+ * exhausted. This must not impersonate the model with intent-specific canned
+ * conversation or advertise direct-command shortcuts.
  */
 export function handleLLMFailure(
   intent: IntentResult,
   error: Error,
   toolResult?: string,
 ): CognitiveResult {
-  const down = isLLMDown(error);
-  const fallback = generateFallback(intent, toolResult);
-
-  if (fallback && !fallback.isPlaceholder) {
-    return {
-      responseText: fallback.text,
-      intent,
-      llmWasCalled: true,
-      directToolExecuted: false,
-      toolResult,
-      isFallback: true,
-    };
-  }
-
-  if (down) {
-    return {
-      responseText: `Lumi 的语言模块暂时不可用（${error.message.slice(0, 80)}）。\n\n但我核心功能还在 — 你可以直接给我指令，比如"打开记事本"、"搜索文件"、"列出桌面"。`,
-      intent,
-      llmWasCalled: true,
-      directToolExecuted: false,
-      isFallback: true,
-    };
-  }
-
+  void error;
   return {
-    responseText: `出错了：${error.message}`,
+    responseText: '本轮没有生成可靠回复，也没有据此执行新操作。请直接重试当前消息。',
     intent,
     llmWasCalled: true,
     directToolExecuted: false,
+    toolResult,
     isFallback: true,
   };
 }

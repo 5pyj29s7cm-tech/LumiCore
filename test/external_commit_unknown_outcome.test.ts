@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ToolRegistry, resetExternalCommitRuntimeCacheForTests } from '../server/tools/registry';
+import { createHash } from 'crypto';
+import {
+  ToolRegistry,
+  externalCommitInputDigest,
+  resetExternalCommitRuntimeCacheForTests,
+} from '../server/tools/registry';
 import { executeToolCall } from '../server/tools/execution_engine';
 import {
   configureExternalCommitJournal,
@@ -73,6 +78,10 @@ function durableJournalAdapter(): {
   return {
     rows,
     adapter: {
+      async lookup(idempotencyKey) {
+        const existing = rows.get(idempotencyKey);
+        return existing ? { ...existing } : null;
+      },
       async claim(entry) {
         const existing = rows.get(entry.idempotencyKey);
         if (existing) return { claimed: false, entry: { ...existing } };
@@ -103,6 +112,13 @@ afterEach(() => {
 });
 
 describe('external commit unknown-outcome safety', () => {
+  it('uses an installation-keyed digest for low-entropy external commit inputs', () => {
+    const name = 'external_commit_low_entropy_test';
+    const args = { target: '13800138000', payload: '1234' };
+    const publicDigest = createHash('sha256').update(JSON.stringify({ name, args })).digest('hex');
+    expect(externalCommitInputDigest(name, args)).not.toBe(publicDigest);
+  });
+
   it('marks a timed-out commit unknown and never invokes it again with the same key', async () => {
     vi.useFakeTimers();
     const registry = new ToolRegistry();
@@ -177,6 +193,7 @@ describe('external commit unknown-outcome safety', () => {
       sent: true,
       verificationStatus: 'verified',
       providerReceipt: 'provider-restart-1',
+      counts: { completed: 1, apiToken: 'sk-super-secret-provider-token' },
       message: 'sensitive body must not be journaled',
     }));
     const args = { target: 'Restart Recipient', payload: 'Only once across restart' };
@@ -200,6 +217,8 @@ describe('external commit unknown-outcome safety', () => {
       deduplicated: true,
     });
     expect(replay).not.toContain('sensitive body must not be journaled');
+    expect(replay).not.toContain('sk-super-secret-provider-token');
+    expect(JSON.parse(replay).counts.apiToken).toBe('[redacted]');
     expect(durable.rows.get('verified-across-restart-key')?.state).toBe('verified');
   });
 

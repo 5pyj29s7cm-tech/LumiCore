@@ -147,7 +147,56 @@ function correctionOrExplanation(text: string): NormalizedActionIntent | null {
   };
 }
 
+export type NormalizedIntentRuntimeRole = 'advisory' | 'native_client_event';
+export type NormalizedIntentOrigin =
+  | 'natural_language'
+  | 'structured_client_event'
+  | 'model_selected_capability';
+
+/**
+ * Normalized intent is a planning hint, not a natural-language executor.
+ * Merely recognizing a registered client surface in user text never upgrades
+ * the text into a native event. Deterministic ownership is reserved for a
+ * structured client event; model-selected capabilities execute through the
+ * shared tool loop and therefore remain advisory here.
+ */
+export function getNormalizedIntentRuntimeRole(
+  intent: NormalizedActionIntent,
+  origin: NormalizedIntentOrigin = 'natural_language',
+): NormalizedIntentRuntimeRole {
+  return origin === 'structured_client_event'
+    && intent.kind === 'client_navigation'
+    && Boolean(intent.clientAction)
+    ? 'native_client_event'
+    : 'advisory';
+}
+
+const MIXED_STATUS_SIGNAL_RE =
+  /(?:\u72b6\u6001|\u8fdb\u5ea6|\u7ed3\u679c|(?:\u5b8c\u6210|\u505a\u5b8c|\u6267\u884c\u5b8c|\u597d)(?:\u4e86)?(?:\u5417|\u6ca1|\u4e86\u6ca1)|\u662f\u5426.{0,16}(?:\u5b8c\u6210|\u505a\u5b8c|\u6267\u884c\u5b8c)|(?:\u6ca1\u6709|\u6ca1|\u672a|\u5c1a\u672a)(?:\u5b8c\u6210|\u505a\u5b8c|\u6267\u884c\u5b8c)|\b(?:status|progress|result)\b|\b(?:is|was|has)\b.{0,24}\b(?:done|complete|completed|finished|successful)\b|\bwhether\b.{0,24}\b(?:done|complete|completed|finished)\b)/iu;
+
+const CN_MIXED_STATUS_EXECUTION_RE =
+  /(?:\u5982\u679c|\u82e5|\u8981\u662f|\u5047\u5982).{0,18}(?:\u6ca1\u6709|\u6ca1|\u672a|\u5c1a\u672a)(?:\u5b8c\u6210|\u505a\u5b8c|\u6267\u884c\u5b8c|\u6210\u529f)[^\u3002\uff01\uff1f.!?\n]{0,18}(?:(?:\u5c31|\u5219|\u90a3\u5c31|\u8bf7|\u9a6c\u4e0a|\u7acb\u5373|\u73b0\u5728)\s*)?(?:\u7ee7\u7eed|\u63a5\u7740|\u6062\u590d|\u91cd\u8bd5|\u518d\u8bd5|\u91cd\u65b0\u6267\u884c|\u6267\u884c|\u5904\u7406|\u63a8\u8fdb|\u5b8c\u6210|\u505a\u5b8c)|(?:\u6ca1\u6709|\u6ca1|\u672a|\u5c1a\u672a)(?:\u5b8c\u6210|\u505a\u5b8c|\u6267\u884c\u5b8c|\u6210\u529f)[^\u3002\uff01\uff1f.!?\n]{0,12}(?:\u5c31|\u5219|\u90a3\u5c31|\u8bf7|\u9a6c\u4e0a|\u7acb\u5373|\u73b0\u5728)\s*(?:\u7ee7\u7eed|\u63a5\u7740|\u6062\u590d|\u91cd\u8bd5|\u518d\u8bd5|\u91cd\u65b0\u6267\u884c|\u6267\u884c|\u5904\u7406|\u63a8\u8fdb|\u5b8c\u6210|\u505a\u5b8c)|[\uff1f?\uff1b;\u3002]\s*(?:(?:\u8bf7|\u73b0\u5728|\u9a6c\u4e0a|\u7acb\u5373|\u7136\u540e|\u90a3\u5c31|\u5c31)\s*)?(?:\u7ee7\u7eed|\u63a5\u7740|\u6062\u590d|\u91cd\u8bd5|\u518d\u8bd5|\u91cd\u65b0\u6267\u884c|\u6267\u884c|\u5904\u7406|\u63a8\u8fdb)(?:\u5b83|\u8fd9\u4e2a|\u90a3\u4e2a|\u4efb\u52a1)?/u;
+
+const EN_MIXED_STATUS_EXECUTION_RE =
+  /\bif\s+(?:(?:not|unfinished|incomplete)\b|(?:(?:it|this|that|the\s+task)\s+)?(?:is|was|has\s+been)?\s*(?:not|isn['\u2019]?t|wasn['\u2019]?t|hasn['\u2019]?t)\s+(?:done|complete|completed|finished|successful)\b)[^.!?;\n]{0,28}\b(?:continue|resume|retry|re-?try|execute|run|finish|complete|proceed)\b|[?;.!]\s*(?:(?:if\s+(?:not|unfinished|incomplete)|then|please|now)\s*[,;:]?\s*)*(?:continue|resume|retry|re-?try|execute|run|finish|complete|proceed)\b/iu;
+
+/**
+ * A status question is not status-only when the same turn also contains an
+ * independent, affirmative instruction to resume the work. Keeping this
+ * predicate next to normalized intent priority prevents an interrogative
+ * first clause from suppressing the executable second clause.
+ */
+export function hasMixedStatusExecutionIntent(value: string): boolean {
+  const text = currentTurnText(value).replace(/\s+/gu, ' ').trim();
+  if (!text || !MIXED_STATUS_SIGNAL_RE.test(text)) return false;
+  const chineseExecutionQuestion = /(?:\u7ee7\u7eed(?:\u6267\u884c|\u5904\u7406|\u63a8\u8fdb|\u5b8c\u6210)?|\u63a5\u7740(?:\u6267\u884c|\u5904\u7406|\u63a8\u8fdb|\u505a)?|\u6062\u590d(?:\u6267\u884c|\u4efb\u52a1)?|\u91cd\u8bd5|\u518d\u8bd5|\u91cd\u65b0\u6267\u884c|\u6267\u884c|\u5904\u7406|\u63a8\u8fdb)(?:\u5b83|\u8fd9\u4e2a|\u90a3\u4e2a|\u4efb\u52a1)?(?:\u4e86)?(?:(?:\u5417|\u6ca1|\u6ca1\u6709|\u5462)[\uff1f?]?|[\uff1f?])\s*$/u.test(text);
+  const englishExecutionQuestion = /\b(?:continue|resume|retry|re-?try|execute|run|finish|complete|proceed)(?:\s+(?:executing|execution|running|working\s+on|with)(?:\s+(?:it|this|that|the\s+task))?)?\s*\?\s*$/iu.test(text);
+  return (CN_MIXED_STATUS_EXECUTION_RE.test(text) && !chineseExecutionQuestion)
+    || (EN_MIXED_STATUS_EXECUTION_RE.test(text) && !englishExecutionQuestion);
+}
+
 function statusQuery(text: string): NormalizedActionIntent | null {
+  if (hasMixedStatusExecutionIntent(text)) return null;
   // Reporting the id/status after creating a specifically described new task
   // is part of that creation contract, not a query about an older task.
   if (persistentWorkTaskCreation(text)) return null;
@@ -279,7 +328,16 @@ function statusQuery(text: string): NormalizedActionIntent | null {
 
 function clientNavigation(text: string): NormalizedActionIntent | null {
   if (!CLIENT_NAVIGATION_VERB_RE.test(text)) return null;
-  const surface = CLIENT_SURFACE_RULES.find(candidate => candidate.pattern.test(text));
+  const surface = CLIENT_SURFACE_RULES.find(candidate => {
+    const match = text.match(candidate.pattern);
+    if (!match || match.index == null) return false;
+    // The navigation verb must govern the client-surface noun. A capability
+    // phrase such as "use desktop tools to open Notepad" contains both words,
+    // but `open` comes after `tools` and targets Notepad, not Lumi's tools page.
+    const prefix = text.slice(Math.max(0, match.index - 48), match.index);
+    const sameClausePrefix = prefix.split(/[\uff0c,\u3002\uff01\uff1f!?\uff1b;\n]/u).pop() || '';
+    return CLIENT_NAVIGATION_VERB_RE.test(sameClausePrefix);
+  });
   if (!surface) return null;
   return {
     kind: 'client_navigation',
@@ -456,13 +514,18 @@ function localDesktopOperation(text: string): NormalizedActionIntent | null {
   // Client surfaces and external commits have already won the priority race.
   // This rule requires an explicit local action plus a concrete target; a lone
   // action-shaped word is never enough to create executable work.
-  const match = text.match(
+  const forbidsInstrumentedAction = /(?:\u4e0d\u8981|\u522b|\u65e0\u9700|\u4e0d\u7528).{0,20}(?:\u4f7f\u7528|\u8c03\u7528)|\b(?:do\s+not|don['\u2019]?t|without)\s+(?:use|using|call(?:ing)?)\b/iu.test(text);
+  const instrumented = forbidsInstrumentedAction ? null : text.match(
+    // i18n-allow: Tool-as-instrument phrasing; the target belongs to the action after the tool noun.
+    /(?:\u4f7f\u7528|\u8c03\u7528).{0,24}?(?:\u5de5\u5177|\u6280\u80fd).{0,8}?(\u6253\u5f00|\u542f\u52a8|\u8fd0\u884c|\u5207\u6362\u5230|\u805a\u7126|\u6700\u5927\u5316|\u6700\u5c0f\u5316|\u8fd8\u539f|\u5173\u95ed)\s*(?:\u7a0b\u5e8f|\u5e94\u7528|\u8f6f\u4ef6|\u7a97\u53e3)?\s*([^\uff0c,\u3002\uff01\uff1f!?\uff1b;\n]{1,120})|\b(?:use|using|call(?:ing)?)\b.{0,30}?\b(?:tools?|skills?)\b\s+(?:to\s+)?\b(open|launch|start|focus|maximi[sz]e|minimi[sz]e|restore|close)\b\s*(?:app|application)?\s*([^,.!?;\n]{1,120})/iu,
+  );
+  const direct = text.match(
     // i18n-allow: Chinese local desktop semantic-role input recognition.
     /(?:^|[，。！？!?：:；;\s])(?:现在\s*)?(?:请|请你|帮我|麻烦你|给我)?\s*(打开|启动|运行|切换到|聚焦|最大化|最小化|还原|关闭|\b(?:open|launch|start|focus|maximi[sz]e|minimi[sz]e|restore|close)\b)\s*(?:程序|应用|软件|窗口|app|application)?\s*([^，。！？!?；;\n]{1,120})/iu,
   );
-  if (!match) return null;
-  const verb = trimSlot(match[1]);
-  const target = trimSlot(match[2]);
+  if (!instrumented && !direct) return null;
+  const verb = trimSlot(instrumented?.[1] || instrumented?.[3] || direct?.[1] || '');
+  const target = trimSlot(instrumented?.[2] || instrumented?.[4] || direct?.[2] || '');
   if (!target || /^(?:什么|啥|哪个|why|what|which)$/iu.test(target)) return null; // i18n-allow: Chinese interrogative input recognition.
   return {
     kind: 'desktop_operation',

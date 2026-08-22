@@ -130,6 +130,28 @@ describe('durable conversation task execution ledger', () => {
     expect(currentTask.state?.supersededTaskId).toBe(oldTask.state?.taskId);
   });
 
+  it('keeps an explicit continue workflow on the unfinished task instead of forcing a new id', () => {
+    const policy = { allowedTools: ['industry_output_create'], requireConfirmation: [], forbiddenTools: [], maxIterations: 5 };
+    const started = prepareConversationActionTaskState(null, {
+      userText: '\u8bf7\u751f\u6210\u5e76\u9a8c\u8bc1\u4ea4\u4ed8\u4ef6',
+      requestId: 'workflow-original',
+      toolPolicy: policy,
+      forceTask: true,
+    });
+    const continued = prepareConversationActionTaskState(started.state, {
+      userText: '\u7ee7\u7eed\u521a\u624d\u7684\u4efb\u52a1',
+      requestId: 'workflow-continue',
+      toolPolicy: policy,
+      forceTask: true,
+      forceResume: true,
+      forceNewTask: false,
+    });
+
+    expect(continued.kind).toBe('resume');
+    expect(continued.state?.taskId).toBe(started.state?.taskId);
+    expect(continued.state?.supersededTaskId).toBeUndefined();
+  });
+
   it('keeps prior permissions on terse replies and deliberately expands them for a real follow-up', () => {
     const merged = applyTaskPolicySnapshot(
       {
@@ -210,7 +232,7 @@ describe('durable conversation task execution ledger', () => {
     expect(afterConfirmedOpen?.unfinished).toBe(true);
   });
 
-  it('continues the original task after a confirmed boundary completes only one step', () => {
+  it('always returns a canonical confirmed record to model review instead of declaring the whole goal complete', () => {
     const confirmedOpen = {
       name: 'desktop_open',
       arguments: { target: 'WPS' },
@@ -231,10 +253,14 @@ describe('durable conversation task execution ledger', () => {
     expect(confirmedStepNeedsContinuation(
       'Open WPS',
       [confirmedOpen],
-    )).toBe(false);
+    )).toBe(true);
     expect(confirmedStepNeedsContinuation(
       'Open WPS and create a Word document',
       [{ ...confirmedOpen, result: '', error: 'permission denied' }],
+    )).toBe(true);
+    expect(confirmedStepNeedsContinuation(
+      'Open WPS',
+      [],
     )).toBe(false);
   });
 

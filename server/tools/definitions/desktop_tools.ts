@@ -1,6 +1,7 @@
 import { ToolRegistry } from '../registry';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 import { desktopFingerprintMatchesRequestedTarget } from '../../desktop/execution_plan';
+import crypto from 'node:crypto';
 
 function parseRelayPayload(value: unknown): Record<string, any> | null {
   let current = value;
@@ -152,6 +153,57 @@ async function desktopPathInfo(args: Record<string, any>, context?: any): Promis
   }
   return context.desktopRelay('desktop_path_info', {
     target: args.target || args.path || '',
+  });
+}
+
+async function desktopWriteTextFile(args: Record<string, any>, context?: any): Promise<string> {
+  if (!context?.desktopRelay) {
+    throw new Error('Desktop tools require a Tauri frontend relay (not available in web mode)');
+  }
+  const filePath = String(args.path || '').trim();
+  if (!filePath) throw new Error('desktop_write_text_file requires an exact file path');
+  const content = String(args.content ?? '');
+  const encoding = String(args.encoding || 'utf-8').trim().toLowerCase();
+  const overwritePolicy = String(args.overwritePolicy || 'fail_if_exists').trim().toLowerCase();
+  if (!['utf-8', 'utf8', 'utf-8-bom', 'utf8-bom'].includes(encoding)) {
+    throw new Error('desktop_write_text_file encoding must be utf-8 or utf-8-bom');
+  }
+  if (!['fail_if_exists', 'replace'].includes(overwritePolicy)) {
+    throw new Error('desktop_write_text_file overwritePolicy must be fail_if_exists or replace');
+  }
+
+  const relayResult = await context.desktopRelay('desktop_write_text_file', {
+    path: filePath,
+    content,
+    encoding,
+    overwritePolicy,
+  });
+  const nativeReceipt = parseRelayPayload(relayResult);
+  if (!nativeReceipt) {
+    throw new Error('The native desktop client returned no structured text-file write receipt');
+  }
+  const expectedBytes = Buffer.byteLength(content, 'utf8')
+    + (encoding === 'utf-8-bom' || encoding === 'utf8-bom' ? 3 : 0);
+  const nativeBytes = Number(nativeReceipt.bytesWritten ?? -1);
+  const receiptVerified = nativeReceipt.success === true
+    && nativeReceipt.readBackMatched === true
+    && nativeBytes === expectedBytes;
+  return JSON.stringify({
+    ok: receiptVerified,
+    status: receiptVerified ? 'verified' : 'unverified',
+    receiptType: 'native_text_file_write',
+    path: String(nativeReceipt.path || filePath),
+    bytesWritten: nativeBytes,
+    encoding: String(nativeReceipt.encoding || encoding),
+    overwritePolicy: String(nativeReceipt.overwritePolicy || overwritePolicy),
+    overwritten: nativeReceipt.overwritten === true,
+    readBackMatched: nativeReceipt.readBackMatched === true,
+    contentSha256: crypto.createHash('sha256').update(content, 'utf8').digest('hex'),
+    contentCharacters: content.length,
+    verificationScope: 'native_byte_read_back',
+    limitations: [
+      'This receipt verifies bytes written and read back by the native client; use a text reader when the response must quote the resulting content.',
+    ],
   });
 }
 
@@ -330,6 +382,54 @@ export function registerDesktopTools(registry: ToolRegistry): void {
     handler: desktopPathInfo,
     permission: 'user',
     securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'desktop_write_text_file',
+    description:
+      'Write an exact text payload to an exact path on the user\'s real desktop machine through the native client. This is the cross-platform file semantic for Desktop/Documents and other host paths; never replace it with a shell command. Choose fail_if_exists to protect an existing file or replace only when overwriting is explicitly intended. Returns a native byte-level read-back receipt. A one-time user confirmation is always required.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Exact host file path, such as "~/Desktop/note.txt" or an absolute path.' },
+        content: { type: 'string', description: 'Exact text content to write.' },
+        encoding: { type: 'string', enum: ['utf-8', 'utf-8-bom'], description: 'Portable text encoding. Defaults to utf-8.' },
+        overwritePolicy: { type: 'string', enum: ['fail_if_exists', 'replace'], description: 'Whether to protect an existing target or replace it. Defaults to fail_if_exists.' },
+      },
+      required: ['path', 'content'],
+    },
+    handler: desktopWriteTextFile,
+    permission: 'user',
+    securityLevel: 'confirm',
+    capability: {
+      ...capabilityContract({
+      id: 'desktop.files.text.write',
+      family: 'desktop_files',
+      lane: 'files',
+      operation: 'mutate',
+      risk: 'high',
+      sideEffects: [{ type: 'local_write', scope: 'one exact native host text-file path', reversible: false }],
+      verification: {
+        strategy: 'measured',
+        required: true,
+        requiredFields: ['path', 'bytesWritten', 'contentSha256', 'readBackMatched'],
+        requiredValues: { readBackMatched: true },
+        successStatuses: ['verified'],
+        failureStatuses: ['unverified', 'failed'],
+        successSignals: ['the native client wrote the requested bytes and immediately read back the same bytes'],
+        limitations: ['The receipt does not interpret the text or prove how another application will render it.'],
+      },
+      }),
+      intents: ['write exact text to a native host file'],
+      tags: ['text file', 'native host file', 'desktop file'],
+    },
+    evidence: capabilityEvidence({
+      id: 'desktop.files.text.write',
+      operation: 'mutate',
+      assurance: 'verified',
+      subjectArgument: 'path',
+      limitations: ['Use a text reader when exact human-readable content must be quoted after writing.'],
+    }),
   });
 
   registry.register({

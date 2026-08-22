@@ -172,7 +172,7 @@ function memoryCandidatesFor(text: string): LumiLearningTurnPlan['memoryCandidat
 function statusFor(input: LumiLearningTurnInput): CapabilityLearningStatus {
   if (input.flow?.executionGovernance.capabilityLearningIntent === 'learn_missing') return 'needs_core_work';
   if (FAILURE_RE.test(input.userText)) return 'needs_core_work';
-  return 'experiment_prepared';
+  return 'hypothesis';
 }
 
 export function planLumiLearningTurn(input: LumiLearningTurnInput): LumiLearningTurnPlan {
@@ -247,7 +247,7 @@ export function persistLumiLearningTurn(input: LumiLearningTurnInput): LumiLearn
         observedFailure: candidate.observedFailure,
         status: candidate.status,
         selectedRoute: candidate.route,
-        planReadiness: candidate.status === 'needs_core_work' ? 'needs_core_work' : 'ready_to_reuse_or_test',
+        planReadiness: candidate.status === 'needs_core_work' ? 'needs_core_work' : 'candidate_needs_experiment',
         existingTools: unique([...(input.toolNames || []), ...candidate.route.preferredTools]).slice(0, 40),
         nextUse: {
           triggerHints: unique([candidate.goal, '人格核心', '学习接口', '换模型不遗忘', '自然自治', '身体认知']).slice(0, 10),
@@ -268,9 +268,9 @@ export function persistLumiLearningTurn(input: LumiLearningTurnInput): LumiLearn
           artifacts: [],
           verification: [
             {
-              label: '本地沉淀记录',
-              passed: true,
-              detail: '已写入 capability_learning_records_v1，后续模型可通过 capability_learning_list/self_extension_plan 复用。',
+              label: '候选记录持久化',
+              passed: false,
+              detail: '候选已记录，但数据库写入不构成能力验证；必须经过真实实验和终态回执后才能晋级为可复用能力。',
             },
           ],
         },

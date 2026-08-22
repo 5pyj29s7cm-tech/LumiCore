@@ -123,6 +123,7 @@ export function applyLumiRoutingShadowGuard(
   if (!comparison.externalCommitBlocked) return execution;
   const blocked = new Set(comparison.blockedExternalTools);
   const toolPolicy = blockPolicyExternalTools(execution.toolPolicy, comparison.blockedExternalTools);
+  const baseToolPolicy = blockPolicyExternalTools(execution.baseToolPolicy, comparison.blockedExternalTools);
   const toolRoute = execution.toolRoute
     ? {
         ...execution.toolRoute,
@@ -139,6 +140,13 @@ export function applyLumiRoutingShadowGuard(
     : execution.toolRoute;
   return {
     ...execution,
+    baseToolPolicy,
+    selfRepairToolPolicy: execution.selfRepairToolPolicy
+      ? blockPolicyExternalTools(execution.selfRepairToolPolicy, comparison.blockedExternalTools)
+      : null,
+    clientActionToolPolicy: execution.clientActionToolPolicy
+      ? blockPolicyExternalTools(execution.clientActionToolPolicy, comparison.blockedExternalTools)
+      : null,
     toolPolicy,
     toolRoute,
     promptOverlay: [

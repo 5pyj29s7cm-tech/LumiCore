@@ -47,6 +47,16 @@ export interface QuickCommandResult {
   toolCall?: { name: string; arguments: Record<string, any> };
   /** Deterministic read-only verification calls that must follow toolCall. */
   followUpToolCalls?: Array<{ name: string; arguments: Record<string, any> }>;
+  /**
+   * Follow-up calls derived from the primary receipt. Use this when a mutation
+   * is safe only after the current persistent state has been read and checked.
+   */
+  buildFollowUpToolCalls?: (records: Array<{
+    name: string;
+    arguments?: Record<string, any>;
+    result?: string;
+    error?: string;
+  }>) => Array<{ name: string; arguments: Record<string, any> }>;
   /** Optional formatter for commands whose reply depends on the tool result */
   formatToolResult?: (raw: string, error?: string) => string;
   /** Optional formatter that may verify the complete primary + follow-up receipt chain. */
@@ -56,6 +66,13 @@ export interface QuickCommandResult {
     result?: string;
     error?: string;
   }>) => string;
+  /** Semantic verification that can be stricter than each tool's generic envelope. */
+  verifyToolRecords?: (records: Array<{
+    name: string;
+    arguments?: Record<string, any>;
+    result?: string;
+    error?: string;
+  }>) => { verified: boolean; reason?: string };
   /** Whether this input was matched as a quick command */
   matched: boolean;
 }
@@ -111,6 +128,19 @@ export function buildDeterministicTextArtifactCommand(text: string): QuickComman
         '全文：',
         request.content,
       ].join('\n');
+    },
+    verifyToolRecords: records => {
+      const write = records.find(record => record.name === 'write_file');
+      const read = records.find(record => record.name === 'read_file');
+      if (write?.error) return { verified: false, reason: `write_file failed: ${write.error}` };
+      if (!write) return { verified: false, reason: 'write_file produced no receipt' };
+      if (read?.error) return { verified: false, reason: `read_file failed: ${read.error}` };
+      if (!read) return { verified: false, reason: 'read_file produced no verification receipt' };
+      const actual = String(read.result || '').replace(/\r\n/g, '\n');
+      const expected = request.content.replace(/\r\n/g, '\n');
+      return actual === expected
+        ? { verified: true }
+        : { verified: false, reason: 'read_file content did not exactly match the requested text' };
     },
   };
 }
@@ -208,23 +238,27 @@ export function buildDeterministicWorkTaskStatusCommand(text: string): QuickComm
   // sentence. The mutation owns that turn; otherwise the read-only query path
   // shadows "continue / finish step / write back" and silently does no work.
   if (buildDeterministicWorkTaskProgressCommand(value)) return null;
+  const taskId = value.match(/\b(wt_task_[A-Za-z0-9_-]+)\b/u)?.[1] || '';
   const title = value.match(/(?:\u4efb\u52a1|task)\s*[\u201c"']([^\u201d"']{1,140})[\u201d"']/iu)?.[1]?.trim();
-  if (!title) return null;
+  if (!title && !taskId) return null;
 
   return {
     responseText: '\u6b63\u5728\u67e5\u8be2\u6301\u4e45\u4efb\u52a1\u8d26\u672c\u3002',
     matched: true,
-    toolCall: {
-      name: 'work_takeover_task_list',
-      arguments: { limit: 200 },
-    },
+    toolCall: taskId
+      ? { name: 'work_takeover_task_get', arguments: { id: taskId } }
+      : { name: 'work_takeover_task_list', arguments: { limit: 200 } },
     formatToolResult: (raw, error) => {
       if (error) return `\u4efb\u52a1\u72b6\u6001\u67e5\u8be2\u5931\u8d25\uff1a${error}`;
       let data: Record<string, any> = {};
       try { data = JSON.parse(String(raw || '{}')); } catch {}
       const tasks = Array.isArray(data.tasks) ? data.tasks : [];
-      const task = tasks.find((candidate: any) => String(candidate?.title || '').trim() === title);
-      if (!task) return `\u4efb\u52a1\u8d26\u672c\u4e2d\u672a\u627e\u5230\u201c${title}\u201d\u3002`;
+      const task = taskId
+        ? data.task && String(data.task.id || '') === taskId ? data.task : null
+        : tasks.find((candidate: any) => String(candidate?.title || '').trim() === title);
+      if (!task) return taskId
+        ? `\u4efb\u52a1\u8d26\u672c\u4e2d\u672a\u627e\u5230 ${taskId}\u3002`
+        : `\u4efb\u52a1\u8d26\u672c\u4e2d\u672a\u627e\u5230\u201c${title}\u201d\u3002`;
       const actions = Array.isArray(task.nextActions) ? task.nextActions.map(String).filter(Boolean) : [];
       const index = Math.max(0, Math.min(Number(task.currentActionIndex) || 0, Math.max(0, actions.length - 1)));
       const current = actions[index] || '\u5f85\u8865\u5145';
@@ -243,91 +277,77 @@ export function buildDeterministicWorkTaskStatusCommand(text: string): QuickComm
   };
 }
 
-function parseChineseOrdinal(value: string): number {
-  if (/^\d+$/.test(value)) return Number(value);
-  const direct: Record<string, number> = {
-    '\u4e00': 1, '\u4e8c': 2, '\u4e09': 3, '\u56db': 4, '\u4e94': 5,
-    '\u516d': 6, '\u4e03': 7, '\u516b': 8, '\u4e5d': 9, '\u5341': 10,
-  };
-  return direct[value] || 0;
+function hasPersistentTaskExecutionIntent(text: string): boolean {
+  const value = String(text || '').trim();
+  if (!/\bwt_task_[A-Za-z0-9_-]+\b/u.test(value)) return false;
+  const verbPattern = /(?:\u7ee7\u7eed|\u7eed\u63a5|\u6062\u590d|\u63a8\u8fdb|\u6267\u884c|\u5904\u7406|\u5f00\u59cb|\u5b8c\u6210|\u505a\u5b8c)/gu;
+  const executionVerb = Array.from(value.matchAll(verbPattern)).some(match => {
+    const index = match.index || 0;
+    const prefix = value.slice(Math.max(0, index - 14), index);
+    const suffix = value.slice(index + match[0].length, index + match[0].length + 14);
+    const negated = /(?:\u4e0d\u8981|\u65e0\u9700|\u4e0d\u9700\u8981|\u4e0d|\u672a|\u6ca1\u6709|\u5c1a\u672a)[^\uff0c,\uff1b;\u3002\uff01\uff1f.!?\n]{0,8}$/u.test(prefix);
+    const statusQuestion = /(?:\u662f\u5426|\u6709\u6ca1\u6709|\u662f\u4e0d\u662f)\s*$/u.test(prefix)
+      || /^(?:\u4e86?\u5417|\u4e86?\u6ca1|\u6ca1\u6709|\u5230\u54ea|\u60c5\u51b5|\u72b6\u6001|\u8fdb\u5ea6|\u7ed3\u679c)/u.test(suffix);
+    return !negated && !statusQuestion;
+  });
+  const taskObject = /(?:\u6301\u4e45\u4efb\u52a1|\u4efb\u52a1|\u7b2c[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\d]+\u6b65|\u6b65\u9aa4)/u.test(value);
+  return executionVerb && taskObject;
+}
+
+function explicitWorkTaskBookkeepingNote(text: string): { taskId: string; note: string } | null {
+  const value = String(text || '').trim();
+  const taskId = value.match(/\b(wt_task_[A-Za-z0-9_-]+)\b/u)?.[1] || '';
+  if (!taskId) return null;
+  const explicitlyRecordsOnly = /(?:\u7eaf\u8bb0\u8d26|(?:\u53ea|\u4ec5).{0,16}(?:\u8bb0\u5f55|\u8bb0\u5165|\u5199\u5165|\u8ffd\u52a0|\u66f4\u65b0).{0,14}(?:\u4efb\u52a1\u8d26\u672c|\u8d26\u672c\u5907\u6ce8|\u4efb\u52a1\u5907\u6ce8|\u5907\u6ce8))/u.test(value);
+  const explicitlyDoesNotExecute = /(?:(?:\u4e0d\u8981|\u65e0\u9700|\u4e0d\u9700\u8981|\u4e0d).{0,10}(?:\u6267\u884c|\u63a8\u8fdb|\u5b8c\u6210|\u5904\u7406).{0,8}(?:\u4efb\u52a1|\u6b65\u9aa4|\u52a8\u4f5c)?|(?:\u4e0d\u6539\u53d8|\u4e0d\u4fee\u6539).{0,10}(?:\u4efb\u52a1\u8fdb\u5ea6|\u5f53\u524d\u72b6\u6001|\u6b65\u9aa4\u72b6\u6001))/u.test(value);
+  if (!explicitlyRecordsOnly || !explicitlyDoesNotExecute) return null;
+
+  const explicitNote = value.match(/(?:\u8bb0\u8d26\u5185\u5bb9|\u4efb\u52a1\u5907\u6ce8|\u5907\u6ce8|\u8bf4\u660e)\s*[\uff1a:]\s*([\s\S]{1,700})$/u)?.[1]?.trim();
+  const note = String(explicitNote || value).replace(/\s+/gu, ' ').trim().slice(0, 700);
+  return note ? { taskId, note } : null;
 }
 
 /**
- * Apply an explicitly enumerated, internal-only progress update to a named
- * persistent task. The exact task id and completed step labels keep this path
- * narrow: it cannot guess which task to mutate or perform external work.
+ * Keep an explicit bookkeeping-only write deterministic, while returning a
+ * non-matching routing marker for any request that asks Lumi to actually
+ * continue/execute/finish persistent task steps. Chat uses the marker to keep
+ * status shortcuts from consuming the turn, then falls through to the shared
+ * LLM/tool planner because `matched` is false.
  */
 export function buildDeterministicWorkTaskProgressCommand(text: string): QuickCommandResult | null {
   const value = String(text || '').trim();
-  const taskId = value.match(/\b(wt_task_[A-Za-z0-9_-]+)\b/u)?.[1] || '';
-  if (!taskId || !/(?:\u7ee7\u7eed|\u7eed\u63a5|\u63a8\u8fdb)/u.test(value)) return null;
-  if (!/(?:\u5b8c\u6210)\u7b2c[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\d]+\u6b65/u.test(value) || !/\u6e05\u5355/u.test(value)) return null;
-
-  const completedSteps = Array.from(value.matchAll(
-    /\u7b2c([\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\d]+)\u6b65\s*[\u201c"']([^\u201d"']{1,100})[\u201d"']/gu,
-  )).map(match => ({ index: parseChineseOrdinal(match[1]), label: String(match[2] || '').trim() }))
-    .filter(step => step.index > 0 && step.label);
-  if (!completedSteps.length) return null;
-
-  const completedActionCount = Math.max(...completedSteps.map(step => step.index));
-  const requestedChecklistCount = parseChineseOrdinal(
-    value.match(/([\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\d]+)\u9879(?:\u68c0\u67e5)?\u6e05\u5355/u)?.[1] || '\u4e94',
-  );
-  const checklistCount = Math.max(1, Math.min(requestedChecklistCount || 5, 10));
-  const completedLabels = completedSteps
-    .filter(step => step.index <= completedActionCount)
-    .sort((a, b) => a.index - b.index)
-    .map(step => step.label);
-  const checklist = [
-    `\u4efb\u52a1\u5f15\u7528\u5df2\u6838\u5bf9\uff1a${taskId}`,
-    `\u9a8c\u6536\u9700\u6c42\u5df2\u8bb0\u5f55\uff1a${completedLabels[0] || '\u5df2\u6309\u672c\u8f6e\u8981\u6c42\u8bb0\u5f55'}`,
-    `\u804a\u5929\u4ea4\u4ed8\u5df2\u751f\u6210\uff1a${completedLabels.slice(1).join('\uff1b') || '\u68c0\u67e5\u6e05\u5355'}`,
-    /\u4e0d\u8981\u5199\u6587\u4ef6/u.test(value) && /\u4e0d\u8981\u5916\u53d1/u.test(value)
-      ? '\u6267\u884c\u8fb9\u754c\u5df2\u9075\u5b88\uff1a\u672a\u5199\u6587\u4ef6\u3001\u672a\u5916\u53d1'
-      : '\u6267\u884c\u8fb9\u754c\u5df2\u8bb0\u5f55\uff1a\u672c\u8f6e\u4ec5\u66f4\u65b0\u5185\u90e8\u4efb\u52a1\u8d26\u672c',
-    /\u7b49\u5f85.{0,8}\u786e\u8ba4|\u7b49\u5f85\u786e\u8ba4/u.test(value)
-      ? '\u786e\u8ba4\u8fb9\u754c\u5df2\u4fdd\u7559\uff1a\u540e\u7eed\u6b65\u9aa4\u4ecd\u7b49\u5f85\u786e\u8ba4'
-      : '\u540e\u7eed\u8fb9\u754c\u5df2\u8bb0\u5f55\uff1a\u4ec5\u6309\u7528\u6237\u660e\u786e\u6307\u4ee4\u7ee7\u7eed',
-  ];
-  while (checklist.length < checklistCount) {
-    checklist.push(`\u4efb\u52a1\u8fdb\u5ea6\u5df2\u5199\u56de\u6301\u4e45\u8d26\u672c\uff08\u7b2c ${checklist.length + 1} \u9879\uff09`);
+  const bookkeeping = explicitWorkTaskBookkeepingNote(value);
+  if (!bookkeeping) {
+    return hasPersistentTaskExecutionIntent(value)
+      ? { matched: false, responseText: '' }
+      : null;
   }
-  const exactChecklist = checklist.slice(0, checklistCount);
-  const waitingConfirmation = /\u7b49\u5f85.{0,8}\u786e\u8ba4|\u7b49\u5f85\u786e\u8ba4/u.test(value);
-  const taskTitle = value.match(/(?:\u6301\u4e45\u4efb\u52a1|\u4efb\u52a1)\s*[\u201c"']([^\u201d"']{1,140})[\u201d"']/u)?.[1]?.trim() || '';
 
   return {
-    responseText: '\u6b63\u5728\u7eed\u63a5\u5e76\u5199\u56de\u6301\u4e45\u4efb\u52a1\u8fdb\u5ea6\u3002',
+    responseText: '\u6b63\u5728\u5c06\u660e\u786e\u7684\u5907\u6ce8\u5199\u5165\u6301\u4e45\u4efb\u52a1\u8d26\u672c\u3002',
     matched: true,
     toolCall: {
       name: 'work_takeover_task_update',
       arguments: {
-        id: taskId,
-        ...(taskTitle ? { title: taskTitle } : {}),
-        status: waitingConfirmation ? 'waiting_confirmation' : 'in_progress',
-        currentActionIndex: completedActionCount,
-        draftReply: exactChecklist.map((item, index) => `${index + 1}. ${item}`).join('\n'),
-        result: `\u5df2\u5b8c\u6210\uff1a${completedLabels.join('\u2192')}`,
-        note: '\u663e\u5f0f\u5206\u6b65\u7eed\u63a5\u6307\u4ee4\u5df2\u901a\u8fc7\u539f\u751f\u5ba2\u6237\u7aef\u5199\u56de\u3002',
+        id: bookkeeping.taskId,
+        note: bookkeeping.note,
       },
     },
     formatToolResult: (raw, error) => {
-      if (error) return `\u4efb\u52a1\u7eed\u63a5\u5931\u8d25\uff1a${error}`;
+      if (error) return `\u4efb\u52a1\u5907\u6ce8\u5199\u5165\u5931\u8d25\uff1a${error}`;
       let data: Record<string, any> = {};
       try { data = JSON.parse(String(raw || '{}')); } catch {}
       const task = data.task && typeof data.task === 'object' ? data.task : {};
-      const persisted = data.persisted === true && String(task.id || '') === taskId;
-      if (!persisted) return '\u4efb\u52a1\u8fdb\u5ea6\u672a\u53d6\u5f97\u53ef\u9a8c\u8bc1\u7684\u6301\u4e45\u56de\u6267\u3002';
+      const persisted = data.persisted === true && String(task.id || '') === bookkeeping.taskId;
+      if (!persisted) return '\u4efb\u52a1\u5907\u6ce8\u672a\u53d6\u5f97\u53ef\u9a8c\u8bc1\u7684\u6301\u4e45\u56de\u6267\u3002';
       const actions = Array.isArray(task.nextActions) ? task.nextActions.map(String).filter(Boolean) : [];
-      const currentIndex = Math.max(0, Number(task.currentActionIndex) || completedActionCount);
-      const done = actions.slice(0, currentIndex);
-      const remaining = actions.slice(currentIndex);
+      const currentIndex = Math.max(0, Number(task.currentActionIndex) || 0);
       return [
-        `\u5df2\u5b8c\u6210\u6b65\u9aa4\uff1a${done.length ? done.join('\u2192') : completedLabels.join('\u2192')}`,
-        `${checklistCount}\u9879\u68c0\u67e5\u6e05\u5355\uff1a`,
-        ...exactChecklist.map((item, index) => `${index + 1}. ${item}`),
-        `\u5f53\u524d\u72b6\u6001\uff1a${String(task.status || (waitingConfirmation ? 'waiting_confirmation' : 'in_progress'))}`,
-        `\u5269\u4f59\u6b65\u9aa4\uff1a${remaining.length ? remaining.join('\u2192') : '\u65e0'}`,
+        `\u4efb\u52a1\u7f16\u53f7\uff1a${bookkeeping.taskId}`,
+        '\u8bb0\u8d26\u72b6\u6001\uff1a\u5907\u6ce8\u5df2\u6301\u4e45\u5316',
+        '\u6267\u884c\u72b6\u6001\uff1a\u672a\u6267\u884c\u4efb\u52a1\u6b65\u9aa4\uff0c\u672a\u63a8\u8fdb\u8fdb\u5ea6\u6216\u5b8c\u6210\u72b6\u6001',
+        `\u5f53\u524d\u4efb\u52a1\u72b6\u6001\uff1a${String(task.status || '\u672a\u77e5')}`,
+        `\u5f53\u524d\u6b65\u9aa4\uff1a${actions[currentIndex] || '\u5f85\u8865\u5145'}`,
       ].join('\n');
     },
   };
@@ -380,6 +400,23 @@ export function buildDeterministicClientNavigationCommand(
           : '\u5df2\u53d1\u51fa\u6253\u5f00' + label + '\u7684\u8bf7\u6c42\uff0c\u4f46\u754c\u9762\u8fd8\u6ca1\u6709\u786e\u8ba4\u3002'; // i18n-allow: receipt-grounded client-navigation pending state.
       } catch {
         return '\u5df2\u53d1\u51fa\u6253\u5f00' + label + '\u7684\u8bf7\u6c42\uff0c\u4f46\u56de\u6267\u65e0\u6cd5\u9a8c\u8bc1\u3002'; // i18n-allow: receipt-grounded client-navigation unknown state.
+      }
+    },
+    verifyToolRecords: records => {
+      const action = records.find(record => record.name === 'client_action');
+      if (!action) return { verified: false, reason: 'client_action produced no receipt' };
+      if (action.error) return { verified: false, reason: `client_action failed: ${action.error}` };
+      try {
+        const parsed = JSON.parse(String(action.result || '{}'));
+        const status = String(parsed?.verification?.status || parsed?.status || '').toLowerCase();
+        return parsed?.ok !== false && /^(?:verified|not_applicable)$/.test(status)
+          ? { verified: true }
+          : {
+              verified: false,
+              reason: String(parsed?.verification?.message || parsed?.say || status || 'client_action was not verified'),
+            };
+      } catch {
+        return { verified: false, reason: 'client_action receipt was not parseable' };
       }
     },
   };
@@ -535,22 +572,17 @@ function quickOpenToolCall(target: string): { name: string; arguments: Record<st
 }
 
 /**
- * A deterministic quick command has already selected one exact tool from the
- * user's words. Route selection occasionally omits that same tool from the
- * broader LLM allow-list; add only the selected tool while preserving every
- * explicit forbidden rule and confirmation setting.
+ * Quick-command compatibility code is never an authorization source. Return
+ * the existing policy unchanged: a selected tool that is absent from the
+ * allow-list must fail closed and return to the shared model capability loop.
  */
 export function buildQuickCommandToolPolicy(
   policy: ToolPolicy | undefined,
   toolName: string,
 ): ToolPolicy | undefined {
   if (!policy) return undefined;
-  if (policy.forbiddenTools.includes('*') || policy.forbiddenTools.includes(toolName)) return policy;
-  if (policy.allowedTools.includes('*') || policy.allowedTools.includes(toolName)) return policy;
-  return {
-    ...policy,
-    allowedTools: [...policy.allowedTools, toolName],
-  };
+  void toolName;
+  return policy;
 }
 
 function normalizeQuickOpenTarget(value: string): string | null {

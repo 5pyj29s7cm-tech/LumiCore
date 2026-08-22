@@ -101,17 +101,36 @@ function requirePathArg(args: Record<string, any>, keys: string[], toolName: str
   return value;
 }
 
-async function readFileHandler(args: Record<string, any>, context?: { cwd?: string }): Promise<string> {
+async function readFileHandler(
+  args: Record<string, any>,
+  context?: Pick<ToolContext, 'cwd' | 'desktopRelay'>,
+): Promise<string> {
   const inputPath = requirePathArg(args, ['path', 'filePath', 'filepath', 'targetPath', 'target'], 'read_file');
   const targetPath = resolveSafePath(inputPath, context?.cwd);
-  const stat = fs.statSync(targetPath);
-  if (stat.isDirectory()) {
-    throw new Error(`"${targetPath}" is a directory, not a file.`);
+  try {
+    const stat = fs.statSync(targetPath);
+    if (stat.isDirectory()) {
+      throw new Error(`"${targetPath}" is a directory, not a file.`);
+    }
+    if (stat.size > 100 * 1024) {
+      throw new Error(`File too large (${(stat.size / 1024).toFixed(1)}KB). Max 100KB.`);
+    }
+    return fs.readFileSync(targetPath, 'utf-8');
+  } catch (localError) {
+    const canUseNativePath = /^(?:~[\\/]|[a-z]:[\\/]|\/)/i.test(inputPath.trim());
+    if (!context?.desktopRelay || !canUseNativePath) throw localError;
+    const relayed = await context.desktopRelay('desktop_read_text_file', { path: inputPath.trim() });
+    let receipt: any;
+    try {
+      receipt = JSON.parse(relayed);
+    } catch {
+      throw new Error('The native desktop client returned no structured text-file read receipt');
+    }
+    if (receipt?.success !== true || typeof receipt.content !== 'string') {
+      throw new Error(String(receipt?.error || 'The native desktop client could not read the text file'));
+    }
+    return receipt.content;
   }
-  if (stat.size > 100 * 1024) {
-    throw new Error(`File too large (${(stat.size / 1024).toFixed(1)}KB). Max 100KB.`);
-  }
-  return fs.readFileSync(targetPath, 'utf-8');
 }
 
 async function writeFileHandler(

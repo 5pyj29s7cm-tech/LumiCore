@@ -1,7 +1,9 @@
 import {
   NormalizedMessage,
   makeLLMCallDirect,
+  makeLLMCallStreamingDirect,
   StreamCallback,
+  type ModelAttemptTimeouts,
 } from './providers';
 import { NormalizedLLMResponse } from '../tools/types';
 import {
@@ -27,6 +29,7 @@ export interface DispatchConfig {
   domain?: string;
   orgId?: string;
   signal?: AbortSignal;
+  attemptTimeouts?: Partial<ModelAttemptTimeouts>;
   allowCloudFallback?: boolean;
   selectionMode?: UserLLMSelectionMode;
   fallbackCandidates?: UserLLMFallbackCandidate[];
@@ -64,6 +67,8 @@ function callArguments(config: DispatchConfig, provider: string, model: string) 
     userId: config.userId,
     domain: config.domain,
     orgId: config.orgId,
+    signal: config.signal,
+    attemptTimeouts: config.attemptTimeouts,
     selectionMode: 'pinned' as const,
     fallbackCandidates: [],
     allowCloudFallback: false,
@@ -119,6 +124,7 @@ async function tryLocal(
       attempts.push({ provider: candidate.provider, model: candidate.model, status: 'failed', reason: 'empty_response' });
       console.log(`[Dispatch] ${candidate.provider}/${candidate.model} returned an empty response`);
     } catch (error: any) {
+      if (config.signal?.aborted) throw error;
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,
@@ -224,6 +230,7 @@ async function dispatchOrderedCall(
         }),
       };
     } catch (error) {
+      if (config.signal?.aborted) throw error;
       lastError = error;
       attempts.push({
         ...candidate,
@@ -305,6 +312,7 @@ export async function dispatchLLMCall(
         }),
       };
     } catch (error) {
+      if (config.signal?.aborted) throw error;
       lastError = error;
       attempts.push({
         ...fallback,
@@ -327,10 +335,208 @@ export async function dispatchLLMCallStreaming(
   onChunk: StreamCallback,
   getters: LLMGetters,
 ): Promise<DispatchedLLMResponse> {
-  // Fallback decisions must happen before user-visible chunks are emitted.
-  // Otherwise a provider that fails mid-stream could leak a partial answer and
-  // the next candidate would append a duplicate or contradictory answer.
-  const result = await dispatchLLMCall(messages, toolDeclarations, config, getters);
-  if (result.text) onChunk(result.text);
+  if (config.selectionMode === 'ordered_fallback') {
+    const candidates = orderedCandidates(config);
+    const attempts: ModelRouteAttempt[] = [];
+    let lastError: unknown = new Error('No configured model candidate is available');
+    for (const [index, candidate] of candidates.entries()) {
+      if (index > 0 && config.allowCloudFallback === false && !isLocalProvider(candidate.provider, config.userId)) {
+        attempts.push({ ...candidate, status: 'skipped', reason: 'privacy_policy_blocked' });
+        continue;
+      }
+      const visibility = createCandidateVisibility(onChunk);
+      let result: NormalizedLLMResponse;
+      try {
+        result = await attemptStreamingCandidate(messages, toolDeclarations, config, candidate, getters, visibility);
+      } catch (error) {
+        if (config.signal?.aborted) throw error;
+        lastError = error;
+        attempts.push({
+          ...candidate,
+          status: 'failed',
+          reason: modelRoutingErrorReason(error),
+          errorDigest: modelRoutingErrorDigest(error),
+        });
+        if (visibility.committed) {
+          throw new ModelRoutingDispatchError(
+            String((error as any)?.message || error),
+            routingTrace({ config, attempts, fallbackReason: modelRoutingErrorReason(error) }),
+          );
+        }
+        continue;
+      }
+      attempts.push({ ...candidate, status: 'succeeded' });
+      return {
+        ...result,
+        tier: isLocalProvider(candidate.provider, config.userId) ? 'local' : 'cloud',
+        routing: routingTrace({
+          config,
+          selectedProvider: candidate.provider,
+          selectedModel: candidate.model,
+          fallbackReason: index === 0 ? '' : lastFailedReason(attempts.slice(0, -1)) || 'primary_failed',
+          attempts,
+        }),
+      };
+    }
+    throw new ModelRoutingDispatchError(
+      String((lastError as any)?.message || lastError),
+      routingTrace({ config, attempts, fallbackReason: modelRoutingErrorReason(lastError) }),
+    );
+  }
+
+  const localCandidates = (await resolveAutoLocalModelCandidates(config.localModel)).slice(0, 8);
+  const attempts: ModelRouteAttempt[] = [];
+  for (const candidate of localCandidates) {
+    const getter = candidate.provider === 'ollama' ? getters.getOllama : getters.getLmStudio;
+    if (!getter?.()) {
+      attempts.push({ provider: candidate.provider, model: candidate.model, status: 'skipped', reason: 'runtime_client_unavailable' });
+      continue;
+    }
+    const visibility = createCandidateVisibility(onChunk);
+    let result: NormalizedLLMResponse;
+    try {
+      result = await attemptStreamingCandidate(messages, toolDeclarations, config, candidate, getters, visibility);
+    } catch (error) {
+      if (config.signal?.aborted) throw error;
+      attempts.push({
+        provider: candidate.provider,
+        model: candidate.model,
+        status: 'failed',
+        reason: modelRoutingErrorReason(error),
+        errorDigest: modelRoutingErrorDigest(error),
+      });
+      if (visibility.committed) {
+        throw new ModelRoutingDispatchError(
+          String((error as any)?.message || error),
+          routingTrace({ config, attempts, fallbackReason: modelRoutingErrorReason(error) }),
+        );
+      }
+      continue;
+    }
+    attempts.push({ provider: candidate.provider, model: candidate.model, status: 'succeeded' });
+    return {
+      ...result,
+      tier: 'local',
+      routing: routingTrace({
+        config,
+        selectedProvider: candidate.provider,
+        selectedModel: candidate.model,
+        attempts,
+      }),
+    };
+  }
+
+  if (config.allowCloudFallback === false) {
+    const error = new Error('[Privacy] Strict mode: no healthy local LLM/model is available. Start Ollama or LM Studio and load the selected model.');
+    throw new ModelRoutingDispatchError(error.message, routingTrace({
+      config,
+      attempts,
+      fallbackReason: 'privacy_policy_blocked',
+    }));
+  }
+
+  const cloudCandidates = orderedCandidates({
+    ...config,
+    ...exactCloudFallback(config),
+  }).filter(candidate => !isLocalProvider(candidate.provider, config.userId));
+  let lastError: unknown = new Error('No cloud fallback is configured');
+  for (const candidate of cloudCandidates) {
+    const visibility = createCandidateVisibility(onChunk);
+    let result: NormalizedLLMResponse;
+    try {
+      result = await attemptStreamingCandidate(messages, toolDeclarations, config, candidate, getters, visibility);
+    } catch (error) {
+      if (config.signal?.aborted) throw error;
+      lastError = error;
+      attempts.push({
+        ...candidate,
+        status: 'failed',
+        reason: modelRoutingErrorReason(error),
+        errorDigest: modelRoutingErrorDigest(error),
+      });
+      if (visibility.committed) {
+        throw new ModelRoutingDispatchError(
+          String((error as any)?.message || error),
+          routingTrace({ config, attempts, fallbackReason: modelRoutingErrorReason(error) }),
+        );
+      }
+      continue;
+    }
+    attempts.push({ ...candidate, status: 'succeeded' });
+    return {
+      ...result,
+      tier: 'cloud',
+      routing: routingTrace({
+        config,
+        selectedProvider: candidate.provider,
+        selectedModel: candidate.model,
+        fallbackReason: lastFailedReason(attempts.slice(0, -1)) || 'no_healthy_local_model',
+        attempts,
+      }),
+    };
+  }
+  throw new ModelRoutingDispatchError(
+    String((lastError as any)?.message || lastError),
+    routingTrace({ config, attempts, fallbackReason: modelRoutingErrorReason(lastError) }),
+  );
+}
+
+async function attemptStreamingCandidate(
+  messages: NormalizedMessage[],
+  toolDeclarations: any[],
+  config: DispatchConfig,
+  candidate: { provider: string; model: string },
+  getters: LLMGetters,
+  visibility: CandidateVisibility,
+): Promise<NormalizedLLMResponse> {
+  const result = await makeLLMCallStreamingDirect(
+    messages,
+    toolDeclarations,
+    callArguments(config, candidate.provider, candidate.model),
+    visibility.accept,
+    ...getterArguments(getters),
+  );
+  if (!String(result.text || '').trim() && !(result.toolCalls?.length)) {
+    throw new Error('Model candidate completed without semantic content');
+  }
+  visibility.finish(result.text);
   return result;
+}
+
+interface CandidateVisibility {
+  readonly committed: boolean;
+  accept: StreamCallback;
+  finish: (resultText: string | null) => void;
+}
+
+function createCandidateVisibility(onChunk: StreamCallback): CandidateVisibility {
+  let committed = false;
+  let pending: string[] = [];
+  return {
+    get committed() { return committed; },
+    accept(chunk: string) {
+      if (committed) {
+        onChunk(chunk);
+        return;
+      }
+      pending.push(chunk);
+      if (!String(chunk).trim()) return;
+      committed = true;
+      for (const buffered of pending) onChunk(buffered);
+      pending = [];
+    },
+    finish(resultText: string | null) {
+      if (committed) return;
+      if (pending.length > 0) {
+        committed = true;
+        for (const buffered of pending) onChunk(buffered);
+        pending = [];
+        return;
+      }
+      if (resultText) {
+        committed = true;
+        onChunk(resultText);
+      }
+    },
+  };
 }

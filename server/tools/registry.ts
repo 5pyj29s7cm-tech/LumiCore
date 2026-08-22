@@ -24,6 +24,7 @@ import {
   type CapabilityRoutingProjection,
 } from './capability_projection';
 import crypto from 'node:crypto';
+import { getJwtSecret } from '../config/local_identity';
 import { beginToolMetric, recordToolRetry } from '../runtime/tool_metrics';
 import {
   claimExternalCommitAttempt,
@@ -83,8 +84,34 @@ function executionIdempotencyKey(name: string, args: Record<string, any>, contex
   }))).digest('hex');
 }
 
-function externalCommitInputDigest(name: string, args: Record<string, any>): string {
-  return crypto.createHash('sha256').update(JSON.stringify(stableValue({ name, args }))).digest('hex');
+export function externalCommitInputDigest(name: string, args: Record<string, any>): string {
+  return crypto.createHmac('sha256', getJwtSecret())
+    .update('lumi.external-commit.input.v1\0')
+    .update(JSON.stringify(stableValue({ name, args })))
+    .digest('hex');
+}
+
+const EXTERNAL_REPLAY_SECRET_KEY_RE = /password|passphrase|passkey|secret|token|api.?key|credential|authorization|cookie|otp|captcha|verification.?code|pin/i;
+const EXTERNAL_REPLAY_SECRET_VALUE_RE = /(?:bearer\s+[a-z0-9._~+/=-]{8,}|\bsk-[a-z0-9_-]{12,}\b)/i;
+
+function sanitizeExternalCommitReplayValue(value: unknown, depth = 0): unknown {
+  if (depth > 4) return '[nested data omitted]';
+  if (typeof value === 'string') {
+    if (EXTERNAL_REPLAY_SECRET_VALUE_RE.test(value)) return '[redacted]';
+    return value.slice(0, 500);
+  }
+  if (Array.isArray(value)) return value.slice(0, 30).map(item => sanitizeExternalCommitReplayValue(item, depth + 1));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .slice(0, 40)
+      .map(([key, item]) => [
+        key,
+        EXTERNAL_REPLAY_SECRET_KEY_RE.test(key)
+          ? '[redacted]'
+          : sanitizeExternalCommitReplayValue(item, depth + 1),
+      ]),
+  );
 }
 
 function persistedExternalCommitReplay(result: string, idempotencyKey: string): string {
@@ -96,13 +123,21 @@ function persistedExternalCommitReplay(result: string, idempotencyKey: string): 
         Object.entries(parsed)
           .filter(([key]) => safeKeys.test(key))
           .slice(0, 40)
-          .map(([key, value]) => [key, typeof value === 'string' ? value.slice(0, 500) : value]),
+          .map(([key, value]) => [key, sanitizeExternalCommitReplayValue(value)]),
       );
-      return JSON.stringify({
+      const replay = JSON.stringify({
         ...safe,
         verified: true,
         verificationStatus: 'verified',
         deduplicated: true,
+        idempotencyKey,
+      });
+      if (replay.length <= 8_192) return replay;
+      return JSON.stringify({
+        verified: true,
+        verificationStatus: 'verified',
+        deduplicated: true,
+        receiptTruncated: true,
         idempotencyKey,
       });
     }
@@ -590,6 +625,14 @@ export class ToolRegistry {
       ...(tool.capability?.adapter || defaultAdapterContract(lane, operation)
         ? { adapter: tool.capability?.adapter || defaultAdapterContract(lane, operation) }
         : {}),
+      ...(tool.capability?.reconciliation
+        ? { reconciliation: {
+            ...tool.capability.reconciliation,
+            reconcilesCapabilityIds: [...tool.capability.reconciliation.reconcilesCapabilityIds],
+            committedValues: [...tool.capability.reconciliation.committedValues],
+            notCommittedValues: [...tool.capability.reconciliation.notCommittedValues],
+          } }
+        : {}),
       modeSecurity: { ...(tool.capability?.modeSecurity || {}) },
       domains: Array.from(new Set(
         tool.capability?.domains?.length ? tool.capability.domains : [family],
@@ -687,6 +730,11 @@ export class ToolRegistry {
       finishMetric('failed');
       throw new Error(`Tool "${name}" not found in registry`);
     }
+    // Pin executable references at admission. Policy/manifest checks and the
+    // adapter-start barrier may yield; later mutation of the registry object
+    // must not swap the reviewed implementation for this execution.
+    const pinnedHandler = tool.handler;
+    const pinnedReconcileExternalCommit = tool.reconcileExternalCommit;
 
     // Resolve effective security level
     const policy = (context as any)?.toolPolicy as ToolPolicy | undefined;
@@ -746,7 +794,7 @@ export class ToolRegistry {
     ));
     const idempotencyKey = externalCommit ? executionIdempotencyKey(name, args, context) : '';
     const inputDigest = externalCommit ? externalCommitInputDigest(name, args) : '';
-    const claimToken = externalCommit ? crypto.randomUUID() : '';
+    let claimToken = externalCommit ? crypto.randomUUID() : '';
     let releasePreparation: (() => void) | null = null;
     if (externalCommit) {
       let existing = externalCommitAttempts.get(idempotencyKey);
@@ -797,7 +845,7 @@ export class ToolRegistry {
           userId: String(context?.userId || ''),
           toolName: name,
           inputDigest,
-          state: 'running',
+          state: 'not_started',
           replayResult: '',
           claimToken,
           createdAt: now,
@@ -843,12 +891,18 @@ export class ToolRegistry {
           return replay;
         }
 
+        if (prior.state === 'not_started') {
+          // A previous attempt durably proved that the adapter handler never
+          // started. Reuse the same claim identity and arm it only at the next
+          // handler-entry barrier.
+          claimToken = prior.claimToken;
+        } else {
         let reconciled: string | null = null;
-        if (tool.reconcileExternalCommit) {
+        if (pinnedReconcileExternalCommit) {
           let reconciliationTimeout: ReturnType<typeof setTimeout> | undefined;
           try {
             reconciled = await Promise.race([
-              tool.reconcileExternalCommit(args, context, idempotencyKey),
+              pinnedReconcileExternalCommit(args, context, idempotencyKey),
               new Promise<null>(resolve => {
                 reconciliationTimeout = setTimeout(() => resolve(null), 8_000);
               }),
@@ -897,6 +951,7 @@ export class ToolRegistry {
         cancelAdapterExecutionPermit(adapterPermit);
         finishMetric('unknown_outcome');
         throw externalCommitUnknownError(name, 'A prior running or unknown attempt could not be verified by read-only reconciliation.');
+        }
       }
     }
     let timedOut = false;
@@ -906,6 +961,7 @@ export class ToolRegistry {
       userConfirmed: context?.userConfirmed === true || userConfirmed,
     };
     const retryPolicy = getAdapterRetryPolicy(name, capability);
+    let handlerEntered = false;
     const execution = (async () => {
       let lastError: unknown;
       for (let attempt = 1; attempt <= retryPolicy.maxAttempts; attempt += 1) {
@@ -917,8 +973,22 @@ export class ToolRegistry {
           isCancelled: () => attemptTimedOut || context?.isCancelled?.() === true,
         };
         try {
+          await executionContext.onAdapterStart?.({ name, attempt });
+          if (externalCommit) {
+            const armed = await settleExternalCommitAttempt({
+              idempotencyKey,
+              claimToken,
+              state: 'running',
+              replayResult: '',
+              updatedAt: new Date().toISOString(),
+            });
+            if (!armed) {
+              throw new Error(`Tool "${name}" external commit was stopped because its durable handler-entry barrier could not be armed.`);
+            }
+          }
+          handlerEntered = true;
           return await Promise.race([
-            tool.handler(args, executionContext),
+            pinnedHandler(args, executionContext),
             new Promise<string>((_, reject) => {
               attemptTimeoutHandle = setTimeout(() => {
                 attemptTimedOut = true;
@@ -991,12 +1061,25 @@ export class ToolRegistry {
     } catch (error: any) {
       if (error?.externalCommitUnknown === true) throw error;
       if (externalCommit) {
+        if (!handlerEntered) {
+          await settleExternalCommitAttempt({
+            idempotencyKey,
+            claimToken,
+            state: 'not_started',
+            replayResult: '',
+            updatedAt: new Date().toISOString(),
+          }).catch(() => false);
+          externalCommitAttempts.delete(idempotencyKey);
+          cancelAdapterExecutionPermit(adapterPermit);
+          finishMetric('failed');
+          throw error;
+        }
         let reconciled: string | null = null;
-        if (tool.reconcileExternalCommit) {
+        if (pinnedReconcileExternalCommit) {
           let reconciliationTimeout: ReturnType<typeof setTimeout> | undefined;
           try {
             reconciled = await Promise.race([
-              tool.reconcileExternalCommit(args, context, idempotencyKey),
+              pinnedReconcileExternalCommit(args, context, idempotencyKey),
               new Promise<null>(resolve => {
                 reconciliationTimeout = setTimeout(() => resolve(null), 8_000);
               }),

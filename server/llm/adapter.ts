@@ -2,12 +2,27 @@ import fs from 'fs';
 import path from 'path';
 import { ToolRegistry } from '../tools/registry';
 import { ToolExecutionRecord, ToolContext, LLMUsage } from '../tools/types';
-import { NormalizedMessage, makeLLMCall, makeLLMCallStreaming, StreamCallback, type LLMResponseFormat } from './providers';
+import {
+  NormalizedMessage,
+  makeLLMCall,
+  makeLLMCallStreaming,
+  resolveModelAttemptTimeouts,
+  StreamCallback,
+  type LLMResponseFormat,
+  type ModelAttemptTimeouts,
+} from './providers';
 import { recordTokenUsage } from './token_tracker';
 import { recordWorkflow, WorkflowStep } from '../skills/worklog';
 import { recordLatency } from '../monitor/latency_store';
 import { guardCompletionClaims, needsCompletionEvidence } from '../work_product/completion_guard';
-import { hasVisibleAutoCadExecutionEvidence, requiresVisibleAutoCadExecution } from '../cognition/action_contract';
+import {
+  buildActionContract,
+  formatActionContractPrompt,
+  hasCoreActionEvidence,
+  hasVisibleAutoCadExecutionEvidence,
+  requiresVisibleAutoCadExecution,
+} from '../cognition/action_contract';
+import { buildConfirmedStepContinuationNote } from '../cognition/task_execution_ledger';
 import { guardCurrentAppToolCall } from '../cognition/current_app_execution';
 import { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
 import { executeToolCall } from '../tools/execution_engine';
@@ -34,6 +49,10 @@ export interface LLMConfig {
   source?: string;
   responseFormat?: LLMResponseFormat;
   signal?: AbortSignal;
+  /** Provider-independent lifecycle deadlines for each model candidate. */
+  attemptTimeouts?: Partial<ModelAttemptTimeouts>;
+  /** Cumulative budget spent waiting on model providers; tool runtime is excluded. */
+  modelWaitBudgetMs?: number;
   selectionMode?: UserLLMSelectionMode;
   fallbackCandidates?: UserLLMFallbackCandidate[];
   allowCloudFallback?: boolean;
@@ -79,6 +98,12 @@ function guardToolResponseIfNeeded(input: {
 }
 
 const DEFAULT_TOOL_RESULT_MODEL_LIMIT = 5_000;
+const TOOL_RECEIPT_MODEL_LIMIT = 1_600;
+const MAX_IDENTICAL_RECOVERY_RETRIES = 1;
+const MAX_TOOL_RECOVERY_REPLANS = 1;
+const MAX_VERIFICATION_OBLIGATION_REPLANS = 1;
+const RECEIPT_SECRET_KEY_RE = /password|passphrase|passkey|secret|token|api.?key|credential|otp|captcha|verification.?code/i;
+const TRANSIENT_TOOL_FAILURE_RE = /\b(?:timeout|timed[ -]?out|temporar(?:y|ily)|rate[ -]?limit|too many requests|service unavailable|try again|busy|network|connection|socket|stream|econnreset|econnrefused|etimedout|eai_again|429|502|503|504)\b/i;
 const TOOL_RESULT_LIMITS: Record<string, number> = {
   desktop_list_files: 2_500,
   list_directory: 2_500,
@@ -139,6 +164,209 @@ function compactStringForModel(value: string, limit: number, label: string): str
 export function compactToolResultForModel(toolName: string, value: string): string {
   const limit = TOOL_RESULT_LIMITS[toolName] || DEFAULT_TOOL_RESULT_MODEL_LIMIT;
   return compactStringForModel(value, limit, 'Tool result');
+}
+
+function sanitizeReceiptForModel(
+  value: unknown,
+  depth = 0,
+  seen = new WeakSet<object>(),
+): unknown {
+  if (depth > 5) return '[nested receipt omitted]';
+  if (Array.isArray(value)) {
+    return value.slice(0, 40).map(item => sanitizeReceiptForModel(item, depth + 1, seen));
+  }
+  if (!value || typeof value !== 'object') {
+    if (typeof value === 'string' && value.length > TOOL_RECEIPT_MODEL_LIMIT) {
+      return `${value.slice(0, TOOL_RECEIPT_MODEL_LIMIT)}...`;
+    }
+    return value;
+  }
+  if (seen.has(value)) return '[circular receipt omitted]';
+  seen.add(value);
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .slice(0, 60)
+      .map(([key, item]) => [
+        key,
+        RECEIPT_SECRET_KEY_RE.test(key)
+          ? '[redacted]'
+          : sanitizeReceiptForModel(item, depth + 1, seen),
+      ]),
+  );
+}
+
+function compactReceiptForModel(receipt: unknown): string {
+  if (receipt === undefined) return '';
+  try {
+    return compactStringForModel(
+      JSON.stringify(sanitizeReceiptForModel(receipt)),
+      TOOL_RECEIPT_MODEL_LIMIT,
+      'Tool receipt',
+    );
+  } catch {
+    return '[receipt summary unavailable]';
+  }
+}
+
+export function formatToolRecordForModel(record: ToolExecutionRecord): string {
+  const verification = record.terminalVerification;
+  const status = verification?.status || (record.error ? 'failed' : 'unverified');
+  const reason = String(verification?.reason || record.error || 'No terminal verification result was recorded.')
+    .replace(/\s+/g, ' ')
+    .slice(0, 1_200);
+  const receipt = compactReceiptForModel(record.receipt);
+  const evidence = [
+    record.result ? `result:\n${compactToolResultForModel(record.name, record.result)}` : '',
+    receipt ? `receipt:\n${receipt}` : '',
+  ].filter(Boolean).join('\n\n') || '[no tool output or receipt]';
+  const outcomeRule = status === 'verified'
+    ? 'Outcome rule: this call has verified terminal evidence and may be used as completion evidence for the capability it proves.'
+    : 'Outcome rule: this call is not verified completion evidence. Treat its output only as diagnostic state; do not claim success. Re-plan with a safe retry, declared fallback, or verification capability.';
+  return [
+    '[LUMI TERMINAL VERIFICATION]',
+    `status=${status}`,
+    `strategy=${verification?.strategy || 'unknown'}`,
+    `reason=${reason}`,
+    outcomeRule,
+    wrapToolOutputForModel(record.name, evidence),
+  ].join('\n');
+}
+
+/**
+ * Reconstruct the exact confirmed call as normal assistant/tool history. This
+ * keeps the adapter output in the tool-output trust boundary while allowing
+ * every provider to reason from the canonical receipt. The trailing system
+ * policy tells the model to assess the whole goal without replaying the
+ * consumed side effect.
+ */
+export function buildConfirmedStepContinuationMessages(
+  goal: string,
+  record: ToolExecutionRecord,
+): NormalizedMessage[] {
+  const toolCallId = String(record.id || `confirmed_${Date.now().toString(36)}`);
+  return [
+    { role: 'user', content: String(goal || '').trim() },
+    {
+      role: 'assistant',
+      content: '',
+      toolCalls: [{
+        id: toolCallId,
+        name: record.name,
+        arguments: record.arguments || {},
+      }],
+    },
+    {
+      role: 'tool',
+      toolCallId,
+      name: record.name,
+      content: formatToolRecordForModel(record),
+    },
+    {
+      role: 'system',
+      content: buildConfirmedStepContinuationNote(record),
+    },
+  ];
+}
+
+function toolCallSignature(call: Pick<ToolExecutionRecord, 'name' | 'arguments'>): string {
+  return `${call.name}\u0000${JSON.stringify(call.arguments || {})}`;
+}
+
+function isVerifiedToolSuccess(record: ToolExecutionRecord | undefined): boolean {
+  return Boolean(
+    record
+    && !record.error
+    && record.terminalVerification?.status === 'verified',
+  );
+}
+
+function isSafeReadOnlyRetry(record: ToolExecutionRecord | undefined): boolean {
+  if (!record?.capability) return false;
+  if (record.capability.operation !== 'observe' && record.capability.operation !== 'test') return false;
+  return record.capability.sideEffects.every(effect => (
+    effect.type === 'none'
+    || effect.type === 'local_read'
+    || effect.type === 'network_read'
+  ));
+}
+
+function isRetryableToolOutcome(record: ToolExecutionRecord | undefined): boolean {
+  if (!record || !isSafeReadOnlyRetry(record)) return false;
+  if (record.terminalVerification?.status === 'unverified') return true;
+  const detail = `${record.error || ''} ${record.terminalVerification?.reason || ''}`;
+  return record.terminalVerification?.status === 'failed' && TRANSIENT_TOOL_FAILURE_RE.test(detail);
+}
+
+function shouldSuppressConfirmedReplay(record: ToolExecutionRecord | undefined): boolean {
+  if (!record || isSafeReadOnlyRetry(record)) return false;
+  // A conclusive preflight failure did not cross the adapter boundary, so the
+  // normal policy/recovery loop may propose the call again. Once a mutation or
+  // unknown-effect tool started, however, its confirmed receipt is immutable
+  // commit-state evidence and the exact call must be reconciled, not replayed.
+  if (
+    record.adapterStarted === false
+    && (Boolean(record.error) || record.terminalVerification?.status === 'failed')
+  ) return false;
+  return true;
+}
+
+function hasUnverifiedToolOutcome(records: ToolExecutionRecord[]): boolean {
+  return records.some(record => (
+    Boolean(record.error)
+    || record.terminalVerification?.status === 'failed'
+    || record.terminalVerification?.status === 'unverified'
+  ));
+}
+
+function buildToolRecoveryReplanPrompt(reason: string): string {
+  return [
+    'Tool recovery required:',
+    reason,
+    'Do not stop with an explanation of the failure and do not claim completion.',
+    'Re-plan from the original user goal now. Prefer a different declared fallback or verification capability. Repeat an identical call only when the prior outcome was transient/unverified, the capability is read-only, and its bounded retry budget remains.',
+    'If no safe executable route exists, preserve the receipts and report the exact blocker without asking the user to repeat information already present.',
+  ].join('\n');
+}
+
+function hasPendingVerificationObligation(
+  task: string,
+  records: ToolExecutionRecord[],
+): boolean {
+  const contract = buildActionContract(task);
+  if (!contract.applies || records.length === 0 || hasCoreActionEvidence(contract, records, task)) return false;
+  return records.some(record => (
+    !record.error
+    && record.terminalVerification?.status === 'verified'
+    && record.capability?.operation !== 'observe'
+    && record.capability?.operation !== 'test'
+  ));
+}
+
+function buildMissingVerificationObligationPrompt(
+  task: string,
+  records: ToolExecutionRecord[],
+  registry: ToolRegistry,
+  exposedToolNames: Set<string>,
+  policy?: ToolContext['toolPolicy'],
+): string {
+  const contract = buildActionContract(task);
+  if (!hasPendingVerificationObligation(task, records)) return '';
+  const verificationCapabilities = registry.getCapabilityManifest(policy, { executableOnly: true })
+    .filter(entry => (
+      exposedToolNames.has(entry.toolName)
+      && (entry.operation === 'observe' || entry.operation === 'test')
+    ))
+    .slice(0, 12)
+    .map(entry => `${entry.toolName} (${entry.capabilityId}; ${entry.verification.strategy})`);
+  return [
+    'Declarative verification obligation:',
+    formatActionContractPrompt(contract),
+    'The current verified capability receipts do not yet satisfy the whole action contract.',
+    verificationCapabilities.length
+      ? `Currently declared observation/test capabilities: ${verificationCapabilities.join('; ')}.`
+      : 'No declared observation/test capability is currently exposed.',
+    'Choose the declared capability that best supplies the missing evidence, or state a real blocker if none can. Do not repeat a verified mutation, and do not claim completion yet.',
+  ].filter(Boolean).join('\n');
 }
 
 function messageContentLength(content: NormalizedMessage['content']): number {
@@ -283,8 +511,8 @@ function buildIterationLimitSummary(executionLog: ToolExecutionRecord[], task: s
   const isZh = /[\u3400-\u9fff]/.test(task);
   if (executionLog.length === 0) {
     return isZh
-      ? '这轮处理没有拿到可执行的工具结果，所以我还不能确认已经完成。请再说一次你要我继续处理的目标。'
-      : 'The tool loop ended before any tool result was available, so I cannot confirm completion yet. Please restate what you want me to continue.';
+      ? '这轮处理没有拿到可执行的工具结果，不能确认完成。恢复时必须保留当前目标并重新规划可用能力或声明式替代路径，不能让你重复已经提供的信息。'
+      : 'The tool loop ended before any tool result was available, so completion is not verified. Recovery must preserve the current goal and re-plan an available capability or declared fallback without asking the user to repeat known information.';
   }
 
   const artifacts = collectExistingArtifacts(executionLog).slice(0, 8);
@@ -292,13 +520,15 @@ function buildIterationLimitSummary(executionLog: ToolExecutionRecord[], task: s
   const recentSteps = executionLog.slice(-6).map((record, index) => {
     const status = record.error
       ? (isZh ? '未成功' : 'not completed')
-      : (isZh ? '已执行' : 'done');
+      : record.terminalVerification?.status === 'verified'
+        ? (isZh ? '已验证' : 'verified')
+        : (isZh ? '未验证' : 'unverified');
     return `${index + 1}. ${humanToolLabel(record.name)} - ${status}`;
   });
 
   if (isZh) {
     return [
-      '这轮工具处理次数到上限了，我还没来得及整理成最终结论。',
+      '这轮工具执行与自动恢复预算已经用尽，当前任务仍未通过最终验真。',
       '',
       '这轮进展：',
       ...recentSteps,
@@ -307,13 +537,13 @@ function buildIterationLimitSummary(executionLog: ToolExecutionRecord[], task: s
       ...artifacts.map(artifact => `- ${artifact.path} (${formatBytes(artifact.size)})`),
       '',
       artifacts.length > 0
-        ? '你可以直接让我继续，我会从这些已确认结果接着处理。'
-        : '这轮没有检测到已生成的可验证文件。你可以让我继续当前请求，或重新指定要处理的文件/路径。',
+        ? '恢复执行时必须从这些已验证结果继续，优先改走声明式替代能力或独立验真工具，不能重复已完成步骤。'
+        : '这轮没有检测到可验证产物；恢复执行时必须保留现有回执并重新规划声明式替代能力或验真工具，不能把失败说明当成完成。',
     ].filter(Boolean).join('\n');
   }
 
   return [
-    'The tool loop reached its limit before Lumi could write the final answer.',
+    'The bounded tool execution and automatic recovery budget was exhausted before final verification passed.',
     '',
     'Progress:',
     ...recentSteps,
@@ -322,8 +552,8 @@ function buildIterationLimitSummary(executionLog: ToolExecutionRecord[], task: s
     ...artifacts.map(artifact => `- ${artifact.path} (${formatBytes(artifact.size)})`),
     '',
     artifacts.length > 0
-      ? 'The task can be continued from these verified files/results instead of starting over.'
-      : 'No verified generated file was detected in this tool run. Continue from the current request, or ask for the current file/path.',
+      ? 'Recovery must continue from these verified results, prefer a declared fallback or independent verification capability, and avoid repeating completed work.'
+      : 'No verified artifact was detected. Recovery must preserve the receipts and re-plan a declared fallback or verification capability instead of treating the failure explanation as completion.',
   ].filter(Boolean).join('\n');
 }
 
@@ -385,7 +615,11 @@ function collectPathStrings(value: unknown, out: Set<string>, depth = 0): void {
 function collectExistingArtifacts(executionLog: ToolExecutionRecord[]): ReadyArtifact[] {
   const byPath = new Map<string, ReadyArtifact>();
   for (const record of executionLog) {
-    if (record.error || !record.result) continue;
+    if (
+      record.error
+      || record.terminalVerification?.status !== 'verified'
+      || !record.result
+    ) continue;
     if (!ARTIFACT_PRODUCER_TOOL_RE.test(record.name) && !/work_product_verify/i.test(record.name)) continue;
 
     const paths = new Set<string>();
@@ -466,7 +700,10 @@ function buildReadyWorkProductSummary(messages: NormalizedMessage[], executionLo
       (!wantsCad && !wantsPpt)
     )
     .slice(0, 8);
-  const failedCount = executionLog.filter(record => record.error).length;
+  const failedCount = executionLog.filter(record => (
+    Boolean(record.error)
+    || record.terminalVerification?.status !== 'verified'
+  )).length;
   const isZh = /[\u3400-\u9fff]/.test(task);
 
   if (!isZh) {
@@ -510,6 +747,202 @@ export function isForbiddenLocalCadImageFallback(
   return /certutil(?:\.exe)?\s+-(?:encode|decode)|(?:to|from)base64|stringfrombase64|base64string|convert\.?tobase64|base64\s+(?:encode|decode)|\[\s*convert\s*\]\s*::\s*(?:to|from)base64/i.test(payload);
 }
 
+const DEFAULT_TOOL_LOOP_MODEL_WAIT_BUDGET_MS = 120_000;
+
+export class ToolLoopModelBudgetError extends Error {
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super(`Model/tool loop exhausted its ${timeoutMs}ms cumulative model-wait budget`);
+    this.name = 'ToolLoopModelBudgetError';
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+function positiveBudget(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.max(1, Math.trunc(parsed)) : fallback;
+}
+
+interface ModelBudgetAttempt {
+  signal: AbortSignal;
+  attemptTimeouts: ModelAttemptTimeouts;
+  onChunk?: StreamCallback;
+}
+
+class ToolLoopModelBudget {
+  readonly timeoutMs: number;
+  private remainingBudgetMs: number;
+  private closed = false;
+  private generation = 0;
+
+  constructor(
+    timeoutMs: number,
+    private readonly callerSignal?: AbortSignal,
+    private readonly isCancelled?: () => boolean,
+  ) {
+    this.timeoutMs = timeoutMs;
+    this.remainingBudgetMs = timeoutMs;
+  }
+
+  get acceptsEvents(): boolean {
+    return !this.closed && !this.callerCancelled();
+  }
+
+  remainingMs(): number {
+    return Math.max(0, this.remainingBudgetMs);
+  }
+
+  clipAttemptTimeouts(config?: Partial<ModelAttemptTimeouts>): ModelAttemptTimeouts {
+    const remainingMs = this.remainingMs();
+    if (remainingMs <= 0) {
+      throw new ToolLoopModelBudgetError(this.timeoutMs);
+    }
+    const resolved = resolveModelAttemptTimeouts(config);
+    const absoluteMs = Math.max(1, Math.min(resolved.absoluteMs, remainingMs));
+    return {
+      requestMs: Math.min(resolved.requestMs, absoluteMs),
+      firstByteMs: Math.min(resolved.firstByteMs, absoluteMs),
+      semanticContentMs: Math.min(resolved.semanticContentMs, absoluteMs),
+      idleMs: Math.min(resolved.idleMs, absoluteMs),
+      absoluteMs,
+    };
+  }
+
+  async runModelAttempt<T>(
+    configuredTimeouts: Partial<ModelAttemptTimeouts> | undefined,
+    onChunk: StreamCallback | undefined,
+    operation: (attempt: ModelBudgetAttempt) => Promise<T>,
+  ): Promise<T> {
+    if (this.closed) throw new Error('Model/tool loop is no longer active');
+    if (this.callerCancelled()) throw this.cancellationError();
+
+    const attemptTimeouts = this.clipAttemptTimeouts(configuredTimeouts);
+    const modelBudgetForAttempt = this.remainingMs();
+    const startedAt = Date.now();
+    const generation = ++this.generation;
+    const controller = new AbortController();
+    const signal = this.callerSignal
+      ? AbortSignal.any([this.callerSignal, controller.signal])
+      : controller.signal;
+    const guardedChunk: StreamCallback | undefined = onChunk
+      ? chunk => {
+          if (
+            !this.closed
+            && generation === this.generation
+            && !signal.aborted
+            && !this.callerCancelled()
+          ) onChunk(chunk);
+        }
+      : undefined;
+    const deadlineTimer = setTimeout(() => {
+      if (!controller.signal.aborted) {
+        controller.abort(new ToolLoopModelBudgetError(this.timeoutMs));
+      }
+    }, modelBudgetForAttempt);
+    const cancellationPoll = this.isCancelled
+      ? setInterval(() => {
+          if (controller.signal.aborted || !this.callerCancelled()) return;
+          controller.abort(this.cancellationError());
+        }, 25)
+      : undefined;
+    (cancellationPoll as any)?.unref?.();
+
+    const providerOperation = Promise.resolve().then(() => operation({
+      signal,
+      attemptTimeouts,
+      onChunk: guardedChunk,
+    }));
+    try {
+      return await this.wait(providerOperation, signal);
+    } finally {
+      clearTimeout(deadlineTimer);
+      if (cancellationPoll) clearInterval(cancellationPoll);
+      if (generation === this.generation) this.generation += 1;
+      const elapsedMs = Math.max(0, Date.now() - startedAt);
+      this.remainingBudgetMs = Math.max(0, this.remainingBudgetMs - elapsedMs);
+    }
+  }
+
+  dispose(): void {
+    this.closed = true;
+    this.generation += 1;
+  }
+
+  private wait<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+    if (signal.aborted) {
+      void operation.catch(() => {});
+      return Promise.reject(this.abortReason(signal));
+    }
+    return new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const finish = (callback: () => void) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener('abort', onAbort);
+        callback();
+      };
+      const onAbort = () => finish(() => reject(this.abortReason(signal)));
+      signal.addEventListener('abort', onAbort, { once: true });
+      operation.then(
+        value => finish(() => resolve(value)),
+        error => finish(() => reject(error)),
+      );
+    });
+  }
+
+  private callerCancelled(): boolean {
+    if (this.callerSignal?.aborted) return true;
+    try { return Boolean(this.isCancelled?.()); } catch { return false; }
+  }
+
+  private cancellationError(): Error {
+    const reason = this.callerSignal?.reason;
+    if (reason instanceof Error) return reason;
+    const error = new Error('Model/tool turn cancelled by caller');
+    error.name = 'AbortError';
+    return error;
+  }
+
+  private abortReason(signal: AbortSignal): Error {
+    return signal.reason instanceof Error
+      ? signal.reason
+      : new DOMException('Model attempt cancelled', 'AbortError');
+  }
+}
+
+function buildVerifiedToolCheckpoint(executionLog: ToolExecutionRecord[], task: string): string {
+  const verified = executionLog.filter(isVerifiedToolSuccess).slice(-4);
+  if (verified.length === 0) return buildIterationLimitSummary(executionLog, task);
+  const isZh = /[\u3400-\u9fff]/.test(task);
+  const evidence = verified.map((record, index) => {
+    const result = String(record.result || '').trim();
+    const receipt = result ? '' : compactReceiptForModel(record.receipt);
+    const detail = compactStringForModel(
+      result || receipt || record.terminalVerification?.reason || (isZh ? '已通过终态核验' : 'terminal verification passed'),
+      3_000,
+      'Verified checkpoint evidence',
+    );
+    return `${index + 1}. ${humanToolLabel(record.name)}\n${detail}`;
+  });
+  const checkpoint = isZh
+    ? ['已核验的执行结果：', ...evidence, '', '当前进度与回执仍可用于继续后续步骤。'].join('\n')
+    : ['Verified execution results:', ...evidence, '', 'The progress and receipts are preserved so subsequent work can continue from this checkpoint.'].join('\n');
+  return guardToolResponseIfNeeded({
+    task,
+    response: checkpoint,
+    toolCalls: executionLog,
+  }).text;
+}
+
+function isCallerCancellation(
+  signal: AbortSignal | undefined,
+  isCancelled: (() => boolean) | undefined,
+): boolean {
+  if (signal?.aborted) return true;
+  try { return Boolean(isCancelled?.()); } catch { return false; }
+}
+
 export async function runWithTools(
   messages: NormalizedMessage[],
   toolRegistry: ToolRegistry,
@@ -531,8 +964,210 @@ export async function runWithTools(
   getGlm?: () => any,
   getRelay?: () => any,
 ): Promise<LLMResult> {
-  const executionLog: ToolExecutionRecord[] = [];
-  const usageRecords: LLMUsageRecord[] = [];
+  const priorToolRecords = (context?.priorToolRecords || [])
+    .filter(record => Boolean(record?.name))
+    .slice(-40);
+  const policyAttemptTimeoutMs = positiveBudget(
+    context?.toolPolicy?.modelAttemptTimeoutMs,
+    resolveModelAttemptTimeouts(config.attemptTimeouts).absoluteMs,
+  );
+  const configuredAttemptTimeouts: Partial<ModelAttemptTimeouts> = {
+    ...config.attemptTimeouts,
+    absoluteMs: config.attemptTimeouts?.absoluteMs ?? policyAttemptTimeoutMs,
+  };
+  const modelWaitBudgetMs = positiveBudget(
+    config.modelWaitBudgetMs ?? context?.toolPolicy?.modelWaitBudgetMs,
+    DEFAULT_TOOL_LOOP_MODEL_WAIT_BUDGET_MS,
+  );
+  const supervisor = new ToolLoopModelBudget(modelWaitBudgetMs, config.signal, context?.isCancelled);
+  const observedRecords: ToolExecutionRecord[] = [];
+  const observedUsageRecords: LLMUsageRecord[] = [];
+  const guardedToolCall = (record: ToolExecutionRecord) => {
+    if (!supervisor.acceptsEvents) return;
+    observedRecords.push(record);
+    onToolCall?.(record);
+  };
+  const guardedChunk: StreamCallback | undefined = onStreamChunk
+    ? chunk => {
+        if (supervisor.acceptsEvents) onStreamChunk(chunk);
+      }
+    : undefined;
+  const guardedContext: ToolContext | undefined = context
+    ? {
+        ...context,
+        isCancelled: () => isCallerCancellation(config.signal, context.isCancelled),
+        onProgress: context.onProgress
+          ? step => { if (supervisor.acceptsEvents) context.onProgress?.(step); }
+          : undefined,
+        onToolStart: context.onToolStart
+          ? call => { if (supervisor.acceptsEvents) context.onToolStart?.(call); }
+          : undefined,
+        requestConfirmation: context.requestConfirmation
+          ? async (name, args) => {
+              if (!supervisor.acceptsEvents) return false;
+              const approved = await context.requestConfirmation!(name, args);
+              return supervisor.acceptsEvents && approved;
+            }
+          : undefined,
+        onAdapterStart: context.onAdapterStart
+          ? async call => {
+              if (!supervisor.acceptsEvents) throw config.signal?.reason || new Error('Turn no longer active');
+              await context.onAdapterStart?.(call);
+              if (!supervisor.acceptsEvents) throw config.signal?.reason || new Error('Turn no longer active');
+            }
+          : undefined,
+      }
+    : { isCancelled: () => isCallerCancellation(config.signal, undefined) };
+
+  const operation = runWithToolsInternal(
+    messages,
+    toolRegistry,
+    {
+      ...config,
+      attemptTimeouts: configuredAttemptTimeouts,
+    },
+    guardedToolCall,
+    maxIterations,
+    getDeepSeek,
+    getGemini,
+    getOpenAI,
+    getAnthropic,
+    getQwen,
+    guardedChunk,
+    guardedContext,
+    getOllama,
+    getLmStudio,
+    getArk,
+    getXiaomi,
+    getKimi,
+    getGlm,
+    getRelay,
+    supervisor,
+    observedUsageRecords,
+  );
+
+  try {
+    return await operation;
+  } catch (error) {
+    if (isCallerCancellation(config.signal, context?.isCancelled)) {
+      return {
+        text: 'Task was cancelled by the user.',
+        toolCalls: [...priorToolRecords, ...observedRecords],
+        usageRecords: observedUsageRecords,
+      };
+    }
+    const checkpointRecords = [...priorToolRecords, ...observedRecords];
+    const primaryTask = String(context?.routedTaskText || '').trim()
+      || getPrimaryUserText(messages);
+    if (
+      checkpointRecords.length > 0
+      && hasPendingVerificationObligation(primaryTask, checkpointRecords)
+      && supervisor.remainingMs() > 0
+    ) {
+      // A provider failure after a confirmed side effect must not bypass the
+      // same evidence continuation used for a premature model completion. Run
+      // one bounded continuation through the user's unchanged provider/fallback
+      // configuration; the model still selects from the policy-filtered
+      // capability manifest and the confirmed mutation remains immutable prior
+      // evidence. If that continuation also fails, preserve the checkpoint.
+      try {
+        const retryDeclarations = toolRegistry.getToolDeclarationsForPolicy(
+          context?.toolPolicy,
+          { failClosedWithoutPolicy: context?.source === 'orchestrator' },
+        );
+        const missingVerification = buildMissingVerificationObligationPrompt(
+          primaryTask,
+          checkpointRecords,
+          toolRegistry,
+          new Set(retryDeclarations.map(declaration => declaration.function.name)),
+          context?.toolPolicy,
+        );
+        if (missingVerification) {
+          return await runWithToolsInternal(
+            [
+              ...messages,
+              {
+                role: 'system',
+                content: [
+                  'The preceding model-provider attempt failed before it could continue from the preserved execution receipts.',
+                  'Continue through the configured provider/fallback policy without replaying any verified mutation.',
+                  missingVerification,
+                ].join('\n'),
+              },
+            ],
+            toolRegistry,
+            { ...config, attemptTimeouts: configuredAttemptTimeouts },
+            guardedToolCall,
+            Math.max(maxIterations, 3),
+            getDeepSeek,
+            getGemini,
+            getOpenAI,
+            getAnthropic,
+            getQwen,
+            guardedChunk,
+            { ...(guardedContext || {}), priorToolRecords: checkpointRecords },
+            getOllama,
+            getLmStudio,
+            getArk,
+            getXiaomi,
+            getKimi,
+            getGlm,
+            getRelay,
+            supervisor,
+            observedUsageRecords,
+          );
+        }
+      } catch {
+        // The bounded provider/fallback continuation also failed. Fall through
+        // to the immutable checkpoint response below; never replay the action.
+      }
+    }
+    if (checkpointRecords.length > 0) {
+      recordWorkflowIfToolsUsed(checkpointRecords, messages, config);
+      return {
+        text: buildVerifiedToolCheckpoint(checkpointRecords, getPrimaryUserText(messages)),
+        toolCalls: checkpointRecords,
+        usageRecords: observedUsageRecords,
+      };
+    }
+    throw error;
+  } finally {
+    supervisor.dispose();
+  }
+}
+
+async function runWithToolsInternal(
+  messages: NormalizedMessage[],
+  toolRegistry: ToolRegistry,
+  config: LLMConfig,
+  onToolCall?: (record: ToolExecutionRecord) => void,
+  maxIterations: number = 5,
+  getDeepSeek?: () => any,
+  getGemini?: () => any,
+  getOpenAI?: () => any,
+  getAnthropic?: () => any,
+  getQwen?: () => any,
+  onStreamChunk?: StreamCallback,
+  context?: ToolContext,
+  getOllama?: () => any,
+  getLmStudio?: () => any,
+  getArk?: () => any,
+  getXiaomi?: () => any,
+  getKimi?: () => any,
+  getGlm?: () => any,
+  getRelay?: () => any,
+  modelBudget?: ToolLoopModelBudget,
+  usageRecordSink?: LLMUsageRecord[],
+): Promise<LLMResult> {
+  // Prior records are immutable evidence from an execution segment that has
+  // already crossed the canonical adapter boundary (most notably a consumed
+  // one-time confirmation). Seeding the loop makes generic duplicate and
+  // recovery logic aware of that real outcome without invoking it again.
+  const priorExecutionRecords = (context?.priorToolRecords || [])
+    .filter(record => Boolean(record?.name))
+    .slice(-40);
+  const executionLog: ToolExecutionRecord[] = [...priorExecutionRecords];
+  const usageRecords: LLMUsageRecord[] = usageRecordSink || [];
   const conversationHistory: NormalizedMessage[] = [
     {
       role: 'system',
@@ -555,7 +1190,21 @@ export async function runWithTools(
     ? 'auto'  // Keep as 'auto' for the dispatch logic below
     : config.provider;
 
-  const effectiveMaxIterations = Math.max(0, Math.min(maxIterations, context?.toolPolicy?.maxIterations ?? maxIterations));
+  // The routed iteration count is the ordinary planning budget. A model that
+  // tries to finish after a verified mutation can discover, at finalization
+  // time, that the action contract still lacks independent evidence. Keep the
+  // ceiling mutable so the single declarative verification replan below can
+  // reserve one turn to select an observe/test capability and one turn to
+  // synthesize the resulting receipt. This does not widen the tool manifest,
+  // confirmation policy, or any other execution authorization.
+  const routedMaxIterations = Math.max(0, Math.min(maxIterations, context?.toolPolicy?.maxIterations ?? maxIterations));
+  let effectiveMaxIterations = routedMaxIterations > 0
+    && hasPendingVerificationObligation(primaryTask, executionLog)
+    ? Math.max(routedMaxIterations, 3)
+    : routedMaxIterations;
+  const identicalRecoveryRetries = new Map<string, number>();
+  let recoveryReplans = 0;
+  let verificationObligationReplans = 0;
   for (let iteration = 0; iteration < effectiveMaxIterations; iteration++) {
     // Check for cancellation between iterations
     if (context?.isCancelled?.()) {
@@ -570,45 +1219,58 @@ export async function runWithTools(
       { failClosedWithoutPolicy: context?.source === 'orchestrator' },
     );
     const exposedToolNames = new Set(toolDeclarations.map(declaration => declaration.function.name));
-
     const llmStart = Date.now();
     const modelMessages = compactMessagesForModel(conversationHistory);
-    const response = onStreamChunk
-      ? await makeLLMCallStreaming(
-          modelMessages,
-          toolDeclarations,
-          config,
-          onStreamChunk,
-          getDeepSeek || (() => null),
-          getGemini || (() => null),
-          getOpenAI || (() => null),
-          getAnthropic || (() => null),
-          getQwen || (() => null),
-          getOllama || (() => null),
-          getLmStudio || (() => null),
-          getArk || (() => null),
-          getXiaomi || (() => null),
-          getKimi || (() => null),
-          getGlm || (() => null),
-          getRelay || (() => null),
-        )
-      : await makeLLMCall(
-          modelMessages,
-          toolDeclarations,
-          config,
-          getDeepSeek || (() => null),
-          getGemini || (() => null),
-          getOpenAI || (() => null),
-          getAnthropic || (() => null),
-          getQwen || (() => null),
-          getOllama || (() => null),
-          getLmStudio || (() => null),
-          getArk || (() => null),
-          getXiaomi || (() => null),
-          getKimi || (() => null),
-          getGlm || (() => null),
-          getRelay || (() => null),
-        );
+    const invokeModel = async (attempt: ModelBudgetAttempt) => {
+      const attemptConfig: LLMConfig = {
+        ...config,
+        signal: attempt.signal,
+        attemptTimeouts: attempt.attemptTimeouts,
+      };
+      return attempt.onChunk
+        ? makeLLMCallStreaming(
+            modelMessages,
+            toolDeclarations,
+            attemptConfig,
+            attempt.onChunk,
+            getDeepSeek || (() => null),
+            getGemini || (() => null),
+            getOpenAI || (() => null),
+            getAnthropic || (() => null),
+            getQwen || (() => null),
+            getOllama || (() => null),
+            getLmStudio || (() => null),
+            getArk || (() => null),
+            getXiaomi || (() => null),
+            getKimi || (() => null),
+            getGlm || (() => null),
+            getRelay || (() => null),
+          )
+        : makeLLMCall(
+            modelMessages,
+            toolDeclarations,
+            attemptConfig,
+            getDeepSeek || (() => null),
+            getGemini || (() => null),
+            getOpenAI || (() => null),
+            getAnthropic || (() => null),
+            getQwen || (() => null),
+            getOllama || (() => null),
+            getLmStudio || (() => null),
+            getArk || (() => null),
+            getXiaomi || (() => null),
+            getKimi || (() => null),
+            getGlm || (() => null),
+            getRelay || (() => null),
+          );
+    };
+    const response = modelBudget
+      ? await modelBudget.runModelAttempt(config.attemptTimeouts, onStreamChunk, invokeModel)
+      : await invokeModel({
+          signal: config.signal || new AbortController().signal,
+          attemptTimeouts: resolveModelAttemptTimeouts(config.attemptTimeouts),
+          onChunk: onStreamChunk,
+        });
     recordLatency('llm', Date.now() - llmStart);
 
     // A provider may ignore AbortSignal and resolve after the caller has
@@ -651,6 +1313,50 @@ export async function runWithTools(
         });
         continue;
       }
+      const missingVerification = buildMissingVerificationObligationPrompt(
+        primaryTask,
+        executionLog,
+        toolRegistry,
+        exposedToolNames,
+        context?.toolPolicy,
+      );
+      if (
+        missingVerification
+        && verificationObligationReplans < MAX_VERIFICATION_OBLIGATION_REPLANS
+      ) {
+        // A verification continuation needs two model turns after the
+        // premature completion attempt: one to choose/execute the verifier and
+        // one to write the evidence-grounded final response. This allowance is
+        // created only after the receipt gate proves it is necessary and is
+        // still bounded by MAX_VERIFICATION_OBLIGATION_REPLANS.
+        effectiveMaxIterations = Math.max(effectiveMaxIterations, iteration + 3);
+        conversationHistory.push({
+          role: 'assistant',
+          content: response.text || 'The requested action has a verified receipt, but its completion evidence is incomplete.',
+        });
+        conversationHistory.push({ role: 'system', content: missingVerification });
+        verificationObligationReplans += 1;
+        continue;
+      }
+      if (
+        hasUnverifiedToolOutcome(executionLog)
+        && exposedToolNames.size > 0
+        && recoveryReplans < MAX_TOOL_RECOVERY_REPLANS
+        && iteration + 1 < effectiveMaxIterations
+      ) {
+        conversationHistory.push({
+          role: 'assistant',
+          content: response.text || 'The previous tool path did not produce verified completion evidence.',
+        });
+        conversationHistory.push({
+          role: 'system',
+          content: buildToolRecoveryReplanPrompt(
+            'The previous tool path ended without verified terminal evidence, so a failure explanation is not a terminal result.',
+          ),
+        });
+        recoveryReplans += 1;
+        continue;
+      }
       recordWorkflowIfToolsUsed(executionLog, messages, config);
       const guarded = guardToolResponseIfNeeded({
         task: getPrimaryUserText(messages),
@@ -685,19 +1391,49 @@ export async function runWithTools(
         JSON.stringify(tc.arguments) === JSON.stringify(normalizedToolCalls[i].arguments)
       );
       if (sameTools && lastAssistantMsg.toolCalls.length === normalizedToolCalls.length) {
-        recordWorkflowIfToolsUsed(executionLog, messages, config);
-        const fallbackText = response.text || 'The same tools were called repeatedly. Breaking the loop to prevent infinite execution.';
-        const guarded = guardToolResponseIfNeeded({
-          task: getPrimaryUserText(messages),
-          response: fallbackText,
-          toolCalls: executionLog,
-          source: context?.source,
-        });
-        return {
-          text: guarded.text,
-          toolCalls: executionLog,
-          usageRecords,
-        };
+        const priorRecords = lastAssistantMsg.toolCalls.map(call => (
+          [...executionLog].reverse().find(record => record.id === call.id)
+        ));
+        const priorBatchVerified = priorRecords.length > 0
+          && priorRecords.every(isVerifiedToolSuccess);
+        const priorBatchRetryable = priorRecords.length > 0
+          && priorRecords.every(isRetryableToolOutcome);
+        const retrySignatures = normalizedToolCalls.map(call => toolCallSignature({
+          name: call.name,
+          arguments: call.arguments || {},
+        }));
+        const retryBudgetAvailable = retrySignatures.every(signature => (
+          (identicalRecoveryRetries.get(signature) || 0) < MAX_IDENTICAL_RECOVERY_RETRIES
+        ));
+
+        if (priorBatchRetryable && retryBudgetAvailable) {
+          for (const signature of retrySignatures) {
+            identicalRecoveryRetries.set(signature, (identicalRecoveryRetries.get(signature) || 0) + 1);
+          }
+        } else {
+          const reason = priorBatchVerified
+            ? 'The identical prior call already has verified terminal evidence. Skip duplicate execution and use that receipt to finish, or select only the still-missing verification step.'
+            : priorBatchRetryable
+              ? `The identical safe recovery retry budget (${MAX_IDENTICAL_RECOVERY_RETRIES}) is exhausted. Select a different declared fallback or verification capability.`
+              : 'The identical prior call was not a verified success and is not safe to retry automatically. Reconcile its outcome or select a different declared fallback/verification capability.';
+          if (
+            recoveryReplans < MAX_TOOL_RECOVERY_REPLANS
+            && iteration + 1 < effectiveMaxIterations
+          ) {
+            conversationHistory.push({
+              role: 'system',
+              content: buildToolRecoveryReplanPrompt(reason),
+            });
+            recoveryReplans += 1;
+            continue;
+          }
+          recordWorkflowIfToolsUsed(executionLog, messages, config);
+          return {
+            text: buildIterationLimitSummary(executionLog, getPrimaryUserText(messages)),
+            toolCalls: executionLog,
+            usageRecords,
+          };
+        }
       }
     }
 
@@ -724,6 +1460,27 @@ export async function runWithTools(
           content: 'This tool is not exposed for the current task. Use only the tools declared for this turn.',
           toolCallId: tc.id,
           name: tc.name,
+        });
+        continue;
+      }
+
+      const confirmedReplay = [...priorExecutionRecords].reverse().find(record => (
+        toolCallSignature(record) === toolCallSignature({
+          name: tc.name,
+          arguments: tc.arguments || {},
+        })
+      ));
+      if (shouldSuppressConfirmedReplay(confirmedReplay)) {
+        conversationHistory.push({
+          role: 'tool',
+          toolCallId: tc.id,
+          name: tc.name,
+          content: [
+            'Duplicate confirmed side effect was not executed.',
+            'The exact one-time confirmation was already consumed and its canonical receipt remains authoritative.',
+            'Use the existing receipt to finish, select only missing verification, or reconcile uncertain commit state before choosing a different safe recovery path.',
+            confirmedReplay ? formatToolRecordForModel(confirmedReplay) : '',
+          ].filter(Boolean).join('\n'),
         });
         continue;
       }
@@ -762,9 +1519,7 @@ export async function runWithTools(
 
       conversationHistory.push({
         role: 'tool',
-        content: record.error
-          ? `Error: ${record.error}`
-          : wrapToolOutputForModel(tc.name, compactToolResultForModel(tc.name, record.result)),
+        content: formatToolRecordForModel(record),
         toolCallId: tc.id,
         name: tc.name,
       });

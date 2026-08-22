@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::collections::HashSet;
-use std::io::Read;
+use std::io::{Read, Write};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -16,6 +16,11 @@ use tauri::{
 };
 #[cfg(not(test))]
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+const WINDOW_TOGGLE_SHORTCUT: &str = "Alt+Space";
+const COMMAND_CENTER_SHORTCUT: &str = "Ctrl+Shift+Enter";
+const COMMAND_CENTER_EVENT: &str = "lumi:open-command-center";
 
 struct SpawnConfig {
     exe: PathBuf,
@@ -259,6 +264,31 @@ pub struct NativePathInfo {
     pub is_directory: bool,
     pub size: u64,
     pub modified_ms: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeTextFileWriteResult {
+    pub success: bool,
+    pub status: String,
+    pub path: String,
+    pub bytes_written: u64,
+    pub encoding: String,
+    pub overwrite_policy: String,
+    pub overwritten: bool,
+    pub read_back_matched: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeTextFileReadResult {
+    pub success: bool,
+    pub path: String,
+    pub content: String,
+    pub bytes_read: u64,
+    pub encoding: String,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -573,6 +603,191 @@ fn path_info(target: String) -> NativePathInfo {
         modified_ms: metadata
             .as_ref()
             .and_then(|m| system_time_to_ms(m.modified())),
+    }
+}
+
+#[tauri::command]
+fn write_text_file(
+    path: String,
+    content: String,
+    encoding: Option<String>,
+    overwrite_policy: Option<String>,
+) -> NativeTextFileWriteResult {
+    const MAX_TEXT_FILE_BYTES: usize = 500 * 1024;
+
+    let target = resolve_user_path(&path);
+    let resolved_path = target.to_string_lossy().to_string();
+    let normalized_encoding = encoding
+        .unwrap_or_else(|| "utf-8".to_string())
+        .trim()
+        .to_ascii_lowercase();
+    let normalized_policy = overwrite_policy
+        .unwrap_or_else(|| "fail_if_exists".to_string())
+        .trim()
+        .to_ascii_lowercase();
+
+    let failure = |message: String| NativeTextFileWriteResult {
+        success: false,
+        status: "failed".to_string(),
+        path: resolved_path.clone(),
+        bytes_written: 0,
+        encoding: normalized_encoding.clone(),
+        overwrite_policy: normalized_policy.clone(),
+        overwritten: false,
+        read_back_matched: false,
+        error: Some(message),
+    };
+
+    if path.trim().is_empty() {
+        return failure("A non-empty text file path is required.".to_string());
+    }
+    if target.file_name().is_none() {
+        return failure("The target must be an exact file path, not a root directory.".to_string());
+    }
+    if target.is_dir() {
+        return failure("The target is a directory, not a text file.".to_string());
+    }
+
+    let bytes = match normalized_encoding.as_str() {
+        "utf-8" | "utf8" => content.into_bytes(),
+        "utf-8-bom" | "utf8-bom" => {
+            let mut value = Vec::with_capacity(content.len() + 3);
+            value.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+            value.extend_from_slice(content.as_bytes());
+            value
+        }
+        _ => {
+            return failure(
+                "Unsupported encoding. Use utf-8 or utf-8-bom for portable text files.".to_string(),
+            );
+        }
+    };
+    if bytes.len() > MAX_TEXT_FILE_BYTES {
+        return failure(format!(
+            "Text content is too large ({} bytes). Maximum is {} bytes.",
+            bytes.len(),
+            MAX_TEXT_FILE_BYTES
+        ));
+    }
+
+    let replace_existing = match normalized_policy.as_str() {
+        "fail_if_exists" => false,
+        "replace" => true,
+        _ => {
+            return failure(
+                "Unsupported overwrite policy. Use fail_if_exists or replace.".to_string(),
+            );
+        }
+    };
+    let existed_before = target.exists();
+    let Some(parent) = target.parent() else {
+        return failure("The target has no parent directory.".to_string());
+    };
+    if !parent.is_dir() {
+        return failure(format!(
+            "Parent directory does not exist: {}",
+            parent.to_string_lossy()
+        ));
+    }
+
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true);
+    if replace_existing {
+        options.create(true).truncate(true);
+    } else {
+        options.create_new(true);
+    }
+    let mut file = match options.open(&target) {
+        Ok(value) => value,
+        Err(error) => return failure(error.to_string()),
+    };
+    if let Err(error) = file.write_all(&bytes).and_then(|_| file.sync_all()) {
+        return failure(error.to_string());
+    }
+    drop(file);
+
+    let read_back_matched = std::fs::read(&target)
+        .map(|written| written == bytes)
+        .unwrap_or(false);
+    NativeTextFileWriteResult {
+        success: read_back_matched,
+        status: if read_back_matched {
+            "verified"
+        } else {
+            "unverified"
+        }
+        .to_string(),
+        path: resolved_path,
+        bytes_written: bytes.len() as u64,
+        encoding: if normalized_encoding == "utf8" {
+            "utf-8".to_string()
+        } else if normalized_encoding == "utf8-bom" {
+            "utf-8-bom".to_string()
+        } else {
+            normalized_encoding
+        },
+        overwrite_policy: normalized_policy,
+        overwritten: existed_before && replace_existing,
+        read_back_matched,
+        error: if read_back_matched {
+            None
+        } else {
+            Some("The native read-back did not match the requested bytes.".to_string())
+        },
+    }
+}
+
+#[tauri::command]
+fn read_text_file(path: String) -> NativeTextFileReadResult {
+    const MAX_TEXT_FILE_BYTES: u64 = 100 * 1024;
+
+    let target = resolve_user_path(&path);
+    let resolved_path = target.to_string_lossy().to_string();
+    let failure = |message: String| NativeTextFileReadResult {
+        success: false,
+        path: resolved_path.clone(),
+        content: String::new(),
+        bytes_read: 0,
+        encoding: "utf-8".to_string(),
+        error: Some(message),
+    };
+    if path.trim().is_empty() {
+        return failure("A non-empty text file path is required.".to_string());
+    }
+    let metadata = match std::fs::metadata(&target) {
+        Ok(value) => value,
+        Err(error) => return failure(error.to_string()),
+    };
+    if !metadata.is_file() {
+        return failure("The target is not a file.".to_string());
+    }
+    if metadata.len() > MAX_TEXT_FILE_BYTES {
+        return failure(format!(
+            "Text file is too large ({} bytes). Maximum is {} bytes.",
+            metadata.len(),
+            MAX_TEXT_FILE_BYTES
+        ));
+    }
+    let bytes = match std::fs::read(&target) {
+        Ok(value) => value,
+        Err(error) => return failure(error.to_string()),
+    };
+    let (text_bytes, encoding) = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        (&bytes[3..], "utf-8-bom")
+    } else {
+        (bytes.as_slice(), "utf-8")
+    };
+    let content = match std::str::from_utf8(text_bytes) {
+        Ok(value) => value.to_string(),
+        Err(_) => return failure("The native file is not valid UTF-8 text.".to_string()),
+    };
+    NativeTextFileReadResult {
+        success: true,
+        path: resolved_path,
+        content,
+        bytes_read: bytes.len() as u64,
+        encoding: encoding.to_string(),
+        error: None,
     }
 }
 
@@ -4956,7 +5171,11 @@ pub fn run() {
             if !started_in_background
                 && matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
             {
-                let _ = webview.window().show();
+                let window = webview.window();
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+                let _ = webview.set_focus();
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -4966,6 +5185,8 @@ pub fn run() {
             list_home_files,
             list_directory,
             path_info,
+            write_text_file,
+            read_text_file,
             list_native_apps,
             create_directory,
             rename_item,
@@ -5191,24 +5412,48 @@ pub fn run() {
                 });
             }
 
-            // Register Alt+Space global shortcut (hide/show window)
-            use tauri_plugin_global_shortcut::GlobalShortcutExt;
+            // Register the native window and command-center shortcuts. The
+            // browser key handler remains a fallback when the webview is
+            // already focused; this path also works while focus is elsewhere.
             let window = app.get_webview_window("main").unwrap();
             let reg = app.global_shortcut();
-            let _ = reg.on_shortcut("Alt+Space", move |app, _shortcut, _event| {
-                let wallpaper_enabled = app
-                    .state::<Mutex<WallpaperState>>()
-                    .lock()
-                    .map(|state| state.enabled)
-                    .unwrap_or(false);
-                if wallpaper_enabled {
+            if let Err(error) =
+                reg.on_shortcut(WINDOW_TOGGLE_SHORTCUT, move |app, _shortcut, _event| {
+                    let wallpaper_enabled = app
+                        .state::<Mutex<WallpaperState>>()
+                        .lock()
+                        .map(|state| state.enabled)
+                        .unwrap_or(false);
+                    if wallpaper_enabled {
+                        let _ = show_main_window_impl(app);
+                    } else if window.is_visible().unwrap_or(true) {
+                        let _ = window.hide();
+                    } else {
+                        let _ = show_main_window_impl(app);
+                    }
+                })
+            {
+                eprintln!(
+                    "[LumiOS] Failed to register {WINDOW_TOGGLE_SHORTCUT} global shortcut: {error}"
+                );
+            }
+            if let Err(error) =
+                reg.on_shortcut(COMMAND_CENTER_SHORTCUT, move |app, _shortcut, event| {
+                    if event.state != tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        return;
+                    }
                     let _ = show_main_window_impl(app);
-                } else if window.is_visible().unwrap_or(true) {
-                    let _ = window.hide();
-                } else {
-                    let _ = show_main_window_impl(app);
-                }
-            });
+                    if let Some(webview_window) = app.get_webview_window("main") {
+                        let webview: &tauri::Webview<_> = webview_window.as_ref();
+                        let _ = webview.set_focus();
+                    }
+                    let _ = app.emit(COMMAND_CENTER_EVENT, ());
+                })
+            {
+                eprintln!(
+                    "[LumiOS] Failed to register {COMMAND_CENTER_SHORTCUT} global shortcut: {error}"
+                );
+            }
 
             Ok(())
         })
@@ -5239,6 +5484,9 @@ pub fn run() {
                 let _ = show_main_window_impl(app);
             }
             tauri::RunEvent::Exit => {
+                if let Err(error) = app.global_shortcut().unregister_all() {
+                    eprintln!("[LumiOS] Failed to unregister global shortcuts: {error}");
+                }
                 let state = app.state::<Mutex<BackendProcesses>>();
                 let mut procs = state.lock().unwrap();
                 if let Some(child) = procs.node.as_mut() {

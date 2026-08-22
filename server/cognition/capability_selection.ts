@@ -1,4 +1,5 @@
 import type { LumiExecutionDecision } from './execution_decision';
+import type { ToolPolicy } from '../personality/types';
 import type { LumiTurnDispatch } from './turn_dispatch';
 import {
   buildActionContract,
@@ -61,6 +62,30 @@ export interface LumiCapabilitySelection {
   preferredTools: string[];
   promptOverlay: string;
   readOnlyPattern?: RankedReadOnlyToolPattern;
+}
+
+/**
+ * Build the authorization ceiling exposed to the model. Semantic routing may
+ * rank a small preferred set, but it must not silently turn that ranking into
+ * an allow-list. Hard mode/personality denies, confirmation requirements, and
+ * iteration caps are preserved and can only narrow this manifest.
+ */
+export function buildModelCapabilityPolicy(
+  execution: LumiExecutionDecision,
+): ToolPolicy {
+  const base = execution.baseToolPolicy;
+  const forbiddenTools = unique(base.forbiddenTools || []);
+  const forbidden = new Set(forbiddenTools);
+  const blockAll = forbidden.has('*') || execution.allowToolUse === false;
+  return {
+    ...base,
+    allowedTools: blockAll
+      ? []
+      : (base.allowedTools || []).filter(name => name === '*' || !forbidden.has(name)),
+    forbiddenTools: blockAll ? unique([...forbiddenTools, '*']) : forbiddenTools,
+    requireConfirmation: unique(base.requireConfirmation || []).filter(name => !forbidden.has(name)),
+    maxIterations: blockAll ? 0 : (base.maxIterations ?? execution.maxIterations),
+  };
 }
 
 function unique(values: string[]): string[] {
@@ -197,12 +222,17 @@ function selectLane(input: LumiCapabilitySelectionInput): Pick<LumiCapabilitySel
     };
   }
 
-  if (input.dispatch.boundary === 'skill_workflow' || flow.specialWorkflow) {
-    const workflow = flow.specialWorkflow;
+  if (input.dispatch.boundary === 'skill_workflow' || flow.workflowHint || flow.specialWorkflow) {
+    const workflow = flow.workflowHint || flow.specialWorkflow;
     return {
       lane: 'skill_workflow',
       primary: workflow ? `${workflow.skillId}/${workflow.id}` : 'matched skill workflow',
-      reasons: [...reasons, 'a learned repeatable workflow matched this turn'],
+      reasons: [
+        ...reasons,
+        flow.workflowRouting === 'model_hint'
+          ? 'a learned workflow matched as an advisory capability candidate; the model still owns respond-versus-act'
+          : 'an isolated learned workflow adapter matched this turn',
+      ],
     };
   }
 
@@ -355,9 +385,9 @@ function laneRule(selection: Pick<LumiCapabilitySelection, 'lane'>, text = ''): 
     case 'conversation':
       return 'Answer as Lumi. Do not invent work, tool calls, or hidden task progress.';
     case 'client_surface':
-      return 'Stay on Lumi client state/action. Do not drift into desktop, browser, files, or task execution.';
+      return 'Treat Lumi client state/action as the strongest capability candidate. The hint does not authorize or forbid tools; choose from the hard-policy manifest and avoid unrelated work.';
     case 'self_repair':
-      return 'Inspect state first, try one safe recovery when possible, verify, then report plainly.';
+      return 'Prefer state inspection, one safe recovery when appropriate, and verification. The hint does not narrow the hard-policy manifest.';
     case 'capability_learning':
       return 'Inspect existing skills/adapters/tools first; reuse or stabilize before adding anything new. Do not hard-code an industry demo into Lumi core.';
     case 'skill_workflow':
@@ -409,18 +439,17 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
   const actionContract = buildActionContract(routeText);
   const visibleAutoCad = selected.lane === 'design_cad' && requiresVisibleAutoCadExecution(routeText);
   const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(routeText);
-  const effectiveAllowed = new Set(
-    (input.execution.toolPolicy.allowedTools || []).filter(name => name && name !== '*'),
-  );
+  const modelPolicy = buildModelCapabilityPolicy(input.execution);
+  const hardAllowed = new Set((modelPolicy.allowedTools || []).filter(Boolean));
+  const hardWildcard = hardAllowed.has('*');
+  const isHardAuthorized = (name: string) => hardWildcard || hardAllowed.has(name);
   const contractPreferredTools = actionContract.applies
-    ? actionContract.preferredTools.filter(name => (
-        effectiveAllowed.has(name)
-      ))
+    ? actionContract.preferredTools.filter(isHardAuthorized)
     : [];
   const basePreferredTools = unique([
     ...availablePreferredTools(input, selected.lane),
-    ...(input.dispatch.flow.specialWorkflow?.requiredTools || [])
-      .filter(name => effectiveAllowed.size === 0 || effectiveAllowed.has(name)),
+    ...((input.dispatch.flow.workflowHint || input.dispatch.flow.specialWorkflow)?.requiredTools || [])
+      .filter(isHardAuthorized),
     ...contractPreferredTools,
   ]).filter(name => (
     (!visibleAutoCad || ![
@@ -461,9 +490,9 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
     ? extractExplicitArtifactTextRequirements(routeText)
     : [];
   const promptOverlay = [
-    '## Lumi Capability Selection',
-    `Selected lane: ${selected.lane}.`,
-    `Primary capability: ${selected.primary}.`,
+    '## Lumi Capability Selection (advisory)',
+    `Suggested lane: ${selected.lane}.`,
+    `Suggested primary capability: ${selected.primary}.`,
     `Why: ${unique(selected.reasons).join('; ')}.`,
     routeCategories.length ? `Tool route categories: ${routeCategories.join(', ')}.` : 'Tool route categories: none.',
     preferredTools.length ? `Preferred tools for this lane: ${preferredTools.join(', ')}.` : 'Preferred tools for this lane: none.',
@@ -475,7 +504,8 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
     exactArtifactText.length
       ? `Exact artifact text requirements: ${JSON.stringify(exactArtifactText)}. Preserve every string exactly, then verify the written artifact with work_product_verify using artifacts[].requiredText before claiming completion. If verification fails, repair the artifact and verify again.`
       : '',
-    'This lane is an execution bias, not a fixed script. If the newest user wording contradicts it, follow the newest wording and update task state when work is persistent.',
+    'The model owns the final respond-versus-act decision over the declared capability manifest. This lane, normalized intent, workflow match, and preferred-tool order are hints only; they do not authorize a tool or require execution.',
+    'If the newest user wording contradicts a hint, follow the newest wording and update task state when work is persistent.',
   ].filter(Boolean).join('\n');
 
   return {

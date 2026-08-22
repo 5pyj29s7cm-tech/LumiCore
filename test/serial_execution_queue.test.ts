@@ -15,6 +15,21 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe('SerialExecutionQueue', () => {
+  it('cancels only the durable target while a later request remains queued', async () => {
+    const queue = new SerialExecutionQueue();
+    const active = queue.reserve('scope', 'A');
+    expect(await active.waitForTurn()).toBe(true);
+    const queued = queue.reserve('scope', 'B');
+
+    const cancellation = queue.cancelRequest('scope', 'A');
+    expect(active.signal.aborted).toBe(true);
+    expect(queued.signal.aborted).toBe(false);
+    active.release();
+    await expect(cancellation).resolves.toBe(true);
+    expect(await queued.waitForTurn()).toBe(true);
+    queued.release();
+  });
+
   it('runs three rapidly queued turns in strict FIFO order', async () => {
     const queue = new SerialExecutionQueue();
     const gates = [deferred(), deferred(), deferred()];

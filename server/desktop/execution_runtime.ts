@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import type { ToolExecutionRecord } from '../tools/types';
+import type { CapabilityManifestEntry, ToolExecutionRecord } from '../tools/types';
 import {
   recordDesktopAuthorizationBlock,
   recordDesktopExecutionReceipt,
@@ -97,8 +97,78 @@ function fingerprintInvalidatesVisualPlan(before: WindowFingerprint | null, afte
   return Boolean(before.displayId && after.displayId && before.displayId !== after.displayId);
 }
 
-function stepForTool(plan: DesktopExecutionPlan, toolName: string): DesktopActionStep | undefined {
-  return plan.steps.find(step => step.allowedTools.includes(toolName));
+type RuntimeCapabilityDescriptor = Pick<
+  CapabilityManifestEntry,
+  'lane' | 'operation' | 'sideEffects'
+>;
+
+function isSafeObservationCapability(capability?: RuntimeCapabilityDescriptor): boolean {
+  return Boolean(
+    capability
+    && (capability.operation === 'observe' || capability.operation === 'test')
+    && capability.sideEffects.every(effect => (
+      effect.type === 'none'
+      || effect.type === 'local_read'
+      || effect.type === 'network_read'
+    )),
+  );
+}
+
+function isExternalCommitCapability(capability?: RuntimeCapabilityDescriptor): boolean {
+  return Boolean(capability?.sideEffects.some(effect => (
+    effect.type === 'external_state_change'
+    || effect.type === 'external_communication'
+  )));
+}
+
+function isDesktopRuntimeCapability(
+  toolName: string,
+  capability?: RuntimeCapabilityDescriptor,
+): boolean {
+  if (CONTROL_TOOL_RE.test(toolName)) return true;
+  if (!capability) return false;
+  return capability.sideEffects.some(effect => effect.type === 'desktop_control')
+    || (
+      ['client', 'desktop', 'cad', 'messaging', 'office'].includes(capability.lane)
+      && !isSafeObservationCapability(capability)
+    );
+}
+
+function isFocusOrOpenCapability(toolName: string): boolean {
+  const segments = toolName.toLocaleLowerCase().split('_').filter(Boolean);
+  return segments.includes('open')
+    || segments.includes('focus')
+    || segments.join('_') === 'desktop_show_lumi_window'
+    || segments.join('_') === 'desktop_window_control';
+}
+
+/**
+ * The compiled plan's tool list is a planner hint, not an authority list. A
+ * newer model may choose a different registered adapter with the same runtime
+ * semantics. Map that adapter onto the existing safety state machine without
+ * expanding registry permissions or relaxing observation/identity gates.
+ */
+function stepForTool(
+  plan: DesktopExecutionPlan,
+  toolName: string,
+  capability?: RuntimeCapabilityDescriptor,
+): DesktopActionStep | undefined {
+  const planned = plan.steps.find(step => step.allowedTools.includes(toolName));
+  if (planned) return planned;
+  if (!isDesktopRuntimeCapability(toolName, capability)) return undefined;
+  if (isSafeObservationCapability(capability)) {
+    return plan.steps.find(step => step.operation === 'observe')
+      || plan.steps.find(step => step.operation === 'verify');
+  }
+  if (isFocusOrOpenCapability(toolName)) {
+    return plan.steps.find(step => step.operation === 'focus_or_open');
+  }
+  if (isExternalCommitCapability(capability)) {
+    return plan.steps.find(step => step.operation === 'commit')
+      || plan.steps.find(step => step.operation === 'act');
+  }
+  return plan.steps.find(step => step.operation === 'act')
+    || plan.steps.find(step => step.operation === 'commit');
 }
 
 function isObservationStep(step: DesktopActionStep | undefined): boolean {
@@ -126,15 +196,22 @@ export class DesktopExecutionTracker {
     return { allowed: false, reason };
   }
 
-  authorize(toolName: string): DesktopRuntimeAuthorization {
-    const step = stepForTool(this.plan, toolName);
+  authorize(
+    toolName: string,
+    capability?: RuntimeCapabilityDescriptor,
+  ): DesktopRuntimeAuthorization {
+    const explicitlyPlanned = this.plan.steps.some(step => step.allowedTools.includes(toolName));
+    const step = stepForTool(this.plan, toolName, capability);
     if (!step) {
-      return CONTROL_TOOL_RE.test(toolName)
-        ? this.block(`Desktop execution plan did not authorize control tool '${toolName}'.`)
-        : { allowed: true, reason: 'not_a_desktop_control_tool' };
+      return { allowed: true, reason: 'not_a_desktop_control_tool' };
     }
     if (isObservationStep(step) || step.operation === 'focus_or_open') {
-      return { allowed: true, reason: 'desktop_plan_step_authorized' };
+      return {
+        allowed: true,
+        reason: explicitlyPlanned
+          ? 'desktop_plan_step_authorized'
+          : 'desktop_plan_membership_advisory',
+      };
     }
     if (this.replanRequiredReason) {
       return this.block(this.replanRequiredReason);
@@ -146,14 +223,22 @@ export class DesktopExecutionTracker {
     if (!fresh || this.observationConsumed || !this.lastFingerprint) {
       return this.block('Desktop action requires a fresh, unused foreground-window fingerprint.');
     }
-    if (step.operation === 'commit' && this.lastIdentityAssessment?.certification !== 'certified') {
+    if (
+      (step.operation === 'commit' || isExternalCommitCapability(capability))
+      && this.lastIdentityAssessment?.certification !== 'certified'
+    ) {
       return this.block('External desktop commit requires a fully certified application identity observation.');
     }
-    return { allowed: true, reason: 'desktop_plan_step_authorized' };
+    return {
+      allowed: true,
+      reason: explicitlyPlanned
+        ? 'desktop_plan_step_authorized'
+        : 'desktop_plan_membership_advisory',
+    };
   }
 
   record(record: ToolExecutionRecord): void {
-    const step = stepForTool(this.plan, record.name);
+    const step = stepForTool(this.plan, record.name, record.capability);
     if (!step) return;
     const verified = !record.error && record.terminalVerification?.status === 'verified';
     const evidence = [`tool:${record.name}`, `result_sha256:${digest(record.result || record.error || '')}`];

@@ -1915,6 +1915,7 @@ async function processVoiceInput(
     'desktop_list_files',
     'desktop_list_apps',
     'desktop_path_info',
+    'desktop_write_text_file',
     'desktop_open',
     'desktop_show_lumi_window',
     'desktop_run_command',

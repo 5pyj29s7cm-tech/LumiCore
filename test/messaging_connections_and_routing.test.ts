@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import sqlite3 from 'sqlite3';
 import { makeApp } from './helpers';
 import type { IncomingMessage } from '../server/messaging/types';
+import { buildModelCapabilityPolicy } from '../server/cognition/capability_selection';
 
 let bindings: typeof import('../server/messaging/bindings');
 let delivery: typeof import('../server/messaging/delivery_ledger');
@@ -444,8 +445,14 @@ describe('messaging long connections and organization routing', () => {
       operationMode: 'assistant',
     });
     expect(greeting.dispatch.boundary).toBe('conversation');
-    expect(greeting.execution.allowToolUse).toBe(false);
-    expect(greeting.execution.toolPolicy.forbiddenTools).toContain('*');
+    expect(greeting.execution.allowToolUse).toBe(true);
+    const greetingModelPolicy = buildModelCapabilityPolicy(greeting.execution);
+    expect(greetingModelPolicy.forbiddenTools).not.toContain('*');
+    expect(greetingModelPolicy.allowedTools).toEqual(expect.arrayContaining([
+      'client_get_state',
+      'desktop_open',
+      'wechat_send_message',
+    ]));
 
     const knowledgeFileCapabilityQuestion = routes.buildRemoteLumiExecutionPlan({
       ...base,
@@ -453,8 +460,13 @@ describe('messaging long connections and organization routing', () => {
       operationMode: 'assistant',
     });
     expect(knowledgeFileCapabilityQuestion.dispatch.boundary).toBe('conversation');
-    expect(knowledgeFileCapabilityQuestion.execution.allowToolUse).toBe(false);
-    expect(knowledgeFileCapabilityQuestion.execution.toolPolicy.forbiddenTools).toContain('*');
+    expect(knowledgeFileCapabilityQuestion.execution.allowToolUse).toBe(true);
+    const knowledgeModelPolicy = buildModelCapabilityPolicy(knowledgeFileCapabilityQuestion.execution);
+    expect(knowledgeModelPolicy.forbiddenTools).not.toContain('*');
+    expect(knowledgeModelPolicy.allowedTools).toEqual(expect.arrayContaining([
+      'read_file',
+      'wechat_send_file',
+    ]));
 
     const chatAction = routes.buildRemoteLumiExecutionPlan({
       ...base,
@@ -462,10 +474,16 @@ describe('messaging long connections and organization routing', () => {
       operationMode: 'chat',
     });
     expect(chatAction.dispatch.flow.autoPromoteToAssistant).toBe(true);
-    expect(chatAction.dispatch.flow.effectiveOperationMode).toBe('assistant');
+    expect(chatAction.dispatch.flow.effectiveOperationMode).toBe('chat');
     expect(chatAction.execution.allowToolUse).toBe(true);
     expect(chatAction.execution.maxIterations).toBeGreaterThan(3);
-    expect(chatAction.execution.toolPolicy.allowedTools).toContain('desktop_open');
+    expect(chatAction.execution.toolRoute?.categories).toContain('messaging');
+    expect(buildModelCapabilityPolicy(chatAction.execution).allowedTools).toEqual(expect.arrayContaining([
+      'client_get_state',
+      'client_action',
+      'desktop_open',
+    ]));
+    expect(buildModelCapabilityPolicy(chatAction.execution).forbiddenTools).toContain('wechat_send_message');
 
     const clientCheck = routes.buildRemoteLumiExecutionPlan({
       ...base,
@@ -473,15 +491,14 @@ describe('messaging long connections and organization routing', () => {
       operationMode: 'assistant',
     });
     expect(clientCheck.dispatch.flow.selfRepairTurn).toBe(true);
-    expect(clientCheck.execution.toolPolicy.allowedTools).toEqual([
+    const clientModelPolicy = buildModelCapabilityPolicy(clientCheck.execution);
+    expect(clientModelPolicy.allowedTools).toEqual(expect.arrayContaining([
       'client_get_state',
       'client_health_check',
-    ]);
-    expect(clientCheck.execution.toolPolicy.allowedTools).not.toContain('*');
-    expect(clientCheck.execution.toolPolicy.allowedTools).not.toContain('open_runtime_log');
-    expect(clientCheck.execution.toolPolicy.allowedTools).not.toContain('write_file');
-    expect(clientCheck.execution.toolPolicy.allowedTools).not.toContain('desktop_open');
-    expect(clientCheck.execution.maxIterations).toBe(3);
+      'desktop_open',
+    ]));
+    expect(clientModelPolicy.forbiddenTools).not.toContain('*');
+    expect(clientModelPolicy.maxIterations).toBeGreaterThan(3);
 
     const modeSwitch = routes.buildRemoteLumiExecutionPlan({
       ...base,
@@ -489,7 +506,13 @@ describe('messaging long connections and organization routing', () => {
       operationMode: 'assistant',
     });
     expect(modeSwitch.dispatch.flow.requestedMode).toBe('autonomous');
-    expect(modeSwitch.execution.toolPolicy.allowedTools).toEqual(['client_get_state', 'client_action']);
+    expect(modeSwitch.dispatch.flow.effectiveOperationMode).toBe('assistant');
+    const modeSwitchModelPolicy = buildModelCapabilityPolicy(modeSwitch.execution);
+    expect(modeSwitchModelPolicy.allowedTools).toEqual(expect.arrayContaining([
+      'client_get_state',
+      'client_action',
+      'desktop_open',
+    ]));
   });
 
   it('keeps unbound remote senders off private tools and organization viewers off write tools', () => {

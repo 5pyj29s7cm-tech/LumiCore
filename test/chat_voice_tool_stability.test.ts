@@ -155,12 +155,26 @@ describe('chat and voice tool-call stability', () => {
     }
   });
 
+  it('returns consumed confirmation receipts to the shared model loop in both text execution surfaces', () => {
+    const root = process.cwd();
+    const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
+    const task = readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8');
+
+    for (const source of [chat, task]) {
+      expect(source).toContain('buildConfirmedStepContinuationMessages');
+      expect(source).toMatch(/priorToolRecords:\s*\[(?:confirmedRecord|confirmationRecord)\]/);
+      expect(source).toContain('confirmedStepNeedsContinuation(');
+    }
+    expect(chat).toContain('llmWasCalled: confirmationLlmWasCalled');
+    expect(chat).toContain('for (const usage of continuation.usageRecords)');
+  });
+
   it('routes short foreground WeChat send follow-ups into the task chain', () => {
     expect(shouldChainTask('\u76f4\u63a5\u53d1\u665a\u5b89')).toBe(true);
     expect(shouldChainTask('\u5fae\u4fe1\u5e2e\u6211\u7f16\u8f91\u4e00\u6761\u665a\u5b89\u53d1\u7ed9\u963f\u9646')).toBe(true);
   });
 
-  it('keeps foreground WeChat sends on the shared deterministic execution path', () => {
+  it('keeps foreground WeChat parsing advisory while main chat remains model-owned', () => {
     const args = buildForegroundWeChatSendArgs('\u6253\u5f00\u5fae\u4fe1\u7ed9\u963f\u9646\u53d1\u665a\u5b89');
     expect(args).toMatchObject({
       contact: '\u963f\u9646',
@@ -170,11 +184,14 @@ describe('chat and voice tool-call stability', () => {
     expect(String(args?.message || '')).toContain('\u665a\u5b89');
 
     const chat = readFileSync(path.join(process.cwd(), 'server/socket/chat.ts'), 'utf8');
-    expect(chat).toContain('buildForegroundWeChatSendArgs');
-    expect(chat).toContain('executeForegroundMessagingAction');
-    expect(chat).toContain("action: 'send'");
+    expect(chat).not.toContain('buildForegroundWeChatSendArgs');
+    expect(chat).not.toContain('executeForegroundMessagingAction');
+    expect(chat).not.toContain('shouldRunLegacyDirectExecution() && !responseText');
+    expect(chat).toContain('toolPolicy: modelCapabilityPolicy');
+    expect(chat).toContain('## Advisory execution candidates');
     expect(chat).toContain('buildRecentFailureExplanation');
-    expect(chat).toContain('recent_failure_explanation');
+    expect(chat).toContain('## Grounded current-turn evidence');
+    expect(chat).not.toContain('recent_failure_explanation');
   });
 
   it('extracts foreground message recipients and content without hard-coded samples', () => {
@@ -248,7 +265,8 @@ describe('chat and voice tool-call stability', () => {
     });
 
     const chat = readFileSync(path.join(process.cwd(), 'server/socket/chat.ts'), 'utf8');
-    expect(chat).toContain('buildForegroundWeChatReadArgs');
-    expect(chat).toContain("const toolName = 'wechat_read_recent_chat'");
+    expect(chat).not.toContain('buildForegroundWeChatReadArgs');
+    expect(chat).not.toContain("const toolName = 'wechat_read_recent_chat'");
+    expect(chat).toContain('toolPolicy: modelCapabilityPolicy');
   });
 });

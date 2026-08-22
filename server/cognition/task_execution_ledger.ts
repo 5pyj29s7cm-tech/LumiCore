@@ -541,26 +541,40 @@ export function taskCompletionFromReceipts(
 }
 
 /**
- * A confirmed action may be only one boundary inside a larger task. Continue
- * automatically when the exact confirmed receipt succeeded but the original
- * action contract is still incomplete.
+ * Confirmation consumes one exact safety boundary; it does not adjudicate the
+ * user's whole natural-language goal. Every canonical confirmation record is
+ * therefore returned to the shared model/tool loop, including a failed or
+ * unverified record. The loop and finalizer can then use the receipt as
+ * evidence, continue missing work, or recover without rediscovering/replaying
+ * the already-confirmed side effect.
+ *
+ * `goal` remains in the signature for compatibility with older callers. It is
+ * deliberately not classified here: deterministic action-contract matching
+ * must never turn one confirmed tool receipt into a terminal task decision.
  */
 export function confirmedStepNeedsContinuation(
   goal: string,
   records: ToolExecutionRecord[] = [],
 ): boolean {
-  if (records.length === 0 || !toolRecordSucceeded(records[records.length - 1])) return false;
-  return !taskCompletionFromReceipts(goal, recordsToTaskReceipts(records)).complete;
+  void goal;
+  return records.some(record => Boolean(compact(record?.name, 160)));
 }
 
 export function buildConfirmedStepContinuationNote(
   record: ToolExecutionRecord,
 ): string {
+  const executionOutcome = toolRecordVerifiedForCompletion(record)
+    ? 'verified_for_its_declared_capability'
+    : toolRecordSucceeded(record)
+      ? 'handler_succeeded_but_not_terminally_verified'
+      : 'failed_blocked_or_unverified';
   return [
-    'The user-confirmed step below already executed successfully in this turn.',
-    `Tool: ${compact(record.name, 160)}`,
-    `Arguments: ${compact(JSON.stringify(record.arguments || {}), 1200)}`,
-    `Result: ${compact(record.result, 1600)}`,
-    'Do not repeat this step. Continue the original task until its acceptance criteria are complete, a real blocker is proven, or another confirmation boundary is reached.',
+    'Confirmation continuation policy:',
+    'The exact one-time confirmation has already been consumed. The preceding assistant tool call and tool-result message are the canonical execution record for that step.',
+    `Confirmed tool: ${compact(record.name, 160)}`,
+    `Recorded outcome: ${executionOutcome}`,
+    'Judge the whole original user goal from its natural-language requirements and the available receipts. A receipt proves only the capability and scope it actually verifies; it never proves unrelated acceptance criteria.',
+    'Do not blindly replay the same state-changing call. If it succeeded, continue only the still-missing work or verification. If it failed or is uncertain, use the shared recovery path: reconcile uncertain commit state first, then choose a declared fallback or a bounded safe retry only when the evidence and active policy make that safe.',
+    'Finish only when every requested acceptance condition has evidence, a real blocker is established, or a new confirmation boundary is reached.',
   ].join('\n');
 }

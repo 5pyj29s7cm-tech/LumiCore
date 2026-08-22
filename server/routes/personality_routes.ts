@@ -160,6 +160,7 @@ export function mountPersonalityRoutes(router: Router, _jwtSecret: string, llm: 
         llm.getDeepSeek, llm.getGemini, llm.getOpenAI, llm.getAnthropic, llm.getQwen,
         evolutionConfig,
         { domain: scope.orgId ? 'work' : 'personal', orgId: scope.orgId || '' },
+        { forceSynthesis: true },
       );
 
       if (!step) {

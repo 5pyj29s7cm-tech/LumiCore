@@ -2,6 +2,7 @@ import { readDB, writeDB } from '../../db_layer';
 import { estimateTokenCount } from '../llm/providers';
 import {
   buildConversationActionContinuationState,
+  classifyToolRecordTaskDurability,
   classifyRecentActionFollowupIntent,
   formatConversationActionTaskStatus,
   isUserObservedTaskCompletion,
@@ -173,6 +174,10 @@ export interface MessageRecord {
   routeSequence?: number;
   /** Time the remote transport received the message. */
   receivedAt?: string;
+  /** Stable request identity for one local/socket turn. */
+  requestId?: string;
+  /** Structured model/runtime classification for durable task ownership. */
+  taskIntent?: 'task' | 'conversation' | '';
   timestamp: string;
 }
 
@@ -901,6 +906,8 @@ export function addMessage(msg: {
   timestamp?: string;
   /** Immutable foreground request identity used to reject late replies. */
   requestId?: string;
+  /** Explicit structured intent emitted by the model/runtime for this reply. */
+  taskIntent?: 'task' | 'conversation';
   /**
    * Persist the accepted instruction before routing/tool selection finishes,
    * while leaving creation of the real task state to the foreground executor.
@@ -938,6 +945,8 @@ export function addMessage(msg: {
     externalMessageId: msg.externalMessageId || '',
     routeSequence: Number.isFinite(msg.routeSequence) ? msg.routeSequence : undefined,
     receivedAt: msg.receivedAt || '',
+    requestId: msg.requestId || '',
+    taskIntent: msg.taskIntent || '',
     timestamp: now,
   };
 
@@ -988,23 +997,10 @@ export function addMessage(msg: {
             };
             delete conv.pendingActionContinuation;
           } else {
-            // Ordinary conversation no longer destroys an unfinished task. A
-            // concrete new action is staged before execution by
-            // prepareConversationActionExecution; this fallback only covers
-            // non-socket callers and tests.
-            if (
-              actionTurn
-              && !preparedSameTurn
-              && !continuationTurn
-              && !msg.deferActionPreparation
-            ) {
-              const prepared = prepareConversationActionTaskState(conv.actionContinuationState, {
-                userText,
-                requestId: id,
-                toolPolicy: { allowedTools: [], requireConfirmation: [], forbiddenTools: [], maxIterations: 5 },
-              });
-              if (prepared.state) conv.actionContinuationState = prepared.state;
-            }
+            // A user-message wording heuristic may stage pending turn context,
+            // but it never creates a durable task. The canonical capability
+            // selection path, an explicit model taskIntent, or a durable tool
+            // receipt owns task creation.
             if (!actionTurn && !continuationTurn && !preparedSameTurn) {
               // A finished pointer is useful for an immediate “打开它/结果呢”,
               // but must not survive an unrelated topic indefinitely. Unfinished
@@ -1081,10 +1077,23 @@ export function addMessage(msg: {
             )
           )),
         );
-        const pendingExpectsExecution = pendingFollowupIntent === 'execute'
-          || (pendingContract.applies && pendingContract.kind !== 'none')
-          || ['client_navigation', 'client_state', 'external_ai_history', 'messaging_read'].includes(pendingNormalizedIntent.kind)
-          || toolRecordsBelongToActiveTask;
+        const taskDurability = currentToolRecords.map(record => (
+          classifyToolRecordTaskDurability(record)
+        ));
+        const hasDurableCapabilityReceipt = taskDurability.includes('durable');
+        const hasLegacyUnknownReceipt = taskDurability.includes('unknown');
+        // Legacy persisted rows predate capability snapshots. Preserve their
+        // old action migration path, while never using that wording heuristic
+        // to turn a canonical observe/read receipt into a durable task.
+        const legacyUnknownExecutionIntent = hasLegacyUnknownReceipt && (
+          (pendingContract.applies && pendingContract.kind !== 'none')
+          || ['client_navigation', 'external_ai_history'].includes(pendingNormalizedIntent.kind)
+        );
+        const pendingExpectsExecution = msg.taskIntent === 'task'
+          || pendingFollowupIntent === 'execute'
+          || toolRecordsBelongToActiveTask
+          || hasDurableCapabilityReceipt
+          || legacyUnknownExecutionIntent;
         const pendingAgeMs = Date.now() - new Date(pending.updatedAt).getTime();
         if (
           pendingExpectsExecution
@@ -1104,6 +1113,35 @@ export function addMessage(msg: {
             toolPolicy: conv.actionContinuationState?.policySnapshot,
           });
           if (nextState) conv.actionContinuationState = nextState;
+        } else if (
+          msg.taskIntent === 'task'
+          && !conv.actionContinuationState?.unfinished
+        ) {
+          // A model may explicitly classify a turn as durable work before it
+          // has a terminal receipt. Preserve that task as blocked/resumable,
+          // rather than silently losing it or inferring durability from prose.
+          const prepared = prepareConversationActionTaskState(undefined, {
+            userText: pending.userText,
+            requestId: pending.requestId || msg.requestId || id,
+            toolPolicy: {
+              allowedTools: [],
+              requireConfirmation: [],
+              forbiddenTools: [],
+              maxIterations: 5,
+            },
+            forceTask: true,
+            now,
+          });
+          if (prepared.state) {
+            conv.actionContinuationState = {
+              ...prepared.state,
+              status: 'blocked',
+              latestBlocker: 'No terminal tool receipt was recorded for the requested step.',
+              assistantState: compactRolloverText(msg.content, 700),
+              revision: (prepared.state.revision || 0) + 1,
+              updatedAt: now,
+            };
+          }
         } else if (
           conv.actionContinuationState?.unfinished
           && pendingExpectsExecution
@@ -1139,6 +1177,81 @@ export function addMessage(msg: {
 
   writeDB(db);
   return id;
+}
+
+export type IdempotentConversationMessage = Parameters<typeof addMessage>[0] & {
+  conversationId: string;
+  requestId: string;
+};
+
+/**
+ * Find the durable transcript row for one accepted socket request. Native chat
+ * mirrors the request id into externalMessageId because that column survives a
+ * database restart; older in-memory rows can still be found through requestId.
+ */
+export function getMessageByRequestId(input: {
+  userId: string;
+  agentId?: string;
+  conversationId?: string;
+  requestId: string;
+  role: string;
+  source?: string;
+  channel?: string;
+}): MessageRecord | null {
+  const requestId = String(input.requestId || '').trim();
+  if (!requestId) return null;
+  const source = String(input.source || '');
+  const channel = String(input.channel || '');
+  const row = (readDB().interactions || []).find((item: any) => (
+    item.userId === input.userId
+    && (!input.agentId || item.agentId === input.agentId)
+    && (!input.conversationId || item.conversationId === input.conversationId)
+    && item.role === input.role
+    && (!source || item.source === source)
+    && (!channel || item.channel === channel)
+    && (
+      String(item.requestId || '') === requestId
+      || String(item.externalMessageId || '') === requestId
+    )
+  ));
+  return row || null;
+}
+
+/**
+ * Persist one role exactly once for a received socket request. The monotonic
+ * routeSequence is used as a durable receive/commit order for native chat;
+ * user rows are written when accepted, while assistant rows take their order
+ * only when the terminal result is committed.
+ */
+export function addMessageIdempotent(msg: IdempotentConversationMessage): string {
+  const requestId = String(msg.requestId || '').trim();
+  if (!requestId) return addMessage(msg);
+  const existing = getMessageByRequestId({
+    userId: msg.userId,
+    agentId: msg.agentId,
+    conversationId: msg.conversationId,
+    requestId,
+    role: msg.role,
+    source: msg.source,
+    channel: msg.channel,
+  });
+  if (existing) return existing.id;
+
+  const rows = (readDB().interactions || []).filter((item: any) => (
+    item.conversationId === msg.conversationId
+  ));
+  const nextRouteSequence = rows.reduce((largest: number, item: any) => (
+    Number.isFinite(Number(item.routeSequence))
+      ? Math.max(largest, Math.floor(Number(item.routeSequence)))
+      : largest
+  ), 0) + 1;
+
+  return addMessage({
+    ...msg,
+    requestId,
+    externalMessageId: msg.externalMessageId || requestId,
+    routeSequence: Number.isFinite(msg.routeSequence) ? msg.routeSequence : nextRouteSequence,
+  });
 }
 
 const DEFAULT_CONTEXT_TOKENS = parseInt(process.env.CONTEXT_TOKEN_BUDGET || '18000', 10);
@@ -1208,8 +1321,19 @@ export function getMessages(conversationId: string, limit = 1000): MessageRecord
   const db = readDB();
   if (!db.interactions) return [];
   const rows = db.interactions
-    .filter((i: any) => i.conversationId === conversationId)
-    .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    .map((row: any, insertionOrder: number) => ({ row, insertionOrder }))
+    .filter(({ row }: any) => row.conversationId === conversationId)
+    .sort((a: any, b: any) => {
+      const timestampDelta = new Date(a.row.timestamp).getTime() - new Date(b.row.timestamp).getTime();
+      if (timestampDelta) return timestampDelta;
+      const aSequence = Number(a.row.routeSequence);
+      const bSequence = Number(b.row.routeSequence);
+      if (Number.isFinite(aSequence) && Number.isFinite(bSequence) && aSequence !== bSequence) {
+        return aSequence - bSequence;
+      }
+      return a.insertionOrder - b.insertionOrder;
+    })
+    .map(({ row }: any) => row);
 
   return rows
     .filter((row: any) => {

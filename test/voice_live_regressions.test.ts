@@ -102,14 +102,14 @@ describe('live voice regression cases', () => {
     expect(feedback?.toolCall).toBeUndefined();
   });
 
-  it('adds only the deterministic quick tool to a non-forbidden route policy', () => {
+  it('never lets a deterministic quick hint widen the authorized route policy', () => {
     const policy = buildQuickCommandToolPolicy({
       allowedTools: ['client_get_state'],
       forbiddenTools: ['desktop_run_command'],
       requireConfirmation: [],
       maxIterations: 4,
     }, 'browser_open_task');
-    expect(policy?.allowedTools).toEqual(['client_get_state', 'browser_open_task']);
+    expect(policy?.allowedTools).toEqual(['client_get_state']);
     expect(buildQuickCommandToolPolicy({ ...policy!, forbiddenTools: ['browser_open_task'] }, 'browser_open_task'))
       .toMatchObject({ forbiddenTools: ['browser_open_task'] });
   });

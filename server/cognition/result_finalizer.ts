@@ -758,7 +758,7 @@ function formatGroundedArtifactResult(
   const records = input.toolRecords || [];
   const created = [...records].reverse().find(record => (
     !record.error
-    && /^(?:create_docx|create_xlsx|create_ppt|create_pdf|write_file|cad_generate_dxf)$/i.test(String(record.name || ''))
+    && /^(?:create_docx|create_xlsx|create_ppt|create_pdf|write_file|desktop_write_text_file|cad_generate_dxf)$/i.test(String(record.name || ''))
     && String(record.result || '').trim()
     && artifactPathFromRecord(record)
   ));
@@ -1668,26 +1668,231 @@ function sanitizeUnsupportedRestatementAdditions(taskText: string, responseText:
   return retained || responseText;
 }
 
-function groundedInternalWorkTaskProgress(input: LumiResultFinalizerInput): string | null {
+/**
+ * Receipt formatters validate execution truth; they do not author ordinary
+ * main-chat prose. Keep a non-empty model answer after a grounded successful
+ * check, while retaining formatter text for empty transport output and for
+ * blocked safety/evidence outcomes.
+ */
+function normalizeEvidenceWording(value: string): string {
+  const compact: string[] = [];
+  for (const character of String(value || '').normalize('NFKC')) {
+    const codePoint = character.codePointAt(0) || 0;
+    const asciiAlphaNumeric = (
+      (codePoint >= 48 && codePoint <= 57)
+      || (codePoint >= 65 && codePoint <= 90)
+      || (codePoint >= 97 && codePoint <= 122)
+    );
+    const unicodeWord = (
+      (codePoint >= 0x3400 && codePoint <= 0x9fff)
+      || (codePoint >= 0x3040 && codePoint <= 0x30ff)
+      || (codePoint >= 0xac00 && codePoint <= 0xd7af)
+    );
+    if (asciiAlphaNumeric || unicodeWord) compact.push(character.toLocaleLowerCase());
+  }
+  return compact.join('');
+}
+
+function evidenceBigrams(value: string): Set<string> {
+  const normalized = normalizeEvidenceWording(value);
+  if (!normalized) return new Set();
+  if (normalized.length === 1) return new Set([normalized]);
+  return new Set(Array.from({ length: normalized.length - 1 }, (_, index) => (
+    normalized.slice(index, index + 2)
+  )));
+}
+
+function evidenceIdentifiers(value: string): string[] {
+  const tokens: string[] = [];
+  let current = '';
+  const flush = () => {
+    if (current.length >= 2) tokens.push(current.slice(0, 128));
+    current = '';
+  };
+  for (const character of String(value || '')) {
+    const codePoint = character.codePointAt(0) || 0;
+    const asciiLetter = (
+      (codePoint >= 65 && codePoint <= 90)
+      || (codePoint >= 97 && codePoint <= 122)
+    );
+    const asciiDigit = codePoint >= 48 && codePoint <= 57;
+    const separator = '_.:/\\=-'.includes(character);
+    if (!current && asciiLetter) {
+      current = character;
+    } else if (current && (asciiLetter || asciiDigit || separator)) {
+      current += character;
+    } else {
+      flush();
+    }
+  }
+  flush();
+
+  const stableTokens = tokens.filter(token => {
+    let hasStructure = false;
+    let hasLetter = false;
+    let allLettersUppercase = true;
+    let previousWasLowercase = false;
+    for (const character of token) {
+      const codePoint = character.codePointAt(0) || 0;
+      const uppercase = codePoint >= 65 && codePoint <= 90;
+      const lowercase = codePoint >= 97 && codePoint <= 122;
+      const digit = codePoint >= 48 && codePoint <= 57;
+      if (uppercase || lowercase) hasLetter = true;
+      if (lowercase) allLettersUppercase = false;
+      if (digit || '_.:/\\=-'.includes(character)) hasStructure = true;
+      if (previousWasLowercase && uppercase) hasStructure = true;
+      previousWasLowercase = lowercase;
+    }
+    return hasStructure || (token.length >= 3 && hasLetter && allLettersUppercase);
+  });
+  return Array.from(new Set(stableTokens.map(token => token.toLocaleLowerCase())));
+}
+
+function modelWordingMatchesGroundedEvidence(
+  input: LumiResultFinalizerInput,
+  modelText: string,
+  groundedText: string,
+): boolean {
+  const normalizedModel = normalizeEvidenceWording(modelText);
+  if (!normalizedModel) return false;
+  const groundedIdentifiers = new Set(evidenceIdentifiers(groundedText));
+  const taskIdentifiers = new Set(evidenceIdentifiers(resultTaskText(input)));
+  const supportedIdentifiers = new Set([...groundedIdentifiers, ...taskIdentifiers]);
+  const missingRequestedIdentifier = Array.from(taskIdentifiers).some(identifier => (
+    groundedIdentifiers.has(identifier)
+    && !normalizedModel.includes(normalizeEvidenceWording(identifier))
+  ));
+  if (missingRequestedIdentifier) return false;
+  const unsupportedIdentifier = evidenceIdentifiers(modelText).some(identifier => (
+    !supportedIdentifiers.has(identifier)
+  ));
+  if (unsupportedIdentifier) return false;
+  const modelBigrams = evidenceBigrams(modelText);
+  const groundedBigrams = evidenceBigrams(groundedText);
+  if (!modelBigrams.size || !groundedBigrams.size) return false;
+  let overlap = 0;
+  for (const token of modelBigrams) {
+    if (groundedBigrams.has(token)) overlap += 1;
+  }
+  return overlap / Math.min(modelBigrams.size, groundedBigrams.size) >= 0.2;
+}
+
+function formatStructuredEvidenceCorrection(
+  input: LumiResultFinalizerInput,
+  grounded: LumiResultFinalizerResult,
+): LumiResultFinalizerResult {
+  const receiptStates = (input.toolRecords || []).map(record => (
+    record.envelope?.status
+    || record.terminalVerification?.status
+    || (record.error ? 'failed' : 'recorded')
+  ));
+  return {
+    ...grounded,
+    reason: [
+      grounded.reason || '',
+      `Structured evidence correction (${receiptStates.join(',') || 'grounder'}).`,
+    ].filter(Boolean).join(' '),
+  };
+}
+
+function preserveModelWordingOnGroundedSuccess(
+  input: LumiResultFinalizerInput,
+  grounded: LumiResultFinalizerResult,
+): LumiResultFinalizerResult {
+  const modelText = String(input.responseText || '').trim();
+  // Grounders reach this helper only after their structured receipt contract
+  // has accepted the current outcome. Compatibility uses a domain-neutral
+  // evidence fingerprint (stable identifiers plus text overlap), never a
+  // tool/phrase-specific reply patch. A failed or conflicting outcome stays on
+  // the structured correction path.
+  if (input.source !== 'chat' || grounded.blocked || !modelText) return grounded;
+  if (
+    claimsCurrentAppSaveCompletion(modelText)
+    && !hasCurrentAppSaveEvidence(input.toolRecords || [], resultTaskText(input))
+  ) {
+    return formatStructuredEvidenceCorrection(input, grounded);
+  }
+  if (!modelWordingMatchesGroundedEvidence(input, modelText, grounded.text)) {
+    return formatStructuredEvidenceCorrection(input, grounded);
+  }
+  return {
+    ...grounded,
+    text: input.responseText,
+  };
+}
+
+function parseActionReceipt(value: unknown): Record<string, any> | null {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, any>;
+  }
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, any>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function isWorkTaskLedgerTool(name: unknown): boolean {
+  return /^(?:work_takeover_task_(?:create|get|list|update)|conversation_action_(?:task|receipt).*)$/iu
+    .test(String(name || ''));
+}
+
+function hasVerifiedNonLedgerActionReceipt(records: ToolExecutionRecord[]): boolean {
+  return records.some(record => {
+    if (record.error || isWorkTaskLedgerTool(record.name)) return false;
+    if (record.terminalVerification?.status === 'verified') return true;
+    if (
+      record.envelope?.status === 'verified_success'
+      && record.envelope.verification?.status === 'verified'
+    ) return true;
+    const receipt = parseActionReceipt(record.receipt);
+    const receiptVerification = receipt?.terminalVerification?.status
+      || receipt?.verification?.status;
+    return receiptVerification === 'verified'
+      || receipt?.status === 'verified_success'
+      || receipt?.status === 'verified'
+      || (receipt?.ok === true && receipt?.verified === true);
+  });
+}
+
+function claimsPersistentTaskStepCompletion(responseText: string): boolean {
+  const response = String(responseText || '').trim();
+  if (!response) return false;
+  const explicitlyIncomplete = /(?:\u5c1a\u672a|\u672a|\u6ca1\u6709|\u4e0d\u80fd|\u4e0d\u5e94|\u4e0d\u53ef)[^\u3002\uff01\uff1f.!?\n]{0,20}(?:\u5b8c\u6210|\u6807\u8bb0[^\u3002\uff01\uff1f.!?\n]{0,6}\u5b8c\u6210)|\b(?:not|isn'?t|wasn'?t|cannot|can't)\b[^.!?\n]{0,32}\b(?:complete|completed|done)\b/iu
+    .test(response);
+  if (explicitlyIncomplete) return false;
+  return /(?:\u5df2\u7ecf|\u5df2)[^\u3002\uff01\uff1f.!?\n]{0,18}(?:\u5b8c\u6210|\u505a\u5b8c|\u63a8\u8fdb)|(?:\u5b8c\u6210|\u505a\u5b8c)\u4e86?\u7b2c[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\d]+\u6b65|\b(?:completed|finished|done)\b/iu
+    .test(response);
+}
+
+function unsupportedLedgerOnlyWorkTaskCompletion(
+  input: LumiResultFinalizerInput,
+): LumiResultFinalizerResult | null {
   const taskText = resultTaskText(input);
   if (!/\bwt_task_[A-Za-z0-9_-]+\b/u.test(taskText)) return null;
-  if (!/\u6301\u4e45\u4efb\u52a1/u.test(taskText) || !/\u4e0d\u8981\u5199\u6587\u4ef6/u.test(taskText) || !/\u4e0d\u8981\u5916\u53d1/u.test(taskText)) return null;
-  const record = [...(input.toolRecords || [])].reverse().find(item => (
-    item.name === 'work_takeover_task_update' && !item.error && String(item.result || '').trim()
-  ));
-  if (!record) return null;
-  let parsed: any;
-  try { parsed = JSON.parse(String(record.result || '{}')); } catch { return null; }
-  const task = parsed?.task;
-  if (parsed?.ok !== true || parsed?.persisted !== true || parsed?.status !== 'updated' || !task?.id || !task?.updatedAt) return null;
-  if (!['in_progress', 'waiting_confirmation'].includes(String(task.status || ''))) return null;
-  const drafts = Array.isArray(task.drafts) ? task.drafts : [];
-  const latestDraft = String(drafts[drafts.length - 1]?.text || '').trim();
-  if (!latestDraft) return null;
-  const response = String(input.responseText || '').trim();
-  const draftLines = latestDraft.split(/\r?\n/u).map((line: string) => line.trim()).filter(Boolean);
-  if (!response || !draftLines.every((line: string) => response.includes(line))) return null;
-  return response;
+  if (!/(?:\u7ee7\u7eed|\u7eed\u63a5|\u6062\u590d|\u63a8\u8fdb|\u6267\u884c|\u5904\u7406|\u5b8c\u6210|\u505a\u5b8c)/u.test(taskText)) return null;
+  if (!claimsPersistentTaskStepCompletion(input.responseText)) return null;
+  const records = input.toolRecords || [];
+  if (!records.some(record => isWorkTaskLedgerTool(record.name))) return null;
+  if (hasVerifiedNonLedgerActionReceipt(records)) return null;
+
+  const reason = 'Persistent task completion was claimed from ledger updates without a verified action receipt.';
+  return {
+    text: isChineseText(taskText) || isChineseText(input.responseText)
+      ? '\u4efb\u52a1\u8d26\u672c\u53ea\u8bc1\u660e\u4e86\u8bb0\u8d26\u6216\u72b6\u6001\u5199\u56de\uff0c\u4e0d\u8bc1\u660e\u4efb\u52a1\u6b65\u9aa4\u5df2\u5b9e\u9645\u6267\u884c\u3002\u672c\u8f6e\u6ca1\u6709\u771f\u5b9e\u52a8\u4f5c\u7684\u5df2\u9a8c\u8bc1\u7ec8\u6001\u56de\u6267\uff0c\u4e0d\u80fd\u5c06\u8be5\u6b65\u9aa4\u6807\u8bb0\u4e3a\u5b8c\u6210\u3002'
+      : 'The task ledger proves only a bookkeeping update, not execution. No verified terminal receipt from a real action exists for this turn, so the step cannot be marked complete.',
+    blocked: true,
+    reason,
+    notification: {
+      type: 'work_product_guard',
+      level: 'warning',
+      message: reason,
+    },
+  };
 }
 
 export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResultFinalizerResult {
@@ -1713,15 +1918,9 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   // terminal state. Do not let model narration or a later generic guard hide
   // a verified completion or a concrete workflow blocker.
   const earlyGroundedCadRun = formatGroundedCadRunResult(input);
-  if (earlyGroundedCadRun) return earlyGroundedCadRun;
-  const groundedWorkTaskProgress = groundedInternalWorkTaskProgress(input);
-  if (groundedWorkTaskProgress) {
-    return {
-      text: groundedWorkTaskProgress,
-      blocked: false,
-      reason: 'Grounded internal work-task progress from a persisted update receipt and matching chat draft.',
-    };
-  }
+  if (earlyGroundedCadRun) return preserveModelWordingOnGroundedSuccess(input, earlyGroundedCadRun);
+  const unsupportedWorkTaskCompletion = unsupportedLedgerOnlyWorkTaskCompletion(input);
+  if (unsupportedWorkTaskCompletion) return unsupportedWorkTaskCompletion;
   const modeSafeResponseText = sanitizeContradictoryOperationModeText(input);
   if (modeSafeResponseText !== input.responseText) {
     input = { ...input, responseText: modeSafeResponseText };
@@ -1754,11 +1953,11 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   }
   const groundedClientAction = formatGroundedClientActionResult(input);
   if (groundedClientAction) {
-    return {
+    return preserveModelWordingOnGroundedSuccess(input, {
       text: groundedClientAction,
       blocked: false,
       reason: 'Grounded Lumi client action from a verified state-diff receipt.',
-    };
+    });
   }
   const actionContract = taskActionContract(input);
   const chatOnlyConversationTurn = Boolean(
@@ -1800,7 +1999,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   const diagnosticResult = formatClientDiagnosticResult(input.toolRecords || [], actionText, input.responseText);
   if (diagnosticResult) {
     const diagnosticCompleted = hasSuccessfulSubstantiveClientDiagnosticReceipt(input.toolRecords || []);
-    return {
+    return preserveModelWordingOnGroundedSuccess(input, {
       text: diagnosticResult,
       blocked: !diagnosticCompleted,
       reason: diagnosticCompleted
@@ -1813,7 +2012,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
           message: 'Client diagnostic did not produce a successful substantive receipt.',
         },
       } : {}),
-    };
+    });
   }
   const unsupportedExecution = unsupportedToolExecutionClaim(input);
   if (unsupportedExecution) {
@@ -1856,35 +2055,35 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     return { text: input.responseText, blocked: false };
   }
   const groundedBlankCadDocument = formatGroundedBlankAutoCadDocumentResult(input);
-  if (groundedBlankCadDocument) return groundedBlankCadDocument;
+  if (groundedBlankCadDocument) return preserveModelWordingOnGroundedSuccess(input, groundedBlankCadDocument);
   const groundedWpsMutation = formatGroundedWpsMutationResult(input);
-  if (groundedWpsMutation) return groundedWpsMutation;
+  if (groundedWpsMutation) return preserveModelWordingOnGroundedSuccess(input, groundedWpsMutation);
   const groundedArtifact = formatGroundedArtifactResult(input);
-  if (groundedArtifact) return groundedArtifact;
+  if (groundedArtifact) return preserveModelWordingOnGroundedSuccess(input, groundedArtifact);
   const groundedCadGeometry = formatGroundedCadGeometryExtractionResult(input);
-  if (groundedCadGeometry) return groundedCadGeometry;
+  if (groundedCadGeometry) return preserveModelWordingOnGroundedSuccess(input, groundedCadGeometry);
   const groundedExternalAiHistory = formatExternalAiHistoryResult(input);
-  if (groundedExternalAiHistory) return groundedExternalAiHistory;
+  if (groundedExternalAiHistory) return preserveModelWordingOnGroundedSuccess(input, groundedExternalAiHistory);
   const groundedExternalAi = formatExternalAiCollaborationResult(input);
-  if (groundedExternalAi) return groundedExternalAi;
+  if (groundedExternalAi) return preserveModelWordingOnGroundedSuccess(input, groundedExternalAi);
   const groundedDesktopAi = formatDesktopAiRoundtableResult(input);
   if (groundedDesktopAi) {
-    return {
+    return preserveModelWordingOnGroundedSuccess(input, {
       text: groundedDesktopAi,
       blocked: false,
       reason: 'Grounded desktop AI collaboration summary from structured tool evidence.',
-    };
+    });
   }
   const groundedSimpleOpen = formatGroundedSimpleDesktopOpenResult(input);
   if (groundedSimpleOpen) {
-    return {
+    return preserveModelWordingOnGroundedSuccess(input, {
       text: groundedSimpleOpen,
       blocked: false,
       reason: 'Grounded exact desktop-open success from the requested target receipt.',
-    };
+    });
   }
   const groundedPartialAction = formatGroundedPartialActionResult(input);
-  if (groundedPartialAction) return groundedPartialAction;
+  if (groundedPartialAction) return preserveModelWordingOnGroundedSuccess(input, groundedPartialAction);
   const groundedDriftCorrection = correctCurrentTurnContractDrift(input, actionContract);
   if (groundedDriftCorrection) {
     return {
@@ -1899,11 +2098,11 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   // overwrite that evidence with a generic incomplete-work guard.
   const groundedDesktopObservation = formatGroundedDesktopEvidence(input);
   if (groundedDesktopObservation) {
-    return {
+    return preserveModelWordingOnGroundedSuccess(input, {
       text: groundedDesktopObservation,
       blocked: false,
       reason: 'Grounded desktop observation from current-turn tool receipts.',
-    };
+    });
   }
   const responseClaimsIncomplete = /(?:\u8fd8|\u5c1a|\u4ecd)?(?:\u6ca1\u6709|\u6ca1|\u672a|\u5e76\u672a|\u4e0d\u7b97|\u4e0d\u80fd\u8bf4)[^\u3002\uFF01\uFF1F.!?\n]{0,18}(?:\u5b8c\u6210|\u53d1\u9001|\u53d1\u51fa|\u6253\u5f00|\u8bfb\u53d6|\u751f\u6210)|\b(?:not|isn'?t|wasn'?t|didn'?t|incomplete|unfinished)\b[^.!?\n]{0,40}\b(?:complete|completed|sent|opened|read|created|generated)\b/iu
     .test(input.responseText || '');

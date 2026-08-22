@@ -63,7 +63,9 @@ describe('finalized output paths', () => {
     expect(rest).toContain('createPreFinalizationTextGate');
     expect(rest).toContain('restTextGate.push(chunk)');
     expect(rest).toContain('if (!deferRestStream)');
-    expect(rest).toContain('toolPolicy: restExecutionDecision.toolPolicy');
+    expect(rest).toContain('const restModelToolPolicy = buildModelCapabilityPolicy(restExecutionDecision)');
+    expect(rest).toContain('toolPolicy: restModelToolPolicy');
+    expect(rest).toContain('restModelToolPolicy.maxIterations || 3');
     expect(rest).toContain('source: \'rest_chat_stream\'');
     expect(rest).toContain('finalized: true');
     expect(rest).toContain('blocked: finalized.blocked');
@@ -105,29 +107,13 @@ describe('finalized output paths', () => {
     expectFinalizationMetadataOnEveryAgentResponse('server/socket/task.ts');
   });
 
-  it('validates the complete background-success candidate and marks non-success exits blocked', () => {
+  it('keeps heuristic background execution out of model-owned main chat', () => {
     const chat = source('server/socket/chat.ts');
-    const backgroundStart = chat.indexOf('const completionCandidate = `');
-    const finalizerStart = chat.indexOf('const finalizedBackground = finalizeLumiResponse({', backgroundStart);
-    const backgroundEnd = chat.indexOf('}, 30);', finalizerStart);
-    const backgroundPath = chat.slice(backgroundStart, backgroundEnd);
-
-    expect(backgroundStart).toBeGreaterThan(0);
-    expect(finalizerStart).toBeGreaterThan(backgroundStart);
-    expect(backgroundPath).toContain('responseText: completionCandidate');
-    expect(backgroundPath).toContain('const completionText = finalizedBackground.text;');
-    expect(backgroundPath).toContain('? recordBackgroundTaskFailure(backgroundTaskId, {');
-    expect(backgroundPath).toContain('verificationFailure: true');
-    expect(backgroundPath).toContain(': completeBackgroundTask(backgroundTaskId, completionText, runningTask.leaseId)');
-    expect(backgroundPath).toContain("if (terminalTask?.status === 'queued')");
-    expect(backgroundPath).not.toContain('finalText = finalizedBackground.text;');
-
-    const cancelledResponses = Array.from(
-      backgroundPath.matchAll(/reason:\s*'cancelled'[\s\S]{0,80}/g),
-      match => match[0],
-    );
-    expect(cancelledResponses).toHaveLength(2);
-    expect(backgroundPath.match(/blocked:\s*true/g)?.length || 0).toBeGreaterThanOrEqual(3);
+    expect(chat).not.toContain('const completionCandidate = `');
+    expect(chat).not.toContain('const finalizedBackground = finalizeLumiResponse({');
+    expect(chat).not.toContain('registerBackgroundTask');
+    expect(chat).toContain('## Advisory execution candidates');
+    expect(chat).toContain('responseText = finalResponse.text;');
   });
 
   it('keeps MCP chat chunks, speech, and returns behind the shared finalizer', () => {
@@ -214,24 +200,10 @@ describe('finalized output paths', () => {
     const chat = source('server/socket/chat.ts');
     const voice = source('server/socket/voice.ts');
 
-    for (const finalized of [
-      'finalizedMode',
-      'finalizedWorkflow',
-      'quickFinalized',
-    ]) {
-      expect(chat).toContain(`cognitiveIntent: ${finalized}.blocked ? 'work_product_guard' : undefined`);
-      expect(chat).toContain(`if (!${finalized}.blocked) {`);
-    }
-    expect(chat).toContain('if (!finalizedWorkflowQuick.blocked) {');
-    expect(chat).toContain("cognitiveIntent: finalized.blocked ? 'work_product_guard' : 'confirmation'");
-    expect(chat).toContain('if (!finalized.blocked) {');
-    expect(chat).toContain("cognitiveIntent: finalizedWorkflow.blocked ? 'work_product_guard' : specialWorkflow.id");
-    expect(chat).toContain("cognitiveIntent: guarded ? 'work_product_guard' : undefined");
-    expect(chat).toContain("cognitiveIntent: guarded ? 'work_product_guard' : cognition.intent.category");
-    expect(chat).toContain('persistBackgroundResult(completionText, backgroundToolRecords, finalizedBackground.blocked, deliver)');
-    expect(chat).toContain('const deliver = isLatestUserTurn(executionScope, requestId)');
-    expect(chat).toContain('if (conversationId && deliverToConversation) {');
-    expect(chat).toContain('if (conversationId && !quickFinalized.blocked) {');
+    expect(chat).not.toContain('executeSkillWorkflowAdapter');
+    expect(chat).not.toContain('persistBackgroundResult(');
+    expect(chat).toContain("cognitiveIntent: finalResponse.blocked ? 'work_product_guard' : cognition.intent.category");
+    expect(chat).toContain('if (!finalResponse.blocked) {');
 
     for (const finalized of [
       'finalizedRecentAction',
@@ -247,25 +219,14 @@ describe('finalized output paths', () => {
     expect(voice.match(/if \(!directFinal\.blocked\) \{/g)).toHaveLength(3);
   });
 
-  it('persists finalized stored-workflow turns with tool evidence before conversation sync', () => {
+  it('keeps named workflow regex shortcuts out of main chat', () => {
     const chat = source('server/socket/chat.ts');
-    const workflowStart = chat.indexOf('if (workflowQuickResult) {');
-    const workflowEnd = chat.indexOf('// ── Quick Command Fast-Path', workflowStart);
-    const workflowPath = chat.slice(workflowStart, workflowEnd);
-
-    expect(workflowStart).toBeGreaterThan(0);
-    expect(workflowEnd).toBeGreaterThan(workflowStart);
-    expect(workflowPath).toContain("role: 'user'");
-    expect(workflowPath).toContain("role: 'tool'");
-    expect(workflowPath).toContain('summarizeToolRecordForPersistence(record)');
-    expect(workflowPath).toContain("role: 'assistant'");
-    expect(workflowPath).toContain('toolCalls: workflowQuickToolRecords.length ? workflowQuickToolRecords : undefined');
-    expect(workflowPath).toContain("cognitiveIntent: finalizedWorkflowQuick.blocked ? 'work_product_guard' : undefined");
-    expect(workflowPath.indexOf('emitAgent("agent:response"')).toBeLessThan(
-      workflowPath.indexOf('emitConversationUpdated('),
-    );
-    expect(workflowPath).toContain('if (!finalizedWorkflowQuick.blocked) {');
-    expect(workflowPath).toContain('trackTopic(conversationId, topic)');
+    expect(chat).not.toContain('runWorkflowMatch');
+    expect(chat).not.toContain('workflowQuickResult');
+    expect(chat).not.toContain('workflowQuickToolRecords');
+    expect(chat).toContain('// ── Model-owned natural-language dispatch');
+    expect(chat).not.toContain('buildDeterministicClientNavigationCommand');
+    expect(chat).not.toContain('quickFinalized');
   });
 
   it('falls back to the finalized primary workflow response when a speech summary is blocked', () => {
@@ -280,9 +241,12 @@ describe('finalized output paths', () => {
     expect(workflowPath).toContain('queueFinalizedSpeech(workflowSpeechText)');
   });
 
-  it('keeps the legacy misc chat route behind the shared finalizer', () => {
+  it('keeps the misc chat route on the shared capability policy and finalizer', () => {
     const misc = source('server/routes/misc_routes.ts');
 
+    expect(misc).toContain('buildLumiExecutionPipeline({');
+    expect(misc).toContain('const modelToolPolicy = buildModelCapabilityPolicy(executionPlan.execution)');
+    expect(misc).toContain('toolPolicy: modelToolPolicy');
     expect(misc).toContain('finalizeLumiResponse({');
     expect(misc).toContain("source: 'misc_chat'");
     expect(misc).toContain('blocked: finalized.blocked');
@@ -357,19 +321,12 @@ describe('finalized output paths', () => {
     expect(voice).toContain('const persistVoiceTakeoverExecution = (');
     expect(chat).toContain('if (currentToolRecords.length === 0) return null;');
     expect(voice).toContain('if (currentToolRecords.length === 0) return null;');
-    expect(chat.match(/persistChatTakeoverExecution\(/g)?.length || 0).toBeGreaterThanOrEqual(8);
+    expect(chat.match(/persistChatTakeoverExecution\(/g)?.length || 0).toBeGreaterThanOrEqual(2);
+    expect(chat).not.toContain('executeSkillWorkflowAdapter');
     expect(voice.match(/persistVoiceTakeoverExecution\(/g)?.length || 0).toBeGreaterThanOrEqual(6);
     expect(writeback).toContain('input.flow.workTakeover.shouldResumeTask');
 
-    for (const marker of [
-      "source: 'chat_mode'",
-      "source: 'workflow'",
-      "source: 'chat_quick_command'",
-      "source: 'chat_confirmation'",
-      "source: 'background_delegation'",
-    ]) {
-      expect(chat).toContain(marker);
-    }
+    expect(chat).not.toContain('registerBackgroundTask');
     for (const marker of [
       "source: 'voice_mode'",
       "source: 'voice_quick_command'",
@@ -381,14 +338,16 @@ describe('finalized output paths', () => {
     }
 
     const chatHistoryStart = chat.indexOf('const recentFailureExplanation =');
-    const chatHistoryEnd = chat.indexOf('//', chat.indexOf('return;', chatHistoryStart) + 1);
-    expect(chat.slice(chatHistoryStart, chatHistoryEnd)).not.toContain('persistChatTakeoverExecution(');
+    const chatHistoryEnd = chat.indexOf('// ── Desktop relay', chatHistoryStart);
+    const chatHistoryPath = chat.slice(chatHistoryStart, chatHistoryEnd);
+    expect(chatHistoryPath).toContain('groundedTurnEvidence.push');
+    expect(chatHistoryPath).not.toContain('agent:response');
+    expect(chatHistoryPath).not.toContain('persistChatTakeoverExecution(');
     const voiceHistoryStart = voice.indexOf('if (recentActionExplanation) {');
     const voiceHistoryEnd = voice.indexOf('const specialWorkflow =', voiceHistoryStart);
     expect(voice.slice(voiceHistoryStart, voiceHistoryEnd)).not.toContain('persistVoiceTakeoverExecution(');
 
-    expect(chat).toContain('const terminalBackgroundRecords: ToolExecutionRecord[] = backgroundToolRecords.length > 0');
-    expect(chat).toContain("name: 'background_delegation'");
-    expect(chat).toContain('toolRecords: terminalBackgroundRecords');
+    expect(chat).not.toContain('const terminalBackgroundRecords: ToolExecutionRecord[] = backgroundToolRecords.length > 0');
+    expect(chat).not.toContain("name: 'background_delegation'");
   });
 });

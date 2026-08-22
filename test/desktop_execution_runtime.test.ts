@@ -118,7 +118,7 @@ describe('desktop execution runtime', () => {
     });
   });
 
-  it('rejects desktop control tools absent from the compiled desktop plan', () => {
+  it('treats heuristic plan membership as advisory while retaining identity and freshness gates', () => {
     const tracker = new DesktopExecutionTracker(buildDesktopExecutionPlan({
       text: '打开 AutoCAD', lane: 'design_cad', taskId: 'cad-scope-task',
     }));
@@ -128,6 +128,41 @@ describe('desktop execution runtime', () => {
     expect(tracker.authorize('desktop_run_command')).toMatchObject({ allowed: false });
     expect(tracker.authorize('run_command')).toMatchObject({ allowed: false });
     expect(tracker.authorize('read_file')).toMatchObject({ allowed: true });
+
+    const futureAdapter = {
+      lane: 'desktop' as const,
+      operation: 'mutate' as const,
+      sideEffects: [{
+        type: 'desktop_control' as const,
+        scope: 'foreground_application',
+        reversible: true,
+      }],
+    };
+    tracker.record(verifiedRecord('desktop_active_window', JSON.stringify({
+      title: 'Drawing1.dwg', process_name: 'acad.exe', pid: 42,
+    })));
+    expect(tracker.authorize('future_desktop_adapter', futureAdapter)).toMatchObject({
+      allowed: true,
+      reason: 'desktop_plan_membership_advisory',
+    });
+    tracker.record({
+      ...verifiedRecord('future_desktop_adapter', JSON.stringify({ status: 'verified' })),
+      capability: {
+        capabilityId: 'desktop.future_adapter',
+        ...futureAdapter,
+        risk: 'medium',
+        verification: {
+          strategy: 'terminal_receipt',
+          required: true,
+          requiredFields: [],
+          successSignals: [],
+          limitations: [],
+        },
+      },
+    });
+    const afterActuation = tracker.authorize('future_desktop_adapter', futureAdapter);
+    expect(afterActuation.allowed).toBe(false);
+    expect(afterActuation.reason.toLocaleLowerCase()).toContain('fresh, unused');
   });
 
   it('invalidates the plan after a popup, application restart, DPI or display geometry change', () => {

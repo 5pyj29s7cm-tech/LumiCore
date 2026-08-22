@@ -72,6 +72,7 @@ import type { ToolPolicy } from '../../../personality/types';
 import { requestsOrganizationScope, resolvePersonalOrganizationScope } from '../../../messaging/personal_org_scope';
 import { buildLumiTurnDispatch, type LumiTurnDispatch } from '../../../cognition/turn_dispatch';
 import { buildLumiExecutionPipeline, type LumiExecutionPipeline } from '../../../cognition/execution_pipeline';
+import { buildModelCapabilityPolicy } from '../../../cognition/capability_selection';
 import { buildLumiRuntimeCapabilityContext } from '../../../cognition/capability_context';
 import { buildInteractionModeOverlay } from '../../../cognition/turn_flow';
 import { bindCapabilityExecutionPlanTask } from '../../../cognition/capability_execution_plan';
@@ -1602,9 +1603,15 @@ export async function processWithPersonality(
   }
   if (newerMessageCancelsThisTurn(msg)) return '';
 
-  const directlyAppliedMode: OperationMode | null = provisionalPlan.dispatch.flow.autoPromoteToAssistant
-    ? 'assistant'
-    : provisionalPlan.dispatch.flow.requestedMode;
+  const requestedMode = provisionalPlan.dispatch.flow.requestedMode;
+  // A semantic action match is only a planning hint. It must not silently
+  // mutate the user's persisted client mode before the model has decided to
+  // act. Keep the deterministic native fast path solely for an exact, explicit
+  // mode-switch command; compound work remains model-owned.
+  const directlyAppliedMode: OperationMode | null = requestedMode
+    && isPureOperationModeSwitchRequest(requestText, requestedMode)
+    ? requestedMode
+    : null;
 
   // ── Build system prompt from Lumi personality ──
   let systemPrompt = '';
@@ -1679,6 +1686,7 @@ export async function processWithPersonality(
   const turnDispatch = executionPlan.dispatch;
   const turnFlow = turnDispatch.flow;
   const executionDecision = executionPlan.execution;
+  const modelToolPolicy = buildModelCapabilityPolicy(executionDecision);
   const capabilitySelection = executionPlan.capabilityPlan;
   const actionFollowupIntent = classifyConversationActionFollowupIntent(
     requestText,
@@ -1690,7 +1698,7 @@ export async function processWithPersonality(
         userId: effectiveUserId,
         userText: requestText,
         requestId,
-        toolPolicy: executionDecision.toolPolicy,
+        toolPolicy: modelToolPolicy,
         forceResume: Boolean(pendingConfirmation || actionFollowupIntent === 'execute'),
         forceTask: executionPlan.capabilityPlan.taskLedgerRequired
           || (isOrganizationBound && requestsOrganizationScope(requestText)),
@@ -1969,7 +1977,7 @@ export async function processWithPersonality(
           actionIntent: requestText,
           routedTaskText: routingText,
           supervisedExternalCommits: true,
-          toolPolicy: executionDecision.toolPolicy,
+          toolPolicy: modelToolPolicy,
           source,
           llmGetters: llm as any,
           desktopRelay,
@@ -2083,7 +2091,7 @@ export async function processWithPersonality(
         : undefined,
       desktopRelay,
       personalDesktopRelay,
-      toolPolicy: executionDecision.toolPolicy,
+      toolPolicy: modelToolPolicy,
       rootTaskText: routingText,
       taskId: actionTaskExecution.state?.taskId,
       desktopExecutionTracker,
@@ -2190,7 +2198,7 @@ export async function processWithPersonality(
         toolRegistry,
         userLLMPrefs,
         undefined,
-        executionDecision.maxIterations,
+        modelToolPolicy.maxIterations || executionDecision.maxIterations,
         llm?.getDeepSeek,
         llm?.getGemini,
         llm?.getOpenAI,
@@ -2208,7 +2216,7 @@ export async function processWithPersonality(
           actionIntent: requestText,
           routedTaskText: routingText,
           supervisedExternalCommits: isIdentityBound,
-          toolPolicy: executionDecision.toolPolicy,
+          toolPolicy: modelToolPolicy,
           source,
           llmGetters: llm as any,
           desktopRelay,

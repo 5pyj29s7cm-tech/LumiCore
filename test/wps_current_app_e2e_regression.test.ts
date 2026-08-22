@@ -233,7 +233,6 @@ describe('WPS current-app end-to-end regression', () => {
     expect(decision.maxIterations).toBe(4);
     expect(decision.toolRoute?.toolNames[0]).toBe(WPS_CREATE_DOCUMENT_TOOL);
     expect(decision.toolPolicy.allowedTools).toContain(WPS_CREATE_DOCUMENT_TOOL);
-    expect(decision.toolPolicy.forbiddenTools).toContain('computer_use');
     expect(decision.toolPolicy.allowedTools).not.toContain('computer_use');
     expect(decision.toolPolicy.allowedTools).not.toContain('keyboard_type');
     expect(decision.toolPolicy.allowedTools).not.toContain('mouse_click');
@@ -606,10 +605,7 @@ describe('WPS current-app end-to-end regression', () => {
       source: 'chat',
     });
     expect(finalized.blocked).toBe(false);
-    expect(finalized.text).toContain('\u5df2\u5728\u53ef\u89c1 WPS \u6587\u6863');
-    expect(finalized.text).toContain(CONTENT);
-    expect(finalized.text).toContain('\u5f53\u524d\u672a\u4fdd\u5b58');
-    expect(finalized.text).toContain('wps.exe (PID 43210)');
+    expect(finalized.text).toBe(response);
 
     const savedClaim = finalizeLumiResponse({
       taskText: executionTaskText,

@@ -26,7 +26,7 @@ describe('frontend agent response finalization gate', () => {
     expect(isActionSuccessClaim('The document describes a completed project.')).toBe(false);
   });
 
-  it('withholds unfinalized action claims from display and speech', () => {
+  it('withholds unfinalized action claims but always delivers terminal receipts', () => {
     const unverified = { text: '\u5df2\u6253\u5f00 WPS\u3002', finalized: false, blocked: false };
     const verified = { ...unverified, finalized: true };
     const blocked = { ...verified, blocked: true };
@@ -35,10 +35,30 @@ describe('frontend agent response finalization gate', () => {
     expect(shouldSpeakAgentResponse(unverified)).toBe(false);
     expect(shouldDisplayAgentResponse(verified)).toBe(true);
     expect(shouldSpeakAgentResponse(verified)).toBe(true);
-    expect(shouldDisplayAgentResponse(blocked)).toBe(false);
+    expect(shouldDisplayAgentResponse(blocked)).toBe(true);
     expect(shouldSpeakAgentResponse(blocked)).toBe(false);
     expect(isFinalizedSuccessfulResponse(verified)).toBe(true);
     expect(isFinalizedSuccessfulResponse(blocked)).toBe(false);
+  });
+
+  it('does not hide a blocker merely because it reports the successful prefix of a partial operation', () => {
+    const partialFailure = {
+      text: '\u6587\u4ef6\u5df2\u7ecf\u5199\u5165\uff0c\u4f46\u6ca1\u6709\u53d6\u5f97\u540c\u4e00\u8def\u5f84\u7684\u6210\u529f\u56de\u8bfb\u56de\u6267\uff0c\u4e0d\u80fd\u62a5\u544a\u5b8c\u6210\u3002',
+      finalized: true,
+      blocked: true,
+      reason: 'Requested post-write readback is missing or failed.',
+    };
+    expect(isActionSuccessClaim(partialFailure.text)).toBe(true);
+    expect(shouldDisplayAgentResponse(partialFailure)).toBe(true);
+    expect(shouldSpeakAgentResponse(partialFailure)).toBe(false);
+  });
+
+  it('keeps confirmation boundaries visible even when transport finalization is absent', () => {
+    expect(shouldDisplayAgentResponse({
+      text: '\u5df2\u51c6\u5907\u5199\u5165\uff0c\u9700\u8981\u4f60\u786e\u8ba4\u540e\u624d\u80fd\u7ee7\u7eed\u3002',
+      finalized: false,
+      status: 'waiting_confirmation',
+    })).toBe(true);
   });
 
   it('allows ordinary text and finalized blocker explanations without marking them successful', () => {

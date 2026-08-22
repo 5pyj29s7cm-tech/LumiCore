@@ -62,6 +62,8 @@ describe('capability gap autofix', () => {
       } as any);
       const listed = JSON.parse(listRaw);
       expect(listed.records.map((record: any) => record.id)).toContain(result.record.id);
+      expect(listed.records.find((record: any) => record.id === result.record.id)?.status)
+        .toBe('experiment_prepared');
 
       const planRaw = await registry.execute('self_extension_plan', {
         goal: 'AutoCAD 一笔一笔画图能力',
@@ -70,8 +72,10 @@ describe('capability gap autofix', () => {
         userId: 'capability_user',
       } as any);
       const plan = JSON.parse(planRaw);
-      expect(plan.existingCoverage.learnedCapabilities.map((record: any) => record.id)).toContain(result.record.id);
-      expect(plan.resolution.decision).toBe('reuse_learned_route');
+      const preparedCoverage = plan.existingCoverage.learnedCapabilities
+        .find((record: any) => record.id === result.record.id);
+      expect(preparedCoverage?.verified).toBe(false);
+      expect(plan.resolution.decision).toBe('use_existing_coverage');
       expect(plan.resolution.shouldCreateNewCapability).toBe(false);
 
       const secondRaw = await registry.execute('capability_gap_autofix', {
@@ -85,8 +89,9 @@ describe('capability gap autofix', () => {
       } as any);
       const second = JSON.parse(secondRaw);
       expect(second.reusedExistingCoverage).toBe(true);
-      expect(second.record.id).toBe(result.record.id);
-      expect(second.note).toContain('Existing learned route reused');
+      expect(second.record.id).not.toBe(result.record.id);
+      expect(second.record.status).toBe('hypothesis');
+      expect(second.note).toContain('Existing coverage reused');
 
       const afterSecondListRaw = await registry.execute('capability_learning_list', {
         goal: 'AutoCAD 一笔一笔画图',
@@ -98,9 +103,8 @@ describe('capability gap autofix', () => {
 
       const { formatClientSelfPrompt } = await import('../server/client/self_model');
       const prompt = formatClientSelfPrompt('capability_user');
-      expect(prompt).toContain('### Learned Capability Routes');
-      expect(prompt).toContain('AutoCAD MCP/COM drawing route');
-      expect(prompt).toContain('cad_prepare_autocad_operations');
+      expect(prompt).toContain('No persisted learned capability routes yet');
+      expect(prompt).not.toContain('AutoCAD MCP/COM drawing route');
     } finally {
       fs.rmSync(outputDirectory, { recursive: true, force: true });
     }

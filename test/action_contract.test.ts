@@ -68,6 +68,43 @@ describe('Lumi action contract', () => {
     expect(hasCoreActionEvidence(contract, [write, read], task)).toBe(true);
   });
 
+  it('accepts native semantic text writes with a later same-path readback', () => {
+    const target = 'C:\\Users\\me\\Desktop\\note.txt';
+    const task = `After creating the file, read it back and verify the exact content. Target: ${target}`;
+    const contract = buildActionContract(task);
+    const write = {
+      name: 'desktop_write_text_file',
+      arguments: { path: target, content: 'hello' },
+      result: JSON.stringify({ ok: true, status: 'verified', readBackMatched: true }),
+      terminalVerification: { status: 'verified' as const, strategy: 'measured' as const, reason: 'native byte read-back matched' },
+      capability: {
+        capabilityId: 'desktop.files.text.write',
+        lane: 'files' as const,
+        operation: 'mutate' as const,
+        risk: 'high' as const,
+        sideEffects: [{ type: 'local_write' as const, scope: 'one exact native host text-file path', reversible: false }],
+        verification: {
+          strategy: 'measured' as const,
+          required: true,
+          requiredFields: ['path', 'readBackMatched'],
+          requiredValues: { readBackMatched: true },
+          successSignals: ['native byte read-back matched'],
+          limitations: [],
+        },
+      },
+    };
+    const read = {
+      name: 'read_file',
+      arguments: { path: target },
+      result: 'hello',
+      terminalVerification: { status: 'verified' as const, strategy: 'terminal_receipt' as const, reason: 'text read returned' },
+    };
+
+    expect(contract.kind).toBe('artifact_work');
+    expect(hasCoreActionEvidence(contract, [read, write], task)).toBe(false);
+    expect(hasCoreActionEvidence(contract, [write, read], task)).toBe(true);
+  });
+
   it('requires both exact launch and matching active-window evidence for launch verification', () => {
     const task = '请打开 Windows 计算器。打开后读取当前活动窗口，只有窗口标题和进程能证明是计算器时才报告完成。';
     const contract = buildActionContract(task);

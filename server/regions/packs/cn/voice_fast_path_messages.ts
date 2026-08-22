@@ -151,6 +151,7 @@ export const CN_TASK_EXECUTION_MESSAGES = {
   executing: (goal: string, receiptCount: number) => `“${goal}”还在执行链上${receiptCount ? `，已完成${receiptCount}个可验证步骤` : ''}。`,
   activeWithoutReceipt: '当前任务仍在执行，暂时还没有终态回执。',
   cancelled: '已停止当前任务，未完成的步骤不会继续执行。',
+  staleControl: '这条控制请求对应的任务已经变化，我没有停止后来开始的任务。',
   confirmationFailed: (detail: string) => `确认的操作执行失败：${detail}`,
   confirmationExecuted: '已执行刚才确认的操作。',
 } as const;

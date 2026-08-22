@@ -8,6 +8,8 @@ import { optionalAuth, requireAuth } from "../middleware/auth";
 import { getUserPreferredLLMConfig } from "../llm/user_preferences";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
+import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
+import { buildModelCapabilityPolicy } from "../cognition/capability_selection";
 
 export function mountMiscRoutes(router: Router, _jwtSecret: string, llm: {
   getDeepSeek: any; getGemini: any; getOpenAI: any; getAnthropic: any; getQwen: any;
@@ -115,11 +117,33 @@ export function mountMiscRoutes(router: Router, _jwtSecret: string, llm: {
     }
 
     try {
+      const taskText = messages
+        .filter((item: any) => item?.role !== 'assistant')
+        .map((item: any) => String(item?.content || item?.message || item?.text || '').trim())
+        .filter(Boolean)
+        .join('\n')
+        .slice(-12000);
+      const executionPlan = buildLumiExecutionPipeline({
+        dispatch: {
+          userId,
+          text: taskText,
+          channel: 'chat',
+          source: 'misc_chat',
+          domain,
+          orgId,
+          operationMode: 'assistant',
+          targetIsLumi: true,
+        },
+        registry: toolRegistry,
+        isSanctuary: !req.user,
+        source: 'misc_chat',
+      });
+      const modelToolPolicy = buildModelCapabilityPolicy(executionPlan.execution);
       const result = await runWithTools(
         messages,
         toolRegistry,
         { provider, model, userId, domain, orgId },
-        undefined, 3,
+        undefined, modelToolPolicy.maxIterations || 3,
         llm.getDeepSeek, llm.getGemini, llm.getOpenAI, llm.getAnthropic, llm.getQwen,
         undefined,
         {
@@ -128,15 +152,12 @@ export function mountMiscRoutes(router: Router, _jwtSecret: string, llm: {
           orgId,
           llmGetters: llm,
           source: 'misc_chat',
+          actionIntent: taskText,
+          routedTaskText: executionPlan.turnIntent.flow.routeText,
+          toolPolicy: modelToolPolicy,
         },
       );
 
-      const taskText = messages
-        .filter((item: any) => item?.role !== 'assistant')
-        .map((item: any) => String(item?.content || item?.message || item?.text || '').trim())
-        .filter(Boolean)
-        .join('\n')
-        .slice(-12000);
       const finalized = finalizeLumiResponse({
         taskText,
         responseText: result.text || '',

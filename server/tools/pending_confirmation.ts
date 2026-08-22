@@ -79,6 +79,7 @@ function confirmationTarget(args: Record<string, any>): string {
     args.contact
     || args.recipient
     || args.target
+    || args.path
     || args.channelId
     || args.chatId
     || args.url
@@ -105,6 +106,22 @@ function sanitizeValue(value: any, depth = 0): any {
     key,
     SECRET_KEY_RE.test(key) ? '[redacted]' : sanitizeValue(item, depth + 1),
   ]));
+}
+
+function confirmationSafeArgs(toolName: string, args: Record<string, any>): Record<string, any> {
+  if (toolName !== 'desktop_write_text_file') return sanitizeValue(args || {});
+  const content = String(args.content ?? '');
+  return {
+    path: String(args.path || ''),
+    encoding: String(args.encoding || 'utf-8'),
+    overwritePolicy: String(args.overwritePolicy || 'fail_if_exists'),
+    contentSummary: {
+      characters: content.length,
+      sha256: crypto.createHash('sha256').update(content, 'utf8').digest('hex'),
+      preview: content.slice(0, 120),
+      truncated: content.length > 120,
+    },
+  };
 }
 
 function matchesScope(pending: PendingToolConfirmation, scope?: PendingConfirmationScope): boolean {
@@ -157,7 +174,7 @@ export function recordPendingConfirmation(
     target: confirmationTarget(args),
     payloadDigest: confirmationPayloadDigest(args),
     exactArgs: stableValue(args || {}),
-    safeArgs: sanitizeValue(args || {}),
+    safeArgs: confirmationSafeArgs(toolName, args || {}),
     actionIntent: String(scope.actionIntent || '').trim(),
     source,
     domain: scope.domain || '',

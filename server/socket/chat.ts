@@ -2,38 +2,30 @@
  * agent:chat socket handler — the core conversational AI pipeline
  */
 import { Server, Socket } from "socket.io";
-import os from "os";
-import path from "path";
 import { readDB, writeDB } from "../../db_layer";
 import { pushNotification } from "../routes/notifications";
 import { NormalizedMessage, makeLLMCall, makeLLMCallStreaming, StreamCallback } from "../llm/providers";
-import { LLMUsage, ToolContext, ToolExecutionRecord } from "../tools/types";
+import { LLMUsage, ToolExecutionRecord } from "../tools/types";
 import { toolRegistry } from "../tools/registry";
 import { executeToolCall } from "../tools/execution_engine";
-import { runWithTools } from "../llm/adapter";
+import { buildConfirmedStepContinuationMessages, runWithTools } from "../llm/adapter";
 import {
-  isPureOperationModeSwitchRequest,
   normalizeOperationMode,
-  type OperationMode,
 } from "../cognition/operation_modes";
 import { getStoredOperationMode, saveStoredOperationMode } from "../cognition/operation_mode_store";
 import { buildInteractionModeOverlay } from "../cognition/turn_flow";
-import { buildLumiCapabilitySelection } from "../cognition/capability_selection";
+import {
+  buildLumiCapabilitySelection,
+  buildModelCapabilityPolicy,
+} from "../cognition/capability_selection";
 import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
-import { shouldRunLegacyDirectExecution } from "../cognition/legacy_route_policy";
-import { bindCapabilityExecutionPlanTask } from "../cognition/capability_execution_plan";
-import { buildForegroundMessagingArguments, executeForegroundMessagingAction } from "../cognition/foreground_messaging_execution";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
 import { createDesktopExecutionTracker, withDesktopExecutionReceipt } from "../desktop/execution_runtime";
-import { buildDesktopObservationPlan, formatDesktopObservationResult } from "../cognition/desktop_observation";
-import { buildClientDiagnosticPlan, formatClientDiagnosticResult } from "../cognition/client_diagnostic_result";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import {
   buildActionContract,
-  requiresArtifactPostWriteReadback,
   summarizeActionContractBlocker,
 } from "../cognition/action_contract";
-import { isExplicitArtifactCreationText } from "../cognition/normalized_action_intent";
 import {
   createPreFinalizationTextGate,
   shouldDeferModelOutputUntilFinalized,
@@ -44,7 +36,6 @@ import {
   getExplicitSentenceCountConstraint,
   sentenceCountCorrectionInstruction,
 } from "../cognition/response_constraints";
-import { buildCapabilityMetaResponse } from "../cognition/capability_meta";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import {
   persistLumiPostTurnLearning,
@@ -72,6 +63,8 @@ import { lightweightEvolve } from "../personality/evolution";
 import {
   getOrCreateConversationForTurn,
   addMessage,
+  addMessageIdempotent,
+  getMessageByRequestId,
   getMessages,
   getMessagesByTokenBudget,
   getConversationSummary,
@@ -83,13 +76,10 @@ import {
   getConversationForScope,
   getOrCreateActiveConversation,
   getConversationActionStatus,
-  prepareConversationActionExecution,
-  persistConversationExecutionPlan,
   persistConversationModelExecutionResult,
   getConversationModelExecutionRecovery,
   cancelConversationActionExecution,
   setConversationActionExecutionStatus,
-  updateConversationActionFocus,
 } from "../conversation/manager";
 import { scheduleConversationSummary } from "../conversation/summary_scheduler";
 import {
@@ -106,11 +96,8 @@ import {
   buildRecentActionContinuationBridge,
   classifyConversationActionFollowupIntent,
   formatConversationActionTaskStatus,
-  getRecoveredApplicationContinuationTarget,
-  resolveRecentActionOpenTarget,
 } from "../cognition/action_continuation";
 import {
-  buildConfirmedStepContinuationNote,
   coalesceToolExecutionRecords,
   confirmedStepNeedsContinuation,
   taskReceiptsToRecords,
@@ -119,60 +106,26 @@ import {
 import { hasExplicitTeamExecutionRequest, isUserCorrectionOrExplanationQuestion } from "../cognition/tool_intent";
 import { summarizeToolRecordForPersistence } from "../cognition/tool_record_status";
 import {
-  buildDeterministicClientNavigationCommand,
-  buildDeterministicExternalCommitConfirmationCommand,
-  buildDeterministicKnowledgeInspectionCommand,
-  buildDeterministicLocalDesktopNavigationCommand,
-  buildDeterministicTextArtifactCommand,
-  buildDeterministicWorkTaskCreateCommand,
-  buildDeterministicWorkTaskProgressCommand,
   buildDeterministicWorkTaskStatusCommand,
-  buildDeterministicWpsDocumentCommand,
-  buildQuickCommandToolPolicy,
-  matchQuickCommand,
 } from "../cognition/quick_commands";
 import { recordTokenUsage } from "../llm/token_tracker";
 import {
-  runOrchestratedTask,
-  shouldDistillSkill,
-  buildSkillDescription,
   classifyComplexity,
-  isTerminalOrchestrationToolEvent,
   listAvailableOrchestrationAgents,
   shouldAttemptOrchestration,
 } from "../agents/orchestrator";
-import { buildDelegationAck, formatBackgroundDelegationFailure, shouldDelegateWorkInBackground } from "../agents/background_delegation";
-import { executeSkillWorkflowAdapter } from "../skills/workflow_registry";
-import { isLatestUserTurn, markLatestUserTurn } from "../agents/background_delivery";
+import { shouldDelegateWorkInBackground } from "../agents/background_delegation";
+import { markLatestUserTurn } from "../agents/background_delivery";
 import {
-  cancelBackgroundTask,
-  checkpointBackgroundTask,
-  completeBackgroundTask,
-  getBackgroundTask,
-  heartbeatBackgroundTask,
-  incrementBackgroundTaskToolCalls,
-  isBackgroundTaskCancellationRequested,
-  isBackgroundTaskPauseRequested,
-  markBackgroundTaskRunning,
-  pauseBackgroundTask,
-  recordBackgroundTaskFailure,
-  registerBackgroundTask,
   requestCancelBackgroundTask,
   requestPauseBackgroundTask,
   resumeBackgroundTask,
 } from "../agents/background_tasks";
-import { snapshotDurableToolRecords } from "../cognition/durable_task_recovery";
-import { buildForegroundWeChatReadArgs, buildForegroundWeChatSendArgs, runNLChainer, shouldChainTask } from "../agents/nl_chainer";
-import { autoInstallForTask } from "../agents/auto_installer";
+import { shouldChainTask } from "../agents/nl_chainer";
 import { searchKnowledgeBase } from "../org/kb";
-import { getWorkflow, recordWorkflowRun, listWorkflows } from "../agents/workflows";
 import { buildProfessionOverlay } from "../autonomy/professions";
 import { buildResponseLanguageInstruction } from "../utils/language";
-import { buildInternalOpenCommand } from "../i18n/naturalness_messages";
-import { formatOperationModeSwitchResponse } from "../i18n/operation_mode_messages";
 import { CN_MESSAGING_MESSAGES } from "../regions/packs/cn/messaging_messages";
-import { CN_CLIENT_DIAGNOSTIC_MESSAGES } from "../regions/packs/cn/client_diagnostic_messages";
-import { CN_BACKGROUND_DELEGATION_MESSAGES } from "../regions/packs/cn/background_delegation_messages";
 import { CN_TASK_EXECUTION_MESSAGES, CN_VOICE_FAST_PATH_MESSAGES } from "../regions/packs/cn/voice_fast_path_messages";
 import { buildModelSelfAwareness, buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { getScopedPreferredLLM } from "../llm/user_preferences";
@@ -180,9 +133,14 @@ import { createDesktopRelay } from "./desktop_relay";
 import { resolveSocketScope, scopedEmotionalStateKey } from "./scope";
 import {
   beginChatExecution,
+  beginQueuedChatExecution,
+  beginChatSidecarExecution,
   getChatExecution,
+  getChatSidecarCancellationTarget,
   markChatExecutionCancelling,
+  persistChatSidecarCancellationIntent,
   recordChatExecutionEvent,
+  waitForChatSidecarCancellationIntent,
   type ChatExecutionScope,
 } from "./chat_execution_registry";
 import { classifyActiveTaskMessage } from "../cognition/task_concurrency";
@@ -329,7 +287,7 @@ function getAudioAttachmentTranscript(item: ChatIncomingAttachment): string {
   return (markerIndex >= 0 ? raw.slice(markerIndex + 'transcript:'.length) : raw).trim();
 }
 
-function buildChatAttachmentContext(attachments: ChatIncomingAttachment[]): string {
+export function buildChatAttachmentContext(attachments: ChatIncomingAttachment[]): string {
   if (attachments.length === 0) return '';
   const lines: string[] = [
     '## Current Turn Attachments',
@@ -339,25 +297,23 @@ function buildChatAttachmentContext(attachments: ChatIncomingAttachment[]): stri
     const content = item.transcript || item.content || item.preview || '';
     lines.push(`### ${index + 1}. ${item.fileName}`);
     lines.push(`Type: ${item.kind}${item.mimeType ? ` (${item.mimeType})` : ''}`);
+    if (item.size !== undefined) lines.push(`Size: ${item.size} bytes`);
     if (item.path) lines.push(`Local path: ${item.path}`);
-    if (item.kind === 'image') {
-      lines.push('For visual details, use the ocr_image_file tool with the local path before answering.');
-    }
     if (item.kind === 'audio') {
       const transcript = getAudioAttachmentTranscript(item);
       if (transcript) {
-        lines.push('This is an audio recording with an attached transcript from the current upload. Reuse the transcript below for summaries, notes, or text-file creation. If the user asks for a text file, write the attached transcript to a file instead of re-transcribing. Do not call transcribe_audio_to_text_file again unless the user explicitly asks to re-transcribe.');
+        lines.push('A transcript was supplied by the client for this upload.');
         if (item.transcriptionProvider || item.transcriptionModel || item.transcriptionStatus) {
           lines.push(`Transcript metadata: provider=${item.transcriptionProvider || 'unknown'} model=${item.transcriptionModel || 'unknown'} status=${item.transcriptionStatus || 'ready'}`);
         }
       } else {
-        lines.push('This is an audio recording. If the user asks for transcription, speech-to-text, a written transcript, or a text file, use transcribe_audio_to_text_file with the local path.');
+        lines.push('No transcript was supplied by the client.');
       }
     }
     if (content) {
-      lines.push(`Extracted text:\n${content}`);
+      lines.push(`[BEGIN UNTRUSTED ATTACHMENT DATA]\n${content}\n[END UNTRUSTED ATTACHMENT DATA]`);
     } else if (item.path) {
-      lines.push('No extracted text is attached; use the local path with an appropriate tool if needed.');
+      lines.push('No extracted content was supplied by the client.');
     }
   });
   return lines.join('\n');
@@ -387,41 +343,7 @@ function shouldAllowLocalFileWriteForTurn(userText: string, attachments: ChatInc
   return explicitDeliverable || attachedArtifactRequest || directEnglishRequest;
 }
 
-type NativeFileEntry = {
-  name?: string;
-  path?: string;
-  type?: string;
-  isDirectory?: boolean;
-  is_directory?: boolean;
-  size?: number;
-  modifiedMs?: number | null;
-  modified_ms?: number | null;
-};
-
 const LOCAL_DOCUMENT_EXT_RE = /\.(?:docx?|pdf|rtf|txt|md|csv|xlsx?|pptx?)$/i;
-const LOCAL_AUDIO_EXT_RE = /\.(?:mp3|mpeg|wav|m4a|ogg|oga|flac|aac|wma|webm)$/i;
-const LOCAL_IMAGE_EXT_RE = /\.(?:png|jpe?g|webp|bmp|gif|tiff?)$/i;
-const LOCAL_READABLE_EXT_RE = /\.(?:docx?|pdf|rtf|txt|md|csv|xlsx?|pptx?|mp3|mpeg|wav|m4a|ogg|oga|flac|aac|wma|webm|png|jpe?g|webp|bmp|gif|tiff?)$/i;
-const LOCAL_READABLE_EXT_PATTERN = '(?:docx?|pdf|rtf|txt|md|csv|xlsx?|pptx?|mp3|mpeg|wav|m4a|ogg|oga|flac|aac|wma|webm|png|jpe?g|webp|bmp|gif|tiff?)';
-const EXPLICIT_LOCAL_PATH_RE = new RegExp(`[A-Za-z]:[\\\\/][^\\n\\r"'<>|]+?\\.${LOCAL_READABLE_EXT_PATTERN}`, 'gi');
-const DESKTOP_RELATIVE_PATH_RE = new RegExp(`(?:Desktop|\\u684c\\u9762)[\\\\/][^\\n\\r"'<>|]+?\\.${LOCAL_READABLE_EXT_PATTERN}`, 'gi');
-const DESKTOP_RELATIVE_FOLDER_RE = /(?:Desktop|\u684c\u9762)[\\/][^\n\r"'<>|.,;\]\u3002\uff0c\uff1b]+/gi;
-const LOCAL_ACTION_VERB_RE =
-  /\b(?:open|read|review|inspect|analy[sz]e|summari[sz]e|compare|transcribe|extract|ocr|check|look\s+at|look\s+over)\b|(?:\u6253\u5f00|\u8bfb\u53d6|\u8bfb\u4e00\u4e0b|\u8bfb\u4e0b|\u770b\u4e00\u4e0b|\u770b\u770b|\u67e5\u770b|\u5ba1\u67e5|\u5ba1\u9605|\u5206\u6790|\u68c0\u67e5|\u6574\u7406|\u603b\u7ed3|\u8f6c\u6587\u5b57|\u8f6c\u5199|\u8bc6\u522b|\u63d0\u53d6|\u5bf9\u6bd4|\u505a\u6210|\u751f\u6210)/iu;
-const LOCAL_ACTION_OBJECT_RE =
-  /\b(?:file|folder|directory|document|docx|pdf|word|attachment|contract|agreement|audio|recording|voice|screenshot|image|picture)\b|(?:\u6587\u4ef6|\u6587\u4ef6\u5939|\u76ee\u5f55|\u6587\u6863|\u8d44\u6599|\u9644\u4ef6|\u5408\u540c|\u534f\u8bae|\u5f55\u97f3|\u97f3\u9891|\u8bed\u97f3|\u622a\u56fe|\u56fe\u7247|\u7167\u7247|\u8fd9\u4efd)/iu;
-const TRANSCRIPTION_REQUEST_RE =
-  /\b(?:transcribe|transcript|speech\s*to\s*text|voice\s*to\s*text)\b|(?:\u8f6c\u6587\u5b57|\u8f6c\u5199|\u7b14\u5f55|\u8bed\u97f3\u8bc6\u522b|\u5f55\u97f3)/iu;
-const DOCUMENT_REVIEW_REQUEST_RE =
-  /\b(?:contract|agreement|review|inspect|analy[sz]e|document|docx|pdf)\b|(?:\u5408\u540c|\u534f\u8bae|\u5ba1\u67e5|\u5ba1\u9605|\u4e59\u65b9|\u7532\u65b9|\u4fee\u6539\u610f\u89c1|\u6587\u4ef6|\u6587\u6863|\u8d44\u6599)/iu;
-const OCR_REQUEST_RE =
-  /\b(?:ocr|image|picture|screenshot|photo)\b|(?:\u8bc6\u522b|\u63d0\u53d6|\u622a\u56fe|\u56fe\u7247|\u7167\u7247)/iu;
-const LOCAL_CAD_IMAGE_REQUEST_RE =
-  /\b(?:cad|dxf|dwg|autocad|floor\s*plan|blueprint|draft|drawing|renovation)\b|(?:\u56fe\u7eb8|\u6237\u578b|\u5e73\u9762\u56fe|\u65bd\u5de5\u56fe|\u8bbe\u8ba1\u56fe|\u8349\u7a3f\u56fe|\u753b\u56fe|\u753b\u51fa\u6765|\u7ed8\u5236|\u88c5\u4fee|\u5b9e\u64cd|\u5b9e\u9645\u753b)/iu;
-
-function uniqueStrings(values: string[]): string[] {
-  return Array.from(new Set(values.filter(Boolean)));
-}
 
 function getRecentHistoryText(history: any[] | undefined, maxLength = 6000): string {
   if (!Array.isArray(history) || history.length === 0) return '';
@@ -505,6 +427,29 @@ function isShortClientContinuation(userText: string): boolean {
   return Boolean(clean) && clean.length <= 24 && SHORT_CLIENT_CONTINUATION_RE.test(clean);
 }
 
+function getVerifiedClientModeChange(records: ToolExecutionRecord[]): 'chat' | 'assistant' | 'autonomous' | 'meeting' | null {
+  const validModes = new Set(['chat', 'assistant', 'autonomous', 'meeting']);
+  for (const record of [...records].reverse()) {
+    if (
+      record.name !== 'client_action'
+      || record.arguments?.action !== 'set_client_mode'
+      || !toolRecordSucceeded(record)
+    ) continue;
+    const mode = String(record.arguments?.mode || '').trim().toLowerCase();
+    if (!validModes.has(mode)) continue;
+    try {
+      const parsed = JSON.parse(String(record.result || '{}'));
+      const status = String(parsed?.verification?.status || parsed?.status || '').toLowerCase();
+      if (/^(?:verified|not_applicable)$/.test(status) && parsed?.ok !== false) {
+        return mode as 'chat' | 'assistant' | 'autonomous' | 'meeting';
+      }
+    } catch {
+      // A mode preference is never persisted from an unparseable receipt.
+    }
+  }
+  return null;
+}
+
 function hasRecentClientSurfaceContext(history: any[] | undefined): boolean {
   const recent = getRecentHistoryText(
     Array.isArray(history)
@@ -536,301 +481,12 @@ export function buildClientSurfaceContinuationBridge(userText: string, history: 
 }
 
 export function shouldRunVisibleActionPreflight(userText: string, attachments: ChatIncomingAttachment[]): boolean {
-  if (attachments.some(item => item.path && !shouldSkipPreflightForAttachment(item))) return true;
-  const text = userText || '';
-  if (isExplicitArtifactCreationText(text)) return false;
-  if (extractExplicitLocalPaths(text).length > 0) return true;
-  const mentionsFileLocation = /\b(?:desktop|downloads?|documents?)\b|(?:\u684c\u9762|\u4e0b\u8f7d|\u6587\u6863)/iu.test(text);
-  const namesSpecificFile = LOCAL_READABLE_EXT_RE.test(text) || /["“][^"”]{2,}["”]/u.test(text);
-  return LOCAL_ACTION_VERB_RE.test(text) && LOCAL_ACTION_OBJECT_RE.test(text) && (mentionsFileLocation || namesSpecificFile);
-}
-
-function cleanLocalPathSegment(input: string): string {
-  return String(input || '')
-    .trim()
-    .replace(/^[\s"'`“”‘’「」『』《》]+|[\s"'`“”‘’「」『』《》]+$/g, '')
-    .replace(/^(?:\u6709(?:\u4e2a|\u4e00\u4e2a)?|\u53eb|\u540d\u4e3a|\u7684)\s*/u, '')
-    .replace(/[\s),.;\]\u3002\uff0c\uff1b\uff1a:!?]+$/g, '')
-    .trim();
-}
-
-function extractNamedDesktopFolders(input: string): string[] {
-  const text = String(input || '');
-  const homeDesktop = path.join(os.homedir(), 'Desktop');
-  const out: string[] = [];
-  const patterns = [
-    /(?:\u684c\u9762(?:\u4e0a|\u91cc|\u4e0b)?(?:\u6709(?:\u4e2a|\u4e00\u4e2a)?|\u7684|\u53eb|\u540d\u4e3a)?\s*)["'`“”‘’「」『』《》]([^"'`“”‘’「」『』《》\n\r]{1,80})["'`“”‘’「」『』《》]\s*(?:\u6587\u4ef6\u5939|\u76ee\u5f55)/giu,
-    /(?:\u684c\u9762(?:\u4e0a|\u91cc|\u4e0b)?(?:\u6709(?:\u4e2a|\u4e00\u4e2a)?|\u7684|\u53eb|\u540d\u4e3a)?\s*)([^\s"'`“”‘’「」『』《》,，。！？!?:：;；、\n\r]{1,80})\s*(?:\u6587\u4ef6\u5939|\u76ee\u5f55)/giu,
-    /\b(?:desktop\s+)?(?:folder|directory)\s+(?:named|called)?\s*["'`]?([^"'`,.;\n\r]{1,80})["'`]?/giu,
-  ];
-  for (const pattern of patterns) {
-    for (const match of text.matchAll(pattern)) {
-      const name = cleanLocalPathSegment(match[1] || '');
-      if (!name || /^(?:desktop|folder|directory)$/i.test(name)) continue;
-      if (/^(?:\u684c\u9762|\u6587\u4ef6\u5939|\u76ee\u5f55|\u91cc\u9762|\u5185\u5bb9|\u8fd9\u4e2a|\u90a3\u4e2a)$/u.test(name)) continue;
-      out.push(path.join(homeDesktop, name));
-    }
-  }
-  return uniqueStrings(out).slice(0, 4);
-}
-
-function extractExplicitLocalPaths(input: string): string[] {
-  const out: string[] = [];
-  const text = String(input || '');
-  for (const match of text.match(EXPLICIT_LOCAL_PATH_RE) || []) {
-    out.push(match.trim().replace(/[),.;\]\u3002\uff0c\uff1b]+$/g, ''));
-  }
-  const homeDesktop = path.join(os.homedir(), 'Desktop');
-  for (const match of text.match(DESKTOP_RELATIVE_PATH_RE) || []) {
-    const cleaned = match.trim().replace(/[),.;\]\u3002\uff0c\uff1b]+$/g, '');
-    const relative = cleaned.replace(/^(?:Desktop|\u684c\u9762)[\\/]/i, '');
-    out.push(path.join(homeDesktop, relative));
-  }
-  for (const match of text.match(DESKTOP_RELATIVE_FOLDER_RE) || []) {
-    const cleaned = cleanLocalPathSegment(match);
-    if (!cleaned || LOCAL_READABLE_EXT_RE.test(cleaned)) continue;
-    const relative = cleaned.replace(/^(?:Desktop|\u684c\u9762)[\\/]/i, '');
-    if (relative && relative !== cleaned) out.push(path.join(homeDesktop, relative));
-  }
-  out.push(...extractNamedDesktopFolders(text));
-  return uniqueStrings(out).slice(0, 6);
-}
-
-function parseNativeFiles(raw: string): NativeFileEntry[] {
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed;
-    if (typeof parsed === 'string') return parseNativeFiles(parsed);
-    if (parsed && typeof parsed === 'object') {
-      const obj = parsed as Record<string, any>;
-      for (const key of ['entries', 'files', 'items', 'data', 'result', 'output']) {
-        const value = obj[key];
-        if (Array.isArray(value)) return value;
-        if (typeof value === 'string') {
-          const nested = parseNativeFiles(value);
-          if (nested.length) return nested;
-        }
-      }
-    }
-    return [];
-  } catch {
-    return [];
-  }
-}
-
-function isNativeDirectory(entry: NativeFileEntry): boolean {
-  return entry.type === 'directory' || entry.isDirectory === true || entry.is_directory === true;
-}
-
-function getNativeModifiedMs(entry: NativeFileEntry): number {
-  const value = entry.modifiedMs ?? entry.modified_ms;
-  return typeof value === 'number' ? value : 0;
-}
-
-function getLikelyLocalDirs(searchText: string): string[] {
-  const home = os.homedir();
-  const oneDrive = process.env.OneDrive || process.env.ONEDRIVE || process.env.OneDriveConsumer || process.env.ONEDRIVECONSUMER || '';
-  const dirs = new Set<string>();
-  dirs.add(path.join(home, 'Desktop'));
-  dirs.add(path.join(home, 'OneDrive', 'Desktop'));
-  if (oneDrive) dirs.add(path.join(oneDrive, 'Desktop'));
-  if (process.env.PUBLIC) dirs.add(path.join(process.env.PUBLIC, 'Desktop'));
-  dirs.add('C:\\Users\\Public\\Desktop');
-
-  const text = String(searchText || '');
-  if (/\bdownloads?\b|\u4e0b\u8f7d/i.test(text)) {
-    dirs.add(path.join(home, 'Downloads'));
-  }
-  if (/\bdocuments?\b|\u6587\u6863/i.test(text)) {
-    dirs.add(path.join(home, 'Documents'));
-    dirs.add(path.join(home, 'OneDrive', 'Documents'));
-    if (oneDrive) dirs.add(path.join(oneDrive, 'Documents'));
-  }
-  return uniqueStrings(Array.from(dirs)).slice(0, 6);
-}
-
-function normalizeComparableText(value: string): string {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/\.[a-z0-9]+$/i, '')
-    .replace(/[\s"'“”‘’`.,，。；;:：()[\]{}<>《》【】_-]+/g, '');
-}
-
-function scoreLocalFileCandidate(entry: NativeFileEntry, searchText: string): number {
-  if (isNativeDirectory(entry)) return -Infinity;
-  const filePath = entry.path || entry.name || '';
-  if (!LOCAL_READABLE_EXT_RE.test(filePath)) return -Infinity;
-
-  const name = entry.name || path.basename(filePath);
-  const nameLower = name.toLowerCase();
-  const query = String(searchText || '');
-  const queryComparable = normalizeComparableText(query);
-  const baseComparable = normalizeComparableText(path.basename(name, path.extname(name)));
-  const isDoc = LOCAL_DOCUMENT_EXT_RE.test(name);
-  const isAudio = LOCAL_AUDIO_EXT_RE.test(name);
-  const isImage = LOCAL_IMAGE_EXT_RE.test(name);
-  let score = 0;
-
-  if (isDoc) score += 6;
-  if (isAudio) score += 6;
-  if (isImage) score += 4;
-  if (TRANSCRIPTION_REQUEST_RE.test(query) && isAudio) score += 34;
-  if (DOCUMENT_REVIEW_REQUEST_RE.test(query) && isDoc) score += 18;
-  if (OCR_REQUEST_RE.test(query) && isImage) score += 20;
-  if (LOCAL_CAD_IMAGE_REQUEST_RE.test(query) && isImage) score += 30;
-  if (/\b(?:contract|agreement)\b|(?:\u5408\u540c|\u534f\u8bae)/iu.test(query) && /\b(?:contract|agreement)\b|(?:\u5408\u540c|\u534f\u8bae)/iu.test(nameLower)) score += 30;
-  if (/\b(?:transcript|recording|audio|voice)\b|(?:\u7b14\u5f55|\u5f55\u97f3|\u97f3\u9891|\u8bed\u97f3)/iu.test(query) && /\b(?:recording|audio|voice)\b|(?:\u7b14\u5f55|\u5f55\u97f3|\u97f3\u9891|\u8bed\u97f3)/iu.test(nameLower)) score += 24;
-  if (baseComparable.length >= 4 && queryComparable.includes(baseComparable.slice(0, Math.min(18, baseComparable.length)))) score += 45;
-  if (getNativeModifiedMs(entry) > 0) {
-    const ageHours = Math.max(0, (Date.now() - getNativeModifiedMs(entry)) / 3_600_000);
-    score += Math.max(0, 8 - Math.min(8, ageHours / 12));
-  }
-  return score;
-}
-
-function selectBestLocalFileCandidate(entries: NativeFileEntry[], searchText: string): NativeFileEntry | null {
-  const scored = entries
-    .map(entry => ({ entry, score: scoreLocalFileCandidate(entry, searchText) }))
-    .filter(item => Number.isFinite(item.score) && item.score > 0)
-    .sort((a, b) => b.score - a.score || getNativeModifiedMs(b.entry) - getNativeModifiedMs(a.entry));
-  if (scored.length === 0) return null;
-  const best = scored[0];
-  const second = scored[1];
-  if (best.score >= 30) return best.entry;
-  if (scored.length === 1 && best.score >= 14) return best.entry;
-  if (best.score >= 22 && (!second || best.score - second.score >= 8)) return best.entry;
-  return null;
-}
-
-function selectLocalCadImageCandidates(entries: NativeFileEntry[], searchText: string, limit = 2): NativeFileEntry[] {
-  if (!LOCAL_CAD_IMAGE_REQUEST_RE.test(searchText)) return [];
-  return entries
-    .map(entry => ({ entry, score: scoreLocalFileCandidate(entry, searchText) }))
-    .filter(item => (
-      Number.isFinite(item.score) &&
-      item.score > 0 &&
-      !isNativeDirectory(item.entry) &&
-      LOCAL_IMAGE_EXT_RE.test(item.entry.path || item.entry.name || '')
-    ))
-    .sort((a, b) => b.score - a.score || getNativeModifiedMs(b.entry) - getNativeModifiedMs(a.entry))
-    .map(item => item.entry)
-    .slice(0, Math.max(1, limit));
-}
-
-function toolForLocalFile(filePath: string, searchText: string, kind?: ChatIncomingAttachment['kind']): { name: string; arguments: Record<string, any> } {
-  const fileName = path.basename(filePath);
-  if (kind === 'audio' || LOCAL_AUDIO_EXT_RE.test(filePath)) {
-    return {
-      name: 'transcribe_audio_to_text_file',
-      arguments: {
-        filePath,
-        title: fileName,
-        outputFormat: 'txt',
-        language: /[\u3400-\u9fff]/.test(searchText) ? 'zh' : 'auto',
-      },
-    };
-  }
-  if (kind === 'image' || LOCAL_IMAGE_EXT_RE.test(filePath)) {
-    if (LOCAL_CAD_IMAGE_REQUEST_RE.test(searchText)) {
-      return {
-        name: 'floorplan_extract_geometry',
-        arguments: {
-          imagePath: filePath,
-          projectName: path.basename(path.dirname(filePath)) || fileName,
-        },
-      };
-    }
-    return {
-      name: 'ocr_image_file',
-      arguments: {
-        imagePath: filePath,
-        query: 'Extract the visible text and details relevant to the user request.',
-      },
-    };
-  }
-  if (LOCAL_DOCUMENT_EXT_RE.test(filePath)) {
-    return { name: 'extract_document_text', arguments: { filePath } };
-  }
-  return { name: 'read_file', arguments: { path: filePath } };
-}
-
-function toolForLocalPath(localPath: string, searchText: string, kind?: ChatIncomingAttachment['kind']): { name: string; arguments: Record<string, any> } {
-  if (kind || LOCAL_READABLE_EXT_RE.test(localPath)) return toolForLocalFile(localPath, searchText, kind);
-  return { name: 'desktop_list_files', arguments: { path: localPath, limit: 120 } };
-}
-
-function localArtifactTarget(record: ToolExecutionRecord): string {
-  const args = record.arguments || {};
-  return String(args.path || args.filePath || args.outputPath || args.targetPath || '').trim();
-}
-
-function sameLocalArtifact(left: string, right: string): boolean {
-  return Boolean(left && right && path.normalize(left).toLowerCase() === path.normalize(right).toLowerCase());
-}
-
-export function buildRequestedArtifactReadback(
-  userText: string,
-  records: ToolExecutionRecord[],
-): { name: string; arguments: Record<string, any> } | null {
-  if (!requiresArtifactPostWriteReadback(userText)) return null;
-  let writeIndex = -1;
-  for (let index = records.length - 1; index >= 0; index -= 1) {
-    const record = records[index];
-    if (
-      !record.error
-      && /^(?:write_file|create_docx|create_xlsx|create_ppt|create_pdf)$/i.test(String(record.name || ''))
-    ) {
-      writeIndex = index;
-      break;
-    }
-  }
-  if (writeIndex < 0) return null;
-  const target = localArtifactTarget(records[writeIndex]);
-  if (!target) return null;
-  const hasPostWriteReadback = records.slice(writeIndex + 1).some(record => (
-    !record.error
-    && /^(?:read_file|read_docx|read_pdf|pdf_to_text|extract_document_text)$/i.test(String(record.name || ''))
-    && sameLocalArtifact(target, localArtifactTarget(record))
-  ));
-  return hasPostWriteReadback ? null : toolForLocalFile(target, userText);
-}
-
-function shouldSkipPreflightForAttachment(item: ChatIncomingAttachment): boolean {
-  return item.kind === 'audio' && Boolean(getAudioAttachmentTranscript(item));
-}
-
-function compactPreflightResult(record: ToolExecutionRecord): string {
-  const result = String(record.result || '');
-  const limit = /^(extract_document_text|read_docx|read_file|read_pdf|pdf_to_text|ocr_image_file|transcribe_audio_to_text_file)$/i.test(record.name)
-    ? 18000
-    : 4000;
-  if (result.length <= limit) return result;
-  return `${result.slice(0, limit)}\n[...preflight result truncated: ${result.length - limit} more chars]`;
-}
-
-function formatPreflightContext(records: ToolExecutionRecord[]): string {
-  const useful = records.filter(record => record.result || record.error);
-  if (useful.length === 0) return '';
-  const extractedContent = useful.some(record =>
-    !record.error && /^(extract_document_text|read_docx|read_file|read_pdf|pdf_to_text|ocr_image_file|transcribe_audio_to_text_file)$/i.test(record.name)
-  );
-  const lines = [
-    '## Visible Action Preflight',
-    'Before answering, Lumi already performed these safe tool steps. Treat them as visible evidence from this turn.',
-    extractedContent
-      ? 'Readable content was extracted below. Use it directly, and do not promise to read it again unless something is missing.'
-      : 'Only discovery/checking evidence is available below. Do not claim the document/audio/image content was read; say what was checked and ask for the exact file if needed.',
-  ];
-  useful.slice(-6).forEach((record, index) => {
-    lines.push(`### Step ${index + 1}: ${record.name}`);
-    lines.push(`Arguments: ${JSON.stringify(record.arguments || {})}`);
-    if (record.error) {
-      lines.push(`Error: ${record.error}`);
-    } else {
-      lines.push(`Result:\n${compactPreflightResult(record)}`);
-    }
-  });
-  return lines.join('\n');
+  void userText;
+  void attachments;
+  // Retained as a compatibility probe for callers/tests. Attachments and
+  // local-path prose are model inputs, not a pre-model domain router. Any
+  // extraction now begins only after the model selects a manifest capability.
+  return false;
 }
 
 function buildNaturalReplyStyleOverlay(source?: string): string {
@@ -1013,7 +669,7 @@ export function registerChatHandler(
   socket.on("agent:background_resume", (data: { taskId?: string }) => updateBackgroundTaskState(data, 'resume'));
 
   socket.on("agent:chat", async (
-    data: { text?: string; history?: any[]; attachments?: any[]; personalityId?: string; category?: string; agentId?: string; domain?: string; orgId?: string | null; mode?: string; operationMode?: string; source?: string; requestId?: string; conversationId?: string },
+    data: { text?: string; history?: any[]; attachments?: any[]; personalityId?: string; category?: string; agentId?: string; domain?: string; orgId?: string | null; mode?: string; operationMode?: string; source?: string; requestId?: string; conversationId?: string; controlTargetRequestId?: string },
     ack?: (payload: { ok: boolean; requestId?: string; receivedAt?: string; error?: string }) => void,
   ) => {
     console.log('[ChatHandler] agent:chat RECEIVED:', JSON.stringify(data).slice(0, 300));
@@ -1034,6 +690,7 @@ export function registerChatHandler(
     const requestId = typeof data.requestId === 'string' && data.requestId.trim()
       ? data.requestId.trim().slice(0, 120)
       : `chat_${crypto.randomUUID()}`;
+    const requestReceivedAt = new Date().toISOString();
     const eventSource = source || 'chat';
     const allowAdaptiveLearning = shouldPersistPostTurnLearningSource(eventSource);
     const toolResultPreviewLimit = 500;
@@ -1054,15 +711,35 @@ export function registerChatHandler(
     const resolvedDomain = requestScope.domain;
     const resolvedOrgId = requestScope.orgId;
     const requestedConversationId = String(data.conversationId || '').trim();
-    const selectedConversation = requestedConversationId
+    const persistedRequestTurn = getMessageByRequestId({
+      userId: uid,
+      agentId: conversationAgentId,
+      requestId,
+      role: 'user',
+      source: eventSource,
+      channel: 'chat',
+    });
+    const persistedRequestConversation = persistedRequestTurn?.conversationId
+      ? getConversationForScope(
+          persistedRequestTurn.conversationId,
+          uid,
+          resolvedDomain,
+          resolvedOrgId,
+        )
+      : null;
+    const selectedConversation = persistedRequestConversation || (requestedConversationId
       ? getConversationForScope(requestedConversationId, uid, resolvedDomain, resolvedOrgId)
-      : getOrCreateActiveConversation(uid, conversationAgentId, resolvedDomain, resolvedOrgId);
-    if (!selectedConversation || selectedConversation.agentId !== conversationAgentId || selectedConversation.status !== 'active') {
+      : getOrCreateActiveConversation(uid, conversationAgentId, resolvedDomain, resolvedOrgId));
+    if (
+      !selectedConversation
+      || selectedConversation.agentId !== conversationAgentId
+      || (selectedConversation.status !== 'active' && !persistedRequestTurn)
+    ) {
       try { ack?.({ ok: false, requestId, error: 'Conversation is unavailable for this user, agent, or workspace' }); } catch {}
       return;
     }
-    const selectedConversationId = selectedConversation.id;
-    const confirmationScope = buildConversationConfirmationChannelScope({
+    let selectedConversationId = selectedConversation.id;
+    let confirmationScope = buildConversationConfirmationChannelScope({
       source: eventSource,
       domain: resolvedDomain,
       orgId: resolvedOrgId,
@@ -1078,15 +755,15 @@ export function registerChatHandler(
     pendingConfirmationPrompt = pendingConfirmation
       ? formatPendingConfirmationPrompt(pendingConfirmation)
       : '';
-    const executionScope: ChatExecutionScope = {
+    let executionScope: ChatExecutionScope = {
       userId: uid,
       domain: resolvedDomain,
       orgId: resolvedOrgId,
       source: eventSource,
       conversationId: selectedConversationId,
     };
-    const executionRoom = chatExecutionRoom(executionScope);
-    const sessionKey = `${uid}:${resolvedDomain}:${resolvedOrgId || ''}:${eventSource}:${selectedConversationId}`;
+    let executionRoom = chatExecutionRoom(executionScope);
+    let sessionKey = `${uid}:${resolvedDomain}:${resolvedOrgId || ''}:${eventSource}:${selectedConversationId}`;
     const emitAgent = (event: string, payload: Record<string, any> = {}) => {
       const normalizedPayload = {
         ...payload,
@@ -1094,18 +771,10 @@ export function registerChatHandler(
         requestId,
         conversationId: selectedConversationId,
       };
-      if (!recordChatExecutionEvent(executionScope, requestId, event, normalizedPayload)) {
-        if (event === 'agent:response') {
-          const snapshot = getChatExecution(executionScope, requestId);
-          if (snapshot?.terminalEvent?.event === 'agent:response') {
-            socket.emit('agent:response', {
-              ...snapshot.terminalEvent.payload,
-              replayed: true,
-            });
-          }
-        }
-        return;
-      }
+      // A late duplicate from the same handler is not a reconnect replay. The
+      // explicit request/recovery entry points above own replay delivery; doing
+      // it here turns one committed terminal into a second UI terminal frame.
+      if (!recordChatExecutionEvent(executionScope, requestId, event, normalizedPayload)) return false;
       if (event === 'agent:response') {
         // The originating native client must receive the terminal frame even
         // if its room membership changed during reconnect or conversation
@@ -1113,9 +782,10 @@ export function registerChatHandler(
         // event through the user/workspace room without duplicating it here.
         socket.emit(event, normalizedPayload);
         socket.to(executionRoom).emit(event, normalizedPayload);
-        return;
+        return true;
       }
       io.to(executionRoom).emit(event, normalizedPayload);
+      return true;
     };
     const emitConversationUpdated = (payload: Record<string, any>) => {
       io.to(executionRoom).emit('chat:conversation_updated', {
@@ -1129,8 +799,36 @@ export function registerChatHandler(
     // Request ids are idempotency keys. Socket.IO may deliver a buffered emit
     // after reconnect; acknowledging the existing execution avoids running the
     // same user action twice.
-    const existingExecution = getChatExecution(executionScope, requestId);
+    let existingExecution = getChatExecution(executionScope, requestId);
     if (existingExecution) {
+      if (existingExecution.sidecar === true && !existingExecution.terminal) {
+        try {
+          await waitForChatSidecarCancellationIntent(executionScope, requestId);
+        } catch (error: any) {
+          try { ack?.({ ok: false, requestId, error: String(error?.message || 'Control receipt is not durable') }); } catch {}
+          return;
+        }
+        existingExecution = getChatExecution(executionScope, requestId) || existingExecution;
+        const durableTarget = getChatSidecarCancellationTarget(executionScope, requestId);
+        if (durableTarget && !chatExecutionQueue.getByRequestId(sessionKey, durableTarget)) {
+          // The process can restart after the durable fence but before the
+          // side effect/terminal write. With no matching lease, converge the
+          // tombstone to a terminal no-op; never replay cancellation onto a
+          // later task.
+          recordChatExecutionEvent(executionScope, requestId, 'agent:response', {
+            text: CN_TASK_EXECUTION_MESSAGES.staleControl,
+            agentName: 'Lumi',
+            source: eventSource,
+            requestId,
+            conversationId: selectedConversationId,
+            sidecar: true,
+            finalized: true,
+            blocked: false,
+            reason: 'stale_control',
+          });
+          existingExecution = getChatExecution(executionScope, requestId) || existingExecution;
+        }
+      }
       try { ack?.({ ok: true, requestId, receivedAt: existingExecution.createdAt }); } catch {}
       if (existingExecution.terminalEvent) {
         socket.emit(existingExecution.terminalEvent.event, {
@@ -1139,7 +837,7 @@ export function registerChatHandler(
         });
       } else {
         const resumableStatus = existingExecution.status === 'planning' || existingExecution.status === 'acknowledged'
-          ? 'thinking'
+          ? existingExecution.queued === true ? 'queued' : 'thinking'
           : existingExecution.status;
         socket.emit('agent:status', {
           status: resumableStatus,
@@ -1175,6 +873,7 @@ export function registerChatHandler(
     // A status question is a side conversation, not a replacement command.
     // Answer it without aborting/superseding the foreground executor.
     const existingSession = chatExecutionQueue.getCurrent(sessionKey);
+    const controlTargetRequestId = String(data.controlTargetRequestId || '').trim().slice(0, 120);
     const activeConversationForStatus = existingSession ? getActiveConversation(
       uid,
       conversationAgentId,
@@ -1189,17 +888,48 @@ export function registerChatHandler(
         activeConversationForStatus?.actionContinuationState,
       ) === 'status'
     ) {
+      if (!beginChatSidecarExecution(executionScope, requestId)) return;
+      if (!controlTargetRequestId || controlTargetRequestId !== existingSession.requestId) {
+        try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
+        emitAgent('agent:response', {
+          text: CN_TASK_EXECUTION_MESSAGES.staleControl,
+          agentName: 'Lumi',
+          sidecar: true,
+          finalized: true,
+          blocked: false,
+          reason: 'stale_control',
+        });
+        return;
+      }
       const activeConversation = activeConversationForStatus || getActiveConversation(
         uid,
         conversationAgentId,
         resolvedDomain,
         resolvedOrgId,
       );
+      if (activeConversation) {
+        addMessageIdempotent({
+          userId: uid,
+          agentId: conversationAgentId,
+          conversationId: activeConversation.id,
+          role: 'user',
+          content: storedUserContent,
+          domain: resolvedDomain,
+          orgId: resolvedOrgId,
+          source: eventSource,
+          channel: 'chat',
+          cognitiveIntent: 'task_status',
+          requestId,
+          receivedAt: requestReceivedAt,
+          timestamp: requestReceivedAt,
+          skipActionContinuation: true,
+        });
+      }
       const statusText = activeConversation
         ? getConversationActionStatus(activeConversation.id, uid, visibleUserText, activeConversation.actionContinuationState)
         : CN_TASK_EXECUTION_MESSAGES.activeWithoutReceipt;
       try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
-      socket.emit('agent:response', {
+      const statusCommitted = emitAgent('agent:response', {
         text: statusText,
         agentName: 'Lumi',
         source: eventSource,
@@ -1209,9 +939,8 @@ export function registerChatHandler(
         blocked: false,
         reason: '',
       });
-      if (activeConversation) {
-        addMessage({ userId: uid, agentId: conversationAgentId, conversationId: activeConversation.id, role: 'user', content: storedUserContent, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'task_status' });
-        addMessage({ userId: uid, agentId: conversationAgentId, conversationId: activeConversation.id, role: 'assistant', content: statusText, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'task_status' });
+      if (statusCommitted && activeConversation) {
+        addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId: activeConversation.id, role: 'assistant', content: statusText, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', cognitiveIntent: 'task_status', requestId, skipActionContinuation: true });
       }
       return;
     }
@@ -1228,12 +957,81 @@ export function registerChatHandler(
       : null;
     let acknowledged = false;
     if (previousSession && activeMessageRelation === 'cancel') {
+      if (!beginChatSidecarExecution(executionScope, requestId)) return;
+      if (!controlTargetRequestId) {
+        emitAgent('agent:response', {
+          text: CN_TASK_EXECUTION_MESSAGES.staleControl,
+          agentName: 'Lumi',
+          sidecar: true,
+          finalized: true,
+          blocked: false,
+          reason: 'missing_control_target',
+        });
+        try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
+        return;
+      }
+      try {
+        // A buffered cancellation must be durably fenced before it can touch
+        // the foreground queue. On restart, this tombstone makes replay a
+        // status lookup instead of a second cancellation of newer work.
+        await persistChatSidecarCancellationIntent(executionScope, requestId, controlTargetRequestId);
+      } catch (error: any) {
+        const message = String(error?.message || 'Unable to reserve cancellation request');
+        emitAgent('agent:error', {
+          message,
+          code: 'CHAT_CONTROL_RECEIPT_WRITE_FAILED',
+          sidecar: true,
+        });
+        try { ack?.({ ok: false, requestId, error: message }); } catch {}
+        return;
+      }
+      addMessageIdempotent({
+        userId: uid,
+        agentId: conversationAgentId,
+        conversationId: selectedConversationId,
+        role: 'user',
+        content: storedUserContent,
+        domain: resolvedDomain,
+        orgId: resolvedOrgId,
+        source: eventSource,
+        channel: 'chat',
+        cognitiveIntent: 'task_cancel',
+        requestId,
+        receivedAt: requestReceivedAt,
+        timestamp: requestReceivedAt,
+        skipActionContinuation: true,
+      });
       try {
         ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() });
         acknowledged = true;
       } catch {}
-      await chatExecutionQueue.cancelAll(sessionKey);
-      socket.emit('agent:response', {
+      emitAgent('agent:status', { status: 'cancelling', sidecar: true });
+      const currentTarget = chatExecutionQueue.getByRequestId(sessionKey, controlTargetRequestId);
+      if (!currentTarget) {
+        const staleCommitted = emitAgent('agent:response', {
+          text: CN_TASK_EXECUTION_MESSAGES.staleControl,
+          agentName: 'Lumi',
+          sidecar: true,
+          finalized: true,
+          blocked: false,
+          reason: 'stale_control',
+        });
+        if (staleCommitted) {
+          addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId: selectedConversationId, role: 'assistant', content: CN_TASK_EXECUTION_MESSAGES.staleControl, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', cognitiveIntent: 'task_cancel', requestId, skipActionContinuation: true });
+        }
+        return;
+      }
+      try {
+        await chatExecutionQueue.cancelRequest(sessionKey, controlTargetRequestId);
+      } catch (error: any) {
+        emitAgent('agent:error', {
+          message: String(error?.message || 'Cancellation did not settle'),
+          code: 'CHAT_CONTROL_CANCEL_FAILED',
+          sidecar: true,
+        });
+        return;
+      }
+      const cancelCommitted = emitAgent('agent:response', {
         text: CN_TASK_EXECUTION_MESSAGES.cancelled,
         agentName: 'Lumi',
         source: eventSource,
@@ -1243,8 +1041,55 @@ export function registerChatHandler(
         blocked: false,
         reason: 'cancelled_by_user',
       });
+      if (cancelCommitted) {
+        addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId: selectedConversationId, role: 'assistant', content: CN_TASK_EXECUTION_MESSAGES.cancelled, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', cognitiveIntent: 'task_cancel', requestId, skipActionContinuation: true });
+      }
       return;
     }
+
+    // Bind and persist the foreground user turn before it waits behind any
+    // older lease. This keeps receive order durable even when the model/tool
+    // phase is long or the process exits before a terminal assistant result.
+    const conversationTurn = getOrCreateConversationForTurn(
+      uid,
+      conversationAgentId,
+      resolvedDomain,
+      resolvedOrgId,
+      { userText: visibleUserText, conversationId: selectedConversationId },
+    );
+    const conversation = conversationTurn.conversation;
+    if (conversation.id !== selectedConversationId) {
+      clearPendingConfirmation(uid, confirmationScope);
+      selectedConversationId = conversation.id;
+      confirmationScope = buildConversationConfirmationChannelScope({
+        source: eventSource,
+        domain: resolvedDomain,
+        orgId: resolvedOrgId,
+        conversationId: selectedConversationId,
+      });
+      executionScope = { ...executionScope, conversationId: selectedConversationId };
+      executionRoom = chatExecutionRoom(executionScope);
+      sessionKey = `${uid}:${resolvedDomain}:${resolvedOrgId || ''}:${eventSource}:${selectedConversationId}`;
+      pendingConfirmation = null;
+      pendingConfirmationPrompt = '';
+    }
+    addMessageIdempotent({
+      userId: uid,
+      agentId: conversationAgentId,
+      conversationId: conversation.id,
+      role: 'user',
+      content: storedUserContent,
+      domain: resolvedDomain,
+      orgId: resolvedOrgId,
+      source: eventSource,
+      channel: 'chat',
+      cognitiveIntent: confirmationCancellationRequested ? 'task_cancel' : undefined,
+      requestId,
+      receivedAt: requestReceivedAt,
+      timestamp: requestReceivedAt,
+      deferActionPreparation: !confirmationCancellationRequested,
+      skipActionContinuation: confirmationCancellationRequested,
+    });
 
     // Install the lease before waiting. Otherwise two messages arriving while
     // the same task is active both wait for that task and wake concurrently,
@@ -1252,6 +1097,7 @@ export function registerChatHandler(
     if (previousSession && activeMessageRelation === 'replace') {
       void chatExecutionQueue.cancelAll(sessionKey);
     }
+    beginQueuedChatExecution(executionScope, requestId);
     const sessionLease = chatExecutionQueue.reserve(sessionKey, requestId);
     const abortController = sessionLease.controller;
     let releaseDesktopControlLease: (() => void) | null = null;
@@ -1274,6 +1120,16 @@ export function registerChatHandler(
       });
     }
     if (!await sessionLease.waitForTurn()) {
+      const cancelledCommitted = emitAgent('agent:response', {
+        text: CN_TASK_EXECUTION_MESSAGES.cancelled,
+        agentName: 'Lumi',
+        finalized: true,
+        blocked: true,
+        reason: 'cancelled',
+      });
+      if (cancelledCommitted) {
+        addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId: selectedConversationId, role: 'assistant', content: CN_TASK_EXECUTION_MESSAGES.cancelled, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', cognitiveIntent: 'task_cancel', requestId });
+      }
       releaseChatSession();
       return;
     }
@@ -1358,14 +1214,6 @@ export function registerChatHandler(
       const isNovel = relevantMemories.length < 2;
 
       // ── Conversation mode: get/create conversation, apply mode from payload ──
-      const conversationTurn = getOrCreateConversationForTurn(
-        uid,
-        conversationAgentId,
-        resolvedDomain,
-        resolvedOrgId,
-        { userText: visibleUserText, conversationId: selectedConversationId },
-      );
-      const conversation = conversationTurn.conversation;
       const conversationId = conversation?.id;
       if (conversationTurn.rolledOver) {
         console.log(
@@ -1395,8 +1243,7 @@ export function registerChatHandler(
             ? '已取消刚才等待确认的操作；它没有执行，也不会继续发送。'
             : CN_TASK_EXECUTION_MESSAGES.cancelled;
           emitAgent("agent:response", { text: responseText, agentName: "Lumi", finalized: true, blocked: false, reason: '' });
-          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'task_cancel' });
-          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'task_cancel' });
+          addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', cognitiveIntent: 'task_cancel', requestId, skipActionContinuation: true });
           emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
           emitAgent("agent:status", { status: "idle" });
           releaseChatSession();
@@ -1404,15 +1251,26 @@ export function registerChatHandler(
         }
         const responseText = '当前没有等待确认或正在执行的操作。';
         emitAgent("agent:response", { text: responseText, agentName: "Lumi", finalized: true, blocked: false, reason: '' });
-        addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'task_cancel' });
-        addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'task_cancel' });
+        addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', cognitiveIntent: 'task_cancel', requestId, skipActionContinuation: true });
         emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
         emitAgent("agent:status", { status: "idle" });
         releaseChatSession();
         return;
       }
 
-      const persistedConversationHistory = conversationId ? getMessages(conversationId, 18) : [];
+      const persistedConversationHistory = conversationId
+        ? getMessages(conversationId, 18).filter(record => !(
+            record.role === 'user'
+            && (
+              record.requestId === requestId
+              || (
+                record.externalMessageId === requestId
+                && record.source === eventSource
+                && record.channel === 'chat'
+              )
+            )
+          ))
+        : [];
       if (!chatContextBridge && conversationId && isShortClientContinuation(visibleUserText)) {
         const dbHistoryItems = persistedConversationHistory.slice(-12)
           .map(record => ({ role: record.role, message: record.message, response: record.response }));
@@ -1425,11 +1283,6 @@ export function registerChatHandler(
           : [...historyItems, ...persistedConversationHistory],
         conversation?.actionContinuationState,
       );
-      const continuationOpenTarget = resolveRecentActionOpenTarget(
-        visibleUserText,
-        conversation?.actionContinuationState,
-      );
-
       const operationMode = (() => {
         if (typeof data.operationMode === 'string') return normalizeOperationMode(data.operationMode);
         try {
@@ -1586,6 +1439,7 @@ export function registerChatHandler(
         'desktop_list_files',
         'desktop_list_apps',
         'desktop_path_info',
+        'desktop_write_text_file',
         'desktop_open',
         'desktop_show_lumi_window',
         'desktop_run_command',
@@ -1683,10 +1537,7 @@ export function registerChatHandler(
         visibleUserText,
         conversation?.actionContinuationState,
       );
-      const deterministicWorkTaskProgress = buildDeterministicWorkTaskProgressCommand(visibleUserText);
-      const deterministicWorkTaskStatus = deterministicWorkTaskProgress
-        ? null
-        : buildDeterministicWorkTaskStatusCommand(visibleUserText);
+      const groundedTurnEvidence: string[] = [];
       if (conversationId && isConversationExecutionFactQuestion(visibleUserText)) {
         const factText = formatConversationExecutionFactAnswer(getConversationExecutionFacts({
           conversationId,
@@ -1694,63 +1545,35 @@ export function registerChatHandler(
           domain: resolvedDomain,
           orgId: resolvedOrgId,
         }), visibleUserText);
-        emitAgent("agent:status", { status: "responding", agentName: personality.name });
-        emitAgent("agent:response", { text: factText, agentName: personality.name, finalized: true, blocked: false, reason: 'conversation_execution_facts' });
-        addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'execution_facts' });
-        addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: factText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'execution_facts' });
-        emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
-        emitAgent("agent:status", { status: "idle" });
-        releaseChatSession();
-        return;
+        groundedTurnEvidence.push(`Conversation execution facts:\n${factText}`);
       }
       const exactCorrectionText = conversationId
         ? resolveExactConversationCorrection(visibleUserText, persistedConversationHistory)
         : null;
       if (conversationId && exactCorrectionText) {
-        emitAgent("agent:status", { status: "responding", agentName: personality.name });
-        emitAgent("agent:response", { text: exactCorrectionText, agentName: personality.name, finalized: true, blocked: false, reason: 'exact_conversation_correction' });
-        addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'exact_correction' });
-        addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: exactCorrectionText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'exact_correction', llmWasCalled: false });
-        emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
-        emitAgent("agent:status", { status: "idle" });
-        releaseChatSession();
-        return;
+        groundedTurnEvidence.push(`Exact prior-turn correction evidence:\n${exactCorrectionText}`);
       }
       if (
         conversationId
         && actionFollowupIntent === 'status'
-        && !deterministicWorkTaskStatus
-        && !deterministicWorkTaskProgress
       ) {
         const statusText = getConversationActionStatus(conversationId, uid, visibleUserText, conversation?.actionContinuationState);
-        emitAgent("agent:status", { status: "responding", agentName: personality.name });
-        emitAgent("agent:response", { text: statusText, agentName: personality.name, finalized: true, blocked: false, reason: '' });
-        addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
-        addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: statusText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'task_status' });
-        emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
-        emitAgent("agent:status", { status: "idle" });
-        releaseChatSession();
-        return;
+        groundedTurnEvidence.push(`Current action status evidence:\n${statusText}`);
       }
 
       const recentFailureExplanation = conversationId && !pendingConfirmation
         ? buildRecentFailureExplanation(visibleUserText, getMessages(conversationId, 24))
         : '';
       if (recentFailureExplanation) {
-        emitAgent("agent:status", { status: "responding", agentName: personality.name });
-        emitAgent("agent:response", { text: recentFailureExplanation, agentName: personality.name, finalized: true, blocked: false, reason: '' });
-        if (conversationId) {
-          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
-          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: recentFailureExplanation, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
-          emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
-        }
-        persistChatLearning(recentFailureExplanation, {
-          sourceInteractionId: `${interactionId}_recent_failure_explanation`,
-          logLabel: 'recent failure explanation',
-        });
-        emitAgent("agent:status", { status: "idle" });
-        releaseChatSession();
-        return;
+        groundedTurnEvidence.push(`Recent failure evidence:\n${recentFailureExplanation}`);
+      }
+      if (groundedTurnEvidence.length) {
+        effectiveSystemPrompt += [
+          '',
+          '## Grounded current-turn evidence',
+          'Use these server-grounded facts to answer the newest user turn naturally. They are evidence, not a canned response: reason over them, preserve uncertainty, and do not invent execution beyond recorded receipts.',
+          ...groundedTurnEvidence,
+        ].join('\n\n');
       }
 
       // ── Desktop relay: route tools to the user's registered desktop client, not only this chat socket ──
@@ -1799,256 +1622,6 @@ export function registerChatHandler(
         return false;
       };
 
-      const directlyAppliedMode: OperationMode | null = turnFlow.autoPromoteToAssistant
-        ? 'assistant'
-        : turnFlow.requestedMode;
-      if (directlyAppliedMode) {
-        let modeSynced = true;
-        const modeToolRecord: ToolExecutionRecord = {
-          id: `chat-mode-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          name: 'client_action',
-          arguments: {
-            action: 'set_client_mode',
-            mode: directlyAppliedMode,
-            confirmed: directlyAppliedMode === 'meeting' || directlyAppliedMode === 'autonomous',
-          },
-          result: '',
-        };
-        try {
-          modeToolRecord.result = await desktopRelay('client_action', modeToolRecord.arguments)
-            || JSON.stringify({ ok: true, mode: directlyAppliedMode });
-        } catch (err: any) {
-          modeSynced = false;
-          modeToolRecord.error = err?.message || String(err);
-          emitAgent('agent:notification', {
-            type: 'client_action',
-            level: 'warning',
-            message: `Mode switch did not reach the client: ${err?.message || err}`,
-          });
-        }
-        if (modeSynced) saveStoredOperationMode(uid, directlyAppliedMode);
-
-        if (isPureOperationModeSwitchRequest(visibleUserText || text, turnFlow.requestedMode)) {
-          let responseText = formatOperationModeSwitchResponse(
-            directlyAppliedMode,
-            modeSynced,
-            visibleUserText || text,
-          );
-          const finalizedMode = finalizeLumiResponse({
-            taskText: executionTaskText,
-            responseText,
-            toolRecords: [modeToolRecord],
-            source: 'chat',
-            flow: turnFlow,
-          });
-          responseText = finalizedMode.text;
-          if (finalizedMode.notification) {
-            emitAgent('agent:notification', finalizedMode.notification);
-          }
-          persistChatTakeoverExecution(responseText, {
-            toolRecords: [modeToolRecord],
-            source: 'chat_mode',
-            sourceInteractionId: `${interactionId}_mode`,
-            finalizationBlocked: finalizedMode.blocked,
-            assistantTextTrusted: !finalizedMode.blocked,
-            finalizationReason: finalizedMode.reason,
-          });
-
-          emitAgent('agent:status', { status: 'responding', agentName: personality.name });
-          emitAgent('agent:response', {
-            text: responseText,
-            agentName: personality.name,
-            source: 'chat_mode',
-            finalized: true,
-            blocked: finalizedMode.blocked,
-            reason: finalizedMode.reason || '',
-          });
-          if (conversationId) {
-            addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, mode: directlyAppliedMode, domain: resolvedDomain, orgId: resolvedOrgId });
-            addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, personality: personality.id, mode: directlyAppliedMode, cognitiveIntent: finalizedMode.blocked ? 'work_product_guard' : undefined, domain: resolvedDomain, orgId: resolvedOrgId });
-            emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat_mode', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
-          }
-          if (!finalizedMode.blocked) {
-            persistChatLearning(responseText, {
-              sourceInteractionId: `${interactionId}_mode`,
-              logLabel: 'chat mode switch',
-            });
-          }
-          emitAgent('agent:status', { status: 'idle', agentName: personality.name });
-          releaseChatSession();
-          return;
-        }
-      }
-
-      const specialWorkflowText = [visibleUserText || text, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
-      const specialWorkflow = turnFlow.specialWorkflow;
-      if (specialWorkflow) {
-        const workflowExecutionDecision = executionPipeline.execution;
-        const workflowTaskExecution = conversationId
-          ? prepareConversationActionExecution({
-              conversationId,
-              userId: uid,
-              userText: visibleUserText,
-              requestId,
-              toolPolicy: workflowExecutionDecision.toolPolicy,
-              forceResume: Boolean(pendingConfirmation),
-              forceNewTask: !pendingConfirmation,
-            })
-          : { state: null, kind: 'conversation' as const };
-        if (conversationId && workflowTaskExecution.state?.taskId) {
-          executionPipeline.executionPlan = bindCapabilityExecutionPlanTask(
-            executionPipeline.executionPlan,
-            workflowTaskExecution.state.taskId,
-          );
-          persistConversationExecutionPlan({
-            conversationId,
-            userId: uid,
-            plan: executionPipeline.executionPlan,
-          });
-          updateConversationActionFocus({
-            taskId: workflowTaskExecution.state.taskId,
-            userId: uid,
-            domain: resolvedDomain,
-            orgId: resolvedOrgId,
-            commitment: workflowTaskExecution.state.goal,
-            nextAction: workflowTaskExecution.state.latestInstruction || workflowTaskExecution.state.goal,
-            resumePoint: workflowTaskExecution.kind === 'resume'
-              ? workflowTaskExecution.state.assistantState || workflowTaskExecution.state.latestBlocker || ''
-              : '',
-          });
-          setConversationActionExecutionStatus(conversationId, uid, 'executing', { requestId });
-        }
-        const workflowIntentTrace = executionPipeline.intentTrace;
-        socket.emit('agent:intent_trace', workflowIntentTrace);
-        emitAgent("agent:status", {
-          status: "thinking",
-          agentName: personality.name,
-          phase: specialWorkflow.phase,
-          ...(shouldForwardPreFinalizationProgress(specialWorkflow.statusDetail)
-            ? { detail: specialWorkflow.statusDetail }
-            : {}),
-        });
-
-        let workflowResponseText = '';
-        let workflowToolCalls: ToolExecutionRecord[] = [];
-        try {
-          const workflowResult = await executeSkillWorkflowAdapter({
-            workflow: specialWorkflow,
-            plan: executionPipeline.executionPlan,
-            registry: toolRegistry,
-            context: {
-              userId: uid,
-              taskId: workflowTaskExecution.state?.taskId,
-              turnId: requestId,
-              requestId,
-              domain: resolvedDomain,
-              orgId: resolvedOrgId,
-              desktopRelay,
-              llmGetters,
-              source: specialWorkflow.source,
-              supervisedExternalCommits: true,
-              actionIntent: specialWorkflowText,
-              routedTaskText: specialWorkflowText,
-              toolPolicy: workflowExecutionDecision.toolPolicy,
-              requestConfirmation: requestToolConfirmation,
-              isCancelled: () => abortController.signal.aborted,
-            },
-            options: {
-              socket,
-              userText: specialWorkflowText,
-              userId: uid,
-              desktopRelay,
-              speak: async () => 0,
-              voiceScope: {
-                domain: resolvedDomain === 'work' ? 'work' : 'personal',
-                orgId: resolvedOrgId,
-              },
-              isCancelled: () => abortController.signal.aborted,
-            },
-          });
-          workflowResponseText = workflowResult.responseText;
-          workflowToolCalls = workflowResult.toolCalls;
-        } catch (err: any) {
-          console.warn(`[ChatHandler] ${specialWorkflow.logLabel} failed:`, err?.message || err);
-          workflowResponseText = specialWorkflow.fallbackText;
-        }
-
-        const finalizedWorkflow = finalizeLumiResponse({
-          taskText: specialWorkflowText,
-          responseText: workflowResponseText,
-          toolRecords: workflowToolCalls,
-          source: specialWorkflow.source,
-          flow: turnFlow,
-        });
-        workflowResponseText = finalizedWorkflow.text;
-        if (finalizedWorkflow.notification) {
-          emitAgent('agent:notification', finalizedWorkflow.notification);
-        }
-        persistChatTakeoverExecution(workflowResponseText, {
-          toolRecords: workflowToolCalls,
-          source: specialWorkflow.source,
-          sourceInteractionId: `${interactionId}_workflow`,
-          capabilitySelection: executionPipeline.capabilityPlan,
-          finalizationBlocked: finalizedWorkflow.blocked,
-          assistantTextTrusted: !finalizedWorkflow.blocked,
-          finalizationReason: finalizedWorkflow.reason,
-        });
-
-        if (conversationId) {
-          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
-          for (const tc of workflowToolCalls) {
-            const tcSummary = summarizeToolRecordForPersistence(tc);
-            addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'tool', content: tcSummary, domain: resolvedDomain, orgId: resolvedOrgId });
-          }
-          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: workflowResponseText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: workflowToolCalls.length ? workflowToolCalls : undefined, cognitiveIntent: finalizedWorkflow.blocked ? 'work_product_guard' : undefined });
-        }
-
-        try {
-          const db = readDB();
-          db.interactions.push({
-            id: interactionId,
-            userId: uid,
-            agentId: agentId || '',
-            conversationId: conversationId || '',
-            content: storedUserContent,
-            response: workflowResponseText,
-            role: "user",
-            personality: personality.id,
-            timestamp: new Date().toISOString(),
-            cognitiveIntent: finalizedWorkflow.blocked ? 'work_product_guard' : specialWorkflow.id,
-            llmWasCalled: false,
-            domain: resolvedDomain,
-            orgId: resolvedOrgId,
-          });
-          writeDB(db);
-        } catch (persistErr: any) {
-          console.warn(`[ChatHandler] ${specialWorkflow.logLabel} interaction persistence failed:`, persistErr?.message || persistErr);
-        }
-
-        emitAgent("agent:response", {
-          text: workflowResponseText,
-          agentName: personality.name,
-          source: specialWorkflow.source,
-          finalized: true,
-          blocked: finalizedWorkflow.blocked,
-          reason: finalizedWorkflow.reason || '',
-        });
-        if (conversationId) {
-          emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: specialWorkflow.source, rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
-        }
-        if (!finalizedWorkflow.blocked) {
-          persistChatLearning(workflowResponseText, {
-            channel: 'workflow',
-            toolRecords: workflowToolCalls,
-            sourceInteractionId: `${interactionId}_workflow`,
-            logLabel: specialWorkflow.source,
-          });
-        }
-        emitAgent("agent:status", { status: "idle", agentName: personality.name });
-        releaseChatSession();
-        return;
-      }
-
       emitAgent("agent:status", { status: "thinking", agentName: personality.name });
       console.log('[ChatHandler] emitted agent:status thinking');
 
@@ -2071,55 +1644,22 @@ export function registerChatHandler(
       });
       const desktopExecutionTracker = createDesktopExecutionTracker(desktopExecutionPolicy.executionPlan);
       const toolRoute = executionDecision.toolRoute;
-      const routedToolPolicy = executionDecision.toolPolicy;
-      const actionTaskExecution = turnFlow.conceptualCapabilityQuestion || !executionDecision.allowToolUse
-        ? { state: null, kind: 'conversation' as const }
-        : conversationId
-        ? prepareConversationActionExecution({
-            conversationId,
-            userId: uid,
-            userText: visibleUserText,
-            requestId,
-            toolPolicy: routedToolPolicy,
-            forceResume: Boolean(pendingConfirmation || actionFollowupIntent === 'execute'),
-            forceTask: turnFlow.clientActionOnlyTurn,
-          })
+      const modelCapabilityPolicy = buildModelCapabilityPolicy(executionDecision);
+      // A natural-language turn must not create or freeze a durable task before
+      // the model has chosen to act. At this point we may only read an existing
+      // task pointer for an explicit continuation. Fresh task state is derived
+      // later from canonical tool receipts (or from a structured client event).
+      const existingActionState = conversation?.actionContinuationState;
+      const actionTaskExecution = existingActionState?.taskId
+        && Boolean(pendingConfirmation || actionFollowupIntent === 'execute')
+        ? { state: existingActionState, kind: 'resume' as const }
         : { state: null, kind: 'conversation' as const };
-      if (conversationId && actionTaskExecution.state?.taskId) {
-        executionPipeline.executionPlan = bindCapabilityExecutionPlanTask(
-          executionPipeline.executionPlan,
-          actionTaskExecution.state.taskId,
-        );
-        persistConversationExecutionPlan({
-          conversationId,
-          userId: uid,
-          plan: executionPipeline.executionPlan,
-        });
-        updateConversationActionFocus({
-          taskId: actionTaskExecution.state.taskId,
-          userId: uid,
-          domain: resolvedDomain,
-          orgId: resolvedOrgId,
-          commitment: actionTaskExecution.state.goal,
-          nextAction: actionTaskExecution.state.latestInstruction || actionTaskExecution.state.goal,
-          resumePoint: actionTaskExecution.kind === 'resume'
-            ? actionTaskExecution.state.assistantState || actionTaskExecution.state.latestBlocker || ''
-            : '',
-        });
-      }
       const priorTaskRecords = actionTaskExecution.kind === 'resume'
         ? taskReceiptsToRecords(actionTaskExecution.state?.receipts || [])
         : [];
       const taskAwareRecords = (records: ToolExecutionRecord[]) => (
         coalesceToolExecutionRecords([...priorTaskRecords, ...records])
       );
-      if (
-        conversationId
-        && executionDecision.allowToolUse
-        && (actionTaskExecution.kind === 'new' || actionTaskExecution.kind === 'resume')
-      ) {
-        setConversationActionExecutionStatus(conversationId, uid, 'executing', { requestId });
-      }
       const exposeAgentWork = turnFlow.exposeAgentWork;
       effectiveSystemPrompt += '\n\n' + formatClientSelfPrompt(uid, { domain: resolvedDomain, orgId: resolvedOrgId });
       console.log('[ChatHandler] tool gate:', executionDecision.allowToolUse ? 'enabled' : 'chat-only', 'operationMode:', operationMode, 'effective:', effectiveOperationMode, 'surface:', turnFlow.surface, 'clientActionOnly:', clientActionOnlyTurn, 'selfRepair:', selfRepairTurn, 'capabilityLane:', capabilitySelection.lane, 'trace:', intentTrace.summary, 'route:', toolRoute ? `${toolRoute.toolNames.length}/${toolRoute.totalAvailable} ${toolRoute.categories.join(',') || 'fallback'}` : 'none');
@@ -2250,7 +1790,7 @@ export function registerChatHandler(
             userConfirmed: true,
             actionIntent: confirmedTask,
             routedTaskText: confirmedTask,
-            toolPolicy: routedToolPolicy || personality.toolPolicy,
+            toolPolicy: modelCapabilityPolicy,
           },
           preflight: () => consumed
             ? { allowed: true, arguments: confirmedArgs }
@@ -2271,6 +1811,7 @@ export function registerChatHandler(
           });
         }
         let confirmationRecords: ToolExecutionRecord[] = [confirmedRecord];
+        let confirmationLlmWasCalled = false;
         let candidate = toolRecordSucceeded(confirmedRecord)
           ? CN_VOICE_FAST_PATH_MESSAGES.confirmationExecuted
           : CN_VOICE_FAST_PATH_MESSAGES.confirmationFailed(
@@ -2283,11 +1824,11 @@ export function registerChatHandler(
           )
           && !abortController.signal.aborted
         ) {
+          confirmationLlmWasCalled = true;
           const continuation = await runWithTools(
             [
               { role: 'system', content: effectiveSystemPrompt },
-              { role: 'system', content: buildConfirmedStepContinuationNote(confirmedRecord) },
-              { role: 'user', content: confirmedTask },
+              ...buildConfirmedStepContinuationMessages(confirmedTask, confirmedRecord),
             ],
             toolRegistry,
             {
@@ -2309,7 +1850,7 @@ export function registerChatHandler(
                 error: record.error,
               });
             },
-            Math.max(1, routedToolPolicy.maxIterations || 5),
+            Math.max(1, modelCapabilityPolicy.maxIterations || 5),
             llmGetters.getDeepSeek,
             llmGetters.getGemini,
             llmGetters.getOpenAI,
@@ -2334,7 +1875,8 @@ export function registerChatHandler(
               requestConfirmation: requestToolConfirmation,
               actionIntent: confirmedTask,
               routedTaskText: confirmedTask,
-              toolPolicy: routedToolPolicy || personality.toolPolicy,
+              toolPolicy: modelCapabilityPolicy,
+              priorToolRecords: [confirmedRecord],
               desktopExecutionTracker,
             },
             llmGetters.getOllama,
@@ -2345,7 +1887,27 @@ export function registerChatHandler(
             llmGetters.getGlm,
             llmGetters.getRelay,
           );
-          confirmationRecords = [confirmedRecord, ...(continuation.toolCalls || [])];
+          for (const usage of continuation.usageRecords) {
+            recordTokenUsage(uid, usage.provider, usage.model, {
+              promptTokens: usage.promptTokens,
+              completionTokens: usage.completionTokens,
+              totalTokens: usage.totalTokens,
+            }, interactionId);
+          }
+          const confirmationUsage = continuation.usageRecords.reduce(
+            (sum, usage) => sum + (usage.totalTokens || 0),
+            0,
+          );
+          socket.emit('token:usage_update', {
+            userId: uid,
+            provider: activeProvider,
+            totalTokens: confirmationUsage,
+            mode: 'chat',
+            timestamp: new Date().toISOString(),
+          });
+          confirmationRecords = continuation.toolCalls?.length
+            ? continuation.toolCalls
+            : [confirmedRecord];
           candidate = pendingConfirmationCreatedThisTurn
             ? CN_TASK_EXECUTION_MESSAGES.waitingConfirmation(confirmedTask)
             : continuation.text || candidate;
@@ -2367,8 +1929,7 @@ export function registerChatHandler(
           reason: finalized.reason || '',
         });
         if (conversationId) {
-          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
-          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: finalized.text, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: confirmationRecords, cognitiveIntent: finalized.blocked ? 'work_product_guard' : 'confirmation' });
+          addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: finalized.text, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', toolCalls: confirmationRecords, cognitiveIntent: finalized.blocked ? 'work_product_guard' : 'confirmation', llmWasCalled: confirmationLlmWasCalled, requestId });
           scheduleChatSummary(conversationId);
           emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
         }
@@ -2393,387 +1954,13 @@ export function registerChatHandler(
         return;
       }
 
-      // ── Named Workflow Quick-Path: "run my X" / "跑XX流程" ──
-      const runWorkflowMatch = text.match(/(?:run|执行|跑|运行)\s+(?:my\s+)?(.+?)(?:\s*(?:routine|workflow|流程|工作流))?\s*$/i);
-      let workflowQuickResult: string | null = null;
-      const workflowQuickToolRecords: ToolExecutionRecord[] = [];
-      if (shouldRunLegacyDirectExecution() && runWorkflowMatch && executionDecision.allowToolUse) {
-        const wfName = runWorkflowMatch[1].trim().toLowerCase();
-        const workflowScope = { domain: resolvedDomain, orgId: resolvedOrgId };
-        const allWfs = listWorkflows(uid, undefined, workflowScope);
-        const matched = allWfs.find(w => w.name.toLowerCase().includes(wfName));
-        if (matched) {
-          console.log('[ChatHandler] Workflow quick-path matched:', matched.name);
-          const steps: string[] = [];
-          for (let i = 0; i < matched.steps.length; i++) {
-            const step = matched.steps[i];
-            if (step.tool) {
-              const toolRecord = await executeToolCall({
-                registry: toolRegistry,
-                id: `workflow-quick-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 8)}`,
-                name: step.tool,
-                arguments: step.args || {},
-                context: {
-                  userId: uid,
-                  domain: resolvedDomain,
-                  orgId: resolvedOrgId,
-                  desktopRelay,
-                  llmGetters,
-                  source: eventSource || 'chat',
-                  supervisedExternalCommits: true,
-                  allowLocalFileWrites,
-                  localWriteIntentReason,
-                  requestConfirmation: requestToolConfirmation,
-                  actionIntent: visibleUserText,
-                  ...(routedToolPolicy ? { toolPolicy: routedToolPolicy } : {}),
-                },
-              });
-              workflowQuickToolRecords.push(toolRecord);
-              if (toolRecord.error) {
-                steps.push(`Step ${i + 1} (${step.tool}): Error - ${toolRecord.error}`);
-                break;
-              }
-              steps.push(`Step ${i + 1} (${step.tool}): ${(toolRecord.result || 'OK').slice(0, 200)}`);
-            } else {
-              steps.push(`Step ${i + 1}: ${step.description} (no tool bound — use this as a guide)`);
-            }
-          }
-          recordWorkflowRun(uid, matched.name, workflowScope);
-          workflowQuickResult = `Ran workflow "${matched.name}" (${matched.steps.length} steps):\n${steps.join('\n')}`;
-        }
-      }
-
-      if (workflowQuickResult) {
-        const finalizedWorkflowQuick = finalizeLumiResponse({
-          taskText: executionTaskText,
-          responseText: workflowQuickResult,
-          toolRecords: workflowQuickToolRecords,
-          source: 'workflow',
-          flow: turnFlow,
-        });
-        workflowQuickResult = finalizedWorkflowQuick.text;
-        if (finalizedWorkflowQuick.notification) {
-          emitAgent('agent:notification', finalizedWorkflowQuick.notification);
-        }
-        persistChatTakeoverExecution(workflowQuickResult, {
-          toolRecords: workflowQuickToolRecords,
-          source: 'workflow',
-          sourceInteractionId: `${interactionId}_workflow_quick`,
-          capabilitySelection,
-          finalizationBlocked: finalizedWorkflowQuick.blocked,
-          assistantTextTrusted: !finalizedWorkflowQuick.blocked,
-          finalizationReason: finalizedWorkflowQuick.reason,
-        });
-        emitAgent("agent:status", { status: "responding" });
-        if (conversationId) {
-          addMessage({
-            userId: uid,
-            agentId: conversationAgentId,
-            conversationId,
-            role: 'user',
-            content: storedUserContent,
-            personality: personality.id,
-            domain: resolvedDomain,
-            orgId: resolvedOrgId,
-          });
-          for (const record of workflowQuickToolRecords) {
-            addMessage({
-              userId: uid,
-              agentId: conversationAgentId,
-              conversationId,
-              role: 'tool',
-              content: summarizeToolRecordForPersistence(record),
-              domain: resolvedDomain,
-              orgId: resolvedOrgId,
-            });
-          }
-          addMessage({
-            userId: uid,
-            agentId: conversationAgentId,
-            conversationId,
-            role: 'assistant',
-            content: workflowQuickResult,
-            personality: personality.id,
-            domain: resolvedDomain,
-            orgId: resolvedOrgId,
-            toolCalls: workflowQuickToolRecords.length ? workflowQuickToolRecords : undefined,
-            cognitiveIntent: finalizedWorkflowQuick.blocked ? 'work_product_guard' : undefined,
-          });
-          scheduleChatSummary(conversationId);
-        }
-        emitAgent("agent:response", {
-          text: workflowQuickResult,
-          agentName: personality.name,
-          finalized: true,
-          blocked: finalizedWorkflowQuick.blocked,
-          reason: finalizedWorkflowQuick.reason || '',
-        });
-        if (conversationId) {
-          emitConversationUpdated({
-            conversationId,
-            agentId: conversationAgentId,
-            source: 'workflow',
-            rolledOver: conversationTurn.rolledOver,
-            previousConversationId: conversationTurn.previousConversationId,
-          });
-        }
-        if (!finalizedWorkflowQuick.blocked) {
-          persistChatLearning(workflowQuickResult, {
-            channel: 'workflow',
-            toolRecords: workflowQuickToolRecords,
-            sourceInteractionId: `${interactionId}_workflow_quick`,
-            logLabel: 'workflow quick path',
-          });
-          if (conversationId) {
-            try {
-              const topics = extractTopics(text);
-              for (const topic of topics) trackTopic(conversationId, topic);
-            } catch {}
-          }
-        }
-        emitAgent("agent:status", { status: "idle" });
-        releaseChatSession();
-        return;
-      }
-
-      // ── Quick Command Fast-Path: deterministic commands skip LLM entirely ──
-      try {
-        const capabilityMetaResponse = buildCapabilityMetaResponse({
-          text: visibleUserText,
-          operationMode: turnFlow.effectiveOperationMode,
-          source: eventSource,
-        });
-        const deterministicClientNavigation = clientActionOnlyTurn
-          ? buildDeterministicClientNavigationCommand(executionPipeline.normalizedIntent)
-          : null;
-        const deterministicKnowledgeInspection = !clientActionOnlyTurn
-          ? buildDeterministicKnowledgeInspectionCommand(visibleUserText)
-          : null;
-        const deterministicExternalCommitConfirmation = !clientActionOnlyTurn
-          ? buildDeterministicExternalCommitConfirmationCommand(
-              executionPipeline.normalizedIntent,
-              visibleUserText,
-            )
-          : null;
-        const deterministicLocalDesktopNavigation = !clientActionOnlyTurn && !explicitTeamOrchestration
-          ? buildDeterministicLocalDesktopNavigationCommand(executionPipeline.normalizedIntent, visibleUserText)
-          : null;
-        const deterministicWpsDocument = !clientActionOnlyTurn && !explicitTeamOrchestration
-          ? buildDeterministicWpsDocumentCommand(visibleUserText)
-          : null;
-        const deterministicTextArtifact = !clientActionOnlyTurn
-          ? buildDeterministicTextArtifactCommand(visibleUserText)
-          : null;
-        const deterministicWorkTaskCreate = !clientActionOnlyTurn
-          ? buildDeterministicWorkTaskCreateCommand(visibleUserText)
-          : null;
-        const nonExecutingNormalizedIntent =
-          executionPipeline.normalizedIntent.kind === 'correction_explanation'
-          || executionPipeline.normalizedIntent.kind === 'status_query';
-        const quickResult = capabilityMetaResponse
-          ? { matched: true, responseText: capabilityMetaResponse }
-          : deterministicClientNavigation || deterministicExternalCommitConfirmation || deterministicKnowledgeInspection || deterministicWorkTaskProgress || deterministicWorkTaskStatus || deterministicWorkTaskCreate || deterministicTextArtifact || deterministicWpsDocument || deterministicLocalDesktopNavigation || (
-            shouldRunLegacyDirectExecution() && !nonExecutingNormalizedIntent
-              ? await matchQuickCommand(
-                  continuationOpenTarget ? buildInternalOpenCommand(visibleUserText, continuationOpenTarget) : text,
-                  uid,
-                  {
-                    domain: resolvedDomain,
-                    orgId: resolvedOrgId,
-                    surface: turnSurface,
-                    currentAppTarget: getRecoveredApplicationContinuationTarget(actionContinuationBridge),
-                  },
-                )
-              : null
-          );
-        if (quickResult?.matched && (!quickResult.toolCall || executionDecision.allowToolUse)) {
-          console.log('[ChatHandler] Quick command:', text.slice(0, 60));
-          let quickResponseText = quickResult.responseText;
-          let quickToolResult = '';
-          let quickToolError: string | undefined;
-          const quickToolRecords: ToolExecutionRecord[] = [];
-          if (quickResult.toolCall) {
-            const toolCid = `qc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-            const shouldEmitQuickTool = !isDirectDesktopTool(quickResult.toolCall.name);
-            if (shouldEmitQuickTool) {
-              emitToolLifecycle({
-                correlationId: toolCid,
-                name: quickResult.toolCall.name,
-                arguments: quickResult.toolCall.arguments,
-              });
-            }
-            const quickToolRecord = await executeToolCall({
-              registry: toolRegistry,
-              id: toolCid,
-              name: quickResult.toolCall.name,
-              arguments: quickResult.toolCall.arguments,
-              context: {
-                userId: uid,
-                domain: resolvedDomain,
-                orgId: resolvedOrgId,
-                desktopRelay,
-                llmGetters,
-                source: 'quick_command',
-                supervisedExternalCommits: true,
-                allowLocalFileWrites,
-                localWriteIntentReason,
-                requestConfirmation: requestToolConfirmation,
-                actionIntent: visibleUserText,
-                ...(routedToolPolicy ? {
-                  toolPolicy: buildQuickCommandToolPolicy(routedToolPolicy, quickResult.toolCall.name),
-                } : {}),
-              },
-            });
-            quickToolResult = quickToolRecord.result || '';
-            quickToolError = quickToolRecord.error;
-            if (shouldEmitQuickTool) {
-              if (quickToolRecord.error) {
-                emitToolLifecycle({
-                  correlationId: toolCid,
-                  name: quickResult.toolCall.name,
-                  arguments: quickResult.toolCall.arguments,
-                  error: quickToolRecord.error,
-                });
-              } else {
-                emitToolLifecycle({
-                  correlationId: toolCid,
-                  name: quickResult.toolCall.name,
-                  arguments: quickResult.toolCall.arguments,
-                  result: formatToolResultForUi(quickToolRecord.result),
-                });
-              }
-            }
-            if (quickResult.formatToolResult) {
-              quickResponseText = quickResult.formatToolResult(quickToolResult, quickToolError);
-            } else if (quickToolError) {
-              quickResponseText = `\u8fd9\u6b21\u6ca1\u6709\u5b8c\u6210\uff1a${quickToolError}`;
-            }
-            quickToolRecords.push(quickToolRecord);
-            if (!quickToolRecord.error && quickResult.followUpToolCalls?.length) {
-              for (const followUp of quickResult.followUpToolCalls) {
-                const followUpCid = `qc-verify-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-                const shouldEmitFollowUp = !isDirectDesktopTool(followUp.name);
-                if (shouldEmitFollowUp) {
-                  emitToolLifecycle({
-                    correlationId: followUpCid,
-                    name: followUp.name,
-                    arguments: followUp.arguments,
-                  });
-                }
-                const followUpRecord = await executeToolCall({
-                  registry: toolRegistry,
-                  id: followUpCid,
-                  name: followUp.name,
-                  arguments: followUp.arguments,
-                  context: {
-                    userId: uid,
-                    domain: resolvedDomain,
-                    orgId: resolvedOrgId,
-                    desktopRelay,
-                    llmGetters,
-                    source: 'quick_command_verification',
-                    supervisedExternalCommits: true,
-                    allowLocalFileWrites,
-                    localWriteIntentReason,
-                    requestConfirmation: requestToolConfirmation,
-                    actionIntent: visibleUserText,
-                    ...(routedToolPolicy ? {
-                      toolPolicy: buildQuickCommandToolPolicy(routedToolPolicy, followUp.name),
-                    } : {}),
-                  },
-                });
-                quickToolRecords.push(followUpRecord);
-                if (followUpRecord.error && !quickToolError) quickToolError = followUpRecord.error;
-                if (shouldEmitFollowUp) {
-                  emitToolLifecycle({
-                    correlationId: followUpCid,
-                    name: followUp.name,
-                    arguments: followUp.arguments,
-                    ...(followUpRecord.error
-                      ? { error: followUpRecord.error }
-                      : { result: formatToolResultForUi(followUpRecord.result) }),
-                  });
-                }
-              }
-            }
-            if (quickResult.formatToolRecords) {
-              quickResponseText = quickResult.formatToolRecords(quickToolRecords);
-            }
-          }
-          if (pendingConfirmationCreatedThisTurn) {
-            quickResponseText = formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn);
-          }
-          const quickFinalized = pendingConfirmationCreatedThisTurn
-            ? {
-                text: quickResponseText,
-                blocked: false,
-                reason: 'waiting_confirmation',
-                notification: undefined,
-              }
-            : finalizeLumiResponse({
-                taskText: executionTaskText,
-                responseText: quickResponseText,
-                toolRecords: quickToolRecords,
-                source: 'chat',
-                flow: turnFlow,
-              });
-          quickResponseText = quickFinalized.text;
-          if (quickFinalized.notification) emitAgent('agent:notification', quickFinalized.notification);
-          persistChatTakeoverExecution(quickResponseText, {
-            toolRecords: quickToolRecords,
-            source: 'chat_quick_command',
-            sourceInteractionId: `${interactionId}_quick`,
-            capabilitySelection,
-            finalizationBlocked: quickFinalized.blocked,
-            assistantTextTrusted: !quickFinalized.blocked,
-            finalizationReason: quickFinalized.reason,
-          });
-          if (pendingConfirmationCreatedThisTurn && conversationId) {
-            setConversationActionExecutionStatus(conversationId, uid, 'waiting_confirmation', {
-              assistantState: formatPendingConfirmationPrompt(pendingConfirmationCreatedThisTurn),
-              requestId,
-            });
-          }
-          emitAgent("agent:response", {
-            text: quickResponseText,
-            agentName: personality.name,
-            finalized: true,
-            blocked: quickFinalized.blocked,
-            reason: quickFinalized.reason || '',
-          });
-          if (conversationId) {
-            addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
-            if (quickToolRecords.length) {
-              for (const record of quickToolRecords) {
-                addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'tool', content: summarizeToolRecordForPersistence(record), domain: resolvedDomain, orgId: resolvedOrgId });
-              }
-            }
-            addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: quickResponseText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: quickToolRecords.length ? quickToolRecords : undefined, cognitiveIntent: quickFinalized.blocked ? 'work_product_guard' : undefined });
-            scheduleChatSummary(conversationId);
-            emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
-          }
-          if (!quickFinalized.blocked) {
-            persistChatLearning(quickResponseText, {
-              toolRecords: quickToolRecords,
-              sourceInteractionId: `${interactionId}_quick`,
-              logLabel: 'chat quick command',
-            });
-          }
-          emitAgent("agent:status", { status: "idle" });
-          // Track topics for quick commands too
-          if (conversationId && !quickFinalized.blocked) {
-            try {
-              const topics = extractTopics(text);
-              for (const topic of topics) trackTopic(conversationId, topic);
-            } catch {}
-          }
-          releaseChatSession();
-          return;
-        }
-      } catch (qcErr: any) {
-        console.warn('[ChatHandler] Quick command check failed, falling through:', qcErr.message);
-      }
-
+      let responseText = '';
+      let llmWasCalled = false;
+      const allToolRecords: ToolExecutionRecord[] = [];
+      // ── Model-owned natural-language dispatch ──
+      // Natural-language chat has no deterministic quick-command path. Surface
+      // recognition and legacy quick matches are advisory inputs to the shared
+      // model/tool loop; structured UI events use their dedicated handlers.
       // ── Lumi Cognitive Engine: classify intent BEFORE calling any LLM ──
       const cognitiveCtx: CognitiveContext = {
         userId: uid,
@@ -2800,27 +1987,7 @@ export function registerChatHandler(
         return result.text || '{"category":"unknown","confidence":0.5,"entities":{}}';
       };
 
-      const cognitionToolContext: ToolContext = {
-        userId: uid,
-        taskId: actionTaskExecution.state?.taskId || requestId,
-        conversationId: conversation.id,
-        turnId: requestId,
-        requestId,
-        domain: resolvedDomain,
-        orgId: resolvedOrgId,
-        desktopRelay,
-        llmGetters,
-        source: 'chat_cognition_direct',
-        supervisedExternalCommits: true,
-        allowLocalFileWrites,
-        localWriteIntentReason,
-        requestConfirmation: requestToolConfirmation,
-        actionIntent: visibleUserText,
-        toolPolicy: routedToolPolicy || personality.toolPolicy,
-        desktopExecutionTracker,
-        isCancelled: () => abortController.signal.aborted,
-      };
-      const cognition = await processInput(text, cognitiveCtx, llmClassifier, cognitionToolContext);
+      const cognition = await processInput(text, cognitiveCtx, llmClassifier);
       console.log('[ChatHandler] cognition result:', cognition.intent.category, 'directToolExecuted:', cognition.directToolExecuted, 'responseText:', cognition.responseText?.slice(0, 100));
 
       // ── Sentiment analysis: detect emotional charge in user input ──
@@ -2831,209 +1998,6 @@ export function registerChatHandler(
 
       // Auto-select model: flash for simple chat, pro for complex tasks
       console.log('[ChatHandler] Using exact configured reasoning model:', activeProvider, '/', activeModel);
-
-      let responseText = '';
-      let llmWasCalled = false;
-      const allToolRecords: ToolExecutionRecord[] = [];
-      let actionPreflightContext = '';
-      const runPreflightTool = async (name: string, args: Record<string, any>): Promise<ToolExecutionRecord> => {
-        const correlationId = `preflight-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const shouldEmitLifecycle = !isDirectDesktopTool(name);
-        if (shouldEmitLifecycle) {
-          emitToolLifecycle({ correlationId, name, arguments: args || {} });
-        }
-        const record = await executeToolCall({
-          registry: toolRegistry,
-          id: correlationId,
-          name,
-          arguments: args || {},
-          context: {
-            userId: uid,
-            domain: resolvedDomain,
-            orgId: resolvedOrgId,
-            desktopRelay,
-            llmGetters,
-            source: 'chat_preflight',
-            supervisedExternalCommits: true,
-            allowLocalFileWrites,
-            localWriteIntentReason,
-            isCancelled: () => abortController.signal.aborted,
-            requestConfirmation: requestToolConfirmation,
-            actionIntent: visibleUserText,
-            ...(routedToolPolicy ? { toolPolicy: routedToolPolicy } : {}),
-            desktopExecutionTracker,
-          },
-        });
-        if (shouldEmitLifecycle) {
-          if (record.error) {
-            emitToolLifecycle({ correlationId, name, arguments: args || {}, error: record.error });
-          } else {
-            emitToolLifecycle({ correlationId, name, arguments: args || {}, result: formatToolResultForUi(record.result) });
-          }
-        }
-        allToolRecords.push(record);
-        return record;
-      };
-
-      const historyContextText = getRecentHistoryText(history);
-      const preflightSearchText = [visibleUserText, attachmentContext].filter(Boolean).join('\n');
-      const shouldPreflightLocalAction =
-        !cognition.directToolExecuted &&
-        !explicitTeamOrchestration &&
-        executionDecision.allowToolUse &&
-        !clientActionOnlyTurn &&
-        !selfRepairTurn &&
-        !isSanctuary &&
-        shouldRunVisibleActionPreflight(visibleUserText, attachments);
-
-      if (shouldPreflightLocalAction) {
-        emitAgent("agent:status", {
-          status: "thinking",
-          agentName: personality.name,
-          phase: 'preflight',
-          detail: "Checking available local evidence before answering",
-        });
-        const preflightStartIndex = allToolRecords.length;
-        const pathKinds = new Map<string, ChatIncomingAttachment['kind'] | undefined>();
-        for (const item of attachments) {
-          if (shouldSkipPreflightForAttachment(item)) continue;
-          if (item.path) pathKinds.set(path.normalize(item.path), item.kind);
-        }
-        for (const localPath of extractExplicitLocalPaths(visibleUserText)) {
-          pathKinds.set(path.normalize(localPath), pathKinds.get(path.normalize(localPath)));
-        }
-
-        if (pathKinds.size > 0) {
-          for (const [localPath, kind] of Array.from(pathKinds.entries()).slice(0, 4)) {
-            const toolCall = toolForLocalPath(localPath, preflightSearchText, kind);
-            const record = await runPreflightTool(toolCall.name, toolCall.arguments);
-            if (toolCall.name === 'desktop_list_files' && !record.error) {
-              const entries = parseNativeFiles(record.result || '');
-              const cadImageCandidates = selectLocalCadImageCandidates(entries, preflightSearchText);
-              if (cadImageCandidates.length > 0) {
-                for (const candidate of cadImageCandidates) {
-                  if (!candidate.path) continue;
-                  const candidateTool = toolForLocalFile(candidate.path, preflightSearchText);
-                  await runPreflightTool(candidateTool.name, candidateTool.arguments);
-                }
-              } else {
-                const candidate = selectBestLocalFileCandidate(entries, preflightSearchText);
-                if (candidate?.path) {
-                  const candidateTool = toolForLocalFile(candidate.path, preflightSearchText);
-                  await runPreflightTool(candidateTool.name, candidateTool.arguments);
-                }
-              }
-            }
-          }
-        } else {
-          const discovered: NativeFileEntry[] = [];
-          const probeDirs = getLikelyLocalDirs(visibleUserText);
-          for (const dir of probeDirs.slice(0, 4)) {
-            const record = await runPreflightTool('desktop_list_files', { path: dir, limit: 80 });
-            if (!record.error) {
-              const entries = parseNativeFiles(record.result || '');
-              discovered.push(...entries);
-            }
-          }
-          const hadDesktopListingSuccess = allToolRecords
-            .slice(preflightStartIndex)
-            .some(record => record.name === 'desktop_list_files' && !record.error);
-          if (!hadDesktopListingSuccess) {
-            for (const dir of probeDirs.slice(0, 2)) {
-              const record = await runPreflightTool('list_directory', { path: dir });
-              if (!record.error) {
-                discovered.push(...parseNativeFiles(record.result || ''));
-                if (discovered.length > 0) break;
-              }
-            }
-          }
-
-          const cadImageCandidates = selectLocalCadImageCandidates(discovered, preflightSearchText);
-          if (cadImageCandidates.length > 0) {
-            for (const candidate of cadImageCandidates) {
-              if (!candidate.path) continue;
-              const toolCall = toolForLocalFile(candidate.path, preflightSearchText);
-              await runPreflightTool(toolCall.name, toolCall.arguments);
-            }
-          } else {
-            const candidate = selectBestLocalFileCandidate(discovered, visibleUserText);
-            if (candidate?.path) {
-              const toolCall = toolForLocalFile(candidate.path, preflightSearchText);
-              await runPreflightTool(toolCall.name, toolCall.arguments);
-            }
-          }
-        }
-
-        actionPreflightContext = formatPreflightContext(allToolRecords.slice(preflightStartIndex));
-        if (actionPreflightContext) {
-          effectiveSystemPrompt += '\n\n' + actionPreflightContext;
-        }
-      }
-
-      const clientDiagnosticPlan = selfRepairTurn
-        ? buildClientDiagnosticPlan(visibleUserText)
-        : [];
-      if (
-        !responseText
-        && !actionPreflightContext
-        && clientDiagnosticPlan.length > 0
-        && executionDecision.allowToolUse
-        && !clientActionOnlyTurn
-        && !isSanctuary
-      ) {
-        const zh = /[\u3400-\u9fff]/u.test(visibleUserText);
-        const progressText = zh
-          ? CN_CLIENT_DIAGNOSTIC_MESSAGES.checking
-          : 'I am checking the client and runtime path now.';
-        emitAgent("agent:status", {
-          status: "thinking",
-          agentName: personality.name,
-          phase: 'client_diagnostic',
-          detail: progressText,
-        });
-        emitAgent("agent:progress", {
-          text: progressText,
-          tone: 'tool',
-          agentName: personality.name,
-        });
-        const diagnosticStartIndex = allToolRecords.length;
-        for (const call of clientDiagnosticPlan) {
-          await runPreflightTool(call.name, call.arguments);
-        }
-        responseText = formatClientDiagnosticResult(
-          allToolRecords.slice(diagnosticStartIndex),
-          visibleUserText,
-        ) || '';
-        llmWasCalled = false;
-      }
-
-      const desktopObservationPlan = buildDesktopObservationPlan(visibleUserText);
-      if (
-        !responseText &&
-        !cognition.directToolExecuted &&
-        !explicitTeamOrchestration &&
-        desktopObservationPlan.length > 0 &&
-        executionDecision.allowToolUse &&
-        !clientActionOnlyTurn &&
-        !selfRepairTurn &&
-        !isSanctuary
-      ) {
-        emitAgent("agent:status", {
-          status: "thinking",
-          agentName: personality.name,
-          phase: 'desktop_observation',
-          detail: 'Reading current desktop state',
-        });
-        const observationStartIndex = allToolRecords.length;
-        for (const call of desktopObservationPlan) {
-          await runPreflightTool(call.name, call.arguments);
-        }
-        responseText = formatDesktopObservationResult(
-          allToolRecords.slice(observationStartIndex),
-          visibleUserText,
-        ) || '';
-        llmWasCalled = false;
-      }
 
       const deferCompletionStream = shouldDeferModelOutputUntilFinalized({
         taskText: executionTaskText,
@@ -3064,858 +2028,47 @@ export function registerChatHandler(
         orgId: resolvedOrgId,
         desktopRelay,
       });
-
-      if (cognition.directToolExecuted && cognition.responseText) {
-        // Path A: Lumi handled this directly — no LLM needed
-        responseText = cognition.responseText;
-        const directRecords = cognition.toolRecords
-          || (cognition.toolRecord ? [cognition.toolRecord] : []);
-        allToolRecords.push(...directRecords);
-        console.log(`[Cognition] Direct tool '${cognition.intent.directToolCall?.name}' handled without LLM`);
-      }
-
-      const foregroundWeChatReadArgs = buildForegroundMessagingArguments('read', executionPipeline.normalizedIntent);
-      if (!responseText && !actionPreflightContext && executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn && foregroundWeChatReadArgs) {
-        const toolName = 'wechat_read_recent_chat';
-        const correlationId = `wechat-read-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const toolRecord: ToolExecutionRecord = {
-          id: correlationId,
-          name: toolName,
-          arguments: foregroundWeChatReadArgs,
-          result: '',
-        };
-
-        emitAgent("agent:status", {
-          status: "thinking",
-          agentName: personality.name,
-          phase: 'foreground_messaging_read',
-          detail: '\u6b63\u5728\u524d\u53f0\u5fae\u4fe1\u91cc\u8bfb\u53d6\u804a\u5929\u5185\u5bb9',
-        });
-        try {
-          const foregroundExecution = await executeForegroundMessagingAction({
-            action: 'read',
-            normalizedIntent: executionPipeline.normalizedIntent,
-            executionPlan: executionPipeline.executionPlan,
-            registry: toolRegistry,
-            correlationId,
-            arguments: foregroundWeChatReadArgs,
-            context: {
-              userId: uid,
-              domain: resolvedDomain,
-              orgId: resolvedOrgId,
-              desktopRelay,
-              llmGetters,
-              source: 'chat_foreground_messaging_read',
-              supervisedExternalCommits: true,
-              allowLocalFileWrites,
-              localWriteIntentReason,
-              isCancelled: () => abortController.signal.aborted,
-              requestConfirmation: requestToolConfirmation,
-              actionIntent: visibleUserText,
-              toolPolicy: routedToolPolicy || personality.toolPolicy,
-              onProgress: (step: string) => {
-                if (shouldForwardPreFinalizationProgress(step)) {
-                  emitAgent("agent:progress", { text: step, tone: 'tool', agentName: personality.name });
-                }
-              },
-            },
-            onLifecycle: event => emitToolLifecycle({
-              correlationId: event.correlationId,
-              name: event.name,
-              arguments: event.arguments,
-              ...(event.phase === 'finish' && event.result ? { result: formatToolResultForUi(event.result) } : {}),
-              ...(event.error ? { error: event.error } : {}),
-            }),
-          });
-          Object.assign(toolRecord, foregroundExecution.record);
-          if (toolRecord.error) throw new Error(toolRecord.error);
-          const parsed = foregroundExecution.parsed;
-          const contact = String(foregroundWeChatReadArgs.contact || '').trim();
-          const summary = String(parsed.contentSummary || '').trim();
-          if (parsed.read && summary) {
-            responseText = contact
-              ? `\u6211\u5df2\u7ecf\u5b9a\u4f4d\u5230\u4f60\u548c${contact}\u7684\u5fae\u4fe1\u804a\u5929\u3002\u53ef\u89c1\u6700\u8fd1\u5185\u5bb9\u5982\u4e0b\uff1a\n\n${summary}`
-              : `\u6211\u5df2\u7ecf\u8bfb\u5230\u5f53\u524d\u5fae\u4fe1\u804a\u5929\u7684\u53ef\u89c1\u6700\u8fd1\u5185\u5bb9\uff1a\n\n${summary}`;
-          } else if (parsed.read) {
-            const evidence = String(parsed.uiSnapshotPreview || '').slice(0, 1200);
-            responseText = contact
-              ? `\u6211\u5df2\u7ecf\u5b9a\u4f4d\u5230\u4f60\u548c${contact}\u7684\u5fae\u4fe1\u804a\u5929\uff0c\u4f46\u89c6\u89c9\u6458\u8981\u4e0d\u53ef\u7528\u3002\u5f53\u524d\u53ef\u9a8c\u8bc1\u7684\u7a97\u53e3\u8bc1\u636e\uff1a\n\n${evidence}`
-              : `\u6211\u5df2\u7ecf\u5b9a\u4f4d\u5230\u5f53\u524d\u5fae\u4fe1\u804a\u5929\uff0c\u4f46\u89c6\u89c9\u6458\u8981\u4e0d\u53ef\u7528\u3002\u5f53\u524d\u53ef\u9a8c\u8bc1\u7684\u7a97\u53e3\u8bc1\u636e\uff1a\n\n${evidence}`;
-          } else {
-            responseText = [
-              '\u8fd9\u6b21\u8fd8\u6ca1\u5b8c\u6210\u3002',
-              '\u5361\u4f4f\u7684\u4f4d\u7f6e\uff1a\u5fae\u4fe1\u524d\u53f0\u804a\u5929\u8bfb\u53d6\u3002',
-              String(parsed.visionError || parsed.note || '\u5df2\u5c1d\u8bd5\u805a\u7126\u5fae\u4fe1\uff0c\u4f46\u6ca1\u6709\u62ff\u5230\u53ef\u8bfb\u7684\u804a\u5929\u5185\u5bb9\u8bc1\u636e\u3002'),
-            ].join('\n');
-          }
-          llmWasCalled = false;
-        } catch (readErr: any) {
-          toolRecord.error = readErr?.message || String(readErr);
-          responseText = [
-            '\u8fd9\u6b21\u8fd8\u6ca1\u5b8c\u6210\u3002',
-            `\u5361\u4f4f\u7684\u4f4d\u7f6e\uff1a\u5fae\u4fe1\u524d\u53f0\u804a\u5929\u8bfb\u53d6: ${toolRecord.error}\u3002`,
-            '\u6211\u4e0d\u4f1a\u628a\u53ea\u6253\u5f00\u6216\u805a\u7126\u5fae\u4fe1\u8bf4\u6210\u5df2\u8bfb\u5230\u804a\u5929\u5185\u5bb9\u3002',
-          ].join('\n');
-          llmWasCalled = false;
-        }
-        allToolRecords.push(toolRecord);
-      }
-
-      const foregroundWeChatSendArgs = buildForegroundMessagingArguments('send', executionPipeline.normalizedIntent);
-      if (!responseText && !actionPreflightContext && executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn && foregroundWeChatSendArgs) {
-        const toolName = 'wechat_send_message';
-        const correlationId = `wechat-send-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const toolRecord: ToolExecutionRecord = {
-          id: correlationId,
-          name: toolName,
-          arguments: foregroundWeChatSendArgs,
-          result: '',
-        };
-
-        emitAgent("agent:status", {
-          status: "thinking",
-          agentName: personality.name,
-          phase: 'foreground_messaging',
-          detail: '\u6b63\u5728\u524d\u53f0\u5fae\u4fe1\u91cc\u53d1\u9001\u6d88\u606f',
-        });
-        try {
-          const foregroundExecution = await executeForegroundMessagingAction({
-            action: 'send',
-            normalizedIntent: executionPipeline.normalizedIntent,
-            executionPlan: executionPipeline.executionPlan,
-            registry: toolRegistry,
-            correlationId,
-            arguments: foregroundWeChatSendArgs,
-            context: {
-              userId: uid,
-              domain: resolvedDomain,
-              orgId: resolvedOrgId,
-              desktopRelay,
-              llmGetters,
-              source: 'chat_foreground_messaging',
-              supervisedExternalCommits: true,
-              allowLocalFileWrites,
-              localWriteIntentReason,
-              isCancelled: () => abortController.signal.aborted,
-              requestConfirmation: requestToolConfirmation,
-              actionIntent: visibleUserText,
-              toolPolicy: routedToolPolicy || personality.toolPolicy,
-              onProgress: (step: string) => {
-                if (shouldForwardPreFinalizationProgress(step)) {
-                  emitAgent("agent:progress", { text: step, tone: 'tool', agentName: personality.name });
-                }
-              },
-            },
-            onLifecycle: event => emitToolLifecycle({
-              correlationId: event.correlationId,
-              name: event.name,
-              arguments: event.arguments,
-              ...(event.phase === 'finish' && event.result ? { result: formatToolResultForUi(event.result) } : {}),
-              ...(event.error ? { error: event.error } : {}),
-            }),
-          });
-          Object.assign(toolRecord, foregroundExecution.record);
-          if (toolRecord.error) throw new Error(toolRecord.error);
-          const contact = String(foregroundWeChatSendArgs.contact || '').trim();
-          const message = String(foregroundWeChatSendArgs.message || foregroundWeChatSendArgs.draft || '').trim();
-          const sendResult = foregroundExecution.parsed;
-          if (sendResult.sent === true && sendResult.verificationStatus === 'verified') {
-            responseText = contact
-              ? `\u5df2\u5728\u524d\u53f0\u5fae\u4fe1\u91cc\u53d1\u9001\u7ed9${contact}\uff1a${message}`
-              : `\u5df2\u5728\u524d\u53f0\u5fae\u4fe1\u5f53\u524d\u804a\u5929\u91cc\u53d1\u9001\uff1a${message}`;
-          } else {
-            responseText = contact
-              ? `\u6211\u5df2\u5728\u5fae\u4fe1\u91cc\u5b9a\u4f4d${contact}\u5e76\u6267\u884c\u53d1\u9001\uff0c\u4f46\u8fd8\u6ca1\u770b\u5230\u53ef\u786e\u8ba4\u7684\u6d88\u606f\u6c14\u6ce1\uff0c\u56e0\u6b64\u4e0d\u6807\u8bb0\u4e3a\u5df2\u53d1\u9001\u3002`
-              : '\u6211\u5df2\u5728\u5fae\u4fe1\u5f53\u524d\u804a\u5929\u6267\u884c\u53d1\u9001\uff0c\u4f46\u8fd8\u6ca1\u770b\u5230\u53ef\u786e\u8ba4\u7684\u6d88\u606f\u6c14\u6ce1\uff0c\u56e0\u6b64\u4e0d\u6807\u8bb0\u4e3a\u5df2\u53d1\u9001\u3002';
-          }
-          llmWasCalled = false;
-        } catch (sendErr: any) {
-          toolRecord.error = sendErr?.message || String(sendErr);
-          responseText = [
-            '\u8fd9\u6b21\u8fd8\u6ca1\u5b8c\u6210\u3002',
-            `\u5361\u4f4f\u7684\u4f4d\u7f6e\uff1a\u5fae\u4fe1\u524d\u53f0\u53d1\u9001: ${toolRecord.error}\u3002`,
-            '\u6211\u4e0d\u4f1a\u628a\u672a\u786e\u8ba4\u7684\u53d1\u9001\u8bf4\u6210\u5df2\u53d1\u9001\uff1b\u9700\u8981\u7ee7\u7eed\u5b9a\u4f4d\u5fae\u4fe1\u7a97\u53e3\u5e76\u9a8c\u8bc1\u8f93\u5165\u6846\u3002',
-          ].join('\n');
-          llmWasCalled = false;
-        }
-        allToolRecords.push(toolRecord);
-      }
-
-      if (!responseText && !actionPreflightContext) {
-        const delegationDecision = shouldDelegateWorkInBackground({
-          text: visibleUserText || text,
-          source: eventSource,
-          category: cognition.intent.category,
-          complexity: backgroundComplexity,
-          allowToolUse: executionDecision.allowToolUse,
-          clientActionOnly: clientActionOnlyTurn,
-          clientSurfaceRequest: Boolean(chatContextBridge) || isClientSurfaceRequestText(routingText),
-          continuationContext: Boolean(actionContinuationBridge),
-          selfRepair: selfRepairTurn,
-          sanctuary: isSanctuary,
-          directDesktop: workSurfaceRoute.directDesktop,
-          capabilityLane: capabilitySelection.lane,
-          prefersSequentialWorkflow,
-          availableAgentCount: availableWorkerAgents.length,
-        });
-
-        if (delegationDecision.shouldDelegate) {
-          const backgroundTask = registerBackgroundTask({
-            userId: uid,
-            title: visibleUserText.slice(0, 140) || storedUserContent.slice(0, 140) || 'Background task',
-            prompt: executionTaskText,
-            reason: delegationDecision.reason,
-            complexity: backgroundComplexity,
-            workers: availableWorkerAgents.slice(0, 6).map((agent: any) => ({
-              id: agent.id,
-              name: agent.name,
-              category: agent.category,
-            })),
-            context: {
-              conversationId: conversationId || '',
-              conversationAgentId,
-              personalityId,
-              domain: resolvedDomain,
-              orgId: resolvedOrgId,
-              sourceRequestId: requestId,
-              interactionId,
-              actionTaskId: actionTaskExecution.state?.taskId,
-              provider: activeProvider,
-              model: activeModel,
-              selectionMode: reasoningRoutePolicy.selectionMode,
-              fallbackCandidates: reasoningRoutePolicy.fallbackCandidates,
-              allowCloudFallback: reasoningRoutePolicy.allowCloudFallback,
-              forceOrchestration: delegationDecision.reason === 'explicit_background_preference',
-              toolPolicy: routedToolPolicy,
-            },
-          });
-          const backgroundTaskId = backgroundTask.id;
-          const workerNames = backgroundTask.workerNames.slice(0, 3);
-          responseText = buildDelegationAck(workerNames, backgroundTaskId);
-          llmWasCalled = false;
-
-          emitAgent("agent:delegation", {
-            taskId: backgroundTaskId,
-            task: backgroundTask,
-            reason: delegationDecision.reason,
-            complexity: backgroundComplexity,
-            workers: backgroundTask.workers,
-          });
-          emitAgent("agent:background_task_update", {
-            taskId: backgroundTaskId,
-            task: backgroundTask,
-          });
-          pushNotification(uid, {
-            type: 'background_delegation',
-            title: 'Lumi 后台子 agent',
-            message: `已将任务交给后台子 agent：${text.slice(0, 60)}`,
-          });
-
-          setTimeout(() => {
-            const backgroundToolRecords: ToolExecutionRecord[] = [];
-            const emitBackground = (event: string, payload: Record<string, any> = {}) => {
-              if (
-                event !== 'agent:background_task_update'
-                && !isLatestUserTurn(executionScope, requestId)
-              ) return;
-              socket.emit(event, {
-                ...payload,
-                source: 'background_delegation',
-                requestId: backgroundTaskId,
-                taskId: backgroundTaskId,
-                conversationId,
-                agentId: conversationAgentId,
-              });
-            };
-            const emitTaskUpdate = (task = getBackgroundTask(backgroundTaskId, uid)) => {
-              if (!task) return;
-              emitBackground("agent:background_task_update", {
-                taskId: task.id,
-                task,
-              });
-            };
-            const persistBackgroundResult = (
-              content: string,
-              toolCalls?: ToolExecutionRecord[],
-              guarded = false,
-              deliverToConversation = true,
-            ) => {
-              try {
-                if (conversationId && deliverToConversation) {
-                  addMessage({
-                    userId: uid,
-                    agentId: conversationAgentId,
-                    conversationId,
-                    role: 'assistant',
-                    content,
-                    personality: personality.id,
-                    domain: resolvedDomain,
-                    orgId: resolvedOrgId,
-                    toolCalls: toolCalls?.length ? toolCalls : undefined,
-                    cognitiveIntent: guarded ? 'work_product_guard' : undefined,
-                  });
-                  emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'background_delegation', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
-                }
-                if (deliverToConversation) {
-                  const db = readDB();
-                  db.interactions.push({
-                    id: `bg-${interactionId}`,
-                    userId: uid,
-                    agentId: agentId || '',
-                    conversationId: conversationId || '',
-                    content: `Background delegated task: ${storedUserContent}`,
-                    response: content,
-                    role: 'agent',
-                    personality: personality.id,
-                    timestamp: new Date().toISOString(),
-                    mode: 'background_delegation',
-                    cognitiveIntent: guarded ? 'work_product_guard' : cognition.intent.category,
-                    llmWasCalled: true,
-                    domain: resolvedDomain,
-                    orgId: resolvedOrgId,
-                  } as any);
-                  writeDB(db);
-                }
-                if (!guarded && deliverToConversation) {
-                  persistChatLearning(content, {
-                    toolRecords: toolCalls || [],
-                    sourceInteractionId: `bg-${interactionId}`,
-                    logLabel: 'background delegation',
-                  });
-                }
-              } catch (persistErr: any) {
-                console.warn('[BackgroundDelegation] Persist failed:', persistErr?.message || persistErr);
-              }
-            };
-
-            (async () => {
-              let backgroundLeaseHeartbeat: ReturnType<typeof setInterval> | null = null;
-              let backgroundLeaseLost = false;
-              let backgroundDesktopRelay: ReturnType<typeof createDesktopRelay> | null = null;
-              try {
-                const runningTask = markBackgroundTaskRunning(backgroundTaskId);
-                if (runningTask) emitTaskUpdate(runningTask);
-                if (!runningTask || runningTask.status !== 'running' || !runningTask.leaseId) {
-                  throw new Error('Background task lease could not be acquired.');
-                }
-                checkpointBackgroundTask(backgroundTaskId, {
-                  phase: 'orchestrating',
-                  detail: `Started attempt ${runningTask.attempt}`,
-                }, runningTask.leaseId);
-                backgroundLeaseHeartbeat = setInterval(() => {
-                  const renewed = heartbeatBackgroundTask(backgroundTaskId, runningTask.leaseId!);
-                  if (!renewed) {
-                    backgroundLeaseLost = true;
-                    if (backgroundLeaseHeartbeat) clearInterval(backgroundLeaseHeartbeat);
-                  }
-                }, 15_000);
-                if (typeof (backgroundLeaseHeartbeat as any).unref === 'function') {
-                  (backgroundLeaseHeartbeat as any).unref();
-                }
-                emitBackground("agent:status", {
-                  status: "thinking",
-                  agentName: "Lumi Orchestrator",
-                  phase: 'background',
-                  detail: `后台子 agent 正在处理 ${backgroundTaskId}`,
-                });
-                backgroundDesktopRelay = createDesktopRelay({
-                  io,
-                  userId: uid,
-                  domain: resolvedDomain,
-                  orgId: resolvedOrgId,
-                  source: 'background_delegation',
-                  taskId: backgroundTaskId,
-                  requestSocket: socket,
-                  emitToolLifecycle,
-                  formatResultForLifecycle: formatToolResultForUi,
-                  cancelOnRequestSocketDisconnect: false,
-                });
-                const backgroundModelRecovery = conversationId && actionTaskExecution.state?.taskId
-                  ? getConversationModelExecutionRecovery({
-                      conversationId,
-                      userId: uid,
-                      taskId: actionTaskExecution.state.taskId,
-                    })
-                  : null;
-                const orchResult = await runOrchestratedTask(
-                  executionTaskText,
-                  {
-                    userId: uid,
-                    personalityId,
-                    domain: resolvedDomain,
-                    orgId: resolvedOrgId,
-                    desktopRelay: backgroundDesktopRelay,
-                    toolPolicy: routedToolPolicy,
-                    taskId: actionTaskExecution.state?.taskId,
-                    desktopExecutionTracker,
-                    resumeNodeReceipts: backgroundModelRecovery?.receipts,
-                    availableAgentIds: backgroundTask.workers.map(worker => worker.id),
-                    forceOrchestration: delegationDecision.reason === 'explicit_background_preference',
-                    isCancelled: () => isBackgroundTaskCancellationRequested(backgroundTaskId)
-                      || isBackgroundTaskPauseRequested(backgroundTaskId)
-                      || backgroundLeaseLost,
-                  },
-                  { provider: activeProvider as any, model: activeModel, ...reasoningRoutePolicy },
-                  llmGetters,
-                  undefined,
-                  (record, meta) => {
-                    if (isTerminalOrchestrationToolEvent(record)) {
-                      backgroundToolRecords.push({
-                        ...record,
-                        arguments: { ...(record.arguments || {}) },
-                        result: record.result || '',
-                      });
-                    }
-                    if (record.result !== undefined || record.error !== undefined) {
-                      const updatedTask = incrementBackgroundTaskToolCalls(backgroundTaskId, runningTask.leaseId);
-                      checkpointBackgroundTask(backgroundTaskId, {
-                        phase: 'tool_execution',
-                        receiptIds: backgroundToolRecords.map(item => item.id).filter((id): id is string => Boolean(id)),
-                        receipts: snapshotDurableToolRecords(backgroundToolRecords),
-                        detail: `${backgroundToolRecords.length} terminal tool call(s) observed`,
-                      }, runningTask.leaseId);
-                      if (updatedTask) emitTaskUpdate(updatedTask);
-                    }
-                    // Direct desktop relays already emit their own start/result lifecycle.
-                    if (isDirectDesktopTool(record.name)) return;
-                    const payload: Record<string, any> = {
-                      correlationId: record.id,
-                      toolCallId: record.id,
-                      name: record.name,
-                      arguments: record.arguments,
-                      args: record.arguments,
-                      subTaskId: meta.subTaskId,
-                      workerAgentId: meta.agentId,
-                      workerAgentName: meta.agentName,
-                    };
-                    if (record.result !== undefined) payload.result = formatToolResultForUi(record.result);
-                    if (record.error !== undefined) payload.error = record.error;
-                    emitBackground("agent:tool_call", payload);
-                    emitBackground("agent:tool", payload);
-                  },
-                );
-
-                if (!orchResult) {
-                  throw new Error('No worker agent accepted the delegated task.');
-                }
-                if (conversationId && actionTaskExecution.state?.taskId) {
-                  persistConversationModelExecutionResult({
-                    conversationId,
-                    userId: uid,
-                    taskId: actionTaskExecution.state.taskId,
-                    workflowResult: orchResult.workflowResult,
-                  });
-                }
-                if (isBackgroundTaskCancellationRequested(backgroundTaskId)) {
-                  throw new Error('Workflow cancelled');
-                }
-
-                const taskPreview = text.slice(0, 80);
-                // i18n-allow: reviewed Chinese background-result fallback; this is finalized before delivery.
-                const workerText = orchResult.responseText || '\u540e\u53f0\u5b50 agent \u6ca1\u6709\u8fd4\u56de\u8be6\u7ec6\u7ed3\u679c\u3002';
-                const completionCandidate = `\u540e\u53f0\u4efb\u52a1\u5df2\u5b8c\u6210\uff1a${taskPreview}\n\n${workerText}`;
-                const finalizedBackground = finalizeLumiResponse({
-                  taskText: executionTaskText,
-                  responseText: completionCandidate,
-                  toolRecords: backgroundToolRecords,
-                  source: 'background_delegation',
-                  flow: turnFlow,
-                });
-                const backgroundBlocked = finalizedBackground.blocked;
-                const completionText = finalizedBackground.text;
-                checkpointBackgroundTask(backgroundTaskId, {
-                  phase: backgroundBlocked ? 'failed_verification' : 'verified',
-                  receiptIds: backgroundToolRecords.map(item => item.id).filter((id): id is string => Boolean(id)),
-                  receipts: snapshotDurableToolRecords(backgroundToolRecords),
-                  detail: finalizedBackground.reason || 'Completion verified',
-                }, runningTask.leaseId);
-                const terminalTask = backgroundBlocked
-                  ? recordBackgroundTaskFailure(backgroundTaskId, {
-                      error: finalizedBackground.reason || 'Missing verified background-task completion evidence.',
-                      verificationFailure: true,
-                      toolRecords: backgroundToolRecords,
-                      leaseLost: backgroundLeaseLost,
-                    }, runningTask.leaseId)
-                  : completeBackgroundTask(backgroundTaskId, completionText, runningTask.leaseId);
-                if (terminalTask) emitTaskUpdate(terminalTask);
-                if (!terminalTask) return;
-                if (terminalTask?.status === 'queued') {
-                  emitBackground("agent:status", {
-                    status: "thinking",
-                    agentName: personality.name,
-                    phase: 'background',
-                    detail: `Safe retry scheduled for ${terminalTask.nextAttemptAt || 'the next recovery window'}`,
-                  });
-                  pushNotification(uid, {
-                    type: 'background_result',
-                    title: 'Background task retry scheduled',
-                    message: `Verification did not pass; retry after ${terminalTask.nextAttemptAt || 'backoff'}.`.slice(0, 180),
-                  });
-                  return;
-                }
-                if (terminalTask?.status === 'cancelled') {
-                  const cancelText = `Background task cancelled: ${text.slice(0, 80)}`;
-                  const deliver = isLatestUserTurn(executionScope, requestId);
-                  persistBackgroundResult(cancelText, backgroundToolRecords, true, deliver);
-                  if (deliver) {
-                    emitBackground("agent:response", {
-                      text: cancelText,
-                      agentName: personality.name,
-                      finalized: true,
-                      blocked: true,
-                      reason: 'cancelled',
-                    });
-                    emitBackground("agent:status", { status: "idle", agentName: personality.name, phase: 'background' });
-                  }
-                  return;
-                }
-                const deliver = isLatestUserTurn(executionScope, requestId);
-                if (deliver) {
-                  persistChatTakeoverExecution(completionText, {
-                    toolRecords: backgroundToolRecords,
-                    source: 'background_delegation',
-                    sourceInteractionId: `bg-${interactionId}`,
-                    capabilitySelection,
-                    finalizationBlocked: finalizedBackground.blocked,
-                    assistantTextTrusted: !finalizedBackground.blocked,
-                    finalizationReason: finalizedBackground.reason,
-                  });
-                }
-                persistBackgroundResult(completionText, backgroundToolRecords, finalizedBackground.blocked, deliver);
-                if (deliver) {
-                  emitBackground("agent:response", {
-                    text: completionText,
-                    agentName: personality.name,
-                    finalized: true,
-                    blocked: finalizedBackground.blocked,
-                    reason: finalizedBackground.reason || '',
-                  });
-                  emitBackground("agent:proactive", {
-                    type: 'background_result',
-                    message: completionText.slice(0, 1200),
-                    agentName: personality.name,
-                    timestamp: new Date().toISOString(),
-                    finalized: true,
-                    blocked: finalizedBackground.blocked,
-                    reason: finalizedBackground.reason || '',
-                  });
-                  emitBackground("agent:status", { status: "idle", agentName: personality.name, phase: 'background' });
-                  pushNotification(uid, {
-                    type: 'background_result',
-                    title: backgroundBlocked ? '\u540e\u53f0\u4efb\u52a1\u672a\u5b8c\u6210' : '\u540e\u53f0\u4efb\u52a1\u5df2\u5b8c\u6210',
-                    message: completionText.slice(0, 180),
-                  });
-                } else {
-                  pushNotification(uid, {
-                    type: backgroundBlocked ? 'background_error' : 'background_result',
-                    title: backgroundBlocked
-                      ? CN_BACKGROUND_DELEGATION_MESSAGES.failedTitle
-                      : CN_BACKGROUND_DELEGATION_MESSAGES.completedTitle,
-                    message: backgroundBlocked
-                      ? CN_BACKGROUND_DELEGATION_MESSAGES.failedInTaskCenter
-                      : CN_BACKGROUND_DELEGATION_MESSAGES.completedInTaskCenter,
-                  });
-                }
-
-                if (deliver && !backgroundBlocked && shouldDistillSkill(executionTaskText) && orchResult.workflowResult.totalAgentsUsed >= 2) {
-                  const skillDesc = buildSkillDescription(executionTaskText, orchResult.workflowResult);
-                  emitBackground("agent:proactive", {
-                    type: 'distill_hint',
-                    message: '这类后台多 agent 工作可以沉淀成自动技能，需要我继续做技能化吗？',
-                    skillDescription: skillDesc,
-                    timestamp: new Date().toISOString(),
-                  });
-                }
-              } catch (bgErr: any) {
-                const bgMessage = bgErr?.message || String(bgErr);
-                if (isBackgroundTaskPauseRequested(backgroundTaskId)) {
-                  const pausedTask = pauseBackgroundTask(backgroundTaskId);
-                  if (pausedTask) emitTaskUpdate(pausedTask);
-                  emitBackground("agent:status", { status: "idle", agentName: personality.name, phase: 'background' });
-                  return;
-                }
-                if (isBackgroundTaskCancellationRequested(backgroundTaskId) || /cancelled|canceled/i.test(bgMessage)) {
-                  const cancelledTask = cancelBackgroundTask(backgroundTaskId);
-                  if (cancelledTask) emitTaskUpdate(cancelledTask);
-                  const cancelText = `Background task cancelled: ${text.slice(0, 80)}`;
-                  const deliver = isLatestUserTurn(executionScope, requestId);
-                  persistBackgroundResult(cancelText, backgroundToolRecords, true, deliver);
-                  if (deliver) {
-                    emitBackground("agent:response", {
-                      text: cancelText,
-                      agentName: personality.name,
-                      finalized: true,
-                      blocked: true,
-                      reason: 'cancelled',
-                    });
-                    emitBackground("agent:status", { status: "idle", agentName: personality.name, phase: 'background' });
-                    pushNotification(uid, {
-                      type: 'background_cancelled',
-                      title: 'Background task cancelled',
-                      message: cancelText.slice(0, 180),
-                    });
-                  }
-                  return;
-                }
-                const errorText = formatBackgroundDelegationFailure(bgErr, /[\u3400-\u9fff]/u.test(visibleUserText));
-                const currentTask = getBackgroundTask(backgroundTaskId, uid);
-                checkpointBackgroundTask(backgroundTaskId, {
-                  phase: 'failed',
-                  receiptIds: backgroundToolRecords.map(item => item.id).filter((id): id is string => Boolean(id)),
-                  receipts: snapshotDurableToolRecords(backgroundToolRecords),
-                  detail: bgMessage,
-                }, currentTask?.leaseId);
-                const failedTask = recordBackgroundTaskFailure(backgroundTaskId, {
-                  error: bgMessage,
-                  toolRecords: backgroundToolRecords,
-                  leaseLost: backgroundLeaseLost,
-                }, currentTask?.leaseId);
-                if (failedTask) emitTaskUpdate(failedTask);
-                if (!failedTask || failedTask.status === 'queued') {
-                  if (failedTask?.status === 'queued') {
-                    pushNotification(uid, {
-                      type: 'background_result',
-                      title: 'Background task retry scheduled',
-                      message: `${errorText} Retry after ${failedTask.nextAttemptAt || 'backoff'}.`.slice(0, 180),
-                    });
-                  }
-                  return;
-                }
-                const terminalBackgroundRecords: ToolExecutionRecord[] = backgroundToolRecords.length > 0
-                  ? backgroundToolRecords
-                  : [{
-                      id: `background-terminal-${backgroundTaskId}`,
-                      name: 'background_delegation',
-                      arguments: { backgroundTaskId },
-                      result: '',
-                      error: bgMessage,
-                    }];
-                const deliver = isLatestUserTurn(executionScope, requestId);
-                if (deliver) {
-                  persistChatTakeoverExecution(errorText, {
-                    toolRecords: terminalBackgroundRecords,
-                    source: 'background_delegation',
-                    sourceInteractionId: `bg-${interactionId}`,
-                    capabilitySelection,
-                    finalizationBlocked: true,
-                    assistantTextTrusted: false,
-                    finalizationReason: bgMessage,
-                  });
-                }
-                persistBackgroundResult(errorText, backgroundToolRecords, true, deliver);
-                if (deliver) {
-                  emitBackground("agent:response", {
-                    text: errorText,
-                    agentName: personality.name,
-                    finalized: true,
-                    blocked: true,
-                    reason: bgMessage,
-                  });
-                  emitBackground("agent:status", { status: "idle", agentName: personality.name, phase: 'background' });
-                  pushNotification(uid, {
-                    type: 'background_error',
-                    title: '后台子 agent 受阻',
-                    message: errorText.slice(0, 180),
-                  });
-                } else {
-                  pushNotification(uid, {
-                    type: 'background_error',
-                    title: CN_BACKGROUND_DELEGATION_MESSAGES.failedTitle,
-                    message: CN_BACKGROUND_DELEGATION_MESSAGES.failedInTaskCenter,
-                  });
-                }
-              } finally {
-                if (backgroundLeaseHeartbeat) clearInterval(backgroundLeaseHeartbeat);
-                backgroundDesktopRelay?.releaseControlLease('background_task_complete');
-              }
-            })().catch((err) => {
-              console.error('[BackgroundDelegation] Unhandled error:', err);
-            });
-          }, 30);
-        }
-      }
-
-      const shouldOrchestrateForeground = shouldAttemptOrchestration({
+      const legacyDelegationHint = shouldDelegateWorkInBackground({
+        text: visibleUserText || text,
+        source: eventSource,
+        category: cognition.intent.category,
+        complexity: backgroundComplexity,
+        allowToolUse: executionDecision.allowToolUse,
+        clientActionOnly: clientActionOnlyTurn,
+        clientSurfaceRequest: Boolean(chatContextBridge) || isClientSurfaceRequestText(routingText),
+        continuationContext: Boolean(actionContinuationBridge),
+        selfRepair: selfRepairTurn,
+        sanctuary: isSanctuary,
+        directDesktop: workSurfaceRoute.directDesktop,
+        capabilityLane: capabilitySelection.lane,
+        prefersSequentialWorkflow,
+        availableAgentCount: availableWorkerAgents.length,
+      });
+      const legacyOrchestrationHint = shouldAttemptOrchestration({
         channel: 'chat',
         text: turnFlow.routeText,
         complexity: backgroundComplexity,
         allowToolUse: executionDecision.allowToolUse,
         clientActionOnly: clientActionOnlyTurn,
         selfRepair: selfRepairTurn,
-        responseReady: Boolean(responseText),
-        hasPreflightContext: Boolean(actionPreflightContext),
+        responseReady: false,
+        hasPreflightContext: false,
         prefersSequentialWorkflow,
         capabilityLane: capabilitySelection.lane,
         cognitionCategory: cognition.intent.category,
       });
-      if (shouldOrchestrateForeground) {
-        // Path B: Orchestrator — decompose tasks into sub-tasks for worker agents
-        // (Skipped for sanctuary agents — they stay in their territory)
-        try {
-          emitAgent("agent:status", { status: "thinking", agentName: exposeAgentWork ? "Lumi Orchestrator" : personality.name, phase: exposeAgentWork ? 'orchestrator' : 'background' });
-          const foregroundModelRecovery = conversationId && actionTaskExecution.state?.taskId
-            ? getConversationModelExecutionRecovery({
-                conversationId,
-                userId: uid,
-                taskId: actionTaskExecution.state.taskId,
-              })
-            : null;
-          const orchResult = await runOrchestratedTask(
-            executionTaskText,
-            {
-              userId: uid,
-              personalityId,
-              domain: resolvedDomain,
-              orgId: resolvedOrgId,
-              desktopRelay,
-              toolPolicy: routedToolPolicy,
-              taskId: actionTaskExecution.state?.taskId,
-              desktopExecutionTracker,
-              resumeNodeReceipts: foregroundModelRecovery?.receipts,
-            },
-            { provider: activeProvider, model: activeModel, ...reasoningRoutePolicy },
-            llmGetters,
-            exposeAgentWork && !deferCompletionStream
-              ? (msg) => emitAgent("agent:chunk", { text: msg, agentName: "Lumi" })
-              : undefined,
-            (record, meta) => {
-              if (isTerminalOrchestrationToolEvent(record)) {
-                allToolRecords.push({
-                  id: record.id,
-                  name: record.name,
-                  arguments: record.arguments || {},
-                  result: record.result || '',
-                  error: record.error,
-                });
-              }
-              // Direct desktop relays already emit their own start/result lifecycle.
-              if (isDirectDesktopTool(record.name)) return;
-              const payload: Record<string, any> = {
-                correlationId: record.id,
-                toolCallId: record.id,
-                name: record.name,
-                arguments: record.arguments,
-                args: record.arguments,
-                subTaskId: meta.subTaskId,
-                workerAgentId: meta.agentId,
-                workerAgentName: meta.agentName,
-              };
-              if (record.result !== undefined) payload.result = formatToolResultForUi(record.result);
-              if (record.error !== undefined) payload.error = record.error;
-              emitAgent("agent:tool_call", payload);
-              emitAgent("agent:tool", payload);
-            },
-          );
-          if (orchResult) {
-            if (conversationId && actionTaskExecution.state?.taskId) {
-              persistConversationModelExecutionResult({
-                conversationId,
-                userId: uid,
-                taskId: actionTaskExecution.state.taskId,
-                workflowResult: orchResult.workflowResult,
-              });
-            }
-            responseText = orchResult.responseText;
-            llmWasCalled = orchResult.llmWasCalled;
-
-            // Check if this pattern should be auto-distilled into a skill
-            if (shouldDistillSkill(executionTaskText) && orchResult.workflowResult.totalAgentsUsed >= 2) {
-              const skillDesc = buildSkillDescription(executionTaskText, orchResult.workflowResult);
-              console.log('[Orchestrator] Pattern detected — candidate for skill distillation:', skillDesc.slice(0, 100));
-              emitAgent("agent:proactive", {
-                type: 'distill_hint',
-                message: 'I notice this type of task is recurring. I can create an automated skill for this — would you like me to?',
-                skillDescription: skillDesc,
-                timestamp: new Date().toISOString(),
-              });
-              pushNotification(uid, { type: 'distill_hint', title: 'Skill Distillation', message: 'I notice this type of task is recurring. I can create an automated skill for this.' });
-            }
-          }
-        } catch (orchErr: any) {
-          console.error('[Orchestrator] Workflow failed, falling back to normal chat:', orchErr.message);
-        }
-      }
-
-      // Path B2: NL Task Chainer — for office workflows that chain tools (search→read→create etc.)
-      if (!responseText && !actionPreflightContext && executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn && shouldChainTask(executionTaskText)) {
-        // Pre-flight: auto-install any matching uninstalled/outdated skills
-        await autoInstallForTask(
-          executionTaskText,
-          { emit: (event, data) => socket.emit(event, data) },
-          {
-            ownerUid: uid,
-            userId: uid,
-            domain: resolvedDomain,
-            orgId: resolvedOrgId,
-          },
-        );
-
-        try {
-          emitAgent("agent:status", { status: "thinking", agentName: personality.name, phase: 'background' });
-          const chainerResult = await runNLChainer(
-            executionTaskText,
-            {
-              userId: uid,
-              provider: activeProvider,
-              model: activeModel,
-              ...reasoningRoutePolicy,
-              desktopRelay,
-              context: {
-                userId: uid,
-                domain: resolvedDomain,
-                orgId: resolvedOrgId,
-                desktopRelay,
-                llmGetters,
-                source: 'chat_chainer',
-                supervisedExternalCommits: true,
-                allowLocalFileWrites,
-                localWriteIntentReason,
-                isCancelled: () => abortController.signal.aborted,
-                requestConfirmation: requestToolConfirmation,
-                actionIntent: visibleUserText,
-                toolPolicy: routedToolPolicy || personality.toolPolicy,
-                onProgress: (step: string) => {
-                  if (shouldForwardPreFinalizationProgress(step)) {
-                    emitAgent("agent:progress", { text: step, tone: 'tool', agentName: personality.name });
-                  }
-                },
-              },
-              onTool: (record) => {
-                allToolRecords.push(record);
-                const payload: Record<string, any> = {
-                  correlationId: record.id,
-                  toolCallId: record.id,
-                  name: record.name,
-                  arguments: record.arguments,
-                  args: record.arguments,
-                };
-                if (record.result !== '') payload.result = formatToolResultForUi(record.result);
-                if (record.error !== undefined) payload.error = record.error;
-                emitAgent("agent:tool_call", payload);
-                emitAgent("agent:tool", payload);
-              },
-            },
-            llmGetters,
-            (step, total, desc) => {
-              const progressText = `Step ${step}/${total}: ${desc}`;
-              if (shouldForwardPreFinalizationProgress(progressText)) {
-                emitAgent("agent:status", { status: "thinking", agentName: personality.name, phase: 'background', detail: progressText });
-                emitAgent("agent:progress", {
-                  text: progressText,
-                  tone: 'tool',
-                  agentName: personality.name,
-                });
-              }
-            },
-          );
-          if (chainerResult.finalResponse) {
-            responseText = chainerResult.finalResponse;
-            llmWasCalled = true;
-            console.log('[NLChainer] Completed with', chainerResult.stepResults.length, 'steps. Goal:', chainerResult.plan.goal);
-          }
-        } catch (chainErr: any) {
-          console.error('[NLChainer] Failed, falling back to normal chat:', chainErr.message);
-        }
+      const legacyExecutionHints = [
+        legacyDelegationHint.shouldDelegate ? `background candidate: ${legacyDelegationHint.reason}` : '',
+        legacyOrchestrationHint ? 'multi-agent orchestration candidate' : '',
+        shouldChainTask(executionTaskText) ? 'multi-step execution candidate' : '',
+      ].filter(Boolean);
+      if (legacyExecutionHints.length) {
+        effectiveSystemPrompt += [
+          '',
+          '## Advisory execution candidates',
+          'Legacy routing observed the candidates below. They are hints only: decide whether to respond, use a registered capability, or execute a model-planned sequence from the current hard-policy manifest. Do not claim delegation, background work, or orchestration unless a current-turn tool receipt proves it.',
+          ...legacyExecutionHints.map(item => `- ${item}`),
+        ].join('\n');
       }
 
       if (!responseText) {
@@ -3924,7 +2077,17 @@ export function registerChatHandler(
         // Load conversation history from persistence (survives page reload / reconnect)
         let persistedHistory: NormalizedMessage[] = [];
         if (conversationId) {
-          const msgs = getMessagesByTokenBudget(conversationId);
+          const msgs = getMessagesByTokenBudget(conversationId).filter((m: any) => !(
+            m.role === 'user'
+            && (
+              m.requestId === requestId
+              || (
+                m.externalMessageId === requestId
+                && m.source === eventSource
+                && m.channel === 'chat'
+              )
+            )
+          ));
           persistedHistory = msgs
             .filter((m: any) => m.message || m.content || m.response)
             .flatMap(normalizeChatHistoryRecord);
@@ -4021,7 +2184,7 @@ export function registerChatHandler(
               timestamp: new Date().toISOString(),
             });
           } else {
-            const maxIterations = routedToolPolicy?.maxIterations || personality.toolPolicy.maxIterations || 25;
+            const maxIterations = modelCapabilityPolicy.maxIterations || personality.toolPolicy.maxIterations || 25;
 
           // Collect tool calls for persistence
 
@@ -4074,7 +2237,7 @@ export function registerChatHandler(
                   emitAgent("agent:progress", { text: step, agentName: "Lumi" });
                 }
               },
-              ...(routedToolPolicy ? { toolPolicy: routedToolPolicy } : {}),
+              toolPolicy: modelCapabilityPolicy,
               actionIntent: visibleUserText,
               routedTaskText: turnFlow.routeText,
               desktopExecutionTracker,
@@ -4115,14 +2278,12 @@ export function registerChatHandler(
       }
 
       chatTextGate.finish();
-      const requestedArtifactReadback = buildRequestedArtifactReadback(executionTaskText, allToolRecords);
-      if (requestedArtifactReadback && !abortController.signal.aborted) {
-        await runPreflightTool(requestedArtifactReadback.name, requestedArtifactReadback.arguments);
-      }
       const finalizedDesktopRecords = withDesktopExecutionReceipt(allToolRecords, desktopExecutionTracker);
       if (finalizedDesktopRecords.length > allToolRecords.length) {
         allToolRecords.push(...finalizedDesktopRecords.slice(allToolRecords.length));
       }
+      const verifiedClientMode = getVerifiedClientModeChange(allToolRecords);
+      if (verifiedClientMode) saveStoredOperationMode(uid, verifiedClientMode);
       // Waiting for an immutable one-time confirmation is a valid terminal
       // state for this turn, not a failed completion attempt. The model/tool
       // path must render the same confirmation receipt as the deterministic
@@ -4181,14 +2342,13 @@ export function registerChatHandler(
       // Save to conversation via conversation manager (reuse conversationId from setup)
 
       if (conversationId) {
-        addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
         // Persist tool calls interleaved before the assistant response
         for (const tc of allToolRecords) {
           if (!tc.error && !String(tc.result || '').trim()) continue;
           const tcSummary = summarizeToolRecordForPersistence(tc);
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'tool', content: tcSummary, domain: resolvedDomain, orgId: resolvedOrgId });
         }
-        addMessage({
+        addMessageIdempotent({
           userId: uid,
           agentId: conversationAgentId,
           conversationId,
@@ -4197,9 +2357,12 @@ export function registerChatHandler(
           personality: personality.id,
           domain: resolvedDomain,
           orgId: resolvedOrgId,
+          source: eventSource,
+          channel: 'chat',
           toolCalls: allToolRecords.length ? allToolRecords : undefined,
           cognitiveIntent: finalResponse.blocked ? 'work_product_guard' : cognition.intent.category,
           llmWasCalled,
+          requestId,
         });
         // (conversation_updated NOW emitted AFTER agent:response — see below)
 

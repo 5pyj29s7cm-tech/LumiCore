@@ -2,7 +2,10 @@ import { getAdapterRegistry } from '../adapters/registry';
 import { getMarketplaceSkills } from '../marketplace/registry';
 import { mcpManager } from '../mcp/client';
 import { ToolDefinition } from '../tools/types';
-import { listCapabilityLearningRecords } from './capability_memory';
+import {
+  isCapabilityLearningRecordVerified,
+  listCapabilityLearningRecords,
+} from './capability_memory';
 
 export interface SelfExtensionPlanOptions {
   userId?: string;
@@ -37,7 +40,7 @@ export interface SelfExtensionPlan {
     tools: Array<{ name: string; securityLevel: string; description: string }>;
     installedSkills: Array<{ name: string; description: string; broken?: boolean; toolCount?: number }>;
     marketplaceSkills: Array<{ id: string; name: string; installed: boolean; requiresSetup?: boolean; setupNote?: string }>;
-    learnedCapabilities: Array<{ id: string; domain: string; goal: string; status: string; route: string; preferredTools: string[]; summary: string }>;
+    learnedCapabilities: Array<{ id: string; domain: string; goal: string; status: string; verified: boolean; route: string; preferredTools: string[]; summary: string }>;
   };
   gap: {
     missing: string[];
@@ -138,6 +141,7 @@ export function buildSelfExtensionPlan(options: SelfExtensionPlanOptions): SelfE
     domain: record.domain,
     goal: record.goal,
     status: record.status,
+    verified: isCapabilityLearningRecordVerified(record),
     route: record.selectedRoute.label,
     preferredTools: record.nextUse.preferredTools,
     summary: record.experiment.summary,
@@ -146,7 +150,7 @@ export function buildSelfExtensionPlan(options: SelfExtensionPlanOptions): SelfE
   const coverageReady = matchingAdapters.some(adapter => ['ready', 'available', 'draft_only'].includes(adapter.status))
     || matchingTools.some(tool => tool.securityLevel === 'safe' || tool.securityLevel === 'confirm')
     || matchingLocalSkills.some(skill => !skill.broken)
-    || learnedCapabilities.some(record => ['learned', 'experiment_prepared', 'experiment_passed'].includes(record.status));
+    || learnedCapabilities.some(record => record.verified);
   const repairableSkill = matchingLocalSkills.some(skill => skill.broken);
   const installableSkill = matchingMarketplace.some(skill => !skill.installed);
   const plannedAdapter = matchingAdapters.some(adapter => adapter.status === 'planned');
@@ -254,7 +258,7 @@ function buildResolution(
     plannedAdapter: boolean;
   },
 ): SelfExtensionPlan['resolution'] {
-  const learned = facts.learnedCapabilities.find(record => ['learned', 'experiment_prepared', 'experiment_passed'].includes(record.status));
+  const learned = facts.learnedCapabilities.find(record => record.verified);
   if (learned) {
     return {
       decision: 'reuse_learned_route',
@@ -365,7 +369,7 @@ function buildPipeline(
     },
   ];
 
-  const learned = facts.learnedCapabilities.find(record => ['learned', 'experiment_prepared', 'experiment_passed'].includes(record.status));
+  const learned = facts.learnedCapabilities.find(record => record.verified);
   if (learned) {
     pipeline.push({
       step: 'Reuse learned capability route',

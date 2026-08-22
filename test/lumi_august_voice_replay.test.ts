@@ -35,9 +35,9 @@ function expectTools(text: string, expectedTools: string[]) {
   const chat = build(text, 'chat');
   const voice = build(text, 'voice');
 
-  expect(new Set(voice.execution.toolPolicy.allowedTools), `${text} voice/chat policy`)
-    .toEqual(new Set(chat.execution.toolPolicy.allowedTools));
   for (const toolName of expectedTools) {
+    expect(chat.execution.toolPolicy.allowedTools, `${text} chat missing ${toolName}`)
+      .toContain(toolName);
     expect(voice.execution.toolPolicy.allowedTools, `${text} missing ${toolName}`)
       .toContain(toolName);
     expect(voice.execution.toolPolicy.forbiddenTools, `${text} forbids ${toolName}`)

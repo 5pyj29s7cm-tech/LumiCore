@@ -98,19 +98,30 @@ function relevantAdapters(
   }
 }
 
-function activeTaskLines(input: LumiRuntimeCapabilityContextInput): string[] {
-  const tasks = input.flow.workTakeover.activeTasks.length
+function activeTasksForTurn(input: LumiRuntimeCapabilityContextInput) {
+  return input.flow.workTakeover.activeTasks.length
     ? input.flow.workTakeover.activeTasks
     : getActiveWorkTakeoverTasksForContinuity(input.userId, {
       domain: input.domain,
       orgId: input.orgId,
       limit: 3,
     });
+}
+
+function activeTaskLines(
+  input: LumiRuntimeCapabilityContextInput,
+  tasks: ReturnType<typeof activeTasksForTurn>,
+): string[] {
+  const binding = input.flow.workTakeover.shouldResumeTask
+    ? 'confirmed-by-current-turn'
+    : 'unconfirmed-candidate';
   return tasks.slice(0, 3).map(task => {
     const next = compact(task.nextActions[task.currentActionIndex]) || compact(task.nextActions[0]);
     const artifacts = task.artifacts.filter(a => a.status === 'prepared' || a.status === 'needs_review').map(a => a.label).slice(0, 3);
     return [
       `${task.title} [${task.id}]`,
+      'source=persisted work-takeover ledger',
+      `binding=${binding}`,
       `status=${task.status}`,
       `category=${task.category}`,
       next ? `next=${next}` : '',
@@ -119,6 +130,33 @@ function activeTaskLines(input: LumiRuntimeCapabilityContextInput): string[] {
       task.blockedBy.length ? `blocked=${task.blockedBy.slice(0, 2).join('; ')}` : '',
     ].filter(Boolean).join(' | ');
   });
+}
+
+function activeTaskContext(input: LumiRuntimeCapabilityContextInput): string {
+  const tasks = activeTasksForTurn(input);
+  if (tasks.length === 0) return 'Unfinished task inventory: none.';
+
+  if (input.flow.workTakeover.shouldResumeTask) {
+    return [
+      '## Bound active task evidence',
+      'The current turn explicitly refers to the persisted task below. Its fields come from the task ledger; keep current-turn facts separate from old task fields and rely on receipts for execution claims.',
+      ...activeTaskLines(input, tasks).map(line => `- ${line}`),
+    ].join('\n');
+  }
+
+  if (input.flow.workTakeover.strength === 'hint' || input.flow.surface === 'work') {
+    return [
+      '## Unbound active task candidates',
+      'These candidates come from the persisted task ledger, but the current turn has not confirmed that it refers to any of them.',
+      'A shared word, similar embedding, name fragment, code prefix, or related topic is retrieval evidence only; it is not entity identity. Do not transfer a candidate\'s customer/project/task type, fields, status, plan, or confirmation boundary onto a current-turn name or code unless the user or same-conversation history explicitly binds them. Ask one short clarification when the distinction matters.',
+      ...activeTaskLines(input, tasks).map(line => `- ${line}`),
+    ].join('\n');
+  }
+
+  return [
+    'Unfinished task inventory: available (details disclosed=0).',
+    'Task details are intentionally omitted because this turn did not refer to a persisted task. The tasks remain available through task capabilities if the user explicitly asks for them. Do not infer a relationship between this turn and an unfinished task.',
+  ].join('\n');
 }
 
 function skillLines(flow: LumiTurnFlow): string[] {
@@ -132,7 +170,7 @@ function skillLines(flow: LumiTurnFlow): string[] {
 
 export function buildLumiRuntimeCapabilityContext(input: LumiRuntimeCapabilityContextInput): string {
   const manifest = input.toolRegistry.getCapabilityManifest();
-  const taskLines = activeTaskLines(input);
+  const taskContext = activeTaskContext(input);
   const adapterLines = relevantAdapters(input.flow, input.userId, manifest);
   const workflows = skillLines(input.flow);
   const capabilityGroups = groupCapabilities(manifest);
@@ -148,9 +186,7 @@ export function buildLumiRuntimeCapabilityContext(input: LumiRuntimeCapabilityCo
     `Capability families available: ${capabilityGroups.join(', ') || 'none'}.`,
     ...mcpLines,
     `Skill workflows known: ${workflows.join(', ') || 'none'}.`,
-    taskLines.length
-      ? ['Active task pointers:', ...taskLines.map(line => `- ${line}`)].join('\n')
-      : 'Active task pointers: none.',
+    taskContext,
     adapterLines.length
       ? ['Relevant adapters/external systems:', ...adapterLines.map(line => `- ${line}`)].join('\n')
       : 'Relevant adapters/external systems: none.',

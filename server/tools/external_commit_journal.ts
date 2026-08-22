@@ -1,4 +1,4 @@
-export type ExternalCommitJournalState = 'running' | 'verified' | 'unknown';
+export type ExternalCommitJournalState = 'not_started' | 'running' | 'verified' | 'unknown';
 
 export interface ExternalCommitJournalEntry {
   idempotencyKey: string;
@@ -19,15 +19,21 @@ export interface ExternalCommitJournalClaim {
 }
 
 export interface ExternalCommitJournalAdapter {
+  lookup(idempotencyKey: string): Promise<ExternalCommitJournalEntry | null>;
   claim(entry: ExternalCommitJournalEntry): Promise<ExternalCommitJournalClaim>;
   settle(input: {
     idempotencyKey: string;
     claimToken: string;
-    state: Exclude<ExternalCommitJournalState, 'running'>;
+    state: ExternalCommitJournalState;
     replayResult: string;
     updatedAt: string;
     recoverExisting?: boolean;
   }): Promise<boolean>;
+}
+
+export interface ExternalCommitJournalInspection {
+  durable: boolean;
+  entry: ExternalCommitJournalEntry | null;
 }
 
 let durableAdapter: ExternalCommitJournalAdapter | null = null;
@@ -50,10 +56,23 @@ export async function claimExternalCommitAttempt(
   return { claimed: true, entry: { ...entry } };
 }
 
+/** Read-only, fail-closed inspection used by interruption recovery. */
+export async function inspectExternalCommitAttempt(
+  idempotencyKey: string,
+): Promise<ExternalCommitJournalInspection> {
+  if (durableAdapter) {
+    return { durable: true, entry: await durableAdapter.lookup(idempotencyKey) };
+  }
+  return {
+    durable: false,
+    entry: volatileEntries.get(idempotencyKey) ? { ...volatileEntries.get(idempotencyKey)! } : null,
+  };
+}
+
 export async function settleExternalCommitAttempt(input: {
   idempotencyKey: string;
   claimToken: string;
-  state: Exclude<ExternalCommitJournalState, 'running'>;
+  state: ExternalCommitJournalState;
   replayResult: string;
   updatedAt: string;
   recoverExisting?: boolean;

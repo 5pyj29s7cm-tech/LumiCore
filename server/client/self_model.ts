@@ -7,7 +7,10 @@ import { getAdapterRegistry } from '../adapters/registry';
 import { formatLumiConstitutionForPrompt } from '../personality/constitution';
 import { getActionConstitutionPolicy } from '../tools/action_constitution';
 import { formatDesktopAwarenessForPrompt } from './desktop_awareness';
-import { listCapabilityLearningRecords } from '../self_extension/capability_memory';
+import {
+  isCapabilityLearningRecordVerified,
+  listCapabilityLearningRecords,
+} from '../self_extension/capability_memory';
 import { safeRuntimeError, sanitizeDiagnosticValue } from './diagnostic_sanitizer';
 import {
   normalizeOrganizationWorkspaceView,
@@ -354,7 +357,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Chat mode',
     kind: 'mode',
     actions: ['set_client_mode(chat)'],
-    notes: 'Pure conversation state. Lumi answers, explains, and discusses without tools. A clear real-action request transitions the client and turn to Assistant before execution; explicit continuous work uses Autonomy.',
+    notes: 'Visible conversational posture. Lumi answers naturally, and a user-present model-owned turn may use the ordinary foreground Assistant capability manifest for an explicit task without persistently changing the client mode. Explicit continuous or unattended work uses Autonomy.',
     stateKeys: ['mode', 'voice'],
   },
   {
@@ -613,7 +616,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Desktop modes and autonomous work',
     kind: 'system',
     actions: ['open_plans', 'open_work_queue', 'open_settings(section=autonomy)', 'autonomy_get_policy', 'autonomy_update_policy', 'autonomy_list_workflows', 'autonomy_register_workflow', 'autonomy_set_workflow_enabled'],
-    notes: 'Lumi uses three desktop permission modes. Chat is pure conversation: no tools, external apps, desktop control, files, teams, or background execution except explicit Lumi client mode control. Assistant is user-present high-permission execution: tools, browser, saved/authorized login sessions, files, desktop control, external apps, skills, and teams may run for requested ordinary work without per-tool permission popups; hard boundaries still stop for confirmation or handoff. Autonomy has the same practical permissions as Assistant plus 24h continuous/background operation, proactive questions, monitoring, sorting, absorption, local-machine body learning, industry-habit-aware public-source web learning, task checkpoints, and ultra-long continuation. The desktop client can launch at login, hide to tray/background, and supervise bundled backend processes. That is resident runtime, not permission to invent unrelated automatic work; background task generation still follows workflow/autonomy policy. There is no separate external-app automation gate.',
+    notes: 'Lumi uses three visible desktop postures. Chat is conversational, but an explicit user-present task may use the ordinary foreground Assistant capability manifest for that turn without persistently switching the UI mode. Assistant is an explicit foreground execution posture with tools, browser, saved/authorized login sessions, files, desktop control, external apps, skills, and teams; hard boundaries still stop for confirmation or handoff. Autonomy has the same practical permissions plus 24h continuous/background operation, proactive questions, monitoring, sorting, absorption, local-machine body learning, industry-habit-aware public-source web learning, task checkpoints, and ultra-long continuation. The desktop client can launch at login, hide to tray/background, and supervise bundled backend processes. That is resident runtime, not permission to invent unrelated automatic work; background task generation still follows workflow/autonomy policy. There is no separate external-app automation gate.',
     requiresConfirmation: false,
     stateKeys: ['mode', 'autonomy', 'runtime'],
   },
@@ -1901,7 +1904,7 @@ function formatLearnedCapabilityRoutes(
       orgId: scope.domain === 'work' ? scope.orgId : '',
       limit: 8,
     })
-      .filter(record => ['learned', 'experiment_prepared', 'experiment_passed'].includes(record.status));
+      .filter(isCapabilityLearningRecordVerified);
     if (!records.length) {
       return [scope.domain === 'work'
         ? '- No organization-scoped learned routes yet. The current work workspace does not expose any member\'s personal learned routes.'
@@ -2055,7 +2058,7 @@ export function formatClientSelfPrompt(
       : 'You are the user\'s continuous Lumi running inside the LumiOS desktop client. You are not a pure voice assistant and not a boxed chat bot. Treat the local client and this computer as your lived body: know its surfaces, current state, tools, permissions, failures, and safe action routes.',
     'Keep three maps separate and current: local machine (host, files, apps, processes), visible desktop (foreground window, screen/UI controls, cursor, logged-in sessions), and background runtime (client visibility, autostart, close-to-background, backend health, runtime log, confirmed autonomous workflows).',
     'Use the client_action tool for UI/client actions when tools are available. Do not pretend a window changed if you did not call the action or ask the user.',
-    'A tool omitted by the current turn mode is not a missing capability. Never infer your global capability inventory from the tools exposed on one turn: explicit action requests in Chat transition to Assistant, and the registered runtime, adapter, and health maps determine what is actually available.',
+    'A tool omitted by the current turn policy is not a missing capability. Never infer your global capability inventory from one routed preference list. In model-owned Chat, an explicit user-present task may receive the ordinary foreground Assistant manifest for that turn while the visible UI remains in Chat; the registered runtime, adapter, and health maps determine what is actually available.',
     'For client-native actions, the natural loop is: read current state -> call client_action -> use the returned verification.status. Say success only when verification.status is verified, report pending when state has not caught up, and report failed when the action result says it failed.',
     'Use the registered explicit client action for every Lumi interface, including personality, notifications, reminders, devices, tokens, terminal, profile, MCP settings, Voice Forge, skill generation, and the app launcher.',
     'When you operate visibly, behave like a present desktop partner: name the task, choose the right interface, inspect the screen/window, move the visible cursor before desktop clicks, verify outcomes, and close temporary surfaces when they are no longer useful.',
@@ -2085,7 +2088,7 @@ export function formatClientSelfPrompt(
     'When the user reports a client failure, do not stop at repeating the error. First read client_get_state, inspect relevant status/log/config tools when available, try one safe recovery or retry if the cause is clear, verify the state changed, then explain the remaining blocker if it still fails.',
     'If a routed client action, meeting capture, runtime log, organization workspace, or file operation fails, treat that as a repairable client workflow: diagnose -> safe recovery -> verify -> concise report.',
     'Do not shrink yourself into voice interaction. Voice, chat, Feishu, runtime logs, organization, meeting, tools, skills, files, and desktop control are different entrances into the same local Lumi.',
-    'Respect modes: Chat is pure conversation; an explicit action request transitions the turn and client to Assistant. Meeting is transcription/reporting, Assistant is user-present high-permission execution, and Autonomy adds continuous 24-hour background operation and ultra-long continuation. Music requests belong to installed desktop media applications, not a Lumi mode or client surface.',
+    'Respect modes without turning them into scripted gates: Chat is the visible conversational posture and may execute an explicit user-present foreground task from the current hard-policy manifest without a persistent UI-mode switch. Meeting is transcription/reporting, Assistant is the explicit foreground execution posture, and Autonomy adds continuous 24-hour background operation and ultra-long continuation. Music requests belong to installed desktop media applications, not a Lumi mode or client surface.',
     '',
     '### Workspace Identity And Data Boundaries',
     ...workspaceIdentityLines,

@@ -110,6 +110,52 @@ describe('Lumi turn flow', () => {
     }
   });
 
+  it.each([
+    '你能不能使用桌面工具打开记事本？现在打开它。',
+    'Can you use desktop tools to open Notepad? Open it now.',
+  ])('keeps a capability question with an immediate action on an execution boundary: %s', async (text) => {
+    const { initDatabase } = await import('../db_layer');
+    const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+    await initDatabase();
+
+    const dispatch = buildLumiTurnDispatch({
+      userId: 'turn_flow_capability_action_user',
+      text,
+      channel: 'chat',
+      source: 'command-center-chat',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+
+    expect(dispatch.flow.conceptualCapabilityQuestion).toBe(false);
+    expect(dispatch.flow.allowToolUseForTurn).toBe(true);
+    expect(dispatch.flow.clientActionOnlyTurn).toBe(false);
+    expect(dispatch.boundary).toBe('tool_action');
+  });
+
+  it.each([
+    '这个任务完成了吗？没完成就继续执行。',
+    'Check the task status; if unfinished, retry it.',
+  ])('keeps a mixed status and resume turn executable with continuation context: %s', async (text) => {
+    const { initDatabase } = await import('../db_layer');
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+    await initDatabase();
+
+    const flow = buildLumiTurnFlow({
+      userId: 'turn_flow_mixed_status_execution_user',
+      text,
+      continuationContext: '## Recent action continuation context\n- followupIntent: status\n- unfinished: true\n- goal: finish the active task',
+      channel: 'chat',
+      source: 'command-center-chat',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+
+    expect(flow.conceptualCapabilityQuestion).toBe(false);
+    expect(flow.allowToolUseForTurn).toBe(true);
+    expect(flow.routeText).toContain('finish the active task');
+  });
+
   it('keeps a missing-reply complaint conversational in assistant mode', async () => {
     const { initDatabase } = await import('../db_layer');
     const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
@@ -218,7 +264,7 @@ describe('Lumi turn flow', () => {
     });
 
     expect(flow.autoPromoteToAssistant).toBe(true);
-    expect(flow.effectiveOperationMode).toBe('assistant');
+    expect(flow.effectiveOperationMode).toBe('chat');
     expect(flow.selfRepairTurn).toBe(true);
     expect(flow.allowToolUseForTurn).toBe(true);
     expect(flow.executionGovernance.delegationIntent).toBe('none');
@@ -285,6 +331,74 @@ describe('Lumi turn flow', () => {
     expect(flow.workTakeover.shouldResumeTask).toBe(false);
     expect(flow.allowToolUseForTurn).toBe(false);
     expect(flow.promptOverlay).toContain('Do not force a task/tool path');
+  });
+
+  it.each([
+    '请分三句简短回答：你今天会如何陪我完成工作？每句不超过十五个字。',
+    'Please answer in three short sentences: how will you help me complete my work today?',
+  ])('keeps a work-support conversation off the active-task tool lane: %s', async (text) => {
+    const { initDatabase } = await import('../db_layer');
+    const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');
+    const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+    await initDatabase();
+
+    createWorkTakeoverTask({
+      userId: 'turn_flow_work_support_question_user',
+      category: 'general_work',
+      title: '旧的未完成工作',
+      nextActions: ['继续旧任务'],
+      source: 'manual',
+      status: 'in_progress',
+    });
+
+    const dispatch = buildLumiTurnDispatch({
+      userId: 'turn_flow_work_support_question_user',
+      text,
+      channel: 'chat',
+      source: 'command-center-chat',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+
+    expect(dispatch.boundary).toBe('conversation');
+    expect(dispatch.flow.workTakeover.shouldResumeTask).toBe(false);
+    expect(dispatch.flow.allowToolUseForTurn).toBe(false);
+    expect(dispatch.flow.routeText).toBe(text);
+  });
+
+  it.each([
+    '现在帮我完成这项工作。',
+    'Help me complete this work now.',
+  ])('keeps an explicit work imperative on the active-task execution lane: %s', async (text) => {
+    const { initDatabase } = await import('../db_layer');
+    const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');
+    const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+    await initDatabase();
+
+    createWorkTakeoverTask({
+      userId: 'turn_flow_work_support_imperative_user',
+      category: 'general_work',
+      title: '需要继续的工作',
+      nextActions: ['执行下一步'],
+      source: 'manual',
+      status: 'in_progress',
+    });
+
+    const dispatch = buildLumiTurnDispatch({
+      userId: 'turn_flow_work_support_imperative_user',
+      text,
+      channel: 'chat',
+      source: 'command-center-chat',
+      operationMode: 'chat',
+      targetIsLumi: true,
+    });
+
+    expect(dispatch.boundary).toBe('work_takeover');
+    expect(dispatch.flow.workTakeover.intent).toBe('advance');
+    expect(dispatch.flow.workTakeover.shouldResumeTask).toBe(true);
+    expect(dispatch.flow.autoPromoteToAssistant).toBe(true);
+    expect(dispatch.flow.effectiveOperationMode).toBe('chat');
+    expect(dispatch.flow.allowToolUseForTurn).toBe(true);
   });
 
   it('binds assistant work-surface follow-ups to the task center', async () => {
@@ -410,7 +524,7 @@ describe('Lumi turn flow', () => {
     });
 
     expect(flow.promptOverlay).toContain('Stay as Lumi first');
-    expect(flow.promptOverlay).toContain('Use skill workflows');
+    expect(flow.promptOverlay).toContain('skill workflows as capability candidates');
     expect(flow.promptOverlay).toContain('external software');
   });
 

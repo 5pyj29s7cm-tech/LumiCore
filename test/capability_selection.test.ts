@@ -179,7 +179,7 @@ describe('Lumi capability selection', () => {
 
     expect(selection.lane).toBe('conversation');
     expect(selection.preferredTools).toEqual([]);
-    expect(selection.promptOverlay).toContain('Selected lane: conversation');
+    expect(selection.promptOverlay).toContain('Suggested lane: conversation');
   });
 
   it('selects capability learning before treating Lumi improvement as generic tools', async () => {
@@ -197,7 +197,7 @@ describe('Lumi capability selection', () => {
     expect(selection.promptOverlay).toContain('Do not hard-code an industry demo into Lumi core');
   });
 
-  it('keeps ordinary self-introduction conversational and reserves workflow execution for explicit demos', async () => {
+  it('keeps chat workflow matches advisory, including explicit demos', async () => {
     const { dispatch, selection } = await selectCapability({
       userId: 'capability_selection_skill_user',
       text: 'Lumi, introduce yourself',
@@ -214,10 +214,13 @@ describe('Lumi capability selection', () => {
       operationMode: 'assistant',
       targetIsLumi: true,
     });
-    expect(demo.dispatch.boundary).toBe('skill_workflow');
+    expect(demo.dispatch.boundary).not.toBe('skill_workflow');
+    expect(demo.dispatch.flow.specialWorkflow).toBeNull();
+    expect(demo.dispatch.flow.workflowHint?.id).toBe('self_intro_demo');
+    expect(demo.dispatch.flow.workflowRouting).toBe('model_hint');
     expect(demo.selection.lane).toBe('skill_workflow');
     expect(demo.selection.primary).toContain('self_intro_demo');
-    expect(demo.selection.promptOverlay).toContain('not a fixed script');
+    expect(demo.selection.promptOverlay).toContain('model owns the final respond-versus-act decision');
   });
 
   it('treats task center turns as persistent task work', async () => {
@@ -231,7 +234,7 @@ describe('Lumi capability selection', () => {
 
     expect(dispatch.boundary).toBe('task_center');
     expect(selection.lane).toBe('task_center');
-    expect(selection.preferredTools).toContain('work_takeover_task_advance');
+    expect(selection.promptOverlay).toContain('persistent work');
   });
 
   it('continues active work takeover state instead of starting from scratch', async () => {
