@@ -29,6 +29,7 @@ jobs:
       - name: Run complete Vitest suite
         run: npm test -- --reporter=json --outputFile=vitest-results.json
       - name: Enforce test inventory
+        if: always()
         run: npm run test:inventory -- vitest-results.json
       - name: Build desktop and mobile frontends
         run: npm run build:frontends

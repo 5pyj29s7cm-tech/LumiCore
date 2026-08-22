@@ -301,6 +301,7 @@ pub struct NativeAppEntry {
     pub score: i32,
 }
 
+#[cfg(target_os = "windows")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AppLaunchHistoryEntry {
     app_id: String,
@@ -472,6 +473,7 @@ fn detect_gpu() -> Option<String> {
     None
 }
 
+#[cfg(target_os = "windows")]
 fn detect_gpu_usage() -> Option<f32> {
     #[cfg(target_os = "windows")]
     {
@@ -1056,16 +1058,16 @@ fn run_command(
         }
     };
 
-    let mut cmd = if cfg!(target_os = "windows") {
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
         let mut cmd = Command::new("cmd");
-        #[cfg(target_os = "windows")]
-        {
-            cmd.args(["/D", "/S", "/C"]);
-            cmd.raw_arg(&command);
-            cmd.creation_flags(0x08000000u32);
-        }
+        cmd.args(["/D", "/S", "/C"]);
+        cmd.raw_arg(&command);
+        cmd.creation_flags(0x08000000u32);
         cmd
-    } else {
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut cmd = {
         let mut cmd = Command::new("sh");
         cmd.args(["-c", &command]);
         cmd
@@ -2772,13 +2774,17 @@ async fn list_native_apps(query: Option<String>, limit: Option<usize>) -> Vec<Na
 
 #[tauri::command]
 fn open_item(
-    mut target: String,
+    target: String,
     application: Option<String>,
     window: tauri::WebviewWindow,
 ) -> CommandResult {
     // Open file, folder, app, or URL with the OS default handler
     let _ = window.set_always_on_top(false);
 
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    let mut target = target;
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     if let Some(application) = application
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -2793,6 +2799,9 @@ fn open_item(
             return result;
         }
     }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let _ = application;
 
     #[cfg(target_os = "windows")]
     if let Some(result) = try_launch_windows_app_alias(&target) {
@@ -3880,15 +3889,36 @@ pub struct CaptureResult {
 
 #[tauri::command]
 fn get_active_window_info() -> ActiveWindowInfo {
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     let mut window_id = String::new();
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let window_id = String::new();
     let mut title = String::new();
     let mut process_name = String::new();
+    #[cfg(target_os = "windows")]
     let mut executable_path = String::new();
+    #[cfg(not(target_os = "windows"))]
+    let executable_path = String::new();
+    #[cfg(target_os = "windows")]
     let mut publisher = String::new();
+    #[cfg(not(target_os = "windows"))]
+    let publisher = String::new();
+    #[cfg(target_os = "windows")]
     let mut product_name = String::new();
+    #[cfg(not(target_os = "windows"))]
+    let product_name = String::new();
+    #[cfg(target_os = "windows")]
     let mut product_version = String::new();
+    #[cfg(not(target_os = "windows"))]
+    let product_version = String::new();
+    #[cfg(target_os = "windows")]
     let mut window_class = String::new();
+    #[cfg(not(target_os = "windows"))]
+    let window_class = String::new();
+    #[cfg(target_os = "windows")]
     let mut signature_status = String::new();
+    #[cfg(not(target_os = "windows"))]
+    let signature_status = String::new();
     #[allow(unused_mut)]
     let mut pid: u32 = 0;
     #[allow(unused_mut)]
@@ -4816,6 +4846,7 @@ Write-Output "OK|$x|$y|$w|$h""#,
 }
 
 /// Simple base64 encoder — avoids pulling in a crate for one function.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn base64_encode(bytes: &[u8]) -> String {
     const CHARS: &[char] = &[
         'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R',
