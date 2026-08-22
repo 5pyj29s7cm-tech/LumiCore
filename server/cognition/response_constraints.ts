@@ -1,3 +1,5 @@
+import { formatCnSentenceCountCorrectionInstruction } from '../i18n/response_recovery_messages';
+
 export interface ExplicitSentenceCountConstraint {
   expected: number;
   actual: number;
@@ -36,6 +38,7 @@ export function getExplicitSentenceCountConstraint(
   responseText: string,
 ): ExplicitSentenceCountConstraint | null {
   const match = String(taskText || '').match(
+    // i18n-allow: Reviewed Chinese sentence-count input recognition; not user-visible copy.
     /(?:严格|总共|只能|只用|仅用|请用|回答(?:为|成)?)[^。！？!?\n]{0,12}?([一二两三四五六七八九十]|\d{1,2})句(?:话)?/u,
   );
   if (!match) return null;
@@ -45,5 +48,5 @@ export function getExplicitSentenceCountConstraint(
 }
 
 export function sentenceCountCorrectionInstruction(expected: number): string {
-  return `重写上一条回答，完整满足用户要求。最终回答必须严格为 ${expected} 句话：不能少答任何问题，也不能增加第 ${expected + 1} 句话。只输出重写后的最终回答。`;
+  return formatCnSentenceCountCorrectionInstruction(expected);
 }

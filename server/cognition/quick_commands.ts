@@ -22,6 +22,7 @@ import {
 } from './normalized_action_intent';
 import { listWebLoginSitePresets } from '../web_login/legal_presets';
 import { formatKnownLoginOpening, formatKnownLoginResult } from '../i18n/naturalness_messages';
+import { CN_TASK_LEDGER_MESSAGES } from '../i18n/task_ledger_messages';
 import { classifyRuntimeWorkIntent } from './runtime_work_intent';
 import {
   extractCurrentAppTarget,
@@ -215,7 +216,7 @@ export function buildDeterministicWorkTaskCreateCommand(text: string): QuickComm
       return [
         `\u4efb\u52a1\u7f16\u53f7\uff1a${id || '\u56de\u6267\u672a\u8bb0\u5f55'}`,
         `\u72b6\u6001\uff1a${persisted ? `\u5df2\u521b\u5efa\u5e76\u6301\u4e45\u5316\uff08${status}\uff09` : `\u672a\u9a8c\u8bc1\uff08${status}\uff09`}`,
-        `\u4e0b\u4e00\u6b65\uff1a${actions.length ? actions.join('\u2192') : '\u5f85\u8865\u5145'}`,
+        `\u4e0b\u4e00\u6b65\uff1a${actions.length ? actions.join('\u2192') : CN_TASK_LEDGER_MESSAGES.pending}`,
         `\u9700\u8981\u786e\u8ba4\uff1a${confirmations.length ? confirmations.join('\uff1b') : '\u65e0'}`,
       ].join('\n');
     },
@@ -243,13 +244,13 @@ export function buildDeterministicWorkTaskStatusCommand(text: string): QuickComm
   if (!title && !taskId) return null;
 
   return {
-    responseText: '\u6b63\u5728\u67e5\u8be2\u6301\u4e45\u4efb\u52a1\u8d26\u672c\u3002',
+    responseText: CN_TASK_LEDGER_MESSAGES.queryStarted,
     matched: true,
     toolCall: taskId
       ? { name: 'work_takeover_task_get', arguments: { id: taskId } }
       : { name: 'work_takeover_task_list', arguments: { limit: 200 } },
     formatToolResult: (raw, error) => {
-      if (error) return `\u4efb\u52a1\u72b6\u6001\u67e5\u8be2\u5931\u8d25\uff1a${error}`;
+      if (error) return CN_TASK_LEDGER_MESSAGES.queryFailed(error);
       let data: Record<string, any> = {};
       try { data = JSON.parse(String(raw || '{}')); } catch {}
       const tasks = Array.isArray(data.tasks) ? data.tasks : [];
@@ -257,8 +258,8 @@ export function buildDeterministicWorkTaskStatusCommand(text: string): QuickComm
         ? data.task && String(data.task.id || '') === taskId ? data.task : null
         : tasks.find((candidate: any) => String(candidate?.title || '').trim() === title);
       if (!task) return taskId
-        ? `\u4efb\u52a1\u8d26\u672c\u4e2d\u672a\u627e\u5230 ${taskId}\u3002`
-        : `\u4efb\u52a1\u8d26\u672c\u4e2d\u672a\u627e\u5230\u201c${title}\u201d\u3002`;
+        ? CN_TASK_LEDGER_MESSAGES.notFoundById(taskId)
+        : CN_TASK_LEDGER_MESSAGES.notFoundByTitle(String(title || ''));
       const actions = Array.isArray(task.nextActions) ? task.nextActions.map(String).filter(Boolean) : [];
       const index = Math.max(0, Math.min(Number(task.currentActionIndex) || 0, Math.max(0, actions.length - 1)));
       const current = actions[index] || '\u5f85\u8865\u5145';
@@ -267,11 +268,11 @@ export function buildDeterministicWorkTaskStatusCommand(text: string): QuickComm
         ? task.confirmationRequired.map(String).filter(Boolean)
         : [];
       return [
-        `\u4efb\u52a1\u7f16\u53f7\uff1a${String(task.id || '\u56de\u6267\u672a\u8bb0\u5f55')}`,
-        `\u5f53\u524d\u72b6\u6001\uff1a${String(task.status || '\u672a\u77e5')}`,
-        `\u5f53\u524d\u6b65\u9aa4\uff1a${current}`,
-        `\u540e\u7eed\u6b65\u9aa4\uff1a${remaining.length ? remaining.join('\u2192') : '\u65e0'}`,
-        `\u786e\u8ba4\u8fb9\u754c\uff1a${confirmations.length ? confirmations.join('\uff1b') : '\u65e0'}`,
+        CN_TASK_LEDGER_MESSAGES.taskId(task.id),
+        CN_TASK_LEDGER_MESSAGES.currentStatus(task.status),
+        CN_TASK_LEDGER_MESSAGES.currentStep(current),
+        CN_TASK_LEDGER_MESSAGES.followingSteps(remaining),
+        CN_TASK_LEDGER_MESSAGES.confirmationBoundary(confirmations),
       ].join('\n');
     },
   };
@@ -324,7 +325,7 @@ export function buildDeterministicWorkTaskProgressCommand(text: string): QuickCo
   }
 
   return {
-    responseText: '\u6b63\u5728\u5c06\u660e\u786e\u7684\u5907\u6ce8\u5199\u5165\u6301\u4e45\u4efb\u52a1\u8d26\u672c\u3002',
+    responseText: CN_TASK_LEDGER_MESSAGES.noteWriteStarted,
     matched: true,
     toolCall: {
       name: 'work_takeover_task_update',
@@ -334,20 +335,20 @@ export function buildDeterministicWorkTaskProgressCommand(text: string): QuickCo
       },
     },
     formatToolResult: (raw, error) => {
-      if (error) return `\u4efb\u52a1\u5907\u6ce8\u5199\u5165\u5931\u8d25\uff1a${error}`;
+      if (error) return CN_TASK_LEDGER_MESSAGES.noteWriteFailed(error);
       let data: Record<string, any> = {};
       try { data = JSON.parse(String(raw || '{}')); } catch {}
       const task = data.task && typeof data.task === 'object' ? data.task : {};
       const persisted = data.persisted === true && String(task.id || '') === bookkeeping.taskId;
-      if (!persisted) return '\u4efb\u52a1\u5907\u6ce8\u672a\u53d6\u5f97\u53ef\u9a8c\u8bc1\u7684\u6301\u4e45\u56de\u6267\u3002';
+      if (!persisted) return CN_TASK_LEDGER_MESSAGES.noteMissingReceipt;
       const actions = Array.isArray(task.nextActions) ? task.nextActions.map(String).filter(Boolean) : [];
       const currentIndex = Math.max(0, Number(task.currentActionIndex) || 0);
       return [
-        `\u4efb\u52a1\u7f16\u53f7\uff1a${bookkeeping.taskId}`,
-        '\u8bb0\u8d26\u72b6\u6001\uff1a\u5907\u6ce8\u5df2\u6301\u4e45\u5316',
-        '\u6267\u884c\u72b6\u6001\uff1a\u672a\u6267\u884c\u4efb\u52a1\u6b65\u9aa4\uff0c\u672a\u63a8\u8fdb\u8fdb\u5ea6\u6216\u5b8c\u6210\u72b6\u6001',
-        `\u5f53\u524d\u4efb\u52a1\u72b6\u6001\uff1a${String(task.status || '\u672a\u77e5')}`,
-        `\u5f53\u524d\u6b65\u9aa4\uff1a${actions[currentIndex] || '\u5f85\u8865\u5145'}`,
+        CN_TASK_LEDGER_MESSAGES.taskId(bookkeeping.taskId),
+        CN_TASK_LEDGER_MESSAGES.notePersisted,
+        CN_TASK_LEDGER_MESSAGES.executionNotAdvanced,
+        CN_TASK_LEDGER_MESSAGES.currentTaskStatus(task.status),
+        CN_TASK_LEDGER_MESSAGES.currentStep(actions[currentIndex]),
       ].join('\n');
     },
   };

@@ -183,7 +183,11 @@ describe('model-owned main chat architecture', () => {
     expect(chatSource).not.toContain('prepareConversationActionExecution');
     expect(chatSource).not.toContain('persistConversationExecutionPlan');
     expect(chatSource).not.toContain("setConversationActionExecutionStatus(conversationId, uid, 'executing'");
-    expect(chatSource).toContain('deferActionPreparation: true');
+    // A cancellation is recorded as a terminal continuation boundary.  Normal
+    // model-owned turns defer task preparation, but a cancellation must not
+    // enqueue that deferred work after the user has revoked it.
+    expect(chatSource).toContain('deferActionPreparation: !confirmationCancellationRequested');
+    expect(chatSource).toContain('skipActionContinuation: confirmationCancellationRequested');
   });
 
   it('uses the same hard-policy manifest across remote and REST text entrances', () => {

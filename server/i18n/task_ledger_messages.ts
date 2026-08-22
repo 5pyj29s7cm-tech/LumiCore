@@ -1,0 +1,18 @@
+export const CN_TASK_LEDGER_MESSAGES = {
+  pending: '待补充',
+  queryStarted: '正在查询持久任务账本。',
+  queryFailed: (error: unknown): string => `任务状态查询失败：${String(error || '')}`,
+  notFoundById: (taskId: string): string => `任务账本中未找到 ${taskId}。`,
+  notFoundByTitle: (title: string): string => `任务账本中未找到“${title}”。`,
+  taskId: (taskId: unknown): string => `任务编号：${String(taskId || '回执未记录')}`,
+  currentStatus: (status: unknown): string => `当前状态：${String(status || '未知')}`,
+  currentStep: (step: unknown): string => `当前步骤：${String(step || '待补充')}`,
+  followingSteps: (steps: string[]): string => `后续步骤：${steps.length ? steps.join('→') : '无'}`,
+  confirmationBoundary: (items: string[]): string => `确认边界：${items.length ? items.join('；') : '无'}`,
+  noteWriteStarted: '正在将明确的备注写入持久任务账本。',
+  noteWriteFailed: (error: unknown): string => `任务备注写入失败：${String(error || '')}`,
+  noteMissingReceipt: '任务备注未取得可验证的持久回执。',
+  notePersisted: '记账状态：备注已持久化',
+  executionNotAdvanced: '执行状态：未执行任务步骤，未推进进度或完成状态',
+  currentTaskStatus: (status: unknown): string => `当前任务状态：${String(status || '未知')}`,
+} as const;

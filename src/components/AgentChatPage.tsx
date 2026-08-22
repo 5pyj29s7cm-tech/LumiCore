@@ -2332,7 +2332,7 @@ export function AgentChatPage({
     toast.success(uiMessage('agent-chat-page.session-materials-cleared.53bea199b2'));
   }, [attachmentContextStorageKey]);
 
-  const sendText = async (text: string, attachments: ChatAttachment[] = pendingAttachments) => {
+  const sendText = useCallback(async (text: string, attachments: ChatAttachment[] = pendingAttachments) => {
     const trimmedText = text.trim();
     const directAttachments = attachments.map(serializeChatAttachment);
     const attachmentMerge = mergeChatAttachmentReferences(
@@ -2581,7 +2581,28 @@ export function AgentChatPage({
 
     // No frontend AI fallback here. If the realtime backend is down, show the
     // connection problem instead of generating a second, inconsistent answer.
-  };
+  }, [
+    acceptChatExecutionEvent,
+    activeDomain,
+    activeOrgId,
+    agentCategory,
+    agentId,
+    chatExecutionSource,
+    clearChatProgress,
+    isZh,
+    messages,
+    operationMode,
+    pendingAttachments,
+    persistActiveExecution,
+    pushChatProgress,
+    rememberAttachmentContext,
+    setDraftText,
+    settleTrackedChatRequest,
+    socket,
+    t.chatUserFallback,
+    t.workflowAnalyzing,
+    user,
+  ]);
 
   const cancelActiveChat = () => {
     const requestId = activeChatRequestIdRef.current;

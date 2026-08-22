@@ -6,6 +6,7 @@ import {
   type CapabilityRoute,
 } from '../self_extension/capability_memory';
 import type { ToolExecutionRecord } from '../tools/types';
+import { CN_DURABLE_EXECUTION_MESSAGES } from '../i18n/durable_execution_messages';
 import type { LumiTurnFlow } from './turn_flow';
 
 export type LumiLearningChannel = 'chat' | 'voice' | 'task' | 'workflow';
@@ -268,9 +269,9 @@ export function persistLumiLearningTurn(input: LumiLearningTurnInput): LumiLearn
           artifacts: [],
           verification: [
             {
-              label: '候选记录持久化',
+              label: CN_DURABLE_EXECUTION_MESSAGES.capabilityCandidatePersistenceLabel,
               passed: false,
-              detail: '候选已记录，但数据库写入不构成能力验证；必须经过真实实验和终态回执后才能晋级为可复用能力。',
+              detail: CN_DURABLE_EXECUTION_MESSAGES.capabilityCandidatePersistenceDetail,
             },
           ],
         },

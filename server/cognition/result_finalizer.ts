@@ -226,10 +226,10 @@ function unsupportedToolAvailabilityExcuse(input: LumiResultFinalizerInput): str
     /(?:\u4e0d\u4ee3\u8868|\u5e76\u4e0d\u4ee3\u8868|\u4e0d\u7b49\u4e8e|\u4e0d\u80fd\u8bf4\u660e|\u4e0d\u662f\u8bf4|does\s+not\s+mean|doesn'?t\s+mean)[^\u3002\uff01\uff1f.!?\n]{0,100}[\u3002\uff01\uff1f.!?]?/giu,
     '',
   );
-  // i18n-allow: Unsupported user-switchable tool-state excuse recognition; not user-visible copy.
   // Keep the state word close to the tool noun. A broad wildcard here makes
   // truthful plans such as “用桌面打开工具启动计算器，不打开替代软件” look as
   // if they claimed the tool itself was not open.
+  // i18n-allow: Unsupported user-switchable tool-state excuse recognition; not user-visible copy.
   const claimsToolsAreOff = /(?:当前|现在|这轮|我这边|当前会话|这个会话)?[^。！？!?\n]{0,32}(?:工具|tool)(?:\s*(?:本身|列表|集合|状态|权限|能力|链路|路由|is|are)){0,2}[\s:：]*(?:没(?:有)?打开|未打开|没开启|未开启|不可用|没有开放|没(?:有)?挂载|未挂载|没带|只有|只(?:挂载|有)|not (?:open|enabled|available|mounted|loaded)|disabled)|(?:当前|现在|这轮|我这边|当前会话|这个会话)?[^。！？!?\n]{0,28}(?:只有|只(?:挂载|有)|没(?:有)?挂载|未挂载|没带)[^。！？!?\n]{0,20}(?:工具|tool)|(?:需要|要不要|可以)(?:我)?[^。！？!?\n]{0,28}(?:切换|切到|进入|开启)[^。！？!?\n]{0,24}(?:工具可用|工具模式|tool mode|tools? enabled)/iu.test(availabilityClaimText);
   if (!claimsToolsAreOff) return null;
   const actualUnavailableReceipt = (input.toolRecords || []).some(record => (
@@ -1883,7 +1883,7 @@ function unsupportedLedgerOnlyWorkTaskCompletion(
   const reason = 'Persistent task completion was claimed from ledger updates without a verified action receipt.';
   return {
     text: isChineseText(taskText) || isChineseText(input.responseText)
-      ? '\u4efb\u52a1\u8d26\u672c\u53ea\u8bc1\u660e\u4e86\u8bb0\u8d26\u6216\u72b6\u6001\u5199\u56de\uff0c\u4e0d\u8bc1\u660e\u4efb\u52a1\u6b65\u9aa4\u5df2\u5b9e\u9645\u6267\u884c\u3002\u672c\u8f6e\u6ca1\u6709\u771f\u5b9e\u52a8\u4f5c\u7684\u5df2\u9a8c\u8bc1\u7ec8\u6001\u56de\u6267\uff0c\u4e0d\u80fd\u5c06\u8be5\u6b65\u9aa4\u6807\u8bb0\u4e3a\u5b8c\u6210\u3002'
+      ? CN_EXECUTION_EVIDENCE_MESSAGES.ledgerOnlyTaskCompletion
       : 'The task ledger proves only a bookkeeping update, not execution. No verified terminal receipt from a real action exists for this turn, so the step cannot be marked complete.',
     blocked: true,
     reason,

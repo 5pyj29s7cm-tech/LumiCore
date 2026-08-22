@@ -900,12 +900,17 @@ function workflowRunSummary(run: NonNullable<ReturnType<typeof getWorkflowRun>>)
   };
 }
 
-async function handleGetWorkflowRun(args: Record<string, any>, context?: any): Promise<string> {
-  // A background worker mutates the in-memory ledger before its strict flush
-  // completes. Never expose that transition to polling clients until SQLite
-  // has crossed the same durability barrier.
+async function readDurableWorkflowRunForContext(runId: string, context?: any) {
+  // Capture one linearizable snapshot before crossing the barrier. A worker
+  // may advance the live ledger while the flush is resolving, but this exact
+  // revision (or a later one) is durable before it is exposed to the caller.
+  const run = requireWorkflowRunForContext(runId, context);
   await persistWorkflowRuntimeBarrier();
-  const run = requireWorkflowRunForContext(String(args.runId || ''), context);
+  return run;
+}
+
+async function handleGetWorkflowRun(args: Record<string, any>, context?: any): Promise<string> {
+  const run = await readDurableWorkflowRunForContext(String(args.runId || ''), context);
   return JSON.stringify(workflowRunSummary(run), null, 2);
 }
 

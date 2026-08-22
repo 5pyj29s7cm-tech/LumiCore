@@ -3,6 +3,11 @@ import { initDatabase, querySQL } from '../db_layer';
 import { saveWorkflowDraftCandidate } from '../server/agents/workflows';
 import { registerWorkflowTools } from '../server/tools/definitions/workflow_tools';
 import { ToolRegistry } from '../server/tools/registry';
+import {
+  createWorkflowRun,
+  persistWorkflowRuntimeBarrier,
+  requestWorkflowCancel,
+} from '../server/workflows/runtime';
 
 async function waitForRun(
   registry: ToolRegistry,
@@ -34,7 +39,7 @@ async function saveAndPublish(
   name: string,
   tool: string,
   context: Record<string, unknown> = {},
-): Promise<void> {
+): Promise<Record<string, any>> {
   const saved = JSON.parse(await registry.execute('save_workflow', {
     name,
     steps: [{ description: 'controlled step', tool, args: { target: 'reviewed-target' } }],
@@ -44,6 +49,7 @@ async function saveAndPublish(
     expectedHash: saved.hash,
   }, { userId, ...context, requestConfirmation: async () => true }));
   expect(published.status).toBe('published');
+  return published;
 }
 
 describe('live versioned workflow control', () => {
@@ -83,6 +89,53 @@ describe('live versioned workflow control', () => {
     expect((await durableWorkflowRun(started.runId))?.status).toBe('cancelled');
   });
 
+  it('never exposes a workflow revision newer than its completed durability barrier', async () => {
+    const registry = new ToolRegistry();
+    registerWorkflowTools(registry);
+    registry.register({
+      name: 'workflow_live_durable_read',
+      description: 'test',
+      parameters: {},
+      permission: 'public',
+      securityLevel: 'safe',
+      handler: async () => JSON.stringify({ ok: true, status: 'completed' }),
+    });
+    const userId = `workflow-live-durable-read-${Date.now()}`;
+    const name = `durable-read-${Date.now()}`;
+    const published = await saveAndPublish(registry, userId, name, 'workflow_live_durable_read');
+    const queued = createWorkflowRun({
+      workflowId: published.workflowId,
+      version: published.version,
+      userId,
+      actor: 'test',
+    });
+
+    // Put the observer behind the same barrier that advances the live ledger.
+    // The old barrier-then-read ordering deterministically returned cancelled@1
+    // here while SQLite still contained queued@0.
+    const advanceAfterFirstBarrier = (async () => {
+      await persistWorkflowRuntimeBarrier();
+      return requestWorkflowCancel({
+        runId: queued.runId,
+        expectedRevision: queued.revision,
+        userId,
+        actor: 'test',
+      });
+    })();
+    const observer = registry.get('get_workflow_run')?.handler;
+    expect(observer).toBeDefined();
+    const observed = JSON.parse(await observer!({ runId: queued.runId }, { userId }));
+    const advanced = await advanceAfterFirstBarrier;
+    expect(advanced).toMatchObject({ status: 'cancelled', revision: queued.revision + 1 });
+
+    expect(await durableWorkflowRun(queued.runId)).toMatchObject({
+      runId: observed.runId,
+      status: observed.status,
+      revision: observed.revision,
+    });
+    await persistWorkflowRuntimeBarrier();
+  });
+
   it('checkpoints a verified long step after several lease heartbeats', async () => {
     const registry = new ToolRegistry();
     registerWorkflowTools(registry);
@@ -112,6 +165,7 @@ describe('live versioned workflow control', () => {
     expect(completed.completedSteps).toBe(1);
     expect(await durableWorkflowRun(started.runId)).toMatchObject({
       status: 'completed',
+      revision: completed.revision,
       receipts: [expect.objectContaining({ stepId: 'step_1', status: 'verified' })],
     });
     expect(completed.outputs).toEqual(expect.arrayContaining([

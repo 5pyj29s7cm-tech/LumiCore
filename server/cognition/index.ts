@@ -14,6 +14,7 @@ import { classifyIntent, classifyIntentLLM, extractSentiment, IntentResult, Sent
 import { generateFallback, isLLMDown } from './fallback';
 import { getModeConfig, ConversationMode, ModeConfig } from './modes';
 import type { ToolContext, ToolExecutionRecord } from '../tools/types';
+import { CN_DURABLE_EXECUTION_MESSAGES } from '../i18n/durable_execution_messages';
 
 export { classifyIntent, classifyIntentLLM, extractSentiment, generateFallback, isLLMDown, getModeConfig };
 export type { IntentResult, SentimentResult } from './intent';
@@ -104,7 +105,7 @@ export function handleLLMFailure(
 ): CognitiveResult {
   void error;
   return {
-    responseText: '本轮没有生成可靠回复，也没有据此执行新操作。请直接重试当前消息。',
+    responseText: CN_DURABLE_EXECUTION_MESSAGES.modelFailure,
     intent,
     llmWasCalled: true,
     directToolExecuted: false,

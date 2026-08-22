@@ -36,6 +36,7 @@ import {
   getExplicitSentenceCountConstraint,
   sentenceCountCorrectionInstruction,
 } from "../cognition/response_constraints";
+import { CN_STREAM_INTERRUPTION_RECOVERY_INSTRUCTION } from "../i18n/response_recovery_messages";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import {
   persistLumiPostTurnLearning,
@@ -2146,7 +2147,7 @@ export function registerChatHandler(
             if (response.streamIncomplete || (sentenceConstraint && sentenceConstraint.actual !== sentenceConstraint.expected)) {
               const recoveryInstruction = sentenceConstraint
                 ? sentenceCountCorrectionInstruction(sentenceConstraint.expected)
-                : '上一条是流式连接中断前的草稿。请基于用户原请求完整重写最终回答，补齐遗漏内容；只输出可直接交付给用户的最终回答。';
+                : CN_STREAM_INTERRUPTION_RECOVERY_INSTRUCTION;
               const corrected = await makeLLMCallStreaming(
                 [
                   ...messages,

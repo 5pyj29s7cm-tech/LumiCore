@@ -295,12 +295,14 @@ function isDocumentOpenAndReviewRequest(text: string): boolean {
   // same-named file". Their incidental "file"/"read" words describe what
   // must not be used, not a document the user wants reviewed.
   const candidate = text
+    // i18n-allow: Reviewed Chinese exact-target exclusion recognition; not user-visible copy.
     .replace(/(?:不能|不要|别|禁止|不可).{0,64}(?:替代|冒充|代替)/gu, ' ')
     .replace(/\b(?:do\s+not|don't|never)\b.{0,80}\b(?:substitute|replace|use\s+instead)\b/giu, ' ');
   // i18n-allow: Reviewed multilingual open/launch input recognition; not user-visible copy.
   const wantsOpen = /(?:打开|启动)|\b(?:open|launch)\b/iu.test(candidate);
   // i18n-allow: Reviewed multilingual document-type input recognition; not user-visible copy.
   const hasDocument = /(?:PDF|DOCX|PPTX?|XLSX?|文件|文档)|\b(?:pdf|docx?|pptx?|xlsx?|file|document)\b/iu.test(candidate)
+    // i18n-allow: Reviewed Chinese report/document input recognition; not user-visible copy.
     || /(?:打开|启动|阅读|读取).{0,24}(?:报告|介绍)|(?:报告|介绍)(?:文件|文档)/u.test(candidate)
     || /\b(?:open|launch|read|review).{0,32}\breport\b/iu.test(candidate);
   // i18n-allow: Reviewed multilingual review/read input recognition; not user-visible copy.
