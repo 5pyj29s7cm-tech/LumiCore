@@ -115,7 +115,7 @@ describe('chat and voice tool-call stability', () => {
     expect(voice).toContain('emitToolLifecycle');
     expect(voice).toContain('emitAgent("agent:tool"');
     expect(voice).toContain('activeTurnRequestId');
-    expect(voice).toContain("channel: payload.channel || 'voice'");
+    expect(voice).toContain("channel: publicPayload.channel || 'voice'");
     expect(voice).toContain('onProgress');
   });
 

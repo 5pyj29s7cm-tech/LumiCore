@@ -10,7 +10,6 @@
  */
 
 import { spawn } from 'child_process';
-import os from 'os';
 
 export interface ExternalAgentConfig {
   /** CLI command template. {task} is replaced with the task text. */
@@ -19,6 +18,8 @@ export interface ExternalAgentConfig {
   timeout?: number;
   /** Working directory for the process */
   cwd?: string;
+  /** Durable authorization set only by the authenticated local administrator surface. */
+  authorized?: boolean;
 }
 
 export interface ExternalResult {
@@ -28,28 +29,42 @@ export interface ExternalResult {
   durationMs: number;
 }
 
-function quoteForPosix(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-function quoteForCmd(value: string): string {
-  const escaped = value
-    .replace(/\r?\n/g, ' ')
-    .replace(/"/g, "'")
-    .replace(/[%!^&|<>()]/g, '^$&');
-  return `"${escaped}"`;
-}
-
-function quoteForShell(value: string): string {
-  return os.platform() === 'win32' ? quoteForCmd(value) : quoteForPosix(value);
-}
-
-function buildCommand(command: string, task: string): string {
-  const quotedTask = quoteForShell(task.slice(0, 4000));
-  return command
-    .replace(/"\{task\}"/g, quotedTask)
-    .replace(/'\{task\}'/g, quotedTask)
-    .replace(/\{task\}/g, quotedTask);
+function parseCommandTemplate(command: string): string[] {
+  const tokens: string[] = [];
+  let current = '';
+  let quote = '';
+  let escaped = false;
+  for (const char of command.trim()) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === '\\' && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = '';
+      else current += char;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        tokens.push(current);
+        current = '';
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (escaped || quote) throw new Error('External command contains an incomplete escape or quote.');
+  if (current) tokens.push(current);
+  return tokens;
 }
 
 /**
@@ -68,17 +83,25 @@ export async function executeExternalAgent(
 ): Promise<ExternalResult> {
   const startTime = Date.now();
   const timeout = config.timeout || 120_000;
-
-  // Build the command by substituting {task} as a single shell argument.
-  const commandStr = buildCommand(config.command, task);
+  if (config.authorized !== true) {
+    return { success: false, output: 'External runtime is not authorized by the local administrator.', exitCode: -1, durationMs: 0 };
+  }
+  let template: string[];
+  try {
+    template = parseCommandTemplate(config.command);
+  } catch (error: any) {
+    return { success: false, output: error?.message || 'External command parsing failed.', exitCode: -1, durationMs: 0 };
+  }
+  const executable = template[0];
+  const args = template.slice(1).map(value => value === '{task}' ? task.slice(0, 4000) : value);
 
   return new Promise((resolve) => {
     let stdout = '';
     let stderr = '';
     let settled = false;
 
-    const child = spawn(commandStr, {
-      shell: true,
+    const child = spawn(executable, args, {
+      shell: false,
       cwd: config.cwd || process.cwd(),
       timeout,
       windowsHide: true,
@@ -134,7 +157,16 @@ export function validateExternalCommand(command: string): string | null {
   if (trimmed.length > 1500) {
     return 'External command is too long';
   }
-  const placeholders = trimmed.match(/\{task\}/g) || [];
+  let tokens: string[];
+  try {
+    tokens = parseCommandTemplate(trimmed);
+  } catch (error: any) {
+    return error?.message || 'External command is invalid';
+  }
+  if (tokens.length < 2 || !tokens[0] || /[\0\r\n]/.test(tokens[0])) {
+    return 'External command must contain an executable and arguments';
+  }
+  const placeholders = tokens.filter(token => token === '{task}');
   if (placeholders.length === 0) {
     return 'External command must include {task} placeholder';
   }
@@ -145,7 +177,7 @@ export function validateExternalCommand(command: string): string | null {
     return 'External command cannot contain newlines';
   }
 
-  const controlTokens = ['&&', '||', ';', '|', '>', '<', '`', '$('];
+  const controlTokens = ['&&', '||', ';', '|', '>', '<', '`', '$(', '%COMSPEC%', '%CMD%', '${'];
   for (const token of controlTokens) {
     if (trimmed.includes(token)) return `Command contains shell control token: "${token}"`;
   }
@@ -175,6 +207,13 @@ export function validateExternalCommand(command: string): string | null {
   }
   if (/^\s*(?:powershell|pwsh)(?:\.exe)?\s+-(?:command|c|encodedcommand)\b/i.test(trimmed)) {
     return 'External command cannot launch inline PowerShell';
+  }
+  const executable = tokens[0].toLowerCase().replace(/^.*[\\/]/, '');
+  if (/^(?:cmd(?:\.exe)?|powershell(?:\.exe)?|pwsh(?:\.exe)?|sh|bash|zsh|wscript(?:\.exe)?|cscript(?:\.exe)?)$/i.test(executable)) {
+    return 'External command must invoke a dedicated agent CLI, not a general-purpose shell or script host';
+  }
+  if (tokens.some(token => token !== '{task}' && /\{task\}/.test(token))) {
+    return 'The {task} placeholder must be one complete command argument';
   }
   return null;
 }

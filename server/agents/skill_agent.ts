@@ -21,6 +21,7 @@ export function createAgentForSkill(
     installSource?: string;
     runtime?: 'internal' | 'external';
     externalCommand?: string;
+    externalRuntimeAuthorized?: boolean;
     scope?: {
       ownerUid?: string;
       userId?: string;
@@ -38,6 +39,9 @@ export function createAgentForSkill(
     const description = skillInfo.description || `Auto-generated agent for skill: ${skillName}`;
     const runtime = skillInfo.runtime || 'internal';
     const externalCommand = skillInfo.externalCommand;
+    if (runtime === 'external' && skillInfo.externalRuntimeAuthorized !== true) {
+      throw new Error('External skill agents require explicit local-administrator runtime authorization.');
+    }
     const baseAgentId = `skill_${skillName.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
     const agentId = scopedAgentId(baseAgentId, skillInfo.scope);
     const tags = Array.from(new Set([
@@ -54,6 +58,7 @@ export function createAgentForSkill(
     if (existing) {
       let changed = false;
       if (runtime === 'external') {
+        existing.externalRuntimeAuthorizedAt = now;
         if (existing.runtime !== 'external') {
           existing.runtime = 'external';
           changed = true;
@@ -112,6 +117,7 @@ export function createAgentForSkill(
       runtime,
       healthStatus: runtime === 'external' ? 'untested' : 'online',
       ...(externalCommand ? { externalCommand } : {}),
+      ...(runtime === 'external' ? { externalRuntimeAuthorizedAt: now } : {}),
       ...(skillInfo.scope?.ownerUid ? { ownerUid: skillInfo.scope.ownerUid, userId: skillInfo.scope.userId || skillInfo.scope.ownerUid } : {}),
       ...(skillInfo.scope?.domain ? { domain: skillInfo.scope.domain, orgId: skillInfo.scope.orgId || '' } : {}),
       autoCreated: true,

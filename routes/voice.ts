@@ -9,7 +9,7 @@ import { TTSProvider } from '../server/tts/types';
 import { logger } from '../logger';
 import { recordLatency } from '../server/monitor/latency_store';
 import { getDataPath } from '../server/config/data_path';
-import { requireAuth, requireLocalRequest } from '../server/middleware/auth';
+import { requireAdmin, requireAuth, requireLocalRequest } from '../server/middleware/auth';
 import { getCosyVoiceCloneTargetModel, getQwenCloneTargetModel, getQwenDesignTargetModel } from '../server/tts/providers/cosyvoice';
 import {
   addScopedVoiceProfile,
@@ -637,7 +637,7 @@ import { getVoicePreference, setVoicePreference } from '../server/config/voice_p
 import { getActiveProvider as getActiveTTSProvider } from '../server/tts/adapter';
 import { getActiveSTTProvider } from '../server/stt/adapter';
 
-router.get('/voice/active-provider', requireAuth, (_req, res) => {
+router.get('/voice/active-provider', requireAuth, requireAdmin, requireLocalRequest, (_req, res) => {
   try {
     const pref = getVoicePreference();
     res.json({
@@ -652,7 +652,7 @@ router.get('/voice/active-provider', requireAuth, (_req, res) => {
   }
 });
 
-router.post('/voice/provider', requireAuth, requireLocalRequest, (req, res) => {
+router.post('/voice/provider', requireAuth, requireAdmin, requireLocalRequest, (req, res) => {
   try {
     if (req.user?.orgId) {
       return res.status(403).json({ error: 'Voice provider selection belongs to the local personal Lumi settings.' });

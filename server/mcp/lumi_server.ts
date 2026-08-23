@@ -18,7 +18,6 @@ import { setOfficeBroadcast } from '../tools/definitions/office_tools';
 import { synthesizeSpeech, getActiveProvider } from '../tts/adapter';
 import { classifyComplexity, decomposeTask, matchWorkers, executeWorkflow, aggregateWithLLM, getRoutingCacheStats } from '../agents/orchestrator';
 import { readDB } from '../../db_layer';
-import { formatLAPSelfPrompt } from '../lap/policy';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
@@ -27,9 +26,18 @@ import type { Request, Response } from 'express';
 import { finalizeLumiResponse } from '../cognition/result_finalizer';
 import type { ToolExecutionRecord } from '../tools/types';
 import { getScopedPreferredLLM } from '../llm/user_preferences';
+import {
+  mcpScopeFromAuthUser,
+  sameMcpScope,
+  type McpCallerScope,
+} from './auth';
+import {
+  restrictSystemPromptForExecutionBoundary,
+  restrictToolPolicyForExecutionBoundary,
+} from '../tools/remote_policy';
 
 // Track active transports per session
-const transports: Map<string, SSEServerTransport> = new Map();
+const transports: Map<string, { transport: SSEServerTransport; scope: McpCallerScope }> = new Map();
 
 type ToolRecordEvent = Omit<ToolExecutionRecord, 'result'> & { result?: string };
 
@@ -65,19 +73,63 @@ export function createLumiMcpServer(llmGetters?: {
   getKimi?: () => any;
   getGlm?: () => any;
   getRelay?: () => any;
-}, toolReg?: ToolRegistry, broadcast?: (event: string, data: any) => void): McpServer {
+}, toolReg?: ToolRegistry, broadcast?: (event: string, data: any) => void, callerScope?: McpCallerScope): McpServer {
   const g = llmGetters || {};
   const tr = toolReg || toolRegistry;
   const bc = broadcast || (() => {});
+  const scope: McpCallerScope = callerScope || {
+    userId: 'mcp_remote',
+    username: 'mcp_remote',
+    role: 'user',
+    authenticated: false,
+    trustedServiceExecution: false,
+    domain: 'personal',
+    orgId: '',
+  };
+  const mcpToolSecurityContext = {
+    authenticated: scope.authenticated === true,
+    authRole: scope.role,
+    orgRole: scope.orgRole,
+    localExecution: false,
+    executionBoundary: 'remote_restricted' as const,
+    trustedServiceExecution: scope.trustedServiceExecution === true,
+  };
+  const memoryScope = {
+    userId: scope.userId,
+    domain: scope.domain,
+    orgId: scope.orgId,
+  };
+  const isWorkViewer = scope.domain === 'work' && scope.orgRole === 'viewer';
+  const viewerMutationDenied = () => ({
+    content: [{ type: 'text' as const, text: 'This organization role has read-only MCP access.' }],
+    isError: true,
+  });
+  const matchesScopedRecord = (record: any, allowUnownedPersonal = false): boolean => {
+    if (!record || typeof record !== 'object') return false;
+    if (scope.domain === 'work') {
+      if (record.domain !== 'work' || String(record.orgId || '') !== scope.orgId) return false;
+      if (!isWorkViewer) return true;
+      const ownerId = String(record.ownerUid || record.userId || '');
+      return Boolean(ownerId) && ownerId === scope.userId;
+    }
+    if (record.domain === 'work' || String(record.orgId || '')) return false;
+    const ownerId = String(record.ownerUid || record.userId || '');
+    return ownerId === scope.userId || (allowUnownedPersonal && !ownerId);
+  };
   const resolveMcpLLM = () => {
-    const preferred = getScopedPreferredLLM('mcp_remote');
+    const preferred = getScopedPreferredLLM(scope.userId, {
+      domain: scope.domain,
+      orgId: scope.orgId,
+    });
     const providerOverride = String(process.env.LUMI_MCP_LLM_PROVIDER || '').trim();
     const modelOverride = String(process.env.LUMI_MCP_LLM_MODEL || '').trim();
     const overridden = Boolean(providerOverride || modelOverride);
     return {
       provider: (providerOverride || preferred.provider) as any,
       model: modelOverride || preferred.model,
-      userId: 'mcp_remote',
+      userId: scope.userId,
+      domain: scope.domain,
+      orgId: scope.orgId,
       selectionMode: overridden ? 'pinned' as const : preferred.selectionMode,
       fallbackCandidates: overridden ? [] : preferred.fallbackCandidates,
       allowCloudFallback: overridden ? false : preferred.allowCloudFallback,
@@ -109,7 +161,10 @@ export function createLumiMcpServer(llmGetters?: {
         bc('agent:status', { status: 'thinking', agentName: 'Lumi' });
         const pid = personalityId || 'lumi';
         const personality = personalityRegistry.get(pid) || personalityRegistry.get('lumi')!;
-        const ds = deviceRegistry.getSensoryContext('mcp_remote');
+        const ds = deviceRegistry.getSensoryContext(scope.userId, {
+          domain: scope.domain,
+          orgId: scope.orgId,
+        });
         const sensory = {
           audio: ds.hasAudio,
           visual: ds.hasVideo,
@@ -122,6 +177,7 @@ export function createLumiMcpServer(llmGetters?: {
         const { systemPrompt } = personalityRegistry.buildSystemPrompt(pid, { mode: 'task', sensory });
 
         const memories = queryMemories({
+          ...memoryScope,
           limit: personality.memoryPolicy.retrieveLimit,
           minConfidence: personality.memoryPolicy.minConfidence,
         });
@@ -130,9 +186,9 @@ export function createLumiMcpServer(llmGetters?: {
           : '';
 
         const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
-          // A remote MCP caller receives the LAP constitution, but never another
-          // authenticated desktop user's active peer/session projection.
-          { role: 'system', content: systemPrompt + '\n\n' + formatLAPSelfPrompt() + (memoryContext ? `\n\n## User context (memories):\n${memoryContext}` : '') },
+          // Network MCP callers receive neither the native host capability
+          // inventory nor active LAP peer/session projections.
+          { role: 'system', content: restrictSystemPromptForExecutionBoundary(systemPrompt, 'remote_restricted') + (memoryContext ? `\n\n## User context (memories):\n${memoryContext}` : '') },
           { role: 'user', content: message },
         ];
 
@@ -157,14 +213,24 @@ export function createLumiMcpServer(llmGetters?: {
               bc('agent:tool_call', { correlationId: cid, name: record.name, arguments: record.arguments, result: (record.result || '').slice(0, 300) });
             }
           },
-          personality.toolPolicy.maxIterations,
+          Math.min(4, personality.toolPolicy.maxIterations),
           g.getDeepSeek || (() => null),
           g.getGemini || (() => null),
           g.getOpenAI || (() => null),
           g.getAnthropic || (() => null),
           g.getQwen || (() => null),
           (chunk) => bufferedChunks.push(chunk),
-          { toolPolicy: personality.toolPolicy, source: 'mcp_chat' },
+          {
+            userId: scope.userId,
+            domain: scope.domain,
+            orgId: scope.orgId,
+            toolPolicy: restrictToolPolicyForExecutionBoundary(
+              personality.toolPolicy,
+              'remote_restricted',
+            ),
+            source: 'mcp_chat',
+            ...mcpToolSecurityContext,
+          } as any,
           g.getOllama,
           g.getLmStudio,
           g.getArk,
@@ -190,7 +256,10 @@ export function createLumiMcpServer(llmGetters?: {
                 gDeep, gGem, gOAI, gAnt, gQw,
               );
               for (const mem of result.memories) {
-                addMemory({ userId: 'mcp_remote', type: mem.type, content: mem.content, keywords: mem.keywords, confidence: mem.confidence, sourceInteractionId: 'mcp_lumi_chat' });
+                addMemory(
+                  { userId: scope.userId, type: mem.type, content: mem.content, keywords: mem.keywords, confidence: mem.confidence, sourceInteractionId: 'mcp_lumi_chat' },
+                  { domain: scope.domain, orgId: scope.orgId },
+                );
               }
             } catch { /* best-effort */ }
           })();
@@ -351,7 +420,7 @@ export function createLumiMcpServer(llmGetters?: {
     },
     async ({ query, type, limit }) => {
       try {
-        const memories = queryMemories({ query, type, limit });
+        const memories = queryMemories({ ...memoryScope, query, type, limit });
         return {
           content: [{
             type: 'text' as const,
@@ -384,14 +453,18 @@ export function createLumiMcpServer(llmGetters?: {
     },
     async ({ type, content, keywords }) => {
       try {
+        if (isWorkViewer) return viewerMutationDenied();
         const kw = keywords || content.toLowerCase().split(/\s+/).filter(w => w.length > 2);
         const entry = addMemory({
-          userId: 'mcp_remote',
+          userId: scope.userId,
           type,
           content,
           keywords: kw,
           confidence: 0.7,
           sourceInteractionId: 'mcp_manual',
+        }, {
+          domain: scope.domain,
+          orgId: scope.orgId,
         });
         return {
           content: [{
@@ -414,7 +487,7 @@ export function createLumiMcpServer(llmGetters?: {
     },
     async () => {
       try {
-        const reminders = getDueReminders();
+        const reminders = getDueReminders(memoryScope);
         return {
           content: [{
             type: 'text' as const,
@@ -525,7 +598,9 @@ export function createLumiMcpServer(llmGetters?: {
     async ({ topic, limit }) => {
       try {
         const result = await buildNarrativeChain({
-          userId: 'mcp_remote',
+          userId: scope.userId,
+          domain: scope.domain,
+          orgId: scope.orgId,
           topic,
           limit,
           getDeepSeek: g.getDeepSeek || (() => null),
@@ -570,7 +645,13 @@ export function createLumiMcpServer(llmGetters?: {
     },
     async ({ requestingAgentId, topic, limit }) => {
       try {
-        const memories = borrowAgentMemories(requestingAgentId, topic, 'mcp_remote', limit);
+        const memories = borrowAgentMemories(requestingAgentId, topic, scope.userId, Math.max(limit * 4, limit))
+          .filter(memory => (
+            memory.userId === scope.userId
+            && (memory.domain || 'personal') === scope.domain
+            && (memory.orgId || '') === scope.orgId
+          ))
+          .slice(0, limit);
         return {
           content: [{
             type: 'text' as const,
@@ -608,6 +689,7 @@ export function createLumiMcpServer(llmGetters?: {
       try {
         const db = readDB();
         const agents = (db.agents || []).filter((a: any) => {
+          if (!matchesScopedRecord(a, true)) return false;
           if (statusFilter === 'all') return true;
           return a.status === statusFilter;
         });
@@ -661,17 +743,24 @@ export function createLumiMcpServer(llmGetters?: {
     async ({ agentId }) => {
       try {
         const db = readDB();
-        const agent = (db.agents || []).find((a: any) => a.id === agentId);
+        const agent = (db.agents || []).find((a: any) => (
+          a.id === agentId && matchesScopedRecord(a, true)
+        ));
         if (!agent) {
           return { content: [{ type: 'text' as const, text: `Agent "${agentId}" not found` }], isError: true };
         }
 
         // Count memories owned by this agent
-        const memoryCount = (db.memories || []).filter((m: any) => m.agentId === agentId).length;
+        const memoryCount = (db.memories || []).filter((m: any) => (
+          m.agentId === agentId
+          && m.userId === scope.userId
+          && (m.domain || 'personal') === scope.domain
+          && (m.orgId || '') === scope.orgId
+        )).length;
 
         // Recent interactions for this agent
         const recentInteractions = (db.interactions || [])
-          .filter((i: any) => i.agentId === agentId)
+          .filter((i: any) => i.agentId === agentId && matchesScopedRecord(i))
           .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
           .slice(0, 5)
           .map((i: any) => ({
@@ -685,7 +774,9 @@ export function createLumiMcpServer(llmGetters?: {
         const agentRouting = routingStats.agents?.[agentId] || {};
 
         // Conversations
-        const conversations = (db.conversations || []).filter((c: any) => c.agentId === agentId);
+        const conversations = (db.conversations || []).filter((c: any) => (
+          c.agentId === agentId && matchesScopedRecord(c)
+        ));
 
         return {
           content: [{
@@ -731,10 +822,11 @@ export function createLumiMcpServer(llmGetters?: {
     },
     async ({ task, targetAgentId }) => {
       try {
+        if (isWorkViewer) return viewerMutationDenied();
         const routeLLM = resolveMcpLLM();
         bc('mcp:activity', { device: 'xiaozhi', action: 'route_task', status: 'received', task: task.slice(0, 200) });
 
-        const complexity = classifyComplexity(task, { userId: 'mcp_remote', personalityId: 'lumi' });
+        const complexity = classifyComplexity(task, { userId: scope.userId, personalityId: 'lumi' });
 
         if (complexity !== 'complex') {
           // Simple task — let Lumi handle directly
@@ -742,7 +834,7 @@ export function createLumiMcpServer(llmGetters?: {
           const { systemPrompt } = personalityRegistry.buildSystemPrompt('lumi', { mode: 'task', sensory: { audio: false, visual: false, spatial: false, haptic: false, holographic: false, activeDeviceTypes: [], deviceCount: 0 } });
 
           const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
-            { role: 'system', content: systemPrompt },
+            { role: 'system', content: restrictSystemPromptForExecutionBoundary(systemPrompt, 'remote_restricted') },
             { role: 'user', content: task },
           ];
 
@@ -753,7 +845,17 @@ export function createLumiMcpServer(llmGetters?: {
             g.getDeepSeek || (() => null), g.getGemini || (() => null), g.getOpenAI || (() => null),
             g.getAnthropic || (() => null), g.getQwen || (() => null),
             undefined,
-            undefined,
+            {
+              ...mcpToolSecurityContext,
+              userId: scope.userId,
+              domain: scope.domain,
+              orgId: scope.orgId,
+              source: 'mcp_route_task',
+              toolPolicy: restrictToolPolicyForExecutionBoundary(
+                personality.toolPolicy,
+                'remote_restricted',
+              ),
+            } as any,
             g.getOllama,
             g.getLmStudio,
             g.getArk,
@@ -796,7 +898,9 @@ export function createLumiMcpServer(llmGetters?: {
 
         // Complex task — orchestrate
         const db = readDB();
-        const availableAgents = (db.agents || []).filter((a: any) => a.status !== 'offline');
+        const availableAgents = (db.agents || []).filter((a: any) => (
+          a.status !== 'offline' && matchesScopedRecord(a, true)
+        ));
 
         if (targetAgentId) {
           // Direct routing to specified agent
@@ -813,7 +917,13 @@ export function createLumiMcpServer(llmGetters?: {
         const subTasks = await decomposeTask(
           task,
           routeLLM,
-          { userId: 'mcp_remote', personalityId: 'lumi' },
+          {
+            ...mcpToolSecurityContext,
+            userId: scope.userId,
+            personalityId: 'lumi',
+            domain: scope.domain,
+            orgId: scope.orgId,
+          },
           { getDeepSeek: g.getDeepSeek || (() => null), getGemini: g.getGemini || (() => null), getOpenAI: g.getOpenAI || (() => null), getAnthropic: g.getAnthropic || (() => null), getQwen: g.getQwen || (() => null) },
         );
 
@@ -821,7 +931,18 @@ export function createLumiMcpServer(llmGetters?: {
         const workflowToolRecords: ToolExecutionRecord[] = [];
         const workflowResult = await executeWorkflow(
           assignments,
-          { userId: 'mcp_remote', personalityId: 'lumi', rootTaskText: task },
+          {
+            ...mcpToolSecurityContext,
+            userId: scope.userId,
+            personalityId: 'lumi',
+            domain: scope.domain,
+            orgId: scope.orgId,
+            rootTaskText: task,
+            toolPolicy: restrictToolPolicyForExecutionBoundary(
+              (personalityRegistry.get('lumi') || personalityRegistry.getDefault()).toolPolicy,
+              'remote_restricted',
+            ),
+          },
           routeLLM,
           { getDeepSeek: g.getDeepSeek || (() => null), getGemini: g.getGemini || (() => null), getOpenAI: g.getOpenAI || (() => null), getAnthropic: g.getAnthropic || (() => null), getQwen: g.getQwen || (() => null) },
           [],
@@ -883,10 +1004,20 @@ export function createLumiMcpServer(llmGetters?: {
 /**
  * Handle SSE connection — create transport and add to the Lumi MCP server.
  */
-export async function handleMcpSSE(mcpServer: McpServer, req: Request, res: Response) {
+export async function handleMcpSSE(
+  mcpServer: McpServer,
+  req: Request,
+  res: Response,
+  callerScope?: McpCallerScope,
+) {
   try {
+    const scope = callerScope || mcpScopeFromAuthUser(req.user);
+    if (!scope) {
+      res.status(401).json({ error: 'Authentication required' });
+      return;
+    }
     const transport = new SSEServerTransport('/mcp/message', res);
-    transports.set(transport.sessionId, transport);
+    transports.set(transport.sessionId, { transport, scope });
 
     res.on('close', () => {
       transports.delete(transport.sessionId);
@@ -906,25 +1037,33 @@ export async function handleMcpSSE(mcpServer: McpServer, req: Request, res: Resp
  */
 export async function handleMcpMessage(req: Request, res: Response) {
   try {
-    // Find the session by checking query param or a simple session routing
-    const sessionId = req.query.sessionId as string;
-    let transport: SSEServerTransport | undefined;
-
-    if (sessionId) {
-      transport = transports.get(sessionId);
-    } else if (transports.size === 1) {
-      // If only one session, use it
-      transport = transports.values().next().value;
-    }
-
-    if (!transport) {
-      // No active session — try to get sessionId from the MCP message body
-      // MCP clients usually pass sessionId as a query parameter
-      res.status(400).json({ error: 'No active MCP session. Connect to /mcp/sse first.' });
+    // The authenticated POST must name, and own, the SSE session explicitly.
+    const requestScope = mcpScopeFromAuthUser(req.user);
+    if (!requestScope) {
+      res.status(401).json({ error: 'Authentication required' });
       return;
     }
 
-    await transport.handlePostMessage(req, res);
+    const sessionId = String(req.query.sessionId || '').trim();
+    let session: { transport: SSEServerTransport; scope: McpCallerScope } | undefined;
+
+    if (!sessionId) {
+      res.status(400).json({ error: 'MCP sessionId is required. Connect to /mcp/sse first.' });
+      return;
+    }
+    session = transports.get(sessionId);
+
+    if (!session) {
+      res.status(404).json({ error: 'MCP session not found or expired.' });
+      return;
+    }
+
+    if (!sameMcpScope(session.scope, requestScope)) {
+      res.status(403).json({ error: 'MCP session does not belong to the authenticated user scope.' });
+      return;
+    }
+
+    await session.transport.handlePostMessage(req, res);
   } catch (err: any) {
     logger.error('[MCP Server] Message error:', err.message);
     res.status(500).json({ error: 'MCP message handling failed' });

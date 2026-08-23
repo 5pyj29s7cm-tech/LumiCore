@@ -19,8 +19,13 @@ import { readDB, writeDB } from '../db_layer';
 import { chunkText, ingestDocument, verifyIngestedDocument } from '../server/agents/rag';
 import type { KnowledgeIngestionManifest } from '../server/knowledge/ingestion_manifest';
 import { buildKnowledgeIngestionManifest, evaluateKnowledgeManifest, hashKnowledgeContent } from '../server/knowledge/ingestion_manifest';
-import { getDataPath, getDataRoot } from '../server/config/data_path';
+import { getDataPath, getGeneratedOutputDir } from '../server/config/data_path';
 import { getJwtSecret } from '../server/config/local_identity';
+import {
+  requireAdmin as requireUnifiedAdmin,
+  requireAuth as requireUnifiedAuth,
+  requireLocalRequest as requireUnifiedLocalRequest,
+} from '../server/middleware/auth';
 import * as OrgKB from '../server/org/kb';
 import { getMember } from '../server/org/db';
 import { analyzeScreen } from '../server/llm/adapter';
@@ -343,7 +348,7 @@ function resolveGeneratedDownloadPath(value: unknown): string {
   const rawInput = String(value || '').trim();
   const normalizedRawInput = rawInput.replace(/\\/g, '/');
   const raw = normalizedRawInput.startsWith('/lumi_output/')
-    ? path.join(process.cwd(), normalizedRawInput.replace(/^\/+/, ''))
+    ? path.join(getGeneratedOutputDir(), normalizedRawInput.slice('/lumi_output/'.length))
     : rawInput;
   if (!raw) {
     const err: any = new Error('path is required');
@@ -358,25 +363,19 @@ function resolveGeneratedDownloadPath(value: unknown): string {
     throw err;
   }
 
-  const allowedRoots = [
-    path.join(process.cwd(), 'lumi_output'),
-    getDataRoot(),
-    path.join(os.homedir(), 'Desktop'),
-    path.join(os.homedir(), 'Downloads'),
-    path.join(os.homedir(), 'Documents'),
-    os.tmpdir(),
-  ];
-  if (!allowedRoots.some(root => isInsideRoot(resolved, root))) {
-    const err: any = new Error('Generated file path is outside allowed directories');
-    err.status = 403;
-    throw err;
-  }
   if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
     const err: any = new Error('Generated file not found');
     err.status = 404;
     throw err;
   }
-  return resolved;
+  const generatedRoot = fs.realpathSync.native(getGeneratedOutputDir());
+  const realPath = fs.realpathSync.native(resolved);
+  if (!isInsideRoot(realPath, generatedRoot)) {
+    const err: any = new Error('Generated file path is outside the generated-output directory');
+    err.status = 403;
+    throw err;
+  }
+  return realPath;
 }
 
 function resolveKnowledgeFilePath(req: Request, idValue: unknown): string {
@@ -2004,7 +2003,7 @@ router.post('/files/upload', requireAuth, upload.array('files', MAX_UPLOAD_FILES
 });
 
 // ── POST /files/import-paths — import local files dropped into the desktop widget ──
-router.post('/files/import-paths', requireAuth, async (req: Request, res: Response) => {
+router.post('/files/import-paths', requireUnifiedAuth, requireUnifiedAdmin, requireUnifiedLocalRequest, async (req: Request, res: Response) => {
   try {
     assertLocalHostRequest(req);
     const requestedPaths = Array.isArray(req.body?.paths) ? req.body.paths : [];
@@ -2140,7 +2139,7 @@ router.post('/files/save', requireAuth, async (req: Request, res: Response) => {
 });
 
 // ── GET /files/generated?path=... — download a generated work artifact ──
-router.get('/files/generated', requireAuth, (req: Request, res: Response) => {
+router.get('/files/generated', requireUnifiedAuth, requireUnifiedAdmin, requireUnifiedLocalRequest, (req: Request, res: Response) => {
   try {
     assertLocalHostRequest(req);
     const filePath = resolveGeneratedDownloadPath(req.query.path);
@@ -2162,6 +2161,9 @@ router.post('/files/open', requireAuth, async (req: Request, res: Response) => {
     assertLocalHostRequest(req);
     const id = req.body?.id || req.query.id;
     const rawPath = req.body?.path || req.query.path;
+    if (!id && getAuthPayload(req)?.role !== 'admin') {
+      return res.status(403).json({ error: 'Generated artifacts may be opened only by the local Lumi administrator.' });
+    }
     const filePath = id
       ? resolveKnowledgeFilePath(req, id)
       : resolveGeneratedDownloadPath(rawPath);
@@ -2173,7 +2175,7 @@ router.post('/files/open', requireAuth, async (req: Request, res: Response) => {
 });
 
 // ── GET /files/download/:id — download or preview a file ──
-router.get('/files/download/:id', (req: Request, res: Response) => {
+router.get('/files/download/:id', requireAuth, (req: Request, res: Response) => {
   try {
     const scope = getFileScope(req);
     const safeName = path.basename(req.params.id);

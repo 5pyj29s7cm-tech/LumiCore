@@ -143,7 +143,10 @@ function registerTool(tool: MCPToolDef, serverConfig?: MCPServerConfig): void {
   const def: ToolDefinition = {
     name: tool.name,
     description: tool.description || `MCP tool: ${tool.name}`,
-    permission: 'public',
+    // Connected MCP adapters execute against user-configured services and may
+    // expose private data or side effects. They are never anonymous/public,
+    // even when the provider annotation marks the individual call read-only.
+    permission: 'user',
     securityLevel: resolveMCPToolSecurity(tool, serverConfig),
     capability: capability || {
       source: serverConfig?.source === 'local' ? 'skill' : 'mcp',

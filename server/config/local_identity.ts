@@ -3,9 +3,9 @@ import fs from 'fs';
 import { getDataPath } from './data_path';
 
 interface LocalIdentity {
-  version: 1;
+  version: 1 | 2;
   jwtSecret: string;
-  adminPassword: string;
+  adminPassword?: string;
   createdAt: string;
 }
 
@@ -15,11 +15,13 @@ let cachedIdentity: LocalIdentity | null = null;
 function isValidIdentity(value: unknown): value is LocalIdentity {
   if (!value || typeof value !== 'object') return false;
   const identity = value as Partial<LocalIdentity>;
-  return identity.version === 1
+  const supportedVersion = identity.version === 2
+    || (identity.version === 1
+      && typeof identity.adminPassword === 'string'
+      && identity.adminPassword.length >= 24);
+  return supportedVersion
     && typeof identity.jwtSecret === 'string'
     && identity.jwtSecret.length >= 32
-    && typeof identity.adminPassword === 'string'
-    && identity.adminPassword.length >= 24
     && typeof identity.createdAt === 'string';
 }
 
@@ -34,9 +36,8 @@ function readIdentity(): LocalIdentity | null {
 
 function createIdentity(): LocalIdentity {
   const identity: LocalIdentity = {
-    version: 1,
+    version: 2,
     jwtSecret: crypto.randomBytes(48).toString('base64url'),
-    adminPassword: crypto.randomBytes(36).toString('base64url'),
     createdAt: new Date().toISOString(),
   };
 
@@ -65,11 +66,6 @@ function getLocalIdentity(): LocalIdentity {
 export function getJwtSecret(): string {
   const configured = String(process.env.JWT_SECRET || '').trim();
   return configured || getLocalIdentity().jwtSecret;
-}
-
-export function getLocalAdminPassword(): string {
-  const configured = String(process.env.AUTO_LOGIN_PASSWORD || '').trim();
-  return configured || getLocalIdentity().adminPassword;
 }
 
 export function getLocalIdentityPath(): string {

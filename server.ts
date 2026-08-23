@@ -94,6 +94,7 @@ import { commandCenterRoutes } from "./server/routes/command_center_routes";
 import voiceRoutes from "./routes/voice";
 import fileRoutes, { configureKnowledgeFileRoutes } from "./routes/files";
 import { getGeneratedOutputDir } from "./server/config/data_path";
+import { requireAdmin, requireAuth, requireLocalRequest } from "./server/middleware/auth";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -102,7 +103,7 @@ const { app, server, io, apiRouter, PORT, HOST, JWT_SECRET, getCookieOptions } =
 const llm = createLLMRuntime();
 
 // ── Static serve for lumi_output (charts, images, generated files) ──
-app.use('/lumi_output', express.static(getGeneratedOutputDir()));
+app.use('/lumi_output', requireAuth, requireAdmin, requireLocalRequest, express.static(getGeneratedOutputDir()));
 
 // ── Shared routes (both roles) ──
 mountAllRoutes({ apiRouter, jwtSecret: JWT_SECRET, llm, getCookieOptions, io });

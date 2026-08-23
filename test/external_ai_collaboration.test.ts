@@ -165,6 +165,7 @@ describe('external AI collaboration routing and receipts', () => {
       externalCommand: 'claude-agent --task {task}',
       status: 'active',
       healthStatus: 'online',
+      externalRuntimeAuthorizedAt: new Date().toISOString(),
       ownerUid: 'external-ai-collaboration-user',
       createdAt: new Date().toISOString(),
     });
@@ -210,6 +211,7 @@ describe('external AI collaboration routing and receipts', () => {
       externalCommand: 'hermes chat --task {task}',
       status: 'active',
       healthStatus: 'online',
+      externalRuntimeAuthorizedAt: new Date().toISOString(),
       ownerUid: 'external-ai-collaboration-user',
       createdAt: new Date().toISOString(),
     });
@@ -397,6 +399,7 @@ describe('external AI collaboration routing and receipts', () => {
       externalCommand: 'guarded-ai --task {task}',
       status: 'active',
       healthStatus: 'online',
+      externalRuntimeAuthorizedAt: new Date().toISOString(),
       ownerUid: 'external-ai-collaboration-user',
       createdAt: new Date().toISOString(),
     });

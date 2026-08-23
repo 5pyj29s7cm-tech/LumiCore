@@ -518,7 +518,12 @@ export function isDiagnosticOrRepairRequest(text: string): boolean {
 export function shouldAllowToolUseForTurn(text: string, source?: string, operationMode?: string): boolean {
   if (hasExplicitNoToolInstruction(text)) return false;
   const mode = normalizeOperationMode(operationMode);
-  if (mode === 'chat') return hasClientActionIntent(text);
+  if (mode === 'chat') {
+    return hasClientActionIntent(text)
+      || isDiagnosticOrRepairRequest(text)
+      || hasVisionIntent(text)
+      || hasExplicitToolIntent(text);
+  }
   if (isDiagnosticOrRepairRequest(text)) return true;
   if (mode === 'meeting') return hasClientActionIntent(text);
   if (hasVisionIntent(text)) return true;
@@ -625,10 +630,15 @@ export function traceToolIntentDecision(text: string, source?: string, operation
     allowToolUse = false;
     decisionReason = 'explicit current-turn no-tool instruction';
   } else if (mode === 'chat') {
-    allowToolUse = clientActionIntent;
+    allowToolUse = !informationOnlyQuestion && (
+      clientActionIntent
+      || diagnosticOrRepair
+      || visionIntent
+      || explicitToolIntent
+    );
     decisionReason = allowToolUse
-      ? 'chat mode client-control signal matched'
-      : 'chat mode is pure conversation unless the user controls Lumi client mode';
+      ? 'chat foreground action signal matched; Assistant capabilities may be borrowed for this turn'
+      : 'chat remains conversational because no foreground action signal matched';
   } else if (diagnosticOrRepair) {
     allowToolUse = true;
     decisionReason = 'diagnostic or repair wording enables self-inspection tools';
@@ -659,8 +669,8 @@ export function traceToolIntentDecision(text: string, source?: string, operation
     if (explicitNoToolInstruction) blockedBy.push('explicit-no-tool-instruction');
     if (informationOnlyQuestion) blockedBy.push('information-only-question');
     if (mode === 'meeting' && !clientActionIntent) blockedBy.push('meeting-mode-client-actions-only');
-    if (mode === 'chat' && !clientActionIntent) {
-      blockedBy.push('chat-mode-conversation-only');
+    if (mode === 'chat' && !clientActionIntent && !diagnosticOrRepair && !visionIntent && !explicitToolIntent) {
+      blockedBy.push('chat-mode-no-foreground-action');
     }
     if (!blockedBy.length) blockedBy.push('no-tool-intent');
   }

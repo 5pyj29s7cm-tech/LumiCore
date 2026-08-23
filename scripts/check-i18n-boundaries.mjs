@@ -77,7 +77,12 @@ function scanFile(file) {
       const lines = text.split(/\r?\n/);
       const currentLine = lines[position.line] || '';
       const previousLine = lines[position.line - 1] || '';
-      if (!currentLine.includes('i18n-allow') && !previousLine.includes('i18n-allow')) {
+      const previousPreviousLine = lines[position.line - 2] || '';
+      if (
+        !currentLine.includes('i18n-allow')
+        && !previousLine.includes('i18n-allow')
+        && !previousPreviousLine.includes('i18n-allow')
+      ) {
         violations.push({
           fingerprint: fingerprint(value),
           line: position.line + 1,

@@ -201,11 +201,41 @@ export interface CapabilityManifestEntry {
 
 export interface ToolContext {
   userId?: string;
+  /** True only when an external principal was authenticated by the transport. */
+  authenticated?: boolean;
+  /** Authenticated account role, such as user or admin. */
+  authRole?: string;
+  /** Authenticated organization membership role for work-domain execution. */
+  orgRole?: string;
+  /** True only for a cryptographically admitted native desktop session or an exact locally admitted durable task. */
+  localExecution?: boolean;
+  /**
+   * Transport-owned capability boundary.  Payloads and model output may never
+   * set or widen it.  Remote entries are deny-by-default even when the account
+   * itself is authenticated.
+   */
+  executionBoundary?: 'trusted_local' | 'remote_restricted' | 'trusted_system';
+  /** Narrow service grant for an explicitly configured connector. It grants
+   * user-level admission only and never system/admin permission. */
+  trustedServiceExecution?: boolean;
+  /** Trusted internal execution marker used only by system-permission tools. */
+  systemExecution?: boolean;
   /** Durable execution correlation shared by task, confirmation and receipt ledgers. */
   taskId?: string;
   conversationId?: string;
+  /** Owning conversation agent/personality for durable delegated work. */
+  conversationAgentId?: string;
+  personalityId?: string;
   turnId?: string;
   requestId?: string;
+  /** Exact reasoning route inherited by a durable delegated task. */
+  modelRouting?: {
+    provider?: string;
+    model?: string;
+    selectionMode?: 'pinned' | 'ordered_fallback' | 'auto';
+    fallbackCandidates?: import('../llm/user_preferences').UserLLMFallbackCandidate[];
+    allowCloudFallback?: boolean;
+  };
   idempotencyKey?: string;
   /**
    * Canonical calls that already executed before this model/tool-loop segment,

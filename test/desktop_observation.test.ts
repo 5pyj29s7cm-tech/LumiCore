@@ -134,18 +134,27 @@ describe('desktop observation routing', () => {
 
     await registry.execute('desktop_list_files', {}, {
       userId: 'desktop-path-test',
+      authenticated: true,
+      localExecution: true,
+      executionBoundary: 'trusted_local',
       source: 'voice',
       routedTaskText: '\u5217\u51fa\u684c\u9762\u6587\u4ef6\uff0c\u5e76\u544a\u8bc9\u6211\u6587\u4ef6\u6570\u91cf',
       desktopRelay,
     } as any);
     await registry.execute('desktop_list_files', {}, {
       userId: 'desktop-list-test',
+      authenticated: true,
+      localExecution: true,
+      executionBoundary: 'trusted_local',
       source: 'voice',
       routedTaskText: '\u5217\u51fa\u684c\u9762\u6587\u4ef6',
       desktopRelay,
     } as any);
     await registry.execute('desktop_list_files', {}, {
       userId: 'home-path-test',
+      authenticated: true,
+      localExecution: true,
+      executionBoundary: 'trusted_local',
       source: 'chat',
       routedTaskText: '\u5217\u51fa\u7528\u6237\u4e3b\u76ee\u5f55',
       desktopRelay,

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import jwt from 'jsonwebtoken';
 import { makeApp, JWT_SECRET, COOKIE_OPTS, LLM_GETTERS } from './helpers';
 import { mountAuthRoutes } from '../server/routes/auth';
 import { mountAgentRoutes } from '../server/routes/agent_routes';
@@ -7,6 +8,7 @@ let url: string;
 let cleanup: () => void;
 let token: string;
 let agentId: string;
+const adminToken = jwt.sign({ uid: 'agent-admin', username: 'agent-admin', role: 'admin' }, JWT_SECRET);
 
 describe('Agent CRUD', () => {
   beforeAll(async () => {
@@ -37,6 +39,10 @@ describe('Agent CRUD', () => {
       'Content-Type': 'application/json',
       'Cookie': `token=${token}`,
     };
+  }
+
+  function adminHeaders() {
+    return { 'Content-Type': 'application/json', 'Cookie': `token=${adminToken}` };
   }
 
   it('creates an agent', async () => {
@@ -88,7 +94,7 @@ describe('Agent CRUD', () => {
     const command = `node -e "console.log('external-ok ' + process.argv.slice(1).join(' '))" {task}`;
     const create = await fetch(`${url}/api/agents`, {
       method: 'POST',
-      headers: headers(),
+      headers: adminHeaders(),
       body: JSON.stringify({
         name: 'CLI Agent',
         category: 'analysis',
@@ -106,7 +112,7 @@ describe('Agent CRUD', () => {
 
     const test = await fetch(`${url}/api/agents/${created.id}/test`, {
       method: 'POST',
-      headers: headers(),
+      headers: adminHeaders(),
       body: JSON.stringify({ task: 'ping' }),
       signal: AbortSignal.timeout(10000),
     });
@@ -119,7 +125,7 @@ describe('Agent CRUD', () => {
     const updatedCommand = `node -e "console.log('external-v2 ' + process.argv.slice(1).join(' '))" {task}`;
     const update = await fetch(`${url}/api/agents/${created.id}`, {
       method: 'PUT',
-      headers: headers(),
+      headers: adminHeaders(),
       body: JSON.stringify({ externalCommand: updatedCommand }),
       signal: AbortSignal.timeout(5000),
     });
@@ -128,13 +134,13 @@ describe('Agent CRUD', () => {
     expect(updated.healthStatus).toBe('untested');
     expect(updated.lastRunOutput).toBeUndefined();
 
-    await fetch(`${url}/api/agents/${created.id}`, { method: 'DELETE', headers: headers(), signal: AbortSignal.timeout(5000) });
+    await fetch(`${url}/api/agents/${created.id}`, { method: 'DELETE', headers: adminHeaders(), signal: AbortSignal.timeout(5000) });
   });
 
   it('rejects unsafe external agent commands', async () => {
     const res = await fetch(`${url}/api/agents`, {
       method: 'POST',
-      headers: headers(),
+      headers: adminHeaders(),
       body: JSON.stringify({
         name: 'Unsafe CLI Agent',
         runtime: 'external',
@@ -148,7 +154,7 @@ describe('Agent CRUD', () => {
 
     const chained = await fetch(`${url}/api/agents`, {
       method: 'POST',
-      headers: headers(),
+      headers: adminHeaders(),
       body: JSON.stringify({
         name: 'Chained CLI Agent',
         runtime: 'external',

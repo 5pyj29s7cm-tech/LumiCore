@@ -29,6 +29,13 @@ function node(nodeId: string, dependsOn: string[] = [], provider = 'ollama'): Mo
   };
 }
 
+function verifiedToolEvidence(nodeId: string) {
+  return {
+    evidenceKind: 'tool_terminal_verification' as const,
+    evidenceRefs: [`tool:${nodeId}-terminal-receipt`],
+  };
+}
+
 describe('model execution graph', () => {
   it('compiles serial/parallel fan-out and fan-in into deterministic waves', () => {
     const compiled = compileModelExecutionGraph({
@@ -113,8 +120,16 @@ describe('model execution graph', () => {
     expect(candidates.every(candidate => candidate.agentId === 'worker-a')).toBe(true);
   });
 
-  it('creates a receipt whose verified flag follows terminal node status', () => {
+  it('requires terminal tool evidence instead of treating successful model prose as verified', () => {
     const compiled = compileModelExecutionGraph({ taskId: 'receipt-task', nodes: [node('answer')] });
+    const reasoningOnly = buildModelGraphNodeReceipt({
+      graph: compiled.graph,
+      node: compiled.graph.nodes[0],
+      status: 'succeeded',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      completedAt: '2026-01-01T00:00:01.000Z',
+      output: 'Done',
+    });
     const receipt = buildModelGraphNodeReceipt({
       graph: compiled.graph,
       node: compiled.graph.nodes[0],
@@ -122,12 +137,21 @@ describe('model execution graph', () => {
       startedAt: '2026-01-01T00:00:00.000Z',
       completedAt: '2026-01-01T00:00:01.000Z',
       output: 'verified answer',
+      ...verifiedToolEvidence('answer'),
     });
 
+    expect(reasoningOnly).toMatchObject({
+      status: 'succeeded',
+      verified: false,
+      evidenceKind: 'reasoning_only',
+      evidenceRefs: [],
+      outputSummary: 'Done',
+    });
     expect(receipt).toMatchObject({
       taskId: 'receipt-task',
       nodeId: 'answer',
       verified: true,
+      evidenceKind: 'tool_terminal_verification',
       durationMs: 1000,
     });
     expect(receipt.outputDigest).toHaveLength(64);
@@ -164,6 +188,7 @@ describe('model execution graph', () => {
       status: 'succeeded',
       startedAt: '2026-01-01T00:00:00.000Z',
       output: 'password=hunter2 verified result',
+      ...verifiedToolEvidence('answer'),
     });
     const resumed = compileModelExecutionGraph({ taskId: 'resume-task', nodes: [node('answer')] });
     const reused = reuseVerifiedModelGraphNodeReceipt({
@@ -191,6 +216,15 @@ describe('model execution graph', () => {
       node: resumed.graph.nodes[0],
       prior,
     })).toBeNull();
+
+    const legacyStatusOnlyReceipt = { ...prior } as any;
+    delete legacyStatusOnlyReceipt.evidenceKind;
+    delete legacyStatusOnlyReceipt.evidenceRefs;
+    expect(reuseVerifiedModelGraphNodeReceipt({
+      graph: resumed.graph,
+      node: resumed.graph.nodes[0],
+      prior: legacyStatusOnlyReceipt,
+    })).toBeNull();
   });
 
   it('arbitrates only verified outputs and honors deterministic first-result policy', () => {
@@ -205,6 +239,7 @@ describe('model execution graph', () => {
       status: graphNode.nodeId === 'failed' ? 'failed' : 'succeeded',
       startedAt: '2026-01-01T00:00:00.000Z',
       output: `${graphNode.nodeId} output`,
+      ...(graphNode.nodeId === 'failed' ? {} : verifiedToolEvidence(graphNode.nodeId)),
     }));
     const result = arbitrateModelGraphResults({
       graph: compiled.graph,
@@ -219,7 +254,9 @@ describe('model execution graph', () => {
     expect(result).toMatchObject({
       policy: 'first_verified',
       status: 'succeeded',
+      verification: 'verified',
       selectedNodeIds: ['first'],
+      verifiedNodeIds: ['first'],
     });
     expect(result.outputDigest).toHaveLength(64);
   });
@@ -248,6 +285,7 @@ describe('model execution graph', () => {
       status: 'succeeded',
       startedAt: '2026-01-01T00:00:00.000Z',
       output: `${graphNode.nodeId} output`,
+      ...verifiedToolEvidence(graphNode.nodeId),
     }));
     const result = arbitrateModelGraphResults({
       graph: compiled.graph,
@@ -262,6 +300,29 @@ describe('model execution graph', () => {
     expect(result).toMatchObject({
       policy: 'judge',
       status: 'succeeded',
+      verification: 'verified',
+      selectedNodeIds: ['judge'],
+      verifiedNodeIds: ['judge', 'candidate-a', 'candidate-b'],
+    });
+
+    const incompleteEvidenceReceipts = compiled.graph.nodes.map(graphNode => buildModelGraphNodeReceipt({
+      graph: compiled.graph,
+      node: graphNode,
+      status: 'succeeded',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      output: `${graphNode.nodeId} output`,
+      ...(graphNode.nodeId === 'candidate-a' ? {} : verifiedToolEvidence(graphNode.nodeId)),
+    }));
+    expect(arbitrateModelGraphResults({
+      graph: compiled.graph,
+      receipts: incompleteEvidenceReceipts,
+      outputByNodeId: new Map(compiled.graph.nodes.map(graphNode => [
+        graphNode.nodeId,
+        `${graphNode.nodeId} output`,
+      ])),
+    })).toMatchObject({
+      status: 'succeeded',
+      verification: 'unverified',
       selectedNodeIds: ['judge'],
     });
   });
@@ -278,20 +339,50 @@ describe('model execution graph', () => {
       status: 'succeeded',
       startedAt: '2026-01-01T00:00:00.000Z',
       output: graphNode.nodeId === 'c' ? 'different' : 'Same answer',
+      ...verifiedToolEvidence(graphNode.nodeId),
     }));
     const majority = arbitrateModelGraphResults({
       graph: compiled.graph,
       receipts,
       outputByNodeId: new Map([['a', 'Same answer'], ['b', ' same   answer '], ['c', 'different']]),
     });
-    expect(majority).toMatchObject({ status: 'succeeded', selectedNodeIds: ['a'] });
+    expect(majority).toMatchObject({
+      status: 'succeeded',
+      verification: 'verified',
+      selectedNodeIds: ['a'],
+      verifiedNodeIds: ['a', 'b'],
+    });
+
+    const reasoningMajorityReceipts = compiled.graph.nodes.map(graphNode => buildModelGraphNodeReceipt({
+      graph: compiled.graph,
+      node: graphNode,
+      status: 'succeeded',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      output: graphNode.nodeId === 'c' ? 'different' : 'Same answer',
+      ...(graphNode.nodeId === 'c' ? verifiedToolEvidence(graphNode.nodeId) : {}),
+    }));
+    const reasoningMajority = arbitrateModelGraphResults({
+      graph: compiled.graph,
+      receipts: reasoningMajorityReceipts,
+      outputByNodeId: new Map([['a', 'Same answer'], ['b', ' same   answer '], ['c', 'different']]),
+    });
+    expect(reasoningMajority).toMatchObject({
+      status: 'succeeded',
+      verification: 'unverified',
+      selectedNodeIds: ['a'],
+      verifiedNodeIds: [],
+    });
 
     const tie = arbitrateModelGraphResults({
       graph: { ...compiled.graph, nodes: compiled.graph.nodes.slice(0, 2) },
       receipts: receipts.slice(0, 2),
       outputByNodeId: new Map([['a', 'one'], ['b', 'two']]),
     });
-    expect(tie).toMatchObject({ status: 'blocked', selectedNodeIds: [] });
+    expect(tie).toMatchObject({
+      status: 'blocked',
+      verification: 'unverified',
+      selectedNodeIds: [],
+    });
   });
 
   it('enforces reflection dependencies plus context and estimated cost budgets', () => {

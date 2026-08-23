@@ -59,6 +59,7 @@ import {
   type ModelCandidate,
   type ModelGraphNode,
   type ModelGraphNodeReceipt,
+  type ModelGraphNodeEvidenceKind,
   type ModelGraphArbitrationReceipt,
   type ModelGraphPrivacy,
 } from './model_execution_graph';
@@ -184,10 +185,20 @@ type WorkerTaskResult = {
   agentId: string;
   status: OrchestrationSubTaskStatus;
   selectedCandidate?: ModelCandidate;
+  evidenceKind?: ModelGraphNodeEvidenceKind;
+  evidenceRefs?: string[];
 };
 
 export interface OrchestrationContext {
   userId: string;
+  /** Authentication and transport authority inherited from the entry point. */
+  authenticated?: boolean;
+  authRole?: string;
+  orgRole?: string;
+  localExecution?: boolean;
+  executionBoundary?: ToolContext['executionBoundary'];
+  trustedServiceExecution?: boolean;
+  systemExecution?: boolean;
   personalityId?: string;
   domain?: string;
   orgId?: string;
@@ -595,6 +606,13 @@ async function runDeterministicDesktopObservation(
       arguments: call.arguments,
       context: {
         userId: context.userId,
+        authenticated: context.authenticated,
+        authRole: context.authRole,
+        orgRole: context.orgRole,
+        localExecution: context.localExecution,
+        executionBoundary: context.executionBoundary,
+        trustedServiceExecution: context.trustedServiceExecution,
+        systemExecution: context.systemExecution,
         taskId: context.taskId,
         conversationId: context.conversationId,
         turnId: context.turnId,
@@ -622,12 +640,12 @@ async function runDeterministicDesktopObservation(
       agentId: meta.agentId,
       status: record.error ? 'failed' : 'succeeded',
     });
+    // Forward the canonical terminal record, including its verification and
+    // evidence envelope. Dropping those fields made a real multi-worker run
+    // look merely exercised and prevented durable acceptance after restart.
     onTool?.({
-      id,
-      name: call.name,
-      arguments: call.arguments,
-      result: record.result,
-      error: record.error,
+      ...record,
+      arguments: { ...(record.arguments || {}) },
     }, meta);
   }
 
@@ -729,6 +747,20 @@ function buildWorkerOutput(text: string, toolCalls: ToolExecutionRecord[] = []):
   ].filter(Boolean).join('\n');
 }
 
+function verifiedWorkerToolEvidence(toolCalls: ToolExecutionRecord[] = []): string[] {
+  return Array.from(new Set(toolCalls
+    .filter(call => (
+      !call.error
+      && Boolean(String(call.result || '').trim())
+      && call.terminalVerification?.status === 'verified'
+    ))
+    .flatMap((call) => {
+      const id = String(call.id || '').trim();
+      return /^[A-Za-z0-9._:-]{1,240}$/.test(id) ? [`tool:${id}`] : [];
+    })))
+    .slice(0, 80);
+}
+
 function workerExecutionFailureReason(
   text: string,
   toolCalls: ToolExecutionRecord[] = [],
@@ -803,6 +835,7 @@ function agentAvailableForContext(agent: AgentRecord, context: OrchestrationCont
   if (!agent || agent.status === 'offline' || agent.status === 'terminated') return false;
   if ((agent as any).isFrozen === true) return false;
   if (agent.runtime === 'external' && agent.healthStatus !== 'online') return false;
+  if (agent.runtime === 'external' && !(agent as any).externalRuntimeAuthorizedAt) return false;
   if (agent.runtime === 'external' && !canUseExternalWorkerForContext(context)) return false;
   if (context.availableAgentIds?.length && !context.availableAgentIds.includes(agent.id)) return false;
 
@@ -1449,7 +1482,7 @@ async function executeExternalWorkerTask(
   }
 
   const result = await executeExternalAgent(
-    { command: agent.externalCommand!, timeout: timeoutMs },
+    { command: agent.externalCommand!, timeout: timeoutMs, authorized: Boolean((agent as any).externalRuntimeAuthorizedAt) },
     [subTask.description, dependencyContext].filter(Boolean).join('\n\n'),
   );
   recordExternalAgentRun(agent.id, result);
@@ -1462,6 +1495,8 @@ async function executeExternalWorkerTask(
     agentId: agent.id,
     status: result.success ? 'succeeded' : 'failed',
     selectedCandidate,
+    evidenceKind: result.success ? 'external_runtime_unverified' : 'none',
+    evidenceRefs: [],
   };
 }
 
@@ -1593,6 +1628,13 @@ async function executeWorkerTask(
       const attemptAbort = new AbortController();
       const workerContext: ToolContext = {
         userId: context.userId,
+        authenticated: context.authenticated,
+        authRole: context.authRole,
+        orgRole: context.orgRole,
+        localExecution: context.localExecution,
+        executionBoundary: context.executionBoundary,
+        trustedServiceExecution: context.trustedServiceExecution,
+        systemExecution: context.systemExecution,
         taskId: context.taskId,
         conversationId: context.conversationId,
         turnId: context.turnId,
@@ -1706,6 +1748,7 @@ async function executeWorkerTask(
 
       const workerOutput = buildWorkerOutput(result.text.trim(), result.toolCalls);
       const failureReason = workerExecutionFailureReason(result.text, result.toolCalls);
+      const evidenceRefs = failureReason ? [] : verifiedWorkerToolEvidence(result.toolCalls);
       return {
         subTaskId: subTask.id,
         output: failureReason
@@ -1714,6 +1757,8 @@ async function executeWorkerTask(
         agentId: currentAgent.id,
         status: failureReason ? 'failed' : 'succeeded',
         selectedCandidate: actualCandidate,
+        evidenceKind: evidenceRefs.length > 0 ? 'tool_terminal_verification' : 'reasoning_only',
+        evidenceRefs,
       };
     } catch (err) {
       throwIfCancelled(context);
@@ -1971,6 +2016,8 @@ export async function executeWorkflow(
           agentId: result.agentId,
           output: result.output,
           selectedCandidate: result.selectedCandidate,
+          evidenceKind: result.evidenceKind,
+          evidenceRefs: result.evidenceRefs,
           ...(result.status === 'succeeded' ? {} : { error: result.output }),
         }));
         return result;
@@ -1981,7 +2028,11 @@ export async function executeWorkflow(
       const a = group[k];
       const result = groupResults[k];
       if (result.status !== 'blocked') usedAgentIds.add(result.agentId);
-      if (result.status === 'succeeded') {
+      if (
+        result.status === 'succeeded'
+        && result.evidenceKind === 'tool_terminal_verification'
+        && Boolean(result.evidenceRefs?.length)
+      ) {
         recordRoutingSuccess(a.subTask.requiredSkill, a.agent.id);
       }
     }

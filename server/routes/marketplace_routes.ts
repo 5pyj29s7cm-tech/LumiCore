@@ -181,6 +181,7 @@ export function mountMarketplaceRoutes(
             skillTags: bundledSkill?.externalCommand ? ['external', 'cli'] : undefined,
             runtime: 'external',
             externalCommand: bundledSkill?.externalCommand,
+            externalRuntimeAuthorized: true,
             installSource: 'bundled',
             scope,
           }, io);
@@ -237,6 +238,7 @@ export function mountMarketplaceRoutes(
             skillTags: ['external', 'cli'],
             runtime: 'external',
             externalCommand: comSkill?.externalCommand,
+            externalRuntimeAuthorized: true,
             installSource: 'community',
             scope,
           }, io);

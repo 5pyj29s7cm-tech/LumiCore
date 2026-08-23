@@ -113,6 +113,11 @@ import {
   runOrchestratedTask,
   shouldDistillSkill,
 } from '../server/agents/orchestrator';
+import {
+  buildTaskCompletionFeedback,
+  buildTaskTerminalReceipt,
+  validateCompletionTerminalReceipt,
+} from '../server/cognition/acceptance_evidence';
 
 const llmGetters = {
   getDeepSeek: () => null,
@@ -239,6 +244,26 @@ describe('orchestrator worker ToolPolicy propagation', () => {
     const terminalReceipts = lifecycle.filter(isTerminalOrchestrationToolEvent);
     expect(terminalReceipts).toHaveLength(2);
     expect(terminalReceipts.map(record => record.name)).toEqual(allowedTools);
+    expect(terminalReceipts.every(record => record.terminalVerification?.status === 'verified')).toBe(true);
+    const taskReceipt = buildTaskTerminalReceipt({
+      taskId: 'controlled-two-worker-acceptance',
+      runtime: 'background',
+      outcome: 'completed',
+      toolRecords: terminalReceipts as any[],
+    });
+    expect(validateCompletionTerminalReceipt(taskReceipt, {
+      taskId: 'controlled-two-worker-acceptance',
+      runtime: 'background',
+    })).toMatchObject({ accepted: true, diagnosticCode: 'accepted' });
+    expect(taskReceipt).toMatchObject({
+      verification: 'verified',
+      evidenceKind: 'tool',
+    });
+    expect(buildTaskCompletionFeedback(taskReceipt, 'Desktop observation')).toMatchObject({
+      status: 'completed',
+      blockers: [],
+      incomplete: [],
+    });
     expect(mocks.runWithTools).not.toHaveBeenCalled();
     expect(mocks.queryMemories).not.toHaveBeenCalled();
     expect(mocks.addMemory).not.toHaveBeenCalled();
@@ -267,6 +292,11 @@ describe('orchestrator worker ToolPolicy propagation', () => {
       }],
       {
         userId: 'voice-desktop-observation-user',
+        authenticated: true,
+        authRole: 'user',
+        orgRole: 'member',
+        localExecution: false,
+        executionBoundary: 'remote_restricted',
         domain: 'personal',
         taskId: 'task-remote-shared-ledger',
         conversationId: 'conversation-remote-shared-ledger',
@@ -294,6 +324,11 @@ describe('orchestrator worker ToolPolicy propagation', () => {
     expect(toolContext.routedTaskText).toBe(rootTaskText);
     expect(toolContext.actionIntent).toBe(rootTaskText);
     expect(toolContext).toMatchObject({
+      authenticated: true,
+      authRole: 'user',
+      orgRole: 'member',
+      localExecution: false,
+      executionBoundary: 'remote_restricted',
       taskId: 'task-remote-shared-ledger',
       conversationId: 'conversation-remote-shared-ledger',
       turnId: 'turn-remote-shared-ledger',
@@ -845,6 +880,153 @@ describe('orchestrator worker ToolPolicy propagation', () => {
     });
   });
 
+  it('keeps a pure model "Done" result as reasoning-only and rejects it as task-completion evidence', async () => {
+    const agent = internalAgent();
+    mocks.runWithTools.mockResolvedValue({
+      text: 'Done',
+      toolCalls: [],
+      usageRecords: [],
+    });
+
+    const result = await executeWorkflow(
+      [{
+        subTask: { id: 'reasoning-only', description: 'Perform the requested action', requiredSkill: 'general', executionMode: 'lumi' },
+        agent,
+      }],
+      { userId: 'reasoning-only-user', taskId: 'reasoning-only-task', rootTaskText: 'Perform the requested action' },
+      llmConfig,
+      llmGetters,
+      [agent],
+    );
+
+    expect(result.subTaskResults[0]).toMatchObject({ status: 'succeeded', output: 'Done' });
+    expect(result.nodeReceipts?.[0]).toMatchObject({
+      status: 'succeeded',
+      verified: false,
+      evidenceKind: 'reasoning_only',
+      evidenceRefs: [],
+    });
+    expect(result.arbitrationReceipt).toMatchObject({
+      status: 'succeeded',
+      verification: 'unverified',
+      selectedNodeIds: ['reasoning-only'],
+      verifiedNodeIds: [],
+    });
+    expect(result.aggregatedOutput).toContain('Done');
+    expect(result.aggregatedOutput).not.toContain('arbitration blocked');
+
+    const terminalReceipt = buildTaskTerminalReceipt({
+      taskId: 'reasoning-only-task',
+      runtime: 'background',
+      outcome: 'completed',
+      nodeReceipts: result.nodeReceipts,
+      arbitrationReceipt: result.arbitrationReceipt,
+    });
+    expect(validateCompletionTerminalReceipt(terminalReceipt, {
+      taskId: 'reasoning-only-task',
+      runtime: 'background',
+    })).toMatchObject({
+      accepted: false,
+      diagnosticCode: 'missing_verified_terminal_evidence',
+    });
+
+    const unrelatedToolCannotOverrideGraph = buildTaskTerminalReceipt({
+      taskId: 'reasoning-only-task',
+      runtime: 'background',
+      outcome: 'completed',
+      nodeReceipts: result.nodeReceipts,
+      arbitrationReceipt: result.arbitrationReceipt,
+      toolRecords: [{
+        id: 'unrelated-verified-tool',
+        name: 'read_file',
+        arguments: {},
+        result: 'some result',
+        terminalVerification: {
+          status: 'verified',
+          strategy: 'terminal_receipt',
+          reason: 'This tool completed, but the selected graph result did not.',
+        },
+      }],
+    });
+    expect(validateCompletionTerminalReceipt(unrelatedToolCannotOverrideGraph, {
+      taskId: 'reasoning-only-task',
+      runtime: 'background',
+    })).toMatchObject({ accepted: false });
+    expect(unrelatedToolCannotOverrideGraph.evidenceKind).toBe('none');
+  });
+
+  it('accepts a graph result backed by a real verified terminal tool receipt', async () => {
+    const agent = internalAgent();
+    mocks.runWithTools.mockResolvedValue({
+      text: 'The controlled read completed.',
+      toolCalls: [{
+        id: 'verified-worker-read',
+        name: 'read_file',
+        arguments: { path: 'result.txt' },
+        result: 'verified contents',
+        terminalVerification: {
+          status: 'verified',
+          strategy: 'terminal_receipt',
+          reason: 'The file contents were read back.',
+        },
+      }],
+      usageRecords: [],
+    });
+
+    const result = await executeWorkflow(
+      [{
+        subTask: { id: 'verified-tool-node', description: 'Read and verify the result', requiredSkill: 'general', executionMode: 'lumi' },
+        agent,
+      }],
+      { userId: 'verified-tool-user', taskId: 'verified-tool-task', rootTaskText: 'Read and verify the result' },
+      llmConfig,
+      llmGetters,
+      [agent],
+    );
+
+    expect(result.nodeReceipts?.[0]).toMatchObject({
+      verified: true,
+      evidenceKind: 'tool_terminal_verification',
+      evidenceRefs: ['tool:verified-worker-read'],
+    });
+    expect(result.arbitrationReceipt).toMatchObject({
+      status: 'succeeded',
+      verification: 'verified',
+      selectedNodeIds: ['verified-tool-node'],
+    });
+
+    const terminalReceipt = buildTaskTerminalReceipt({
+      taskId: 'verified-tool-task',
+      runtime: 'background',
+      outcome: 'completed',
+      nodeReceipts: result.nodeReceipts,
+      arbitrationReceipt: result.arbitrationReceipt,
+    });
+    expect(validateCompletionTerminalReceipt(terminalReceipt, {
+      taskId: 'verified-tool-task',
+      runtime: 'background',
+    })).toMatchObject({ accepted: true, diagnosticCode: 'accepted' });
+    expect(terminalReceipt).toMatchObject({
+      verification: 'verified',
+      evidenceKind: 'model_graph',
+    });
+
+    const crossTaskReceipt = buildTaskTerminalReceipt({
+      taskId: 'different-task',
+      runtime: 'background',
+      outcome: 'completed',
+      nodeReceipts: result.nodeReceipts,
+      arbitrationReceipt: result.arbitrationReceipt,
+    });
+    expect(validateCompletionTerminalReceipt(crossTaskReceipt, {
+      taskId: 'different-task',
+      runtime: 'background',
+    })).toMatchObject({
+      accepted: false,
+      diagnosticCode: 'missing_verified_terminal_evidence',
+    });
+  });
+
   it('aborts the timed-out model before starting its compiled fallback', async () => {
     vi.useFakeTimers();
     const agent = internalAgent();
@@ -987,6 +1169,31 @@ describe('orchestrator worker ToolPolicy propagation', () => {
     expect(runtimeOptions.timeout).toBeLessThanOrEqual(42_000);
     expect(prompt).toContain('Read external analysis');
     expect(result.subTaskResults[0].status).toBe('succeeded');
+    expect(result.nodeReceipts?.[0]).toMatchObject({
+      status: 'succeeded',
+      verified: false,
+      evidenceKind: 'external_runtime_unverified',
+      evidenceRefs: [],
+    });
+    expect(result.arbitrationReceipt).toMatchObject({
+      status: 'succeeded',
+      verification: 'unverified',
+      selectedNodeIds: ['external-timeout'],
+      verifiedNodeIds: [],
+    });
+    expect(result.aggregatedOutput).toContain('external result');
+
+    const terminalReceipt = buildTaskTerminalReceipt({
+      taskId: result.executionGraph!.taskId,
+      runtime: 'background',
+      outcome: 'completed',
+      nodeReceipts: result.nodeReceipts,
+      arbitrationReceipt: result.arbitrationReceipt,
+    });
+    expect(validateCompletionTerminalReceipt(terminalReceipt, {
+      taskId: result.executionGraph!.taskId,
+      runtime: 'background',
+    })).toMatchObject({ accepted: false });
   });
 
   it('does not replay a worker through another model after tool execution has started', async () => {

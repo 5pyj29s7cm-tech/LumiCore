@@ -14,6 +14,12 @@ import {
 import { apiFetch } from '@/services/apiClient';
 import { socketService } from '@/services/socketService';
 import { commandCenterPlannerCopy } from '@/i18n/locales/commandCenterPlanner';
+import { taskCompletionFeedbackCopy } from '@/i18n/locales/taskCompletionFeedback';
+import { TaskCompletionFeedbackDetails } from './TaskCompletionFeedbackDetails';
+import {
+  normalizeTaskCompletionFeedback,
+  type TaskCompletionFeedback,
+} from './workflowTypes';
 
 type PlanKind = 'daily_task' | 'long_term_goal' | 'periodic_report';
 type PlanCadence = 'none' | 'daily' | 'weekly' | 'monthly';
@@ -38,6 +44,7 @@ type RuntimeTask = {
   status: string;
   resultPreview?: string;
   error?: string;
+  completionFeedback?: TaskCompletionFeedback;
 };
 
 const KIND_ICONS = {
@@ -70,6 +77,7 @@ export function CommandCenterPlanner({
   const [dayOfMonth, setDayOfMonth] = useState(1);
 
   const copy = commandCenterPlannerCopy(isZh ? 'zh' : 'en');
+  const feedbackCopy = taskCompletionFeedbackCopy(isZh ? 'zh' : 'en');
   const refresh = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
     const [planResult, taskResult] = await Promise.allSettled([
@@ -87,7 +95,12 @@ export function CommandCenterPlanner({
       setError(planResult.reason instanceof Error ? planResult.reason.message : String(planResult.reason));
     }
     if (taskResult.status === 'fulfilled') {
-      setRuntimeTasks(Array.isArray(taskResult.value?.tasks) ? taskResult.value.tasks : []);
+      setRuntimeTasks(Array.isArray(taskResult.value?.tasks)
+        ? taskResult.value.tasks.map((task: RuntimeTask) => ({
+            ...task,
+            completionFeedback: normalizeTaskCompletionFeedback(task.completionFeedback),
+          }))
+        : []);
     }
     setLoading(false);
   }, []);
@@ -260,6 +273,30 @@ export function CommandCenterPlanner({
               </div>
             </div>
           </div>
+          {task && (
+            <details data-command-center-task-details className="mt-2.5 rounded-xl border border-white/[0.06] bg-black/15">
+              <summary className="cursor-pointer list-none px-3 py-2 text-[9px] font-black uppercase tracking-[0.12em] text-white/38 hover:text-white/62">
+                {feedbackCopy.details}
+              </summary>
+              <div className="space-y-2 border-t border-white/[0.06] p-2.5">
+                {task.resultPreview && (
+                  <div className="rounded-lg border border-emerald-300/10 bg-emerald-300/[0.035] px-2.5 py-2 text-[10px] leading-4 text-white/55">
+                    <span className="font-black text-emerald-100/60">{feedbackCopy.result}: </span>{task.resultPreview}
+                  </div>
+                )}
+                {task.error && (
+                  <div className="rounded-lg border border-rose-300/10 bg-rose-300/[0.035] px-2.5 py-2 text-[10px] leading-4 text-rose-100/65">
+                    <span className="font-black">{feedbackCopy.error}: </span>{task.error}
+                  </div>
+                )}
+                <TaskCompletionFeedbackDetails
+                  feedback={task.completionFeedback}
+                  locale={isZh ? 'zh' : 'en'}
+                  compact
+                />
+              </div>
+            </details>
+          )}
           <div className="mt-3 flex items-center justify-end gap-1.5 border-t border-white/[0.05] pt-2.5">
             <button type="button" onClick={() => onDiscuss(copy.discussPrompt(plan.title, plan.instruction))} className="flex h-7 items-center gap-1 rounded-lg px-2 text-[9px] text-white/38 hover:bg-white/[0.05] hover:text-white/65"><MessageSquareText size={11} />{copy.discuss}</button>
             <button type="button" onClick={() => void runPlan(plan)} className="flex h-7 items-center gap-1 rounded-lg px-2 text-[9px] text-cyan-100/55 hover:bg-cyan-300/[0.08] hover:text-cyan-50"><Play size={11} />{copy.run}</button>

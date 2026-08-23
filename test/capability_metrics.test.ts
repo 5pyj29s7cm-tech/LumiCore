@@ -57,10 +57,24 @@ describe('capability runtime metrics', () => {
       taskId: 'task-1',
       policy: 'majority_vote',
       status: 'blocked',
+      verification: 'unverified',
       selectedNodeIds: [],
+      verifiedNodeIds: [],
       consideredNodeIds: [],
       outputDigest: '',
       completedAt: new Date(0).toISOString(),
+    });
+    recordModelArbitration({
+      graphId: 'graph-reasoning',
+      taskId: 'task-reasoning',
+      policy: 'first_verified',
+      status: 'succeeded',
+      verification: 'unverified',
+      selectedNodeIds: ['reasoning-node'],
+      verifiedNodeIds: [],
+      consideredNodeIds: ['reasoning-node'],
+      outputDigest: 'reasoning-only',
+      completedAt: new Date(1).toISOString(),
     });
 
     expect(getCapabilityRuntimeMetrics().modelGraph).toEqual({
@@ -69,8 +83,8 @@ describe('capability runtime metrics', () => {
       fallbacks: 1,
       fallbackSuppressedAfterSideEffect: 1,
       recoveredNodes: 1,
-      arbitrations: 1,
-      blockedArbitrations: 1,
+      arbitrations: 2,
+      blockedArbitrations: 2,
     });
   });
 

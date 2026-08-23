@@ -83,17 +83,16 @@ function confirmationTarget(args: Record<string, any>): string {
     || args.channelId
     || args.chatId
     || args.url
+    || args.proposalId
     || '',
   ).trim().slice(0, 300);
 }
 
 function confirmationPayloadDigest(args: Record<string, any>): string {
-  const payload = {
-    message: args.message ?? args.text ?? args.content ?? args.draft ?? '',
-    filePath: args.filePath ?? args.path ?? args.attachment ?? '',
-    submission: args.payload ?? args.body ?? args.data ?? '',
-  };
-  return crypto.createHash('sha256').update(JSON.stringify(stableValue(payload))).digest('hex');
+  // Bind every exact argument, including long tails and identity pins. A
+  // selective payload projection allowed two materially different patches to
+  // share the same user-visible digest.
+  return crypto.createHash('sha256').update(JSON.stringify(stableValue(args || {}))).digest('hex');
 }
 
 function sanitizeValue(value: any, depth = 0): any {
@@ -109,6 +108,26 @@ function sanitizeValue(value: any, depth = 0): any {
 }
 
 function confirmationSafeArgs(toolName: string, args: Record<string, any>): Record<string, any> {
+  if (toolName === 'self_improvement_stage_patch') {
+    const patch = String(args.patch || '');
+    const paths = Array.from(new Set(patch.split(/\r?\n/)
+      .filter(line => line.startsWith('+++ b/'))
+      .map(line => line.slice(6).trim())
+      .filter(Boolean)));
+    return {
+      proposalId: String(args.proposalId || ''),
+      expectedBaseCommit: String(args.expectedBaseCommit || ''),
+      expectedDeliveryBranch: String(args.expectedDeliveryBranch || ''),
+      commitMessage: String(args.commitMessage || ''),
+      patchReview: {
+        sha256: crypto.createHash('sha256').update(patch, 'utf8').digest('hex'),
+        bytes: Buffer.byteLength(patch, 'utf8'),
+        lines: patch.split(/\r?\n/).length,
+        changedPaths: paths,
+        fullPatch: patch,
+      },
+    };
+  }
   if (toolName !== 'desktop_write_text_file') return sanitizeValue(args || {});
   const content = String(args.content ?? '');
   return {
@@ -120,6 +139,18 @@ function confirmationSafeArgs(toolName: string, args: Record<string, any>): Reco
       sha256: crypto.createHash('sha256').update(content, 'utf8').digest('hex'),
       preview: content.slice(0, 120),
       truncated: content.length > 120,
+    },
+  };
+}
+
+function confirmationModelSafeArgs(pending: PendingToolConfirmation): Record<string, any> {
+  if (pending.toolName !== 'self_improvement_stage_patch') return pending.safeArgs;
+  const review = pending.safeArgs.patchReview || {};
+  return {
+    ...pending.safeArgs,
+    patchReview: {
+      ...review,
+      fullPatch: `[omitted from model continuation; user reviewed exact SHA-256 ${review.sha256 || pending.payloadDigest}]`,
     },
   };
 }
@@ -265,7 +296,7 @@ export function formatPendingConfirmationPrompt(pending: PendingToolConfirmation
     `Tool: ${pending.toolName}`,
     `Target: ${pending.target || '(current verified target)'}`,
     `Payload digest: ${pending.payloadDigest}`,
-    `Arguments (secrets redacted): ${JSON.stringify(pending.safeArgs)}`,
+    `Arguments (secrets redacted): ${JSON.stringify(confirmationModelSafeArgs(pending))}`,
   ].join('\n');
 }
 

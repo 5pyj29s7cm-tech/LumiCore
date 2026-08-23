@@ -1,6 +1,11 @@
 import { io, Socket } from "socket.io-client";
 import { getSocketOrigin } from "./apiBridge";
-import { getStoredToken } from "./authService";
+import {
+  bootstrap,
+  getDesktopSessionProof,
+  getStoredToken,
+  isNativeDesktopRuntime,
+} from "./authService";
 
 function getDeviceFingerprint(): string {
   const key = 'lumi_device_fingerprint';
@@ -161,17 +166,50 @@ function startWatchdog(socket: Socket) {
 class SocketService {
   private socket: Socket | null = null;
   private token: string | null = null;
+  private desktopSessionProof: string | null = null;
   private watchdogCleanup: (() => void) | null = null;
+  private nativeProofRefreshInFlight = false;
+  private lastNativeProofRefreshAt = 0;
+
+  private async refreshExpiredNativeProof(reason: string) {
+    if (!isNativeDesktopRuntime() || this.nativeProofRefreshInFlight) return;
+    const now = Date.now();
+    if (now - this.lastNativeProofRefreshAt < 5_000) return;
+    this.lastNativeProofRefreshAt = now;
+    this.nativeProofRefreshInFlight = true;
+    recordRuntimeEvent('desktop_session_proof_refresh_started', { reason });
+    try {
+      const result = await bootstrap();
+      if (!result.success || !result.desktopSessionProof) {
+        recordRuntimeEvent('desktop_session_proof_refresh_failed', {
+          reason,
+          message: result.error || 'Native bootstrap returned no desktop session proof',
+        });
+        return;
+      }
+      recordRuntimeEvent('desktop_session_proof_refreshed', { reason });
+      this.refreshAuth();
+    } catch (error: any) {
+      recordRuntimeEvent('desktop_session_proof_refresh_failed', {
+        reason,
+        message: error?.message || String(error),
+      });
+    } finally {
+      this.nativeProofRefreshInFlight = false;
+    }
+  }
 
   connect() {
     reportPreviousRecoveryReason();
     const token = getStoredToken();
+    const desktopSessionProof = getDesktopSessionProof();
 
     if (!this.socket) {
       this.token = token;
+      this.desktopSessionProof = desktopSessionProof;
       this.socket = io(getSocketOrigin(), {
         withCredentials: true,
-        auth: { token, fingerprint: DEVICE_FINGERPRINT },
+        auth: { token, fingerprint: DEVICE_FINGERPRINT, desktopSessionProof },
         reconnection: true,
         reconnectionAttempts: Infinity,
         reconnectionDelay: 1000,
@@ -188,12 +226,22 @@ class SocketService {
 
       this.socket.on("connect_error", (err) => {
         console.error("[SocketService] Connect error:", err.message);
+        if ((err as any)?.data?.code === 'DESKTOP_SESSION_PROOF_REQUIRED') {
+          void this.refreshExpiredNativeProof('socket_connect_error');
+        }
+      });
+
+      this.socket.on('runtime:execution_boundary', (boundary: any) => {
+        if (boundary?.trustedLocalExecution !== true) {
+          void this.refreshExpiredNativeProof('socket_remote_restricted_boundary');
+        }
       });
 
       this.watchdogCleanup = startWatchdog(this.socket);
-    } else if (token !== this.token) {
+    } else if (token !== this.token || desktopSessionProof !== this.desktopSessionProof) {
       this.token = token;
-      this.socket.auth = { token, fingerprint: DEVICE_FINGERPRINT };
+      this.desktopSessionProof = desktopSessionProof;
+      this.socket.auth = { token, fingerprint: DEVICE_FINGERPRINT, desktopSessionProof };
       recordRuntimeEvent('socket_auth_token_changed');
       this.socket.disconnect().connect();
     }
@@ -202,9 +250,11 @@ class SocketService {
 
   refreshAuth() {
     const token = getStoredToken();
+    const desktopSessionProof = getDesktopSessionProof();
     this.token = token;
+    this.desktopSessionProof = desktopSessionProof;
     if (!this.socket) return null;
-    this.socket.auth = { token, fingerprint: DEVICE_FINGERPRINT };
+    this.socket.auth = { token, fingerprint: DEVICE_FINGERPRINT, desktopSessionProof };
     recordRuntimeEvent('socket_auth_refreshed');
     if (this.socket.connected) {
       this.socket.disconnect().connect();
@@ -231,6 +281,7 @@ class SocketService {
       this.socket.disconnect();
       this.socket = null;
       this.token = null;
+      this.desktopSessionProof = null;
     }
   }
 }

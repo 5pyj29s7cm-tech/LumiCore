@@ -173,6 +173,10 @@ export function joinDesktopRelayRoom(
   domain?: 'personal' | 'work',
   orgId?: string,
 ): boolean {
+  // Device metadata is caller-controlled. A remote web/socket client must not
+  // become an execution target merely by registering itself as "desktop".
+  // The Socket.IO middleware owns this proof-backed bit.
+  if (socket.data?.trustedLocalExecution !== true) return false;
   if (!isDesktopDeviceType(deviceType)) return false;
   const scope = normalizeDesktopScope(domain, orgId);
   socket.join(desktopRelayRoomForUser(userId, scope.domain, scope.orgId));
@@ -272,6 +276,12 @@ export function createDesktopRelay(options: DesktopRelayOptions): DesktopRelay {
   };
 
   const relay = async (toolName: string, args: Record<string, any> = {}): Promise<string> => {
+    if (
+      options.requestSocket
+      && options.requestSocket.data?.trustedLocalExecution !== true
+    ) {
+      throw new Error(`Desktop tool "${toolName}" is unavailable on remote execution surfaces.`);
+    }
     if (options.signal?.aborted) {
       throw new Error(`Desktop tool "${toolName}" cancelled before execution`);
     }
@@ -393,7 +403,7 @@ export function createDesktopRelay(options: DesktopRelayOptions): DesktopRelay {
 
       const emitToDesktopTarget = (socketId: string): boolean => {
         const targetSocket = options.io.sockets.sockets.get(socketId);
-        if (!targetSocket?.connected) return false;
+        if (!targetSocket?.connected || targetSocket.data?.trustedLocalExecution !== true) return false;
         const pending = pendingDesktopRelays.get(cid);
         if (!pending) return false;
         pending.targetSocketId = socketId;

@@ -105,40 +105,92 @@ describe('reasoning model switching stability', () => {
     expect(literal.model).toBe('deepseek-chat');
   });
 
-  it('never substitutes a fallback when the selected model is pinned', async () => {
+  it('keeps a pinned primary as first choice and automatically fails over on billing failure', async () => {
     const providers = await import('../server/llm/providers');
     const receipts = await import('../server/llm/model_routing_receipts');
+    const prefs = await import('../server/llm/user_preferences');
+    const circuits = await import('../server/cloud/circuit_breaker');
+    const userId = 'pinned-route-user';
+    prefs.upsertUserPreferredLLM(userId, {
+      provider: 'deepseek',
+      model: 'pinned-billing-primary',
+      selectionMode: 'pinned',
+      fallbackCandidates: [],
+      allowCloudFallback: true,
+    });
     let fallbackCalls = 0;
-    const openAIClient = {
+    const deepSeekClient = {
+      chat: { completions: { create: async () => {
+        throw new Error('402 Payment Required: insufficient balance secret-account-detail');
+      } } },
+    };
+    const qwenClient = {
       chat: { completions: { create: async () => {
         fallbackCalls += 1;
-        return { choices: [{ message: { role: 'assistant', content: 'unexpected fallback' } }] };
+        return { choices: [{ message: { role: 'assistant', content: 'healthy configured fallback' } }] };
       } } },
     };
 
-    await expect(providers.makeLLMCall(
-      [{ role: 'user', content: 'stay pinned' }],
+    const result = await providers.makeLLMCall(
+      [{ role: 'user', content: 'recover from the pinned provider' }],
       [],
       {
-        provider: 'gemini',
-        model: 'missing-primary',
-        userId: 'pinned-route-user',
+        ...prefs.getUserPreferredLLMConfig(userId),
+        conversationId: 'pinned-failover-conversation',
+        requestId: 'pinned-failover-request',
         selectionMode: 'pinned',
-        fallbackCandidates: [{ provider: 'openai', model: 'must-not-run' }],
-        allowCloudFallback: true,
       },
+      () => deepSeekClient,
       () => null,
       () => null,
-      () => openAIClient,
-    )).rejects.toThrow(/Gemini not configured/);
-    expect(fallbackCalls).toBe(0);
-    expect(receipts.listModelRoutingReceipts('pinned-route-user', 1)[0]).toMatchObject({
-      status: 'failed',
-      requestedProvider: 'gemini',
-      requestedModel: 'missing-primary',
+      () => null,
+      () => qwenClient,
+    );
+    expect(result.text).toBe('healthy configured fallback');
+    expect(fallbackCalls).toBe(1);
+    expect(result.routing).toMatchObject({
+      requestedProvider: 'deepseek',
+      requestedModel: 'pinned-billing-primary',
       selectionMode: 'pinned',
-      selectedProvider: '',
+      selectedProvider: 'qwen',
+      selectedModel: 'qwen-plus',
     });
+    expect(result.routing?.attempts.slice(0, 2).map(attempt => ({
+      provider: attempt.provider,
+      status: attempt.status,
+      reason: attempt.reason,
+      errorCategory: attempt.errorCategory,
+    }))).toEqual([
+      { provider: 'deepseek', status: 'failed', reason: 'quota_or_billing', errorCategory: 'quota' },
+      { provider: 'qwen', status: 'succeeded', reason: undefined, errorCategory: undefined },
+    ]);
+    const receipt = receipts.listModelRoutingReceipts(userId, 1)[0];
+    expect(receipt).toMatchObject({
+      status: 'succeeded',
+      selectedProvider: 'qwen',
+      selectedModel: 'qwen-plus',
+      conversationId: 'pinned-failover-conversation',
+      requestId: 'pinned-failover-request',
+    });
+    expect(receipt.attempts[0]).toMatchObject({
+      durationMs: expect.any(Number),
+      errorCategory: 'quota',
+      errorDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(JSON.stringify(receipt)).not.toContain('secret-account-detail');
+    const { assessProviderAvailability } = await import('../server/llm/provider_health');
+    expect(assessProviderAvailability({
+      provider: 'qwen',
+      model: 'qwen-plus',
+      configured: true,
+    })).toMatchObject({
+      available: true,
+      candidateEligible: true,
+      readiness: 'healthy',
+      reason: 'recent_model_success',
+      lastObservation: { status: 'succeeded' },
+    });
+    circuits.resetCircuit('deepseek', 'pinned-billing-primary');
   });
 
   it('uses ordered fallbacks exactly and records the model that actually answered', async () => {
@@ -187,7 +239,7 @@ describe('reasoning model switching stability', () => {
     });
     expect(result.routing?.attempts.map(attempt => `${attempt.provider}/${attempt.model}:${attempt.status}`)).toEqual([
       'gemini/primary-gemini:failed',
-      'anthropic/second-anthropic:failed',
+      'anthropic/second-anthropic:skipped',
       'openai/third-openai:succeeded',
     ]);
     const receipt = receipts.listModelRoutingReceipts('ordered-route-user', 1)[0];
@@ -235,9 +287,86 @@ describe('reasoning model switching stability', () => {
       () => null,
     );
     expect(result.text).toBe('primary:explicit-cloud-primary');
-    expect(result.routing?.attempts).toEqual([
-      { provider: 'openai', model: 'explicit-cloud-primary', status: 'succeeded' },
-    ]);
+    expect(result.routing?.attempts).toHaveLength(1);
+    expect(result.routing?.attempts[0]).toMatchObject({
+      provider: 'openai', model: 'explicit-cloud-primary', status: 'succeeded', durationMs: expect.any(Number),
+    });
+  });
+
+  it('does not cross the cloud fallback boundary when failover is disabled', async () => {
+    const providers = await import('../server/llm/providers');
+    let fallbackCalls = 0;
+    const failingPrimary = {
+      chat: { completions: { create: async () => { throw new Error('503 primary unavailable'); } } },
+    };
+    const fallback = {
+      chat: { completions: { create: async () => {
+        fallbackCalls += 1;
+        return { choices: [{ message: { role: 'assistant', content: 'must not run' } }] };
+      } } },
+    };
+    await expect(providers.makeLLMCall(
+      [{ role: 'user', content: 'primary only' }],
+      [],
+      {
+        provider: 'deepseek',
+        model: 'no-cloud-fallback-primary',
+        selectionMode: 'pinned',
+        fallbackCandidates: [{ provider: 'openai', model: 'blocked-cloud-fallback' }],
+        allowCloudFallback: false,
+      },
+      () => failingPrimary,
+      () => null,
+      () => fallback,
+    )).rejects.toThrow('503 primary unavailable');
+    expect(fallbackCalls).toBe(0);
+  });
+
+  it('skips an open-circuit pinned primary and records the health decision', async () => {
+    const providers = await import('../server/llm/providers');
+    const circuits = await import('../server/cloud/circuit_breaker');
+    const primaryCreate = async () => {
+      throw new Error('open-circuit primary must not be called');
+    };
+    let fallbackCalls = 0;
+    const fallback = {
+      chat: { completions: { create: async () => {
+        fallbackCalls += 1;
+        return { choices: [{ message: { role: 'assistant', content: 'circuit fallback' } }] };
+      } } },
+    };
+    circuits.recordFailure(
+      'gemini',
+      'open-circuit-primary',
+      new Error('known outage'),
+      { openImmediately: true },
+    );
+
+    const result = await providers.makeLLMCall(
+      [{ role: 'user', content: 'route around the outage' }],
+      [],
+      {
+        provider: 'gemini',
+        model: 'open-circuit-primary',
+        selectionMode: 'pinned',
+        fallbackCandidates: [{ provider: 'openai', model: 'healthy-circuit-fallback' }],
+        allowCloudFallback: true,
+      },
+      () => null,
+      () => ({ getGenerativeModel: () => ({ generateContent: primaryCreate }) }),
+      () => fallback,
+    );
+    expect(result.text).toBe('circuit fallback');
+    expect(fallbackCalls).toBe(1);
+    expect(result.routing?.fallbackReason).toBe('circuit_open');
+    expect(result.routing?.attempts[0]).toMatchObject({
+      provider: 'gemini',
+      model: 'open-circuit-primary',
+      status: 'skipped',
+      reason: 'circuit_open',
+      durationMs: 0,
+    });
+    circuits.resetCircuit('gemini', 'open-circuit-primary');
   });
 
   it('uses the exact selected LM Studio model without restarting the runtime client', async () => {

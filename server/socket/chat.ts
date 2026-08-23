@@ -23,6 +23,17 @@ import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execu
 import { createDesktopExecutionTracker, withDesktopExecutionReceipt } from "../desktop/execution_runtime";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import {
+  recoverBlockedExecutionOnce,
+  sanitizeExecutionResponseForDelivery,
+} from "../cognition/execution_guard_recovery";
+import {
+  executionBoundaryPromptOverlay,
+  restrictSystemPromptForExecutionBoundary,
+  restrictToolPolicyForExecutionBoundary,
+  restrictVisibleToolNamesForExecutionBoundary,
+  restrictVisibleToolRouteForExecutionBoundary,
+} from "../tools/remote_policy";
+import {
   buildActionContract,
   summarizeActionContractBlocker,
 } from "../cognition/action_contract";
@@ -115,7 +126,7 @@ import {
   listAvailableOrchestrationAgents,
   shouldAttemptOrchestration,
 } from "../agents/orchestrator";
-import { shouldDelegateWorkInBackground } from "../agents/background_delegation";
+import { buildDelegationAck, shouldDelegateWorkInBackground } from "../agents/background_delegation";
 import { markLatestUserTurn } from "../agents/background_delivery";
 import {
   requestCancelBackgroundTask,
@@ -131,7 +142,11 @@ import { CN_TASK_EXECUTION_MESSAGES, CN_VOICE_FAST_PATH_MESSAGES } from "../regi
 import { buildModelSelfAwareness, buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { getScopedPreferredLLM } from "../llm/user_preferences";
 import { createDesktopRelay } from "./desktop_relay";
-import { resolveSocketScope, scopedEmotionalStateKey } from "./scope";
+import {
+  buildSocketToolSecurityContext,
+  resolveSocketScope,
+  scopedEmotionalStateKey,
+} from "./scope";
 import {
   beginChatExecution,
   beginQueuedChatExecution,
@@ -711,6 +726,7 @@ export function registerChatHandler(
     });
     const resolvedDomain = requestScope.domain;
     const resolvedOrgId = requestScope.orgId;
+    const toolSecurityContext = buildSocketToolSecurityContext(socket, requestScope);
     const requestedConversationId = String(data.conversationId || '').trim();
     const persistedRequestTurn = getMessageByRequestId({
       userId: uid,
@@ -766,9 +782,12 @@ export function registerChatHandler(
     let executionRoom = chatExecutionRoom(executionScope);
     let sessionKey = `${uid}:${resolvedDomain}:${resolvedOrgId || ''}:${eventSource}:${selectedConversationId}`;
     const emitAgent = (event: string, payload: Record<string, any> = {}) => {
+      const publicPayload = event === 'agent:response'
+        ? sanitizeExecutionResponseForDelivery(payload, { task: visibleUserText })
+        : payload;
       const normalizedPayload = {
-        ...payload,
-        source: payload.source || eventSource,
+        ...publicPayload,
+        source: publicPayload.source || eventSource,
         requestId,
         conversationId: selectedConversationId,
       };
@@ -1310,7 +1329,10 @@ export function registerChatHandler(
       console.log('[ChatHandler] systemPrompt built, personality name:', personality?.name);
 
       // Inject conversation summary chain for long-running conversations (anti-entropy)
-      let effectiveSystemPrompt = systemInstruction;
+      let effectiveSystemPrompt = restrictSystemPromptForExecutionBoundary(
+        systemInstruction,
+        toolSecurityContext.executionBoundary,
+      );
       if (conversationId) {
         const summaryContext = getConversationSummary(conversationId);
         if (summaryContext) {
@@ -1333,7 +1355,9 @@ export function registerChatHandler(
         }
       }
       effectiveSystemPrompt += '\n\n' + buildNaturalReplyStyleOverlay(eventSource);
-      effectiveSystemPrompt += '\n\nFile handling rule: attachments supplied in this request may be newly added files or verified material carried forward by the client within this same conversation. Treat their copied local paths, extracted text, and transcripts as available conversation material and keep using them for follow-up questions. Ask the user to reattach only when no usable attachment/path is supplied or a supplied path is unreadable; never ask merely because the material first appeared in an earlier turn.';
+      if (toolSecurityContext.executionBoundary !== 'remote_restricted') {
+        effectiveSystemPrompt += '\n\nFile handling rule: attachments supplied in this request may be newly added files or verified material carried forward by the client within this same conversation. Treat their copied local paths, extracted text, and transcripts as available conversation material and keep using them for follow-up questions. Ask the user to reattach only when no usable attachment/path is supplied or a supplied path is unreadable; never ask merely because the material first appeared in an earlier turn.';
+      }
       if (pendingConfirmationPrompt) {
         effectiveSystemPrompt += `\n\n${pendingConfirmationPrompt}`;
       }
@@ -1383,16 +1407,20 @@ export function registerChatHandler(
       const turnDispatch = executionPipeline.turnIntent;
       const turnFlow = turnDispatch.flow;
       const turnSurface = turnDispatch.surface;
-      effectiveSystemPrompt += '\n\n' + turnDispatch.promptOverlay;
-      effectiveSystemPrompt += '\n\n' + turnFlow.promptOverlay;
-      effectiveSystemPrompt += '\n\n' + buildLumiRuntimeCapabilityContext({
-        userId: uid,
-        text: turnFlow.routeText,
-        flow: turnFlow,
-        toolRegistry,
-        domain: resolvedDomain,
-        orgId: resolvedOrgId,
-      });
+      if (toolSecurityContext.executionBoundary !== 'remote_restricted') {
+        effectiveSystemPrompt += '\n\n' + turnDispatch.promptOverlay;
+        effectiveSystemPrompt += '\n\n' + turnFlow.promptOverlay;
+      }
+      if (toolSecurityContext.executionBoundary !== 'remote_restricted') {
+        effectiveSystemPrompt += '\n\n' + buildLumiRuntimeCapabilityContext({
+          userId: uid,
+          text: turnFlow.routeText,
+          flow: turnFlow,
+          toolRegistry,
+          domain: resolvedDomain,
+          orgId: resolvedOrgId,
+        });
+      }
 
       // Inject company knowledge base context when in work domain
       if (kbContext) {
@@ -1644,8 +1672,15 @@ export function registerChatHandler(
         capabilityExecutionPlan: executionPipeline.executionPlan,
       });
       const desktopExecutionTracker = createDesktopExecutionTracker(desktopExecutionPolicy.executionPlan);
+      executionDecision.toolRoute = restrictVisibleToolRouteForExecutionBoundary(
+        executionDecision.toolRoute,
+        toolSecurityContext.executionBoundary,
+      );
       const toolRoute = executionDecision.toolRoute;
-      const modelCapabilityPolicy = buildModelCapabilityPolicy(executionDecision);
+      const modelCapabilityPolicy = restrictToolPolicyForExecutionBoundary(
+        buildModelCapabilityPolicy(executionDecision),
+        toolSecurityContext.executionBoundary,
+      );
       // A natural-language turn must not create or freeze a durable task before
       // the model has chosen to act. At this point we may only read an existing
       // task pointer for an explicit continuation. Fresh task state is derived
@@ -1662,7 +1697,9 @@ export function registerChatHandler(
         coalesceToolExecutionRecords([...priorTaskRecords, ...records])
       );
       const exposeAgentWork = turnFlow.exposeAgentWork;
-      effectiveSystemPrompt += '\n\n' + formatClientSelfPrompt(uid, { domain: resolvedDomain, orgId: resolvedOrgId });
+      if (toolSecurityContext.executionBoundary !== 'remote_restricted') {
+        effectiveSystemPrompt += '\n\n' + formatClientSelfPrompt(uid, { domain: resolvedDomain, orgId: resolvedOrgId });
+      }
       console.log('[ChatHandler] tool gate:', executionDecision.allowToolUse ? 'enabled' : 'chat-only', 'operationMode:', operationMode, 'effective:', effectiveOperationMode, 'surface:', turnFlow.surface, 'clientActionOnly:', clientActionOnlyTurn, 'selfRepair:', selfRepairTurn, 'capabilityLane:', capabilitySelection.lane, 'trace:', intentTrace.summary, 'route:', toolRoute ? `${toolRoute.toolNames.length}/${toolRoute.totalAvailable} ${toolRoute.categories.join(',') || 'fallback'}` : 'none');
       socket.emit('agent:intent_trace', intentTrace);
       if (toolRoute) {
@@ -1675,14 +1712,25 @@ export function registerChatHandler(
           trace: intentTrace,
         });
       }
+      const visiblePreferredTools = restrictVisibleToolNamesForExecutionBoundary(
+        capabilitySelection.preferredTools,
+        toolSecurityContext.executionBoundary,
+      );
+      const remoteRestricted = toolSecurityContext.executionBoundary === 'remote_restricted';
       emitAgent('agent:capability_selection', {
-        lane: capabilitySelection.lane,
-        primary: capabilitySelection.primary,
-        reasons: capabilitySelection.reasons,
-        preferredTools: capabilitySelection.preferredTools,
+        lane: remoteRestricted
+          ? (visiblePreferredTools.length > 0 ? 'web_or_account' : 'conversation')
+          : capabilitySelection.lane,
+        primary: remoteRestricted
+          ? (visiblePreferredTools[0] || 'conversation')
+          : capabilitySelection.primary,
+        reasons: remoteRestricted
+          ? ['remote execution boundary applied']
+          : capabilitySelection.reasons,
+        preferredTools: visiblePreferredTools,
         source: eventSource,
       });
-      if (desktopExecutionPolicy.applies) {
+      if (desktopExecutionPolicy.applies && toolSecurityContext.executionBoundary !== 'remote_restricted') {
         emitAgent('agent:desktop_execution_policy', {
           reason: desktopExecutionPolicy.reason,
           evidenceTools: desktopExecutionPolicy.evidenceTools,
@@ -1691,23 +1739,35 @@ export function registerChatHandler(
           source: eventSource,
         });
       }
-      effectiveSystemPrompt += '\n\n' + buildInteractionModeOverlay(turnFlow);
-      if (workSurfaceRoute.promptOverlay) {
+      if (!remoteRestricted) {
+        effectiveSystemPrompt += '\n\n' + buildInteractionModeOverlay(turnFlow);
+      }
+      if (workSurfaceRoute.promptOverlay && toolSecurityContext.executionBoundary !== 'remote_restricted') {
         effectiveSystemPrompt += '\n\n' + workSurfaceRoute.promptOverlay;
       }
-      effectiveSystemPrompt += '\n\n' + executionDecision.promptOverlay;
-      effectiveSystemPrompt += '\n\n' + capabilitySelection.promptOverlay;
-      if (desktopExecutionPolicy.promptOverlay) {
+      effectiveSystemPrompt += '\n\n' + executionBoundaryPromptOverlay(
+        executionDecision.promptOverlay,
+        toolSecurityContext.executionBoundary,
+      );
+      if (toolSecurityContext.executionBoundary !== 'remote_restricted') {
+        effectiveSystemPrompt += '\n\n' + capabilitySelection.promptOverlay;
+      }
+      if (desktopExecutionPolicy.promptOverlay && toolSecurityContext.executionBoundary !== 'remote_restricted') {
         effectiveSystemPrompt += '\n\n' + desktopExecutionPolicy.promptOverlay;
       }
-      const visionRoutingOverlay = effectiveOperationMode !== 'meeting' ? buildVisionRoutingOverlay(uid, text) : '';
+      const visionRoutingOverlay = effectiveOperationMode !== 'meeting'
+        && toolSecurityContext.executionBoundary !== 'remote_restricted'
+        ? buildVisionRoutingOverlay(uid, text)
+        : '';
       if (visionRoutingOverlay) {
         effectiveSystemPrompt += '\n\n' + visionRoutingOverlay;
       }
-      effectiveSystemPrompt += '\n\n' + buildLumiOperatingKernelPrompt({
-        channel: 'chat',
-        flow: turnFlow,
-      });
+      if (!remoteRestricted) {
+        effectiveSystemPrompt += '\n\n' + buildLumiOperatingKernelPrompt({
+          channel: 'chat',
+          flow: turnFlow,
+        });
+      }
 
       // Keep this late so English system/tool context cannot pull the reply language.
       effectiveSystemPrompt += '\n\n' + buildResponseLanguageInstruction(text);
@@ -1778,6 +1838,7 @@ export function registerChatHandler(
           name: pendingConfirmation.toolName,
           arguments: confirmedArgs,
           context: {
+            ...toolSecurityContext,
             userId: uid,
             domain: resolvedDomain,
             orgId: resolvedOrgId,
@@ -1859,6 +1920,7 @@ export function registerChatHandler(
             llmGetters.getQwen,
             undefined,
             {
+              ...toolSecurityContext,
               userId: uid,
               taskId: actionTaskExecution.state?.taskId || requestId,
               conversationId: conversation.id,
@@ -1958,6 +2020,14 @@ export function registerChatHandler(
       let responseText = '';
       let llmWasCalled = false;
       const allToolRecords: ToolExecutionRecord[] = [];
+      // Keep the same token-budgeted conversation that drove the normal turn
+      // available to the one-shot execution recovery. Falling back to only the
+      // latest task makes the recovery model forget constraints and prior user
+      // corrections precisely when it needs them most.
+      let normalTurnMessages: NormalizedMessage[] = [
+        { role: 'system', content: effectiveSystemPrompt },
+        { role: 'user', content: text },
+      ];
       // ── Model-owned natural-language dispatch ──
       // Natural-language chat has no deterministic quick-command path. Surface
       // recognition and legacy quick matches are advisory inputs to the shared
@@ -2072,6 +2142,79 @@ export function registerChatHandler(
         ].join('\n');
       }
 
+      if (!responseText && legacyDelegationHint.shouldDelegate) {
+        const delegationRecord = await executeToolCall({
+          registry: toolRegistry,
+          id: `background-register-${requestId}`,
+          name: 'agent_delegate_background',
+          arguments: {
+            task: executionTaskText,
+            title: visibleUserText.slice(0, 140) || storedUserContent.slice(0, 140) || 'Background task',
+            reason: legacyDelegationHint.reason,
+            preferredAgentIds: availableWorkerAgents.slice(0, 8).map((agent: any) => agent.id),
+            forceOrchestration: true,
+          },
+          context: {
+            ...toolSecurityContext,
+            userId: uid,
+            taskId: actionTaskExecution.state?.taskId || requestId,
+            conversationId: conversation.id,
+            conversationAgentId,
+            personalityId,
+            turnId: requestId,
+            requestId,
+            idempotencyKey: `background:${conversation.id}:${requestId}`,
+            domain: resolvedDomain,
+            orgId: resolvedOrgId,
+            actionIntent: visibleUserText,
+            routedTaskText: turnFlow.routeText,
+            source: 'chat_background_registration',
+            modelRouting: {
+              provider: activeProvider,
+              model: activeModel,
+              selectionMode: reasoningRoutePolicy.selectionMode,
+              fallbackCandidates: reasoningRoutePolicy.fallbackCandidates,
+              allowCloudFallback: reasoningRoutePolicy.allowCloudFallback,
+            },
+            toolPolicy: {
+              allowedTools: ['agent_delegate_background'],
+              requireConfirmation: [],
+              forbiddenTools: [],
+              maxIterations: 1,
+            },
+          },
+        });
+        allToolRecords.push(delegationRecord);
+        let registeredTask: any = null;
+        try {
+          const payload = JSON.parse(delegationRecord.result || '{}');
+          if (!delegationRecord.error && payload?.ok === true && payload?.status === 'registered') {
+            registeredTask = payload.task;
+          }
+        } catch {}
+        if (registeredTask?.id) {
+          responseText = buildDelegationAck(registeredTask.workerNames || [], registeredTask.id);
+          llmWasCalled = false;
+          emitAgent('agent:delegation', {
+            taskId: registeredTask.id,
+            task: registeredTask,
+            reason: legacyDelegationHint.reason,
+            complexity: backgroundComplexity,
+            workers: registeredTask.workerNames || [],
+          });
+          emitAgent('agent:background_task_update', {
+            taskId: registeredTask.id,
+            task: registeredTask,
+            source: 'background_delegation',
+          });
+          pushNotification(uid, {
+            type: 'background_delegation',
+            title: 'Lumi background agents',
+            message: `Task registered for ${Math.max(1, registeredTask.workerNames?.length || 0)} worker agent(s): ${visibleUserText.slice(0, 80)}`,
+          });
+        }
+      }
+
       if (!responseText) {
         // Path C: Normal LLM path (simple queries, or orchestrator fallback)
 
@@ -2109,6 +2252,7 @@ export function registerChatHandler(
           ...conversationHistory,
           { role: 'user', content: text },
         ];
+        normalTurnMessages = messages;
 
         try {
           console.log('[ChatHandler] Calling Path C with provider:', activeProvider, 'model:', activeModel, 'tools:', executionDecision.allowToolUse ? 'enabled' : 'off');
@@ -2211,6 +2355,7 @@ export function registerChatHandler(
             llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
             onChunk,
             {
+              ...toolSecurityContext,
               userId: uid,
               taskId: actionTaskExecution.state?.taskId || requestId,
               conversationId: conversation.id,
@@ -2290,7 +2435,7 @@ export function registerChatHandler(
       // path must render the same confirmation receipt as the deterministic
       // quick-command path and must not let the completion guard overwrite it
       // with a generic "missing core evidence" failure.
-      const finalResponse = pendingConfirmationCreatedThisTurn
+      let finalResponse: ReturnType<typeof finalizeLumiResponse> = pendingConfirmationCreatedThisTurn
         ? {
             text: formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn),
             blocked: false,
@@ -2304,6 +2449,150 @@ export function registerChatHandler(
             source: 'chat',
             flow: turnFlow,
           });
+      const guardRecovery = await recoverBlockedExecutionOnce({
+        task: executionTaskText,
+        responseText,
+        finalization: finalResponse,
+        allowToolUse: executionDecision.allowToolUse && !isSanctuary,
+        pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
+        aborted: abortController.signal.aborted,
+        isAborted: () => abortController.signal.aborted,
+        isPendingConfirmation: () => Boolean(pendingConfirmationCreatedThisTurn),
+        toolRecords: taskAwareRecords(allToolRecords),
+        attempt: async ({ instruction, priorToolRecords, recordTool }) => {
+          console.warn('[ChatHandler] Recovering blocked execution internally.');
+          llmWasCalled = true;
+          const recovery = await runWithTools(
+            [
+              ...normalTurnMessages,
+              ...(String(responseText || '').trim()
+                ? [{ role: 'assistant' as const, content: responseText }]
+                : []),
+              { role: 'user', content: instruction },
+            ],
+            toolRegistry,
+            {
+              provider: activeProvider,
+              model: activeModel,
+              userId: uid,
+              domain: resolvedDomain,
+              orgId: resolvedOrgId,
+              signal: abortController.signal,
+              ...reasoningRoutePolicy,
+            },
+            record => {
+              // Preserve terminal receipts independently from the provider
+              // result; a late provider error must not erase tool evidence.
+              recordTool(record);
+              if (isDirectDesktopTool(record.name)) return;
+              const toolPayload = {
+                correlationId: record.id || `guard-recovery-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                name: record.name,
+                arguments: record.arguments,
+                args: record.arguments,
+                result: formatToolResultForUi(record.result),
+                error: record.error,
+              };
+              emitAgent('agent:tool_call', toolPayload);
+              emitAgent('agent:tool', toolPayload);
+            },
+            Math.max(2, Math.min(12, modelCapabilityPolicy.maxIterations || personality.toolPolicy.maxIterations || 8)),
+            llmGetters.getDeepSeek,
+            llmGetters.getGemini,
+            llmGetters.getOpenAI,
+            llmGetters.getAnthropic,
+            llmGetters.getQwen,
+            undefined,
+            {
+              ...toolSecurityContext,
+              userId: uid,
+              taskId: actionTaskExecution.state?.taskId || requestId,
+              conversationId: conversation.id,
+              turnId: requestId,
+              requestId,
+              domain: resolvedDomain,
+              orgId: resolvedOrgId,
+              desktopRelay,
+              llmGetters,
+              source: 'chat_guard_recovery',
+              supervisedExternalCommits: true,
+              allowLocalFileWrites,
+              localWriteIntentReason,
+              isCancelled: () => abortController.signal.aborted,
+              onToolStart: call => {
+                if (isDirectDesktopTool(call.name)) return;
+                emitToolLifecycle({
+                  correlationId: call.id || `guard-recovery-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                  name: call.name,
+                  arguments: call.arguments,
+                });
+              },
+              toolPolicy: modelCapabilityPolicy,
+              actionIntent: visibleUserText,
+              routedTaskText: turnFlow.routeText,
+              priorToolRecords,
+              desktopExecutionTracker,
+              requestConfirmation: requestToolConfirmation,
+            },
+            llmGetters.getOllama,
+            llmGetters.getLmStudio,
+            llmGetters.getArk,
+            llmGetters.getXiaomi,
+            llmGetters.getKimi,
+            llmGetters.getGlm,
+            llmGetters.getRelay,
+          );
+          for (const usage of recovery.usageRecords) {
+            recordTokenUsage(uid, usage.provider, usage.model, {
+              promptTokens: usage.promptTokens,
+              completionTokens: usage.completionTokens,
+              totalTokens: usage.totalTokens,
+            }, interactionId);
+          }
+          return {
+            text: recovery.text,
+            toolRecords: withDesktopExecutionReceipt(
+              recovery.toolCalls || [],
+              desktopExecutionTracker,
+            ),
+          };
+        },
+        finalize: (candidateText, records) => pendingConfirmationCreatedThisTurn
+          ? {
+              text: formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn),
+              blocked: false,
+              reason: 'waiting_confirmation',
+              notification: undefined,
+            }
+          : finalizeLumiResponse({
+              taskText: executionTaskText,
+              responseText: candidateText,
+              toolRecords: withDesktopExecutionReceipt(records, desktopExecutionTracker),
+              source: 'chat_guard_recovery',
+              flow: turnFlow,
+            }),
+      });
+      for (const record of guardRecovery.toolRecords) {
+        const isPriorTaskReceipt = priorTaskRecords.some(item => (
+          record.id
+            ? item.id === record.id
+            : item.name === record.name && item.result === record.result && item.error === record.error
+        ));
+        if (isPriorTaskReceipt) continue;
+        const duplicate = record.id
+          ? allToolRecords.some(item => item.id === record.id)
+          : allToolRecords.some(item => (
+              item.name === record.name
+              && item.result === record.result
+              && item.error === record.error
+            ));
+        if (!duplicate) allToolRecords.push(record);
+      }
+      const recoveredDesktopRecords = withDesktopExecutionReceipt(allToolRecords, desktopExecutionTracker);
+      if (recoveredDesktopRecords.length > allToolRecords.length) {
+        allToolRecords.push(...recoveredDesktopRecords.slice(allToolRecords.length));
+      }
+      finalResponse = guardRecovery.finalization;
       responseText = finalResponse.text;
       if (finalResponse.blocked) {
         console.warn('[ChatHandler] Completion claim blocked:', finalResponse.reason);

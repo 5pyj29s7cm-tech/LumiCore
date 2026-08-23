@@ -29,7 +29,11 @@ import {
   type ChatResponseFinalization,
   type ChatProgressTone,
 } from '@/lib/chatProgress';
-import type { BackgroundWorkflowTask, WorkflowStep } from './workflowTypes';
+import {
+  normalizeTaskCompletionFeedback,
+  type BackgroundWorkflowTask,
+  type WorkflowStep,
+} from './workflowTypes';
 import { WeChatSettings } from './WeChatSettings';
 import type { FileEntry } from './MemoryTree';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
@@ -46,6 +50,7 @@ import {
   type ChatAttachmentRequest,
 } from '@/lib/chatAttachmentReferences';
 import {
+  describeAgentResponseDelivery,
   isFinalizedSuccessfulResponse,
   isTerminalAgentStatus,
   shouldDisplayAgentResponse,
@@ -1726,7 +1731,7 @@ export function AgentChatPage({
           id: makeChatMessageId('chat-rejected'),
           type: 'error',
           text: t.workflowError || 'Processing blocked',
-          detail: data.reason,
+          detail: describeAgentResponseDelivery(data, isZh),
           time: Date.now(),
         }]);
         if (!hasRemainingRequests) scheduleWorkflowReset(data.requestId);
@@ -1754,7 +1759,7 @@ export function AgentChatPage({
           text: wasCancelled
             ? uiMessage('agent-chat-page.execution-cancelled.4ec843f670', isZh ? 'zh' : 'en')
             : data.blocked ? (t.workflowError || 'Processing blocked') : (t.workflowResponseReady || 'Response ready'),
-          detail: (data.reason || data.text)?.slice(0, 100),
+          detail: describeAgentResponseDelivery(data, isZh),
           time: Date.now(),
         }]);
         if (!hasRemainingRequests) scheduleWorkflowReset(data.requestId);
@@ -1932,6 +1937,7 @@ export function AgentChatPage({
         error: raw?.error,
         resultPreview: raw?.resultPreview,
         updatedAt: raw?.updatedAt,
+        completionFeedback: normalizeTaskCompletionFeedback(raw?.completionFeedback || data?.completionFeedback),
       };
     };
 

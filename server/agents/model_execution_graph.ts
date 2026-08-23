@@ -71,6 +71,18 @@ export interface ModelGraphCompilation {
 
 export type ModelGraphNodeStatus = 'succeeded' | 'failed' | 'blocked' | 'cancelled';
 
+/**
+ * A model/runtime can produce a useful result without proving that the
+ * requested real-world work completed. Only a verified terminal tool receipt
+ * is currently accepted as machine evidence. External process exit codes and
+ * model prose remain useful, but explicitly unverified.
+ */
+export type ModelGraphNodeEvidenceKind =
+  | 'none'
+  | 'reasoning_only'
+  | 'external_runtime_unverified'
+  | 'tool_terminal_verification';
+
 export interface ModelGraphNodeReceipt {
   graphId: string;
   taskId: string;
@@ -85,6 +97,8 @@ export interface ModelGraphNodeReceipt {
   nodeFingerprint: string;
   outputDigest: string;
   outputSummary?: string;
+  evidenceKind: ModelGraphNodeEvidenceKind;
+  evidenceRefs: string[];
   verified: boolean;
   reusedFromReceipt?: string;
   error?: string;
@@ -97,7 +111,10 @@ export interface ModelGraphArbitrationReceipt {
   taskId: string;
   policy: ModelExecutionGraph['arbitration'];
   status: 'succeeded' | 'blocked';
+  /** Result availability is separate from machine-verifiable completion. */
+  verification: 'verified' | 'unverified';
   selectedNodeIds: string[];
+  verifiedNodeIds: string[];
   consideredNodeIds: string[];
   outputDigest: string;
   completedAt: string;
@@ -490,20 +507,39 @@ export function buildModelGraphNodeReceipt(input: {
   output?: string;
   error?: string;
   selectedCandidate?: ModelCandidate;
+  evidenceKind?: ModelGraphNodeEvidenceKind;
+  evidenceRefs?: string[];
 }): ModelGraphNodeReceipt {
   const completedAt = input.completedAt || new Date().toISOString();
+  const selectedCandidate = input.status === 'blocked' || input.status === 'cancelled'
+    ? undefined
+    : input.selectedCandidate
+      ? { ...input.selectedCandidate }
+      : input.node.candidates[0]
+        ? { ...input.node.candidates[0] }
+        : undefined;
+  const requestedEvidenceRefs = Array.from(new Set((input.evidenceRefs || [])
+    .map(value => String(value || '').trim())
+    .filter(value => /^tool:[A-Za-z0-9._:-]{1,240}$/.test(value))))
+    .slice(0, 80);
+  const hasVerifiedToolEvidence = input.status === 'succeeded'
+    && input.evidenceKind === 'tool_terminal_verification'
+    && requestedEvidenceRefs.length > 0;
+  const evidenceKind: ModelGraphNodeEvidenceKind = hasVerifiedToolEvidence
+    ? 'tool_terminal_verification'
+    : input.status !== 'succeeded'
+      ? 'none'
+      : input.evidenceKind === 'external_runtime_unverified'
+        || input.node.type === 'external_agent'
+        || selectedCandidate?.locality === 'external_runtime'
+        ? 'external_runtime_unverified'
+        : 'reasoning_only';
   return {
     graphId: input.graph.graphId,
     taskId: input.graph.taskId,
     nodeId: input.node.nodeId,
     status: input.status,
-    selectedCandidate: input.status === 'blocked' || input.status === 'cancelled'
-      ? undefined
-      : input.selectedCandidate
-        ? { ...input.selectedCandidate }
-        : input.node.candidates[0]
-          ? { ...input.node.candidates[0] }
-          : undefined,
+    selectedCandidate,
     agentId: input.agentId || input.node.assignedAgentId,
     dependencyReceiptIds: input.node.dependsOn.map(dependency => `${input.graph.graphId}:${dependency}`),
     startedAt: input.startedAt,
@@ -512,7 +548,9 @@ export function buildModelGraphNodeReceipt(input: {
     nodeFingerprint: modelGraphNodeFingerprint(input.node),
     outputDigest: modelGraphDigest(input.output || ''),
     ...(input.output ? { outputSummary: summarizeModelNodeOutput(input.output) } : {}),
-    verified: input.status === 'succeeded',
+    evidenceKind,
+    evidenceRefs: hasVerifiedToolEvidence ? requestedEvidenceRefs : [],
+    verified: hasVerifiedToolEvidence,
     ...(input.node.estimatedInputTokens !== undefined
       ? { estimatedInputTokens: input.node.estimatedInputTokens }
       : {}),
@@ -521,6 +559,20 @@ export function buildModelGraphNodeReceipt(input: {
       : {}),
     ...(input.error ? { error: input.error.slice(0, 700) } : {}),
   };
+}
+
+export function hasVerifiedModelGraphNodeEvidence(
+  receipt: ModelGraphNodeReceipt | null | undefined,
+): receipt is ModelGraphNodeReceipt {
+  return Boolean(
+    receipt
+    && receipt.status === 'succeeded'
+    && receipt.verified === true
+    && receipt.evidenceKind === 'tool_terminal_verification'
+    && Array.isArray(receipt.evidenceRefs)
+    && receipt.evidenceRefs.length > 0
+    && receipt.evidenceRefs.every(value => /^tool:[A-Za-z0-9._:-]{1,240}$/.test(value)),
+  );
 }
 
 export function reuseVerifiedModelGraphNodeReceipt(input: {
@@ -533,8 +585,7 @@ export function reuseVerifiedModelGraphNodeReceipt(input: {
     input.prior.taskId !== input.graph.taskId
     || input.prior.nodeId !== input.node.nodeId
     || input.prior.nodeFingerprint !== modelGraphNodeFingerprint(input.node)
-    || input.prior.status !== 'succeeded'
-    || input.prior.verified !== true
+    || !hasVerifiedModelGraphNodeEvidence(input.prior)
   ) {
     return null;
   }
@@ -557,25 +608,50 @@ export function arbitrateModelGraphResults(input: {
   outputByNodeId: ReadonlyMap<string, string>;
   completedAt?: string;
 }): ModelGraphArbitrationReceipt {
-  const verified = new Map(input.receipts
+  const graphNodes = new Map(input.graph.nodes.map(node => [node.nodeId, node]));
+  const matchesCurrentGraphNode = (receipt: ModelGraphNodeReceipt): boolean => {
+    const node = graphNodes.get(receipt.nodeId);
+    return Boolean(node && receipt.nodeFingerprint === modelGraphNodeFingerprint(node));
+  };
+  const successful = new Map(input.receipts
     .filter(receipt => (
       receipt.graphId === input.graph.graphId
       && receipt.taskId === input.graph.taskId
       && receipt.status === 'succeeded'
-      && receipt.verified === true
+      && matchesCurrentGraphNode(receipt)
+    ))
+    .map(receipt => [receipt.nodeId, receipt]));
+  const verified = new Map(input.receipts
+    .filter(receipt => (
+      receipt.graphId === input.graph.graphId
+      && receipt.taskId === input.graph.taskId
+      && hasVerifiedModelGraphNodeEvidence(receipt)
+      && matchesCurrentGraphNode(receipt)
     ))
     .map(receipt => [receipt.nodeId, receipt]));
   const consideredNodeIds = input.graph.nodes.map(node => node.nodeId);
   let selectedNodeIds: string[] = [];
+  let verifiedNodeIds: string[] = [];
+  let verification: ModelGraphArbitrationReceipt['verification'] = 'unverified';
   let reason = '';
   if (input.graph.arbitration === 'first_verified') {
-    const selected = consideredNodeIds.find(nodeId => verified.has(nodeId) && input.outputByNodeId.has(nodeId));
-    if (selected) selectedNodeIds = [selected];
-    else reason = 'no verified node result was available';
+    const selectedVerified = consideredNodeIds.find(nodeId => (
+      verified.has(nodeId) && input.outputByNodeId.has(nodeId)
+    ));
+    const selectedUseful = selectedVerified || consideredNodeIds.find(nodeId => (
+      successful.has(nodeId) && input.outputByNodeId.has(nodeId)
+    ));
+    if (selectedUseful) {
+      selectedNodeIds = [selectedUseful];
+      verification = selectedVerified ? 'verified' : 'unverified';
+      verifiedNodeIds = selectedVerified ? [selectedVerified] : [];
+    } else {
+      reason = 'no successful node result was available';
+    }
   } else if (input.graph.arbitration === 'majority_vote') {
     const votes = new Map<string, string[]>();
     for (const nodeId of consideredNodeIds) {
-      if (!verified.has(nodeId) || !input.outputByNodeId.has(nodeId)) continue;
+      if (!successful.has(nodeId) || !input.outputByNodeId.has(nodeId)) continue;
       const normalizedOutput = String(input.outputByNodeId.get(nodeId) || '')
         .replace(/\s+/g, ' ')
         .trim()
@@ -589,24 +665,45 @@ export function arbitrateModelGraphResults(input: {
       right.length - left.length
       || consideredNodeIds.indexOf(left[0]) - consideredNodeIds.indexOf(right[0])
     ));
-    const verifiedCount = consideredNodeIds.filter(nodeId => verified.has(nodeId)).length;
-    if (ranked[0] && ranked[0].length > verifiedCount / 2) {
-      selectedNodeIds = [ranked[0][0]];
+    const successfulCount = consideredNodeIds.filter(nodeId => (
+      successful.has(nodeId) && input.outputByNodeId.has(nodeId)
+    )).length;
+    const winningVoters = ranked[0] && ranked[0].length > successfulCount / 2
+      ? ranked[0]
+      : [];
+    if (winningVoters.length > 0) {
+      selectedNodeIds = [winningVoters[0]];
+      verification = winningVoters.every(nodeId => verified.has(nodeId))
+        ? 'verified'
+        : 'unverified';
+      verifiedNodeIds = winningVoters.filter(nodeId => verified.has(nodeId));
     } else {
-      reason = 'no strict majority of verified node outputs was available';
+      reason = 'no strict majority of successful node outputs was available';
     }
   } else if (input.graph.arbitration === 'judge') {
     const judge = input.graph.nodes.find(node => node.type === 'judge');
-    if (judge && verified.has(judge.nodeId) && input.outputByNodeId.has(judge.nodeId)) {
+    if (judge && successful.has(judge.nodeId) && input.outputByNodeId.has(judge.nodeId)) {
       selectedNodeIds = [judge.nodeId];
+      const judgeEvidenceNodeIds = [judge.nodeId, ...judge.dependsOn];
+      verification = judgeEvidenceNodeIds.every(nodeId => verified.has(nodeId))
+        ? 'verified'
+        : 'unverified';
+      verifiedNodeIds = judgeEvidenceNodeIds.filter(nodeId => verified.has(nodeId));
     } else {
-      reason = 'the required judge node did not produce a verified result';
+      reason = 'the required judge node did not produce a successful result';
     }
   } else {
     selectedNodeIds = consideredNodeIds.filter(nodeId => (
-      verified.has(nodeId) && input.outputByNodeId.has(nodeId)
+      successful.has(nodeId) && input.outputByNodeId.has(nodeId)
     ));
-    if (selectedNodeIds.length === 0) reason = 'no verified node result was available';
+    verification = selectedNodeIds.length > 0 && selectedNodeIds.every(nodeId => verified.has(nodeId))
+      ? 'verified'
+      : 'unverified';
+    verifiedNodeIds = selectedNodeIds.filter(nodeId => verified.has(nodeId));
+    if (selectedNodeIds.length === 0) reason = 'no successful node result was available';
+  }
+  if (selectedNodeIds.length > 0 && verification === 'unverified') {
+    reason = 'Useful reasoning/runtime output was selected, but it has no verified terminal machine evidence.';
   }
   const selectedOutputs = selectedNodeIds.map(nodeId => input.outputByNodeId.get(nodeId) || '');
   return {
@@ -614,7 +711,9 @@ export function arbitrateModelGraphResults(input: {
     taskId: input.graph.taskId,
     policy: input.graph.arbitration,
     status: selectedNodeIds.length > 0 ? 'succeeded' : 'blocked',
+    verification,
     selectedNodeIds,
+    verifiedNodeIds,
     consideredNodeIds,
     outputDigest: modelGraphDigest(selectedOutputs),
     completedAt: input.completedAt || new Date().toISOString(),

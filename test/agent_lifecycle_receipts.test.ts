@@ -3,6 +3,7 @@ import { initDatabase } from '../db_layer';
 import { registerAgentTools } from '../server/tools/definitions/agent_tools';
 import { executeToolCall } from '../server/tools/execution_engine';
 import { ToolRegistry } from '../server/tools/registry';
+import { getBackgroundTask, resetBackgroundTasksForTest } from '../server/agents/background_tasks';
 
 describe('agent lifecycle terminal receipts', () => {
   beforeAll(async () => {
@@ -49,5 +50,72 @@ describe('agent lifecycle terminal receipts', () => {
 
     expect(record.error).toContain('externalCommand');
     expect(record.terminalVerification?.status).toBe('failed');
+  });
+
+  it('registers a real scoped background task and returns a verified handoff receipt', async () => {
+    resetBackgroundTasksForTest({ clearPersisted: false, markHydrated: true });
+    const registry = new ToolRegistry();
+    registerAgentTools(registry);
+    const userId = `agent-delegation-${Date.now()}`;
+    const created = await executeToolCall({
+      registry,
+      name: 'agent_create',
+      arguments: { name: 'Delegation Worker', category: 'test' },
+      context: { userId, requestConfirmation: async () => true },
+    });
+    const workerId = JSON.parse(created.result).agent.id;
+    const context = {
+      userId,
+      taskId: 'conversation-task-1',
+      conversationId: 'conversation-1',
+      conversationAgentId: 'lumi',
+      personalityId: 'lumi',
+      requestId: 'request-1',
+      idempotencyKey: 'delegation-request-1',
+      modelRouting: { provider: 'openai', model: 'test-model', selectionMode: 'pinned' as const },
+      toolPolicy: {
+        allowedTools: ['agent_delegate_background'],
+        requireConfirmation: [],
+        forbiddenTools: [],
+        maxIterations: 1,
+      },
+    };
+
+    const delegated = await executeToolCall({
+      registry,
+      name: 'agent_delegate_background',
+      arguments: {
+        task: 'Run a controlled multi-agent acceptance task.',
+        preferredAgentIds: [workerId],
+      },
+      context,
+    });
+    expect(delegated.error).toBeUndefined();
+    expect(delegated.terminalVerification?.status).toBe('verified');
+    const payload = JSON.parse(delegated.result);
+    expect(payload).toMatchObject({
+      ok: true,
+      status: 'registered',
+      persisted: true,
+      task: { status: 'queued', workerNames: ['Delegation Worker'] },
+    });
+    expect(getBackgroundTask(payload.task.id, userId)).toMatchObject({
+      id: payload.task.id,
+      prompt: 'Run a controlled multi-agent acceptance task.',
+      context: {
+        conversationId: 'conversation-1',
+        actionTaskId: 'conversation-task-1',
+        provider: 'openai',
+        model: 'test-model',
+      },
+    });
+
+    const duplicate = await executeToolCall({
+      registry,
+      name: 'agent_delegate_background',
+      arguments: { task: 'Run a controlled multi-agent acceptance task.', preferredAgentIds: [workerId] },
+      context,
+    });
+    expect(JSON.parse(duplicate.result).task.id).toBe(payload.task.id);
   });
 });

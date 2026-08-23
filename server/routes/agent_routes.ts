@@ -7,6 +7,7 @@ import { executeExternalAgent, validateExternalCommand } from "../agents/externa
 import { requireAuth, resolveDomain, type AuthUser } from "../middleware/auth";
 import { isAudioTranscriptionUnavailable, transcribeAudioFile } from "../stt/file_transcription";
 import * as ResourceACL from '../org/resource_acl';
+import { isLoopbackAddress } from '../config/local_identity';
 
 const asyncHandler = (fn: (req: Request, res: Response, next?: NextFunction) => Promise<any>) =>
   (req: Request, res: Response, next: NextFunction) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -101,6 +102,10 @@ function externalRuntimeConfig(agent: any): { cwd?: string } {
   const cfg = parseRuntimeConfig(agent?.runtimeConfig);
   const cwd = typeof cfg.cwd === 'string' && cfg.cwd.trim() ? cfg.cwd.trim() : undefined;
   return cwd ? { cwd } : {};
+}
+
+function canAuthorizeExternalRuntime(req: Request): boolean {
+  return req.user?.role === 'admin' && isLoopbackAddress(req.socket?.remoteAddress);
 }
 
 export function mountAgentRoutes(
@@ -205,6 +210,9 @@ export function mountAgentRoutes(
       const runtimeKind = runtime === 'external' ? 'external' : 'internal';
       const command = String(externalCommand || '').trim();
       if (runtimeKind === 'external') {
+        if (!canAuthorizeExternalRuntime(req)) {
+          return res.status(403).json({ error: 'External agent runtimes may be configured only by the local Lumi administrator.' });
+        }
         const validationError = validateExternalCommand(command);
         if (validationError) return res.status(400).json({ error: validationError });
       }
@@ -238,6 +246,7 @@ export function mountAgentRoutes(
         knowledgeDomains: normalizeStringList(knowledgeDomains),
         allowCrossPollination: !isSanctuary,
         healthStatus: runtimeKind === 'external' ? 'untested' : 'online',
+        ...(runtimeKind === 'external' ? { externalRuntimeAuthorizedAt: new Date().toISOString() } : {}),
       };
       db.agents.push(agent);
       writeDB(db);
@@ -265,6 +274,9 @@ export function mountAgentRoutes(
   });
 
   router.post("/agents/:id/test", requireAuth, asyncHandler(async (req, res) => {
+    if (!canAuthorizeExternalRuntime(req)) {
+      return res.status(403).json({ error: 'External agent runtimes may be tested only by the local Lumi administrator.' });
+    }
     const { id } = req.params;
     const db = readDB();
     const agent = findScopedAgent(db, req.user!, id);
@@ -274,12 +286,16 @@ export function mountAgentRoutes(
     const command = String(req.body?.externalCommand || agent.externalCommand || '').trim();
     const validationError = validateExternalCommand(command);
     if (validationError) return res.status(400).json({ error: validationError });
+    if (!agent.externalRuntimeAuthorizedAt) {
+      agent.externalRuntimeAuthorizedAt = new Date().toISOString();
+    }
 
     const task = String(req.body?.task || 'Lumi external agent health check. Reply briefly with OK and your agent name if you can receive this task.').slice(0, 500);
     const timeoutMs = Math.max(1000, Math.min(Number(req.body?.timeoutMs) || 30000, 60000));
     const result = await executeExternalAgent({
       command,
       timeout: timeoutMs,
+      authorized: true,
       ...externalRuntimeConfig(agent),
     }, task);
 
@@ -310,6 +326,12 @@ export function mountAgentRoutes(
       const idx = db.agents.findIndex((a: any) => a.id === id && canManageAgent(a, req.user!, 'admin'));
       if (idx === -1) return res.status(404).json({ error: "Agent not found or unauthorized" });
       const agent = db.agents[idx];
+      const touchesExternalRuntime = agent.runtime === 'external'
+        || req.body?.runtime === 'external'
+        || req.body?.externalCommand !== undefined;
+      if (touchesExternalRuntime && !canAuthorizeExternalRuntime(req)) {
+        return res.status(403).json({ error: 'External agent runtimes may be configured only by the local Lumi administrator.' });
+      }
       const previousRuntime = agent.runtime;
       const previousCommand = String(agent.externalCommand || '').trim();
       const allowedFields = [
@@ -334,10 +356,14 @@ export function mountAgentRoutes(
       if (req.body.runtimeConfig !== undefined) agent.runtimeConfig = normalizeRuntimeConfig(req.body.runtimeConfig);
       const nextRuntime = agent.runtime === 'external' ? 'external' : 'internal';
       if (nextRuntime === 'external') {
+        if (!canAuthorizeExternalRuntime(req)) {
+          return res.status(403).json({ error: 'External agent runtimes may be configured only by the local Lumi administrator.' });
+        }
         const validationError = validateExternalCommand(String(agent.externalCommand || ''));
         if (validationError) return res.status(400).json({ error: validationError });
         const commandChanged = previousRuntime !== nextRuntime || previousCommand !== String(agent.externalCommand || '').trim();
         if (commandChanged) {
+          agent.externalRuntimeAuthorizedAt = new Date().toISOString();
           agent.healthStatus = 'untested';
           delete agent.lastHealthCheckAt;
           delete agent.lastRunStatus;
@@ -349,6 +375,7 @@ export function mountAgentRoutes(
         }
       } else {
         agent.externalCommand = '';
+        delete agent.externalRuntimeAuthorizedAt;
         agent.healthStatus = 'online';
       }
       agent.lastActiveAt = new Date().toISOString();

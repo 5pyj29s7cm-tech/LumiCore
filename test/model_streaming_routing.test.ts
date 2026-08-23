@@ -109,7 +109,7 @@ describe('transactional streaming model routing', () => {
     ]);
   });
 
-  it('never appends a second model after visible output has committed', async () => {
+  it('never appends a second model after visible output has committed for a pinned primary', async () => {
     async function* primary() {
       yield { choices: [{ delta: { content: 'visible partial' } }] };
       throw new Error('failed after commit');
@@ -127,7 +127,7 @@ describe('transactional streaming model routing', () => {
       {
         provider: 'deepseek',
         model: 'committed-primary',
-        selectionMode: 'ordered_fallback',
+        selectionMode: 'pinned',
         fallbackCandidates: [{ provider: 'openai', model: 'forbidden-replay' }],
         allowCloudFallback: true,
         attemptTimeouts: deadlines,
@@ -140,7 +140,7 @@ describe('transactional streaming model routing', () => {
     expect(fallbackCreate).not.toHaveBeenCalled();
   });
 
-  it('does not expose or replay a failed candidate tool call', async () => {
+  it('does not expose or replay a failed pinned candidate tool call', async () => {
     async function* primary() {
       yield { choices: [{ delta: { tool_calls: [{ index: 0, id: 'unsafe', function: { name: 'side_effect', arguments: '{}' } }] } }] };
       throw new Error('tool stream failed before completion');
@@ -158,7 +158,7 @@ describe('transactional streaming model routing', () => {
       {
         provider: 'deepseek',
         model: 'failed-tool-primary',
-        selectionMode: 'ordered_fallback',
+        selectionMode: 'pinned',
         fallbackCandidates: [{ provider: 'openai', model: 'safe-tool-fallback' }],
         allowCloudFallback: true,
         attemptTimeouts: deadlines,
@@ -171,7 +171,7 @@ describe('transactional streaming model routing', () => {
     expect(result.routing.selectedProvider).toBe('openai');
   });
 
-  it('stops the route immediately on caller cancellation', async () => {
+  it('stops a pinned failover route immediately on caller cancellation', async () => {
     const controller = new AbortController();
     const deepSeek = { chat: { completions: { create: () => new Promise<never>(() => {}) } } };
     const fallbackCreate = vi.fn();
@@ -182,7 +182,7 @@ describe('transactional streaming model routing', () => {
       {
         provider: 'deepseek',
         model: 'cancelled-primary',
-        selectionMode: 'ordered_fallback',
+        selectionMode: 'pinned',
         fallbackCandidates: [{ provider: 'openai', model: 'must-not-run' }],
         allowCloudFallback: true,
         signal: controller.signal,
@@ -197,12 +197,15 @@ describe('transactional streaming model routing', () => {
     expect(fallbackCreate).not.toHaveBeenCalled();
   });
 
-  it('keeps an explicitly pinned model pinned when it times out', async () => {
+  it('fails over a pinned model after a pre-visible timeout', async () => {
     const deepSeek = { chat: { completions: { create: () => new Promise<never>(() => {}) } } };
-    const fallbackCreate = vi.fn();
+    const fallbackCreate = vi.fn(async function* () {
+      yield { choices: [{ delta: { content: 'pinned fallback answer' } }] };
+    });
     const openAI = { chat: { completions: { create: fallbackCreate } } };
+    const chunks: string[] = [];
 
-    await expect(makeLLMCallStreaming(
+    const result = await makeLLMCallStreaming(
       [{ role: 'user', content: 'stay pinned' }],
       [],
       {
@@ -213,11 +216,18 @@ describe('transactional streaming model routing', () => {
         allowCloudFallback: true,
         attemptTimeouts: { ...deadlines, requestMs: 15 },
       },
-      () => {},
+      chunk => chunks.push(chunk),
       () => deepSeek,
       () => null,
       () => openAI,
-    )).rejects.toMatchObject({ stage: 'request' });
-    expect(fallbackCreate).not.toHaveBeenCalled();
+    );
+    expect(result.text).toBe('pinned fallback answer');
+    expect(result.routing).toMatchObject({
+      selectionMode: 'pinned',
+      selectedProvider: 'openai',
+      selectedModel: 'must-not-run',
+    });
+    expect(chunks).toEqual(['pinned fallback answer']);
+    expect(fallbackCreate).toHaveBeenCalledTimes(1);
   });
 });

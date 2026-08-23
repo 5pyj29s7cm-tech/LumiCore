@@ -1,7 +1,7 @@
 import { Socket, Server } from "socket.io";
 import { deviceRegistry } from "../devices";
 import { registerUserSocket, unregisterUserSocket } from "../memory";
-import { joinDesktopRelayRoom } from "./desktop_relay";
+import { isDesktopDeviceType, joinDesktopRelayRoom } from "./desktop_relay";
 import { resolveSocketScope } from './scope';
 
 function socketGuard(fn: (...args: any[]) => void | Promise<void>) {
@@ -26,6 +26,13 @@ export function registerDeviceHandlers(socket: Socket, getUserId: (s: Socket) =>
   }) => {
     const uid = getUserId(socket);
     const scope = resolveSocketScope(socket, uid);
+    if (isDesktopDeviceType(data.type) && socket.data?.trustedLocalExecution !== true) {
+      socket.emit('device:registration_error', {
+        code: 'DESKTOP_SESSION_PROOF_REQUIRED',
+        message: 'A verified native desktop session is required to register a desktop execution target.',
+      });
+      return;
+    }
     const fingerprint = (socket.handshake.auth as any)?.fingerprint || socket.id;
     deviceRegistry.register(uid, socket.id, {
       name: data.name,

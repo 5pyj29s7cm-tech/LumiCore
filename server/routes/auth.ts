@@ -1,5 +1,6 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import rateLimit from "express-rate-limit";
 import { readDB, writeDB } from "../../db_layer";
@@ -8,7 +9,12 @@ import { getMember, listUserOrgs } from "../org/db";
 import { saveVoiceprint, replaceVoiceprints, saveFace, getVoiceprints, getFaces, deleteVoiceprint, deleteFace } from "../biometrics/store";
 import { verifyVoiceprintAudio } from "../biometrics/voiceprint_verify";
 import { extractSpeechBrainEmbedding } from "../biometrics/voiceprint_provider";
-import { getLocalAdminPassword, isLoopbackAddress } from "../config/local_identity";
+import { isLoopbackAddress } from "../config/local_identity";
+import {
+  consumeDesktopBootstrapProof,
+  DESKTOP_BOOTSTRAP_HEADER,
+  issueDesktopSessionProof,
+} from "../config/desktop_bootstrap";
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -125,20 +131,44 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
     res.json({ success: true });
   });
 
-  // Bootstrap endpoint: silent local identity for the desktop client.
-  router.get("/auth/bootstrap", async (req, res) => {
+  // Native-only bootstrap handoff. Loopback is necessary but not sufficient.
+  router.post("/auth/bootstrap", async (req, res) => {
     try {
+    res.setHeader('Cache-Control', 'no-store');
     if (!isLoopbackAddress(req.socket.remoteAddress)) {
       return res.status(403).json({ error: "Local identity bootstrap is only available from this computer" });
     }
-    const adminPassword = getLocalAdminPassword();
+    const presentedProof = req.headers[DESKTOP_BOOTSTRAP_HEADER];
+    if (typeof presentedProof !== 'string' || !consumeDesktopBootstrapProof(presentedProof)) {
+      return res.status(403).json({ error: "Native desktop bootstrap proof is required" });
+    }
 
     const db = readDB();
-    let admin = db.users.find((u: any) => u.username === "admin");
+    let admin: any = null;
+    const bearer = req.headers.authorization?.startsWith('Bearer ')
+      ? req.headers.authorization.slice(7)
+      : '';
+    if (bearer) {
+      try {
+        const decoded = jwt.verify(bearer, jwtSecret) as any;
+        admin = db.users.find((user: any) => user.uid === decoded.uid) || null;
+      } catch {}
+    }
+    if (!admin) {
+      admin = db.users.find((user: any) => user.username === 'admin' && user.role === 'admin');
+    }
 
     if (!admin) {
-      // Create admin account on first bootstrap
-      const hashedPassword = await bcrypt.hash(adminPassword, 10);
+      if (db.users.some((user: any) => user.username === 'admin')) {
+        return res.status(409).json({
+          error: 'The reserved local administrator name belongs to a non-administrator account',
+          code: 'LOCAL_ADMIN_IDENTITY_CONFLICT',
+        });
+      }
+      // First-run authentication is the native proof. This random credential
+      // is never returned and is unrelated to any fixed environment password.
+      const randomCredential = crypto.randomBytes(48).toString('base64url');
+      const hashedPassword = await bcrypt.hash(randomCredential, 10);
       admin = {
         uid: Math.random().toString(36).substring(2, 15),
         username: "admin",
@@ -147,33 +177,29 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
         role: "admin",
         balance: 999.0,
         createdAt: new Date().toISOString(),
+        localDesktopIdentity: true,
       };
       db.users.push(admin);
       writeDB(db);
     }
 
-    // Verify password matches current AUTO_LOGIN_PASSWORD
-    const pwMatch = await bcrypt.compare(adminPassword, admin.password);
-    if (!pwMatch) {
-      // Password changed in .env — update stored hash
-      admin.password = await bcrypt.hash(adminPassword, 10);
-      const idx = db.users.findIndex((u: any) => u.username === "admin");
-      if (idx >= 0) {
-        db.users[idx].password = admin.password;
-        writeDB(db);
-      }
-    }
-
-    const tokenPayload: any = { uid: admin.uid, username: "admin", role: admin.role };
+    const tokenPayload: any = { uid: admin.uid, username: admin.username, role: admin.role };
     const token = jwt.sign(
       tokenPayload,
       jwtSecret,
       { expiresIn: "24h" },
     );
+    const desktopSession = issueDesktopSessionProof(admin.uid);
     res.cookie("token", token, getCookieOptions());
     const { password: _, ...userWithoutPassword } = admin;
     const userResp: any = { ...userWithoutPassword };
-    return res.json({ success: true, user: userResp, token });
+    return res.json({
+      success: true,
+      user: userResp,
+      token,
+      desktopSessionProof: desktopSession.proof,
+      desktopSessionExpiresAt: desktopSession.expiresAt,
+    });
     } catch (err: any) {
       console.error('[Auth] bootstrap error:', err.message);
       return res.status(500).json({ error: 'Internal server error' });

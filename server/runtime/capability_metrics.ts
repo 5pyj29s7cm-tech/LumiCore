@@ -150,7 +150,10 @@ export function recordModelNodeRecovery(): void {
 
 export function recordModelArbitration(receipt: ModelGraphArbitrationReceipt): void {
   counters.modelGraph.arbitrations += 1;
-  if (receipt.status !== 'succeeded') counters.modelGraph.blockedArbitrations += 1;
+  // A useful reasoning result is still not a verified completion sample.
+  if (receipt.status !== 'succeeded' || receipt.verification !== 'verified') {
+    counters.modelGraph.blockedArbitrations += 1;
+  }
 }
 
 export function recordKnowledgeCoverageEvaluation(

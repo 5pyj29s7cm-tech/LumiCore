@@ -7,7 +7,7 @@ import { makeLLMCall } from "../llm/providers";
 import { toolRegistry } from "../tools/registry";
 import { executeToolCallOrThrow } from "../tools/execution_engine";
 import { recordLatency } from "../monitor/latency_store";
-import { optionalAuth, resolveDomain } from "../middleware/auth";
+import { optionalAuth, requireAuth, resolveDomain } from "../middleware/auth";
 import { getUserPreferredLLMConfig } from "../llm/user_preferences";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { buildUnifiedLegalEntryPrompt } from "../cognition/legal_entry";
@@ -21,6 +21,7 @@ import {
 } from "../cognition/response_delivery";
 import type { LumiTurnFlow } from "../cognition/turn_flow";
 import type { ToolExecutionRecord } from "../tools/types";
+import { restrictToolPolicyForExecutionBoundary } from "../tools/remote_policy";
 
 const REST_CHAT_BASE_SYSTEM_INSTRUCTION =
   'You are Lumi, the local core intelligence. Be professional, thoughtful, forward-looking, concise, and useful. Follow the user-facing response-language instruction while keeping internal protocols, tool names, state fields, and execution policy in canonical English.';
@@ -191,6 +192,32 @@ const DIRECT_LEGAL_TOOL_ALLOWLIST = new Set([
   'legal_import_judgment',
 ]);
 
+/**
+ * Organization viewers are limited to tools whose contract is read-only.
+ * Tools that can archive a case, write an artifact, import knowledge,
+ * download material, or refresh shared state remain denied. Contract review
+ * is the sole conditional exception when persistence is explicitly disabled
+ * and no case identity is supplied.
+ */
+const ORGANIZATION_VIEWER_LEGAL_READ_TOOL_ALLOWLIST = new Set([
+  'legal_search_case',
+  'legal_search_statute',
+  'legal_case_workflow_status',
+  'legal_authority_source_status',
+  'legal_verify_citation',
+]);
+
+function isOrganizationViewerLegalRead(
+  toolName: string,
+  args: Record<string, any>,
+): boolean {
+  if (ORGANIZATION_VIEWER_LEGAL_READ_TOOL_ALLOWLIST.has(toolName)) return true;
+  if (toolName !== 'legal_review_contract') return false;
+  return args.persistCase === false
+    && !String(args.caseId || '').trim()
+    && !String(args.caseName || args.title || '').trim();
+}
+
 export function formatMeetingTranscriptForAnalysis(notes: unknown[]): string {
   const noteItems = Array.isArray(notes) ? notes : [];
   return noteItems
@@ -217,6 +244,12 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     const { provider: reqProvider = "gemini", model: reqModel, messages, prompt: rawPrompt, message } = req.body;
     const prompt = rawPrompt ?? message;
     const userKey = req.headers["x-api-key"] as string;
+    const isBYOK = typeof userKey === 'string' && userKey.length > 5;
+    // Anonymous callers may use only their own provider key. Shared Lumi model
+    // credentials are never an unauthenticated public inference endpoint.
+    if (!req.user && !isBYOK) {
+      return res.status(401).json({ error: 'Authentication or a caller-provided API key is required' });
+    }
     const userId = req.user?.uid || 'anonymous';
     const requestScope = req.user ? resolveDomain(req.user) : { domain: 'personal' as const, orgId: '' };
     const domain = requestScope.domain;
@@ -240,7 +273,10 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       toolRegistry,
       isSanctuary: !req.user,
     });
-    const restModelToolPolicy = buildModelCapabilityPolicy(restExecutionDecision);
+    const restModelToolPolicy = restrictToolPolicyForExecutionBoundary(
+      buildModelCapabilityPolicy(restExecutionDecision),
+      'remote_restricted',
+    );
     const deferRestStream =
       restExecutionDecision.allowToolUse
       || shouldDeferModelOutputUntilFinalized({
@@ -249,6 +285,11 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       });
     const toolContext = {
       userId,
+      authenticated: Boolean(req.user),
+      authRole: req.user?.role,
+      orgRole: req.user?.orgRole,
+      localExecution: false,
+      executionBoundary: 'remote_restricted' as const,
       domain,
       orgId,
       llmGetters: llm,
@@ -264,7 +305,6 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       source: 'rest_chat',
     });
 
-    const isBYOK = userKey && userKey.length > 5;
     const preferred = getUserPreferredLLMConfig(userId, { domain, orgId });
     const provider = isBYOK ? reqProvider : preferred.provider;
     const model = isBYOK ? reqModel : preferred.model;
@@ -444,20 +484,16 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
   router.post("/ai/chat", optionalAuth, handleChat);
   router.post("/chat", optionalAuth, handleChat);
 
-  router.post("/legal/tool/:toolName", optionalAuth, asyncHandler(async (req, res) => {
+  router.post("/legal/tool/:toolName", requireAuth, asyncHandler(async (req, res) => {
     const toolName = String(req.params?.toolName || '').trim();
     if (!DIRECT_LEGAL_TOOL_ALLOWLIST.has(toolName)) {
       return res.status(404).json({ error: 'Unknown or unavailable legal tool' });
     }
-    if (!toolRegistry.get(toolName)) {
-      return res.status(404).json({ error: `Legal tool "${toolName}" is not registered` });
-    }
-
     const rawArgs = req.body?.args && typeof req.body.args === 'object'
       ? req.body.args
       : (req.body || {});
-    const userId = req.user?.uid || 'anonymous';
-    const requestScope = req.user ? resolveDomain(req.user) : { domain: 'personal' as const, orgId: '' };
+    const userId = req.user!.uid;
+    const requestScope = resolveDomain(req.user!);
     const domain = requestScope.domain;
     const orgId = requestScope.orgId;
     const legalOrgId = resolveLegalCaseworkOrgId({ domain, userOrgId: orgId, userId });
@@ -472,6 +508,20 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       args.persistCase = true;
     }
 
+    if (
+      domain === 'work'
+      && req.user!.orgRole === 'viewer'
+      && !isOrganizationViewerLegalRead(toolName, args)
+    ) {
+      return res.status(403).json({
+        error: 'Organization viewers may only use read-only legal tools.',
+      });
+    }
+
+    if (!toolRegistry.get(toolName)) {
+      return res.status(404).json({ error: `Legal tool "${toolName}" is not registered` });
+    }
+
     const text = await executeToolCallOrThrow({
       registry: toolRegistry,
       name: toolName,
@@ -482,19 +532,23 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
         orgId,
         llmGetters: llm,
         source: 'legal-direct-tool',
-      },
+        authenticated: true,
+        authRole: req.user!.role,
+        orgRole: req.user!.orgRole,
+        localExecution: false,
+      } as any,
     });
     return res.json({ text, toolName });
   }));
 
-  router.post("/legal/contract-review", optionalAuth, asyncHandler(async (req, res) => {
+  router.post("/legal/contract-review", requireAuth, asyncHandler(async (req, res) => {
     const contract = String(req.body?.contract || '').trim();
     if (!contract) {
       return res.status(400).json({ error: '请提供合同文本' });
     }
 
-    const userId = req.user?.uid || 'anonymous';
-    const requestScope = req.user ? resolveDomain(req.user) : { domain: 'personal' as const, orgId: '' };
+    const userId = req.user!.uid;
+    const requestScope = resolveDomain(req.user!);
     const domain = requestScope.domain;
     const orgId = requestScope.orgId;
     const legalOrgId = resolveLegalCaseworkOrgId({ domain, userOrgId: orgId, userId });
@@ -508,6 +562,15 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       court: String(req.body?.court || '').trim(),
       persistCase: req.body?.persistCase === true || Boolean(req.body?.caseId || req.body?.caseName),
     };
+    if (
+      domain === 'work'
+      && req.user!.orgRole === 'viewer'
+      && !isOrganizationViewerLegalRead('legal_review_contract', args)
+    ) {
+      return res.status(403).json({
+        error: 'Organization viewers may only run contract review without case persistence.',
+      });
+    }
     const llmReview = executeToolCallOrThrow({
       registry: toolRegistry,
       name: 'legal_review_contract',
@@ -518,7 +581,11 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
         orgId,
         llmGetters: llm,
         source: 'legal-contract-review',
-      },
+        authenticated: true,
+        authRole: req.user!.role,
+        orgRole: req.user!.orgRole,
+        localExecution: false,
+      } as any,
     });
     llmReview.catch(() => undefined);
 
@@ -542,7 +609,11 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
           domain,
           orgId,
           source: 'legal-contract-review-fallback',
-        },
+          authenticated: true,
+          authRole: req.user!.role,
+          orgRole: req.user!.orgRole,
+          localExecution: false,
+        } as any,
       });
       return res.json({
         text: `${fallback}\n\n*提示：深度 LLM 审查暂未及时完成，已先返回本地规则审查结果。*`,
@@ -552,7 +623,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     }
   }));
 
-  router.post("/meeting/analyze", optionalAuth, asyncHandler(async (req, res) => {
+  router.post("/meeting/analyze", requireAuth, asyncHandler(async (req, res) => {
     const { provider: reqProvider, notes, startedAt, endedAt, language = "zh", purpose = "meeting", legalCase } = req.body || {};
     const userId = req.user?.uid || 'anonymous';
     const requestScope = req.user ? resolveDomain(req.user) : { domain: 'personal' as const, orgId: '' };
@@ -654,6 +725,10 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
           }),
           context: {
             userId,
+            authenticated: true,
+            authRole: req.user!.role,
+            orgRole: req.user!.orgRole,
+            localExecution: false,
             domain,
             orgId,
             llmGetters: llm,

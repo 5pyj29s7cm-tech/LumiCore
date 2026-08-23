@@ -1,15 +1,17 @@
 import { Router } from "express";
 import { deviceRegistry } from "../devices";
-import { optionalAuth } from "../middleware/auth";
+import type { DeviceScope } from "../devices";
+import { requireAuth } from "../middleware/auth";
 import { readDB, writeDB } from "../../db_layer";
 
-function pairedKey(userId: string): string {
-  return `paired_devices_${userId || 'local'}`;
+function pairedKey(userId: string, scope: DeviceScope): string {
+  const scopeKey = scope.domain === 'work' ? `work_${scope.orgId}` : 'personal';
+  return `paired_devices_${userId}_${scopeKey}`;
 }
 
-function getPairedDeviceIds(userId: string): string[] {
+function getPairedDeviceIds(userId: string, scope: DeviceScope): string[] {
   try {
-    const row = (readDB().settings || []).find((s: any) => s.key === pairedKey(userId));
+    const row = (readDB().settings || []).find((s: any) => s.key === pairedKey(userId, scope));
     const value = row?.value ? JSON.parse(row.value) : [];
     return Array.isArray(value) ? value.filter((id: any) => typeof id === 'string') : [];
   } catch {
@@ -17,11 +19,11 @@ function getPairedDeviceIds(userId: string): string[] {
   }
 }
 
-function savePairedDeviceIds(userId: string, ids: string[]): string[] {
+function savePairedDeviceIds(userId: string, scope: DeviceScope, ids: string[]): string[] {
   const db = readDB();
   if (!db.settings) db.settings = [];
   const unique = [...new Set(ids.filter(Boolean))];
-  const key = pairedKey(userId);
+  const key = pairedKey(userId, scope);
   const idx = db.settings.findIndex((s: any) => s.key === key);
   const value = JSON.stringify(unique);
   if (idx >= 0) db.settings[idx].value = value;
@@ -31,37 +33,59 @@ function savePairedDeviceIds(userId: string, ids: string[]): string[] {
 }
 
 export function mountDeviceRoutes(router: Router, _jwtSecret: string) {
-  router.post("/devices/pair", optionalAuth, (req, res) => {
+  const requestScope = (req: any): DeviceScope => req.user?.orgId
+    ? { domain: 'work', orgId: req.user.orgId }
+    : { domain: 'personal', orgId: '' };
+
+  router.post("/devices/pair", requireAuth, (req, res) => {
     const { deviceId } = req.body || {};
     if (!deviceId) return res.status(400).json({ error: "deviceId required" });
-    const userId = req.user?.uid || 'local';
-    const pairedDeviceIds = savePairedDeviceIds(userId, [...getPairedDeviceIds(userId), String(deviceId)]);
-    res.json({ success: true, paired: deviceId, pairedDeviceIds, timestamp: new Date().toISOString() });
-  });
-
-  router.delete("/devices/pair/:deviceId", optionalAuth, (req, res) => {
-    const userId = req.user?.uid || 'local';
+    const normalizedDeviceId = String(deviceId).trim();
+    if (!normalizedDeviceId || normalizedDeviceId.length > 512) {
+      return res.status(400).json({ error: 'deviceId must be 512 characters or fewer' });
+    }
+    const userId = req.user!.uid;
+    const scope = requestScope(req);
+    const visible = deviceRegistry.getUserDevices(userId, scope);
+    if (!visible.some(device => device.id === normalizedDeviceId)) {
+      return res.status(404).json({ error: 'Device not found in the active user and domain scope' });
+    }
     const pairedDeviceIds = savePairedDeviceIds(
       userId,
-      getPairedDeviceIds(userId).filter(id => id !== req.params.deviceId),
+      scope,
+      [...getPairedDeviceIds(userId, scope), normalizedDeviceId],
+    );
+    res.json({ success: true, paired: normalizedDeviceId, pairedDeviceIds, timestamp: new Date().toISOString() });
+  });
+
+  router.delete("/devices/pair/:deviceId", requireAuth, (req, res) => {
+    const userId = req.user!.uid;
+    const scope = requestScope(req);
+    const current = getPairedDeviceIds(userId, scope);
+    if (!current.includes(req.params.deviceId)) {
+      return res.status(404).json({ error: 'Paired device not found in the active user and domain scope' });
+    }
+    const pairedDeviceIds = savePairedDeviceIds(
+      userId,
+      scope,
+      current.filter(id => id !== req.params.deviceId),
     );
     res.json({ success: true, unpaired: req.params.deviceId, pairedDeviceIds, timestamp: new Date().toISOString() });
   });
 
-  router.get("/devices", optionalAuth, (req, res) => {
-    const userId = req.user?.uid || 'local';
-    const scope = req.user?.orgId
-      ? { domain: 'work' as const, orgId: req.user.orgId }
-      : { domain: 'personal' as const, orgId: '' };
-    const userDevices = userId ? deviceRegistry.getUserDevices(userId, scope) : [];
-    const mcpDevices = deviceRegistry.getMcpDevices();
-    const pairedDeviceIds = getPairedDeviceIds(userId);
+  router.get("/devices", requireAuth, (req, res) => {
+    const userId = req.user!.uid;
+    const scope = requestScope(req);
+    // MCP devices are returned only when their registered owner and domain
+    // match this exact request scope; the global MCP list is never merged in.
+    const userDevices = deviceRegistry.getUserDevices(userId, scope);
+    const pairedDeviceIds = getPairedDeviceIds(userId, scope);
     const pairedSet = new Set(pairedDeviceIds);
-    const devices = [...userDevices, ...mcpDevices].map(device => ({
+    const devices = userDevices.map(device => ({
       ...device,
       paired: pairedSet.has(device.id),
     }));
-    const sensory = userId ? deviceRegistry.getSensoryContext(userId, scope) : { hasAudio: false, hasVideo: false, hasSpatial: false, hasHaptic: false, hasHolographic: false, activeDeviceTypes: [], deviceCount: mcpDevices.length };
+    const sensory = deviceRegistry.getSensoryContext(userId, scope);
     res.json({ devices, pairedDeviceIds, sensoryContext: sensory });
   });
 }

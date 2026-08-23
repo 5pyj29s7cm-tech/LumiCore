@@ -41,6 +41,15 @@ import {
 } from '../cognition/execution_pipeline';
 import { sanitizeCapabilityExecutionPlan } from '../conversation/action_ledger';
 import { snapshotDurableToolRecords } from '../cognition/durable_task_recovery';
+import {
+  buildTaskCompletionFeedback,
+  buildTaskTerminalReceipt,
+  validateCompletionTerminalReceipt,
+} from '../cognition/acceptance_evidence';
+import {
+  canUseQueuedSelfImprovementStageAuthorization,
+  isLocalAdminAuthorizedSelfImprovementTask,
+} from '../self_extension/improvement_program';
 
 interface LLMGetters {
   getDeepSeek: () => any;
@@ -82,13 +91,23 @@ const LOCAL_BODY_LEARNING_TOOLS = [
   'work_product_verify',
 ];
 
+const SELF_IMPROVEMENT_TASK_TOOLS = [
+  'self_improvement_read_scope',
+  'self_improvement_stage_patch',
+  'self_improvement_replay_verified_stage',
+];
+
+function isSelfImprovementTask(task: Partial<Pick<AutonomousTask, 'idempotencyKey'>>): boolean {
+  return /^self-improvement:improvement_[a-z0-9_-]+:\d+$/i.test(String(task.idempotencyKey || ''));
+}
+
 export function isLocalBodyLearningTask(task: Pick<AutonomousTask, 'title' | 'description'>): boolean {
   return /本机身体|local machine body|desktop body|local body|desktop_body_map|local_machine_awareness/i
     .test(`${task.title || ''}\n${task.description || ''}`);
 }
 
 export function buildAutonomousToolPolicy(
-  task: Pick<AutonomousTask, 'title' | 'description'> & Partial<Pick<AutonomousTask, 'executionPlan' | 'recovery'>>,
+  task: Pick<AutonomousTask, 'title' | 'description'> & Partial<Pick<AutonomousTask, 'idempotencyKey' | 'executionPlan' | 'recovery'>>,
   maxIterations: number,
 ) {
   const recoveryToolBoundary = task.recovery?.planRevisions?.length && task.executionPlan
@@ -96,9 +115,24 @@ export function buildAutonomousToolPolicy(
         .map(node => node.toolName)
         .filter((name): name is string => Boolean(name))))
     : [];
-  const narrowForRecovery = (policy: typeof AUTONOMOUS_POLICY) => recoveryToolBoundary.length > 0
-    ? { ...policy, allowedTools: recoveryToolBoundary }
-    : policy;
+  const narrowForRecovery = (policy: typeof AUTONOMOUS_POLICY) => {
+    if (recoveryToolBoundary.length === 0) return policy;
+    const permitted = policy.allowedTools.includes('*')
+      ? recoveryToolBoundary
+      : recoveryToolBoundary.filter(tool => policy.allowedTools.includes(tool));
+    return { ...policy, allowedTools: permitted };
+  };
+  if (isSelfImprovementTask(task)) {
+    // A prior diagnostic/read-only plan is not a complete self-improvement
+    // capability boundary. Recovery must retain the dedicated stage tool or a
+    // persisted read-only plan can deadlock the exact task forever.
+    return {
+      allowedTools: SELF_IMPROVEMENT_TASK_TOOLS,
+      requireConfirmation: ['self_improvement_stage_patch'],
+      forbiddenTools: AUTONOMOUS_POLICY.forbiddenTools,
+      maxIterations: Math.min(maxIterations, 8),
+    };
+  }
   if (isLocalBodyLearningTask(task)) {
     return narrowForRecovery({
       allowedTools: LOCAL_BODY_LEARNING_TOOLS,
@@ -112,7 +146,7 @@ export function buildAutonomousToolPolicy(
 
 export function buildAutonomousCapabilityPipeline(
   task: Pick<AutonomousTask, 'id' | 'userId' | 'description' | 'source' | 'title'>
-    & Partial<Pick<AutonomousTask, 'executionPlan' | 'recovery'>>,
+    & Partial<Pick<AutonomousTask, 'idempotencyKey' | 'executionPlan' | 'recovery'>>,
   maxIterations: number,
   registry: ToolRegistry = toolRegistry,
 ): LumiExecutionPipeline {
@@ -198,6 +232,88 @@ function autonomousResponseReportsIncomplete(value: string): boolean {
   return /(?:\b(?:could\s+not|couldn't|unable\s+to|failed\s+to|not\s+completed|not\s+finished|incomplete|unfinished|blocked|requires?\s+(?:user\s+)?confirmation)\b|(?:\u672a\u5b8c\u6210|\u6ca1\u6709\u5b8c\u6210|\u65e0\u6cd5\u5b8c\u6210|\u4e0d\u80fd\u5b8c\u6210|\u53d7\u963b|\u6267\u884c\u5931\u8d25|\u9700\u8981\u7528\u6237\u786e\u8ba4))/iu.test(text);
 }
 
+function selfImprovementProposalId(
+  task?: Partial<Pick<AutonomousTask, 'idempotencyKey'>>,
+): string {
+  const match = /^self-improvement:(improvement_[a-z0-9_-]+):\d+$/i
+    .exec(String(task?.idempotencyKey || ''));
+  return match?.[1] || '';
+}
+
+function selfImprovementProgramRevision(
+  task?: Partial<Pick<AutonomousTask, 'idempotencyKey'>>,
+): number {
+  const match = /^self-improvement:improvement_[a-z0-9_-]+:(\d+)$/i
+    .exec(String(task?.idempotencyKey || ''));
+  return Number(match?.[1] || -1);
+}
+
+/**
+ * A queued self-improvement task ends at a verified isolated stage. Activation
+ * is deliberately outside the autonomous task and still requires a separate
+ * foreground confirmation.  Do not make an honest boundary explanation look
+ * like a failed task, and do not accept generic file-write evidence in place
+ * of the exact proposal receipt.
+ */
+export function hasVerifiedSelfImprovementStageReceipt(
+  task: Partial<Pick<AutonomousTask, 'id' | 'idempotencyKey'>> | undefined,
+  toolRecords: ToolExecutionRecord[],
+): boolean {
+  const proposalId = selfImprovementProposalId(task);
+  const programRevision = selfImprovementProgramRevision(task);
+  const taskId = String(task?.id || '').trim();
+  if (!proposalId || !taskId || !Number.isSafeInteger(programRevision) || programRevision < 0) return false;
+  return toolRecords.some(record => {
+    if (
+      !['self_improvement_stage_patch', 'self_improvement_replay_verified_stage'].includes(record.name)
+      || record.error
+      || !String(record.id || '').trim()
+      || String(record.arguments?.proposalId || '') !== proposalId
+      || record.taskId !== taskId
+      || record.terminalVerification?.status !== 'verified'
+      || record.terminalVerification.strategy !== 'terminal_receipt'
+      || record.envelope?.version !== 1
+      || record.envelope.status !== 'verified_success'
+      || record.envelope.toolName !== record.name
+      || record.envelope.taskId !== taskId
+      || record.envelope.verification.status !== 'verified'
+      || !String(record.envelope.idempotencyKey || '').trim()
+      || record.envelope.idempotencyKey !== record.idempotencyKey
+    ) return false;
+    const payload = parseStructuredToolResult(record.result);
+    if (!payload) return false;
+    const proposal = payload.proposal && typeof payload.proposal === 'object'
+      ? payload.proposal as Record<string, unknown>
+      : null;
+    const commit = String(payload.commit || '');
+    const treeDigest = String(payload.treeDigest || '');
+    const repositoryId = String(payload.repositoryId || '');
+    const baseCommit = String(payload.baseCommit || '');
+    const branch = String(payload.branch || '');
+    return payload.ok === true
+      && payload.status === 'verified'
+      && payload.persisted === true
+      && payload.isolated === true
+      && payload.activated === false
+      && payload.pushed === false
+      && /^[0-9a-f]{40,64}$/i.test(commit)
+      && /^[0-9a-f]{64}$/i.test(treeDigest)
+      && /^[0-9a-f]{64}$/i.test(repositoryId)
+      && /^[0-9a-f]{40,64}$/i.test(baseCommit)
+      && branch === `lumi/self-improvement/${proposalId.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80)}`
+      && String(proposal?.id || '') === proposalId
+      && proposal?.status === 'verified'
+      && proposal?.stagingProtocol === 'static_git_plumbing_v1'
+      && proposal?.taskId === taskId
+      && Number(proposal?.programRevision) === programRevision
+      && proposal?.stagedCommit === commit
+      && proposal?.stagedTreeDigest === treeDigest
+      && proposal?.repositoryId === repositoryId
+      && proposal?.baseCommit === baseCommit
+      && proposal?.stagedBranch === branch;
+  });
+}
+
 export interface AutonomousTaskOutcome {
   text: string;
   blocked: boolean;
@@ -210,8 +326,11 @@ export function evaluateAutonomousTaskOutcome(
   taskText: string,
   responseText: string,
   toolRecords: ToolExecutionRecord[],
+  task?: Partial<Pick<AutonomousTask, 'id' | 'idempotencyKey'>>,
 ): AutonomousTaskOutcome {
   const candidateText = String(responseText || '').trim();
+  const selfImprovementTask = Boolean(selfImprovementProposalId(task));
+  const verifiedSelfImprovementStage = hasVerifiedSelfImprovementStageReceipt(task, toolRecords);
   const finalized = finalizeLumiResponse({
     taskText,
     responseText: candidateText || 'Autonomous task returned no final summary.',
@@ -221,18 +340,23 @@ export function evaluateAutonomousTaskOutcome(
   const successfulToolRecords = toolRecords.filter(isSuccessfulAutonomousToolRecord);
   const actionContract = buildActionContract(taskText);
   const missingSummary = !candidateText;
-  const reportedIncomplete = autonomousResponseReportsIncomplete(candidateText);
+  const reportedIncomplete = !verifiedSelfImprovementStage
+    && autonomousResponseReportsIncomplete(candidateText);
   const missingEvidence = successfulToolRecords.length === 0;
-  const missingCoreEvidence = actionContract.applies
+  const missingCoreEvidence = !selfImprovementTask && actionContract.applies
     && !hasCoreActionEvidence(actionContract, toolRecords, taskText);
+  const selfImprovementEvidenceMissing = selfImprovementTask && !verifiedSelfImprovementStage;
   const verified = (
-    !finalized.blocked
+    (!finalized.blocked || verifiedSelfImprovementStage)
     && !missingSummary
     && !reportedIncomplete
     && !missingEvidence
     && !missingCoreEvidence
+    && !selfImprovementEvidenceMissing
   );
-  const reason = finalized.blocked
+  const reason = selfImprovementEvidenceMissing
+    ? 'The autonomous self-improvement task did not produce an exact verified isolated-stage receipt for its bound proposal.'
+    : finalized.blocked && !verifiedSelfImprovementStage
     ? finalized.reason || 'Autonomous completion claim was not supported by its tool ledger.'
     : missingCoreEvidence
       ? `Missing core evidence for autonomous ${actionContract.kind}.`
@@ -245,8 +369,8 @@ export function evaluateAutonomousTaskOutcome(
           : finalized.reason || '';
 
   return {
-    text: finalized.text,
-    blocked: finalized.blocked || !verified,
+    text: verifiedSelfImprovementStage ? candidateText : finalized.text,
+    blocked: (finalized.blocked && !verifiedSelfImprovementStage) || !verified,
     verified,
     reason,
     successfulToolRecords,
@@ -424,7 +548,16 @@ export async function executeNextAutonomousTask(
       userId: task.userId,
       taskId: running.id,
       desktopRelay: task.mode === 'desktop' ? desktopRelay : undefined,
-      requestConfirmation: async (toolName, args) => canAutoApproveAction(toolName, args, { actionIntent: task.description }),
+      requestConfirmation: async (toolName, args) => {
+        if (toolName === 'self_improvement_stage_patch') {
+          return canUseQueuedSelfImprovementStageAuthorization(
+            { userId: task.userId, domain: 'personal', orgId: '' },
+            String(args.proposalId || ''),
+            running.id,
+          );
+        }
+        return canAutoApproveAction(toolName, args, { actionIntent: task.description });
+      },
       actionIntent: task.description,
       routedTaskText: executionPipeline.turnIntent.flow.routeText,
       toolPolicy,
@@ -433,6 +566,11 @@ export async function executeNextAutonomousTask(
         || isRealtimeUserActive(task.userId)
         || leaseLost,
       autonomous: true,
+      localExecution: isLocalAdminAuthorizedSelfImprovementTask(
+        { userId: task.userId, domain: 'personal', orgId: '' },
+        running.id,
+        running.idempotencyKey,
+      ),
       source: 'autonomous',
       idempotencyKey: running.idempotencyKey,
     };
@@ -505,11 +643,15 @@ export async function executeNextAutonomousTask(
       const reason = isRealtimeUserActive(task.userId)
         ? 'Cancelled because a live user voice session took priority'
         : 'Cancelled by user';
-      markCancelled(task.id, reason);
+      const cancelled = markCancelled(task.id, reason);
       markLinkedPlanCancelled(task);
       io.to(`user:${task.userId}:personal`).emit('autonomous:task_cancelled', {
         taskId: task.id,
         title: task.title,
+        completionFeedback: buildTaskCompletionFeedback(cancelled?.terminalReceipt, task.title, {
+          status: cancelled?.status || 'cancelled',
+          reason,
+        }),
         timestamp: new Date().toISOString(),
       });
       return { executed: true, taskId: task.id, result: 'Cancelled by user' };
@@ -519,9 +661,27 @@ export async function executeNextAutonomousTask(
       `${task.title}\n${task.description}`.trim(),
       result.text,
       toolLedger,
+      task,
     );
-    if (!outcome.verified) {
-      const failureReason = outcome.reason || 'Autonomous completion could not be verified.';
+    const terminalReceipt = buildTaskTerminalReceipt({
+      taskId: task.id,
+      runtime: 'autonomous',
+      outcome: 'completed',
+      toolRecords: toolLedger,
+      reason: outcome.verified
+        ? undefined
+        : outcome.reason || 'Autonomous completion could not be verified.',
+    });
+    const terminalAcceptance = outcome.verified
+      ? validateCompletionTerminalReceipt(terminalReceipt, {
+          taskId: task.id,
+          runtime: 'autonomous',
+        })
+      : null;
+    if (!outcome.verified || !terminalAcceptance?.accepted) {
+      const failureReason = outcome.verified
+        ? terminalAcceptance?.reason || 'Autonomous completion lacked a verified terminal receipt.'
+        : outcome.reason || 'Autonomous completion could not be verified.';
       const receiptSnapshots = snapshotDurableToolRecords(toolLedger);
       checkpointAutonomousTask(task.id, {
         phase: 'failed_verification',
@@ -555,6 +715,11 @@ export async function executeNextAutonomousTask(
         status: settled.status,
         nextAttemptAt: settled.nextAttemptAt,
         diagnosis: settled.recovery?.diagnoses.at(-1),
+        completionFeedback: buildTaskCompletionFeedback(
+          settled.terminalReceipt,
+          task.title,
+          { status: settled.status, reason: failureReason },
+        ),
         timestamp: new Date().toISOString(),
       });
       console.warn(
@@ -580,6 +745,7 @@ export async function executeNextAutonomousTask(
       blocked: false,
       verified: true,
       verificationReason: outcome.reason,
+      terminalReceipt,
     }, running.leaseId);
     if (!completed) {
       return { executed: true, taskId: task.id, result: 'Task lease was lost; stale completion was discarded.' };
@@ -596,6 +762,11 @@ export async function executeNextAutonomousTask(
       blocked: false,
       verified: true,
       reason: outcome.reason,
+      terminalReceipt: completed.terminalReceipt,
+      completionFeedback: buildTaskCompletionFeedback(completed.terminalReceipt, task.title, {
+        status: completed.status,
+        accepted: true,
+      }),
       timestamp: new Date().toISOString(),
     });
 
@@ -616,11 +787,15 @@ export async function executeNextAutonomousTask(
       const reason = isRealtimeUserActive(task.userId)
         ? 'Cancelled because a live user voice session took priority'
         : errorMsg;
-      markCancelled(task.id, reason);
+      const cancelled = markCancelled(task.id, reason);
       markLinkedPlanCancelled(task);
       io.to(`user:${task.userId}:personal`).emit('autonomous:task_cancelled', {
         taskId: task.id,
         title: task.title,
+        completionFeedback: buildTaskCompletionFeedback(cancelled?.terminalReceipt, task.title, {
+          status: cancelled?.status || 'cancelled',
+          reason,
+        }),
         timestamp: new Date().toISOString(),
       });
       return { executed: true, taskId: task.id, result: 'Cancelled by user' };
@@ -659,6 +834,10 @@ export async function executeNextAutonomousTask(
       status: settled.status,
       nextAttemptAt: settled.nextAttemptAt,
       diagnosis: settled.recovery?.diagnoses.at(-1),
+      completionFeedback: buildTaskCompletionFeedback(settled.terminalReceipt, task.title, {
+        status: settled.status,
+        reason: errorMsg,
+      }),
       timestamp: new Date().toISOString(),
     });
 

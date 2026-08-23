@@ -6,12 +6,17 @@ import { toast } from 'sonner';
 import { useT } from '@/lib/useT';
 import { uiMessage } from '../i18n/uiMessages';
 import { useApp } from '@/contexts/AppContext';
+import { TaskCompletionFeedbackDetails } from './TaskCompletionFeedbackDetails';
+import {
+  normalizeTaskCompletionFeedback,
+  type TaskCompletionFeedback,
+} from './workflowTypes';
 
 interface AutoTask {
   id: string;
   title: string;
   description: string;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  status: 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'blocked' | 'cancelled';
   source: string;
   planId?: string;
   priority: number;
@@ -27,6 +32,7 @@ interface AutoTask {
   blocked?: boolean;
   verified?: boolean;
   verificationReason?: string;
+  completionFeedback?: TaskCompletionFeedback;
 }
 
 interface AutonomousCompletionPayload {
@@ -40,6 +46,7 @@ interface AutonomousCompletionPayload {
   blocked?: boolean;
   verified?: boolean;
   reason?: string;
+  completionFeedback?: TaskCompletionFeedback;
 }
 
 export function isVerifiedAutonomousCompletionPayload(data: AutonomousCompletionPayload): boolean {
@@ -52,20 +59,26 @@ export function isVerifiedAutonomousCompletionPayload(data: AutonomousCompletion
   );
 }
 
+export function normalizeAutonomousTask(task: AutoTask): AutoTask {
+  const completionFeedback = normalizeTaskCompletionFeedback(task.completionFeedback);
+  return completionFeedback ? { ...task, completionFeedback } : task;
+}
+
 export function normalizeAutonomousHistoryTask(task: AutoTask): AutoTask {
-  if (task.status !== 'completed') return task;
+  const normalized = normalizeAutonomousTask(task);
+  if (normalized.status !== 'completed') return normalized;
   const verified = (
-    task.finalized === true
-    && task.blocked === false
-    && task.verified === true
-    && Number(task.toolCallsCount || 0) > 0
-    && Boolean(String(task.result || '').trim())
+    normalized.finalized === true
+    && normalized.blocked === false
+    && normalized.verified === true
+    && Number(normalized.toolCallsCount || 0) > 0
+    && Boolean(String(normalized.result || '').trim())
   );
-  if (verified) return task;
+  if (verified) return normalized;
   return {
-    ...task,
+    ...normalized,
     status: 'failed',
-    error: task.verificationReason || 'Autonomous completion has no persisted verification evidence.',
+    error: normalized.verificationReason || 'Autonomous completion has no persisted verification evidence.',
   };
 }
 
@@ -76,6 +89,7 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
   const { addNotification } = useApp();
   const t = useT();
   const isZh = t.langCode !== 'en';
+  const locale = isZh ? 'zh' : 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
   const [tasks, setTasks] = useState<AutoTask[]>([]);
   const [queue, setQueue] = useState<AutoTask[]>([]);
@@ -99,7 +113,7 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
       const historyData = await historyRes.json().catch(() => ({}));
       if (!queueRes.ok) throw new Error(queueData.error || 'Failed to load autonomous queue');
       if (!historyRes.ok) throw new Error(historyData.error || 'Failed to load autonomous history');
-      setQueue(queueData.queue || []);
+      setQueue((queueData.queue || []).map(normalizeAutonomousTask));
       setHistory((historyData.tasks || []).map(normalizeAutonomousHistoryTask));
     } catch (err: any) {
       const message = err?.message || 'Failed to load autonomous work';
@@ -134,22 +148,26 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
       result?: string;
       toolCallsCount?: number;
       tokensUsed?: number;
+      completionFeedback?: TaskCompletionFeedback;
     }) => {
+      const completionFeedback = normalizeTaskCompletionFeedback(data.completionFeedback);
+      const terminalStatus: AutoTask['status'] = completionFeedback?.status === 'blocked' ? 'blocked' : 'failed';
       setTasks(prev => prev.map(t => t.id === data.taskId ? {
         ...t,
-        status: 'failed' as const,
+        status: terminalStatus,
         error: data.error,
         result: data.result,
         toolCallsCount: data.toolCallsCount,
         tokensUsed: data.tokensUsed,
         completedAt: data.timestamp,
+        completionFeedback,
       } : t));
       setQueue(prev => prev.filter(t => t.id !== data.taskId));
       const failedTask: AutoTask = {
         id: data.taskId,
         title: data.title,
         description: '',
-        status: 'failed',
+        status: terminalStatus,
         source: 'curiosity',
         priority: 5,
         mode: 'analysis',
@@ -159,6 +177,7 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
         result: data.result,
         toolCallsCount: data.toolCallsCount,
         tokensUsed: data.tokensUsed,
+        completionFeedback,
       };
       setHistory(prev => [failedTask, ...prev.filter(t => t.id !== data.taskId)].slice(0, 50));
       addNotification({
@@ -178,11 +197,18 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
           toolCallsCount: data.toolCallsCount,
           tokensUsed: data.tokensUsed,
           timestamp: data.timestamp,
+          completionFeedback: data.completionFeedback,
         });
         return;
       }
       setTasks(prev => prev.map(t => t.id === data.taskId ? {
-        ...t, status: 'completed' as const, result: data.result, toolCallsCount: data.toolCallsCount, tokensUsed: data.tokensUsed, completedAt: data.timestamp,
+        ...t,
+        status: 'completed' as const,
+        result: data.result,
+        toolCallsCount: data.toolCallsCount,
+        tokensUsed: data.tokensUsed,
+        completedAt: data.timestamp,
+        completionFeedback: normalizeTaskCompletionFeedback(data.completionFeedback),
       } : t));
       setQueue(prev => prev.filter(t => t.id !== data.taskId));
       const newHistoryItem: AutoTask = {
@@ -193,6 +219,7 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
         finalized: true,
         blocked: false,
         verified: true,
+        completionFeedback: normalizeTaskCompletionFeedback(data.completionFeedback),
       };
       setHistory(prev => [newHistoryItem, ...prev].slice(0, 50));
       addNotification({
@@ -210,16 +237,43 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
       result?: string;
       toolCallsCount?: number;
       tokensUsed?: number;
+      completionFeedback?: TaskCompletionFeedback;
     }) => recordFailedTask(data);
+
+    const onCancelled = (data: {
+      taskId: string;
+      title: string;
+      timestamp: string;
+      completionFeedback?: TaskCompletionFeedback;
+    }) => {
+      const completionFeedback = normalizeTaskCompletionFeedback(data.completionFeedback);
+      const cancelledTask: AutoTask = {
+        id: data.taskId,
+        title: data.title,
+        description: '',
+        status: 'cancelled',
+        source: 'curiosity',
+        priority: 5,
+        mode: 'analysis',
+        createdAt: data.timestamp,
+        completedAt: data.timestamp,
+        completionFeedback,
+      };
+      setTasks(prev => prev.filter(task => task.id !== data.taskId));
+      setQueue(prev => prev.filter(task => task.id !== data.taskId));
+      setHistory(prev => [cancelledTask, ...prev.filter(task => task.id !== data.taskId)].slice(0, 50));
+    };
 
     socket.on('autonomous:task_started', onStarted);
     socket.on('autonomous:task_completed', onCompleted);
     socket.on('autonomous:task_failed', onFailed);
+    socket.on('autonomous:task_cancelled', onCancelled);
 
     return () => {
       socket.off('autonomous:task_started', onStarted);
       socket.off('autonomous:task_completed', onCompleted);
       socket.off('autonomous:task_failed', onFailed);
+      socket.off('autonomous:task_cancelled', onCancelled);
     };
   }, [socket, addNotification]);
 
@@ -248,7 +302,7 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
   const allItems = [...liveItems, ...history.filter(t => !liveItems.some(live => live.id === t.id))].filter(t => {
     switch (filter) {
       case 'completed': return t.status === 'completed';
-      case 'failed': return t.status === 'failed';
+      case 'failed': return t.status === 'failed' || t.status === 'blocked';
       case 'cancelled': return t.status === 'cancelled';
       case 'running': return t.status === 'pending' || t.status === 'running';
       case 'desktop': return t.mode === 'desktop';
@@ -271,6 +325,7 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
       case 'running': return <Zap size={14} className="text-amber-400 animate-pulse" />;
       case 'completed': return <CheckCircle size={14} className="text-emerald-400" />;
       case 'failed': return <XCircle size={14} className="text-red-400" />;
+      case 'blocked': return <XCircle size={14} className="text-amber-300" />;
       case 'cancelled': return <XCircle size={14} className="text-white/40" />;
       default: return <Clock size={14} className="text-white/40" />;
     }
@@ -401,6 +456,11 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
                           <p className="text-white/60 leading-relaxed">{task.result.slice(0, 300)}</p>
                         )}
                         {task.error && <p className="text-red-400/70">{task.error}</p>}
+                        <TaskCompletionFeedbackDetails
+                          feedback={task.completionFeedback}
+                          locale={locale}
+                          compact
+                        />
                         <div className="flex gap-4 text-white/30">
                           {task.tokensUsed != null && <span>{task.tokensUsed} tokens</span>}
                           <span>Priority: {task.priority}</span>

@@ -33,6 +33,11 @@ function socketGuard(fn: (...args: any[]) => void | Promise<void>) {
 }
 
 export function registerTerminalHandlers(socket: any, _getUserId: (s: any) => string) {
+  // This handler bypasses ToolRegistry and spawns an interactive host shell.
+  // Keep the guard here as well as at the runtime registration call so a
+  // future mount site cannot accidentally expose it to an ordinary web socket.
+  if (socket.data?.trustedLocalExecution !== true) return;
+
   // Create a new terminal session
   socket.on('terminal:create', socketGuard(() => {
     const sessionId = socket.id;

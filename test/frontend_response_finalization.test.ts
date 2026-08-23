@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  describeAgentResponseDelivery,
   isActionSuccessClaim,
   isFinalizedSuccessfulResponse,
   isTerminalAgentStatus,
@@ -59,6 +60,33 @@ describe('frontend agent response finalization gate', () => {
       finalized: false,
       status: 'waiting_confirmation',
     })).toBe(true);
+  });
+
+  it('turns backend reason codes into actionable copy and never renders guard diagnostics', () => {
+    expect(describeAgentResponseDelivery({
+      text: 'No successful current-turn tool execution was recorded for that execution-status claim.',
+      finalized: true,
+      blocked: true,
+      reason: 'execution_recovery_incomplete',
+    }, true)).toContain('\u5df2\u4fdd\u7559');
+    expect(describeAgentResponseDelivery({
+      text: '\u9700\u8981\u786e\u8ba4\u540e\u624d\u80fd\u7ee7\u7eed\u3002',
+      reason: 'waiting_confirmation',
+    }, true)).toContain('\u786e\u8ba4\u540e');
+    expect(describeAgentResponseDelivery({
+      text: 'blocked',
+      reason: 'execution_capability_unavailable',
+    }, false)).toContain('Settings');
+  });
+
+  it('uses retained-state language instead of exposing the missing-tool guard in progress', () => {
+    const blocked = describeTurnCompletionProgress(true, false, true, {
+      finalized: true,
+      blocked: true,
+      reason: 'execution_recovery_incomplete',
+    });
+    expect(blocked.text).toContain('\u4e0a\u4e0b\u6587');
+    expect(blocked.text).not.toContain('\u672a\u68c0\u6d4b\u5230\u5b9e\u9645\u5de5\u5177\u6267\u884c');
   });
 
   it('allows ordinary text and finalized blocker explanations without marking them successful', () => {

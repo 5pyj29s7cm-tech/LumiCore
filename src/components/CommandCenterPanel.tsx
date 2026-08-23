@@ -3,6 +3,7 @@ import {
   Activity,
   ArrowUpRight,
   Building2,
+  ChevronDown,
   CircleAlert,
   Command,
   Cpu,
@@ -16,9 +17,16 @@ import type { StructuredRuntimeStatus } from '@/hooks/useRuntimeStatus';
 import { apiFetch } from '@/services/apiClient';
 import { socketService } from '@/services/socketService';
 import { uiMessage } from '@/i18n/uiMessages';
+import type { Locale } from '@/i18n/runtime';
+import { taskCompletionFeedbackCopy } from '@/i18n/locales/taskCompletionFeedback';
 import { LumiScenePanel } from './LumiScenePanel';
 import { RuntimeEvidencePanel } from './RuntimeEvidencePanel';
 import { AgentOfficeScene, type OfficeWorker } from './AgentOfficeScene';
+import { TaskCompletionFeedbackDetails } from './TaskCompletionFeedbackDetails';
+import {
+  normalizeTaskCompletionFeedback,
+  type TaskCompletionFeedback,
+} from './workflowTypes';
 import type { CommandCenterView } from './commandCenterTypes';
 
 type CommandAgent = {
@@ -37,11 +45,36 @@ type BackgroundTask = {
   title?: string;
   status?: string;
   workerNames?: string[];
+  toolCallsCount?: number;
+  resultPreview?: string;
+  error?: string;
+  updatedAt?: string;
+  completedAt?: string;
+  completionFeedback?: TaskCompletionFeedback;
 };
 
 type DeskState = 'ready' | 'working' | 'paused' | 'attention';
 
-const ACTIVE_BACKGROUND_STATES = new Set(['queued', 'running', 'cancelling']);
+const ACTIVE_BACKGROUND_STATES = new Set(['queued', 'running', 'pausing', 'cancelling']);
+
+function normalizeBackgroundTask(value: unknown): BackgroundTask | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const task = value as Record<string, unknown>;
+  const id = String(task.id || '').trim();
+  if (!id) return null;
+  return {
+    id,
+    title: String(task.title || id),
+    status: String(task.status || 'queued'),
+    workerNames: Array.isArray(task.workerNames) ? task.workerNames.map(String).filter(Boolean) : [],
+    toolCallsCount: Number(task.toolCallsCount || 0),
+    resultPreview: typeof task.resultPreview === 'string' ? task.resultPreview : undefined,
+    error: typeof task.error === 'string' ? task.error : undefined,
+    updatedAt: typeof task.updatedAt === 'string' ? task.updatedAt : undefined,
+    completedAt: typeof task.completedAt === 'string' ? task.completedAt : undefined,
+    completionFeedback: normalizeTaskCompletionFeedback(task.completionFeedback),
+  };
+}
 
 function deskState(agent: CommandAgent, tasks: BackgroundTask[]): DeskState {
   if (agent.isFrozen || agent.status === 'terminated') return 'paused';
@@ -75,9 +108,12 @@ export function CommandCenterPanel({
 }) {
   const { workDomain, orgConnection } = useApp();
   const isWork = workDomain === 'work' && Boolean(orgConnection?.connected && orgConnection?.orgId);
+  const locale: Locale = t?.langCode === 'en' ? 'en' : 'zh';
+  const feedbackCopy = taskCompletionFeedbackCopy(locale);
   const scopeKey = `${isWork ? 'work' : 'personal'}:${isWork ? orgConnection?.orgId || '' : ''}`;
   const [agents, setAgents] = useState<CommandAgent[]>([]);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
+  const [expandedBackgroundTaskId, setExpandedBackgroundTaskId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const hasLoadedOfficeRef = useRef(false);
   const refreshInFlightRef = useRef<Promise<void> | null>(null);
@@ -111,7 +147,9 @@ export function CommandCenterPanel({
         setAgents(Array.isArray(payload) ? payload : Array.isArray(payload?.agents) ? payload.agents : []);
       }
       if (taskResult.status === 'fulfilled') {
-        setBackgroundTasks(Array.isArray(taskResult.value?.tasks) ? taskResult.value.tasks : []);
+        setBackgroundTasks(Array.isArray(taskResult.value?.tasks)
+          ? taskResult.value.tasks.map(normalizeBackgroundTask).filter((task): task is BackgroundTask => Boolean(task))
+          : []);
       }
       hasLoadedOfficeRef.current = true;
       if (firstLoad) setLoading(false);
@@ -165,6 +203,13 @@ export function CommandCenterPanel({
     };
   }), [agentDesks, backgroundTasks]);
   const activeBackgroundCount = backgroundTasks.filter(task => ACTIVE_BACKGROUND_STATES.has(String(task.status || '').toLowerCase())).length;
+  const recentBackgroundTasks = useMemo(() => [...backgroundTasks]
+    .sort((left, right) => {
+      const rightTime = Date.parse(right.updatedAt || right.completedAt || '') || 0;
+      const leftTime = Date.parse(left.updatedAt || left.completedAt || '') || 0;
+      return rightTime - leftTime;
+    })
+    .slice(0, 6), [backgroundTasks]);
   const lumiWorking = status?.level === 'working' || activeBackgroundCount > 0;
   const lumiAttention = status?.level === 'attention';
 
@@ -273,6 +318,88 @@ export function CommandCenterPanel({
               <div className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-4"><div className="flex items-center gap-2 text-xs text-white/45"><Activity size={13} />{uiMessage('command-center.tasks.1ddfd1ee9d')}</div><div className="mt-2 text-xl font-black text-white/80">{status?.counts.activeTasks || 0}</div></div>
               <div className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-4"><div className="flex items-center gap-2 text-xs text-white/45"><Cpu size={13} />{uiMessage('command-center.receipts.291d3480e2')}</div><div className="mt-2 text-xl font-black text-white/80">{status?.counts.verifiedReceipts || 0}</div></div>
             </div>
+            <section
+              data-command-center-background-tasks
+              className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-3"
+              aria-label={feedbackCopy.backgroundWork}
+            >
+              <div className="flex items-start justify-between gap-3 px-1 pb-2">
+                <div>
+                  <div className="text-xs font-black text-white/78">{feedbackCopy.backgroundWork}</div>
+                  <div className="mt-1 text-[9px] leading-4 text-white/32">{feedbackCopy.backgroundWorkDetail}</div>
+                </div>
+                <span className="rounded-full border border-white/[0.08] bg-black/15 px-2 py-1 font-mono text-[9px] text-white/35">
+                  {recentBackgroundTasks.length}
+                </span>
+              </div>
+              {recentBackgroundTasks.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-white/[0.07] px-3 py-5 text-center text-[10px] text-white/28">
+                  {feedbackCopy.noBackgroundWork}
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  {recentBackgroundTasks.map(task => {
+                    const expanded = expandedBackgroundTaskId === task.id;
+                    const feedbackStatus = task.completionFeedback?.status;
+                    const taskStatus = String(task.status || 'unknown').toLowerCase();
+                    const statusLabel = feedbackStatus
+                      ? feedbackCopy.status[feedbackStatus]
+                      : ACTIVE_BACKGROUND_STATES.has(taskStatus)
+                        ? uiMessage('command-center.working.90f16b23a5', locale)
+                        : taskStatus === 'paused'
+                          ? uiMessage('command-center.paused.7848cd9af5', locale)
+                          : taskStatus;
+                    return (
+                      <article key={task.id} className="overflow-hidden rounded-xl border border-white/[0.065] bg-black/15">
+                        <button
+                          type="button"
+                          aria-expanded={expanded}
+                          aria-controls={`command-center-background-task-${task.id}`}
+                          onClick={() => setExpandedBackgroundTaskId(expanded ? null : task.id)}
+                          className="flex w-full items-center gap-2 px-3 py-2.5 text-left hover:bg-white/[0.035]"
+                        >
+                          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                            ACTIVE_BACKGROUND_STATES.has(taskStatus)
+                              ? 'bg-cyan-300 animate-pulse'
+                              : feedbackStatus === 'completed'
+                                ? 'bg-emerald-300'
+                                : feedbackStatus === 'blocked' || feedbackStatus === 'failed'
+                                  ? 'bg-rose-300'
+                                  : 'bg-white/25'
+                          }`} />
+                          <span className="min-w-0 flex-1 truncate text-[10px] font-bold text-white/68">{task.title || task.id}</span>
+                          <span className="shrink-0 text-[8px] font-black uppercase text-white/32">{statusLabel}</span>
+                          <ChevronDown size={12} className={`shrink-0 text-white/28 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+                        </button>
+                        {expanded && (
+                          <div id={`command-center-background-task-${task.id}`} className="space-y-2 border-t border-white/[0.06] p-2.5">
+                            {(task.workerNames?.length || task.updatedAt || task.completedAt) && (
+                              <div className="flex flex-wrap gap-x-3 gap-y-1 text-[9px] text-white/28">
+                                {task.workerNames?.length ? <span>{feedbackCopy.workers}: {task.workerNames.join(', ')}</span> : null}
+                                {(task.updatedAt || task.completedAt) && (
+                                  <span>{feedbackCopy.updated}: {new Date(task.updatedAt || task.completedAt || '').toLocaleString(locale === 'zh' ? 'zh-CN' : 'en-US')}</span>
+                                )}
+                              </div>
+                            )}
+                            {task.resultPreview && (
+                              <div className="rounded-lg border border-emerald-300/10 bg-emerald-300/[0.035] px-2.5 py-2 text-[10px] leading-4 text-white/55">
+                                <span className="font-black text-emerald-100/60">{feedbackCopy.result}: </span>{task.resultPreview}
+                              </div>
+                            )}
+                            {task.error && (
+                              <div className="rounded-lg border border-rose-300/10 bg-rose-300/[0.035] px-2.5 py-2 text-[10px] leading-4 text-rose-100/65">
+                                <span className="font-black">{feedbackCopy.error}: </span>{task.error}
+                              </div>
+                            )}
+                            <TaskCompletionFeedbackDetails feedback={task.completionFeedback} locale={locale} compact />
+                          </div>
+                        )}
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
           </div>
         )}
       </div>

@@ -4,12 +4,10 @@ describe.sequential('Local security boundary', () => {
   const originalHost = process.env.HOST;
   const originalOrigins = process.env.CORS_ORIGINS;
   let originalJwt: string | undefined;
-  let originalPassword: string | undefined;
 
   beforeAll(async () => {
     await import('./helpers');
     originalJwt = process.env.JWT_SECRET;
-    originalPassword = process.env.AUTO_LOGIN_PASSWORD;
   });
 
   afterAll(() => {
@@ -19,8 +17,6 @@ describe.sequential('Local security boundary', () => {
     else process.env.CORS_ORIGINS = originalOrigins;
     if (originalJwt === undefined) delete process.env.JWT_SECRET;
     else process.env.JWT_SECRET = originalJwt;
-    if (originalPassword === undefined) delete process.env.AUTO_LOGIN_PASSWORD;
-    else process.env.AUTO_LOGIN_PASSWORD = originalPassword;
   });
 
   it('binds local installs to loopback unless HOST is explicitly configured', async () => {
@@ -45,19 +41,14 @@ describe.sequential('Local security boundary', () => {
   it('generates a persistent unpredictable identity when env overrides are absent', async () => {
     const identity = await import('../server/config/local_identity');
     delete process.env.JWT_SECRET;
-    delete process.env.AUTO_LOGIN_PASSWORD;
     identity.resetLocalIdentityCacheForTests();
 
     const firstSecret = identity.getJwtSecret();
-    const firstPassword = identity.getLocalAdminPassword();
     expect(firstSecret.length).toBeGreaterThanOrEqual(32);
-    expect(firstPassword.length).toBeGreaterThanOrEqual(24);
     expect(firstSecret).not.toContain('lumiOS_default');
-    expect(firstPassword).not.toContain('lumi_admin');
 
     identity.resetLocalIdentityCacheForTests();
     expect(identity.getJwtSecret()).toBe(firstSecret);
-    expect(identity.getLocalAdminPassword()).toBe(firstPassword);
   });
 
   it('limits silent identity bootstrap to loopback clients', async () => {

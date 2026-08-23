@@ -34,9 +34,9 @@ describe('audio transcription tool intent', () => {
     expect(hasExplicitToolIntent(correction)).toBe(false);
   });
 
-  it('keeps transcript file requests out of pure chat and enables them in assistant mode', () => {
+  it('lets an explicit transcript file request borrow foreground tools from Chat', () => {
     const text = 'Please transcribe this audio recording and save it as a text file.';
-    expect(shouldAllowToolUseForTurn(text, undefined, 'chat')).toBe(false);
+    expect(shouldAllowToolUseForTurn(text, undefined, 'chat')).toBe(true);
     expect(shouldAllowToolUseForTurn(text, undefined, 'assistant')).toBe(true);
   });
 

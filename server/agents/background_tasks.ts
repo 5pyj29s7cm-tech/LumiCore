@@ -13,6 +13,11 @@ import {
   type DurableTaskReceiptSnapshot,
   type DurableTaskRecoveryState,
 } from '../cognition/durable_task_recovery';
+import {
+  buildTaskTerminalReceipt,
+  validateCompletionTerminalReceipt,
+  type TaskTerminalReceipt,
+} from '../cognition/acceptance_evidence';
 
 export type BackgroundDelegationStatus =
   | 'queued'
@@ -83,6 +88,8 @@ export interface BackgroundDelegationTask {
   recoveryCount: number;
   nextAttemptAt?: string;
   recovery?: DurableTaskRecoveryState;
+  /** Unified terminal acceptance receipt. Completed tasks require a verified receipt. */
+  terminalReceipt?: TaskTerminalReceipt;
   leaseId?: string;
   leaseOwner?: string;
   leaseExpiresAt?: string;
@@ -153,6 +160,12 @@ function cloneTask(task: BackgroundDelegationTask): BackgroundDelegationTask {
       })),
     } : undefined,
     recovery: task.recovery ? JSON.parse(JSON.stringify(task.recovery)) : undefined,
+    terminalReceipt: task.terminalReceipt ? {
+      ...task.terminalReceipt,
+      evidenceRefs: [...task.terminalReceipt.evidenceRefs],
+      toolNames: [...task.terminalReceipt.toolNames],
+      workerIds: [...task.terminalReceipt.workerIds],
+    } : undefined,
   };
 }
 
@@ -207,6 +220,15 @@ export function recoverPersistedBackgroundTask(
     task.completedAt = recoveredAt;
     task.updatedAt = recoveredAt;
     task.error = task.error || 'Cancellation completed during restart recovery';
+    task.terminalReceipt = buildTaskTerminalReceipt({
+      taskId: task.id,
+      runtime: 'background',
+      outcome: 'cancelled',
+      reasonCode: 'restart_recovery_cancelled',
+      reason: task.error,
+      evidenceRefs: task.checkpoint?.receiptIds,
+      createdAt: recoveredAt,
+    });
     clearLease(task);
     return task;
   }
@@ -241,6 +263,15 @@ export function recoverPersistedBackgroundTask(
     task.recoveryCount = nextRecoveryCount;
     task.lastRecoveredAt = recoveredAt;
     task.recovery = updateDurableTaskRecovery(task.recovery, diagnosis, task.checkpoint?.receipts);
+    task.terminalReceipt = buildTaskTerminalReceipt({
+      taskId: task.id,
+      runtime: 'background',
+      outcome: 'blocked',
+      reasonCode: diagnosis.failureClass,
+      reason,
+      evidenceRefs: task.checkpoint?.receiptIds,
+      createdAt: recoveredAt,
+    });
     clearLease(task);
     return task;
   }
@@ -367,6 +398,7 @@ export function claimBackgroundTask(id: string, input: BackgroundTaskLeaseInput 
   const timestamp = new Date(now).toISOString();
   const durationMs = Math.max(5_000, input.durationMs || DEFAULT_LEASE_MS);
   task.status = 'running';
+  task.terminalReceipt = undefined;
   task.attempt += 1;
   task.startedAt = timestamp;
   task.updatedAt = timestamp;
@@ -468,6 +500,7 @@ export function resumeBackgroundTask(id: string, userId?: string): BackgroundDel
   const task = tasks.get(id);
   if (!task || (userId && task.userId !== userId) || task.status !== 'paused') return null;
   task.status = 'queued';
+  task.terminalReceipt = undefined;
   task.pauseRequested = false;
   task.pausedAt = undefined;
   task.updatedAt = nowIso();
@@ -500,18 +533,34 @@ export function isBackgroundTaskCancellationRequested(id: string): boolean {
   return task?.cancelRequested === true || task?.status === 'cancelling' || task?.status === 'cancelled';
 }
 
-export function completeBackgroundTask(id: string, result: string, leaseId?: string): BackgroundDelegationTask | null {
+export function completeBackgroundTask(
+  id: string,
+  result: string,
+  terminalReceipt: TaskTerminalReceipt,
+  leaseId?: string,
+): BackgroundDelegationTask | null {
   ensureHydrated();
   const task = tasks.get(id);
   if (!task) return null;
   if (!hasLiveLease(task, leaseId)) return null;
   if (task.cancelRequested) return cancelBackgroundTask(id);
   if (task.pauseRequested) return pauseBackgroundTask(id);
+  const acceptance = validateCompletionTerminalReceipt(terminalReceipt, {
+    taskId: task.id,
+    runtime: 'background',
+  });
+  if (!acceptance.accepted) return null;
   const timestamp = nowIso();
   task.status = 'completed';
   task.resultPreview = result.slice(0, 500);
   task.updatedAt = timestamp;
   task.completedAt = timestamp;
+  task.terminalReceipt = {
+    ...terminalReceipt,
+    evidenceRefs: [...terminalReceipt.evidenceRefs],
+    toolNames: [...terminalReceipt.toolNames],
+    workerIds: [...terminalReceipt.workerIds],
+  };
   clearLease(task);
   persist();
   return cloneTask(task);
@@ -529,6 +578,15 @@ export function failBackgroundTask(id: string, error: string, leaseId?: string):
   task.error = error.slice(0, 500);
   task.updatedAt = timestamp;
   task.completedAt = timestamp;
+  task.terminalReceipt = buildTaskTerminalReceipt({
+    taskId: task.id,
+    runtime: 'background',
+    outcome: 'failed',
+    reasonCode: 'background_execution_failed',
+    reason: task.error,
+    evidenceRefs: task.checkpoint?.receiptIds,
+    createdAt: timestamp,
+  });
   clearLease(task);
   persist();
   return cloneTask(task);
@@ -559,12 +617,23 @@ export function recordBackgroundTaskFailure(
   clearLease(task);
   if (diagnosis.decision === 'retry' || diagnosis.decision === 'replan') {
     task.status = 'queued';
+    task.terminalReceipt = undefined;
     task.startedAt = undefined;
     task.completedAt = undefined;
     task.nextAttemptAt = diagnosis.nextAttemptAt;
   } else {
     task.status = diagnosis.decision === 'block' ? 'blocked' : 'failed';
     task.completedAt = diagnosis.diagnosedAt;
+    task.terminalReceipt = buildTaskTerminalReceipt({
+      taskId: task.id,
+      runtime: 'background',
+      outcome: task.status,
+      toolRecords: input.toolRecords,
+      reasonCode: diagnosis.failureClass,
+      reason: diagnosis.reason,
+      evidenceRefs: task.checkpoint?.receiptIds,
+      createdAt: diagnosis.diagnosedAt,
+    });
   }
   persist();
   return cloneTask(task);
@@ -580,6 +649,15 @@ export function cancelBackgroundTask(id: string): BackgroundDelegationTask | nul
   task.status = 'cancelled';
   task.updatedAt = timestamp;
   task.completedAt = timestamp;
+  task.terminalReceipt = buildTaskTerminalReceipt({
+    taskId: task.id,
+    runtime: 'background',
+    outcome: 'cancelled',
+    reasonCode: 'background_task_cancelled',
+    reason: task.error || 'Background task cancelled.',
+    evidenceRefs: task.checkpoint?.receiptIds,
+    createdAt: timestamp,
+  });
   clearLease(task);
   persist();
   return cloneTask(task);

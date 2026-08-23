@@ -23,6 +23,14 @@ const DESKTOP_WORKFLOW_COPY = {
       voicePreview: 'Hello, this is my voice.',
       chargingSuffix: ' (charging)',
     },
+    voiceIdentity: {
+      workflow: 'Voice identity workflow',
+      complete: 'complete',
+      inProgress: 'in progress',
+      pending: 'pending',
+      openAppearance: 'Open appearance',
+      status: 'Status',
+    },
     legalMeeting: {
       title: 'Client consultation',
       lumiSummary: 'Lumi consultation summary',
@@ -52,6 +60,14 @@ const DESKTOP_WORKFLOW_COPY = {
       windowControlFailed: '窗口控制失败',
       voicePreview: '你好，这是我的声音。',
       chargingSuffix: ' (充电中)',
+    },
+    voiceIdentity: {
+      workflow: '音色身份工作流',
+      complete: '已完成',
+      inProgress: '进行中',
+      pending: '待处理',
+      openAppearance: '打开外观',
+      status: '状态',
     },
     legalMeeting: {
       title: '当事人会谈',

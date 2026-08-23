@@ -702,6 +702,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const init = async () => {
       setLoading(true);
       try {
+        // Refresh the process-bound desktop session capability on every native
+        // client load, even when a still-valid JWT survived a backend restart.
+        if (authService.isNativeDesktopRuntime()) {
+          let nativeSession = await authService.bootstrap();
+          for (let retry = 0; !nativeSession.success && retry < 8 && !cancelled; retry++) {
+            await new Promise(resolve => setTimeout(resolve, 500 + retry * 500));
+            nativeSession = await authService.bootstrap();
+          }
+          if (nativeSession.success) socketService.refreshAuth();
+        }
         let me = await authService.getMe();
         if (!me && !cancelled) {
           // Clear stale token so apiBridge sends fresh one after bootstrap

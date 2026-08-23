@@ -69,6 +69,102 @@ describe('remaining output bypass closure', () => {
     expect(wrongActionEvidence.reason).toContain('desktop_operation');
   });
 
+  it('treats the exact verified self-improvement stage as the autonomous terminal state', () => {
+    const task = { id: 'auto-self-improvement-1', idempotencyKey: 'self-improvement:improvement_docs_1:3' };
+    const shapedButUnverifiedRecord = {
+      id: 'stage-receipt-1',
+      name: 'self_improvement_stage_patch',
+      arguments: { proposalId: 'improvement_docs_1' },
+      result: JSON.stringify({
+        ok: true,
+        status: 'verified',
+        persisted: true,
+        isolated: true,
+        activated: false,
+        pushed: false,
+        proposal: { id: 'improvement_docs_1' },
+      }),
+    };
+
+    const unverified = evaluateAutonomousTaskOutcome(
+      'Improve the authorized static Markdown documentation path.',
+      'The patch looks verified in isolation.',
+      [shapedButUnverifiedRecord],
+      task,
+    );
+    expect(unverified.verified).toBe(false);
+
+    const commit = 'a'.repeat(40);
+    const baseCommit = 'b'.repeat(40);
+    const treeDigest = 'c'.repeat(64);
+    const repositoryId = 'd'.repeat(64);
+    const branch = 'lumi/self-improvement/improvement-docs-1';
+    const stageRecord = {
+      ...shapedButUnverifiedRecord,
+      taskId: task.id,
+      idempotencyKey: 'self-improvement-stage-call-1',
+      terminalVerification: {
+        status: 'verified' as const,
+        strategy: 'terminal_receipt' as const,
+        reason: 'Exact isolated stage receipt verified.',
+      },
+      envelope: {
+        version: 1 as const,
+        status: 'verified_success' as const,
+        toolName: 'self_improvement_stage_patch',
+        taskId: task.id,
+        turnId: 'turn-1',
+        requestId: 'request-1',
+        idempotencyKey: 'self-improvement-stage-call-1',
+        targetIdentity: '',
+        completedAt: new Date().toISOString(),
+        verification: { status: 'verified' as const, reason: 'verified' },
+      },
+      result: JSON.stringify({
+        ok: true,
+        status: 'verified',
+        persisted: true,
+        isolated: true,
+        activated: false,
+        pushed: false,
+        commit,
+        treeDigest,
+        repositoryId,
+        baseCommit,
+        branch,
+        proposal: {
+          id: 'improvement_docs_1',
+          status: 'verified',
+          stagingProtocol: 'static_git_plumbing_v1',
+          taskId: task.id,
+          programRevision: 3,
+          stagedCommit: commit,
+          stagedTreeDigest: treeDigest,
+          repositoryId,
+          baseCommit,
+          stagedBranch: branch,
+        },
+      }),
+    };
+
+    const staged = evaluateAutonomousTaskOutcome(
+      'Improve the authorized static Markdown documentation path.',
+      'The patch is verified in isolation; activation requires user confirmation.',
+      [stageRecord],
+      task,
+    );
+    expect(staged).toMatchObject({ verified: true, blocked: false });
+
+    const wrongProposal = evaluateAutonomousTaskOutcome(
+      'Improve the authorized static Markdown documentation path.',
+      'The patch is verified in isolation.',
+      [{ ...stageRecord, arguments: { proposalId: 'improvement_other' } }],
+      task,
+    );
+    expect(wrongProposal.verified).toBe(false);
+    expect(wrongProposal.reason).toContain('exact verified isolated-stage receipt');
+  });
+
   it('withholds model-authored scheduler claims that are not grounded', () => {
     const blocked = finalizeScheduledDelivery('daily_summary', {
       userId: 'scheduler-user',

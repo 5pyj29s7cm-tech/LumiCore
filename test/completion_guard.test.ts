@@ -229,7 +229,8 @@ describe('completion guard generic execution claims', () => {
 
     expect(result.blocked).toBe(true);
     expect(result.reason).toContain('current-turn tool execution');
-    expect(result.text).toContain('\u8fd8\u4e0d\u80fd\u8bf4\u6b63\u5728\u6267\u884c');
+    expect(result.text).toContain('\u64cd\u4f5c\u8fd8\u6ca1\u6709\u6210\u529f\u542f\u52a8');
+    expect(result.text).not.toContain('No successful current-turn tool execution');
   });
 
   it('allows a write-completion claim only with current-turn producer evidence', () => {

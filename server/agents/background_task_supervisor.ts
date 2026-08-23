@@ -22,6 +22,7 @@ import {
 } from './orchestrator';
 import type { ToolExecutionRecord } from '../tools/types';
 import { finalizeLumiResponse } from '../cognition/result_finalizer';
+import { sanitizeExecutionResponseForDelivery } from '../cognition/execution_guard_recovery';
 import {
   addMessage,
   getConversationModelExecutionRecovery,
@@ -30,8 +31,15 @@ import {
 import { pushNotification } from '../routes/notifications';
 import { CN_BACKGROUND_DELEGATION_MESSAGES } from '../regions/packs/cn/background_delegation_messages';
 import { isDurableTaskReady, snapshotDurableToolRecords } from '../cognition/durable_task_recovery';
+import {
+  buildTaskCompletionFeedback,
+  buildTaskTerminalReceipt,
+  validateCompletionTerminalReceipt,
+} from '../cognition/acceptance_evidence';
+import type { TaskCompletionFeedback, TaskTerminalReceipt } from '../cognition/acceptance_evidence';
 import { settleBackgroundConversationActionTask } from '../conversation/action_ledger';
 import { readDB, writeDB } from '../../db_layer';
+import { formatCnTaskCompletionFeedback } from '../regions/packs/cn/task_completion_feedback_messages';
 
 const DEFAULT_POLL_MS = 1_000;
 const DEFAULT_CONCURRENCY = 2;
@@ -71,9 +79,17 @@ function emitTask(io: SocketIOServer, task: BackgroundDelegationTask): void {
   });
 }
 
-function persistResult(task: BackgroundDelegationTask, content: string, toolCalls: ToolExecutionRecord[], blocked: boolean): void {
+function mergeReceiptSnapshots<T extends { id: string }>(...groups: Array<T[] | undefined>): T[] {
+  const byId = new Map<string, T>();
+  for (const group of groups) {
+    for (const receipt of group || []) byId.set(receipt.id, receipt);
+  }
+  return Array.from(byId.values()).slice(-80);
+}
+
+function persistResult(task: BackgroundDelegationTask, content: string, toolCalls: ToolExecutionRecord[], blocked: boolean): boolean {
   const context = task.context;
-  if (!context?.conversationId) return;
+  if (!context?.conversationId) return false;
   addMessage({
     userId: task.userId,
     agentId: context.conversationAgentId || '',
@@ -87,6 +103,50 @@ function persistResult(task: BackgroundDelegationTask, content: string, toolCall
     cognitiveIntent: blocked ? 'work_product_guard' : undefined,
     source: 'background_delegation_recovery',
     skipActionContinuation: true,
+  });
+  return true;
+}
+
+function formatTaskResult(
+  baseText: string,
+  task: BackgroundDelegationTask,
+  feedback: TaskCompletionFeedback,
+  receipt?: TaskTerminalReceipt | null,
+): string {
+  if (/[^\x00-\xff]/u.test(task.prompt || task.title)) {
+    return formatCnTaskCompletionFeedback(baseText, task.title, feedback, receipt);
+  }
+  const status = feedback.status === 'completed'
+    ? 'verified complete'
+    : feedback.status === 'working'
+      ? 'still running'
+      : feedback.status === 'cancelled'
+        ? 'cancelled'
+        : 'not complete';
+  const evidence = [
+    ...(receipt?.toolNames?.length ? [`terminal tool receipts: ${receipt.toolNames.join(', ')}`] : []),
+    ...(receipt?.workerIds?.length ? [`agent receipts: ${receipt.workerIds.length}`] : []),
+    ...(receipt?.receiptId ? [`acceptance receipt: ${receipt.receiptId}`] : []),
+  ];
+  const lines = [String(baseText || '').trim(), '', 'Execution feedback', `- Status: ${status}`];
+  if (feedback.status === 'completed') lines.push(`- Completed: ${task.title}`);
+  if (evidence.length > 0) lines.push(`- Evidence: ${evidence.join('; ')}`);
+  if (feedback.status !== 'completed') lines.push(`- Incomplete: ${task.title}`);
+  if (feedback.blockers.length > 0) lines.push(`- Blocker: ${feedback.blockers.slice(0, 4).join('; ')}`);
+  if (feedback.status !== 'completed' && feedback.status !== 'cancelled') {
+    lines.push('- Next: the goal, plan, and existing receipts are retained; Lumi will resume from the unverified step without replaying confirmed external side effects.');
+  }
+  return lines.filter((line, index) => line || index > 0).join('\n').trim();
+}
+
+function emitConversationResultUpdated(io: SocketIOServer, task: BackgroundDelegationTask): void {
+  const conversationId = task.context?.conversationId;
+  if (!conversationId) return;
+  io.to(roomFor(task)).emit('chat:conversation_updated', {
+    conversationId,
+    agentId: task.context?.conversationAgentId || '',
+    source: 'background_delegation',
+    requestId: task.id,
   });
 }
 
@@ -164,7 +224,12 @@ async function executeRecoveredTask(
       : null;
     checkpointBackgroundTask(claimed.id, {
       phase: 'orchestrating',
-      receiptIds: modelRecovery?.receipts?.map(receipt => `${receipt.graphId}:${receipt.nodeId}`) || [],
+      completedNodeIds: claimed.checkpoint?.completedNodeIds,
+      receiptIds: Array.from(new Set([
+        ...(claimed.checkpoint?.receiptIds || []),
+        ...(modelRecovery?.receipts?.map(receipt => `${receipt.graphId}:${receipt.nodeId}`) || []),
+      ])).slice(-80),
+      receipts: claimed.checkpoint?.receipts,
       detail: `Recovered attempt ${claimed.attempt}`,
     }, leaseId);
 
@@ -210,8 +275,15 @@ async function executeRecoveredTask(
         });
         checkpointBackgroundTask(claimed.id, {
           phase: 'tool_execution',
-          receiptIds: toolRecords.map(item => item.id),
-          receipts: snapshotDurableToolRecords(toolRecords),
+          completedNodeIds: claimed.checkpoint?.completedNodeIds,
+          receiptIds: Array.from(new Set([
+            ...(claimed.checkpoint?.receiptIds || []),
+            ...toolRecords.map(item => item.id),
+          ])).slice(-80),
+          receipts: mergeReceiptSnapshots(
+            claimed.checkpoint?.receipts,
+            snapshotDurableToolRecords(toolRecords),
+          ),
           detail: `${toolRecords.length} terminal tool call(s) observed`,
         }, leaseId);
       },
@@ -242,20 +314,36 @@ async function executeRecoveredTask(
       toolRecords,
       source: 'background_delegation',
     });
+    const terminalReceipt = buildTaskTerminalReceipt({
+      taskId: claimed.id,
+      runtime: 'background',
+      outcome: finalized.blocked ? 'blocked' : 'completed',
+      toolRecords,
+      nodeReceipts: result.workflowResult.nodeReceipts,
+      arbitrationReceipt: result.workflowResult.arbitrationReceipt,
+      reasonCode: finalized.blocked ? 'final_response_verification_failed' : undefined,
+      reason: finalized.reason || undefined,
+    });
+    const acceptance = finalized.blocked
+      ? { accepted: false, diagnosticCode: terminalReceipt.reasonCode, reason: terminalReceipt.reason }
+      : validateCompletionTerminalReceipt(terminalReceipt, {
+          taskId: claimed.id,
+          runtime: 'background',
+        });
     checkpointBackgroundTask(claimed.id, {
-      phase: finalized.blocked ? 'failed_verification' : 'verified',
+      phase: acceptance.accepted ? 'verified' : 'failed_verification',
       receiptIds: toolRecords.map(item => item.id),
       receipts: snapshotDurableToolRecords(toolRecords),
-      detail: finalized.reason || 'Final response verified',
+      detail: acceptance.reason || finalized.reason || 'Final response verified',
     }, leaseId);
-    const settled = finalized.blocked
+    const settled = finalized.blocked || !acceptance.accepted
       ? recordBackgroundTaskFailure(claimed.id, {
-          error: finalized.reason || 'Missing verified completion evidence.',
+          error: acceptance.reason || finalized.reason || 'Missing verified completion evidence.',
           verificationFailure: true,
           toolRecords,
           leaseLost,
         }, leaseId)
-      : completeBackgroundTask(claimed.id, finalized.text, leaseId);
+      : completeBackgroundTask(claimed.id, finalized.text, terminalReceipt, leaseId);
     if (!settled) throw new Error('Recovered task state could not be settled.');
     if (settled.status === 'queued') {
       emitTask(io, settled);
@@ -266,27 +354,35 @@ async function executeRecoveredTask(
       });
       return;
     }
-    settlePlanLedger(claimed, toolRecords, finalized.blocked ? 'blocked' : 'completed', finalized.reason || finalized.text);
-    persistResult(claimed, finalized.text, toolRecords, finalized.blocked);
+    const blocked = settled.status !== 'completed';
+    settlePlanLedger(claimed, toolRecords, blocked ? 'blocked' : 'completed', acceptance.reason || finalized.reason || finalized.text);
+    const completionFeedback = buildTaskCompletionFeedback(
+      settled.terminalReceipt,
+      claimed.title,
+      { status: settled.status, reason: acceptance.reason || finalized.reason },
+    );
+    const resultText = formatTaskResult(finalized.text, claimed, completionFeedback, settled.terminalReceipt);
+    if (persistResult(claimed, resultText, toolRecords, blocked)) emitConversationResultUpdated(io, claimed);
     emitTask(io, settled);
-    io.to(roomFor(claimed)).emit('agent:response', {
-      text: finalized.text,
+    io.to(roomFor(claimed)).emit('agent:response', sanitizeExecutionResponseForDelivery({
+      text: resultText,
       agentName: 'Lumi',
       source: 'background_delegation',
       requestId: claimed.id,
       taskId: claimed.id,
       conversationId: context.conversationId || '',
       finalized: true,
-      blocked: finalized.blocked,
-      reason: finalized.reason || '',
+      blocked,
+      reason: acceptance.reason || finalized.reason || '',
+      completionFeedback,
       recovered: true,
-    });
+    }, { task: claimed.prompt, toolRecords }));
     pushNotification(claimed.userId, {
-      type: finalized.blocked ? 'background_error' : 'background_result',
-      title: finalized.blocked
+      type: blocked ? 'background_error' : 'background_result',
+      title: blocked
         ? CN_BACKGROUND_DELEGATION_MESSAGES.recoveredBlockedTitle
         : CN_BACKGROUND_DELEGATION_MESSAGES.recoveredCompletedTitle,
-      message: finalized.text.slice(0, 180),
+      message: resultText.slice(0, 180),
     });
   } catch (error) {
     if (isBackgroundTaskPauseRequested(claimed.id)) {
@@ -318,7 +414,26 @@ async function executeRecoveredTask(
       return;
     }
     settlePlanLedger(claimed, toolRecords, 'blocked', message);
-    persistResult(claimed, failureText, toolRecords, true);
+    const completionFeedback = buildTaskCompletionFeedback(
+      failed.terminalReceipt,
+      claimed.title,
+      { status: failed.status, reason: message },
+    );
+    const resultText = formatTaskResult(failureText, claimed, completionFeedback, failed.terminalReceipt);
+    if (persistResult(claimed, resultText, toolRecords, true)) emitConversationResultUpdated(io, claimed);
+    io.to(roomFor(claimed)).emit('agent:response', sanitizeExecutionResponseForDelivery({
+      text: resultText,
+      agentName: 'Lumi',
+      source: 'background_delegation',
+      requestId: claimed.id,
+      taskId: claimed.id,
+      conversationId: claimed.context?.conversationId || '',
+      finalized: true,
+      blocked: true,
+      reason: failed.terminalReceipt?.reason || message,
+      completionFeedback,
+      recovered: true,
+    }, { task: claimed.prompt, toolRecords }));
     pushNotification(claimed.userId, {
       type: 'background_error',
       title: CN_BACKGROUND_DELEGATION_MESSAGES.recoveryFailedTitle,

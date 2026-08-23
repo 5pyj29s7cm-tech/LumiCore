@@ -25,14 +25,17 @@ describe('desktop startup shell', () => {
   it('keeps the native window hidden until the dark webview shell has loaded', () => {
     const tauriConfig = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'src-tauri/tauri.conf.json'), 'utf8'));
     const rustEntry = fs.readFileSync(path.join(process.cwd(), 'src-tauri/src/lib.rs'), 'utf8');
+    const activation = fs.readFileSync(path.join(process.cwd(), 'src-tauri/src/window_activation.rs'), 'utf8');
 
     expect(tauriConfig.app.windows[0].visible).toBe(false);
     expect(rustEntry).toContain('.on_page_load(move |webview, payload|');
     expect(rustEntry).toContain('PageLoadEvent::Finished');
-    expect(rustEntry).toContain('let _ = window.show();');
-    expect(rustEntry).toContain('let _ = window.unminimize();');
-    expect(rustEntry).toContain('let _ = window.set_focus();');
-    expect(rustEntry).toContain('let _ = webview.set_focus();');
+    expect(rustEntry).toContain('show_main_window_impl(webview.app_handle(), "page_load");');
+    expect(rustEntry).toContain('execute_window_activation_steps(restore_result, operations)');
+    expect(activation).toContain('step("show", operations.show())');
+    expect(activation).toContain('step("unminimize", operations.unminimize())');
+    expect(activation).toContain('step("focus_window", operations.focus_window())');
+    expect(activation).toContain('step("focus_webview", operations.focus_webview())');
   });
 
   it('keeps macOS media, automation, and protected-folder permission prompts in source configuration', () => {

@@ -54,6 +54,42 @@ function Invoke-JsonRequest {
   return Invoke-RestMethod @params
 }
 
+function Invoke-DesktopBootstrap {
+  param(
+    [string]$BaseUrl,
+    [string]$DataRoot,
+    [int]$TimeoutSec = 15
+  )
+
+  $ProofPath = Join-Path $DataRoot "runtime\desktop-bootstrap.json"
+  $LastError = ""
+  for ($Attempt = 0; $Attempt -lt 3; $Attempt++) {
+    if (!(Test-Path -LiteralPath $ProofPath -PathType Leaf)) {
+      throw "Desktop bootstrap proof file not found: $ProofPath"
+    }
+    $ProofFile = Get-Item -LiteralPath $ProofPath -Force
+    if ($ProofFile.LinkType -or $ProofFile.Length -le 0 -or $ProofFile.Length -gt 4096) {
+      throw "Desktop bootstrap proof is not a safe regular file"
+    }
+    $ProofRecord = Get-Content -LiteralPath $ProofPath -Raw | ConvertFrom-Json
+    $Proof = [string]$ProofRecord.proof
+    if ($ProofRecord.version -ne 1 -or $Proof -notmatch '^[A-Za-z0-9_-]{32,256}$') {
+      throw "Desktop bootstrap proof has an invalid format"
+    }
+    try {
+      return Invoke-JsonRequest `
+        -Uri "$BaseUrl/auth/bootstrap" `
+        -Method "POST" `
+        -Headers @{ "X-Lumi-Desktop-Bootstrap" = $Proof } `
+        -TimeoutSec $TimeoutSec
+    } catch {
+      $LastError = $_.Exception.Message
+      if ($Attempt -lt 2) { Start-Sleep -Milliseconds 50 }
+    }
+  }
+  throw "Desktop bootstrap failed: $LastError"
+}
+
 function Stop-InstalledBackend {
   param(
     [string]$InstallDir,
@@ -313,7 +349,7 @@ try {
     throw "Installed Socket.IO handshake failed"
   }
 
-  $Bootstrap = Invoke-JsonRequest -Uri "$BaseUrl/auth/bootstrap" -TimeoutSec 15
+  $Bootstrap = Invoke-DesktopBootstrap -BaseUrl $BaseUrl -DataRoot $DataRoot -TimeoutSec 15
   if (-not $Bootstrap.success -or [string]::IsNullOrWhiteSpace($Bootstrap.token)) {
     throw "Installed app local identity bootstrap failed"
   }
@@ -399,7 +435,7 @@ try {
     throw "Installed app did not restart with a clean database"
   }
 
-  $RestartBootstrap = Invoke-JsonRequest -Uri "$BaseUrl/auth/bootstrap" -TimeoutSec 15
+  $RestartBootstrap = Invoke-DesktopBootstrap -BaseUrl $BaseUrl -DataRoot $DataRoot -TimeoutSec 15
   $RestartHeaders = @{ Authorization = "Bearer $($RestartBootstrap.token)" }
   $RestartMarketplace = Invoke-JsonRequest -Uri "$BaseUrl/marketplace/skills?lang=zh" -TimeoutSec 8
   if (-not [bool](@($RestartMarketplace | Where-Object { $_.id -eq $SkillId -and $_.installed }).Count)) {

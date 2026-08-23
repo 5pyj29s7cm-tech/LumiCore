@@ -10,6 +10,7 @@ name = "lumi_os_lib"
 crate-type = ["lib", "staticlib"]
 
 [build-dependencies]
+embed-resource = "3"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]

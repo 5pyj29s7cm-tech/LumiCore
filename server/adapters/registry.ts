@@ -166,7 +166,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       surfaces: ['mode switcher', 'voice', 'chat', 'meeting'],
       requiresConfirmation: false,
       diagnostics: state?.mode ? [`Current mode: ${state.mode}`] : [],
-      notes: 'Chat is pure conversation. Assistant is user-present high-permission work. Autonomous has the same practical permissions plus continuous/background work. Switching between Chat, Assistant, and Autonomous does not need tool permission popups; Meeting capture remains explicit.',
+      notes: 'Chat is conversation-first; an explicit foreground action can borrow the Assistant manifest for that turn without persistently changing the visible mode. Assistant is user-present high-permission work. Autonomous has the same practical permissions plus continuous/background work. Switching between Chat, Assistant, and Autonomous does not need tool permission popups; Meeting capture remains explicit.',
     },
     {
       id: 'client.self_intro_demo',
@@ -435,7 +435,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
         `autoProcess=${gate.autoProcessEnabled}`,
         `maxConsecutiveTasks=${gate.maxConsecutiveTasks}`,
       ],
-      notes: 'The desktop has three permission modes: Chat is pure conversation, Assistant is user-present high-permission execution without ordinary tool prompts, and Autonomy has the same practical permissions plus continuous 24h/background operation. Launch-at-login and close-to-background only make Lumi resident when the client/server are alive; workflows then run according to autonomy policy, token budgets, enabled workflow limits, and high-consequence hard boundaries.',
+      notes: 'The desktop has three permission modes: Chat is conversation-first and may borrow Assistant foreground capabilities for an explicit action in the current turn, Assistant is user-present high-permission execution without ordinary tool prompts, and Autonomy has the same practical permissions plus continuous 24h/background operation. Launch-at-login and close-to-background only make Lumi resident when the client/server are alive; workflows then run according to autonomy policy, token budgets, enabled workflow limits, and high-consequence hard boundaries.',
     },
     {
       id: 'automation.work_takeover_tasks',

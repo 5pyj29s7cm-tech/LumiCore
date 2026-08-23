@@ -21,6 +21,7 @@ import {
   registerBackgroundTask,
   resetBackgroundTasksForTest,
 } from '../server/agents/background_tasks';
+import { buildTaskTerminalReceipt } from '../server/cognition/acceptance_evidence';
 
 function toolRecord(input: {
   id?: string;
@@ -214,17 +215,25 @@ describe('durable queue safety state machine', () => {
     })?.id).toBe(first.id);
 
     expect(claimAutonomousTask(first.id, { leaseId: 'lease-a', durationMs: 5_000 })?.leaseId).toBe('lease-a');
+    const completionReceipt = buildTaskTerminalReceipt({
+      taskId: first.id,
+      runtime: 'autonomous',
+      outcome: 'completed',
+      toolRecords: [toolRecord({ id: `${first.id}:verified`, status: 'verified_success' })],
+    });
     vi.advanceTimersByTime(6_000);
     expect(markCompleted(first.id, 'stale result', 1, 1, {
       finalized: true,
       verified: true,
       blocked: false,
+      terminalReceipt: completionReceipt,
     }, 'lease-a')).toBeNull();
     expect(claimAutonomousTask(first.id, { leaseId: 'lease-b', durationMs: 5_000 })?.leaseId).toBe('lease-b');
     expect(markCompleted(first.id, 'verified result', 1, 1, {
       finalized: true,
       verified: true,
       blocked: false,
+      terminalReceipt: completionReceipt,
     }, 'lease-b')?.status).toBe('completed');
   });
 

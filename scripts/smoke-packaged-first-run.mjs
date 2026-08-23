@@ -5,6 +5,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { bootstrapDesktopTestSession } from './lib/desktop-bootstrap.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const root = path.resolve(path.dirname(__filename), '..');
@@ -218,7 +219,7 @@ async function main() {
     const socketHandshake = await fetchText(`http://127.0.0.1:${port}/socket.io/?EIO=4&transport=polling`, { timeoutMs: 8000 });
     if (!socketHandshake.startsWith('0{')) throw new Error(`Unexpected Socket.IO handshake: ${socketHandshake.slice(0, 120)}`);
 
-    const bootstrap = await fetchJson(`${baseUrl}/auth/bootstrap`, { timeoutMs: 15000 });
+    const bootstrap = await bootstrapDesktopTestSession(baseUrl, dataRoot, { timeoutMs: 15000 });
     if (!bootstrap?.success || !bootstrap?.token) {
       throw new Error(`Local identity bootstrap failed: ${JSON.stringify(bootstrap)}`);
     }

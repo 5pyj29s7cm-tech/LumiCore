@@ -5,6 +5,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { computeSourceIdentity } from './lib/source-identity.mjs';
+import { bootstrapDesktopTestSession } from './lib/desktop-bootstrap.mjs';
 
 const root = process.cwd();
 
@@ -79,11 +80,11 @@ function freePort() {
   });
 }
 
-async function fetchJson(url, timeoutMs = 3000) {
+async function fetchJson(url, timeoutMs = 3000, headers = undefined) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await fetch(url, { signal: controller.signal, headers });
     if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
     return response.json();
   } catch (error) {
@@ -432,13 +433,17 @@ async function runSoak(args, runRoot, runtimeMeta) {
   };
   try {
     const initialHealth = await waitForHealth(runtime.baseUrl, runtime.child, args.timeoutMs);
-    recordRuntimeHealth(initialHealth);
     ttsFixtureReady = Boolean(args.ttsFixtureDir);
-    if (ttsFixtureReady) {
-      const auth = await fetchJson(`${runtime.baseUrl}/auth/bootstrap`, 10_000);
-      authToken = String(auth.token || '');
-      if (!authToken) throw new Error('Local reliability identity bootstrap did not return a token');
-    }
+    const auth = await bootstrapDesktopTestSession(runtime.baseUrl, runtime.dataRoot, { timeoutMs: 10_000 });
+    authToken = String(auth.token || '');
+    if (!authToken) throw new Error('Local reliability identity bootstrap did not return a token');
+    const authHeaders = { Authorization: `Bearer ${authToken}` };
+    const initialDetailedHealth = await fetchJson(
+      `${runtime.baseUrl}/health?details=1`,
+      10_000,
+      authHeaders,
+    );
+    recordRuntimeHealth(initialDetailedHealth);
     const prewarmTasks = [];
     if (gptSovitsInstalled && authToken) {
       prewarmTasks.push((async () => {
@@ -478,7 +483,7 @@ async function runSoak(args, runRoot, runtimeMeta) {
       prewarmComplete = true;
     });
     while (!prewarmComplete) {
-      const health = await fetchJson(`${runtime.baseUrl}/health`, 10_000);
+      const health = await fetchJson(`${runtime.baseUrl}/health?details=1`, 10_000, authHeaders);
       if (!['ok', 'degraded'].includes(health.status) || health.runtime?.buildId !== runtimeMeta.buildId) {
         throw new Error('prewarm health or runtime identity invariant failed');
       }
@@ -540,9 +545,9 @@ async function runSoak(args, runRoot, runtimeMeta) {
         nextVoiceprintProbeAt = Date.now() + args.voiceprintProbeIntervalMs;
       }
       const [health, mcp, providers, marketplace, socketHandshake] = await Promise.all([
-        fetchJson(`${runtime.baseUrl}/health`),
-        fetchJson(`${runtime.baseUrl}/mcp/health`),
-        fetchJson(`${runtime.baseUrl}/llm/providers`),
+        fetchJson(`${runtime.baseUrl}/health?details=1`, 3000, authHeaders),
+        fetchJson(`${runtime.baseUrl}/mcp/health`, 3000, authHeaders),
+        fetchJson(`${runtime.baseUrl}/llm/providers`, 3000, authHeaders),
         fetchJson(`${runtime.baseUrl}/marketplace/skills?lang=zh`),
         fetch(`http://127.0.0.1:${new URL(runtime.baseUrl).port}/socket.io/?EIO=4&transport=polling`).then(response => response.text()),
       ]);
@@ -567,7 +572,7 @@ async function runSoak(args, runRoot, runtimeMeta) {
     const voiceprintIdleTimeoutMs = Number(finalHealth?.supervisedRuntimes?.voiceprint?.idleTimeoutMs || 0);
     const idleDeadline = Date.now() + Math.max(gptIdleTimeoutMs, voiceprintIdleTimeoutMs) + 30_000;
     while (Date.now() < idleDeadline && (!gptSovitsIdleReclamationVerified || !voiceprintIdleReclamationVerified)) {
-      const health = await fetchJson(`${runtime.baseUrl}/health`);
+      const health = await fetchJson(`${runtime.baseUrl}/health?details=1`, 3000, authHeaders);
       recordRuntimeHealth(health);
       const gptStatus = health.supervisedRuntimes?.gptSovits || {};
       const voiceprintStatus = health.supervisedRuntimes?.voiceprint || {};

@@ -67,10 +67,15 @@ import { useSocket } from '@/hooks/useSocket';
 import { useAmbientPoller } from '@/hooks/useAmbientPoller';
 import { useVoiceCall, type VoiceTranscriptMeta } from '@/hooks/useVoiceCall';
 import { useApp, type OperationMode } from '@/contexts/AppContext';
+import { describeAgentResponseDelivery } from '@/lib/agentResponseDelivery';
 const LocalAgentSphere = lazy(() => import('./LocalAgentSphere').then(m => ({ default: m.LocalAgentSphere })));
 const NexusGlobe = lazy(() => import('./NexusGlobe/NexusGlobe').then(m => ({ default: m.NexusGlobe })));
 const InkWorldLazy = lazy(() => import('./InkWorld').then(m => ({ default: m.InkWorld })));
-import type { BackgroundWorkflowTask, WorkflowStep } from './workflowTypes';
+import {
+  normalizeTaskCompletionFeedback,
+  type BackgroundWorkflowTask,
+  type WorkflowStep,
+} from './workflowTypes';
 import type { CommandCenterView } from './commandCenterTypes';
 import { useWakeWord } from '../hooks/useWakeWord';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -3291,7 +3296,7 @@ export function DesktopUI({
         id: workflowStepId('resp', data.requestId),
         type: responseBlocked ? 'error' : 'response',
         text: responseBlocked ? (t.workflowError || 'Processing blocked') : (t.workflowResponseReady || 'Response ready'),
-        detail: (data.reason || (data.finalized === true ? data.text : 'Response was not finalized'))?.slice(0, 100),
+        detail: describeAgentResponseDelivery(data, lang === 'zh'),
         time: Date.now(),
       }]);
       if (terminalResetTimer) clearTimeout(terminalResetTimer);
@@ -3359,6 +3364,7 @@ export function DesktopUI({
         error: raw?.error,
         resultPreview: raw?.resultPreview,
         updatedAt: raw?.updatedAt,
+        completionFeedback: normalizeTaskCompletionFeedback(raw?.completionFeedback || data?.completionFeedback),
       };
     };
 

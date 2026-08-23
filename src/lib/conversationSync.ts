@@ -1,6 +1,7 @@
 export interface ConversationUpdatedEvent {
   conversationId?: string;
   requestId?: string;
+  source?: string;
   originSocketId?: string;
   rolledOver?: boolean;
   previousConversationId?: string;

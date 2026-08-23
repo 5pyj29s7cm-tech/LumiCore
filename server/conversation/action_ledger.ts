@@ -1095,6 +1095,8 @@ export function attachConversationModelExecutionGraph(
       durationMs: receipt.durationMs,
       nodeFingerprint: receipt.nodeFingerprint,
       outputDigest: receipt.outputDigest,
+      evidenceKind: receipt.evidenceKind,
+      evidenceRefs: [...receipt.evidenceRefs],
       verified: receipt.verified,
       ...(receipt.estimatedInputTokens !== undefined
         ? { estimatedInputTokens: receipt.estimatedInputTokens }
@@ -1155,6 +1157,10 @@ export function loadConversationModelExecutionRecovery(
       && receipt.outputDigest.length === 64
       && receipt.status === 'succeeded'
       && receipt.verified === true
+      && receipt.evidenceKind === 'tool_terminal_verification'
+      && Array.isArray(receipt.evidenceRefs)
+      && receipt.evidenceRefs.length > 0
+      && receipt.evidenceRefs.every((value: unknown) => /^tool:[A-Za-z0-9._:-]{1,240}$/.test(String(value || '')))
     ))
     .map((receipt: any): ModelGraphNodeReceipt => ({
       graphId: receipt.graphId,
@@ -1171,6 +1177,8 @@ export function loadConversationModelExecutionRecovery(
       durationMs: Math.max(0, Number(receipt.durationMs) || 0),
       nodeFingerprint: receipt.nodeFingerprint,
       outputDigest: receipt.outputDigest,
+      evidenceKind: 'tool_terminal_verification',
+      evidenceRefs: receipt.evidenceRefs.map(String),
       verified: true,
       ...(receipt.estimatedInputTokens !== undefined
         ? { estimatedInputTokens: Math.max(0, Number(receipt.estimatedInputTokens) || 0) }

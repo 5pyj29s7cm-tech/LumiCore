@@ -1079,7 +1079,10 @@ export async function runWithTools(
       try {
         const retryDeclarations = toolRegistry.getToolDeclarationsForPolicy(
           context?.toolPolicy,
-          { failClosedWithoutPolicy: context?.source === 'orchestrator' },
+          {
+            failClosedWithoutPolicy: context?.source === 'orchestrator',
+            context,
+          },
         );
         const missingVerification = buildMissingVerificationObligationPrompt(
           primaryTask,
@@ -1222,7 +1225,10 @@ async function runWithToolsInternal(
     }
     const toolDeclarations = toolRegistry.getToolDeclarationsForPolicy(
       context?.toolPolicy,
-      { failClosedWithoutPolicy: context?.source === 'orchestrator' },
+      {
+        failClosedWithoutPolicy: context?.source === 'orchestrator',
+        context,
+      },
     );
     const exposedToolNames = new Set(toolDeclarations.map(declaration => declaration.function.name));
     const llmStart = Date.now();

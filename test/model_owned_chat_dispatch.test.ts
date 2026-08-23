@@ -16,6 +16,10 @@ import { buildLumiTurnDispatch } from '../server/cognition/turn_dispatch';
 import { buildModelCapabilityPolicy } from '../server/cognition/capability_selection';
 import { buildQuickCommandToolPolicy } from '../server/cognition/quick_commands';
 import { buildOperationModeToolPolicy } from '../server/cognition/operation_modes';
+import {
+  shouldAllowToolUseForTurn,
+  traceToolIntentDecision,
+} from '../server/cognition/tool_intent';
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import {
   buildLumiExecutionDecision,
@@ -155,6 +159,35 @@ describe('model-owned main chat architecture', () => {
     expect(buildModelCapabilityPolicy(execution).maxIterations).toBe(80);
   });
 
+  it('describes Chat foreground escalation consistently with the hard runtime policy', () => {
+    const translationsSource = readFileSync(path.resolve(process.cwd(), 'src/lib/translations.ts'), 'utf8');
+    const adapterRegistrySource = readFileSync(path.resolve(process.cwd(), 'server/adapters/registry.ts'), 'utf8');
+    const generatedMessages = JSON.parse(readFileSync(
+      path.resolve(process.cwd(), 'src/i18n/locales/ui.generated.json'),
+      'utf8',
+    ));
+
+    expect(translationsSource).toContain("Clear action requests may use Assistant's foreground tools for that turn");
+    expect(translationsSource).toContain('明确要求执行时，该回合可调用助手模式的前台工具');
+    expect(generatedMessages['desktop-onboarding.chat-answer-only-no-proactive.fb6dff28d4'].en)
+      .toContain('explicit action requests may use Assistant tools');
+    expect(generatedMessages['desktop-ui.pure-conversation-answers-and-discussion.10bb20f365'].en)
+      .not.toContain('no tools');
+    expect(adapterRegistrySource).not.toContain('Chat is pure conversation');
+
+    const trace = traceToolIntentDecision(
+      'Open Notepad and write the requested note.',
+      'chat',
+      'chat',
+    );
+    expect(shouldAllowToolUseForTurn(trace.text, trace.source, trace.operationMode)).toBe(true);
+    expect(trace).toMatchObject({
+      allowToolUse: true,
+      decisionReason: expect.stringContaining('Assistant capabilities may be borrowed'),
+      blockedBy: [],
+    });
+  });
+
   it('keeps quick-command matches fail-closed and wires the main model loop to the hard capability policy', () => {
     const policy = {
       allowedTools: ['client_get_state'],
@@ -190,7 +223,7 @@ describe('model-owned main chat architecture', () => {
     expect(chatSource).toContain('skipActionContinuation: confirmationCancellationRequested');
   });
 
-  it('uses the same hard-policy manifest across remote and REST text entrances', () => {
+  it('uses model-owned hard policies and further narrows the public REST entrance', () => {
     const messaging = readFileSync(path.resolve(process.cwd(), 'server/regions/packs/cn/messaging_routes.ts'), 'utf8');
     const rest = readFileSync(path.resolve(process.cwd(), 'server/routes/chat_routes.ts'), 'utf8');
     const misc = readFileSync(path.resolve(process.cwd(), 'server/routes/misc_routes.ts'), 'utf8');
@@ -200,13 +233,17 @@ describe('model-owned main chat architecture', () => {
     expect(messaging).toContain('modelToolPolicy.maxIterations || executionDecision.maxIterations');
     expect(messaging).toContain('isPureOperationModeSwitchRequest(requestText, requestedMode)');
 
-    expect(rest).toContain('const restModelToolPolicy = buildModelCapabilityPolicy(restExecutionDecision)');
+    expect(rest).toContain('const restModelToolPolicy = restrictToolPolicyForExecutionBoundary(');
+    expect(rest).toContain('buildModelCapabilityPolicy(restExecutionDecision)');
+    expect(rest).toContain("'remote_restricted'");
     expect(rest).toContain('toolPolicy: restModelToolPolicy');
     expect(rest).toContain('isSanctuary: !req.user');
 
-    expect(misc).toContain('const modelToolPolicy = buildModelCapabilityPolicy(executionPlan.execution)');
-    expect(misc).toContain('toolPolicy: modelToolPolicy');
-    expect(misc).toContain('isSanctuary: !req.user');
+    // misc_routes used to mount a second, less constrained /chat handler.
+    // There must now be one canonical REST entrance in chat_routes only.
+    expect(misc).not.toContain('router.post("/chat"');
+    expect(misc).not.toContain("router.post('/chat'");
+    expect(misc).not.toContain('buildModelCapabilityPolicy');
   });
 
   it('uses finalization as an evidence boundary without replacing compatible model-authored chat prose', () => {

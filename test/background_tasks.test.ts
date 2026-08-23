@@ -17,6 +17,26 @@ import {
   resumeBackgroundTask,
   resetBackgroundTasksForTest,
 } from '../server/agents/background_tasks';
+import { buildTaskTerminalReceipt } from '../server/cognition/acceptance_evidence';
+
+function verifiedReceipt(taskId: string) {
+  return buildTaskTerminalReceipt({
+    taskId,
+    runtime: 'background',
+    outcome: 'completed',
+    toolRecords: [{
+      id: `${taskId}:receipt`,
+      name: 'controlled_test_observation',
+      arguments: {},
+      result: JSON.stringify({ ok: true }),
+      terminalVerification: {
+        status: 'verified',
+        strategy: 'terminal_receipt',
+        reason: 'Controlled test observation verified.',
+      },
+    }],
+  });
+}
 
 describe('background task registry', () => {
   beforeEach(() => {
@@ -39,7 +59,7 @@ describe('background task registry', () => {
     expect(markBackgroundTaskRunning(created.id)?.status).toBe('running');
     expect(incrementBackgroundTaskToolCalls(created.id)?.toolCallsCount).toBe(1);
 
-    const completed = completeBackgroundTask(created.id, 'Done');
+    const completed = completeBackgroundTask(created.id, 'Done', verifiedReceipt(created.id));
     expect(completed?.status).toBe('completed');
     expect(completed?.resultPreview).toBe('Done');
     expect(getBackgroundTask(created.id, 'u2')).toBeNull();
@@ -56,9 +76,21 @@ describe('background task registry', () => {
     expect(cancelling?.status).toBe('cancelled');
     expect(isBackgroundTaskCancellationRequested(created.id)).toBe(true);
 
-    const completed = completeBackgroundTask(created.id, 'Late success');
+    const completed = completeBackgroundTask(created.id, 'Late success', verifiedReceipt(created.id));
     expect(completed?.status).toBe('cancelled');
     expect(getBackgroundTask(created.id, 'u1')?.resultPreview).toBeUndefined();
+  });
+
+  it('rejects completion without a verified terminal receipt', () => {
+    const created = registerBackgroundTask({
+      userId: 'u1',
+      title: 'Unverified work',
+      prompt: 'Do not accept prose as completion evidence',
+    });
+    markBackgroundTaskRunning(created.id);
+
+    expect(completeBackgroundTask(created.id, 'claimed done', undefined as any)).toBeNull();
+    expect(getBackgroundTask(created.id, 'u1')?.status).toBe('running');
   });
 
   it('marks failures and explicit cancellations', () => {

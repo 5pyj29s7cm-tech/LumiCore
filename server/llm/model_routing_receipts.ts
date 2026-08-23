@@ -9,7 +9,12 @@ export interface ModelRouteAttempt {
   model: string;
   status: ModelRouteAttemptStatus;
   reason?: string;
+  errorCategory?: string;
   errorDigest?: string;
+  startedAt?: string;
+  completedAt?: string;
+  durationMs?: number;
+  visibleOutputCommitted?: boolean;
 }
 
 export interface ModelRoutingTrace {
@@ -45,6 +50,9 @@ export function modelRoutingErrorReason(error: unknown): string {
   const message = compact((error as any)?.message || error, 500).toLowerCase();
   if (!message) return 'unknown_error';
   if (/abort|cancel/.test(message)) return 'cancelled';
+  if (/circuit/.test(message)) return 'circuit_open';
+  if (/insufficient balance|payment required|quota|rate.?limit|too many requests|\b429\b|\b402\b/.test(message)) return 'quota_or_billing';
+  if (/unauthorized|authentication|invalid api key|\b401\b|\b403\b/.test(message)) return 'provider_auth_failed';
   if (/timeout|timed out/.test(message)) return 'timeout';
   if (/not reachable|connection|fetch failed|econnrefused|socket/.test(message)) return 'provider_unreachable';
   if (/not loaded|no text-generation model|model.*unavailable/.test(message)) return 'model_unavailable';
@@ -65,7 +73,12 @@ function normalizeAttempt(value: ModelRouteAttempt): ModelRouteAttempt {
     model: compact(value.model),
     status: value.status,
     ...(value.reason ? { reason: compact(value.reason) } : {}),
+    ...(value.errorCategory ? { errorCategory: compact(value.errorCategory, 64) } : {}),
     ...(value.errorDigest ? { errorDigest: compact(value.errorDigest, 64) } : {}),
+    ...(value.startedAt ? { startedAt: compact(value.startedAt, 40) } : {}),
+    ...(value.completedAt ? { completedAt: compact(value.completedAt, 40) } : {}),
+    ...(value.durationMs !== undefined ? { durationMs: Math.max(0, Math.trunc(Number(value.durationMs) || 0)) } : {}),
+    ...(value.visibleOutputCommitted !== undefined ? { visibleOutputCommitted: value.visibleOutputCommitted === true } : {}),
   };
 }
 

@@ -18,8 +18,9 @@ describe('macOS wallpaper mode recovery', () => {
     expect(rust).toContain('#[cfg(target_os = "macos")]\n        let _ = window.set_skip_taskbar(false);');
     expect(rust).toContain('"Exit Wallpaper Mode"');
     expect(rust).toContain('tauri::RunEvent::Reopen { .. }');
-    expect(rust).toContain('let _ = show_main_window_impl(app);');
+    expect(rust).toContain('show_main_window_impl(app, "macos_reopen");');
     expect(rust).toContain('tauri_plugin_single_instance::init(|app, _args, _cwd|');
+    expect(rust).toContain('show_main_window_impl(app, "single_instance");');
     expect(rust).toContain('"lumi:wallpaper-mode-changed"');
     expect(rust).toContain('get_wallpaper_mode');
   });

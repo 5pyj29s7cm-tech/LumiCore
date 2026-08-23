@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { promises as dns } from 'node:dns';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import jwt from 'jsonwebtoken';
 import { closeDatabase, flushDBOrThrow, initDatabase, readDB, writeDB } from '../db_layer';
 import {
@@ -14,6 +15,8 @@ import { JWT_SECRET, makeApp } from './helpers';
 
 let cleanup = () => {};
 let baseUrl = '';
+const companyUrl = 'https://branch-company.example';
+let nativeFetch: typeof fetch;
 let orgId = '';
 const userId = `branch-client-user-${Date.now()}`;
 
@@ -55,15 +58,28 @@ describe('employee organization branch client durability', () => {
     cleanup = app.cleanup;
     baseUrl = app.url;
     mountBranchRoutes(app.apiRouter);
+    nativeFetch = globalThis.fetch;
+    vi.spyOn(dns, 'lookup').mockResolvedValue([{ address: '93.184.216.34', family: 4 }] as any);
+    globalThis.fetch = ((input: any, init?: RequestInit) => {
+      const requested = String(input);
+      const rewritten = requested.startsWith(companyUrl)
+        ? `${baseUrl}${requested.slice(companyUrl.length)}`
+        : requested;
+      return nativeFetch(rewritten, init);
+    }) as typeof fetch;
     orgId = OrgDB.createOrg('Employee Branch Client', `branch-client-${Date.now()}`, userId).id;
     OrgDB.addMember(orgId, userId, 'member');
   });
 
-  afterAll(() => cleanup());
+  afterAll(() => {
+    globalThis.fetch = nativeFetch;
+    vi.restoreAllMocks();
+    cleanup();
+  });
 
   it('persists its stable branch identity and stores only the scoped branch token', async () => {
     const personalToken = userToken();
-    const result = await connectToOrg(orgId, baseUrl, personalToken);
+    const result = await connectToOrg(orgId, companyUrl, personalToken);
     expect(result).toEqual({ success: true });
 
     const state = getBranchState();

@@ -8,8 +8,7 @@ import { mcpManager, registerMCPTools } from "../mcp";
 import { scheduler, registerScheduledTasks } from "../scheduler";
 import { isFirstBootComplete, persistFirstBootExploration, type SystemSnapshot } from "../autonomy/system_explorer";
 import { installProfessionAgents } from "../autonomy/profession_templates";
-import bcrypt from "bcryptjs";
-import { getLocalAdminPassword } from "../config/local_identity";
+import { initializeDesktopBootstrapProof } from "../config/desktop_bootstrap";
 import { repairCorruptedOrganizationNames } from "../org/db";
 import { startMessagingConnections, stopMessagingConnections } from "./messaging";
 import { recoverOrphanedConversationActionExecutions } from "../conversation/manager";
@@ -158,6 +157,9 @@ export async function bootstrap(ctx: BootstrapContext) {
   }
 
   try {
+    // Rotate the native desktop handoff on every backend start. The HTTP
+    // bootstrap route remains fail-closed until this succeeds.
+    initializeDesktopBootstrapProof();
     await ensureDatabaseInitialized();
     const recoveredChatReceipts = await initializeChatExecutionRegistryPersistence();
     console.log('Database initialized successfully');
@@ -202,30 +204,6 @@ export async function bootstrap(ctx: BootstrapContext) {
   } catch (error) {
     console.error('Failed to initialize database:', error);
     process.exit(1);
-  }
-
-  // Auto-create admin account for local/desktop use
-  const adminPassword = getLocalAdminPassword();
-  if (adminPassword) {
-    try {
-      const db = readDB();
-      const adminExists = db.users.find((u: any) => u.username === 'admin');
-      if (!adminExists) {
-        db.users.push({
-          uid: Math.random().toString(36).substring(2, 15),
-          username: 'admin',
-          password: await bcrypt.hash(adminPassword, 10),
-          phone: '+00000000000',
-          role: 'admin',
-          balance: 999.0,
-          createdAt: new Date().toISOString(),
-        });
-        writeDB(db);
-        console.log('[Bootstrap] Admin account created');
-      }
-    } catch (err) {
-      console.warn('[Bootstrap] Failed to ensure admin account:', (err as Error).message);
-    }
   }
 
   // Register all agent tools

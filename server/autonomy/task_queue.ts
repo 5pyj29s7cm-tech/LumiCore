@@ -12,6 +12,11 @@ import {
   type DurableTaskReceiptSnapshot,
   type DurableTaskRecoveryState,
 } from '../cognition/durable_task_recovery';
+import {
+  buildTaskTerminalReceipt,
+  validateCompletionTerminalReceipt,
+  type TaskTerminalReceipt,
+} from '../cognition/acceptance_evidence';
 
 export type AutonomousTaskStatus = 'pending' | 'running' | 'pausing' | 'paused' | 'completed' | 'failed' | 'blocked' | 'cancelled';
 
@@ -63,6 +68,8 @@ export interface AutonomousTask {
   recovery?: DurableTaskRecoveryState;
   checkpoint?: AutonomousTaskCheckpoint;
   executionPlan?: PersistedCapabilityExecutionPlan;
+  /** Unified terminal acceptance receipt. Completed tasks require a verified receipt. */
+  terminalReceipt?: TaskTerminalReceipt;
 }
 
 export interface AutonomousTaskLeaseInput {
@@ -114,6 +121,12 @@ function cloneTask(task: AutonomousTask): AutonomousTask {
     } : undefined,
     recovery: task.recovery ? JSON.parse(JSON.stringify(task.recovery)) : undefined,
     executionPlan: task.executionPlan ? JSON.parse(JSON.stringify(task.executionPlan)) : undefined,
+    terminalReceipt: task.terminalReceipt ? {
+      ...task.terminalReceipt,
+      evidenceRefs: [...task.terminalReceipt.evidenceRefs],
+      toolNames: [...task.terminalReceipt.toolNames],
+      workerIds: [...task.terminalReceipt.workerIds],
+    } : undefined,
   };
 }
 
@@ -147,6 +160,15 @@ export function recoverPersistedTask(task: AutonomousTask, recoveredAt = nowIso(
       recovered.completedAt = recoveredAt;
       recovered.updatedAt = recoveredAt;
       recovered.error = recovered.error || 'Cancellation completed during restart recovery';
+      recovered.terminalReceipt = buildTaskTerminalReceipt({
+        taskId: recovered.id,
+        runtime: 'autonomous',
+        outcome: 'cancelled',
+        reasonCode: 'restart_recovery_cancelled',
+        reason: recovered.error,
+        evidenceRefs: recovered.checkpoint?.receiptIds,
+        createdAt: recoveredAt,
+      });
       clearLease(recovered);
       return recovered;
     }
@@ -184,6 +206,15 @@ export function recoverPersistedTask(task: AutonomousTask, recoveredAt = nowIso(
       recovered.recoveryCount = nextRecoveryCount;
       recovered.lastRecoveredAt = recoveredAt;
       recovered.recovery = updateDurableTaskRecovery(recovered.recovery, diagnosis, recovered.checkpoint?.receipts);
+      recovered.terminalReceipt = buildTaskTerminalReceipt({
+        taskId: recovered.id,
+        runtime: 'autonomous',
+        outcome: 'blocked',
+        reasonCode: diagnosis.failureClass,
+        reason,
+        evidenceRefs: recovered.checkpoint?.receiptIds,
+        createdAt: recoveredAt,
+      });
       clearLease(recovered);
       return recovered;
     }
@@ -304,6 +335,7 @@ export function claimAutonomousTask(id: string, input: AutonomousTaskLeaseInput 
   if (task.status === 'running' && !leaseExpired) return null;
   const timestamp = new Date(now).toISOString();
   task.status = 'running';
+  task.terminalReceipt = undefined;
   task.startedAt = timestamp;
   task.updatedAt = timestamp;
   task.nextAttemptAt = undefined;
@@ -375,7 +407,9 @@ export function markCompleted(
   result: string,
   toolCallsCount: number,
   tokensUsed: number,
-  verification: Pick<AutonomousTask, 'finalized' | 'blocked' | 'verified' | 'verificationReason'> = {},
+  verification: Pick<AutonomousTask, 'finalized' | 'blocked' | 'verified' | 'verificationReason'> & {
+    terminalReceipt?: TaskTerminalReceipt;
+  } = {},
   leaseId?: string,
 ): AutonomousTask | null {
   ensureHydrated();
@@ -383,6 +417,11 @@ export function markCompleted(
   if (!task) return null;
   if (!hasLiveLease(task, leaseId)) return null;
   if (verification.finalized !== true || verification.verified !== true || verification.blocked === true) return null;
+  const acceptance = validateCompletionTerminalReceipt(verification.terminalReceipt, {
+    taskId: task.id,
+    runtime: 'autonomous',
+  });
+  if (!acceptance.accepted) return null;
   if (isTaskCancellationRequested(id)) return markCancelled(id);
   if (task.pauseRequestedAt) return markPaused(id);
   const timestamp = nowIso();
@@ -396,6 +435,12 @@ export function markCompleted(
   task.blocked = false;
   task.verified = true;
   task.verificationReason = verification.verificationReason;
+  task.terminalReceipt = {
+    ...verification.terminalReceipt!,
+    evidenceRefs: [...verification.terminalReceipt!.evidenceRefs],
+    toolNames: [...verification.terminalReceipt!.toolNames],
+    workerIds: [...verification.terminalReceipt!.workerIds],
+  };
   clearLease(task);
   moveToHistory(task);
   persist();
@@ -414,6 +459,15 @@ export function markFailed(id: string, error: string, leaseId?: string): Autonom
   task.completedAt = timestamp;
   task.updatedAt = timestamp;
   task.error = error;
+  task.terminalReceipt = buildTaskTerminalReceipt({
+    taskId: task.id,
+    runtime: 'autonomous',
+    outcome: 'failed',
+    reasonCode: 'autonomous_execution_failed',
+    reason: error,
+    evidenceRefs: task.checkpoint?.receiptIds,
+    createdAt: timestamp,
+  });
   clearLease(task);
   moveToHistory(task);
   persist();
@@ -449,12 +503,23 @@ export function recordAutonomousTaskFailure(
   clearLease(task);
   if (diagnosis.decision === 'retry' || diagnosis.decision === 'replan') {
     task.status = 'pending';
+    task.terminalReceipt = undefined;
     task.startedAt = undefined;
     task.completedAt = undefined;
     task.nextAttemptAt = diagnosis.nextAttemptAt;
   } else {
     task.status = diagnosis.decision === 'block' ? 'blocked' : 'failed';
     task.completedAt = diagnosis.diagnosedAt;
+    task.terminalReceipt = buildTaskTerminalReceipt({
+      taskId: task.id,
+      runtime: 'autonomous',
+      outcome: diagnosis.decision === 'block' ? 'blocked' : 'failed',
+      toolRecords: input.toolRecords,
+      reasonCode: diagnosis.failureClass,
+      reason: diagnosis.reason,
+      evidenceRefs: task.checkpoint?.receiptIds,
+      createdAt: diagnosis.diagnosedAt,
+    });
     moveToHistory(task);
   }
   persist();
@@ -503,6 +568,7 @@ export function resumeAutonomousTask(id: string, userId?: string): AutonomousTas
   const task = findTask(id, userId);
   if (!task || task.status !== 'paused') return null;
   task.status = 'pending';
+  task.terminalReceipt = undefined;
   task.pausedAt = undefined;
   task.pauseRequestedAt = undefined;
   task.updatedAt = nowIso();
@@ -546,6 +612,15 @@ export function markCancelled(id: string, reason = 'Cancelled by user'): Autonom
   task.completedAt = timestamp;
   task.updatedAt = timestamp;
   task.error = reason;
+  task.terminalReceipt = buildTaskTerminalReceipt({
+    taskId: task.id,
+    runtime: 'autonomous',
+    outcome: 'cancelled',
+    reasonCode: 'autonomous_task_cancelled',
+    reason,
+    evidenceRefs: task.checkpoint?.receiptIds,
+    createdAt: timestamp,
+  });
   clearLease(task);
   moveToHistory(task);
   persist();

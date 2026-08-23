@@ -141,6 +141,8 @@ describe('capability execution plan persistence', () => {
       startedAt: '2026-01-01T00:00:00.000Z',
       completedAt: '2026-01-01T00:00:01.000Z',
       output: 'sensitive worker output that must not be persisted',
+      evidenceKind: 'tool_terminal_verification',
+      evidenceRefs: ['tool:research-terminal-receipt'],
     });
     const persisted = attachConversationModelExecutionGraph(db, {
       conversationId: 'conversation-1',
@@ -152,7 +154,12 @@ describe('capability execution plan persistence', () => {
     const context = JSON.parse(String(persisted?.context || '{}'));
 
     expect(context.modelExecutionGraph.graphId).toBe(compilation.graph.graphId);
-    expect(context.modelNodeReceipts[0]).toMatchObject({ nodeId: 'research', verified: true });
+    expect(context.modelNodeReceipts[0]).toMatchObject({
+      nodeId: 'research',
+      verified: true,
+      evidenceKind: 'tool_terminal_verification',
+      evidenceRefs: ['tool:research-terminal-receipt'],
+    });
     expect(context.modelNodeReceipts[0].outputDigest).toHaveLength(64);
     expect(context.modelNodeReceipts[0].outputSummary).toBeUndefined();
     expect(JSON.stringify(context)).not.toContain('sensitive worker output');
@@ -168,6 +175,8 @@ describe('capability execution plan persistence', () => {
       taskId: 'task-durable',
       nodeId: 'research',
       verified: true,
+      evidenceKind: 'tool_terminal_verification',
+      evidenceRefs: ['tool:research-terminal-receipt'],
       nodeFingerprint: receipt.nodeFingerprint,
     });
     expect(loadConversationModelExecutionRecovery(db, {

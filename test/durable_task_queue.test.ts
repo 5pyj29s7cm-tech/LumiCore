@@ -50,6 +50,19 @@ describe('durable background task queues', () => {
     checkpointBackgroundTask(background.id, {
       phase: 'tool_execution',
       receiptIds: ['receipt-a'],
+      receipts: [{
+        id: 'receipt-a',
+        name: 'inspect_state',
+        idempotencyKey: 'durable-background:inspect',
+        status: 'success',
+        verificationStatus: 'verified',
+        operation: 'observe',
+        sideEffects: [{ type: 'local_read', reversible: true }],
+        resultDigest: 'digest-a',
+        error: '',
+        recordedAt: '2026-08-23T00:00:00.000Z',
+      }],
+      detail: 'Inspected the exact target and retained the verified receipt.',
     }, claimedBackground.leaseId);
 
     const autonomous = enqueue({
@@ -78,7 +91,13 @@ describe('durable background task queues', () => {
     expect(getBackgroundTask(background.id, 'durable-owner')).toMatchObject({
       status: 'queued',
       recoveryCount: 1,
-      checkpoint: { phase: 'tool_execution', receiptIds: ['receipt-a'] },
+      prompt: 'Continue safely after restart',
+      checkpoint: {
+        phase: 'tool_execution',
+        receiptIds: ['receipt-a'],
+        receipts: [expect.objectContaining({ id: 'receipt-a', verificationStatus: 'verified' })],
+        detail: 'Inspected the exact target and retained the verified receipt.',
+      },
       context: { provider: 'ollama', model: 'exact-local-model', selectionMode: 'pinned' },
     });
     expect(getBackgroundTask(background.id, 'durable-owner')?.leaseId).toBeUndefined();

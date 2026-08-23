@@ -50,9 +50,10 @@ describe('command center navigation contract', () => {
     expect(chat).toContain("document.addEventListener('visibilitychange', restoreVisibleCommandInput)");
     expect(chat).toContain("focus({ preventScroll: true })");
     expect(rust).toContain('const COMMAND_CENTER_SHORTCUT: &str = "Ctrl+Shift+Enter"');
-    expect(rust).toContain('let _ = show_main_window_impl(app)');
-    expect(rust).toContain('let webview: &tauri::Webview<_> = webview_window.as_ref()');
-    expect(rust).toContain('let _ = webview.set_focus()');
+    expect(rust).toContain('show_main_window_impl(app, "command_center_shortcut")');
+    expect(rust).toContain('fn focus_webview(&self) -> Result<(), String>');
+    expect(rust).toContain('webview.set_focus().map_err(|error| error.to_string())');
+    expect(rust).toContain('WINDOW_ACTIVATION_DIAGNOSTIC_EVENT');
     expect(rust).toContain('app.emit(COMMAND_CENTER_EVENT, ())');
     expect(rust).toContain('app.global_shortcut().unregister_all()');
   });

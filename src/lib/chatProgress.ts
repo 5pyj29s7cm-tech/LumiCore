@@ -1,5 +1,6 @@
 
 import { uiMessage } from '../i18n/uiMessages';
+import { executionFeedbackCopy } from '../i18n/locales/executionFeedback';
 
 export type ChatProgressTone = 'thinking' | 'tool' | 'done' | 'error' | 'confirmation';
 
@@ -36,9 +37,13 @@ export function describeTurnCompletionProgress(
   tone: ChatProgressTone;
 } {
   if (finalization?.blocked) {
+    const reason = String(finalization.reason || '').trim().toLowerCase();
+    const copy = executionFeedbackCopy(isZh ? 'zh' : 'en');
     return {
-      text: uiMessage('chat-progress.no-actual-tool-execution-was.c2d57b608a', (isZh) ? 'zh' : 'en'),
-      tone: 'error',
+      text: reason === 'waiting_confirmation'
+        ? copy.progressConfirmation
+        : copy.progressBlocked,
+      tone: reason === 'waiting_confirmation' ? 'confirmation' : 'error',
     };
   }
   // A tool event only proves that a step was attempted. It does not prove the

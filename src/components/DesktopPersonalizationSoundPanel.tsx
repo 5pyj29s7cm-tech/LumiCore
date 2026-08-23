@@ -76,6 +76,7 @@ export function DesktopPersonalizationSoundPanel({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const isZh = t?.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
+  const voiceIdentityCopy = desktopWorkflowCopy(isZh ? 'zh' : 'en').voiceIdentity;
   const providerName = voices.provider === 'ark'
     ? '豆包'
     : voices.provider === 'cosyvoice'
@@ -219,34 +220,68 @@ export function DesktopPersonalizationSoundPanel({
         </div>
       </div>
 
-      <div className="grid shrink-0 grid-cols-4 gap-2 rounded-2xl border border-white/5 bg-white/[0.02] p-2">
-        {voiceIdentitySteps.map((step, index) => (
-          <button
-            key={step.id}
-            onClick={step.id === 'avatar' ? onOpenAppearance : undefined}
-            disabled={step.id !== 'avatar'}
-            className={`group min-w-0 rounded-xl border px-3 py-2 text-left transition-colors ${
-              step.done
-                ? 'border-emerald-400/20 bg-emerald-400/10'
-                : step.active
-                  ? 'border-sky-400/30 bg-sky-400/10'
-                  : step.id === 'avatar'
-                    ? 'border-cyan-400/20 bg-cyan-400/10 hover:bg-cyan-400/20'
-                    : 'border-white/5 bg-black/20'
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-black ${
-                step.done ? 'bg-emerald-300 text-black' : step.active ? 'bg-sky-300 text-black' : 'bg-white/10 text-white/45'
-              }`}>
-                {step.done ? '✓' : index + 1}
+      <ol
+        aria-label={voiceIdentityCopy.workflow}
+        className="grid shrink-0 grid-cols-4 gap-2 rounded-2xl border border-white/5 bg-white/[0.02] p-2"
+      >
+        {voiceIdentitySteps.map((step, index) => {
+          const cardClassName = `group min-w-0 rounded-xl border px-3 py-2 text-left ${
+            step.done
+              ? 'border-emerald-400/20 bg-emerald-400/10'
+              : step.active
+                ? 'border-sky-400/30 bg-sky-400/10'
+                : step.id === 'avatar'
+                  ? 'border-cyan-400/20 bg-cyan-400/10 transition-colors hover:bg-cyan-400/20'
+                  : 'cursor-default border-white/5 bg-black/20'
+          }`;
+          const statusLabel = step.done
+            ? voiceIdentityCopy.complete
+            : step.active
+              ? voiceIdentityCopy.inProgress
+              : voiceIdentityCopy.pending;
+          const content = (
+            <>
+              <div className="flex items-center gap-2">
+                <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-black ${
+                  step.done ? 'bg-emerald-300 text-black' : step.active ? 'bg-sky-300 text-black' : 'bg-white/10 text-white/45'
+                }`}>
+                  {step.done ? '✓' : index + 1}
+                </span>
+                <span className="truncate text-[11px] font-black uppercase tracking-[0.12em] text-white/72">{step.label}</span>
+              </div>
+              <p className="mt-1 truncate text-[10px] font-semibold text-white/35">{step.desc}</p>
+              <span className="mt-1 block text-[9px] font-black uppercase tracking-[0.14em] text-white/30">
+                {step.id === 'avatar'
+                  ? voiceIdentityCopy.openAppearance
+                  : `${voiceIdentityCopy.status}: ${statusLabel}`}
               </span>
-              <span className="truncate text-[11px] font-black uppercase tracking-[0.12em] text-white/72">{step.label}</span>
-            </div>
-            <p className="mt-1 truncate text-[10px] font-semibold text-white/35">{step.desc}</p>
-          </button>
-        ))}
-      </div>
+            </>
+          );
+
+          return (
+            <li key={step.id} className="min-w-0">
+              {step.id === 'avatar' ? (
+                <button
+                  type="button"
+                  data-voice-workflow-action="appearance"
+                  onClick={onOpenAppearance}
+                  className={`${cardClassName} h-full w-full`}
+                >
+                  {content}
+                </button>
+              ) : (
+                <div
+                  data-voice-workflow-status={step.id}
+                  aria-label={`${step.label}: ${statusLabel}`}
+                  className={`${cardClassName} h-full`}
+                >
+                  {content}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ol>
 
       <div className="grid flex-1 grid-cols-2 gap-4 overflow-hidden">
         <div className="space-y-4 overflow-y-auto scrollbar-hide">

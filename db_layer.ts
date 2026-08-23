@@ -4,12 +4,21 @@ import path from 'path';
 import { createHash } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { getDataPath, getDataRoot } from './server/config/data_path';
+import { acquireDataRootLease } from './server/runtime/data_root_lease';
 import { isolateLegacyGuardSummaryState } from './server/conversation/guard_history';
 import {
   configureExternalCommitJournal,
   type ExternalCommitJournalAdapter,
   type ExternalCommitJournalEntry,
 } from './server/tools/external_commit_journal';
+
+// Production persistence is process-exclusive per canonical Lumi data root.
+// Acquire synchronously before even the legacy migration can inspect/copy data.
+// Vitest isolates intentionally share/reload modules; subprocess lease tests
+// opt back in explicitly through LUMI_ENFORCE_DATA_ROOT_LEASE.
+if (process.env.VITEST !== 'true' || process.env.LUMI_ENFORCE_DATA_ROOT_LEASE === '1') {
+  acquireDataRootLease();
+}
 
 // Auto-migrate data from old location (project directory) to user directory on first run
 function migrateDataFromOldLocation() {

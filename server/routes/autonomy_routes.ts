@@ -14,6 +14,26 @@ import {
   requestPauseBackgroundTask,
   resumeBackgroundTask,
 } from '../agents/background_tasks';
+import {
+  buildTaskCompletionFeedback,
+  type TaskTerminalReceipt,
+} from '../cognition/acceptance_evidence';
+
+function withCompletionFeedback<T extends {
+  title?: string;
+  status?: string;
+  error?: string;
+  terminalReceipt?: TaskTerminalReceipt;
+}>(task: T): T & { completionFeedback: ReturnType<typeof buildTaskCompletionFeedback> } {
+  return {
+    ...task,
+    completionFeedback: buildTaskCompletionFeedback(
+      task.terminalReceipt,
+      task.title || 'Task',
+      { status: task.status, reason: task.error },
+    ),
+  };
+}
 
 export function autonomyRoutes(): Router {
   const router = Router();
@@ -30,13 +50,13 @@ export function autonomyRoutes(): Router {
 
   // Task queue
   router.get('/queue', requireAuth, (req, res) => {
-    res.json({ queue: getTaskQueue(req.user!.uid) });
+    res.json({ queue: getTaskQueue(req.user!.uid).map(withCompletionFeedback) });
   });
 
   router.get('/history', requireAuth, (req, res) => {
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
     const offset = parseInt(req.query.offset as string) || 0;
-    res.json({ tasks: getTaskHistory(limit, offset, req.user!.uid) });
+    res.json({ tasks: getTaskHistory(limit, offset, req.user!.uid).map(withCompletionFeedback) });
   });
 
   router.post('/tasks/:id/cancel', requireAuth, (req, res) => {
@@ -58,7 +78,7 @@ export function autonomyRoutes(): Router {
   });
 
   router.get('/background-tasks', requireAuth, (req, res) => {
-    res.json({ tasks: listBackgroundTasks(req.user!.uid) });
+    res.json({ tasks: listBackgroundTasks(req.user!.uid).map(withCompletionFeedback) });
   });
 
   router.post('/background-tasks/:id/cancel', requireAuth, (req, res) => {

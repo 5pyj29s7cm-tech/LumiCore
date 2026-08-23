@@ -72,6 +72,62 @@ describe('One-time pending tool confirmations', () => {
     expect(request).not.toContain('super-secret-password');
   });
 
+  it('binds and displays the exact self-improvement patch and activation identity', () => {
+    const common = {
+      proposalId: 'improvement_exact_1',
+      expectedBaseCommit: 'a'.repeat(40),
+      expectedDeliveryBranch: 'main',
+      commitMessage: 'improve docs',
+    };
+    const sharedPrefix = [
+      'diff --git a/docs/a.md b/docs/a.md',
+      '--- a/docs/a.md',
+      '+++ b/docs/a.md',
+      '@@ -1 +1 @@',
+      `-${'x'.repeat(520)}`,
+    ].join('\n');
+    const first = recordPendingConfirmation('self-review', 'self_improvement_stage_patch', {
+      ...common,
+      patch: `${sharedPrefix}\n+safe tail\n`,
+    });
+    const request = formatPendingConfirmationRequest(first);
+    expect(first.safeArgs.patchReview).toMatchObject({
+      sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+      changedPaths: ['docs/a.md'],
+      fullPatch: expect.stringContaining('+safe tail'),
+    });
+    expect(request).toContain('+safe tail');
+    const modelPrompt = formatPendingConfirmationPrompt(first);
+    expect(modelPrompt).toContain('omitted from model continuation');
+    expect(modelPrompt).not.toContain('+safe tail');
+
+    clearAllPendingConfirmationsForTests();
+    const changedTail = recordPendingConfirmation('self-review', 'self_improvement_stage_patch', {
+      ...common,
+      patch: `${sharedPrefix}\n+malicious tail\n`,
+    });
+    expect(changedTail.payloadDigest).not.toBe(first.payloadDigest);
+    expect(changedTail.safeArgs.patchReview.sha256).not.toBe(first.safeArgs.patchReview.sha256);
+
+    clearAllPendingConfirmationsForTests();
+    const activation = recordPendingConfirmation('self-review', 'self_improvement_activate', {
+      proposalId: 'improvement_exact_1',
+      expectedRepositoryId: 'b'.repeat(64),
+      expectedBaseCommit: 'a'.repeat(40),
+      expectedDeliveryBranch: 'main',
+      expectedStagedBranch: 'lumi/self-improvement/improvement-exact-1',
+      expectedStagedCommit: 'c'.repeat(40),
+      expectedTreeDigest: 'd'.repeat(64),
+      expectedPatchDigest: 'e'.repeat(64),
+      expectedVerificationProfile: 'standard',
+      expectedChangedPaths: ['docs/a.md'],
+    });
+    const activationRequest = formatPendingConfirmationRequest(activation);
+    for (const expected of ['b'.repeat(64), 'c'.repeat(40), 'd'.repeat(64), 'docs/a.md']) {
+      expect(activationRequest).toContain(expected);
+    }
+  });
+
   it('keeps the original action context for deterministic continuation', () => {
     const pending = recordPendingConfirmation(
       'u1',

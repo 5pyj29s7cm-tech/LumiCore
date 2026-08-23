@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { CheckCircle2, GitBranch, Link, RefreshCw, Server, Shield, Unlink, XCircle } from 'lucide-react';
 import { useT } from '../lib/useT';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
+import { apiFetch } from '../services/apiClient';
 
 type BranchStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'error';
 
@@ -64,7 +65,7 @@ export function OrgBranchPanel() {
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState(() => ({
     orgId: '',
-    companyUrl: 'http://127.0.0.1:3000',
+    companyUrl: '',
     token: (() => {
       try { return localStorage.getItem('lumi_auth_token') || ''; } catch { return ''; }
     })(),
@@ -78,14 +79,14 @@ export function OrgBranchPanel() {
 
   const loadState = async () => {
     try {
-      const res = await fetch('/api/branch/state', { credentials: 'include' });
+      const res = await apiFetch('/api/branch/state');
       if (!res.ok) throw new Error(`${uiMessage('org-branch-panel.failed-to-read-status.23ccb2e167')} (${res.status})`);
       const next = normalizeState(await res.json());
       setState(next);
       setForm(prev => ({
         ...prev,
         orgId: prev.orgId || next.orgId || '',
-        companyUrl: prev.companyUrl || next.companyUrl || 'http://127.0.0.1:3000',
+        companyUrl: prev.companyUrl || next.companyUrl || '',
       }));
     } catch (err: any) {
       setError(err.message || uiMessage('org-branch-panel.failed-to-read-status.23ccb2e167'));
@@ -106,7 +107,7 @@ export function OrgBranchPanel() {
 
     setConnecting(true);
     try {
-      const res = await fetch('/api/branch/connect', {
+      const res = await apiFetch('/api/branch/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -132,7 +133,7 @@ export function OrgBranchPanel() {
     setError('');
     setMessage('');
     try {
-      const res = await fetch('/api/branch/disconnect', { method: 'POST', credentials: 'include' });
+      const res = await apiFetch('/api/branch/disconnect', { method: 'POST' });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `${uiMessage('org-branch-panel.disconnect-failed.17c673b887')} (${res.status})`);
       setState(normalizeState(data));
@@ -147,7 +148,7 @@ export function OrgBranchPanel() {
     setMessage('');
     setSyncing(true);
     try {
-      const res = await fetch('/api/branch/sync', { method: 'POST', credentials: 'include' });
+      const res = await apiFetch('/api/branch/sync', { method: 'POST' });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `${uiMessage('org-branch-panel.sync-failed.58879d004c')} (${res.status})`);
       if (data.state) setState(normalizeState(data));

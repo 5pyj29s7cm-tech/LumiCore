@@ -1,6 +1,6 @@
 // Branch connection API — employee connects to company server
 import { Router } from "express";
-import { requireAuth } from "../middleware/auth";
+import { requireAdmin, requireAuth, requireLocalRequest } from "../middleware/auth";
 import { connectToOrg, disconnectFromOrg, getBranchState, syncWorkData } from "../org/branch";
 
 function publicBranchState() {
@@ -15,7 +15,7 @@ function publicBranchState() {
 
 export function mountBranchConnectionRoutes(router: Router, _jwtSecret: string) {
   // Get current branch connection state
-  router.get("/branch/state", (req, res) => {
+  router.get("/branch/state", requireAuth, requireAdmin, requireLocalRequest, (_req, res) => {
     try {
       res.json(publicBranchState());
     } catch (err: any) {
@@ -24,7 +24,7 @@ export function mountBranchConnectionRoutes(router: Router, _jwtSecret: string) 
   });
 
   // Connect to org — employee joins a company
-  router.post("/branch/connect", requireAuth, async (req, res) => {
+  router.post("/branch/connect", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
     try {
       const orgId = String(req.body?.orgId || '').trim();
       const companyUrl = String(req.body?.companyUrl || '').trim().replace(/\/+$/, '');
@@ -44,7 +44,7 @@ export function mountBranchConnectionRoutes(router: Router, _jwtSecret: string) 
   });
 
   // Disconnect from org
-  router.post("/branch/disconnect", requireAuth, (req, res) => {
+  router.post("/branch/disconnect", requireAuth, requireAdmin, requireLocalRequest, (_req, res) => {
     try {
       disconnectFromOrg();
       res.json({ success: true, state: publicBranchState() });
@@ -54,7 +54,7 @@ export function mountBranchConnectionRoutes(router: Router, _jwtSecret: string) 
   });
 
   // Sync work data on demand
-  router.post("/branch/sync", requireAuth, async (req, res) => {
+  router.post("/branch/sync", requireAuth, requireAdmin, requireLocalRequest, async (_req, res) => {
     try {
       const result = await syncWorkData();
       res.json({ ...result, state: publicBranchState() });

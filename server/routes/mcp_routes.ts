@@ -1,37 +1,84 @@
 import { Router } from "express";
-import { requireAuth } from "../middleware/auth";
+import { requireAdmin, requireAuth, requireLocalRequest } from "../middleware/auth";
 import { mcpManager, getMCPConfig, updateMCPConfig, recoverServerTools } from "../mcp";
 
+function redactMcpArgumentList(value: unknown): string[] {
+  const args = Array.isArray(value) ? value.map(item => String(item || '')) : [];
+  const secretFlag = /^(?:--?(?:api[-_]?key|token|secret|password|authorization)|bearer)$/i;
+  return args.map((arg, index) => {
+    if (index > 0 && secretFlag.test(args[index - 1])) return '[configured]';
+    if (/^(?:bearer\s+|sk-)[a-z0-9._~+/=-]{8,}$/i.test(arg)) return '[configured]';
+    if (/^(?:--?(?:api[-_]?key|token|secret|password|authorization))=.+$/i.test(arg)) {
+      return `${arg.split('=', 1)[0]}=[configured]`;
+    }
+    return arg;
+  });
+}
+
+function sanitizeMcpUrl(value: unknown): string | undefined {
+  const raw = String(value || '').trim();
+  if (!raw) return undefined;
+  try {
+    const parsed = new URL(raw);
+    parsed.username = '';
+    parsed.password = '';
+    for (const key of [...parsed.searchParams.keys()]) {
+      if (/(?:api[-_]?key|token|secret|password|authorization)/i.test(key)) {
+        parsed.searchParams.set(key, '[configured]');
+      }
+    }
+    return parsed.toString();
+  } catch {
+    return '[configured endpoint]';
+  }
+}
+
+function publicMcpConfig(name: string, cfg: any, connected: boolean) {
+  const {
+    env: _env,
+    headers: _headers,
+    cachedTools: _cachedTools,
+    ...safe
+  } = cfg || {};
+  return {
+    name,
+    ...safe,
+    args: redactMcpArgumentList(cfg?.args),
+    ...(cfg?.url ? { url: sanitizeMcpUrl(cfg.url) } : {}),
+    envConfigured: Boolean(cfg?.env && Object.keys(cfg.env).length),
+    headersConfigured: Boolean(cfg?.headers && Object.keys(cfg.headers).length),
+    connected,
+  };
+}
+
 export function mountMcpRoutes(router: Router) {
-  router.get("/mcp", requireAuth, (_req, res) => {
+  router.get("/mcp", requireAuth, requireAdmin, requireLocalRequest, (_req, res) => {
     const config = getMCPConfig();
     const connected = mcpManager.getConnectedServers();
-    const servers = Object.entries(config).map(([name, cfg]) => ({
-      name,
-      ...cfg,
-      connected: connected.includes(name),
-    }));
+    const servers = Object.entries(config).map(([name, cfg]) => (
+      publicMcpConfig(name, cfg, connected.includes(name))
+    ));
     res.json({ servers });
   });
 
-  router.post("/mcp", requireAuth, async (req, res) => {
+  router.post("/mcp", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
     try {
       const { servers } = req.body;
-      if (!servers || typeof servers !== 'object') {
+      if (!servers || typeof servers !== 'object' || Array.isArray(servers)) {
         return res.status(400).json({ error: 'Invalid servers config' });
       }
-      const registered = await updateMCPConfig(servers);
+      const registered = await updateMCPConfig({ ...getMCPConfig(), ...servers });
       res.json({ registered, count: registered.length });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  router.get("/mcp/health", (_req, res) => {
+  router.get("/mcp/health", requireAuth, requireAdmin, requireLocalRequest, (_req, res) => {
     res.json({ servers: mcpManager.getServerHealth() });
   });
 
-  router.post("/mcp/restart/:name", async (req, res) => {
+  router.post("/mcp/restart/:name", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
     try {
       const tools = await mcpManager.restartServer(req.params.name);
       const registered = await recoverServerTools(req.params.name, tools);
@@ -41,7 +88,7 @@ export function mountMcpRoutes(router: Router) {
     }
   });
 
-  router.get("/remote-devices", (_req, res) => {
+  router.get("/remote-devices", requireAuth, requireAdmin, requireLocalRequest, (_req, res) => {
     try {
       res.json({ devices: mcpManager.getRemoteDevices() });
     } catch (err: any) {
@@ -49,7 +96,7 @@ export function mountMcpRoutes(router: Router) {
     }
   });
 
-  router.put("/remote-devices", (req, res) => {
+  router.put("/remote-devices", requireAuth, requireAdmin, requireLocalRequest, (req, res) => {
     try {
       const { devices } = req.body;
       if (!devices || typeof devices !== 'object') {
@@ -62,7 +109,7 @@ export function mountMcpRoutes(router: Router) {
     }
   });
 
-  router.get("/mcp/github/search", async (req, res) => {
+  router.get("/mcp/github/search", requireAuth, async (req, res) => {
     try {
       const q = (req.query.q as string) || 'MCP server';
       const response = await fetch(
@@ -95,7 +142,7 @@ export function mountMcpRoutes(router: Router) {
     }
   });
 
-  router.get("/mcp/npm/search", async (req, res) => {
+  router.get("/mcp/npm/search", requireAuth, async (req, res) => {
     try {
       const q = (req.query.q as string) || 'mcp';
       const response = await fetch(

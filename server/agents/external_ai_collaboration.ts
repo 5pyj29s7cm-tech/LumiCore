@@ -103,6 +103,7 @@ interface PlannedRoute {
   toolName?: string;
   collectorToolName?: string;
   externalCommand?: string;
+  externalRuntimeAuthorized?: boolean;
   routeAttempts: ExternalAiDispatch['routeAttempts'];
 }
 
@@ -412,7 +413,7 @@ function findCliAgent(target: ReturnType<typeof targetIdentity>, context?: ToolC
   const db = readDB();
   const terms = targetHaystack(target);
   return (db.agents || []).find((agent: any) => {
-    if (agent.runtime !== 'external' || !String(agent.externalCommand || '').trim()) return false;
+    if (agent.runtime !== 'external' || !String(agent.externalCommand || '').trim() || !agent.externalRuntimeAuthorizedAt) return false;
     if (validateExternalCommand(String(agent.externalCommand || ''))) return false;
     if (agent.status && agent.status !== 'active') return false;
     if (agent.healthStatus && agent.healthStatus !== 'online') return false;
@@ -453,6 +454,7 @@ export function planExternalAiRoute(
       targetId: target.id,
       targetLabel: target.label,
       externalCommand: String(cli.externalCommand),
+      externalRuntimeAuthorized: true,
       routeAttempts: attempts,
     };
   }
@@ -629,7 +631,11 @@ async function executeRoute(
 
   if (route.routeKind === 'cli' && route.externalCommand) {
     const executor = runtimeOverrides?.cli || executeExternalAgent;
-    const result = await executor({ command: route.externalCommand, timeout: 120_000 }, session.question);
+    const result = await executor({
+      command: route.externalCommand,
+      timeout: 120_000,
+      authorized: route.externalRuntimeAuthorized === true,
+    }, session.question);
     const answerText = result.success ? String(result.output || '').trim() : '';
     const evidence: ExternalAiSourceEvidence = {
       routeKind: 'cli',

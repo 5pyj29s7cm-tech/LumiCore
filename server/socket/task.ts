@@ -54,6 +54,10 @@ import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execu
 import { createDesktopExecutionTracker, withDesktopExecutionReceipt } from "../desktop/execution_runtime";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import {
+  recoverBlockedExecutionOnce,
+  sanitizeExecutionResponseForDelivery,
+} from "../cognition/execution_guard_recovery";
+import {
   createPreFinalizationTextGate,
   shouldDeferModelOutputUntilFinalized,
 } from "../cognition/response_delivery";
@@ -85,8 +89,13 @@ import {
 } from "../cognition/task_execution_ledger";
 import { createDesktopRelay } from "./desktop_relay";
 import { getScopedPreferredLLM } from "../llm/user_preferences";
-import { resolveSocketScope, scopedEmotionalStateKey } from "./scope";
+import {
+  buildSocketToolSecurityContext,
+  resolveSocketScope,
+  scopedEmotionalStateKey,
+} from "./scope";
 import { CN_TASK_EXECUTION_MESSAGES } from "../regions/packs/cn/voice_fast_path_messages";
+import { normalizeVoiceHistory as normalizeTaskHistory } from './voice_history';
 import {
   beginChatExecution,
   beginQueuedChatExecution,
@@ -101,6 +110,13 @@ import {
 } from "./chat_execution_registry";
 import { classifyActiveTaskMessage } from "../cognition/task_concurrency";
 import { SerialExecutionQueue } from "../cognition/serial_execution_queue";
+import {
+  executionBoundaryPromptOverlay,
+  restrictSystemPromptForExecutionBoundary,
+  restrictToolPolicyForExecutionBoundary,
+  restrictVisibleToolNamesForExecutionBoundary,
+  restrictVisibleToolRouteForExecutionBoundary,
+} from "../tools/remote_policy";
 
 const taskExecutionQueue = new SerialExecutionQueue();
 
@@ -197,6 +213,7 @@ export function registerTaskHandler(
   ) => {
     const uid = userIdFn(socket);
     const taskScope = resolveSocketScope(socket, uid, data);
+    const toolSecurityContext = buildSocketToolSecurityContext(socket, taskScope);
     const requestId = typeof data.requestId === 'string' && data.requestId.trim()
       ? data.requestId.trim().slice(0, 120)
       : `task_${crypto.randomUUID()}`;
@@ -209,7 +226,10 @@ export function registerTaskHandler(
     const executionRoom = taskExecutionRoom(executionScope);
     const executionKey = taskExecutionKey(executionScope);
     const emitAgent = (event: string, payload: Record<string, any> = {}) => {
-      const normalizedPayload = { ...payload, source: payload.source || 'task', requestId };
+      const publicPayload = event === 'agent:response'
+        ? sanitizeExecutionResponseForDelivery(payload, { task: data.text })
+        : payload;
+      const normalizedPayload = { ...publicPayload, source: publicPayload.source || 'task', requestId };
       if (!recordChatExecutionEvent(executionScope, requestId, event, normalizedPayload)) return false;
       io.to(executionRoom).emit(event, normalizedPayload);
       return true;
@@ -543,6 +563,15 @@ export function registerTaskHandler(
     const workSurfaceRoute = turnFlow.workSurfaceRoute;
     const visionIntent = turnFlow.visionIntent;
     const executionDecision = executionPipeline.execution;
+    executionDecision.toolPolicy = restrictToolPolicyForExecutionBoundary(
+      executionDecision.toolPolicy,
+      toolSecurityContext.executionBoundary,
+    );
+    executionDecision.maxIterations = executionDecision.toolPolicy.maxIterations;
+    executionDecision.toolRoute = restrictVisibleToolRouteForExecutionBoundary(
+      executionDecision.toolRoute,
+      toolSecurityContext.executionBoundary,
+    );
     const actionFollowupIntent = classifyConversationActionFollowupIntent(
       data.text,
       convForHistory.actionContinuationState,
@@ -621,14 +650,25 @@ export function registerTaskHandler(
       });
     }
     emitAgent('agent:intent_trace', intentTrace);
+    const visiblePreferredTools = restrictVisibleToolNamesForExecutionBoundary(
+      capabilitySelection.preferredTools,
+      toolSecurityContext.executionBoundary,
+    );
+    const remoteRestricted = toolSecurityContext.executionBoundary === 'remote_restricted';
     emitAgent('agent:capability_selection', {
-      lane: capabilitySelection.lane,
-      primary: capabilitySelection.primary,
-      reasons: capabilitySelection.reasons,
-      preferredTools: capabilitySelection.preferredTools,
+      lane: remoteRestricted
+        ? (visiblePreferredTools.length > 0 ? 'web_or_account' : 'conversation')
+        : capabilitySelection.lane,
+      primary: remoteRestricted
+        ? (visiblePreferredTools[0] || 'conversation')
+        : capabilitySelection.primary,
+      reasons: remoteRestricted
+        ? ['remote execution boundary applied']
+        : capabilitySelection.reasons,
+      preferredTools: visiblePreferredTools,
       source: 'task',
     });
-    if (desktopExecutionPolicy.applies) {
+    if (desktopExecutionPolicy.applies && toolSecurityContext.executionBoundary !== 'remote_restricted') {
       emitAgent('agent:desktop_execution_policy', {
         reason: desktopExecutionPolicy.reason,
         evidenceTools: desktopExecutionPolicy.evidenceTools,
@@ -637,50 +677,70 @@ export function registerTaskHandler(
         source: 'task',
       });
     }
-    let effectiveSystemPrompt = systemInstruction + '\n\n' + formatClientSelfPrompt(uid, taskScope);
-    effectiveSystemPrompt += '\n\n' + turnDispatch.promptOverlay;
-    effectiveSystemPrompt += '\n\n' + turnFlow.promptOverlay;
-    effectiveSystemPrompt += '\n\n' + executionDecision.promptOverlay;
-    effectiveSystemPrompt += '\n\n' + capabilitySelection.promptOverlay;
-    if (desktopExecutionPolicy.promptOverlay) {
+    let effectiveSystemPrompt = restrictSystemPromptForExecutionBoundary(
+      systemInstruction,
+      toolSecurityContext.executionBoundary,
+    );
+    if (toolSecurityContext.executionBoundary !== 'remote_restricted') {
+      effectiveSystemPrompt += '\n\n' + formatClientSelfPrompt(uid, taskScope);
+    }
+    if (!remoteRestricted) {
+      effectiveSystemPrompt += '\n\n' + turnDispatch.promptOverlay;
+      effectiveSystemPrompt += '\n\n' + turnFlow.promptOverlay;
+    }
+    effectiveSystemPrompt += '\n\n' + executionBoundaryPromptOverlay(
+      executionDecision.promptOverlay,
+      toolSecurityContext.executionBoundary,
+    );
+    if (toolSecurityContext.executionBoundary !== 'remote_restricted') {
+      effectiveSystemPrompt += '\n\n' + capabilitySelection.promptOverlay;
+    }
+    if (desktopExecutionPolicy.promptOverlay && toolSecurityContext.executionBoundary !== 'remote_restricted') {
       effectiveSystemPrompt += '\n\n' + desktopExecutionPolicy.promptOverlay;
     }
-    effectiveSystemPrompt += '\n\n' + buildLumiRuntimeCapabilityContext({
-      userId: uid,
-      text: routedTaskText,
-      flow: turnFlow,
-      toolRegistry,
-    });
-    if (workSurfaceRoute.promptOverlay) {
+    if (toolSecurityContext.executionBoundary !== 'remote_restricted') {
+      effectiveSystemPrompt += '\n\n' + buildLumiRuntimeCapabilityContext({
+        userId: uid,
+        text: routedTaskText,
+        flow: turnFlow,
+        toolRegistry,
+      });
+    }
+    if (workSurfaceRoute.promptOverlay && toolSecurityContext.executionBoundary !== 'remote_restricted') {
       effectiveSystemPrompt += '\n\n' + workSurfaceRoute.promptOverlay;
     }
-    const visionRoutingOverlay = visionIntent ? buildVisionRoutingOverlay(uid, routedTaskText) : '';
+    const visionRoutingOverlay = visionIntent
+      && toolSecurityContext.executionBoundary !== 'remote_restricted'
+      ? buildVisionRoutingOverlay(uid, routedTaskText)
+      : '';
     if (visionRoutingOverlay) {
       effectiveSystemPrompt += '\n\n' + visionRoutingOverlay;
     }
-    const voiceHistory: NormalizedMessage[] = [];
+    let taskHistory: NormalizedMessage[] = [];
     if (convForHistory) {
       const summaryContext = getConversationSummary(convForHistory.id);
       if (summaryContext) {
         effectiveSystemPrompt += `\n\n## Conversation Context\n${summaryContext}`;
       }
       const recentMsgs = getMessagesByTokenBudget(convForHistory.id);
-      for (const m of recentMsgs) {
-        if (m.message) voiceHistory.push({ role: 'user', content: m.message });
-        if (m.response) voiceHistory.push({ role: 'assistant', content: m.response });
-      }
+      // Persisted assistant rows store their text in `message`. Treating every
+      // `message` as a user turn inverted assistant replies after reload and
+      // made task-mode continuations lose the actual dialogue contract.
+      taskHistory = normalizeTaskHistory(recentMsgs);
       // Inject topic context for continuity
       const topicCtx = getTopicContext(convForHistory.id);
       if (topicCtx) effectiveSystemPrompt += topicCtx;
     }
-    effectiveSystemPrompt += '\n\n' + buildLumiOperatingKernelPrompt({
-      channel: 'task',
-      flow: turnFlow,
-    });
+    if (!remoteRestricted) {
+      effectiveSystemPrompt += '\n\n' + buildLumiOperatingKernelPrompt({
+        channel: 'task',
+        flow: turnFlow,
+      });
+    }
 
     const messages: NormalizedMessage[] = [
       { role: 'system', content: effectiveSystemPrompt },
-      ...voiceHistory,
+      ...taskHistory,
       { role: 'user', content: routedTaskText },
     ];
     const desktopRelay = createDesktopRelay({
@@ -818,6 +878,7 @@ export function registerTaskHandler(
         name: pendingConfirmation.toolName,
         arguments: confirmedArgs,
         context: {
+          ...toolSecurityContext,
           userId: uid,
           taskId: actionTaskExecution.state?.taskId || requestId,
           conversationId: convForHistory.id,
@@ -894,6 +955,7 @@ export function registerTaskHandler(
           llmGetters.getQwen,
           undefined,
           {
+            ...toolSecurityContext,
             userId: uid,
             domain: taskScope.domain,
             orgId: taskScope.orgId,
@@ -1032,6 +1094,7 @@ export function registerTaskHandler(
       const orchestratedToolRecords: ToolExecutionRecord[] = [];
       if (!pendingConfirmation && (cognition.intent.category === 'command' || cognition.intent.category === 'code' || cognition.intent.category === 'question')) {
         const orchestrationContext = {
+          ...toolSecurityContext,
           userId: uid,
           personalityId: data.personalityId || 'lumi',
           domain: taskScope.domain,
@@ -1213,7 +1276,7 @@ export function registerTaskHandler(
             }
           }
         },
-        { userId: uid, taskId: actionTaskExecution.state?.taskId || requestId, conversationId: convForHistory.id, turnId: requestId, requestId, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: routedTaskText, routedTaskText, toolPolicy: executionDecision.toolPolicy, desktopExecutionTracker, isCancelled: () => taskLease.signal.aborted, llmGetters, source: 'task', supervisedExternalCommits: true },
+        { ...toolSecurityContext, userId: uid, taskId: actionTaskExecution.state?.taskId || requestId, conversationId: convForHistory.id, turnId: requestId, requestId, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: routedTaskText, routedTaskText, toolPolicy: executionDecision.toolPolicy, desktopExecutionTracker, isCancelled: () => taskLease.signal.aborted, llmGetters, source: 'task', supervisedExternalCommits: true },
         llmGetters.getOllama,
         llmGetters.getLmStudio,
         llmGetters.getArk,
@@ -1228,7 +1291,7 @@ export function registerTaskHandler(
         recordTokenUsage(uid, u.provider, u.model, { promptTokens: u.promptTokens, completionTokens: u.completionTokens, totalTokens: u.totalTokens }, interactionId, 'task');
       }
       taskTextGate.finish();
-      const finalTaskToolRecords = attachDesktopReceipt(result.toolCalls);
+      let finalTaskToolRecords = attachDesktopReceipt(result.toolCalls);
 
       if (taskLease.signal.aborted) {
         const cancelledResponse = finalizeLumiResponse({
@@ -1257,13 +1320,120 @@ export function registerTaskHandler(
       }
 
       let finalTaskText = result.text;
-      const finalTaskResponse = finalizeLumiResponse({
-        taskText: data.text,
+      let finalTaskResponse: ReturnType<typeof finalizeLumiResponse> = pendingConfirmationCreatedThisTurn
+        ? {
+            text: formatPendingConfirmationPrompt(pendingConfirmationCreatedThisTurn),
+            blocked: false,
+            reason: 'waiting_confirmation',
+          }
+        : finalizeLumiResponse({
+            taskText: data.text,
+            responseText: finalTaskText,
+            toolRecords: taskAwareRecords(finalTaskToolRecords),
+            source: 'task',
+            flow: turnFlow,
+          });
+      const guardRecovery = await recoverBlockedExecutionOnce({
+        task: routedTaskText,
         responseText: finalTaskText,
-        toolRecords: taskAwareRecords(finalTaskToolRecords),
-        source: 'task',
-        flow: turnFlow,
+        finalization: finalTaskResponse,
+        allowToolUse: executionDecision.allowToolUse,
+        pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
+        aborted: taskLease.signal.aborted,
+        isAborted: () => taskLease.signal.aborted,
+        isPendingConfirmation: () => Boolean(pendingConfirmationCreatedThisTurn),
+        toolRecords: finalTaskToolRecords,
+        attempt: async ({ instruction, priorToolRecords, recordTool }) => {
+          console.warn('[TaskHandler] Recovering blocked execution internally.');
+          const recovery = await runWithTools(
+            [
+              ...messages,
+              { role: 'assistant', content: finalTaskText },
+              { role: 'user', content: instruction },
+            ],
+            toolRegistry,
+            {
+              provider: activeProvider,
+              model: activeModel,
+              userId: uid,
+              domain: taskScope.domain,
+              orgId: taskScope.orgId,
+              signal: taskAbortController.signal,
+              ...reasoningRoutePolicy,
+            },
+            record => {
+              recordTool(record);
+              emitAgent('agent:tool_call', {
+                name: record.name,
+                arguments: record.arguments,
+                result: record.result?.slice(0, 500),
+                error: record.error,
+              });
+            },
+            Math.max(2, Math.min(12, executionDecision.maxIterations || 8)),
+            llmGetters.getDeepSeek,
+            llmGetters.getGemini,
+            llmGetters.getOpenAI,
+            llmGetters.getAnthropic,
+            llmGetters.getQwen,
+            undefined,
+            {
+              ...toolSecurityContext,
+              userId: uid,
+              taskId: actionTaskExecution.state?.taskId || requestId,
+              conversationId: convForHistory.id,
+              turnId: requestId,
+              requestId,
+              domain: taskScope.domain,
+              orgId: taskScope.orgId,
+              desktopRelay,
+              requestConfirmation,
+              actionIntent: routedTaskText,
+              routedTaskText,
+              toolPolicy: executionDecision.toolPolicy,
+              priorToolRecords,
+              desktopExecutionTracker,
+              isCancelled: () => taskLease.signal.aborted,
+              llmGetters,
+              source: 'task_guard_recovery',
+              supervisedExternalCommits: true,
+            },
+            llmGetters.getOllama,
+            llmGetters.getLmStudio,
+            llmGetters.getArk,
+            llmGetters.getXiaomi,
+            llmGetters.getKimi,
+            llmGetters.getGlm,
+            llmGetters.getRelay,
+          );
+          for (const usage of recovery.usageRecords) {
+            recordTokenUsage(uid, usage.provider, usage.model, {
+              promptTokens: usage.promptTokens,
+              completionTokens: usage.completionTokens,
+              totalTokens: usage.totalTokens,
+            }, interactionId, 'task');
+          }
+          return {
+            text: recovery.text,
+            toolRecords: attachDesktopReceipt(recovery.toolCalls),
+          };
+        },
+        finalize: (candidateText, records) => pendingConfirmationCreatedThisTurn
+          ? {
+              text: formatPendingConfirmationPrompt(pendingConfirmationCreatedThisTurn),
+              blocked: false,
+              reason: 'waiting_confirmation',
+            }
+          : finalizeLumiResponse({
+              taskText: data.text,
+              responseText: candidateText,
+              toolRecords: taskAwareRecords(records),
+              source: 'task_guard_recovery',
+              flow: turnFlow,
+            }),
       });
+      finalTaskResponse = guardRecovery.finalization;
+      finalTaskToolRecords = attachDesktopReceipt(guardRecovery.toolRecords);
       finalTaskText = finalTaskResponse.text;
       if (finalTaskResponse.blocked) {
         if (finalTaskResponse.notification) emitAgent("agent:notification", finalTaskResponse.notification);

@@ -22,6 +22,7 @@ import { initMemorySync, initMemoryAssociations } from "../memory";
 import { handleDesktopRelayResult } from "../socket/desktop_relay";
 import { getMember } from "../org/db";
 import { resolveSocketScope, runtimeScopeStorageKey } from "../socket/scope";
+import { verifyDesktopSessionProof } from "../config/desktop_bootstrap";
 
 interface SocketContext {
   io: Server;
@@ -31,10 +32,18 @@ interface SocketContext {
   };
 }
 
-function getSocketAuth(socket: any, jwtSecret: string): { uid: string; orgId: string; orgRole: string } | null {
+function getSocketAuth(socket: any, jwtSecret: string): {
+  uid: string;
+  username: string;
+  role: string;
+  orgId: string;
+  orgRole: string;
+} | null {
   if (typeof socket.data?.authenticatedUserId === 'string') {
     return {
       uid: socket.data.authenticatedUserId,
+      username: socket.data.authenticatedUsername || '',
+      role: socket.data.authenticatedRole || 'user',
       orgId: socket.data.authenticatedOrgId || '',
       orgRole: socket.data.authenticatedOrgRole || '',
     };
@@ -43,14 +52,26 @@ function getSocketAuth(socket: any, jwtSecret: string): { uid: string; orgId: st
     const authToken = socket.handshake?.auth?.token;
     if (authToken) {
       const decoded: any = jwt.verify(authToken, jwtSecret);
-      return decoded.uid ? { uid: decoded.uid, orgId: decoded.orgId || '', orgRole: decoded.orgRole || '' } : null;
+      return decoded.uid ? {
+        uid: decoded.uid,
+        username: decoded.username || '',
+        role: decoded.role || 'user',
+        orgId: decoded.orgId || '',
+        orgRole: decoded.orgRole || '',
+      } : null;
     }
     const cookies = socket.handshake.headers.cookie;
     if (cookies) {
       const token = cookies.split(';').find((c: string) => c.trim().startsWith('token='))?.split('=')[1];
       if (token) {
         const decoded: any = jwt.verify(token, jwtSecret);
-        return decoded.uid ? { uid: decoded.uid, orgId: decoded.orgId || '', orgRole: decoded.orgRole || '' } : null;
+        return decoded.uid ? {
+          uid: decoded.uid,
+          username: decoded.username || '',
+          role: decoded.role || 'user',
+          orgId: decoded.orgId || '',
+          orgRole: decoded.orgRole || '',
+        } : null;
       }
     }
   } catch {}
@@ -115,6 +136,19 @@ export function initSocketRuntime({ io, jwtSecret, llm }: SocketContext) {
       socket.data.authenticatedOrgRole = membership.role;
     }
     socket.data.authenticatedUserId = auth.uid;
+    socket.data.authenticatedUsername = auth.username;
+    socket.data.authenticatedRole = auth.role;
+    const presentedDesktopProof = String(socket.handshake?.auth?.desktopSessionProof || '').trim();
+    socket.data.trustedLocalExecution = verifyDesktopSessionProof(
+      presentedDesktopProof,
+      auth.uid,
+    );
+    if (presentedDesktopProof && socket.data.trustedLocalExecution !== true) {
+      const error: any = new Error('Native desktop session proof expired or is invalid');
+      error.data = { code: 'DESKTOP_SESSION_PROOF_REQUIRED' };
+      next(error);
+      return;
+    }
     next();
   });
 
@@ -146,6 +180,13 @@ export function initSocketRuntime({ io, jwtSecret, llm }: SocketContext) {
       socket.join(`user:${uid}:org:${socket.data.authenticatedOrgId}`);
     }
     console.log(`[Socket] Client connected: ${socket.id} (uid=${uid})`);
+    socket.emit('runtime:execution_boundary', {
+      authenticated: true,
+      trustedLocalExecution: socket.data.trustedLocalExecution === true,
+      executionBoundary: socket.data.trustedLocalExecution === true
+        ? 'trusted_local'
+        : 'remote_restricted',
+    });
 
     const getUserId = (s: any) => getUserIdFromSocket(s, jwtSecret) || uid;
 
@@ -196,7 +237,12 @@ export function initSocketRuntime({ io, jwtSecret, llm }: SocketContext) {
     registerAmbientHandlers(socket, getUserId, io);
     registerConversationHandlers(socket, getUserId);
     registerWakeHandlers(socket, getUserId);
-    registerTerminalHandlers(socket, getUserId);
+    // A terminal is a direct host shell, not a model tool. Keep this
+    // transport-level escape hatch behind the same native proof as local
+    // execution; an authenticated web socket is intentionally insufficient.
+    if (socket.data.trustedLocalExecution === true) {
+      registerTerminalHandlers(socket, getUserId);
+    }
     registerClientSelfHandlers(socket, getUserId, io);
     registerFocusHandlers(socket, getUserId, io);
     registerSceneHandlers(socket, getUserId, io);

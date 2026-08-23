@@ -2283,6 +2283,7 @@ version = "3.0.3"
 dependencies = [
  "arboard",
  "dirs-next",
+ "embed-resource",
  "encoding_rs",
  "enigo",
  "serde",

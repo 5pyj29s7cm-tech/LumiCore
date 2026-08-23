@@ -208,6 +208,15 @@ export function classifyActionRisk(
 }
 
 export function canAutoApproveAction(toolName: string, args: Record<string, any> = {}, context?: Pick<ToolContext, 'actionIntent'>): boolean {
+  // A self-improvement mandate and a supervised proposal may only be widened
+  // or released by the user. Autonomous workers may create proposals and may
+  // stage changes already covered by an autonomous-low-risk mandate, but they
+  // must never manufacture the confirmation that grants those permissions.
+  if (
+    toolName === 'self_improvement_program_update'
+    || toolName === 'self_improvement_queue'
+    || toolName === 'self_improvement_activate'
+  ) return false;
   const domain = classifyAction(toolName, args);
   const risk = classifyActionRisk(toolName, args, context);
   if (risk === 'high') return false;

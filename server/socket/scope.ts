@@ -1,5 +1,6 @@
 import type { Socket } from 'socket.io';
 import { getMember } from '../org/db';
+import type { ToolContext } from '../tools/types';
 
 export type RuntimeDomain = 'personal' | 'work';
 
@@ -12,6 +13,32 @@ export interface RuntimeScope {
 export interface RequestedRuntimeScope {
   domain?: RuntimeDomain;
   orgId?: string;
+}
+
+export type SocketToolSecurityContext = Pick<
+  ToolContext,
+  'authenticated' | 'authRole' | 'orgRole' | 'localExecution' | 'executionBoundary'
+>;
+
+/**
+ * Project the transport-owned socket identity into every tool/orchestrator
+ * context.  Loopback is intentionally irrelevant: only a native session proof
+ * verified by the Socket.IO authentication middleware can set
+ * trustedLocalExecution.
+ */
+export function buildSocketToolSecurityContext(
+  socket: Socket,
+  scope: RuntimeScope,
+): SocketToolSecurityContext {
+  const authenticated = Boolean(String(socket.data?.authenticatedUserId || '').trim());
+  const localExecution = authenticated && socket.data?.trustedLocalExecution === true;
+  return {
+    authenticated,
+    authRole: String(socket.data?.authenticatedRole || 'user'),
+    orgRole: scope.orgRole || String(socket.data?.authenticatedOrgRole || '') || undefined,
+    localExecution,
+    executionBoundary: localExecution ? 'trusted_local' : 'remote_restricted',
+  };
 }
 
 /**

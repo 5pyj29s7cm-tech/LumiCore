@@ -8,6 +8,8 @@ import type { Server } from 'http';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 import { randomUUID } from 'crypto';
+import { authenticateMcpUpgradeRequest } from './auth';
+import type { AuthUser } from '../middleware/auth';
 
 export class WebSocketServerTransport implements Transport {
   private _socket: WebSocket;
@@ -100,16 +102,26 @@ export function connectMcpServerToRemote(
  */
 export function attachMcpWebSocket(
   httpServer: Server,
-  onConnection: (transport: WebSocketServerTransport) => void,
+  onConnection: (
+    transport: WebSocketServerTransport,
+    request: IncomingMessage,
+    user: AuthUser,
+  ) => void,
 ): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
 
   httpServer.on('upgrade', (request, socket, head) => {
     const url = new URL(request.url || '/', `http://${request.headers.host}`);
     if (url.pathname === '/mcp/ws') {
+      const user = authenticateMcpUpgradeRequest(request);
+      if (!user) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+        socket.destroy();
+        return;
+      }
       wss.handleUpgrade(request, socket, head, (ws) => {
         const transport = new WebSocketServerTransport(ws, request);
-        onConnection(transport);
+        onConnection(transport, request, user);
       });
     }
   });

@@ -6,6 +6,7 @@ import {
   resetBackgroundTasksForTest,
 } from '../server/agents/background_tasks';
 import { startDurableBackgroundTaskSupervisor } from '../server/agents/background_task_supervisor';
+import { buildTaskTerminalReceipt } from '../server/cognition/acceptance_evidence';
 
 function deferred() {
   let resolve!: () => void;
@@ -31,7 +32,22 @@ describe('durable background task supervisor', () => {
         expect(claimBackgroundTask(task.id)).not.toBeNull();
         started.push(task.id);
         await (task.id === 'supervisor-a' ? firstGate.promise : secondGate.promise);
-        completeBackgroundTask(task.id, 'done');
+        completeBackgroundTask(task.id, 'done', buildTaskTerminalReceipt({
+          taskId: task.id,
+          runtime: 'background',
+          outcome: 'completed',
+          toolRecords: [{
+            id: `${task.id}:controlled-receipt`,
+            name: 'controlled_supervisor_probe',
+            arguments: {},
+            result: JSON.stringify({ ok: true }),
+            terminalVerification: {
+              status: 'verified',
+              strategy: 'terminal_receipt',
+              reason: 'Controlled supervisor probe verified.',
+            },
+          }],
+        }));
       },
     });
 

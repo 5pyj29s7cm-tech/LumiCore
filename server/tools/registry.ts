@@ -38,6 +38,12 @@ import {
   recordAdapterExecutionFailure,
   recordAdapterExecutionSuccess,
 } from './adapter_resilience';
+import { readDB } from '../../db_layer';
+import {
+  isRemoteRestrictedExecution,
+  isRemoteRestrictedToolAllowed,
+  restrictToolPolicyForExecutionBoundary,
+} from './remote_policy';
 
 export {
   inferCapabilityFamily,
@@ -58,6 +64,85 @@ type ExternalCommitAttempt = {
 };
 
 const externalCommitAttempts = new Map<string, ExternalCommitAttempt>();
+
+type PermissionExecutionContext = ToolContext & {
+  authenticated?: boolean;
+  authRole?: string;
+  systemExecution?: boolean;
+  trustedServiceExecution?: boolean;
+};
+
+function isAnonymousToolIdentity(userId: unknown): boolean {
+  const normalized = String(userId || '').trim().toLowerCase();
+  return !normalized || normalized === 'anonymous' || normalized === 'guest';
+}
+
+function isRegisteredAdmin(userId: string): boolean {
+  try {
+    const user = (readDB().users || []).find((candidate: any) => candidate?.uid === userId);
+    return user?.role === 'admin';
+  } catch {
+    return false;
+  }
+}
+
+function isExternallySourcedToolContext(context?: PermissionExecutionContext): boolean {
+  if (!context) return false;
+  return context.executionBoundary !== undefined
+    || /^(?:rest_chat|mcp_|chat(?:_|$)|task(?:_|$)|voice(?:_|$)|meeting-analyze|legal-)/i.test(
+      String(context.source || ''),
+    );
+}
+
+function assertToolPermission(tool: ToolDefinition, context?: ToolContext): void {
+  const permissionContext = context as PermissionExecutionContext | undefined;
+  const userId = String(permissionContext?.userId || '').trim();
+
+  // This check intentionally precedes `public` permission. A host/process tool
+  // accidentally registered as public must still never cross a remote model
+  // boundary. Model declaration filtering is only the first line of defence.
+  if (isRemoteRestrictedExecution(permissionContext) && !isRemoteRestrictedToolAllowed(tool.name)) {
+    throw new Error(`Tool "${tool.name}" is unavailable on remote execution surfaces.`);
+  }
+  if (
+    isRemoteRestrictedExecution(permissionContext)
+    && permissionContext?.authenticated !== true
+    && permissionContext?.trustedServiceExecution !== true
+  ) {
+    throw new Error(`Tool "${tool.name}" requires an authenticated user.`);
+  }
+
+  if (tool.permission === 'public') return;
+
+  if (tool.permission === 'user') {
+    if (
+      permissionContext?.authenticated === true
+      && !isAnonymousToolIdentity(userId)
+    ) return;
+    if (permissionContext?.systemExecution === true || permissionContext?.trustedServiceExecution === true) return;
+    // Context-free registry calls are trusted in-process invocations retained
+    // for backwards compatibility. Explicit transport boundaries and sources
+    // with a localExecution marker are external and therefore fail closed.
+    if (!permissionContext || !String(permissionContext.source || '').trim()) return;
+    const externallySourced = isExternallySourcedToolContext(permissionContext);
+    if (!externallySourced && !isAnonymousToolIdentity(userId)) return;
+    throw new Error(`Tool "${tool.name}" requires an authenticated user.`);
+  }
+
+  if (tool.permission === 'admin') {
+    const verifiedContextAdmin = permissionContext?.authenticated === true
+      && permissionContext.authRole === 'admin'
+      && !isAnonymousToolIdentity(userId);
+    const registeredInternalAdmin = !isExternallySourcedToolContext(permissionContext)
+      && !isAnonymousToolIdentity(userId)
+      && isRegisteredAdmin(userId);
+    if (verifiedContextAdmin || registeredInternalAdmin) return;
+    throw new Error(`Tool "${tool.name}" requires administrator permission.`);
+  }
+
+  if (tool.permission === 'system' && permissionContext?.systemExecution === true) return;
+  throw new Error(`Tool "${tool.name}" requires trusted system permission.`);
+}
 
 /** Test-only process restart simulation; durable journal rows are preserved. */
 export function resetExternalCommitRuntimeCacheForTests(): void {
@@ -193,6 +278,7 @@ export function getToolExecutionTimeoutMs(name: string): number {
   if (/^(web_login_|url_fetch_logged_in)/i.test(name)) return 5 * 60_000;
   if (name === 'legal_refresh_authoritative_sources') return 3 * 60_000;
   if (name === 'desktop_ai_roundtable' || name === 'external_ai_collaborate') return 15 * 60_000;
+  if (name === 'self_improvement_stage_patch' || name === 'self_improvement_activate') return 60 * 60_000;
   if (/^(wechat_|desktop_ai_|external_ai_)/i.test(name)) return 3 * 60_000;
   if (/^(work_takeover_|capability_gap_autofix|generate_skill|install_skill)/i.test(name)) return 10 * 60_000;
   if (/^desktop_/i.test(name)) return 90_000;
@@ -681,11 +767,19 @@ export class ToolRegistry {
    */
   getToolDeclarationsForPolicy(
     policy?: ToolPolicy,
-    options?: { failClosedWithoutPolicy?: boolean },
+    options?: { failClosedWithoutPolicy?: boolean; context?: ToolContext },
   ): ReturnType<ToolRegistry['getToolDeclarations']> {
-    if (!policy && options?.failClosedWithoutPolicy) return [];
+    const effectivePolicy = options?.context?.executionBoundary === 'remote_restricted'
+      ? restrictToolPolicyForExecutionBoundary(policy || {
+          allowedTools: [],
+          requireConfirmation: [],
+          forbiddenTools: ['*'],
+          maxIterations: 0,
+        }, 'remote_restricted')
+      : policy;
+    if (!effectivePolicy && options?.failClosedWithoutPolicy) return [];
     const executable = new Set(
-      this.getCapabilityManifest(policy, { executableOnly: true })
+      this.getCapabilityManifest(effectivePolicy, { executableOnly: true })
         .map(entry => entry.toolName),
     );
     return this.getToolDeclarations().filter(declaration => (
@@ -735,6 +829,13 @@ export class ToolRegistry {
     // must not swap the reviewed implementation for this execution.
     const pinnedHandler = tool.handler;
     const pinnedReconcileExternalCommit = tool.reconcileExternalCommit;
+
+    try {
+      assertToolPermission(tool, context);
+    } catch (error) {
+      finishMetric('forbidden');
+      throw error;
+    }
 
     // Resolve effective security level
     const policy = (context as any)?.toolPolicy as ToolPolicy | undefined;

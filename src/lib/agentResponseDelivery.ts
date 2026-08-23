@@ -1,3 +1,5 @@
+import { executionFeedbackCopy } from '../i18n/locales/executionFeedback';
+
 export type AgentResponseDelivery = {
   text?: string;
   finalized?: boolean;
@@ -8,6 +10,7 @@ export type AgentResponseDelivery = {
 
 const FAILURE_STATUS_RE = /^(?:blocked|cancelled|canceled|error|failed|timeout|timed_out)$/i;
 const WAITING_STATUS_RE = /^(?:waiting_confirmation|waiting_for_confirmation)$/i;
+const INTERNAL_EXECUTION_DETAIL_RE = /No successful (?:current-turn )?tool execution|without a current-turn tool receipt|No tool execution started|execution-status claim|Missing (?:core|verified|current-turn|in-app|desktop|client|content-read|action) evidence|tool-call protocol leaked|internal tool request|fictional tool-mode|claimed tool execution without matching tool records|Internal execution recovery/i;
 
 const CHINESE_ACTION_SUCCESS_RE = new RegExp(
   [
@@ -72,4 +75,30 @@ export function isFinalizedSuccessfulResponse(data: AgentResponseDelivery): bool
 export function isTerminalAgentStatus(status: string): boolean {
   const normalized = String(status || '').trim().toLowerCase();
   return normalized === 'idle' || FAILURE_STATUS_RE.test(normalized);
+}
+
+/** User-facing workflow detail. Never render the backend finalizer's internal
+ * diagnostic sentence directly; the response body already carries the useful
+ * blocker/result, while this line explains the next actionable state. */
+export function describeAgentResponseDelivery(
+  data: AgentResponseDelivery,
+  isZh: boolean,
+): string {
+  const copy = executionFeedbackCopy(isZh ? 'zh' : 'en');
+  const reason = String(data.reason || '').trim().toLowerCase();
+  if (WAITING_STATUS_RE.test(reason) || WAITING_STATUS_RE.test(String(data.status || ''))) {
+    return copy.confirmation;
+  }
+  if (/^(?:cancelled|canceled|request_cancelled)$/.test(reason)) {
+    return copy.cancelled;
+  }
+  if (reason === 'uncertain_external_outcome') {
+    return copy.uncertainExternal;
+  }
+  if (reason === 'execution_capability_unavailable') {
+    return copy.capabilityUnavailable;
+  }
+  const text = String(data.text || '').replace(/\s+/g, ' ').trim();
+  if (text && !INTERNAL_EXECUTION_DETAIL_RE.test(text)) return text.slice(0, 160);
+  return copy.retainedBlocker;
 }

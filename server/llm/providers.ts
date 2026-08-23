@@ -6,6 +6,7 @@ import {
   type UserLLMFallbackCandidate,
   type UserLLMSelectionMode,
 } from './user_preferences';
+import { compileReasoningFailoverCandidates } from './failover_policy';
 import { getUserPreferredVision } from './vision_preferences';
 import { getUserPreferredWorldModel } from './world_preferences';
 import { ensureLocalModelReady, runLocalModelInference, type LocalModelProvider } from './local_models';
@@ -19,6 +20,7 @@ import {
 import {
   assertRegisteredProviderModel,
   getRegisteredOpenAIClient,
+  isExtensionProviderId,
   isRegisteredOpenAICompatibleProvider,
   isRegisteredProviderLocal,
 } from '../extensions/registry';
@@ -327,6 +329,42 @@ function autoDispatchPreference(config: LLMCallConfig) {
     orgId: config.orgId,
     signal: config.signal,
     attemptTimeouts: config.attemptTimeouts,
+    allowCloudFallback: config.allowCloudFallback !== false
+      && preferred?.allowCloudFallback !== false
+      && !isStrictPrivacy(),
+  };
+}
+
+function pinnedFailoverDispatchPreference(config: LLMCallConfig) {
+  if (config.role === 'vision' || config.role === 'world') return null;
+  // A disabled/removed signed provider is an explicit trust-state change.
+  // Preserve the selection and surface that state instead of routing around it.
+  if (isExtensionProviderId(config.provider)
+    && !isRegisteredOpenAICompatibleProvider(config.provider, config.userId)) return null;
+  const preferred = config.userId
+    ? getScopedPreferredLLM(config.userId, { domain: config.domain, orgId: config.orgId })
+    : null;
+  const isStoredReasoningPrimary = Boolean(
+    preferred
+    && preferred.provider === config.provider
+    && preferred.model === config.model,
+  );
+  const explicitCandidates = config.fallbackCandidates || [];
+  if (!isStoredReasoningPrimary && explicitCandidates.length === 0) return null;
+
+  const fallbackCandidates = compileReasoningFailoverCandidates({
+    primaryProvider: config.provider,
+    primaryModel: config.model,
+    explicitCandidates,
+    preferences: isStoredReasoningPrimary ? preferred : null,
+  });
+  if (fallbackCandidates.length === 0) return null;
+  return {
+    ...config,
+    requestedProvider: config.provider,
+    requestedModel: config.model,
+    selectionMode: 'pinned' as const,
+    fallbackCandidates,
     allowCloudFallback: config.allowCloudFallback !== false
       && preferred?.allowCloudFallback !== false
       && !isStrictPrivacy(),
@@ -905,12 +943,17 @@ export async function makeLLMCall(
 ): Promise<NormalizedLLMResponse> {
   const startedAt = Date.now();
   const selectionMode = resolvedSelectionMode(config);
+  const pinnedFailover = selectionMode === 'pinned'
+    ? pinnedFailoverDispatchPreference(config)
+    : null;
   try {
     let result: NormalizedLLMResponse;
-    if (selectionMode === 'auto' || selectionMode === 'ordered_fallback') {
+    if (selectionMode === 'auto' || selectionMode === 'ordered_fallback' || pinnedFailover) {
       const { dispatchLLMCall } = await import('./dispatch');
       const dispatchConfig = selectionMode === 'auto'
         ? autoDispatchPreference({ ...config, selectionMode })
+        : pinnedFailover
+          ? pinnedFailover
         : {
             ...config,
             selectionMode,
@@ -1334,12 +1377,17 @@ export async function makeLLMCallStreaming(
 ): Promise<NormalizedLLMResponse> {
   const startedAt = Date.now();
   const selectionMode = resolvedSelectionMode(config);
+  const pinnedFailover = selectionMode === 'pinned'
+    ? pinnedFailoverDispatchPreference(config)
+    : null;
   try {
     let result: NormalizedLLMResponse;
-    if (selectionMode === 'auto' || selectionMode === 'ordered_fallback') {
+    if (selectionMode === 'auto' || selectionMode === 'ordered_fallback' || pinnedFailover) {
       const { dispatchLLMCallStreaming } = await import('./dispatch');
       const dispatchConfig = selectionMode === 'auto'
         ? autoDispatchPreference({ ...config, selectionMode })
+        : pinnedFailover
+          ? pinnedFailover
         : {
             ...config,
             selectionMode,

@@ -42,7 +42,7 @@ describe('finalized output paths', () => {
     expect(task).toContain('const orchestratedToolRecords: ToolExecutionRecord[] = []');
     expect(task).toContain('const finalOrchestratedToolRecords = attachDesktopReceipt(orchestratedToolRecords)');
     expect(task).toContain('toolRecords: taskAwareRecords(finalOrchestratedToolRecords)');
-    expect(task).toContain('const finalTaskToolRecords = attachDesktopReceipt(result.toolCalls)');
+    expect(task).toMatch(/(?:const|let) finalTaskToolRecords = attachDesktopReceipt\(result\.toolCalls\)/);
     expect(task).toContain('toolRecords: taskAwareRecords(finalTaskToolRecords)');
     expect(task).toContain('finalized: true');
     expect(task).toContain('blocked: finalTaskResponse.blocked');
@@ -63,7 +63,9 @@ describe('finalized output paths', () => {
     expect(rest).toContain('createPreFinalizationTextGate');
     expect(rest).toContain('restTextGate.push(chunk)');
     expect(rest).toContain('if (!deferRestStream)');
-    expect(rest).toContain('const restModelToolPolicy = buildModelCapabilityPolicy(restExecutionDecision)');
+    expect(rest).toContain('const restModelToolPolicy = restrictToolPolicyForExecutionBoundary(');
+    expect(rest).toContain('buildModelCapabilityPolicy(restExecutionDecision)');
+    expect(rest).toContain("'remote_restricted'");
     expect(rest).toContain('toolPolicy: restModelToolPolicy');
     expect(rest).toContain('restModelToolPolicy.maxIterations || 3');
     expect(rest).toContain('source: \'rest_chat_stream\'');
@@ -179,7 +181,7 @@ describe('finalized output paths', () => {
     const voice = source('server/socket/voice.ts');
     const orchestratorStart = voice.indexOf('if (shouldOrchestrate) {');
     const singleModelStart = voice.indexOf('if (!usedOrchestrator) {', orchestratorStart);
-    const finalizerStart = voice.indexOf('const finalResponse = finalizeLumiResponse({', singleModelStart);
+    const finalizerStart = voice.indexOf('let finalResponse: ReturnType<typeof finalizeLumiResponse>', singleModelStart);
     const finalSpeechStart = voice.indexOf('queueFinalizedSpeech(responseText)', finalizerStart);
     const orchestratorCandidatePath = voice.slice(orchestratorStart, singleModelStart);
     const modelCandidatePath = voice.slice(singleModelStart, finalizerStart);
@@ -241,16 +243,20 @@ describe('finalized output paths', () => {
     expect(workflowPath).toContain('queueFinalizedSpeech(workflowSpeechText)');
   });
 
-  it('keeps the misc chat route on the shared capability policy and finalizer', () => {
+  it('keeps chat on one canonical route with the shared capability policy and finalizer', () => {
+    const chat = source('server/routes/chat_routes.ts');
     const misc = source('server/routes/misc_routes.ts');
 
-    expect(misc).toContain('buildLumiExecutionPipeline({');
-    expect(misc).toContain('const modelToolPolicy = buildModelCapabilityPolicy(executionPlan.execution)');
-    expect(misc).toContain('toolPolicy: modelToolPolicy');
-    expect(misc).toContain('finalizeLumiResponse({');
-    expect(misc).toContain("source: 'misc_chat'");
-    expect(misc).toContain('blocked: finalized.blocked');
-    expect(misc).toContain('reason: finalized.reason');
+    expect(chat).toContain('buildLumiTurnDispatch({');
+    expect(chat).toContain('buildLumiExecutionDecision({');
+    expect(chat).toContain('buildModelCapabilityPolicy(restExecutionDecision)');
+    expect(chat).toContain('toolPolicy: restModelToolPolicy');
+    expect(chat).toContain('finalizeRestChatResponse({');
+    expect(chat).toContain("source: 'rest_chat'");
+    expect(chat).toContain('blocked: finalized.blocked');
+    expect(chat).toContain('reason: finalized.reason');
+    expect(misc).not.toContain('router.post("/chat"');
+    expect(misc).not.toContain('router.post("/ai/chat"');
   });
 
   it('keeps autonomous, scheduler, tool telemetry, and idle UI states out of false completion', () => {
@@ -263,7 +269,7 @@ describe('finalized output paths', () => {
 
     expect(autonomous).toContain('evaluateAutonomousTaskOutcome');
     expect(autonomous).toContain('toolRecords,');
-    expect(autonomous).toContain('if (!outcome.verified)');
+    expect(autonomous).toContain('if (!outcome.verified || !terminalAcceptance?.accepted)');
     expect(autonomous).toContain('verified: true');
     expect(autonomous).not.toContain('Completed with ${toolCallCount} tool calls.');
     const linkedPlanStart = autonomous.indexOf('function markLinkedPlanCompleted');

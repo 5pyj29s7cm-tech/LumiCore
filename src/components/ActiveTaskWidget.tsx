@@ -7,7 +7,7 @@ import { uiMessage } from '@/i18n/uiMessages';
 import type { Locale } from '@/i18n/runtime';
 
 const ACTIVE_TASK_STATUSES = new Set(['planning', 'executing', 'waiting_confirmation']);
-const ACTIVE_BACKGROUND_STATUSES = new Set(['queued', 'running', 'cancelling']);
+const ACTIVE_BACKGROUND_STATUSES = new Set(['queued', 'running', 'pausing', 'cancelling']);
 
 export interface ActiveTaskWidgetState {
   visible: boolean;
@@ -60,6 +60,9 @@ export function selectActiveTaskWidgetState(input: {
     || primaryThread?.waitingFor
     || primaryThread?.nextAction
     || primaryBackgroundTask?.error
+    || primaryBackgroundTask?.completionFeedback?.blockers[0]
+    || primaryBackgroundTask?.completionFeedback?.incomplete[0]
+    || primaryBackgroundTask?.completionFeedback?.nextSteps[0]
     || input.progressText;
   const activeTaskIds = new Set([
     ...runtimeTasks.map(task => task.taskId),

@@ -52,7 +52,7 @@ describe('desktop relay routing', () => {
   it('joins desktop clients to a user-scoped desktop relay room', () => {
     const joined: string[] = [];
     const socket = {
-      data: {},
+      data: { trustedLocalExecution: true },
       join(room: string) {
         joined.push(room);
       },
@@ -62,8 +62,56 @@ describe('desktop relay routing', () => {
     expect(joined).toEqual([desktopRelayRoomForUser('user_room_test')]);
     expect(socket.data.lumiDeviceType).toBe('desktop');
 
-    const webSocket = { data: {}, join: () => joined.push('unexpected') } as any;
+    const untrustedDesktopSocket = { data: {}, join: () => joined.push('unexpected') } as any;
+    expect(joinDesktopRelayRoom(untrustedDesktopSocket, 'user_room_test', 'desktop')).toBe(false);
+
+    const webSocket = { data: { trustedLocalExecution: true }, join: () => joined.push('unexpected') } as any;
     expect(joinDesktopRelayRoom(webSocket, 'user_room_test', 'web')).toBe(false);
+  });
+
+  it('does not let an ordinary remote socket relay commands to a connected desktop', async () => {
+    const sent: any[] = [];
+    const desktopSocket = {
+      connected: true,
+      emit: (event: string, payload: any) => sent.push({ event, payload }),
+    };
+    const { io } = mockIo({ remote_boundary_desktop: desktopSocket });
+    const relay = createDesktopRelay({
+      io,
+      userId: 'remote-boundary-user',
+      source: 'chat',
+      requestSocket: {
+        connected: true,
+        data: { authenticatedUserId: 'remote-boundary-user' },
+      } as any,
+    });
+
+    await expect(relay('desktop_run_command', { command: 'whoami' }))
+      .rejects.toThrow(/unavailable on remote execution surfaces/i);
+    expect(sent).toEqual([]);
+    expect(getPendingDesktopRelayCount()).toBe(0);
+  });
+
+  it('does not select an unproved socket even when its device metadata claims desktop', async () => {
+    const userId = `forged_relay_target_${Date.now()}`;
+    const sent: any[] = [];
+    const forgedTarget = {
+      connected: true,
+      data: { authenticatedUserId: userId },
+      emit: (event: string, payload: any) => sent.push({ event, payload }),
+    };
+    deviceRegistry.register(userId, 'forged_relay_target_socket', {
+      name: 'Forged desktop target',
+      type: 'desktop',
+      deviceFingerprint: userId,
+    });
+    const { io } = mockIo({ forged_relay_target_socket: forgedTarget });
+    const relay = createDesktopRelay({ io, userId, source: 'autonomous', timeoutMs: 100 });
+
+    await expect(relay('desktop_active_window', {}))
+      .rejects.toThrow(/no desktop client is connected/i);
+    expect(sent).toEqual([]);
+    expect(getPendingDesktopRelayCount()).toBe(0);
   });
 
   it('routes a chat request to the registered desktop socket and resolves cross-socket results', async () => {
@@ -71,10 +119,12 @@ describe('desktop relay routing', () => {
     const sent: any[] = [];
     const desktopSocket = {
       connected: true,
+      data: { trustedLocalExecution: true },
       emit: (event: string, payload: any) => sent.push({ target: 'desktop', event, payload }),
     };
     const requestSocket = {
       connected: true,
+      data: { trustedLocalExecution: true },
       emit: (event: string, payload: any) => sent.push({ target: 'request', event, payload }),
       once: () => {},
       off: () => {},
@@ -111,8 +161,8 @@ describe('desktop relay routing', () => {
   it('selects one preferred desktop socket instead of broadcasting duplicate input actions', async () => {
     const userId = `relay_user_${Date.now()}_b`;
     const sent: any[] = [];
-    const desktopOne = { connected: true, emit: (event: string, payload: any) => sent.push({ target: 'one', event, payload }) };
-    const desktopTwo = { connected: true, emit: (event: string, payload: any) => sent.push({ target: 'two', event, payload }) };
+    const desktopOne = { connected: true, data: { trustedLocalExecution: true }, emit: (event: string, payload: any) => sent.push({ target: 'one', event, payload }) };
+    const desktopTwo = { connected: true, data: { trustedLocalExecution: true }, emit: (event: string, payload: any) => sent.push({ target: 'two', event, payload }) };
 
     deviceRegistry.register(userId, 'sock_desktop_b1', {
       name: 'Relay Test Desktop B1',
@@ -147,10 +197,12 @@ describe('desktop relay routing', () => {
     const sent: any[] = [];
     const personalSocket = {
       connected: true,
+      data: { trustedLocalExecution: true },
       emit: (event: string, payload: any) => sent.push({ target: 'personal', event, payload }),
     };
     const orgSocket = {
       connected: true,
+      data: { trustedLocalExecution: true },
       emit: (event: string, payload: any) => sent.push({ target: 'org-a', event, payload }),
     };
 
@@ -186,6 +238,7 @@ describe('desktop relay routing', () => {
     const sent: any[] = [];
     const desktopSocket = {
       connected: true,
+      data: { trustedLocalExecution: true },
       emit: (event: string, payload: any) => sent.push({ event, payload }),
     };
     deviceRegistry.register(userId, 'scope_abort_socket', {
@@ -216,12 +269,13 @@ describe('desktop relay routing', () => {
     const disconnectHandlers = new Set<() => void>();
     const desktopSocket = {
       connected: true,
+      data: { trustedLocalExecution: true },
       emit: (event: string, payload: any) => sent.push({ event, payload }),
     };
     const requestSocket = {
       id: 'request_disconnect_socket',
       connected: true,
-      data: {},
+      data: { trustedLocalExecution: true },
       once: (event: string, handler: () => void) => {
         if (event === 'disconnect') disconnectHandlers.add(handler);
       },
@@ -265,6 +319,7 @@ describe('desktop relay routing', () => {
     const sent: any[] = [];
     const desktopSocket = {
       connected: true,
+      data: { trustedLocalExecution: true },
       emit: (event: string, payload: any) => sent.push({ event, payload }),
     };
     const socketId = `relay_lease_socket_${Date.now()}`;
@@ -312,6 +367,7 @@ describe('desktop relay routing', () => {
     const pauses: string[] = [];
     const desktopSocket = {
       connected: true,
+      data: { trustedLocalExecution: true },
       emit: (event: string, payload: any) => sent.push({ event, payload }),
     };
     const socketId = `relay_preempt_socket_${Date.now()}`;

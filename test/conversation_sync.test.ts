@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   resolveChatExecutionEvent,
   shouldApplyInitialConversationMessages,
@@ -44,6 +46,31 @@ describe('persisted conversation cross-client synchronization', () => {
       currentConversationId: 'conv_1',
       currentSocketId: 'socket_ui',
     })).toBe(true);
+  });
+
+  it('reloads a persisted background result even while an unrelated foreground request exists', () => {
+    expect(shouldReloadPersistedConversation({
+      event: {
+        conversationId: 'conv_1',
+        requestId: 'background_task_1',
+        source: 'background_delegation',
+      },
+      currentConversationId: 'conv_1',
+      currentSocketId: 'socket_ui',
+      activeRequestId: 'foreground_request_1',
+    })).toBe(true);
+  });
+
+  it('keeps the native chat listener wired to persisted message replacement', () => {
+    const chat = fs.readFileSync(path.join(process.cwd(), 'src/components/AgentChatPage.tsx'), 'utf8');
+    const start = chat.indexOf('const onConversationUpdated =');
+    const end = chat.indexOf('const normalizeBackgroundTask =', start);
+    const handler = chat.slice(start, end);
+
+    expect(handler).toContain('shouldReloadPersistedConversation({');
+    expect(handler).toContain('/messages?limit=${CHAT_HISTORY_LIMIT}');
+    expect(handler).toContain('setMessages(normalizePersistedMessages(result.messages))');
+    expect(chat).toContain('socket.on("chat:conversation_updated", onConversationUpdated)');
   });
 });
 

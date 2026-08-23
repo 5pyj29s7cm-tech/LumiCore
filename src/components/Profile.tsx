@@ -5,6 +5,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { useApp } from '../contexts/AppContext';
 import { GlassCard } from './SharedUI';
+import { apiFetch } from '../services/apiClient';
 
 export function Profile({ t }: { t: any }) {
   const { user, agents } = useApp();
@@ -14,11 +15,37 @@ export function Profile({ t }: { t: any }) {
   const [isUpdating, setIsUpdating] = useState(false);
 
   useEffect(() => {
-    fetch('/api/health')
-      .then(res => res.json())
-      .then(data => setHealth(data))
-      .catch(err => console.error('Health fetch failed:', err));
+    let cancelled = false;
+    const loadHealth = async () => {
+      try {
+        let response = await apiFetch('/api/health?details=1');
+        if (response.status === 401 || response.status === 403) {
+          response = await apiFetch('/api/health');
+        }
+        if (!response.ok) throw new Error(`Health fetch failed (${response.status})`);
+        const data = await response.json();
+        if (!cancelled) setHealth(data);
+      } catch (err) {
+        console.error('Health fetch failed:', err);
+      }
+    };
+    void loadHealth();
+    return () => { cancelled = true; };
   }, []);
+
+  const uptimeSec = Number(health?.process?.uptimeSec);
+  const uptimeLabel = Number.isFinite(uptimeSec)
+    ? `${Math.floor(uptimeSec / 3600)}h ${Math.floor((uptimeSec % 3600) / 60)}m`
+    : (t.unavailable || 'Unavailable');
+  const interactionCount = Number.isFinite(Number(health?.database?.interactions))
+    ? String(health.database.interactions)
+    : (t.unavailable || 'Unavailable');
+  const healthOk = health?.status === 'ok';
+  const healthLabel = healthOk
+    ? (t.operational || 'Operational')
+    : health?.status === 'degraded'
+      ? (t.degraded || 'Degraded')
+      : (t.unavailable || 'Unavailable');
 
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -101,9 +128,9 @@ export function Profile({ t }: { t: any }) {
           <h3 className="text-xl font-bold tracking-tighter">{t.nodeStats || 'Node Stats'}</h3>
           <div className="grid grid-cols-2 gap-4">
             <StatBox label={t.totalData || 'Total Data'} value="1.2 TB" />
-            <StatBox label={t.uptime || 'Uptime'} value={health?.uptime ? `${Math.floor(health.uptime / 3600)}h ${Math.floor((health.uptime % 3600) / 60)}m` : "99.9%"} />
+            <StatBox label={t.uptime || 'Uptime'} value={uptimeLabel} />
             <StatBox label={t.nodePower || 'Node Power'} value="850 GFLOPS" />
-            <StatBox label={t.interactions || 'Interactions'} value={health?.database?.interactions || "1,240"} />
+            <StatBox label={t.interactions || 'Interactions'} value={interactionCount} />
           </div>
         </GlassCard>
 
@@ -169,19 +196,19 @@ export function Profile({ t }: { t: any }) {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="p-4 bg-white/5 rounded-2xl border border-white/5">
                 <div className="text-xs text-white/40 uppercase font-bold mb-1">{t.status || 'Status'}</div>
-                <div className="text-green-500 font-bold uppercase tracking-widest text-xs">{t.operational || 'Operational'}</div>
+                <div className={`${healthOk ? 'text-green-500' : 'text-amber-300'} font-bold uppercase tracking-widest text-xs`}>{healthLabel}</div>
               </div>
               <div className="p-4 bg-white/5 rounded-2xl border border-white/5">
                 <div className="text-xs text-white/40 uppercase font-bold mb-1">{t.users || 'Users'}</div>
-                <div className="text-white font-bold text-xs">{health.database?.users}</div>
+                <div className="text-white font-bold text-xs">{health.database?.users ?? (t.unavailable || 'Unavailable')}</div>
               </div>
               <div className="p-4 bg-white/5 rounded-2xl border border-white/5">
                 <div className="text-xs text-white/40 uppercase font-bold mb-1">{t.agents || 'Agents'}</div>
-                <div className="text-white font-bold text-xs">{health.database?.agents}</div>
+                <div className="text-white font-bold text-xs">{health.database?.agents ?? (t.unavailable || 'Unavailable')}</div>
               </div>
               <div className="p-4 bg-white/5 rounded-2xl border border-white/5">
                 <div className="text-xs text-white/40 uppercase font-bold mb-1">{t.latency || 'Latency'}</div>
-                <div className="text-celestial-saturn font-bold text-xs">12ms</div>
+                <div className="text-celestial-saturn font-bold text-xs">{t.unavailable || 'Unavailable'}</div>
               </div>
             </div>
           </GlassCard>
