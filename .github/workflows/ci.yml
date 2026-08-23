@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   quality:
-    if: ${{ github.repository == '5pyj29s7cm-tech/LumiOS' }}
+    if: ${{ github.repository_owner == '5pyj29s7cm-tech' }}
     name: Lint, tests, frontends, audit and budget
     runs-on: ubuntu-latest
     steps:
@@ -44,7 +44,7 @@ jobs:
         run: npm run security:audit
 
   rust-check:
-    if: ${{ github.repository == '5pyj29s7cm-tech/LumiOS' }}
+    if: ${{ github.repository_owner == '5pyj29s7cm-tech' }}
     name: Rust release check
     runs-on: ubuntu-latest
     steps:
