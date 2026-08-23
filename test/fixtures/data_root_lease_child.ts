@@ -19,6 +19,7 @@ process.on('message', message => {
 });
 process.on('SIGINT', () => void shutdown());
 process.on('SIGTERM', () => void shutdown());
+process.on('disconnect', () => void shutdown());
 
 await ensureDatabaseInitialized();
 if (typeof process.send === 'function') {

@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -11,9 +12,10 @@ interface ManagedChild {
 }
 
 const repositoryRoot = process.cwd();
-const tsxCli = path.join(repositoryRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 const fixture = path.join(repositoryRoot, 'test', 'fixtures', 'data_root_lease_child.ts');
-const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi-data-root-lease-'));
+const tempBase = path.resolve(process.env.LUMI_TEST_TMPDIR || os.tmpdir());
+fs.mkdirSync(tempBase, { recursive: true });
+const tempRoot = fs.mkdtempSync(path.join(tempBase, 'data-root-lease-'));
 const children = new Set<ManagedChild>();
 
 function prepareDataRoot(name: string): string {
@@ -29,7 +31,12 @@ function prepareDataRoot(name: string): string {
 function spawnBackend(dataRoot: string): ManagedChild {
   let stdout = '';
   let stderr = '';
-  const child = spawn(process.execPath, [tsxCli, fixture], {
+  // Run the fixture in the exact child process that this test owns. Invoking
+  // the tsx CLI here would create a wrapper which then spawns the real Node
+  // process and forwards IPC. SIGKILL would terminate only that wrapper on
+  // Linux, leaving the lease-owning backend alive and making a valid lease
+  // look like a stale-lease recovery failure.
+  const child = spawn(process.execPath, ['--import', 'tsx', fixture], {
     cwd: repositoryRoot,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
@@ -60,6 +67,13 @@ function waitForReady(managed: ManagedChild, timeoutMs = 30_000): Promise<{ pid:
     const onMessage = (message: unknown) => {
       const record = message as { type?: string; pid?: number; dataRoot?: string } | null;
       if (record?.type !== 'ready' || !record.pid || !record.dataRoot) return;
+      if (record.pid !== managed.child.pid) {
+        cleanup();
+        reject(new Error(
+          `backend fixture PID ${record.pid} is not the directly managed child PID ${managed.child.pid}`,
+        ));
+        return;
+      }
       cleanup();
       resolve({ pid: record.pid, dataRoot: record.dataRoot });
     };
@@ -111,7 +125,7 @@ async function stopBackend(managed: ManagedChild): Promise<void> {
 afterAll(async () => {
   await Promise.all([...children].map(child => stopBackend(child)));
   const resolvedTempRoot = path.resolve(tempRoot);
-  if (resolvedTempRoot.startsWith(path.resolve(os.tmpdir())) && path.basename(resolvedTempRoot).startsWith('lumi-data-root-lease-')) {
+  if (path.dirname(resolvedTempRoot) === tempBase && path.basename(resolvedTempRoot).startsWith('data-root-lease-')) {
     fs.rmSync(resolvedTempRoot, { recursive: true, force: true });
   }
 });
@@ -158,6 +172,39 @@ describe.sequential('cross-process Lumi data-root lease', () => {
     expect(replacementReady.pid).not.toBe(crashedReady.pid);
     const replacementLease = JSON.parse(fs.readFileSync(leasePath, 'utf8')) as { pid: number };
     expect(replacementLease.pid).toBe(replacementReady.pid);
+    await stopBackend(replacement);
+    expect(fs.existsSync(leasePath)).toBe(false);
+  }, 60_000);
+
+  it('reclaims an old generation when its PID is alive but its process-start identity was reused', async () => {
+    const dataRoot = prepareDataRoot('pid-reuse');
+    const runtimeDir = path.join(dataRoot, 'runtime');
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    const canonicalRoot = fs.realpathSync.native(dataRoot);
+    const normalizedRoot = process.platform === 'win32'
+      ? path.normalize(canonicalRoot).toLocaleLowerCase('en-US')
+      : path.normalize(canonicalRoot);
+    const leasePath = path.join(runtimeDir, 'backend-instance.lock');
+    fs.writeFileSync(leasePath, `${JSON.stringify({
+      version: 1,
+      ownerToken: 'R'.repeat(43),
+      pid: process.pid,
+      hostname: os.hostname().trim().toLocaleLowerCase('en-US'),
+      dataRoot: canonicalRoot,
+      dataRootDigest: crypto.createHash('sha256').update(normalizedRoot, 'utf8').digest('hex'),
+      processStartIdentity: `simulated-reused-pid-${crypto.randomBytes(12).toString('hex')}`,
+      acquiredAt: new Date().toISOString(),
+    })}\n`, { mode: 0o600 });
+
+    const replacement = spawnBackend(dataRoot);
+    const replacementReady = await waitForReady(replacement);
+    expect(replacementReady.pid).not.toBe(process.pid);
+    const replacementLease = JSON.parse(fs.readFileSync(leasePath, 'utf8')) as {
+      pid: number;
+      processStartIdentity: string;
+    };
+    expect(replacementLease.pid).toBe(replacementReady.pid);
+    expect(replacementLease.processStartIdentity).not.toContain('simulated-reused-pid');
     await stopBackend(replacement);
     expect(fs.existsSync(leasePath)).toBe(false);
   }, 60_000);
