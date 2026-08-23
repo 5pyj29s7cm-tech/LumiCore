@@ -60,9 +60,18 @@ export function buildCompactToolEvidenceNote(value: unknown): string {
     if (!name) return '';
     const args = call?.arguments && typeof call.arguments === 'object' ? call.arguments : {};
     const payload = parseToolResult(call?.result);
+    const envelope = payload?.envelope && typeof payload.envelope === 'object'
+      ? payload.envelope
+      : payload;
+    const result = envelope?.result && typeof envelope.result === 'object'
+      ? envelope.result
+      : payload;
     const argumentScope = [
       args.role ? `role=${String(args.role).slice(0, 80)}` : '',
+      args.action ? `action=${String(args.action).slice(0, 100)}` : '',
       args.target ? `target=${String(args.target).slice(0, 100)}` : '',
+      args.section ? `section=${String(args.section).slice(0, 100)}` : '',
+      args.mode ? `mode=${String(args.mode).slice(0, 80)}` : '',
       args.path ? `path=${String(args.path).slice(0, 180)}` : '',
     ].filter(Boolean);
     const facts: string[] = [];
@@ -74,20 +83,41 @@ export function buildCompactToolEvidenceNote(value: unknown): string {
       facts.push(`model=${String(payload.configuration.model || '').slice(0, 120)}`);
       facts.push(`configured=${String(payload.configuration.configured === true)}`);
     }
-    const live = payload?.result && typeof payload.result === 'object' ? payload.result : null;
+    const live = result && typeof result === 'object' ? result : null;
     if (live) {
       if (live.provider) facts.push(`provider=${String(live.provider).slice(0, 80)}`);
       if (live.model) facts.push(`model=${String(live.model).slice(0, 120)}`);
       if (Number.isFinite(Number(live.latencyMs))) facts.push(`latencyMs=${Number(live.latencyMs)}`);
+      if (live.action && !args.action) facts.push(`action=${String(live.action).slice(0, 100)}`);
+      if (live.target && !args.target) facts.push(`target=${String(live.target).slice(0, 100)}`);
+      if (live.section && !args.section) facts.push(`section=${String(live.section).slice(0, 100)}`);
+      if (live.mode && !args.mode) facts.push(`mode=${String(live.mode).slice(0, 80)}`);
+    }
+    const verification = live?.verification && typeof live.verification === 'object'
+      ? live.verification
+      : envelope?.verification && typeof envelope.verification === 'object'
+        ? envelope.verification
+        : {};
+    const verificationStatus = String(
+      call?.terminalVerification?.status || verification.status || '',
+    ).trim().slice(0, 80);
+    if (verificationStatus) facts.push(`verification=${verificationStatus}`);
+    if (Array.isArray(verification.matched) && verification.matched.length) {
+      facts.push(`matched=${verification.matched.map((item: unknown) => String(item || '').slice(0, 100)).filter(Boolean).slice(0, 6).join('|')}`);
     }
     if (Array.isArray(payload?.targets)) facts.push(`targets=${payload.targets.length}`);
     if (Array.isArray(payload)) facts.push(`items=${payload.length}`);
     const error = String(call?.error || payload?.error || '').trim().slice(0, 180);
+    const envelopeStatus = String(envelope?.status || '').trim().slice(0, 80);
     const status = error
       ? `error=${error}`
       : payload?.ok === false
         ? `returned_failure=${String(payload?.reason || payload?.message || payload?.status || 'true').slice(0, 180)}`
-        : `receipt=${String(payload?.status || (String(call?.result || '').trim() ? 'returned' : 'empty')).slice(0, 80)}`;
+        : envelopeStatus
+          ? `outcome=${envelopeStatus}`
+          : verificationStatus === 'verified'
+            ? 'outcome=verified_success'
+            : `receipt=${String(payload?.status || (String(call?.result || '').trim() ? 'returned' : 'empty')).slice(0, 80)}`;
     return [name, ...argumentScope, status, ...facts.filter(Boolean)].join(' | ');
   }).filter(Boolean);
   return entries.length ? `[Verified tool receipt ledger: ${entries.join(' || ')}]`.slice(0, 1800) : '';

@@ -16,6 +16,8 @@ import { buildToolExecutionEnvelope, toolRecordIdempotencyKey } from '../tools/e
 import { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
 import type { ToolExecutionRecord } from '../tools/types';
 import type { CapabilityExecutionPlan } from '../cognition/capability_execution_plan';
+import { CN_ACTION_LEDGER_MESSAGES } from '../regions/packs/cn/action_ledger_messages';
+import { detectLanguage } from '../utils/language';
 import type {
   ModelExecutionGraph,
   ModelGraphArbitrationReceipt,
@@ -121,6 +123,83 @@ function parseObject(value: unknown): Record<string, any> {
     } catch {}
   }
   return {};
+}
+
+function formatEnglishPreviousActionLedgerStatus(
+  task: ConversationActionTaskRow,
+  state: ConversationActionContinuationState,
+  taskReceipts: ConversationActionReceiptRow[],
+): string {
+  const receipt = [...taskReceipts].sort((left, right) => (
+    right.createdAt.localeCompare(left.createdAt)
+  ))[0];
+  const envelope = parseObject(receipt?.envelope);
+  const result = parseObject(envelope.result);
+  const expectation = parseObject(result.expectation);
+  const verification = parseObject(result.verification);
+  const envelopeVerification = parseObject(envelope.verification);
+  const action = String(
+    result.action
+    || expectation.action
+    || receipt?.toolName
+    || task.operation
+    || task.intentKind
+    || '',
+  ).trim();
+  const target = String(
+    result.target
+    || expectation.target
+    || receipt?.targetIdentity
+    || task.target
+    || state.appTarget
+    || '',
+  ).trim();
+  const section = String(result.section || expectation.section || '').trim();
+  const verificationStatus = String(
+    verification.status
+    || envelopeVerification.status
+    || (receipt?.outcome === 'verified_success' ? 'verified' : receipt?.outcome || ''),
+  ).trim();
+  const matchedEvidence = Array.isArray(verification.matched)
+    ? verification.matched
+      .map(value => String(value || '').replace(/\s+/gu, ' ').trim().slice(0, 240))
+      .filter(Boolean)
+      .slice(0, 8)
+    : [];
+  const verificationReason = String(envelopeVerification.reason || '').replace(/\s+/gu, ' ').trim().slice(0, 500);
+  const blocker = String(task.blocker || state.latestBlocker || '')
+    .replace(/^[A-Za-z0-9_.:-]+:\s*/, '')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .slice(0, 500);
+  const durableVerified = receipt?.outcome === 'verified_success' && verificationStatus === 'verified';
+  const finalStatus = task.status === 'completed'
+    ? durableVerified
+      ? 'completed (durable receipt verified)'
+      : state.completionSource === 'user_observation'
+        ? 'completed (confirmed by user observation)'
+        : 'completed (no verified terminal receipt recorded)'
+    : task.status === 'waiting_confirmation'
+      ? 'waiting for confirmation'
+      : task.status === 'blocked'
+        ? `blocked${blocker ? ` — ${blocker}` : ''}`
+        : task.status === 'cancelled'
+          ? `cancelled${blocker ? ` — ${blocker}` : ''}`
+          : `${task.status} (no verified terminal receipt yet)`;
+
+  return [
+    `Executed action: ${action || 'not recorded'}`,
+    target ? `Target: ${target}` : '',
+    section ? `Target section: ${section}` : '',
+    `Verification status: ${verificationStatus || 'not recorded'}`,
+    matchedEvidence.length
+      ? `Verification evidence: ${matchedEvidence.join('; ')}`
+      : verificationReason
+        ? `Verification evidence: ${verificationReason}`
+        : '',
+    receipt ? '' : 'Durable receipt: none recorded',
+    `Final status: ${finalStatus}`,
+  ].filter(Boolean).join('\n');
 }
 
 function redactArguments(args: Record<string, any>): Record<string, any> {
@@ -1204,8 +1283,25 @@ export function findConversationActionTask(
   )).map(match => String(match[1] || '').trim().toLowerCase()).filter(Boolean);
   const scopedReceipts = (db.conversationActionReceipts as ConversationActionReceiptRow[])
     .filter(receipt => receipt.conversationId === input.conversationId);
-  return (db.conversationActionTasks as ConversationActionTaskRow[])
-    .filter(task => task.conversationId === input.conversationId && task.userId === input.userId)
+  const scopedTasks = (db.conversationActionTasks as ConversationActionTaskRow[])
+    .filter(task => task.conversationId === input.conversationId && task.userId === input.userId);
+  if (intent.kind === 'status_query' && intent.target === 'previous_action') {
+    const latestTaskEventAt = (task: ConversationActionTaskRow): string => (
+      scopedReceipts
+        .filter(receipt => receipt.taskId === task.id)
+        .reduce((latest, receipt) => (
+          receipt.createdAt.localeCompare(latest) > 0 ? receipt.createdAt : latest
+        ), task.createdAt || task.updatedAt)
+    );
+    return scopedTasks
+      .map((task, insertionOrder) => ({ task, insertionOrder, eventAt: latestTaskEventAt(task) }))
+      .sort((left, right) => (
+        right.eventAt.localeCompare(left.eventAt)
+        || right.task.createdAt.localeCompare(left.task.createdAt)
+        || right.insertionOrder - left.insertionOrder
+      ))[0]?.task || null;
+  }
+  return scopedTasks
     .map(task => {
       const context = parseObject(task.context);
       const actionState = normalizeConversationActionState(context.actionState);
@@ -1303,6 +1399,9 @@ export function formatConversationActionLedgerStatus(
     ? (db.conversationActionReceipts as ConversationActionReceiptRow[])
       .filter(receipt => receipt.taskId === task.id)
     : [];
+  const normalizedQueryIntent = normalizeActionIntent(query);
+  const asksForPreviousAction = normalizedQueryIntent.kind === 'status_query'
+    && normalizedQueryIntent.target === 'previous_action';
   const asksForArtifactReceiptChain = /(?:\u5199\u5165|\u56de\u8bfb|\u6700\u7ec8\u72b6\u6001)|\b(?:written|read\s*back|final\s+status)\b/iu.test(query);
   if (task && asksForArtifactReceiptChain) {
     const writeIndex = taskReceipts.map(receipt => (
@@ -1445,27 +1544,41 @@ export function formatConversationActionLedgerStatus(
       ].join('\n');
     }
   }
-  const asksForClientNavigationDetails = /(?:\u6267\u884c\u52a8\u4f5c|\u76ee\u6807\u9875\u9762|\u9a8c\u8bc1\u72b6\u6001)|\b(?:client\s+action|target\s+(?:page|surface)|verification\s+status)\b/iu.test(query);
-  if (asksForClientNavigationDetails && task?.intentKind === 'client_navigation') {
-    const clientReceipt = [...taskReceipts].reverse().find(receipt => (
-      receipt.toolName === 'client_action'
-      && receipt.outcome === 'verified_success'
-    ));
+  if (task && asksForPreviousAction && detectLanguage(query) === 'en') {
+    return formatEnglishPreviousActionLedgerStatus(task, state, taskReceipts);
+  }
+  const latestClientActionReceipt = [...taskReceipts].reverse().find(receipt => (
+    receipt.toolName === 'client_action'
+  ));
+  const verifiedClientActionReceipt = latestClientActionReceipt?.outcome === 'verified_success'
+    ? latestClientActionReceipt
+    : undefined;
+  const asksForClientNavigationDetails = /(?:\u6267\u884c\u52a8\u4f5c|\u76ee\u6807\u9875\u9762|\u9a8c\u8bc1\u72b6\u6001)|\b(?:client\s+action|target\s+(?:page|surface)|verification\s+status)\b/iu.test(query)
+    || normalizedQueryIntent.kind === 'status_query'
+      && normalizedQueryIntent.target === 'previous_action';
+  if (asksForClientNavigationDetails && (task?.intentKind === 'client_navigation' || verifiedClientActionReceipt)) {
+    const clientReceipt = verifiedClientActionReceipt;
     if (clientReceipt) {
       const envelope = parseObject(clientReceipt.envelope);
       const result = parseObject(envelope.result);
       const verification = parseObject(result.verification);
       const action = String(result.action || parseObject(result.expectation).action || '').trim();
       const target = String(result.target || parseObject(result.expectation).target || task.target || state.appTarget || '').trim();
+      const section = String(result.section || parseObject(result.expectation).section || '').trim();
       const verificationStatus = String(verification.status || parseObject(envelope.verification).status || '').trim();
+      const matchedEvidence = Array.isArray(verification.matched)
+        ? verification.matched.map(value => String(value || '').trim()).filter(Boolean).slice(0, 8)
+        : [];
       return [
         `\u6267\u884c\u52a8\u4f5c\uff1a${action || '\u56de\u6267\u672a\u8bb0\u5f55'}`,
         `\u76ee\u6807\u9875\u9762\uff1a${target || '\u56de\u6267\u672a\u8bb0\u5f55'}`,
+        section ? CN_ACTION_LEDGER_MESSAGES.targetSection(section) : '',
         `\u9a8c\u8bc1\u72b6\u6001\uff1a${verificationStatus || '\u56de\u6267\u672a\u8bb0\u5f55'}`,
+        matchedEvidence.length ? CN_ACTION_LEDGER_MESSAGES.verificationEvidence(matchedEvidence) : '',
         `\u6700\u7ec8\u72b6\u6001\uff1a${task.status === 'completed' && verificationStatus === 'verified'
           ? '\u5df2\u5b8c\u6210\uff08\u6301\u4e45\u56de\u6267\u5df2\u9a8c\u8bc1\uff09'
           : formatConversationActionTaskStatus(state)}`,
-      ].join('\n');
+      ].filter(Boolean).join('\n');
     }
   }
   const status = formatConversationActionTaskStatus(state);

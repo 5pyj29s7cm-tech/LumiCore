@@ -463,6 +463,82 @@ describe('normalized desktop intent priority', () => {
       sideEffectClass: 'none',
       relation: 'status',
     });
+    expect(normalizeActionIntent(
+      'What did you just do, and what evidence proved it succeeded?',
+    )).toMatchObject({
+      kind: 'status_query',
+      operation: 'status',
+      target: 'previous_action',
+      sideEffectClass: 'none',
+      relation: 'status',
+    });
+  });
+
+  it.each([
+    'What did you just do, and what evidence proved it succeeded? Now open Chat.',
+    'What did you just do? Now save the file.',
+    'What did you just do, and now open Chat.',
+    'What did you just do and now open Chat.',
+    '\u521a\u624d\u505a\u4e86\u4ec0\u4e48\uff1f\u73b0\u5728\u6253\u5f00\u804a\u5929\u754c\u9762\u3002',
+    '\u521a\u624d\u505a\u4e86\u4ec0\u4e48\u2026\u73b0\u5728\u521b\u5efa\u4e00\u4e2a\u65b0\u6587\u4ef6\u3002',
+    '\u521a\u624d\u505a\u4e86\u4ec0\u4e48\uff0c\u7136\u540e\u6253\u5f00\u804a\u5929\u754c\u9762\u3002',
+    '\u521a\u624d\u505a\u4e86\u4ec0\u4e48\u5e76\u6253\u5f00\u804a\u5929\u754c\u9762\u3002',
+  ])('does not let a previous-action receipt question swallow a new instruction: %s', (text) => {
+    expect(hasMixedStatusExecutionIntent(text)).toBe(true);
+    expect(normalizeActionIntent(text).kind).not.toBe('status_query');
+  });
+
+  it.each([
+    'What did you just do? Only answer from the receipt; do not execute a new action.',
+    '\u521a\u624d\u6253\u5f00\u4e86\u4ec0\u4e48\uff1f\u53ea\u6839\u636e\u4e0a\u4e00\u8f6e\u56de\u6267\u56de\u7b54\uff0c\u4e0d\u8981\u6267\u884c\u65b0\u64cd\u4f5c\u3002',
+  ])('keeps an explicitly read-only previous-action query out of execution: %s', (text) => {
+    expect(hasMixedStatusExecutionIntent(text)).toBe(false);
+    expect(normalizeActionIntent(text)).toMatchObject({
+      kind: 'status_query',
+      target: 'previous_action',
+      sideEffectClass: 'none',
+    });
+  });
+
+  it('keeps a direct Chinese previous-action evidence question on the receipt lane', () => {
+    expect(normalizeActionIntent(
+      '\u4f60\u521a\u624d\u505a\u4e86\u4ec0\u4e48\uff0c\u4ec0\u4e48\u8bc1\u636e\u8bc1\u660e\u6210\u529f\u4e86\uff1f',
+    )).toMatchObject({
+      kind: 'status_query',
+      target: 'previous_action',
+      sideEffectClass: 'none',
+    });
+  });
+
+  it.each([
+    '刚才做了什么，打开聊天界面了吗？',
+    '刚才做了什么，并打开聊天界面了吗？',
+    '刚才做了什么，打开过聊天界面吗？',
+  ])('does not upgrade a retrospective Chinese action question into a new navigation: %s', (text) => {
+    expect(hasMixedStatusExecutionIntent(text)).toBe(false);
+    expect(normalizeActionIntent(text)).toMatchObject({
+      kind: 'status_query',
+      target: 'previous_action',
+      sideEffectClass: 'none',
+    });
+  });
+
+  it.each([
+    '你刚才做了什么？谁让你打开设置的？',
+    '你刚才做了什么？这未经我允许。',
+    '你刚才做了什么？你没有权限打开设置。',
+    '你刚才做了什么？我什么时候允许你打开设置了？',
+    '你刚才做了什么？是谁授权你发送消息的？',
+    '你刚才打开设置干什么？',
+    '你刚才打开设置为什么不先问我？',
+    'What did you just do? Who authorized you to open Settings?',
+  ])('keeps a previous-action authorization objection on the explanation lane: %s', (text) => {
+    expect(normalizeActionIntent(text)).toMatchObject({
+      kind: 'correction_explanation',
+      target: 'previous_action',
+      sideEffectClass: 'none',
+      relation: 'correction',
+    });
   });
 
   it('normalizes a constrained natural calculator request to one exact target', () => {

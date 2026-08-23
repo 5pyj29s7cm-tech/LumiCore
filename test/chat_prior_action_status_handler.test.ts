@@ -1,0 +1,334 @@
+import './helpers';
+import { createServer, type Server as HttpServer } from 'node:http';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { Server as SocketIOServer } from 'socket.io';
+import { io as createSocketClient, type Socket as ClientSocket } from 'socket.io-client';
+import { initDatabase, readDB } from '../db_layer';
+import {
+  addMessage,
+  getOrCreateActiveConversation,
+} from '../server/conversation/manager';
+import { registerChatHandler } from '../server/socket/chat';
+import { getChatExecution } from '../server/socket/chat_execution_registry';
+import { queryMemoriesVector } from '../server/memory';
+import { retrieveChunks } from '../server/agents/rag';
+
+vi.mock('../server/memory', async importOriginal => {
+  const actual = await importOriginal<typeof import('../server/memory')>();
+  return {
+    ...actual,
+    queryMemoriesVector: vi.fn(async () => []),
+  };
+});
+
+vi.mock('../server/agents/rag', async importOriginal => {
+  const actual = await importOriginal<typeof import('../server/agents/rag')>();
+  return {
+    ...actual,
+    retrieveChunks: vi.fn(async () => []),
+  };
+});
+
+function waitForRequestEvent<T extends Record<string, any>>(
+  socket: ClientSocket,
+  event: string,
+  requestId: string,
+  timeoutMs = 8_000,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      socket.off(event, handler);
+      reject(new Error(`Timed out waiting for ${event} (${requestId})`));
+    }, timeoutMs);
+    const handler = (payload: T) => {
+      if (String(payload?.requestId || '') !== requestId) return;
+      clearTimeout(timeout);
+      socket.off(event, handler);
+      resolve(payload);
+    };
+    socket.on(event, handler);
+  });
+}
+
+function storedToolCalls(value: unknown): any[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string' || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+describe('chat prior-action status handler', () => {
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const userId = `chat-prior-action-${suffix}`;
+  const priorRequestId = `chat-prior-action-seed-${suffix}`;
+  const firstRequestId = `chat-prior-action-first-${suffix}`;
+  const secondRequestId = `chat-prior-action-second-${suffix}`;
+  const englishStatusQuestion = 'What did you just do, and what evidence proved it succeeded?';
+  const chineseStatusQuestion = '你刚才做了什么，什么证据证明成功了？';
+  const llmTripwire = vi.fn(() => {
+    throw new Error('The prior-action status fast path must not resolve an LLM client.');
+  });
+  const observedEvents: Array<{ event: string; payload: Record<string, any> }> = [];
+  let conversationId = '';
+  let baselineActionReceiptIds: string[] = [];
+  let httpServer: HttpServer;
+  let io: SocketIOServer;
+  let client: ClientSocket;
+
+  beforeAll(async () => {
+    await initDatabase();
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    conversationId = conversation.id;
+
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId,
+      role: 'user',
+      content: '打开 Lumi 设置里的语音与声音。',
+      domain: 'personal',
+      orgId: '',
+      source: 'chat',
+      channel: 'chat',
+      requestId: priorRequestId,
+      deferActionPreparation: true,
+    });
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId,
+      role: 'assistant',
+      content: '已打开设置中的语音与声音。',
+      domain: 'personal',
+      orgId: '',
+      source: 'chat',
+      channel: 'chat',
+      requestId: priorRequestId,
+      taskIntent: 'task',
+      llmWasCalled: true,
+      toolCalls: [{
+        id: 'voice_settings_open',
+        key: 'client_action:open_settings:voice',
+        name: 'client_action',
+        arguments: { action: 'open_settings', section: 'voice' },
+        result: JSON.stringify({
+          ok: true,
+          action: 'open_settings',
+          target: 'settings',
+          section: 'voice',
+          verification: {
+            status: 'verified',
+            matched: ['surface:settings:open', 'settings-section:voice'],
+          },
+        }),
+        error: '',
+        outcome: 'success',
+        terminalVerification: {
+          status: 'verified',
+          strategy: 'state_diff',
+          reason: 'voice settings rendered',
+        },
+      }],
+    });
+
+    const seededReceipts = (readDB().conversationActionReceipts || []).filter((receipt: any) => (
+      receipt.conversationId === conversationId
+    ));
+    expect(seededReceipts).toHaveLength(1);
+    expect(seededReceipts[0]).toMatchObject({
+      toolName: 'client_action',
+      outcome: 'verified_success',
+    });
+    baselineActionReceiptIds = seededReceipts.map((receipt: any) => String(receipt.id));
+
+    httpServer = createServer();
+    io = new SocketIOServer(httpServer, { transports: ['websocket'] });
+    io.on('connection', serverSocket => {
+      serverSocket.data.authenticatedUserId = userId;
+      serverSocket.data.authenticatedRole = 'admin';
+      serverSocket.data.trustedLocalExecution = true;
+      serverSocket.join(`user:${userId}:personal`);
+      registerChatHandler(
+        serverSocket,
+        {
+          getDeepSeek: llmTripwire,
+          getGemini: llmTripwire,
+          getOpenAI: llmTripwire,
+          getAnthropic: llmTripwire,
+          getQwen: llmTripwire,
+          getOllama: llmTripwire,
+          isOllamaAvailable: () => false,
+          getLmStudio: llmTripwire,
+          isLmStudioAvailable: () => false,
+          getArk: llmTripwire,
+          getXiaomi: llmTripwire,
+          getKimi: llmTripwire,
+          getGlm: llmTripwire,
+          getRelay: llmTripwire,
+        },
+        () => ({
+          audio: false,
+          visual: false,
+          spatial: false,
+          haptic: false,
+          holographic: false,
+          activeDeviceTypes: [],
+          deviceCount: 0,
+        }),
+        () => userId,
+        io,
+      );
+    });
+    await new Promise<void>(resolve => httpServer.listen(0, '127.0.0.1', resolve));
+    const address = httpServer.address();
+    if (!address || typeof address === 'string') throw new Error('Unable to bind chat handler test server');
+    client = createSocketClient(`http://127.0.0.1:${address.port}`, { transports: ['websocket'] });
+    client.onAny((event, payload) => {
+      if (payload && typeof payload === 'object') observedEvents.push({ event, payload });
+    });
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Timed out connecting chat handler test client')), 5_000);
+      client.once('connect', () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+      client.once('connect_error', error => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+    });
+  });
+
+  afterAll(async () => {
+    client?.disconnect();
+    if (io) await new Promise<void>(resolve => io.close(() => resolve()));
+    if (httpServer?.listening) {
+      await new Promise<void>(resolve => httpServer.close(() => resolve()));
+    }
+  });
+
+  async function sendStatusQuestion(requestId: string, text: string): Promise<Record<string, any>> {
+    const responsePromise = waitForRequestEvent<Record<string, any>>(
+      client,
+      'agent:response',
+      requestId,
+    );
+    const ack = await client.timeout(5_000).emitWithAck('agent:chat', {
+      text,
+      agentId: 'lumi',
+      domain: 'personal',
+      source: 'command-center-chat',
+      requestId,
+      conversationId,
+    });
+    expect(ack).toMatchObject({ ok: true, requestId });
+    return responsePromise;
+  }
+
+  function expectVerifiedLedgerAnswer(
+    response: Record<string, any>,
+    requestId: string,
+    language: 'en' | 'zh',
+  ): void {
+    expect(response).toMatchObject({
+      requestId,
+      conversationId,
+      source: 'command-center-chat',
+      reason: 'task_status',
+      finalized: true,
+      blocked: false,
+    });
+    if (language === 'en') {
+      expect(response.text).toContain('Executed action: open_settings');
+      expect(response.text).toContain('Target: settings');
+      expect(response.text).toContain('Target section: voice');
+      expect(response.text).toContain('Verification status: verified');
+      expect(response.text).toContain('Final status: executing (no verified terminal receipt yet)');
+      expect(response.text).not.toMatch(/执行动作|目标页面|最终状态/u);
+    } else {
+      expect(response.text).toContain('执行动作：open_settings');
+      expect(response.text).toContain('目标页面：settings');
+      expect(response.text).toContain('目标分区：voice');
+      expect(response.text).toContain('验证状态：verified');
+      expect(response.text).toContain('最终状态：');
+      expect(response.text).not.toContain('最终状态：已完成（持久回执已验证）');
+    }
+    expect(response.text).toContain('surface:settings:open');
+    expect(response.text).toContain('settings-section:voice');
+    expect(response.text).not.toMatch(/No successful current-turn tool execution|No successful tool execution|这一轮没有记录到成功的真实工具执行|我还不能说客户端动作已经完成/u);
+  }
+
+  it('answers two prior-action evidence queries without tools, LLM calls, receipts, or a leaked session', async () => {
+    const firstResponse = await sendStatusQuestion(firstRequestId, englishStatusQuestion);
+    expectVerifiedLedgerAnswer(firstResponse, firstRequestId, 'en');
+    expect(getChatExecution({
+      userId,
+      domain: 'personal',
+      orgId: '',
+      source: 'command-center-chat',
+      conversationId,
+    }, firstRequestId)).toMatchObject({
+      terminal: true,
+      status: 'completed',
+      terminalEvent: {
+        event: 'agent:response',
+        payload: { source: 'command-center-chat' },
+      },
+    });
+    expect((readDB().conversations || []).find((item: any) => item.id === conversationId))
+      .not.toHaveProperty('pendingActionContinuation');
+
+    // A leaked foreground lease would route this status question into the
+    // active-session sidecar and return stale_control instead of ledger proof.
+    const secondResponse = await sendStatusQuestion(secondRequestId, chineseStatusQuestion);
+    expectVerifiedLedgerAnswer(secondResponse, secondRequestId, 'zh');
+    expect(getChatExecution({
+      userId,
+      domain: 'personal',
+      orgId: '',
+      source: 'command-center-chat',
+      conversationId,
+    }, secondRequestId)).toMatchObject({
+      terminal: true,
+      status: 'completed',
+      terminalEvent: {
+        event: 'agent:response',
+        payload: { source: 'command-center-chat' },
+      },
+    });
+
+    const requestIds = new Set([firstRequestId, secondRequestId]);
+    expect(observedEvents.filter(item => (
+      requestIds.has(String(item.payload.requestId || ''))
+      && (item.event === 'agent:tool_call' || item.event === 'agent:tool')
+    ))).toEqual([]);
+
+    const finalDb = readDB();
+    expect((finalDb.conversationActionReceipts || [])
+      .filter((receipt: any) => receipt.conversationId === conversationId)
+      .map((receipt: any) => String(receipt.id)))
+      .toEqual(baselineActionReceiptIds);
+    expect((finalDb.conversations || []).find((item: any) => item.id === conversationId))
+      .not.toHaveProperty('pendingActionContinuation');
+
+    const statusReplies = (finalDb.interactions || []).filter((item: any) => (
+      item.role === 'assistant' && requestIds.has(String(item.requestId || item.externalMessageId || ''))
+    ));
+    expect(statusReplies).toHaveLength(2);
+    for (const reply of statusReplies) {
+      expect(reply).toMatchObject({
+        source: 'chat_task_status',
+        cognitiveIntent: 'task_status',
+        llmWasCalled: false,
+      });
+      expect(storedToolCalls(reply.toolCalls)).toEqual([]);
+    }
+    expect(llmTripwire).not.toHaveBeenCalled();
+    expect(queryMemoriesVector).not.toHaveBeenCalled();
+    expect(retrieveChunks).not.toHaveBeenCalled();
+  });
+});

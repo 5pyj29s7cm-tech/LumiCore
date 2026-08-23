@@ -114,6 +114,40 @@ describe('conversation action continuation state', () => {
       });
   });
 
+  it('clears a deferred prior-action status turn after a deterministic zero-tool reply', () => {
+    const userId = `conversation-prior-action-status-${Date.now()}-${Math.random()}`;
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    const requestId = `prior-action-status-${Date.now()}`;
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'user',
+      content: 'What did you just do, and what evidence proved it succeeded?',
+      requestId,
+      deferActionPreparation: true,
+      domain: 'personal',
+    });
+    expect(getOrCreateActiveConversation(userId, 'lumi', 'personal', '').pendingActionContinuation)
+      .toMatchObject({ requestId });
+
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'assistant',
+      content: '没有可验证的上一轮执行回执。',
+      requestId,
+      cognitiveIntent: 'task_status',
+      llmWasCalled: false,
+      domain: 'personal',
+    });
+
+    const stored = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    expect(stored.pendingActionContinuation).toBeUndefined();
+    expect(stored.actionContinuationState).toBeUndefined();
+  });
+
   it('does not create a durable task from user wording or ordinary model conversation alone', () => {
     const userId = `conversation-no-heuristic-task-${Date.now()}-${Math.random()}`;
     const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');

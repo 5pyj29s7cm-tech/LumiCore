@@ -109,6 +109,7 @@ import {
   classifyConversationActionFollowupIntent,
   formatConversationActionTaskStatus,
 } from "../cognition/action_continuation";
+import { normalizeActionIntent } from "../cognition/normalized_action_intent";
 import {
   coalesceToolExecutionRecords,
   confirmedStepNeedsContinuation,
@@ -1163,6 +1164,60 @@ export function registerChatHandler(
     }
 
     try {
+      // Prior-turn receipt questions are deterministic ledger reads. Resolve
+      // them before memory embeddings, RAG, personality assembly, or any model
+      // client so a slow provider cannot block a local execution-status answer.
+      const acceptedFollowupIntent = classifyConversationActionFollowupIntent(
+        visibleUserText,
+        conversation.actionContinuationState,
+      );
+      const acceptedNormalizedIntent = normalizeActionIntent(visibleUserText);
+      if (
+        acceptedFollowupIntent === 'status'
+        && acceptedNormalizedIntent.kind === 'status_query'
+        && acceptedNormalizedIntent.target === 'previous_action'
+      ) {
+        const statusText = getConversationActionStatus(
+          conversation.id,
+          uid,
+          visibleUserText,
+          conversation.actionContinuationState,
+        );
+        const committed = emitAgent('agent:response', {
+          text: statusText,
+          agentName: 'Lumi',
+          finalized: true,
+          blocked: false,
+          reason: 'task_status',
+        });
+        if (committed) {
+          addMessageIdempotent({
+            userId: uid,
+            agentId: conversationAgentId,
+            conversationId: conversation.id,
+            role: 'assistant',
+            content: statusText,
+            domain: resolvedDomain,
+            orgId: resolvedOrgId,
+            source: 'chat_task_status',
+            channel: 'chat',
+            cognitiveIntent: 'task_status',
+            llmWasCalled: false,
+            requestId,
+          });
+          emitConversationUpdated({
+            conversationId: conversation.id,
+            agentId: conversationAgentId,
+            source: 'chat_task_status',
+            rolledOver: conversationTurn.rolledOver,
+            previousConversationId: conversationTurn.previousConversationId,
+          });
+        }
+        emitAgent('agent:status', { status: 'idle', agentName: 'Lumi' });
+        releaseChatSession();
+        return;
+      }
+
       // Look up agent record for memory/emotion isolation
       const agentRecord = agentId
         ? readDB().agents.find((a: any) => a.id === agentId) || null
@@ -1566,30 +1621,76 @@ export function registerChatHandler(
         visibleUserText,
         conversation?.actionContinuationState,
       );
-      const groundedTurnEvidence: string[] = [];
-      if (conversationId && isConversationExecutionFactQuestion(visibleUserText)) {
-        const factText = formatConversationExecutionFactAnswer(getConversationExecutionFacts({
+      const executionFactText = conversationId && isConversationExecutionFactQuestion(visibleUserText)
+        ? formatConversationExecutionFactAnswer(getConversationExecutionFacts({
           conversationId,
           userId: uid,
           domain: resolvedDomain,
           orgId: resolvedOrgId,
-        }), visibleUserText);
-        groundedTurnEvidence.push(`Conversation execution facts:\n${factText}`);
-      }
+        }), visibleUserText)
+        : '';
       const exactCorrectionText = conversationId
         ? resolveExactConversationCorrection(visibleUserText, persistedConversationHistory)
         : null;
-      if (conversationId && exactCorrectionText) {
-        groundedTurnEvidence.push(`Exact prior-turn correction evidence:\n${exactCorrectionText}`);
-      }
-      if (
-        conversationId
-        && actionFollowupIntent === 'status'
-      ) {
-        const statusText = getConversationActionStatus(conversationId, uid, visibleUserText, conversation?.actionContinuationState);
-        groundedTurnEvidence.push(`Current action status evidence:\n${statusText}`);
+      const deterministicConversationResponse = executionFactText
+        ? {
+            text: executionFactText,
+            intent: 'execution_facts',
+            source: 'chat_conversation_execution_facts',
+          }
+        : exactCorrectionText
+          ? {
+              text: exactCorrectionText,
+              intent: 'exact_correction',
+              source: 'chat_exact_correction',
+            }
+          : null;
+      if (deterministicConversationResponse) {
+        const committed = emitAgent('agent:response', {
+          text: deterministicConversationResponse.text,
+          agentName: personality.name,
+          finalized: true,
+          blocked: false,
+          reason: deterministicConversationResponse.intent,
+        });
+        if (committed && conversationId) {
+          addMessageIdempotent({
+            userId: uid,
+            agentId: conversationAgentId,
+            conversationId,
+            role: 'assistant',
+            content: deterministicConversationResponse.text,
+            personality: personality.id,
+            domain: resolvedDomain,
+            orgId: resolvedOrgId,
+            source: deterministicConversationResponse.source,
+            channel: 'chat',
+            cognitiveIntent: deterministicConversationResponse.intent,
+            llmWasCalled: false,
+            requestId,
+          });
+          emitConversationUpdated({
+            conversationId,
+            agentId: conversationAgentId,
+            source: deterministicConversationResponse.source,
+            rolledOver: conversationTurn.rolledOver,
+            previousConversationId: conversationTurn.previousConversationId,
+          });
+        }
+        emitAgent('agent:status', { status: 'idle', agentName: personality.name });
+        releaseChatSession();
+        return;
       }
 
+      const groundedTurnEvidence: string[] = [];
+      if (conversationId && actionFollowupIntent === 'status') {
+        groundedTurnEvidence.push(`Current action status evidence:\n${getConversationActionStatus(
+          conversationId,
+          uid,
+          visibleUserText,
+          conversation?.actionContinuationState,
+        )}`);
+      }
       const recentFailureExplanation = conversationId && !pendingConfirmation
         ? buildRecentFailureExplanation(visibleUserText, getMessages(conversationId, 24))
         : '';

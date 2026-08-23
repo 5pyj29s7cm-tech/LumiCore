@@ -531,6 +531,238 @@ describe('Lumi field-call stability replay', () => {
     ].join('\n'));
   });
 
+  it('explains a prior verified client action from its durable receipt without requiring a new tool call', () => {
+    const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
+    const conversation = {
+      id: 'conv_client_evidence_followup',
+      userId: 'user_client_evidence_followup',
+      domain: 'personal',
+      orgId: '',
+    };
+    syncConversationActionTaskLedger(db, {
+      conversation,
+      state: actionState({
+        taskId: 'task_open_voice_settings',
+        goal: '打开 Lumi 设置里的语音与声音。',
+        latestInstruction: '打开 Lumi 设置里的语音与声音。',
+        appTarget: 'settings',
+        status: 'completed',
+        unfinished: false,
+        completionSource: 'tool_receipt',
+        receipts: [{
+          id: 'voice_settings_open',
+          key: 'client_action:open_settings:voice',
+          name: 'client_action',
+          arguments: { action: 'open_settings', section: 'voice' },
+          result: JSON.stringify({
+            ok: true,
+            action: 'open_settings',
+            target: 'settings',
+            section: 'voice',
+            verification: {
+              status: 'verified',
+              matched: ['surface:settings:open', 'settings-section:voice'],
+            },
+          }),
+          error: '',
+          outcome: 'success',
+          terminalVerification: {
+            status: 'verified',
+            strategy: 'state_diff',
+            reason: 'voice settings rendered',
+          },
+          recordedAt: '2026-08-23T02:11:56.394Z',
+        }],
+      }),
+    });
+
+    const query = 'What did you just do, and what evidence proved it succeeded?';
+    expect(formatConversationActionLedgerStatus(db, {
+      conversationId: conversation.id,
+      userId: conversation.userId,
+      query,
+    })).toBe([
+      'Executed action: open_settings',
+      'Target: settings',
+      'Target section: voice',
+      'Verification status: verified',
+      'Verification evidence: surface:settings:open; settings-section:voice',
+      'Final status: completed (durable receipt verified)',
+    ].join('\n'));
+    expect(formatConversationActionLedgerStatus(db, {
+      conversationId: conversation.id,
+      userId: conversation.userId,
+      query: '你刚才做了什么，什么证据证明成功了？',
+    })).toBe([
+      '执行动作：open_settings',
+      '目标页面：settings',
+      '目标分区：voice',
+      '验证状态：verified',
+      '验证依据：surface:settings:open、settings-section:voice',
+      '最终状态：已完成（持久回执已验证）',
+    ].join('\n'));
+  });
+
+  it('does not let an older verified action hide the most recent failed action', () => {
+    const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
+    const conversation = {
+      id: 'conv_latest_failed_action',
+      userId: 'user_latest_failed_action',
+      domain: 'personal',
+      orgId: '',
+    };
+    syncConversationActionTaskLedger(db, {
+      conversation,
+      now: '2026-08-23T02:00:00.000Z',
+      state: actionState({
+        taskId: 'task_older_verified_action',
+        goal: 'Open Settings.',
+        latestInstruction: 'Open Settings.',
+        appTarget: 'settings',
+        receipts: [{
+          id: 'older_verified_action',
+          key: 'client_action:open_settings',
+          name: 'client_action',
+          arguments: { action: 'open_settings' },
+          result: JSON.stringify({
+            ok: true,
+            action: 'open_settings',
+            target: 'settings',
+            verification: { status: 'verified' },
+          }),
+          error: '',
+          outcome: 'success',
+          terminalVerification: {
+            status: 'verified',
+            strategy: 'state_diff',
+            reason: 'settings rendered',
+          },
+          recordedAt: '2026-08-23T02:00:00.000Z',
+        }],
+      }),
+    });
+    syncConversationActionTaskLedger(db, {
+      conversation,
+      now: '2026-08-23T02:01:00.000Z',
+      state: actionState({
+        taskId: 'task_latest_failed_action',
+        goal: 'Open Voice & Sound.',
+        latestInstruction: 'Open Voice & Sound.',
+        appTarget: 'voice',
+        status: 'blocked',
+        unfinished: true,
+        completionSource: undefined,
+        latestBlocker: 'client_action: target state was not verified',
+        receipts: [{
+          id: 'latest_failed_action',
+          key: 'client_action:open_settings:voice',
+          name: 'client_action',
+          arguments: { action: 'open_settings', section: 'voice' },
+          result: JSON.stringify({ ok: false, verification: { status: 'failed' } }),
+          error: 'target state was not verified',
+          outcome: 'failure',
+          terminalVerification: {
+            status: 'failed',
+            strategy: 'state_diff',
+            reason: 'voice section did not render',
+          },
+          recordedAt: '2026-08-23T02:01:00.000Z',
+        }],
+      }),
+    });
+
+    const query = 'What did you just do, and what evidence proved it succeeded?';
+    expect(findConversationActionTask(db, {
+      conversationId: conversation.id,
+      userId: conversation.userId,
+      query,
+    })?.id).toBe('task_latest_failed_action');
+    const status = formatConversationActionLedgerStatus(db, {
+      conversationId: conversation.id,
+      userId: conversation.userId,
+      query,
+    });
+    expect(status).toContain('Final status: blocked — target state was not verified');
+    expect(status).toContain('Verification status: failed');
+    expect(status).not.toContain('open_settings');
+    expect(status).not.toContain('durable receipt verified');
+  });
+
+  it('does not promote one verified client step into completion for a blocked multi-step task', () => {
+    const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
+    const conversation = {
+      id: 'conv_verified_client_step_then_blocked',
+      userId: 'user_verified_client_step_then_blocked',
+      domain: 'personal',
+      orgId: '',
+    };
+    syncConversationActionTaskLedger(db, {
+      conversation,
+      state: actionState({
+        taskId: 'task_verified_client_step_then_blocked',
+        goal: '打开设置，再完成后续核验。',
+        latestInstruction: '打开设置，再完成后续核验。',
+        appTarget: 'settings',
+        status: 'blocked',
+        unfinished: true,
+        completionSource: undefined,
+        latestBlocker: 'desktop_active_window: active window could not be verified',
+        receipts: [{
+          id: 'verified_settings_step',
+          key: 'client_action:open_settings',
+          name: 'client_action',
+          arguments: { action: 'open_settings' },
+          result: JSON.stringify({
+            ok: true,
+            action: 'open_settings',
+            target: 'settings',
+            verification: { status: 'verified', matched: ['surface:settings:open'] },
+          }),
+          error: '',
+          outcome: 'success',
+          terminalVerification: {
+            status: 'verified',
+            strategy: 'state_diff',
+            reason: 'settings rendered',
+          },
+          recordedAt: '2026-08-23T02:00:00.000Z',
+        }, {
+          id: 'failed_followup_verification',
+          key: 'desktop_active_window:failed',
+          name: 'desktop_active_window',
+          arguments: {},
+          result: JSON.stringify({ ok: false, verification: { status: 'failed' } }),
+          error: 'active window could not be verified',
+          outcome: 'failure',
+          terminalVerification: {
+            status: 'failed',
+            strategy: 'visual',
+            reason: 'active window could not be verified',
+          },
+          recordedAt: '2026-08-23T02:00:01.000Z',
+        }],
+      }),
+    });
+
+    const status = formatConversationActionLedgerStatus(db, {
+      conversationId: conversation.id,
+      userId: conversation.userId,
+      query: '你刚才做了什么，什么证据证明成功了？',
+    });
+    expect(status).toContain('执行动作：open_settings');
+    expect(status).toContain('验证状态：verified');
+    expect(status).toContain('还没完成');
+    expect(status).not.toContain('最终状态：已完成（持久回执已验证）');
+
+    const englishStatus = formatConversationActionLedgerStatus(db, {
+      conversationId: conversation.id,
+      userId: conversation.userId,
+      query: 'What did you just do, and what evidence proved it succeeded?',
+    });
+    expect(englishStatus).toContain('Final status: blocked — active window could not be verified');
+    expect(englishStatus).not.toContain('Final status: completed (durable receipt verified)');
+  });
+
   it('reports verified WPS document, body readback, and unsaved state from the durable receipt', () => {
     const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
     const conversation = { id: 'conv_wps', userId: 'user_wps', domain: 'personal', orgId: '' };

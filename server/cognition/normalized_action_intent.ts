@@ -122,6 +122,9 @@ function correctionOrExplanation(text: string): NormalizedActionIntent | null {
   // i18n-allow: Chinese correction/authorization input recognition; not user-visible copy.
   const negativeAuthorization = // i18n-allow: Chinese correction/authorization input recognition; not user-visible copy.
     /(?:我|我们)?(?:没有|没|并没有|从没)(?:让|叫|要求|授权|同意)你.{0,80}(?:打开|发送|执行|操作|创建|删除)|(?:不是|并不是)(?:让|叫|要)你.{0,80}(?:打开|发送|执行|操作|创建|删除)/u;
+  // i18n-allow: Multilingual authorization objections and retrospective challenges; not user-visible copy.
+  const authorizationOrExecutionObjection =
+    /(?:谁|哪个人|是谁)(?:让|叫|允许|授权|批准)你|未经(?:我|我们)?(?:的)?(?:允许|授权|同意|批准)|(?:你)?(?:没有|无|没)(?:这个)?权限|(?:我|我们)?什么时候(?:允许|授权|同意|让)你|凭什么(?:打开|发送|执行|操作|创建|删除)?|为什么不(?:先)?(?:问|确认|征得)|(?:你|lumi).{0,24}(?:刚才|刚刚|之前|上一轮)[^。！？!?\n]{0,48}(?:打开|发送|执行|操作|创建|删除)[^。！？!?\n]{0,36}(?:干什么|为什么|凭什么|怎么回事)|\bwho\s+(?:asked|told|authorized|allowed|gave)\s+you\b|\bwithout\s+(?:my|our)\s+(?:permission|authorization|approval)\b|\byou\s+(?:(?:do|did)\s+not|don['\u2019]?t|didn['\u2019]?t)\s+have\s+(?:my\s+)?permission\b|\bwhy\s+(?:didn['\u2019]?t\s+you|did\s+you\s+not)\s+(?:ask|confirm)\b|\bwhy\s+did\s+(?:you|lumi)\s+(?:just\s+)?(?:open|send|run|execute|create|delete)\b/iu;
   // i18n-allow: Chinese complaint input recognition; not user-visible copy.
   const actionComplaint = // i18n-allow: Chinese complaint input recognition; not user-visible copy.
     /(?:你|lumi).{0,24}(?:刚才|刚刚|之前|上一轮)[^。！？!?\n]{0,24}(?:打开|发送|发|执行|操作|做|画)(?:了)?[^。！？!?\n]{0,36}(?:什么东西|什么玩意|什么文件|什么内容|干什么|做什么|为什么|怎么回事)/iu;
@@ -133,7 +136,22 @@ function correctionOrExplanation(text: string): NormalizedActionIntent | null {
   // become a fresh command.
   const taskIdentityCorrection = // i18n-allow: Chinese correction input recognition; not user-visible copy.
     /(?:不对|错了|搞错了|误判|误识别|答非所问).{0,180}(?:(?:我)?(?:刚才|刚刚|上一条).{0,100}(?:新(?:的)?|任务|指令|要求).{0,100}(?:你却|却|但你|而你).{0,80}(?:回答|执行|调用).{0,80}(?:旧|之前|上一)|误判|误识别|答非所问)/u;
-  if (!negativeAuthorization.test(text) && !actionComplaint.test(text) && !terseComplaint.test(text) && !taskIdentityCorrection.test(text)) return null;
+  // A plain retrospective receipt question is not a complaint. Let the
+  // status lane answer it from the durable ledger, while preserving explicit
+  // authorization objections and corrections about the selected task.
+  if (
+    isRecentActionReceiptQuery(text)
+    && !negativeAuthorization.test(text)
+    && !authorizationOrExecutionObjection.test(text)
+    && !taskIdentityCorrection.test(text)
+  ) return null;
+  if (
+    !negativeAuthorization.test(text)
+    && !authorizationOrExecutionObjection.test(text)
+    && !actionComplaint.test(text)
+    && !terseComplaint.test(text)
+    && !taskIdentityCorrection.test(text)
+  ) return null;
   return {
     kind: 'correction_explanation',
     operation: 'explain',
@@ -180,6 +198,22 @@ const CN_MIXED_STATUS_EXECUTION_RE =
 const EN_MIXED_STATUS_EXECUTION_RE =
   /\bif\s+(?:(?:not|unfinished|incomplete)\b|(?:(?:it|this|that|the\s+task)\s+)?(?:is|was|has\s+been)?\s*(?:not|isn['\u2019]?t|wasn['\u2019]?t|hasn['\u2019]?t)\s+(?:done|complete|completed|finished|successful)\b)[^.!?;\n]{0,28}\b(?:continue|resume|retry|re-?try|execute|run|finish|complete|proceed)\b|[?;.!]\s*(?:(?:if\s+(?:not|unfinished|incomplete)|then|please|now)\s*[,;:]?\s*)*(?:continue|resume|retry|re-?try|execute|run|finish|complete|proceed)\b/iu;
 
+const RECENT_ACTION_RECEIPT_QUERY_RE =
+  /(?:\u4f60|lumi)?\s*(?:\u521a\u624d|\u521a\u521a|\u4e0a\u4e00\u8f6e|\u4e0a\u6b21).{0,48}(?:\u505a|\u6253\u5f00|\u6267\u884c|\u53d1\u9001|\u521b\u5efa|\u64cd\u4f5c)(?:\u4e86)?.{0,36}(?:\u4ec0\u4e48|\u54ea\u4e2a|\u54ea\u4e9b|\u6210\u529f|\u5b8c\u6210|\u8bc1\u636e|\u56de\u6267)|\bwhat\s+did\s+(?:you|lumi)\s+(?:just\s+)?(?:do|open|run|send|create)\b|\bdid\s+(?:you|lumi)\s+(?:just\s+)?(?:open|run|send|create).{0,40}\bsuccessfully\b|\bwhat\s+evidence\b.{0,48}\b(?:succeed|succeeded|success|complete|completed)\b/iu;
+
+function isRecentActionReceiptQuery(text: string): boolean {
+  return RECENT_ACTION_RECEIPT_QUERY_RE.test(text);
+}
+
+const CN_INDEPENDENT_ACTION_AFTER_STATUS_RE =
+  /(?:[\uff1f?\uff1b;\uff0c,\u3002.!\u2026\n]\s*(?:(?:\u7136\u540e|\u73b0\u5728|\u63a5\u7740|\u4e0b\u4e00\u6b65|\u53e6\u5916|\u5e76(?:\u4e14)?|\u518d)\s*)?|(?:\u7136\u540e|\u73b0\u5728|\u63a5\u7740|\u4e0b\u4e00\u6b65|\u53e6\u5916|\u5e76(?:\u4e14)?|\u518d)\s*)(?!(?:\u4e0d\u8981|\u522b|\u65e0\u9700|\u4e0d\u5fc5|\u53ea|\u4ec5))(?:(?:\u8bf7|\u9a6c\u4e0a|\u7acb\u5373)\s*)?(?:\u6253\u5f00|\u542f\u52a8|\u65b0\u5efa|\u521b\u5efa|\u4fdd\u5b58|\u5199\u5165|\u53d1\u9001|\u5173\u95ed|\u5220\u9664|\u4fee\u6539|\u5bfc\u51fa|\u4e0a\u4f20|\u4e0b\u8f7d|\u5b89\u88c5|\u7ee7\u7eed|\u6062\u590d|\u91cd\u8bd5|\u6267\u884c|\u5904\u7406)/u;
+
+const EN_INDEPENDENT_ACTION_AFTER_STATUS_RE =
+  /(?:[?;.!,\u2026\n]\s*(?:(?:then|now|next|also|and|please)\s*[,;:]?\s*)*|\b(?:(?:and\s+)?(?:then|now|next|also)|and)\b\s*)(?!(?:do\s+not|don['\u2019]?t|never|only|just\s+(?:answer|report))\b)(?:open|launch|start|create|save|write|send|close|delete|modify|update|export|upload|download|install|continue|resume|retry|re-?try|execute|run|finish|complete|proceed)\b/iu;
+
+const CN_TRAILING_ACTION_QUESTION_RE =
+  /(?:\u6253\u5f00|\u542f\u52a8|\u65b0\u5efa|\u521b\u5efa|\u4fdd\u5b58|\u5199\u5165|\u53d1\u9001|\u5173\u95ed|\u5220\u9664|\u4fee\u6539|\u5bfc\u51fa|\u4e0a\u4f20|\u4e0b\u8f7d|\u5b89\u88c5|\u7ee7\u7eed|\u6062\u590d|\u91cd\u8bd5|\u6267\u884c|\u5904\u7406)[^\u3002\uff01!\uff1b;\n]{0,64}(?:(?:\u4e86|\u8fc7)?\u5417|\u4e86\u6ca1|\u6ca1\u6709?|\u5462|\u662f\u5426|\u662f\u4e0d\u662f)[\uff1f?]?\s*$/u;
+
 /**
  * A status question is not status-only when the same turn also contains an
  * independent, affirmative instruction to resume the work. Keeping this
@@ -188,11 +222,18 @@ const EN_MIXED_STATUS_EXECUTION_RE =
  */
 export function hasMixedStatusExecutionIntent(value: string): boolean {
   const text = currentTurnText(value).replace(/\s+/gu, ' ').trim();
-  if (!text || !MIXED_STATUS_SIGNAL_RE.test(text)) return false;
+  if (!text) return false;
+  const hasTaskStatusSignal = MIXED_STATUS_SIGNAL_RE.test(text);
+  const hasRecentActionStatusSignal = isRecentActionReceiptQuery(text);
+  if (!hasTaskStatusSignal && !hasRecentActionStatusSignal) return false;
   const chineseExecutionQuestion = /(?:\u7ee7\u7eed(?:\u6267\u884c|\u5904\u7406|\u63a8\u8fdb|\u5b8c\u6210)?|\u63a5\u7740(?:\u6267\u884c|\u5904\u7406|\u63a8\u8fdb|\u505a)?|\u6062\u590d(?:\u6267\u884c|\u4efb\u52a1)?|\u91cd\u8bd5|\u518d\u8bd5|\u91cd\u65b0\u6267\u884c|\u6267\u884c|\u5904\u7406|\u63a8\u8fdb)(?:\u5b83|\u8fd9\u4e2a|\u90a3\u4e2a|\u4efb\u52a1)?(?:\u4e86)?(?:(?:\u5417|\u6ca1|\u6ca1\u6709|\u5462)[\uff1f?]?|[\uff1f?])\s*$/u.test(text);
   const englishExecutionQuestion = /\b(?:continue|resume|retry|re-?try|execute|run|finish|complete|proceed)(?:\s+(?:executing|execution|running|working\s+on|with)(?:\s+(?:it|this|that|the\s+task))?)?\s*\?\s*$/iu.test(text);
+  const chineseIndependentAction = CN_INDEPENDENT_ACTION_AFTER_STATUS_RE.test(text)
+    && !CN_TRAILING_ACTION_QUESTION_RE.test(text);
   return (CN_MIXED_STATUS_EXECUTION_RE.test(text) && !chineseExecutionQuestion)
-    || (EN_MIXED_STATUS_EXECUTION_RE.test(text) && !englishExecutionQuestion);
+    || (EN_MIXED_STATUS_EXECUTION_RE.test(text) && !englishExecutionQuestion)
+    || (hasRecentActionStatusSignal && chineseIndependentAction)
+    || (hasRecentActionStatusSignal && EN_INDEPENDENT_ACTION_AFTER_STATUS_RE.test(text));
 }
 
 function statusQuery(text: string): NormalizedActionIntent | null {
@@ -244,8 +285,7 @@ function statusQuery(text: string): NormalizedActionIntent | null {
   // receipt/status lookup. Action verbs inside the question must never be
   // reinterpreted as a fresh desktop or external mutation.
   // i18n-allow: Multilingual recent-action receipt recognition; not user-visible copy.
-  const recentActionReceipt = /(?:\u521a\u624d|\u521a\u521a|\u4e0a\u4e00\u8f6e|\u4e0a\u6b21).{0,28}(?:\u6253\u5f00|\u6267\u884c|\u505a|\u53d1\u9001|\u521b\u5efa|\u64cd\u4f5c)(?:\u4e86)?(?:\u4ec0\u4e48|\u54ea\u4e2a|\u54ea\u4e9b|.{0,24}(?:\u6210\u529f|\u5b8c\u6210)(?:\u4e86)?(?:\u5417|\u6ca1\u6709|\u6ca1))|\bwhat\s+did\s+(?:you|lumi)\s+(?:just\s+)?(?:open|do|run|send|create)\b|\bdid\s+(?:you|lumi)\s+(?:just\s+)?(?:open|run|send|create).{0,40}\bsuccessfully\b/iu;
-  if (recentActionReceipt.test(text)) {
+  if (isRecentActionReceiptQuery(text)) {
     return {
       kind: 'status_query',
       operation: 'status',

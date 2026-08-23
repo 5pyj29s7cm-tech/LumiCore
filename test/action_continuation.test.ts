@@ -66,6 +66,9 @@ describe('recent action continuation', () => {
   });
 
   it('separates execute pressure from status/why follow-ups', () => {
+    expect(classifyRecentActionFollowupIntent(
+      'What did you just do, and what evidence proved it succeeded?',
+    )).toBe('status');
     expect(needsRecentActionContinuationContext('有没有在执行')).toBe(true);
     expect(needsRecentActionContinuationContext('有没有在执行这个任务')).toBe(true);
     expect(needsRecentActionContinuationContext('为什么没有完成')).toBe(true);

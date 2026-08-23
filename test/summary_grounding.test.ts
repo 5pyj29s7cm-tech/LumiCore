@@ -75,4 +75,33 @@ describe('evidence-grounded conversation summaries', () => {
     expect(note).toContain('deepseek-v4-pro');
     expect(note).toContain('latencyMs=1229');
   });
+
+  it('preserves verified client navigation evidence after prompt compaction', () => {
+    const note = buildCompactToolEvidenceNote([{
+      name: 'client_action',
+      arguments: { action: 'open_settings', section: 'voice' },
+      result: JSON.stringify({
+        ok: true,
+        action: 'open_settings',
+        target: 'settings',
+        section: 'voice',
+        verification: {
+          status: 'verified',
+          matched: ['surface:settings:open', 'settings-section:voice'],
+        },
+      }),
+      terminalVerification: {
+        status: 'verified',
+        strategy: 'state_diff',
+        reason: 'voice settings rendered',
+      },
+    }]);
+    expect(note).toContain('client_action');
+    expect(note).toContain('action=open_settings');
+    expect(note).toContain('target=settings');
+    expect(note).toContain('section=voice');
+    expect(note).toContain('outcome=verified_success');
+    expect(note).toContain('verification=verified');
+    expect(note).toContain('settings-section:voice');
+  });
 });

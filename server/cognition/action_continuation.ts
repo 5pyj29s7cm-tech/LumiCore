@@ -424,6 +424,8 @@ export function isRecoveredCurrentAppEditingContinuation(text: string): boolean 
 export function classifyRecentActionFollowupIntent(text: string): RecentActionFollowupIntent {
   const clean = compact(text, 500);
   if (!clean) return 'none';
+  const normalizedIntent = normalizeActionIntent(clean);
+  if (normalizedIntent.kind === 'status_query') return 'status';
   if (hasMixedStatusExecutionIntent(clean)) return 'execute';
   if (MIXED_STATUS_QUESTION_RE.test(clean)) return 'status';
   if (
@@ -542,9 +544,29 @@ function summarizeToolCalls(history: ActionContinuationHistoryItem[]): string[] 
       const name = toolCallName(call);
       if (!name) continue;
       const result = toolCallResult(call);
-      const status = compact(call?.error || (result as any)?.status || call?.status || '', 120);
+      const resultObject = result && typeof result === 'object' && !Array.isArray(result)
+        ? result as Record<string, any>
+        : {};
+      const liveResult = resultObject.result && typeof resultObject.result === 'object'
+        ? resultObject.result as Record<string, any>
+        : resultObject;
+      const verification = liveResult.verification && typeof liveResult.verification === 'object'
+        ? liveResult.verification as Record<string, any>
+        : resultObject.verification && typeof resultObject.verification === 'object'
+          ? resultObject.verification as Record<string, any>
+          : {};
+      const status = compact(
+        call?.error
+        || resultObject.status
+        || call?.terminalVerification?.status
+        || verification.status
+        || call?.status
+        || '',
+        120,
+      );
+      const args = toolCallArguments(call);
       const paths = new Set<string>();
-      collectPathValues(toolCallArguments(call), paths);
+      collectPathValues(args, paths);
       collectPathValues(result, paths);
       const resultEvidence = Array.isArray(result)
         ? [
@@ -566,6 +588,10 @@ function summarizeToolCalls(history: ActionContinuationHistoryItem[]): string[] 
       summaries.push([
         name,
         status ? `status=${status}` : '',
+        args.action || liveResult.action ? `action=${compact(args.action || liveResult.action, 100)}` : '',
+        args.target || liveResult.target ? `target=${compact(args.target || liveResult.target, 100)}` : '',
+        args.section || liveResult.section ? `section=${compact(args.section || liveResult.section, 100)}` : '',
+        verification.status ? `verification=${compact(verification.status, 80)}` : '',
         paths.size ? `paths=${Array.from(paths).slice(0, 3).join(' | ')}` : '',
         resultEvidence,
       ].filter(Boolean).join(' | '));
