@@ -1,0 +1,216 @@
+name: Build Desktop Installers
+
+run-name: Desktop installers · ${{ github.ref_name }} · ${{ github.sha }}
+
+permissions:
+  contents: read
+
+'on':
+  workflow_dispatch: {}
+
+concurrency:
+  group: lumi-desktop-installers-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-x64:
+    if: github.repository == '5pyj29s7cm-tech/LumiOS'
+    name: Windows x64 · unsigned NSIS
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      LUMI_RELEASE_CHANNEL: internal
+      LUMI_DESKTOP_WITH_LOCAL_VOICE: '0'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build unsigned Windows NSIS installer
+        run: npm run tauri:build -- --bundles nsis
+
+      - name: Verify desktop preload budget
+        run: npm run check:bundle-budget
+
+      - name: Verify packaged backend
+        run: npm run smoke:packaged
+
+      - name: Install, launch, restart and uninstall smoke test
+        run: npm run smoke:installer:win
+
+      - name: Record checksum and signing status
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem -LiteralPath 'src-tauri/target/release/bundle/nsis' -Filter '*.exe' -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one NSIS installer, found $($installers.Count)"
+          }
+          $installer = $installers[0]
+          $digest = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$digest  $($installer.Name)" | Set-Content -LiteralPath "$($installer.FullName).sha256" -Encoding ascii
+          $signature = Get-AuthenticodeSignature -LiteralPath $installer.FullName
+          [ordered]@{
+            product = 'Lumi OS'
+            version = (Get-Content -LiteralPath 'package.json' -Raw | ConvertFrom-Json).version
+            commit = $env:GITHUB_SHA
+            platform = 'windows'
+            architecture = 'x64'
+            installer = $installer.Name
+            sha256 = $digest
+            authenticode = $signature.Status.ToString()
+            releaseChannel = $env:LUMI_RELEASE_CHANNEL
+            signedPublicRelease = $false
+          } | ConvertTo-Json | Set-Content -LiteralPath 'windows-build-report.json' -Encoding utf8
+          Get-Content -LiteralPath 'windows-build-report.json'
+
+      - name: Upload tested Windows installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: lumi-os-windows-x64-unsigned-${{ github.sha }}
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.exe.sha256
+            windows-build-report.json
+          if-no-files-found: error
+          retention-days: 14
+
+  macos:
+    if: github.repository == '5pyj29s7cm-tech/LumiOS'
+    name: macOS ${{ matrix.label }} · ad-hoc DMG
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Apple Silicon
+            runner: macos-15
+            target: aarch64-apple-darwin
+            artifact_arch: arm64
+            file_arch: arm64
+            sharp_arch: arm64
+          - label: Intel
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            artifact_arch: x64
+            file_arch: x86_64
+            sharp_arch: x64
+    runs-on: ${{ matrix.runner }}
+    env:
+      LUMI_RELEASE_CHANNEL: internal
+      LUMI_DESKTOP_WITH_LOCAL_VOICE: '0'
+      APPLE_SIGNING_IDENTITY: '-'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+          cache-on-failure: true
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build ad-hoc signed macOS DMG
+        run: npm run tauri:build -- --target ${{ matrix.target }} --bundles dmg
+
+      - name: Verify desktop preload budget
+        run: npm run check:bundle-budget
+
+      - name: Verify packaged backend
+        run: npm run smoke:packaged
+
+      - name: Verify DMG identity, permissions and architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle_dir="src-tauri/target/${{ matrix.target }}/release/bundle"
+          dmg_path="$(find "$bundle_dir/dmg" -maxdepth 1 -name '*.dmg' -type f -print -quit)"
+          test -n "$dmg_path"
+
+          mount_dir="$(mktemp -d)"
+          cleanup() {
+            hdiutil detach "$mount_dir" -quiet || true
+            rmdir "$mount_dir" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          hdiutil attach "$dmg_path" -mountpoint "$mount_dir" -nobrowse -readonly -quiet
+          app_path="$(find "$mount_dir" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$app_path"
+
+          plist_path="$app_path/Contents/Info.plist"
+          for permission_key in \
+            NSCameraUsageDescription \
+            NSMicrophoneUsageDescription \
+            NSAppleEventsUsageDescription \
+            NSDesktopFolderUsageDescription \
+            NSDocumentsFolderUsageDescription \
+            NSDownloadsFolderUsageDescription; do
+            test -n "$(/usr/libexec/PlistBuddy -c "Print :$permission_key" "$plist_path")"
+          done
+
+          expected_version="$(node -p "require('./package.json').version")"
+          actual_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist_path")"
+          test "$actual_version" = "$expected_version"
+
+          app_binary="$(find "$app_path/Contents/MacOS" -maxdepth 1 -type f -print -quit)"
+          node_binary="$app_path/Contents/Resources/_up_/desktop-resources/dist-server/node"
+          sharp_dir="$app_path/Contents/Resources/_up_/desktop-resources/dist-server/node_modules/@img/sharp-darwin-${{ matrix.sharp_arch }}"
+          test -x "$app_binary"
+          test -x "$node_binary"
+          file "$app_binary" | grep -q '${{ matrix.file_arch }}'
+          file "$node_binary" | grep -q '${{ matrix.file_arch }}'
+          test -d "$sharp_dir"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+
+          digest="$(shasum -a 256 "$dmg_path" | awk '{print $1}')"
+          printf '%s  %s\n' "$digest" "$(basename "$dmg_path")" > "$dmg_path.sha256"
+          {
+            echo "product=Lumi OS"
+            echo "version=$expected_version"
+            echo "commit=$GITHUB_SHA"
+            echo "platform=macos"
+            echo "architecture=${{ matrix.artifact_arch }}"
+            echo "installer=$(basename "$dmg_path")"
+            echo "sha256=$digest"
+            echo "codesign=ad-hoc"
+            echo "notarized=false"
+            codesign -dv --verbose=4 "$app_path" 2>&1 | grep -E '^(Identifier|Signature|TeamIdentifier|Authority)=' || true
+          } > "macos-${{ matrix.artifact_arch }}-build-report.txt"
+          cat "macos-${{ matrix.artifact_arch }}-build-report.txt"
+
+      - name: Upload verified macOS installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: lumi-os-macos-${{ matrix.artifact_arch }}-adhoc-${{ github.sha }}
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg.sha256
+            macos-${{ matrix.artifact_arch }}-build-report.txt
+          if-no-files-found: error
+          retention-days: 14
