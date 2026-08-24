@@ -5,6 +5,7 @@ import { getDataRoot } from './data_path';
 import { ensurePrivateRuntimeDirectory, restrictOwnerAccess } from './runtime_file_security';
 
 export const DESKTOP_BOOTSTRAP_HEADER = 'x-lumi-desktop-bootstrap';
+export const DESKTOP_SESSION_HEADER = 'x-lumi-desktop-session';
 
 const PROOF_VERSION = 1;
 const PROOF_BYTES = 48;

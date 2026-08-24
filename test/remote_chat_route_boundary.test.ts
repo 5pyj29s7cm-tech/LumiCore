@@ -11,6 +11,10 @@ vi.mock('../server/llm/adapter', () => ({
 import jwt from 'jsonwebtoken';
 import { makeApp, JWT_SECRET } from './helpers';
 import { mountChatRoutes } from '../server/routes/chat_routes';
+import {
+  DESKTOP_SESSION_HEADER,
+  issueDesktopSessionProof,
+} from '../server/config/desktop_bootstrap';
 
 let baseUrl = '';
 let cleanup: (() => void) | undefined;
@@ -63,7 +67,7 @@ describe('REST chat remote execution boundary', () => {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${userToken}`,
       },
-      body: JSON.stringify({ message: 'read a local file and inspect running processes' }),
+      body: JSON.stringify({ message: '读取 D:\\work\\brief.txt 并告诉我唯一风险，但不要修改文件' }),
     });
     expect(response.status).toBe(200);
     expect(mocks.runWithTools).toHaveBeenCalledTimes(1);
@@ -86,5 +90,42 @@ describe('REST chat remote execution boundary', () => {
       'run_command',
       'credential_get',
     ]));
+  });
+
+  it('accepts the backend-issued native proof on loopback without weakening ordinary REST chat', async () => {
+    const desktopSession = issueDesktopSessionProof('remote-chat-user');
+    const response = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${userToken}`,
+        [DESKTOP_SESSION_HEADER]: desktopSession.proof,
+      },
+      body: JSON.stringify({ message: '读取 D:\\work\\brief.txt 并告诉我唯一风险，但不要修改文件' }),
+    });
+    expect(response.status).toBe(200);
+    const context = mocks.runWithTools.mock.calls[0][11] as any;
+    expect(context).toMatchObject({
+      userId: 'remote-chat-user',
+      authenticated: true,
+      localExecution: true,
+      executionBoundary: 'trusted_local',
+      source: 'rest_chat_local',
+    });
+  });
+
+  it('fails closed when a caller presents an invalid native proof', async () => {
+    const response = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${userToken}`,
+        [DESKTOP_SESSION_HEADER]: 'invalid-proof-that-must-not-downgrade-to-remote-chat',
+      },
+      body: JSON.stringify({ message: 'read a local file' }),
+    });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'DESKTOP_SESSION_PROOF_REQUIRED' });
+    expect(mocks.runWithTools).not.toHaveBeenCalled();
   });
 });

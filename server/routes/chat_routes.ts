@@ -22,6 +22,11 @@ import {
 import type { LumiTurnFlow } from "../cognition/turn_flow";
 import type { ToolExecutionRecord } from "../tools/types";
 import { restrictToolPolicyForExecutionBoundary } from "../tools/remote_policy";
+import { isLoopbackAddress } from "../config/local_identity";
+import {
+  DESKTOP_SESSION_HEADER,
+  verifyDesktopSessionProof,
+} from "../config/desktop_bootstrap";
 
 const REST_CHAT_BASE_SYSTEM_INSTRUCTION =
   'You are Lumi, the local core intelligence. Be professional, thoughtful, forward-looking, concise, and useful. Follow the user-facing response-language instruction while keeping internal protocols, tool names, state fields, and execution policy in canonical English.';
@@ -251,6 +256,19 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       return res.status(401).json({ error: 'Authentication or a caller-provided API key is required' });
     }
     const userId = req.user?.uid || 'anonymous';
+    const presentedDesktopSession = req.headers[DESKTOP_SESSION_HEADER];
+    const trustedLocalExecution = Boolean(
+      req.user
+      && isLoopbackAddress(req.socket?.remoteAddress)
+      && verifyDesktopSessionProof(presentedDesktopSession, userId),
+    );
+    if (presentedDesktopSession && !trustedLocalExecution) {
+      return res.status(403).json({
+        error: 'Native desktop session proof expired or is invalid',
+        code: 'DESKTOP_SESSION_PROOF_REQUIRED',
+      });
+    }
+    const executionBoundary = trustedLocalExecution ? 'trusted_local' as const : 'remote_restricted' as const;
     const requestScope = req.user ? resolveDomain(req.user) : { domain: 'personal' as const, orgId: '' };
     const domain = requestScope.domain;
     const orgId = requestScope.orgId;
@@ -275,7 +293,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     });
     const restModelToolPolicy = restrictToolPolicyForExecutionBoundary(
       buildModelCapabilityPolicy(restExecutionDecision),
-      'remote_restricted',
+      executionBoundary,
     );
     const deferRestStream =
       restExecutionDecision.allowToolUse
@@ -288,12 +306,12 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       authenticated: Boolean(req.user),
       authRole: req.user?.role,
       orgRole: req.user?.orgRole,
-      localExecution: false,
-      executionBoundary: 'remote_restricted' as const,
+      localExecution: trustedLocalExecution,
+      executionBoundary,
       domain,
       orgId,
       llmGetters: llm,
-      source: 'rest_chat',
+      source: trustedLocalExecution ? 'rest_chat_local' : 'rest_chat',
       actionIntent: routeText,
       routedTaskText: restTurnDispatch.flow.routeText,
       toolPolicy: restModelToolPolicy,
