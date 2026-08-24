@@ -128,4 +128,19 @@ describe('REST chat remote execution boundary', () => {
     expect(await response.json()).toMatchObject({ code: 'DESKTOP_SESSION_PROOF_REQUIRED' });
     expect(mocks.runWithTools).not.toHaveBeenCalled();
   });
+
+  it('treats an explicitly empty native proof as presented and fails closed', async () => {
+    const response = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${userToken}`,
+        [DESKTOP_SESSION_HEADER]: '',
+      },
+      body: JSON.stringify({ message: 'read a local file' }),
+    });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'DESKTOP_SESSION_PROOF_REQUIRED' });
+    expect(mocks.runWithTools).not.toHaveBeenCalled();
+  });
 });

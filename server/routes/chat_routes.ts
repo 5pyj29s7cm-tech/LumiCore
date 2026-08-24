@@ -257,12 +257,13 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     }
     const userId = req.user?.uid || 'anonymous';
     const presentedDesktopSession = req.headers[DESKTOP_SESSION_HEADER];
+    const desktopSessionPresented = Object.prototype.hasOwnProperty.call(req.headers, DESKTOP_SESSION_HEADER);
     const trustedLocalExecution = Boolean(
       req.user
       && isLoopbackAddress(req.socket?.remoteAddress)
       && verifyDesktopSessionProof(presentedDesktopSession, userId),
     );
-    if (presentedDesktopSession && !trustedLocalExecution) {
+    if (desktopSessionPresented && !trustedLocalExecution) {
       return res.status(403).json({
         error: 'Native desktop session proof expired or is invalid',
         code: 'DESKTOP_SESSION_PROOF_REQUIRED',
