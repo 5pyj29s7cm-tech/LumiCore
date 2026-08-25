@@ -36,6 +36,34 @@ process.once('exit', cleanupTempRoot);
 
 let dbReady: Promise<void> | null = null;
 
+const SAFE_TEST_PORT_MIN = 20_000;
+const SAFE_TEST_PORT_MAX_EXCLUSIVE = 45_000;
+
+async function listenOnFetchSafePort(server: http.Server): Promise<number> {
+  for (let attempt = 0; attempt < 64; attempt += 1) {
+    const candidate = crypto.randomInt(SAFE_TEST_PORT_MIN, SAFE_TEST_PORT_MAX_EXCLUSIVE);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onError = (error: NodeJS.ErrnoException) => {
+          server.off('listening', onListening);
+          reject(error);
+        };
+        const onListening = () => {
+          server.off('error', onError);
+          resolve();
+        };
+        server.once('error', onError);
+        server.once('listening', onListening);
+        server.listen(candidate, '127.0.0.1');
+      });
+      return candidate;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'EADDRINUSE') throw error;
+    }
+  }
+  throw new Error('Unable to allocate a fetch-safe test port after 64 attempts');
+}
+
 function ensureDb(): Promise<void> {
   if (!dbReady) {
     dbReady = import('../db_layer').then(m => m.initDatabase());
@@ -71,10 +99,7 @@ export async function makeApp(): Promise<{
   app.use('/api', apiRouter);
 
   const server = http.createServer(app);
-  const port = await new Promise<number>((resolve, reject) => {
-    server.listen(0, () => resolve((server.address() as any).port));
-    server.on('error', reject);
-  });
+  const port = await listenOnFetchSafePort(server);
 
   return {
     app,

@@ -40,6 +40,12 @@ describe('conversation session routes', () => {
 
   afterAll(() => cleanup());
 
+  it('allocates the HTTP fixture inside the fetch-safe test port range', () => {
+    const port = Number(new URL(url).port);
+    expect(port).toBeGreaterThanOrEqual(20_000);
+    expect(port).toBeLessThan(45_000);
+  });
+
   it('creates a new conversation and restores a previous one through the HTTP API', async () => {
     const firstResponse = await fetch(`${url}/api/conversations/new?domain=personal&agentId=lumi`, {
       method: 'POST',
