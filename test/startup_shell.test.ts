@@ -125,6 +125,8 @@ describe('desktop startup shell', () => {
     const releaseGuide = fs.readFileSync(path.join(process.cwd(), 'COMMERCIAL_RELEASE.md'), 'utf8');
     expect(publicCi).toContain('Run complete Vitest suite');
     expect(publicCi).toContain('Build desktop and mobile frontends');
+    expect(publicCi.match(/github\.repository == '5pyj29s7cm-tech\/LumiOS'/g)).toHaveLength(2);
+    expect(publicCi).not.toContain('github.repository_owner');
     expect(releaseGuide).toContain('Source availability and signed binary distribution are separate release decisions.');
     expect(releaseGuide).toContain('npm run release:check -- --strict-publish');
     expect(fs.existsSync(path.join(process.cwd(), '.github/workflows/build-windows.yml'))).toBe(false);
