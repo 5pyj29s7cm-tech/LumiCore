@@ -148,6 +148,56 @@ describe('global desktop control lease', () => {
     expect(getDesktopControlLease('lease-user-d')).toBeNull();
   });
 
+  it('releases an abandoned foreground lease when its owning turn is cancelled', async () => {
+    const oldTurn = new AbortController();
+    const abandoned = await acquireDesktopControlLease({
+      userId: 'lease-user-owner-cancel',
+      taskId: 'voice-old',
+      source: 'voice',
+      signal: oldTurn.signal,
+    });
+
+    oldTurn.abort();
+    expect(abandoned.snapshot()).toMatchObject({
+      status: 'released',
+      reason: 'desktop_control_owner_cancelled',
+    });
+
+    const next = await acquireDesktopControlLease({
+      userId: 'lease-user-owner-cancel',
+      taskId: 'voice-next',
+      source: 'voice',
+      timeoutMs: 1_000,
+    });
+    expect(next.snapshot()).toMatchObject({ taskId: 'voice-next', status: 'active' });
+    expect(getDesktopControlQueueLength('lease-user-owner-cancel')).toBe(0);
+    next.release();
+  });
+
+  it('lets a new live-voice turn supersede an unreleased prior voice lease immediately', async () => {
+    const previous = await acquireDesktopControlLease({
+      userId: 'lease-user-voice-supersede',
+      taskId: 'voice-turn-1',
+      source: 'voice',
+    });
+
+    const current = await acquireDesktopControlLease({
+      userId: 'lease-user-voice-supersede',
+      taskId: 'voice-turn-2',
+      source: 'voice',
+      timeoutMs: 1_000,
+    });
+
+    expect(previous.signal.aborted).toBe(true);
+    expect(previous.snapshot()).toMatchObject({
+      status: 'paused',
+      reason: 'desktop_control_superseded_by_new_voice_turn',
+    });
+    expect(current.snapshot()).toMatchObject({ taskId: 'voice-turn-2', status: 'active' });
+    expect(getDesktopControlQueueLength('lease-user-voice-supersede')).toBe(0);
+    current.release();
+  });
+
   it('rejects an already cancelled acquisition without creating a lease', async () => {
     const controller = new AbortController();
     controller.abort();

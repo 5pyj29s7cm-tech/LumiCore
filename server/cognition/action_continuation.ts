@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   hasMixedStatusExecutionIntent,
+  isImmediateAssistantRestatementRequest,
   normalizeActionIntent,
 } from './normalized_action_intent';
 import { matchesCnActionContinuation } from '../regions/packs/cn/action_continuation';
@@ -377,7 +378,7 @@ const AMBIGUOUS_UNFINISHED_TASK_STATUS_RE =
 const STATUS_RESULT_DEMAND_RE =
   /^(?:\u6211\u8ba9\u4f60(?:\u5e2e\u6211)?(?:\u770b(?:\u4e0b|\u4e00\u4e0b|\u770b)?|\u67e5(?:\u4e0b|\u4e00\u4e0b)?).{0,16}\u684c\u9762(?:\u4e0a)?.{0,16}(?:\u591a\u5c11|\u51e0\u4e2a)(?:\u4e2a)?(?:\u8f6f\u4ef6|\u5e94\u7528).{0,20}(?:\u4f60\u5012\u662f)?(?:\u8ddf\u6211|\u7ed9\u6211)?\u8bf4(?:\u5440|\u554a|\u561b)?)[\u554a\u5440\u5427\u561b\u5462\uff0c,\u3002\uff01\uff1f?!]*$/iu;
 
-export type RecentActionFollowupIntent = 'execute' | 'status' | 'none';
+export type RecentActionFollowupIntent = 'execute' | 'status' | 'repeat' | 'none';
 
 function currentTurnText(text: string): string {
   return String(text || '').split(/\n## Recent action continuation context\b/i, 1)[0].trim();
@@ -424,6 +425,7 @@ export function isRecoveredCurrentAppEditingContinuation(text: string): boolean 
 export function classifyRecentActionFollowupIntent(text: string): RecentActionFollowupIntent {
   const clean = compact(text, 500);
   if (!clean) return 'none';
+  if (isImmediateAssistantRestatementRequest(clean)) return 'repeat';
   const normalizedIntent = normalizeActionIntent(clean);
   if (normalizedIntent.kind === 'status_query') return 'status';
   if (hasMixedStatusExecutionIntent(clean)) return 'execute';
@@ -667,6 +669,7 @@ export function classifyConversationActionFollowupIntent(
   text: string,
   state?: ConversationActionContinuationState | null,
 ): RecentActionFollowupIntent {
+  if (isImmediateAssistantRestatementRequest(text)) return 'repeat';
   const normalizedIntent = normalizeActionIntent(text);
   if (
     normalizedIntent.kind === 'correction_explanation'
@@ -702,7 +705,11 @@ export function buildConversationActionContinuationState(
     && previous.latestInstruction === userText
     && ['planning', 'executing', 'waiting_confirmation'].includes(previous.status || ''),
   );
-  const inheritsPrevious = (followupIntent !== 'none' || samePreparedTurn) && Boolean(previous);
+  const inheritsPrevious = (
+    followupIntent === 'execute'
+    || followupIntent === 'status'
+    || samePreparedTurn
+  ) && Boolean(previous);
   const currentHistory: ActionContinuationHistoryItem[] = [
     { role: 'user', message: userText },
     { role: 'assistant', message: assistantText, toolCalls: calls },
@@ -979,6 +986,25 @@ export function buildRecentActionContinuationBridge(
     })
     .filter(item => ['user', 'assistant', 'agent'].includes(recordRole(item)) && recordText(item))
     .filter(item => !(recordRole(item) === 'user' && recordText(item) === currentText));
+  if (followupIntent === 'repeat') {
+    const immediateAssistantReply = [...recent]
+      .reverse()
+      .find(item => ['assistant', 'agent'].includes(recordRole(item)) && recordText(item));
+    const reply = immediateAssistantReply ? recordText(immediateAssistantReply) : '';
+    if (!reply) return '';
+    return [
+      '## Recent action continuation context',
+      'The newest user turn asks to hear the immediately preceding Lumi reply again.',
+      'Recovered structured action state:',
+      '- followupIntent: repeat',
+      'Immediate prior Lumi reply:',
+      `- ${reply}`,
+      'Rules:',
+      '- Repeat or lightly restate only the immediate prior Lumi reply so it is easy to hear.',
+      '- Do not fall back to an older user task, work-takeover record, tool receipt, or unrelated conversation topic.',
+      '- Do not call tools, resume work, diagnose the old task, or claim a new action completed.',
+    ].join('\n');
+  }
   const deduplicate = (items: ActionContinuationHistoryItem[]) => items.filter((item, index, candidates) => {
     const roleGroup = recordRole(item) === 'user' ? 'user' : 'assistant';
     const key = `${roleGroup}:${recordText(item)}`;

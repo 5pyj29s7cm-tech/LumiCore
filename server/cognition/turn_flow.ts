@@ -370,10 +370,13 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     ? 'status' as const
     : /(?:^|\n)- followupIntent:\s*execute(?:\s|$)/i.test(continuationContext)
       ? 'execute' as const
+      : /(?:^|\n)- followupIntent:\s*repeat(?:\s|$)/i.test(continuationContext)
+        ? 'repeat' as const
       : 'none' as const;
   const actionFollowupIntent = directActionFollowupIntent !== 'none'
     ? directActionFollowupIntent
     : recoveredActionFollowupIntent;
+  const immediateAssistantRestatement = actionFollowupIntent === 'repeat';
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   const explicitContinuationConfirmation =
     /^(?:确认|确定|嗯|好|好的|可以|行|开始|yes|ok|okay|confirm|go)[。！？.!?]*$/iu.test(input.text.trim()); // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
@@ -461,7 +464,8 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   const explicitCapabilityMaintenance =
     capabilityLearningPreview.capabilityLearningIntent === 'inspect_reuse'
     || capabilityLearningPreview.capabilityLearningIntent === 'stabilize_existing';
-  const selfRepairTurn = !conceptualCapabilityQuestion
+  const selfRepairTurn = !immediateAssistantRestatement
+    && !conceptualCapabilityQuestion
     && !explicitNoToolInstruction
     && !statusOnlyContinuation
     && !chatModePureConversation
@@ -477,7 +481,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   const workSurfaceRoute = resolveWorkSurfaceRoute(routingText);
   const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(routingText);
   const explicitBackgroundDelegation = hasExplicitBackgroundDelegationPreference(input.text);
-  const allowToolUseForTurn = explicitNoToolInstruction || readOnlyConversationTurn
+  const allowToolUseForTurn = immediateAssistantRestatement || explicitNoToolInstruction || readOnlyConversationTurn
     ? false
     : conceptualCapabilityQuestion || statusOnlyContinuation
       ? false
@@ -497,6 +501,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   // decides whether the main chat model can inspect/use the manifest. Only
   // explicit no-tool/read-only/status/meeting boundaries turn model access off.
   const modelToolAccess = input.channel === 'chat'
+    && !immediateAssistantRestatement
     && !explicitNoToolInstruction
     && !readOnlyConversationTurn
     && !statusOnlyContinuation
@@ -505,7 +510,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
       : allowToolUseForTurn
         ? 'manifest' as const
         : 'hard_off' as const;
-  const matchedWorkflow = conceptualCapabilityQuestion || recoveredCurrentAppEdit || explicitNoToolInstruction
+  const matchedWorkflow = immediateAssistantRestatement || conceptualCapabilityQuestion || recoveredCurrentAppEdit || explicitNoToolInstruction
     ? null
     : matchSkillWorkflow(routingText, { targetIsLumi: input.targetIsLumi });
   // Main chat is open-ended natural language. A regex workflow match may enrich
@@ -528,24 +533,30 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     workSurfaceRoute,
     workTakeover,
   });
-  const execution = conceptualCapabilityQuestion || readOnlyConversationTurn || explicitNoToolInstruction
+  const execution = immediateAssistantRestatement || conceptualCapabilityQuestion || readOnlyConversationTurn || explicitNoToolInstruction
     ? {
         completionEvidenceNeeded: false,
         governance: {
           verificationIntent: 'none' as const,
-          verificationReason: conceptualCapabilityQuestion
+          verificationReason: immediateAssistantRestatement
+            ? 'the user asked to hear the adjacent assistant reply again, not to execute work'
+            : conceptualCapabilityQuestion
             ? 'conceptual capability explanation does not execute work'
             : explicitNoToolInstruction
               ? 'the current turn explicitly forbids tool execution'
               : 'the current turn explicitly requests conversation without modifying the prior work product',
           delegationIntent: 'none' as const,
-          delegationReason: conceptualCapabilityQuestion
+          delegationReason: immediateAssistantRestatement
+            ? 'an adjacent-reply restatement stays in the foreground conversation'
+            : conceptualCapabilityQuestion
             ? 'conceptual capability explanation stays in the foreground conversation'
             : explicitNoToolInstruction
               ? 'a no-tool turn stays in the foreground conversation'
               : 'a read-only conversational follow-up stays in the foreground conversation',
           capabilityLearningIntent: 'none' as const,
-          capabilityLearningReason: conceptualCapabilityQuestion
+          capabilityLearningReason: immediateAssistantRestatement
+            ? 'the user requested a restatement, not capability repair'
+            : conceptualCapabilityQuestion
             ? 'the user asked how existing capability routing works'
             : explicitNoToolInstruction
               ? 'the user explicitly requested no tool or capability execution'

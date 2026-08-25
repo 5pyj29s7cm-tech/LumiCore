@@ -382,6 +382,58 @@ describe('execution guard recovery', () => {
     expect(serialized.length).toBeLessThan(12_000);
   });
 
+  it('stores a bounded client state summary instead of duplicating the full self model', () => {
+    const fullState = {
+      detail: 'full',
+      stateDigest: { mode: 'assistant', wallpaperMode: false },
+      state: {
+        updatedAt: Date.now(),
+        platform: 'desktop',
+        mode: 'assistant',
+        activeTab: 'home',
+        viewMode: 'personal',
+        workDomain: 'personal',
+        windows: { focused: 'home', open: ['home'] },
+        surfaces: { wallpaperMode: false, widgetMode: false },
+      },
+      health: { level: 'ok', stateAgeSeconds: 1, findings: [] },
+      capabilityRuntime: { registeredTools: 371 },
+      scope: { domain: 'personal' },
+      capabilities: Array.from({ length: 80 }, (_, index) => ({ id: `cap-${index}`, notes: 'x'.repeat(600) })),
+      interfaceSurfaces: Array.from({ length: 50 }, (_, index) => ({ id: `surface-${index}`, notes: 'y'.repeat(400) })),
+    };
+    const records = sanitizeToolRecordsForPersistence([record({
+      name: 'client_get_state',
+      result: JSON.stringify(fullState),
+      receipt: fullState,
+      terminalVerification: { status: 'verified', strategy: 'terminal_receipt', reason: 'state read' },
+      envelope: {
+        version: 1,
+        status: 'verified_success',
+        toolName: 'client_get_state',
+        taskId: 'task-client-state',
+        turnId: 'turn-client-state',
+        requestId: 'request-client-state',
+        idempotencyKey: 'client-state-idempotency-key',
+        targetIdentity: 'desktop:local',
+        completedAt: '2026-08-25T14:30:00.000Z',
+        result: fullState,
+        verification: { status: 'verified', reason: 'state read' },
+      },
+    })]);
+    const serialized = JSON.stringify(records);
+    const compacted = JSON.parse(records?.[0].result || '{}');
+
+    expect(compacted).toMatchObject({
+      kind: 'client_state_summary',
+      fullDiagnosticsOmittedFromConversation: true,
+      capabilityRuntime: { registeredTools: 371 },
+    });
+    expect(serialized).not.toContain('cap-79');
+    expect(serialized).not.toContain('surface-49');
+    expect(serialized.length).toBeLessThan(6_000);
+  });
+
   it('redacts nested and serialized credential aliases before persisting tool receipts', () => {
     const records = sanitizeToolRecordsForPersistence([record({
       name: 'credential_probe',

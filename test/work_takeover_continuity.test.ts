@@ -57,6 +57,39 @@ describe('work takeover continuity', () => {
     expect(getWorkTakeoverContinuationQuickCommand('下一步呢', 'continuity_chat_user', { surface: 'chat' })).toBeNull();
   });
 
+  it('never lets a delivery restatement request resume an older work task', async () => {
+    const { initDatabase } = await import('../db_layer');
+    const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');
+    const { buildWorkTakeoverContinuityContext, getWorkTakeoverContinuationQuickCommand } = await import('../server/work_takeover/continuity');
+    await initDatabase();
+
+    const userId = 'continuity_adjacent_reply_restatement_user';
+    createWorkTakeoverTask({
+      userId,
+      category: 'general_work',
+      title: '青穹客户跟进闭环',
+      nextActions: ['整理客户资料'],
+      source: 'manual',
+      status: 'in_progress',
+      metadata: {
+        workTakeoverExecution: {
+          lastTurn: { status: 'failed' },
+          lastFailure: { tool: 'desktop_ui_click', error: 'stale failure' },
+        },
+      },
+    });
+
+    const text = 'sorry, 你刚刚又卡住了，重新说。';
+    for (const surface of ['chat', 'voice', 'work'] as const) {
+      const context = buildWorkTakeoverContinuityContext(userId, text, { surface });
+      expect(context.intent, surface).toBeNull();
+      expect(context.strength, surface).toBe('none');
+      expect(context.shouldResumeTask, surface).toBe(false);
+      expect(context.routeText, surface).toBe(text);
+      expect(getWorkTakeoverContinuationQuickCommand(text, userId, { surface }), surface).toBeNull();
+    }
+  });
+
   it('does not turn work-support questions into persisted-task continuation', async () => {
     const { initDatabase } = await import('../db_layer');
     const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');

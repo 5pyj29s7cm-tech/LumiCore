@@ -3,6 +3,26 @@ import { describe, expect, it } from 'vitest';
 import { resolveExactConversationCorrection } from '../server/conversation/exact_correction';
 
 describe('exact conversation correction', () => {
+  it('repeats only the immediately preceding assistant reply after a delivery stall', () => {
+    expect(resolveExactConversationCorrection(
+      'sorry, 你刚刚又卡住了，重新说。',
+      [
+        { role: 'assistant', message: '旧任务需要整理客户资料。' },
+        { role: 'user', message: '你是谁？' },
+        { role: 'assistant', message: '我是 Lumi，是你的常驻智能伙伴。' },
+      ],
+    )).toBe('我是 Lumi，是你的常驻智能伙伴。');
+
+    expect(resolveExactConversationCorrection(
+      'repeat that',
+      [
+        { role: 'assistant', message: 'Older answer.' },
+        { role: 'user', message: 'Who are you?' },
+        { role: 'assistant', message: 'I am Lumi, your persistent AI partner.' },
+      ],
+    )).toBe('I am Lumi, your persistent AI partner.');
+  });
+
   it('changes only the requested phrase in the latest matching factual sentence', () => {
     const result = resolveExactConversationCorrection(
       '把“售后责任”改成“数据归属”，其他不变。',

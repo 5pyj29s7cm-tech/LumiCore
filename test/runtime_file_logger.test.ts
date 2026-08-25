@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   createSafeConsoleMirror,
+  pruneRuntimeLogFiles,
   RuntimeFileSink,
   sanitizeRuntimeLogLine,
 } from '../server/runtime/file_logger';
@@ -124,6 +125,21 @@ describe('runtime file logger', () => {
     expect(totalBytes).toBeLessThanOrEqual(650);
     expect(files.some(name => name.startsWith('server-20260826'))).toBe(true);
     expect(files.some(name => /-\d{3}\.log$/.test(name))).toBe(true);
+  });
+
+  it('prunes by logical log date even when an older stream closes later', () => {
+    const runtimeDir = makeTemporaryDirectory();
+    const oldPath = path.join(runtimeDir, 'server-20260825-999.log');
+    const newPath = path.join(runtimeDir, 'server-20260826.log');
+    fs.writeFileSync(oldPath, 'old date\n', 'utf8');
+    fs.writeFileSync(newPath, 'new date\n', 'utf8');
+    fs.utimesSync(oldPath, new Date('2026-08-27T00:00:00.000Z'), new Date('2026-08-27T00:00:00.000Z'));
+    fs.utimesSync(newPath, new Date('2026-08-25T00:00:00.000Z'), new Date('2026-08-25T00:00:00.000Z'));
+
+    pruneRuntimeLogFiles(runtimeDir, { retainedFiles: 1, maxTotalBytes: 1024 });
+
+    expect(fs.existsSync(newPath)).toBe(true);
+    expect(fs.existsSync(oldPath)).toBe(false);
   });
 
   it('reads only a bounded tail and returns complete final lines', async () => {

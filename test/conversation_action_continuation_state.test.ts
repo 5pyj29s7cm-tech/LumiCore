@@ -650,6 +650,146 @@ describe('conversation action continuation state', () => {
     expect(receipts[0]).toMatchObject({ turnId: userMessageId, requestId });
   });
 
+  it('archives a failed desktop attempt even when the same logical step later succeeds', () => {
+    const userId = `conversation-action-attempts-${Date.now()}-${Math.random()}`;
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    const requestId = `request-attempts-${Date.now()}`;
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'user',
+      content: 'Enter wallpaper mode.',
+      requestId,
+      deferActionPreparation: true,
+      domain: 'personal',
+    });
+    const prepared = prepareConversationActionExecution({
+      conversationId: conversation.id,
+      userId,
+      userText: 'Enter wallpaper mode.',
+      requestId,
+      toolPolicy: { allowedTools: ['client_action'], requireConfirmation: [], forbiddenTools: [], maxIterations: 4 },
+      forceTask: true,
+    });
+    const shared = {
+      taskId: prepared.state?.taskId,
+      requestId,
+      name: 'client_action',
+      arguments: { action: 'set_wallpaper_mode', enabled: true },
+    };
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'assistant',
+      content: 'Wallpaper mode is on.',
+      requestId,
+      taskIntent: 'task',
+      toolCalls: [{
+        ...shared,
+        id: 'wallpaper-attempt-timeout',
+        result: '',
+        error: 'Desktop control conflict: timed out waiting for global desktop lease.',
+        terminalVerification: { status: 'failed', strategy: 'terminal_receipt', reason: 'lease_timeout' },
+      }, {
+        ...shared,
+        id: 'wallpaper-attempt-success',
+        result: JSON.stringify({ ok: true, status: 'verified' }),
+        terminalVerification: { status: 'verified', strategy: 'terminal_receipt', reason: 'wallpaper enabled' },
+      }],
+      domain: 'personal',
+    });
+
+    const db = readDB();
+    const receipts = (db.conversationActionReceipts || [])
+      .filter((row: any) => row.taskId === prepared.state?.taskId && row.toolName === 'client_action');
+    expect(receipts.map((row: any) => row.outcome).sort()).toEqual(['timeout', 'verified_success']);
+    expect(receipts.some((row: any) => JSON.parse(row.envelope).error?.includes('timed out'))).toBe(true);
+    const task = (db.conversationActionTasks || []).find((row: any) => row.id === prepared.state?.taskId);
+    expect(task?.status).toBe('completed');
+    expect(task?.blocker).toBe('');
+    expect(JSON.parse(String(task?.context || '{}')).actionState).toMatchObject({
+      status: 'completed',
+      unfinished: false,
+      latestBlocker: '',
+    });
+  });
+
+  it('archives every retry when a durable receipt creates the task without a prepare step', () => {
+    const userId = `conversation-action-unprepared-attempts-${Date.now()}-${Math.random()}`;
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    const requestId = `request-unprepared-attempts-${Date.now()}`;
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'user',
+      content: 'Enter wallpaper mode.',
+      requestId,
+      deferActionPreparation: true,
+      domain: 'personal',
+    });
+    expect(getOrCreateActiveConversation(userId, 'lumi', 'personal', '').actionContinuationState)
+      .toBeUndefined();
+
+    const shared = {
+      taskId: 'runtime-provisional-wallpaper-task',
+      requestId,
+      name: 'client_action',
+      arguments: { action: 'set_wallpaper_mode', enabled: true },
+    };
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'assistant',
+      content: 'Wallpaper mode is on.',
+      requestId,
+      taskIntent: 'task',
+      toolCalls: [{
+        ...shared,
+        id: 'unprepared-wallpaper-attempt-timeout',
+        result: '',
+        error: 'Desktop control conflict: timed out waiting for global desktop lease.',
+        terminalVerification: { status: 'failed', strategy: 'terminal_receipt', reason: 'lease_timeout' },
+      }, {
+        ...shared,
+        id: 'unprepared-wallpaper-attempt-success',
+        result: JSON.stringify({ ok: true, status: 'verified' }),
+        terminalVerification: { status: 'verified', strategy: 'terminal_receipt', reason: 'wallpaper enabled' },
+      }],
+      domain: 'personal',
+    });
+
+    const db = readDB();
+    const task = (db.conversationActionTasks || [])
+      .find((row: any) => row.conversationId === conversation.id);
+    const receipts = (db.conversationActionReceipts || [])
+      .filter((row: any) => row.taskId === task?.id && row.toolName === 'client_action');
+    expect(receipts.map((row: any) => row.outcome)).toEqual(['timeout', 'verified_success']);
+    expect(task).toMatchObject({ status: 'completed', blocker: '' });
+    expect(JSON.parse(String(task?.context || '{}')).actionState).toMatchObject({
+      status: 'completed',
+      unfinished: false,
+      latestBlocker: '',
+    });
+    const assistant = (db.interactions || []).find((row: any) => (
+      row.conversationId === conversation.id
+      && row.role === 'assistant'
+      && row.requestId === requestId
+    ));
+    expect(assistant?.toolCalls).toHaveLength(2);
+    expect(assistant?.toolCalls?.[0]).toMatchObject({
+      id: 'unprepared-wallpaper-attempt-timeout',
+      error: 'Desktop control conflict: timed out waiting for global desktop lease.',
+    });
+    expect(assistant?.toolCalls?.[1]).toMatchObject({
+      id: 'unprepared-wallpaper-attempt-success',
+      terminalVerification: { status: 'verified' },
+    });
+  });
+
   it('detaches a stale confirmation task before model, voiceprint, and screen turns', () => {
     const userId = `conversation-action-detach-${Date.now()}-${Math.random()}`;
     const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');

@@ -1,7 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { formatDeepSeekRequest, makeLLMCallStreaming, parseDeepSeekResponse } from '../server/llm/providers';
+import {
+  formatDeepSeekRequest,
+  makeLLMCallStreaming,
+  parseDeepSeekResponse,
+  resolveModelMaxTokens,
+} from '../server/llm/providers';
 
 describe('LLM reasoning output handling', () => {
+  it('honors explicit small control-plane budgets on reasoning-capable models', () => {
+    expect(resolveModelMaxTokens('deepseek-v4-flash', 60)).toBe(60);
+    expect(resolveModelMaxTokens('deepseek-v4-pro', 512)).toBe(512);
+    expect(resolveModelMaxTokens('deepseek-v4-pro')).toBe(8_000);
+    expect(resolveModelMaxTokens('deepseek-chat')).toBeUndefined();
+  });
+
   it('keeps non-streaming reasoning_content out of user-visible text', () => {
     const parsed = parseDeepSeekResponse({
       choices: [{

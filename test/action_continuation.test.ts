@@ -88,6 +88,27 @@ describe('recent action continuation', () => {
     expect(classifyRecentActionFollowupIntent('别光说，快做')).toBe('execute');
   });
 
+  it('binds a restatement request only to the adjacent assistant reply', () => {
+    const text = 'sorry, 你刚刚又卡住了，重新说。';
+    const history = [
+      { role: 'user', message: '继续青穹客户跟进任务。' },
+      { role: 'assistant', message: '旧任务还在等待客户资料。' },
+      { role: 'user', message: '你先重新介绍一下自己。' },
+      { role: 'assistant', message: '我是 Lumi，会陪你聊天，也能在授权后执行任务。' },
+    ];
+
+    expect(classifyRecentActionFollowupIntent(text)).toBe('repeat');
+    expect(classifyConversationActionFollowupIntent(text)).toBe('repeat');
+    expect(needsRecentActionContinuationContext(text)).toBe(true);
+
+    const bridge = buildRecentActionContinuationBridge(text, history);
+    expect(bridge).toContain('- followupIntent: repeat');
+    expect(bridge).toContain('我是 Lumi，会陪你聊天，也能在授权后执行任务。');
+    expect(bridge).not.toContain('旧任务还在等待客户资料');
+    expect(bridge).not.toContain('继续青穹客户跟进任务');
+    expect(bridge).toContain('Do not fall back to an older user task');
+  });
+
   it('treats an ambiguous failure question as status only for an unfinished durable task', () => {
     const unfinished = buildConversationActionContinuationState({
       userText: '读取桌面平面图并画进 AutoCAD。',

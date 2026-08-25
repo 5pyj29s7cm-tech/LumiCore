@@ -6,8 +6,19 @@
  */
 const activeVoiceSessions = new Map<string, Set<string>>();
 const lastVoiceActivityAt = new Map<string, number>();
+const backgroundAbortControllers = new Map<string, Set<AbortController>>();
 
 const DEFAULT_GRACE_MS = 15_000;
+const LIVE_VOICE_PRIORITY_REASON = 'Live user voice session has priority over background autonomy';
+
+function interruptBackgroundWork(userId: string): void {
+  const controllers = backgroundAbortControllers.get(userId);
+  if (!controllers) return;
+  backgroundAbortControllers.delete(userId);
+  for (const controller of controllers) {
+    if (!controller.signal.aborted) controller.abort(new Error(LIVE_VOICE_PRIORITY_REASON));
+  }
+}
 
 export function setRealtimeVoiceSessionActive(
   userId: string,
@@ -23,6 +34,7 @@ export function setRealtimeVoiceSessionActive(
     sessions.add(key);
     activeVoiceSessions.set(uid, sessions);
     lastVoiceActivityAt.set(uid, Date.now());
+    interruptBackgroundWork(uid);
     return;
   }
 
@@ -40,8 +52,44 @@ export function isRealtimeUserActive(userId?: string, graceMs = DEFAULT_GRACE_MS
   return lastActiveAt > 0 && Date.now() - lastActiveAt < Math.max(0, graceMs);
 }
 
+/**
+ * Creates a race-free interruption signal for background model work. The
+ * caller subscribes before checking current activity, so a voice session that
+ * starts between the scheduler gate and the provider call still aborts it.
+ */
+export function createRealtimeVoicePrioritySignal(userId: string): {
+  signal: AbortSignal;
+  dispose: () => void;
+} {
+  const uid = String(userId || '').trim();
+  const controller = new AbortController();
+  if (!uid) return { signal: controller.signal, dispose: () => undefined };
+
+  const controllers = backgroundAbortControllers.get(uid) || new Set<AbortController>();
+  controllers.add(controller);
+  backgroundAbortControllers.set(uid, controllers);
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    const current = backgroundAbortControllers.get(uid);
+    current?.delete(controller);
+    if (current?.size === 0) backgroundAbortControllers.delete(uid);
+  };
+
+  if (isRealtimeUserActive(uid)) {
+    controller.abort(new Error(LIVE_VOICE_PRIORITY_REASON));
+    dispose();
+  }
+  return { signal: controller.signal, dispose };
+}
+
 /** Test-only reset for deterministic module-state assertions. */
 export function resetRealtimeUserActivityForTests(): void {
+  for (const controllers of backgroundAbortControllers.values()) {
+    for (const controller of controllers) controller.abort();
+  }
   activeVoiceSessions.clear();
   lastVoiceActivityAt.clear();
+  backgroundAbortControllers.clear();
 }

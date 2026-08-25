@@ -1,3 +1,5 @@
+import { isImmediateAssistantRestatementRequest } from '../cognition/normalized_action_intent';
+
 export interface ConversationCorrectionRecord {
   role?: string;
   message?: string;
@@ -82,6 +84,16 @@ export function resolveExactConversationCorrection(
   userText: string,
   history: ConversationCorrectionRecord[],
 ): string | null {
+  if (isImmediateAssistantRestatementRequest(userText)) {
+    for (let index = history.length - 1; index >= 0; index -= 1) {
+      const record = history[index];
+      if (!record || !['assistant', 'agent'].includes(String(record.role || ''))) continue;
+      const reply = recordText(record);
+      if (reply) return reply;
+    }
+    return null;
+  }
+
   const replacement = parseExactReplacement(userText);
   if (!replacement) return null;
 

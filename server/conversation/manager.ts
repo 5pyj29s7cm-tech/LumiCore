@@ -1182,6 +1182,11 @@ export function addMessage(msg: {
           && pendingAgeMs >= 0
           && pendingAgeMs <= 30 * 60 * 1000
         ) {
+          // The task state intentionally coalesces a failed attempt followed by
+          // a successful retry into one authoritative logical step. The
+          // append-only receipt table must still retain both attempts so later
+          // diagnosis can explain latency and recovery instead of presenting a
+          // falsely clean history.
           const nextState = buildConversationActionContinuationState({
             previous: conv.actionContinuationState,
             userText: pending.userText,
@@ -1192,7 +1197,44 @@ export function addMessage(msg: {
             requestId: conv.actionContinuationState?.activeRequestId || pending.requestId || msg.requestId,
             toolPolicy: conv.actionContinuationState?.policySnapshot,
           });
-          if (nextState) conv.actionContinuationState = nextState;
+          if (nextState) {
+            const receiptTaskId = activeTaskId || nextState.taskId;
+            const attemptRecords = currentToolRecords.map((record: any) => ({
+              ...record,
+              taskId: receiptTaskId,
+              turnId: record.turnId || currentUserMessageIdForLedger || msg.requestId || pending.requestId,
+              requestId: record.requestId || msg.requestId || pending.requestId,
+            }));
+            if (!activeTaskId) {
+              // A durable tool receipt may be the first canonical signal that
+              // this turn owns a task. Create the row without its coalesced
+              // receipts first, so the raw failed attempt can be archived
+              // before the successful retry and remains chronologically true.
+              syncConversationActionTaskLedger(db, {
+                conversation: conv,
+                state: {
+                  ...nextState,
+                  status: 'executing',
+                  receipts: [],
+                  unfinished: true,
+                  latestBlocker: '',
+                  completionSource: undefined,
+                },
+                userText: pending.userText,
+                rootUserMessageId: currentUserMessageIdForLedger || undefined,
+                currentUserMessageId: currentUserMessageIdForLedger || undefined,
+                now,
+              });
+            }
+            archiveBoundConversationActionReceipts(db, {
+              conversationId: conv.id,
+              userId: conv.userId,
+              records: attemptRecords,
+              turnId: currentUserMessageIdForLedger || msg.requestId || pending.requestId,
+              now,
+            });
+            conv.actionContinuationState = nextState;
+          }
         } else if (
           msg.taskIntent === 'task'
           && !conv.actionContinuationState?.unfinished

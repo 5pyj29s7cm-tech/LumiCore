@@ -172,6 +172,7 @@ export function useVoiceCall({
   const canSendMicAudioRef = useRef(canSendMicAudio);
   const ttsEchoFloorRef = useRef(0);
   const ttsBargeInFramesRef = useRef(0);
+  const ttsBargeInCandidateSentRef = useRef(false);
   const thinkingWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const thinkingWatchdogStartedAt = useRef(0);
   const callStateRef = useRef<CallState>('idle');
@@ -269,8 +270,10 @@ export function useVoiceCall({
       }
     }
     isTtsPlaying.current = false;
+    ttsStartedAt.current = 0;
     ttsEchoFloorRef.current = 0;
     ttsBargeInFramesRef.current = 0;
+    ttsBargeInCandidateSentRef.current = false;
   }, []);
 
   const disposePlaybackContexts = useCallback(() => {
@@ -415,7 +418,10 @@ export function useVoiceCall({
       const ctx = ensureTtsContext();
       const playbackGeneration = playbackGenerationRef.current;
       isTtsPlaying.current = true;
-      if (ttsStartedAt.current === 0) ttsStartedAt.current = Date.now();
+      if (ttsStartedAt.current === 0) {
+        ttsStartedAt.current = Date.now();
+        ttsBargeInCandidateSentRef.current = false;
+      }
       if (lane !== 'conversation') clearThinkingWatchdog();
       setCallState(prev => (prev === 'thinking' || prev === 'queued') ? 'speaking' : prev);
 
@@ -453,6 +459,10 @@ export function useVoiceCall({
             playAudioChunk(queued.buffer, queued.volumeGain, queued.lane, queued.requestId);
           } else {
             isTtsPlaying.current = false;
+            ttsStartedAt.current = 0;
+            ttsEchoFloorRef.current = 0;
+            ttsBargeInFramesRef.current = 0;
+            ttsBargeInCandidateSentRef.current = false;
             setCallState(prev => prev === 'speaking' ? 'listening' : prev);
           }
         };
@@ -463,17 +473,27 @@ export function useVoiceCall({
           const delayMs = Math.max(0, Math.round((effectiveStart - ctx.currentTime) * 1000));
           setTimeout(() => {
             if (!isCallActive.current || ackGeneration !== playbackGenerationRef.current) return;
-            socket.emit('audio:playback_started', { requestId, lane });
+            socket.emit('audio:playback_started', {
+              requestId,
+              lane,
+              durationMs: Math.max(1, Math.round(decoded.duration * 1_000)),
+            });
           }, delayMs);
         }
       }, (err) => {
         if (playbackGeneration !== playbackGenerationRef.current) return;
         console.error('[VoiceCall] Decode failed:', err);
         isTtsPlaying.current = false;
+        ttsStartedAt.current = 0;
+        ttsEchoFloorRef.current = 0;
+        ttsBargeInFramesRef.current = 0;
+        ttsBargeInCandidateSentRef.current = false;
         if (audioQueue.current.length > 0) {
           const next = audioQueue.current.shift()!;
           const queued: VoiceAudioResponse = next instanceof ArrayBuffer ? { buffer: next } : next;
           playAudioChunk(queued.buffer, queued.volumeGain, queued.lane, queued.requestId);
+        } else {
+          setCallState(prev => prev === 'speaking' ? 'listening' : prev);
         }
       });
     };
@@ -834,20 +854,27 @@ export function useVoiceCall({
             ttsBargeInFramesRef.current = frameRms > adaptiveThreshold
               ? ttsBargeInFramesRef.current + 1
               : 0;
+            if (ttsBargeInFramesRef.current > 0 && !transcriptionOnlyRef.current) {
+              // Feed likely near-end speech to the utterance-scoped voiceprint
+              // verifier. Raw energy alone must never stop playback: speaker
+              // echo and room transients can cross the same threshold. The
+              // server stops TTS only after STT echo filtering and speaker/
+              // semantic admission accept the utterance.
+              window.dispatchEvent(new CustomEvent('lumi:voice-pcm-frame', {
+                detail: { samples: new Float32Array(input), rms: frameRms },
+              }));
+            }
             const strongSpeechFrame = frameRms > Math.max(0.045, adaptiveThreshold * 1.6);
-            if (strongSpeechFrame || ttsBargeInFramesRef.current >= 2) {
-              // Stopping local playback is harmless and must not wait for an
-              // asynchronous voiceprint sample. Audio is already flowing
-              // through the semantic stop lane, so no pre-roll replay is needed.
-              currentSocket.emit('audio:interrupt');
-              stopAllPlayback();
-              ttsStartedAt.current = 0;
-              setCallState('listening');
-              if (!transcriptionOnlyRef.current) {
-                window.dispatchEvent(new CustomEvent('lumi:voice-pcm-frame', {
-                  detail: { samples: new Float32Array(input), rms: frameRms },
-                }));
-              }
+            const sustainedCandidate = ttsBargeInFramesRef.current >= (strongSpeechFrame ? 3 : 5);
+            if (sustainedCandidate && !ttsBargeInCandidateSentRef.current) {
+              ttsBargeInCandidateSentRef.current = true;
+              currentSocket.emit('audio:interrupt-candidate', {
+                source: 'local_energy',
+                rms: Number(frameRms.toFixed(4)),
+                threshold: Number(adaptiveThreshold.toFixed(4)),
+                frames: ttsBargeInFramesRef.current,
+                ttsAgeMs,
+              });
             }
           }
           return;
@@ -909,7 +936,7 @@ export function useVoiceCall({
     } finally {
       startInFlightRef.current = false;
     }
-  }, [cleanupCapture, disabled, stopAllPlayback]);
+  }, [cleanupCapture, disabled]);
 
   const switchVoice = useCallback((voiceId?: string): boolean => {
     const normalizedVoiceId = normalizeSelectedVoiceId(voiceId);
@@ -939,14 +966,14 @@ export function useVoiceCall({
 
   const interrupt = useCallback(() => {
     if (callState === 'speaking' || callState === 'thinking') {
-      socket?.emit('audio:interrupt');
+      socket?.emit('audio:interrupt', { source: 'user_control' });
       stopAllPlayback();
     }
   }, [socket, callState, stopAllPlayback]);
 
   useEffect(() => {
     const stopVoiceOutput = () => {
-      if (isCallActive.current) socketRef.current?.emit('audio:interrupt');
+      if (isCallActive.current) socketRef.current?.emit('audio:interrupt', { source: 'user_control' });
       stopAllPlayback();
     };
     window.addEventListener('lumi:stop-voice-output', stopVoiceOutput);
@@ -994,6 +1021,7 @@ export function useVoiceCall({
       ttsStartedAt.current = 0;
       ttsEchoFloorRef.current = 0;
       ttsBargeInFramesRef.current = 0;
+      ttsBargeInCandidateSentRef.current = false;
     }
   }, [callState]);
 

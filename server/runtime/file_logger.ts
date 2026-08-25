@@ -238,6 +238,8 @@ type RuntimeLogFile = {
   filePath: string;
   modifiedAt: number;
   size: number;
+  dateKey: string;
+  segment: number;
 };
 
 function listRuntimeLogFiles(runtimeDir: string): RuntimeLogFile[] {
@@ -247,9 +249,24 @@ function listRuntimeLogFiles(runtimeDir: string): RuntimeLogFile[] {
       .map(entry => {
         const filePath = path.join(runtimeDir, entry.name);
         const stat = fs.statSync(filePath);
-        return { filePath, modifiedAt: stat.mtimeMs, size: stat.size };
+        const match = entry.name.match(RUNTIME_LOG_FILE_RE);
+        return {
+          filePath,
+          modifiedAt: stat.mtimeMs,
+          size: stat.size,
+          dateKey: match?.[1] || '',
+          segment: match?.[2] ? Number(match[2]) : 0,
+        };
       })
-      .sort((left, right) => right.modifiedAt - left.modifiedAt || right.filePath.localeCompare(left.filePath));
+      // Rotation streams close asynchronously. An older segment can therefore
+      // receive a newer mtime than the current date's file and must not evict
+      // that newer logical log during pruning.
+      .sort((left, right) => (
+        right.dateKey.localeCompare(left.dateKey)
+        || right.segment - left.segment
+        || right.modifiedAt - left.modifiedAt
+        || right.filePath.localeCompare(left.filePath)
+      ));
   } catch {
     return [];
   }

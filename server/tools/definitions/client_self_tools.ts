@@ -162,32 +162,67 @@ function getCapabilityRuntimeSummary(registry: ToolRegistry) {
 export function registerClientSelfTools(registry: ToolRegistry): void {
   registry.register({
     name: 'client_get_state',
-    description: 'Read Lumi desktop client self-model: local machine/desktop/background runtime awareness, available capabilities, interface map, visible execution habits, and the latest reported UI state.',
+    description: 'Read the latest Lumi desktop/client state and a compact health/capability summary. Use detail=full only for an explicit self-diagnostic audit; use client_capability_manifest for searchable capability inventory.',
     parameters: {
       type: 'object',
-      properties: {},
+      properties: {
+        detail: {
+          type: 'string',
+          enum: ['summary', 'full'],
+          description: 'summary is the bounded default for normal state/action verification; full includes the complete diagnostic maps.',
+        },
+      },
       required: [],
     },
-    handler: async (_args, context) => {
+    handler: async (args, context) => {
       const userId = context?.userId || 'anonymous';
       const scope = { domain: context?.domain, orgId: context?.orgId };
       const isWork = context?.domain === 'work' && Boolean(context?.orgId);
       const state = getClientStateForScope(userId, scope);
-      return JSON.stringify(sanitizeDiagnosticValue({
-        architecture: getLumiTechnicalArchitecture(),
-        selfAwareness: getClientSelfAwarenessReport(userId, scope),
-        capabilities: getClientCapabilities(registry.getCapabilityManifest(context?.toolPolicy)),
-        interfaceSurfaces: getClientInterfaceSurfaces(),
-        visibleExecutionHabits: getVisibleExecutionHabits(),
-        capabilityRuntime: getCapabilityRuntimeSummary(registry),
+      const architecture = getLumiTechnicalArchitecture();
+      const selfAwareness = getClientSelfAwarenessReport(userId, scope);
+      const capabilityRuntime = getCapabilityRuntimeSummary(registry);
+      const health = getClientHealthReport(userId, scope);
+      const autonomyGate = isWork ? null : getAutonomyDiagnosticPolicy(userId);
+      const autonomyWorkflows = isWork ? [] : getAutonomyWorkflowDiagnostics(userId);
+      const scopedIdentity = isWork ? { domain: 'work', orgId: context?.orgId } : { domain: 'personal' };
+      const common = {
+        detail: args?.detail === 'full' ? 'full' : 'summary',
         state: sanitizeDiagnosticValue(state),
         stateDigest: getClientStateDigest(state),
-        health: getClientHealthReport(userId, scope),
-        skillRuntimeFindings: getSkillRuntimeFindings(),
-        autonomyGate: isWork ? null : getAutonomyDiagnosticPolicy(userId),
-        autonomyWorkflows: isWork ? [] : getAutonomyWorkflowDiagnostics(userId),
-        scope: isWork ? { domain: 'work', orgId: context?.orgId } : { domain: 'personal' },
-      }), null, 2);
+        health,
+        capabilityRuntime,
+        autonomyGate,
+        autonomyWorkflows,
+        scope: scopedIdentity,
+      };
+      const payload = args?.detail === 'full'
+        ? {
+            ...common,
+            architecture,
+            selfAwareness,
+            capabilities: getClientCapabilities(registry.getCapabilityManifest(context?.toolPolicy)),
+            interfaceSurfaces: getClientInterfaceSurfaces(),
+            visibleExecutionHabits: getVisibleExecutionHabits(),
+            skillRuntimeFindings: getSkillRuntimeFindings(),
+          }
+        : {
+            ...common,
+            architecture: {
+              product: architecture.product,
+              topology: architecture.topology,
+              schemaVersion: architecture.schemaVersion,
+            },
+            selfAwareness: {
+              level: selfAwareness.level,
+              bodySummary: selfAwareness.bodySummary,
+              gaps: selfAwareness.gaps.slice(0, 4),
+              nextBestActions: selfAwareness.nextBestActions.slice(0, 3),
+            },
+            omitted: ['capabilities', 'interfaceSurfaces', 'visibleExecutionHabits', 'skillRuntimeFindings'],
+            inventoryTool: 'client_capability_manifest',
+          };
+      return JSON.stringify(sanitizeDiagnosticValue(payload), null, 2);
     },
     permission: 'user',
     securityLevel: 'safe',

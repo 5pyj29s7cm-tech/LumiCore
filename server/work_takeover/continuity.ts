@@ -1,6 +1,7 @@
 import type { WorkTakeoverTask } from './tasks';
 import { listWorkTakeoverTasks } from './tasks';
 import { getWorkTakeoverExecutionProgress, planWorkTakeoverExecution } from './execution_planner';
+import { isImmediateAssistantRestatementRequest } from '../cognition/normalized_action_intent';
 
 export type WorkTakeoverContinuationIntent = 'advance' | 'status';
 export type WorkTakeoverTurnSurface = 'chat' | 'work' | 'voice';
@@ -123,6 +124,7 @@ function classifyWorkTakeoverContinuationSignal(
   const clean = normalizeText(text);
   const normalizedSurface = normalizeSurface(surface);
   if (!clean || MUSIC_CONTINUATION_RE.test(clean)) return { intent: null, strength: 'none' };
+  if (isImmediateAssistantRestatementRequest(text)) return { intent: null, strength: 'none' };
 
   const hasWorkContext = WORK_CONTEXT_RE.test(clean);
   const hasEnglishWorkContext = EN_WORK_CONTEXT_RE.test(text);

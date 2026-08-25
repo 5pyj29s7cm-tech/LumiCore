@@ -230,7 +230,7 @@ describe('completion guard generic execution claims', () => {
     expect(result.blocked).toBe(true);
     expect(result.reason).toContain('current-turn tool execution');
     expect(result.text).toContain('\u64cd\u4f5c\u8fd8\u6ca1\u6709\u6210\u529f\u542f\u52a8');
-    expect(result.text).not.toContain('No successful current-turn tool execution');
+    expect(result.text).not.toMatch(/No successful|current-turn|tool execution|execution-status claim|\u6267\u884c\u5668|\u5de5\u5177\u94fe/iu);
   });
 
   it('allows a write-completion claim only with current-turn producer evidence', () => {
@@ -494,6 +494,50 @@ describe('completion guard generic execution claims', () => {
     });
     expect(explanation.blocked).toBe(false);
     expect(fact.blocked).toBe(false);
+  });
+
+  it.each([
+    {
+      label: 'discussion',
+      task: '我们先讨论一下任务执行为什么容易丢上下文，不要调用工具。',
+      response: '我现在就开始解释：关键在于路由、回执和上下文恢复没有形成同一条链。',
+    },
+    {
+      label: 'intent',
+      task: '如果以后需要执行任务，你打算怎么处理？',
+      response: '我的意向是先确认目标和边界，再决定是否需要实际操作。',
+    },
+    {
+      label: 'clarification',
+      task: '你说“现在就做”到底是什么意思？',
+      response: '我现在就开始澄清这个说法：它表示承接要求，不代表此刻已经完成了外部操作。',
+    },
+  ])('keeps ordinary $label turns out of the execution guard', ({ task, response }) => {
+    const result = guardCompletionClaims({ task, response, toolCalls: [] });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(response);
+    expect(result.text).not.toMatch(/No successful|current-turn|tool execution|execution-status claim/iu);
+  });
+
+  it.each([
+    {
+      task: '启动桌面上的微信程序。',
+      response: '已经完成。',
+      expected: '桌面操作还不能确认完成',
+    },
+    {
+      task: 'launch WeChat from the desktop',
+      response: 'Completed successfully.',
+      expected: 'desktop action does not yet have a verified completion result',
+    },
+  ])('keeps real unsupported completion claims blocked without exposing guard internals', ({ task, response, expected }) => {
+    const result = guardCompletionClaims({ task, response, toolCalls: [] });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBeTruthy();
+    expect(result.text.toLowerCase()).toContain(expected.toLowerCase());
+    expect(result.text).not.toMatch(/No successful|current-turn|tool execution|execution-status claim|执行器|工具链|这一轮没有.*工具/iu);
   });
 
   it.each([

@@ -20,7 +20,7 @@ export interface CompletionGuardResult {
 
 function buildActionPromiseGuardedResponse(
   task: string,
-  reason: string,
+  _reason: string,
   failed: ToolExecutionRecord[],
 ): string {
   const isZh = /[\u3400-\u9fff]/.test(task);
@@ -34,45 +34,45 @@ function buildActionPromiseGuardedResponse(
   if (!isZh) {
     if (clientSurfaceTask) {
       return [
-        `I have not actually operated the Lumi client yet: ${reason}`,
-        lastFailure ? `Latest blocker: ${lastFailure}.` : 'What I can verify: no successful client_get_state/client_action evidence was recorded for this turn.',
-        'Next step: inspect client_get_state, then run the matching client_action and trust only its verification result.',
+        'I have not operated the Lumi client yet.',
+        lastFailure ? `Latest issue: ${lastFailure}.` : 'No client change has been verified yet.',
+        'I will keep the request intact and continue with the matching client action; I will ask only if permission or missing input is required.',
       ].filter(Boolean).join('\n');
     }
     if (desktopActionTask) {
       return [
-        `I have not verified the desktop action yet: ${reason}`,
-        lastFailure ? `Latest blocker: ${lastFailure}.` : 'What I can verify: no successful desktop action evidence was recorded for this turn.',
-        'Next step: continue the real open/focus/check workflow, then report only after the window or process is verified.',
+        'I have not verified the desktop action yet.',
+        lastFailure ? `Latest issue: ${lastFailure}.` : 'The requested window or process state has not been confirmed yet.',
+        'I will keep locating, opening, or checking the target and report once its actual state is confirmed.',
       ].filter(Boolean).join('\n');
     }
     if (confirmationBlocked) {
       return [
-        `I did start the workflow, but it is blocked at a confirmation step: ${reason}`,
-        lastFailure ? `Latest blocker: ${lastFailure}.` : '',
-        'Next step: confirm the requested local action in the client, or ask me to retry after giving explicit approval.',
+        'I started the request, but it is waiting for confirmation.',
+        lastFailure ? `Latest issue: ${lastFailure}.` : '',
+        'Confirm the requested local action in the client, or explicitly ask me to retry with approval.',
       ].filter(Boolean).join('\n');
     }
     return [
-      `I have not actually started that action yet: ${reason}`,
-      lastFailure ? `Latest blocker: ${lastFailure}.` : 'What I can verify: this turn produced only a text reply, with no successful tool evidence.',
-      'Next step: provide or select the file/location, then I should run the real read/open/review tool and show progress before giving the result.',
+      'I have not started the requested action yet.',
+      lastFailure ? `Latest issue: ${lastFailure}.` : 'I do not yet have a result from the requested content or location.',
+      'I will keep the request intact and continue once the required content or location is available.',
     ].filter(Boolean).join('\n');
   }
 
   if (clientSurfaceTask) {
     return [
-      '我还没有真正操作客户端：这一轮没有记录到成功的 client_get_state / client_action 证据。',
-      lastFailure ? `最近的阻塞点：${lastFailure}。` : '现在能确认的是：这次没有完成可验证的客户端状态读取或界面动作。',
-      '下一步应该先读取客户端状态；如果是打开中枢世界，就调用 client_action(open_nexus)，并等验证结果后再说完成。',
+      '\u6211\u8fd8\u6ca1\u6709\u771f\u6b63\u64cd\u4f5c\u5ba2\u6237\u7aef\u3002', // i18n-allow: reviewed Chinese completion-guard response.
+      lastFailure ? `\u6700\u8fd1\u9047\u5230\u7684\u95ee\u9898\uff1a${lastFailure}\u3002` : '\u5ba2\u6237\u7aef\u754c\u9762\u8fd8\u6ca1\u6709\u53d1\u751f\u53ef\u786e\u8ba4\u7684\u53d8\u5316\u3002', // i18n-allow: reviewed Chinese completion-guard response.
+      '\u6211\u4f1a\u4fdd\u7559\u4f60\u7684\u8981\u6c42\uff0c\u5e76\u901a\u8fc7 client_get_state / client_action \u7ee7\u7eed\u5b8c\u6210\u5bf9\u5e94\u52a8\u4f5c\uff1b\u53ea\u6709\u786e\u5b9e\u9700\u8981\u6743\u9650\u6216\u8865\u5145\u4fe1\u606f\u65f6\u624d\u4f1a\u8bf7\u4f60\u5904\u7406\u3002', // i18n-allow: reviewed Chinese completion-guard response.
     ].filter(Boolean).join('\n');
   }
 
   if (desktopActionTask) {
     return [
-      `\u6211\u8fd8\u6ca1\u6709\u62ff\u5230\u53ef\u786e\u8ba4\u7684\u684c\u9762\u52a8\u4f5c\u7ed3\u679c\uff1a${reason}\u3002`,
-      lastFailure ? `\u6700\u8fd1\u7684\u963b\u585e\u70b9\uff1a${lastFailure}\u3002` : '\u73b0\u5728\u80fd\u786e\u8ba4\u7684\u662f\uff1a\u8fd9\u4e00\u8f6e\u8fd8\u6ca1\u6709\u6210\u529f\u7684\u684c\u9762\u6253\u5f00\u3001\u805a\u7126\u6216\u8fdb\u7a0b\u9a8c\u8bc1\u8bb0\u5f55\u3002',
-      '\u4e0b\u4e00\u6b65\u5e94\u8be5\u7ee7\u7eed\u6267\u884c\u6253\u5f00\u3001\u5b9a\u4f4d\u6216\u786e\u8ba4\u52a8\u4f5c\uff0c\u770b\u5230\u771f\u5b9e\u7a97\u53e3\u6216\u5de5\u5177\u8fd4\u56de\u6210\u529f\u540e\u518d\u6c47\u62a5\u5b8c\u6210\u3002',
+      '\u6211\u8fd8\u6ca1\u6709\u62ff\u5230\u53ef\u786e\u8ba4\u7684\u684c\u9762\u52a8\u4f5c\u7ed3\u679c\u3002', // i18n-allow: reviewed Chinese completion-guard response.
+      lastFailure ? `\u6700\u8fd1\u9047\u5230\u7684\u95ee\u9898\uff1a${lastFailure}\u3002` : '\u76ee\u6807\u7a97\u53e3\u6216\u8fdb\u7a0b\u72b6\u6001\u8fd8\u6ca1\u6709\u5f97\u5230\u786e\u8ba4\u3002', // i18n-allow: reviewed Chinese completion-guard response.
+      '\u6211\u4f1a\u7ee7\u7eed\u5b9a\u4f4d\u3001\u6253\u5f00\u6216\u68c0\u67e5\u76ee\u6807\uff0c\u786e\u8ba4\u771f\u5b9e\u72b6\u6001\u540e\u518d\u6c47\u62a5\u3002', // i18n-allow: reviewed Chinese completion-guard response.
     ].filter(Boolean).join('\n');
   }
 
@@ -85,9 +85,9 @@ function buildActionPromiseGuardedResponse(
   }
 
   return [
-    '我还没有真正开始读取或审查：这一轮没有记录到成功的工具执行。',
-    lastFailure ? `最近的阻塞点：${lastFailure}。` : '现在能确认的是：这次只是生成了文字回复，没有实际读到文件内容。',
-    '下一步需要先拿到可读取的文件或位置；真正读取时，聊天窗会显示“正在读取文件”等进度，工具小组件也会出现执行记录。',
+    '\u6211\u8fd8\u6ca1\u6709\u771f\u6b63\u5f00\u59cb\u8bfb\u53d6\u6216\u5ba1\u67e5\u3002', // i18n-allow: reviewed Chinese completion-guard response.
+    lastFailure ? `\u6700\u8fd1\u9047\u5230\u7684\u95ee\u9898\uff1a${lastFailure}\u3002` : '\u76ee\u524d\u8fd8\u6ca1\u6709\u5b9e\u9645\u8bfb\u5230\u6587\u4ef6\u5185\u5bb9\u3002', // i18n-allow: reviewed Chinese completion-guard response.
+    '\u6211\u4f1a\u4fdd\u7559\u4f60\u7684\u8981\u6c42\uff1b\u62ff\u5230\u53ef\u8bfb\u53d6\u7684\u6587\u4ef6\u6216\u4f4d\u7f6e\u540e\u7ee7\u7eed\u5904\u7406\u3002', // i18n-allow: reviewed Chinese completion-guard response.
   ].filter(Boolean).join('\n');
 }
 
@@ -114,7 +114,7 @@ const SELF_COMPLETION_CLAIM_EN_RE =
 
 const SELF_EXECUTION_STATUS_RE =
   // i18n-allow: Chinese immediate-execution recognition pattern; not user-visible copy.
-  /(?:(?:我|我们|这边)\s*(?:(?:现在(?:就|马上)?|马上|立即)\s*(?:就\s*)?(?:做|动手|开始|执行|处理|操作|写|新建|创建|保存|生成|发送|打开|继续)|正在\s*(?:做|执行|处理|操作|写|新建|创建|保存|生成|发送|打开|继续))|(?:^|[\n。！？!?；;])\s*(?:(?:好|好的|可以|行)[，,\s]*)?(?:现在就做(?:这件事|这个任务)?|马上(?:就)?动手(?:处理)?|正在(?:执行|处理|操作)(?:中|这个任务|该任务)?)(?=$|[，,。！？!?；;：:\n])|\b(?:I(?:'m| am)\s+(?:doing|executing|working on)\s+(?:it|this)(?:\s+now)?|I(?:'ll| will)\s+(?:do|start|execute|handle)\s+(?:it|this)\s+now)\b)/iu;
+  /(?:(?:我|我们|这边)\s*(?:(?:现在(?:就|马上)?|马上|立即)\s*(?:就\s*)?(?:做|动手|开始\s*(?:做|动手|执行|处理|操作|写|新建|创建|保存|生成|发送|打开|继续|读取|查看|检查|审查|分析)|执行|处理|操作|写|新建|创建|保存|生成|发送|打开|继续)|正在\s*(?:做|执行|处理|操作|写|新建|创建|保存|生成|发送|打开|继续))|(?:^|[\n。！？!?；;])\s*(?:(?:好|好的|可以|行)[，,\s]*)?(?:现在就做(?:这件事|这个任务)?|马上(?:就)?动手(?:处理)?|正在(?:执行|处理|操作)(?:中|这个任务|该任务)?)(?=$|[，,。！？!?；;：:\n])|\b(?:I(?:'m| am)\s+(?:doing|executing|working on)\s+(?:it|this)(?:\s+now)?|I(?:'ll| will)\s+(?:do|start|execute|handle)\s+(?:it|this)\s+now)\b)/iu;
 
 const REFLECTIVE_SELF_IMPROVEMENT_ACTION_RE =
   // i18n-allow: Chinese reflective-action recognition pattern; not user-visible copy.
@@ -230,7 +230,7 @@ function stripNegatedClaimClauses(value: string): string {
       ' ',
     )
     .replace(
-      /(?:\u6ca1\u6709|\u6ca1|\u5e76\u672a|\u5c1a\u672a|\u672a\u66fe|\u4e0d\u4f1a|\u4e0d\u80fd|\u4e0d\u5e94|\u4e0d\u8981|\u7981\u6b62|\u672a)(?=[^\u3002\uFF1B\uFF01\uFF1F\n\r]{0,48}(?:\u5b8c\u6210|\u505a\u5b8c|\u505a\u597d|\u641e\u5b9a|\u6253\u5f00|\u542f\u52a8|\u53d1\u9001|\u751f\u6210|\u65b0\u5efa|\u521b\u5efa|\u4fdd\u5b58|\u5bfc\u51fa|\u5199\u5165|\u5199\u597d|\u5199\u5b8c|\u8bfb\u53d6|\u67e5\u770b|\u8c03\u7528|\u4f7f\u7528|\u6267\u884c|\u5904\u7406))[^\u3002\uFF1B\uFF01\uFF1F\n\r]*/gu,
+      /(?:\u6ca1\u6709|\u6ca1|\u5e76\u672a|\u5c1a\u672a|\u672a\u66fe|\u4e0d\u4f1a|\u4e0d\u80fd|\u4e0d\u5e94|\u4e0d\u8981|\u7981\u6b62|(?:\u5e76)?\u4e0d(?:\u4ee3\u8868|\u610f\u5473\u7740)|\u672a)(?=[^\u3002\uFF1B\uFF01\uFF1F\n\r]{0,48}(?:\u5b8c\u6210|\u505a\u5b8c|\u505a\u597d|\u641e\u5b9a|\u6253\u5f00|\u542f\u52a8|\u53d1\u9001|\u751f\u6210|\u65b0\u5efa|\u521b\u5efa|\u4fdd\u5b58|\u5bfc\u51fa|\u5199\u5165|\u5199\u597d|\u5199\u5b8c|\u8bfb\u53d6|\u67e5\u770b|\u8c03\u7528|\u4f7f\u7528|\u6267\u884c|\u5904\u7406))[^\u3002\uFF1B\uFF01\uFF1F\n\r]*/gu,
       ' ',
     )
     .replace(
@@ -470,14 +470,14 @@ function buildExecutionStatusGuardedResponse(
   if (!isZh) {
     return [
       'That action has not started successfully.',
-      lastFailure ? `Concrete blocker: ${lastFailure}.` : 'Concrete blocker: the executor did not select or start a tool that can perform the requested action.',
-      'The task context remains intact. Lumi should retry the real tool route internally and interrupt you only if a specific permission or missing input is required.',
+      lastFailure ? `Latest issue: ${lastFailure}.` : 'I do not yet have a result showing that it started.',
+      'I will keep the request intact and continue; if permission or missing input is required, I will ask for it directly.',
     ].filter(Boolean).join('\n');
   }
   return [
     '\u8fd9\u9879\u64cd\u4f5c\u8fd8\u6ca1\u6709\u6210\u529f\u542f\u52a8\u3002', // i18n-allow: reviewed Chinese execution-guard response.
-    lastFailure ? `\u5177\u4f53\u963b\u585e\uff1a${lastFailure}\u3002` : '\u5177\u4f53\u963b\u585e\uff1a\u6267\u884c\u5668\u6ca1\u6709\u9009\u4e2d\u6216\u542f\u52a8\u80fd\u591f\u5b8c\u6210\u8be5\u8bf7\u6c42\u7684\u5de5\u5177\u3002', // i18n-allow: reviewed Chinese execution-guard response.
-    '\u4efb\u52a1\u4e0a\u4e0b\u6587\u4f1a\u4fdd\u7559\uff1bLumi \u5e94\u8be5\u5728\u5185\u90e8\u91cd\u8bd5\u771f\u5b9e\u5de5\u5177\u94fe\uff0c\u53ea\u6709\u786e\u5b9e\u9700\u8981\u4f60\u7684\u6743\u9650\u6216\u8865\u5145\u4fe1\u606f\u65f6\u624d\u6253\u65ad\u4f60\u3002', // i18n-allow: reviewed Chinese execution-guard response.
+    lastFailure ? `\u6700\u8fd1\u9047\u5230\u7684\u95ee\u9898\uff1a${lastFailure}\u3002` : '\u6211\u8fd8\u6ca1\u6709\u62ff\u5230\u80fd\u8bf4\u660e\u64cd\u4f5c\u5df2\u5f00\u59cb\u7684\u7ed3\u679c\u3002', // i18n-allow: reviewed Chinese execution-guard response.
+    '\u6211\u4f1a\u4fdd\u7559\u4f60\u7684\u8981\u6c42\u5e76\u7ee7\u7eed\u5904\u7406\uff1b\u5982\u679c\u786e\u5b9e\u9700\u8981\u6743\u9650\u6216\u8865\u5145\u4fe1\u606f\uff0c\u6211\u4f1a\u76f4\u63a5\u8bf4\u660e\u3002', // i18n-allow: reviewed Chinese execution-guard response.
   ].filter(Boolean).join('\n');
 }
 
@@ -665,7 +665,7 @@ function extractLocalPaths(text: string): string[] {
 
 function buildGuardedResponse(
   task: string,
-  reason: string,
+  _reason: string,
   successful: ToolExecutionRecord[],
   failed: ToolExecutionRecord[],
 ): string {
@@ -680,68 +680,68 @@ function buildGuardedResponse(
 
   if (isZh && desktopActionTask && !clientSurfaceTask) {
     return [
-      `\u6211\u5df2\u7ecf\u5c1d\u8bd5\u4e86\u684c\u9762\u52a8\u4f5c\uff0c\u4f46\u8fd8\u4e0d\u80fd\u786e\u8ba4\u5b8c\u6210\uff1a${reason}\u3002`,
-      lastSuccess ? `\u5df2\u6210\u529f\u6267\u884c\uff1a${lastSuccess}\uff1b\u4f46\u8fd9\u4e9b\u56de\u6267\u4e0d\u662f\u5b8c\u6210\u5f53\u524d\u8bf7\u6c42\u6240\u9700\u7684\u684c\u9762\u8bc1\u636e\u3002` : '\u76ee\u524d\u6ca1\u6709\u8bb0\u5f55\u5230\u6210\u529f\u7684\u684c\u9762\u6253\u5f00\u3001\u805a\u7126\u6216\u8fdb\u7a0b\u9a8c\u8bc1\u3002', // i18n-allow: reviewed Chinese evidence-accuracy response.
+      '\u8fd9\u9879\u684c\u9762\u64cd\u4f5c\u8fd8\u4e0d\u80fd\u786e\u8ba4\u5b8c\u6210\u3002', // i18n-allow: reviewed Chinese completion-guard response.
+      lastSuccess ? `\u5df2\u6210\u529f\u6267\u884c\uff1a${lastSuccess}\uff1b\u4f46\u8fd9\u4e9b\u56de\u6267\u4e0d\u662f\u5b8c\u6210\u5f53\u524d\u8bf7\u6c42\u6240\u9700\u7684\u684c\u9762\u8bc1\u636e\u3002` : '\u76ee\u6807\u7a97\u53e3\u6216\u8fdb\u7a0b\u7684\u6700\u7ec8\u72b6\u6001\u8fd8\u6ca1\u6709\u5f97\u5230\u786e\u8ba4\u3002', // i18n-allow: reviewed Chinese evidence-accuracy response.
       lastFailure ? `\u6700\u8fd1\u7684\u963b\u585e\u70b9\uff1a${lastFailure}\u3002` : '',
-      '\u4e0b\u4e00\u6b65\u5e94\u8be5\u7ee7\u7eed\u5b9a\u4f4d\u3001\u6253\u5f00\u6216\u805a\u7126\u76ee\u6807\uff0c\u5e76\u5728\u771f\u5b9e\u7a97\u53e3\u6216\u8fdb\u7a0b\u786e\u8ba4\u540e\u518d\u6c47\u62a5\u5b8c\u6210\u3002',
+      '\u6211\u4f1a\u7ee7\u7eed\u5b9a\u4f4d\u3001\u6253\u5f00\u6216\u805a\u7126\u76ee\u6807\uff0c\u786e\u8ba4\u771f\u5b9e\u7a97\u53e3\u6216\u8fdb\u7a0b\u540e\u518d\u6c47\u62a5\u3002',
     ].filter(Boolean).join('\n');
   }
 
   if (!isZh) {
     if (clientSurfaceTask) {
       return [
-        `I cannot honestly say the Lumi client action is complete yet: ${reason}.`,
-        lastSuccess ? `Successfully executed: ${lastSuccess}; those receipts do not prove the requested client action completed.` : 'Verified so far: no successful client state/action evidence was recorded.',
+        'The Lumi client action does not yet have a verified completion result.',
+        lastSuccess ? `Successfully executed: ${lastSuccess}; those receipts do not prove the requested client action completed.` : 'The requested client state has not been confirmed yet.',
         lastFailure ? `Latest blocker: ${lastFailure}.` : '',
-        'Next step: run or retry the real client_get_state/client_action path, then report the verified state.',
+        'I will continue with the requested client action and report once its actual state is confirmed.',
       ].filter(Boolean).join('\n');
     }
     if (desktopActionTask) {
       return [
-        `I tried the desktop action, but cannot mark it complete yet: ${reason}.`,
-        lastSuccess ? `Successfully executed: ${lastSuccess}; those receipts are not the desktop evidence required to complete this request.` : 'Verified so far: no successful desktop action was recorded.',
+        'The desktop action does not yet have a verified completion result.',
+        lastSuccess ? `Successfully executed: ${lastSuccess}; those receipts are not the desktop evidence required to complete this request.` : 'The requested window or process state has not been confirmed yet.',
         lastFailure ? `Latest blocker: ${lastFailure}.` : '',
-        'Next step: keep locating/opening/focusing the target and verify the real window or process before reporting completion.',
+        'I will keep locating, opening, or focusing the target and report once the real window or process is confirmed.',
       ].filter(Boolean).join('\n');
     }
     if (confirmationBlocked) {
       return [
-        `I started the workflow, but cannot mark it complete yet: ${reason}.`,
-        lastSuccess ? `Verified so far: successful tools: ${lastSuccess}.` : '',
+        'I started the request, but it is waiting for confirmation and is not complete yet.',
+        lastSuccess ? `Verified so far: ${lastSuccess}.` : '',
         lastFailure ? `Latest blocker: ${lastFailure}.` : '',
-        'Next step: confirm the gated action in the client or explicitly ask me to retry with approval.',
+        'Confirm the action in the client, or explicitly ask me to retry with approval.',
       ].filter(Boolean).join('\n');
     }
     return [
-      `I cannot honestly mark this complete yet: ${reason}.`,
-      lastSuccess ? `Successfully executed: ${lastSuccess}; those results are not the evidence required to complete the current request.` : 'Verified so far: no successful tool execution was recorded.',
+      'I cannot honestly mark this complete yet.',
+      lastSuccess ? `Successfully executed: ${lastSuccess}; those results are not the evidence required to complete the current request.` : 'The requested result has not been confirmed yet.',
       lastFailure ? `Latest blocker: ${lastFailure}.` : '',
-      'Next step: continue the actual tool workflow, then verify the produced file/action before reporting completion.',
+      'I will continue the requested work and report once the result itself is confirmed.',
     ].filter(Boolean).join('\n');
   }
 
   if (clientSurfaceTask) {
     return [
-      `我还不能说客户端动作已经完成：${reason}。`,
-      lastSuccess ? `\u5df2\u6210\u529f\u6267\u884c\uff1a${lastSuccess}\uff1b\u4f46\u8fd9\u4e9b\u56de\u6267\u4e0d\u80fd\u8bc1\u660e\u8bf7\u6c42\u7684\u5ba2\u6237\u7aef\u52a8\u4f5c\u5df2\u7ecf\u5b8c\u6210\u3002` : '目前没有记录到成功的客户端状态读取或界面动作。', // i18n-allow: reviewed Chinese evidence-accuracy response.
+      '\u5ba2\u6237\u7aef\u52a8\u4f5c\u8fd8\u6ca1\u6709\u5f97\u5230\u53ef\u786e\u8ba4\u7684\u5b8c\u6210\u7ed3\u679c\u3002', // i18n-allow: reviewed Chinese completion-guard response.
+      lastSuccess ? `\u5df2\u6210\u529f\u6267\u884c\uff1a${lastSuccess}\uff1b\u4f46\u8fd9\u4e9b\u56de\u6267\u4e0d\u80fd\u8bc1\u660e\u8bf7\u6c42\u7684\u5ba2\u6237\u7aef\u52a8\u4f5c\u5df2\u7ecf\u5b8c\u6210\u3002` : '\u8bf7\u6c42\u7684\u5ba2\u6237\u7aef\u72b6\u6001\u8fd8\u6ca1\u6709\u5f97\u5230\u786e\u8ba4\u3002', // i18n-allow: reviewed Chinese evidence-accuracy response.
       lastFailure ? `最近的阻塞点：${lastFailure}。` : '',
-      '下一步应该继续真实执行 client_get_state / client_action，并在状态验证后再汇报完成。',
+      '\u6211\u4f1a\u7ee7\u7eed\u901a\u8fc7 client_get_state / client_action \u5b8c\u6210\u5bf9\u5e94\u52a8\u4f5c\uff0c\u786e\u8ba4\u5b9e\u9645\u754c\u9762\u72b6\u6001\u540e\u518d\u6c47\u62a5\u3002',
     ].filter(Boolean).join('\n');
   }
 
   if (confirmationBlocked) {
     return [
-      `我已经开始处理，但还不能说完成：${reason}。`,
+      '\u6211\u5df2\u7ecf\u5f00\u59cb\u5904\u7406\uff0c\u4f46\u8fd9\u4e00\u6b65\u4ecd\u5728\u7b49\u5f85\u786e\u8ba4\uff0c\u8fd8\u4e0d\u80fd\u8bf4\u5b8c\u6210\u3002', // i18n-allow: reviewed Chinese completion-guard response.
       lastSuccess ? `目前能确认的成功步骤：${lastSuccess}。` : '',
       lastFailure ? `最近的阻塞点：${lastFailure}。` : '',
-      '下一步需要在客户端确认这个受控动作，或你明确授权后让我重试。',
+      '\u8bf7\u5728\u5ba2\u6237\u7aef\u786e\u8ba4\u8fd9\u4e2a\u52a8\u4f5c\uff0c\u6216\u660e\u786e\u6388\u6743\u6211\u91cd\u8bd5\u3002', // i18n-allow: reviewed Chinese completion-guard response.
     ].filter(Boolean).join('\n');
   }
 
   return [
-    `我还不能说这件事已经完成：${reason}。`,
-    lastSuccess ? `\u5df2\u6210\u529f\u6267\u884c\uff1a${lastSuccess}\uff1b\u4f46\u8fd9\u4e9b\u7ed3\u679c\u4e0d\u662f\u5b8c\u6210\u5f53\u524d\u8bf7\u6c42\u6240\u9700\u7684\u6267\u884c\u8bc1\u636e\u3002` : '目前没有记录到成功的工具执行。', // i18n-allow: reviewed Chinese evidence-accuracy response.
+    '\u6211\u8fd8\u4e0d\u80fd\u8bf4\u8fd9\u4ef6\u4e8b\u5df2\u7ecf\u5b8c\u6210\u3002', // i18n-allow: reviewed Chinese completion-guard response.
+    lastSuccess ? `\u5df2\u6210\u529f\u6267\u884c\uff1a${lastSuccess}\uff1b\u4f46\u8fd9\u4e9b\u7ed3\u679c\u4e0d\u662f\u5b8c\u6210\u5f53\u524d\u8bf7\u6c42\u6240\u9700\u7684\u6267\u884c\u8bc1\u636e\u3002` : '\u8bf7\u6c42\u7684\u5b9e\u9645\u7ed3\u679c\u8fd8\u6ca1\u6709\u5f97\u5230\u786e\u8ba4\u3002', // i18n-allow: reviewed Chinese evidence-accuracy response.
     lastFailure ? `最近的阻塞点：${lastFailure}。` : '',
-    '下一步应该继续真实执行工具，并在文件路径、桌面动作或验收结果确认后再汇报完成。',
+    '\u6211\u4f1a\u7ee7\u7eed\u5b8c\u6210\u8fd9\u9879\u5de5\u4f5c\uff0c\u5e76\u5728\u5b9e\u9645\u7ed3\u679c\u786e\u8ba4\u540e\u518d\u6c47\u62a5\u3002',
   ].filter(Boolean).join('\n');
 }

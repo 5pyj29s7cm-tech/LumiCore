@@ -5,6 +5,7 @@ import { buildPresenceHeartbeat } from '../src/hooks/usePresence';
 import { shouldAcceptVoiceStatus, waitForVoiceSocket } from '../src/hooks/useVoiceCall';
 import {
   addEchoText,
+  isEchoedImmediateVoiceControl,
   isEchoText,
   isPureInterruptCommand,
   isVoiceCallEndCommand,
@@ -168,6 +169,48 @@ describe('voice reconnect and perception continuity', () => {
     expect(client).toContain("socket.on('audio:end-call-request'");
     const voiceprint = readFileSync(path.join(root, 'src/hooks/useVoiceprint.ts'), 'utf8');
     expect(voiceprint).toContain('createScriptProcessor(2048, 1, 1)');
+  });
+
+  it('rejects echoed priority controls only while scoped TTS is active', () => {
+    const scope = `voice-echo-control-${Date.now()}`;
+    addEchoText('stop', scope);
+
+    expect(isEchoedImmediateVoiceControl('stop', true, scope)).toBe(true);
+    expect(isEchoedImmediateVoiceControl('stop', false, scope)).toBe(false);
+    expect(isEchoedImmediateVoiceControl('stop', true, `${scope}-other`)).toBe(false);
+    expect(isEchoedImmediateVoiceControl('continue', true, scope)).toBe(false);
+
+    const root = process.cwd();
+    const server = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
+    const client = readFileSync(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
+    expect(server).toContain('session.isSpeaking || Date.now() < session.ttsPlaybackUntil');
+    expect(server).toContain("socket.on('audio:playback_started'");
+    expect(client).toContain('durationMs: Math.max(1, Math.round(decoded.duration * 1_000))');
+  });
+
+  it('does not stop TTS from a raw local energy spike before semantic admission', () => {
+    const root = process.cwd();
+    const server = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
+    const client = readFileSync(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
+    const semanticLane = client.indexOf('Keep realtime STT active while Lumi speaks');
+    const branchStart = client.indexOf('if (isTtsPlaying.current) {', semanticLane);
+    const branchEnd = client.indexOf('const micAllowed =', branchStart);
+    const ttsBranch = client.slice(branchStart, branchEnd);
+
+    expect(ttsBranch).toContain("currentSocket.emit('audio:interrupt-candidate'");
+    expect(ttsBranch).not.toContain("currentSocket.emit('audio:interrupt')");
+    expect(ttsBranch).not.toContain('stopAllPlayback()');
+    expect(server).toContain("socket.on('audio:interrupt-candidate'");
+    expect(server).toContain('source=semantic_transcript');
+  });
+
+  it('uses a bounded voice history and avoids the serial advisory classifier', () => {
+    const source = readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
+    expect(source).toContain('formatCompactClientSelfPrompt(session.userId, voiceScope)');
+    expect(source).toContain('getMessagesByTokenBudget(conversationTurn.conversation.id, 6_000, 6, requestId)');
+    expect(source).toContain('processInput(routedUserText, cognitiveCtx, undefined, toolContext)');
+    expect(source).not.toContain('const llmClassifier = async');
+    expect(source).toContain('Prompt budget request=${requestId}');
   });
 
   it('authorizes only a strong decision from the current utterance', () => {

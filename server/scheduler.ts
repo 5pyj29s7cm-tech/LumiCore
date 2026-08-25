@@ -21,7 +21,8 @@ import { detectSpatiotemporalPatterns } from './time/spatiotemporal';
 import { cleanupEphemeralAgents } from './agents/orchestrator';
 import { getRecentActivity } from './context/activity_stream';
 import { runDailyScan, isFirstBootComplete } from './autonomy/system_explorer';
-import { getGateConfig } from './autonomy/safety_gate';
+import { getGateConfig, isAutonomousWorkAllowed } from './autonomy/safety_gate';
+import { createRealtimeVoicePrioritySignal } from './autonomy/foreground_activity';
 import { parseStoredOperationMode } from './cognition/operation_modes';
 import { getUserPreferredLLMConfig } from './llm/user_preferences';
 import { refreshAuthoritativeStatuteSources } from './legal/statute_authority_refresh';
@@ -273,6 +274,30 @@ export function resolveScheduledUserIds(db: any): string[] {
     if (uid) registered.add(uid);
   }
   return registered.size > 0 ? [...registered] : ['anonymous'];
+}
+
+/**
+ * Runs one background reflection behind both the autonomy gate and a live
+ * voice interruption signal. The second gate check closes the race between a
+ * scheduler tick being admitted and the model request actually starting.
+ */
+export async function runAgentAutonomousAnalysis(
+  userId: string,
+  analyze: (signal: AbortSignal) => Promise<string>,
+): Promise<string> {
+  if (!isAutonomousWorkAllowed(userId).allowed) return '';
+  const voicePriority = createRealtimeVoicePrioritySignal(userId);
+  try {
+    if (voicePriority.signal.aborted || !isAutonomousWorkAllowed(userId).allowed) return '';
+    try {
+      return await analyze(voicePriority.signal);
+    } catch (error) {
+      if (voicePriority.signal.aborted) return '';
+      throw error;
+    }
+  } finally {
+    voicePriority.dispose();
+  }
 }
 
 type LLMGetters = {
@@ -1742,6 +1767,7 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
       for (const agentRecord of autonomousAgents) {
         try {
           const userId = agentRecord.ownerUid || agentRecord.userId || 'anonymous';
+          if (!isAutonomousWorkAllowed(userId).allowed) continue;
           const domain = agentRecord.domain === 'work' && agentRecord.orgId ? 'work' : 'personal';
           const orgId = domain === 'work' ? (agentRecord.orgId || '') : '';
           const personality = personalityRegistry.getForUser(
@@ -1777,14 +1803,19 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
           runtime.loadState(userId);
 
           const analyze = async (prompt: string): Promise<string> => {
-            const result = await makeLLMCall(
-              [{ role: 'user', content: prompt }],
-              [],
-              getUserPreferredLLMConfig(userId, { maxTokens: 200, domain, orgId, source: 'scheduler_agent_autonomous_tick' }),
-              getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
-              getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay,
-            );
-            return result.text?.trim() || '';
+            return runAgentAutonomousAnalysis(userId, async signal => {
+              const result = await makeLLMCall(
+                [{ role: 'user', content: prompt }],
+                [],
+                {
+                  ...getUserPreferredLLMConfig(userId, { maxTokens: 200, domain, orgId, source: 'scheduler_agent_autonomous_tick' }),
+                  signal,
+                },
+                getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
+                getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay,
+              );
+              return result.text?.trim() || '';
+            });
           };
 
           const tickResult = await runtime.autonomousTick(userId, recentMemories, recentInteractions, analyze);

@@ -146,6 +146,87 @@ function compactPersistedToolValue(value: unknown, key = '', depth = 0): unknown
   );
 }
 
+function compactClientStateResult(value: unknown): string | null {
+  const parsed = parseJson(value);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const payload = parsed as Record<string, any>;
+  const state = payload.state && typeof payload.state === 'object' ? payload.state : null;
+  const health = payload.health && typeof payload.health === 'object' ? payload.health : null;
+  const capabilityRuntime = payload.capabilityRuntime && typeof payload.capabilityRuntime === 'object'
+    ? payload.capabilityRuntime
+    : null;
+  const summary = {
+    kind: 'client_state_summary',
+    detail: payload.detail || 'summary',
+    stateDigest: payload.stateDigest || null,
+    state: state ? {
+      updatedAt: state.updatedAt,
+      platform: state.platform,
+      mode: state.mode,
+      activeTab: state.activeTab,
+      viewMode: state.viewMode,
+      workDomain: state.workDomain,
+      settingsSection: state.settings?.activeSection,
+      focusedWindow: state.windows?.focused,
+      openWindows: Array.isArray(state.windows?.open) ? state.windows.open.slice(0, 12) : [],
+      surfaces: state.surfaces ? {
+        wallpaperMode: state.surfaces.wallpaperMode,
+        widgetMode: state.surfaces.widgetMode,
+        meetingOpen: state.surfaces.meetingOpen,
+        nexusOpen: state.surfaces.nexusOpen,
+        commandCenterOpen: state.surfaces.commandCenterOpen,
+      } : undefined,
+      runtime: state.runtime ? {
+        backendNodeRunning: state.runtime.backendNodeRunning,
+        backendPythonRunning: state.runtime.backendPythonRunning,
+        closeToBackground: state.runtime.closeToBackground,
+        autostartEnabled: state.runtime.autostartEnabled,
+        lastError: state.runtime.lastError,
+      } : undefined,
+    } : null,
+    health: health ? {
+      level: health.level,
+      stateAgeSeconds: health.stateAgeSeconds,
+      findings: Array.isArray(health.findings) ? health.findings.slice(0, 6) : [],
+    } : null,
+    capabilityRuntime,
+    scope: payload.scope || null,
+    fullDiagnosticsOmittedFromConversation: true,
+  };
+  return JSON.stringify(summary);
+}
+
+function compactToolRecordForPersistence(record: unknown): unknown {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return record;
+  const candidate = record as Record<string, any>;
+  if (String(candidate.name || candidate.toolName || '') !== 'client_get_state') return candidate;
+  const compactResult = compactClientStateResult(candidate.result);
+  if (!compactResult) return candidate;
+  const envelope = candidate.envelope && typeof candidate.envelope === 'object'
+    ? {
+        ...candidate.envelope,
+        result: compactResult,
+        receipt: {
+          kind: 'client_state_summary',
+          status: candidate.terminalVerification?.status || candidate.envelope?.status || 'succeeded',
+          fullDiagnosticsOmittedFromConversation: true,
+        },
+      }
+    : candidate.envelope;
+  return {
+    ...candidate,
+    result: compactResult,
+    ...(candidate.receipt !== undefined ? {
+      receipt: {
+        kind: 'client_state_summary',
+        status: candidate.terminalVerification?.status || 'succeeded',
+        fullDiagnosticsOmittedFromConversation: true,
+      },
+    } : {}),
+    ...(envelope !== undefined ? { envelope } : {}),
+  };
+}
+
 /**
  * Tool receipts remain useful across turns, but binary screenshots, secrets,
  * and unbounded adapter returns must never be copied into conversation rows.
@@ -157,7 +238,7 @@ export function sanitizeToolRecordsForPersistence(value: unknown): any[] | undef
   }
   if (!Array.isArray(records) || records.length === 0) return undefined;
   return records.slice(-MAX_PERSISTED_TOOL_RECORDS)
-    .map(record => compactPersistedToolValue(record));
+    .map(record => compactPersistedToolValue(compactToolRecordForPersistence(record)));
 }
 
 function boundedLabel(value: unknown): string {

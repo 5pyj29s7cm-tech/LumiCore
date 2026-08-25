@@ -58,6 +58,7 @@ type LeaseEntry = DesktopControlLeaseSnapshot & {
   controller: AbortController;
   holders: number;
   leaseMs: number;
+  ownerAbortCleanups: Set<() => void>;
   onStateChange: Set<NonNullable<AcquireDesktopControlLeaseInput['onStateChange']>>;
   onPause: Set<NonNullable<AcquireDesktopControlLeaseInput['onPause']>>;
 };
@@ -122,6 +123,11 @@ function notify(entry: LeaseEntry): void {
   }
 }
 
+function clearOwnerAbortListeners(entry: LeaseEntry): void {
+  for (const cleanup of [...entry.ownerAbortCleanups]) cleanup();
+  entry.ownerAbortCleanups.clear();
+}
+
 function clearWakeTimer(userId: string): void {
   const timer = wakeTimers.get(userId);
   if (timer) clearTimeout(timer);
@@ -171,6 +177,7 @@ function expireIfNeeded(userId: string, now = Date.now()): void {
   active.reason = 'desktop_control_lease_expired';
   active.updatedAt = nowIso(now);
   active.controller.abort(new Error(active.reason));
+  clearOwnerAbortListeners(active);
   notify(active);
   activeByUser.delete(userId);
   clearLeaseTimer(userId);
@@ -183,6 +190,7 @@ function pauseEntry(entry: LeaseEntry, reason: string): void {
   entry.updatedAt = nowIso();
   entry.windowBinding = undefined;
   entry.controller.abort(new Error(reason));
+  clearOwnerAbortListeners(entry);
   notify(entry);
   for (const listener of entry.onPause) {
     try { listener(reason); } catch {}
@@ -209,17 +217,45 @@ function grant(input: AcquireDesktopControlLeaseInput, priority: number): Deskto
     controller: new AbortController(),
     holders: 1,
     leaseMs,
+    ownerAbortCleanups: new Set(),
     onStateChange: new Set(input.onStateChange ? [input.onStateChange] : []),
     onPause: new Set(input.onPause ? [input.onPause] : []),
   };
   activeByUser.set(entry.userId, entry);
   scheduleLeaseExpiry(entry);
   notify(entry);
-  return handleFor(entry);
+  return handleFor(entry, input.signal);
 }
 
-function handleFor(entry: LeaseEntry): DesktopControlLeaseHandle {
+function handleFor(entry: LeaseEntry, ownerSignal?: AbortSignal): DesktopControlLeaseHandle {
   let released = false;
+  let detachOwnerAbort = () => undefined;
+  const release = (reason = 'desktop_control_released') => {
+    if (released) return;
+    released = true;
+    detachOwnerAbort();
+    entry.holders = Math.max(0, entry.holders - 1);
+    if (entry.holders > 0 || entry.status !== 'active') return;
+    entry.status = 'released';
+    entry.reason = reason;
+    entry.updatedAt = nowIso();
+    entry.windowBinding = undefined;
+    notify(entry);
+    if (activeByUser.get(entry.userId) === entry) {
+      activeByUser.delete(entry.userId);
+      clearLeaseTimer(entry.userId);
+    }
+    dispatchNext(entry.userId);
+  };
+  if (ownerSignal) {
+    const onOwnerAbort = () => release('desktop_control_owner_cancelled');
+    detachOwnerAbort = () => {
+      ownerSignal.removeEventListener('abort', onOwnerAbort);
+      entry.ownerAbortCleanups.delete(detachOwnerAbort);
+    };
+    entry.ownerAbortCleanups.add(detachOwnerAbort);
+    ownerSignal.addEventListener('abort', onOwnerAbort, { once: true });
+  }
   return {
     leaseId: entry.leaseId,
     signal: entry.controller.signal,
@@ -239,22 +275,7 @@ function handleFor(entry: LeaseEntry): DesktopControlLeaseHandle {
       notify(entry);
       return true;
     },
-    release(reason = 'desktop_control_released') {
-      if (released) return;
-      released = true;
-      entry.holders = Math.max(0, entry.holders - 1);
-      if (entry.holders > 0 || entry.status !== 'active') return;
-      entry.status = 'released';
-      entry.reason = reason;
-      entry.updatedAt = nowIso();
-      entry.windowBinding = undefined;
-      notify(entry);
-      if (activeByUser.get(entry.userId) === entry) {
-        activeByUser.delete(entry.userId);
-        clearLeaseTimer(entry.userId);
-      }
-      dispatchNext(entry.userId);
-    },
+    release,
   };
 }
 
@@ -303,10 +324,15 @@ export function acquireDesktopControlLease(input: AcquireDesktopControlLeaseInpu
     if (input.onStateChange) active.onStateChange.add(input.onStateChange);
     if (input.onPause) active.onPause.add(input.onPause);
     active.updatedAt = nowIso();
-    return Promise.resolve(handleFor(active));
+    return Promise.resolve(handleFor(active, input.signal));
   }
 
-  if (active && priority > active.priority && /autonom|background/i.test(active.source)) {
+  if (active && /voice/i.test(active.source) && /voice/i.test(normalizedInput.source)) {
+    // Live voice is a single foreground desktop lane per user. A newer turn
+    // must supersede an abandoned prior-turn lease instead of waiting for its
+    // full timeout; the old handle is aborted so it cannot keep controlling UI.
+    pauseEntry(active, 'desktop_control_superseded_by_new_voice_turn');
+  } else if (active && priority > active.priority && /autonom|background/i.test(active.source)) {
     pauseEntry(active, `desktop_control_preempted_by_${normalized(input.source, 'foreground')}`);
   }
   if (!activeByUser.has(userId) && (userActiveUntil.get(userId) || 0) <= Date.now()) {
@@ -409,7 +435,10 @@ export function getDesktopControlRuntimeSnapshot(): DesktopControlRuntimeSnapsho
 }
 
 export function resetDesktopControlLeasesForTests(): void {
-  for (const entry of activeByUser.values()) entry.controller.abort();
+  for (const entry of activeByUser.values()) {
+    entry.controller.abort();
+    clearOwnerAbortListeners(entry);
+  }
   for (const [userId, waiters] of waitersByUser.entries()) {
     for (const waiter of waiters) {
       removeWaiter(userId, waiter);

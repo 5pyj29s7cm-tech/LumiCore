@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { ToolRegistry } from '../server/tools/registry';
 import { registerClientSelfTools } from '../server/tools/definitions/client_self_tools';
 import {
+  formatCompactClientSelfPrompt,
   formatClientSelfPrompt,
   getClientActionExpectation,
   getClientCapabilities,
@@ -474,6 +475,38 @@ describe('Lumi client self model', () => {
 });
 
 describe('client self tools', () => {
+  it('keeps the voice self prompt and ordinary state receipt bounded', async () => {
+    const userId = `client_self_compact_${Date.now()}`;
+    updateClientState(userId, {
+      platform: 'desktop',
+      mode: 'assistant',
+      activeTab: 'home',
+      viewMode: 'personal',
+      workDomain: 'personal',
+      windows: { open: ['home'], focused: 'home', minimized: [] },
+      surfaces: { wallpaperMode: false, widgetMode: false },
+    });
+    const prompt = formatCompactClientSelfPrompt(userId);
+    const registry = new ToolRegistry();
+    registerClientSelfTools(registry);
+    const summaryRaw = await registry.execute('client_get_state', {}, { userId });
+    const fullRaw = await registry.execute('client_get_state', { detail: 'full' }, { userId });
+    const summary = JSON.parse(summaryRaw);
+    const full = JSON.parse(fullRaw);
+
+    expect(prompt).toContain('Current Lumi Client Facts (compact)');
+    expect(prompt).toContain('mode=assistant');
+    expect(prompt).not.toContain('### Client Adapter Registry');
+    expect(prompt.length).toBeLessThan(5_000);
+    expect(summary).toMatchObject({ detail: 'summary', inventoryTool: 'client_capability_manifest' });
+    expect(summary).not.toHaveProperty('capabilities');
+    expect(summary).not.toHaveProperty('interfaceSurfaces');
+    expect(full.detail).toBe('full');
+    expect(Array.isArray(full.capabilities)).toBe(true);
+    expect(Array.isArray(full.interfaceSurfaces)).toBe(true);
+    expect(summaryRaw.length).toBeLessThan(fullRaw.length);
+  });
+
   it('scopes client state and personal autonomy data to the active workspace', async () => {
     const userId = 'client_self_tool_scope_user';
     updateClientState(userId, {

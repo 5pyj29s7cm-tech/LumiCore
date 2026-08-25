@@ -335,6 +335,19 @@ function autoDispatchPreference(config: LLMCallConfig) {
   };
 }
 
+/**
+ * An explicit caller budget is a contract. Classifiers and other bounded
+ * control-plane calls must not silently become 4k-token reasoning requests
+ * merely because the selected model can reason. Full reasoning calls that do
+ * not provide a budget keep the generous default.
+ */
+export function resolveModelMaxTokens(model: string, requested?: number): number | undefined {
+  if (Number.isFinite(requested) && Number(requested) > 0) {
+    return Math.max(1, Math.floor(Number(requested)));
+  }
+  return isReasoningModel(model) ? 8_000 : undefined;
+}
+
 function pinnedFailoverDispatchPreference(config: LLMCallConfig) {
   if (config.role === 'vision' || config.role === 'world') return null;
   // A disabled/removed signed provider is an explicit trust-state change.
@@ -1018,9 +1031,7 @@ export async function makeLLMCallDirect(
 
   // ── Privacy gate: strict mode blocks cloud providers ──
   // Reasoning models need high token budget — their CoT eats into max_tokens
-  const maxTokens = isReasoningModel(config.model)
-    ? Math.max(config.maxTokens || 8000, 4000)
-    : config.maxTokens;
+  const maxTokens = resolveModelMaxTokens(config.model, config.maxTokens);
 
   if (config.provider === 'auto') {
     throw new Error('Automatic model routing must be resolved before direct provider execution');
@@ -1457,9 +1468,7 @@ export async function makeLLMCallStreamingDirect(
   if (config.provider !== 'auto') assertProviderAllowedByPrivacy(config);
 
   // Reasoning models need high token budget
-  const maxTokens = isReasoningModel(config.model)
-    ? Math.max(config.maxTokens || 8000, 4000)
-    : config.maxTokens;
+  const maxTokens = resolveModelMaxTokens(config.model, config.maxTokens);
 
   // ── Auto/hybrid dispatch: local Ollama → cloud DeepSeek fallback ──
   if (config.provider === 'auto') {
