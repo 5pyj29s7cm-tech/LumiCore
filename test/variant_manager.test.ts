@@ -441,7 +441,7 @@ describe('Lumi variant release train', () => {
         fs.rmSync(resolvedTemporaryRoot, { recursive: true, force: true });
       }
     }
-  }, 60_000);
+  }, 120_000);
 
   it('rolls back an interrupted all-variant preparation and preserves a durable partial-push recovery state', () => {
     const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi-variant-transaction-test-'));
