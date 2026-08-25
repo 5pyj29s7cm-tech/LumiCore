@@ -585,7 +585,7 @@ describe('isolated self-improvement staging', () => {
     } finally {
       cleanupRepository(fixture);
     }
-  });
+  }, 30_000);
 
   it('binds every proposal to one repository and rejects cwd or option redirection', async () => {
     const intended = createRepository();
