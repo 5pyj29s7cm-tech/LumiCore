@@ -72,7 +72,10 @@ import type { ToolPolicy } from '../../../personality/types';
 import { requestsOrganizationScope, resolvePersonalOrganizationScope } from '../../../messaging/personal_org_scope';
 import { buildLumiTurnDispatch, type LumiTurnDispatch } from '../../../cognition/turn_dispatch';
 import { buildLumiExecutionPipeline, type LumiExecutionPipeline } from '../../../cognition/execution_pipeline';
-import { buildModelCapabilityPolicy } from '../../../cognition/capability_selection';
+import {
+  buildModelCapabilityPolicy,
+  buildModelToolProjection,
+} from '../../../cognition/capability_selection';
 import { buildLumiRuntimeCapabilityContext } from '../../../cognition/capability_context';
 import { buildInteractionModeOverlay } from '../../../cognition/turn_flow';
 import { bindCapabilityExecutionPlanTask } from '../../../cognition/capability_execution_plan';
@@ -1687,6 +1690,7 @@ export async function processWithPersonality(
   const turnFlow = turnDispatch.flow;
   const executionDecision = executionPlan.execution;
   const modelToolPolicy = buildModelCapabilityPolicy(executionDecision);
+  const modelToolProjection = buildModelToolProjection(executionDecision);
   const capabilitySelection = executionPlan.capabilityPlan;
   const actionFollowupIntent = classifyConversationActionFollowupIntent(
     requestText,
@@ -2217,6 +2221,7 @@ export async function processWithPersonality(
           routedTaskText: routingText,
           supervisedExternalCommits: isIdentityBound,
           toolPolicy: modelToolPolicy,
+          modelToolProjection,
           source,
           llmGetters: llm as any,
           desktopRelay,

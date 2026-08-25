@@ -122,6 +122,8 @@ describe('recent action continuation', () => {
       '检查任务状态；如果还没完成，就重试。',
       'Is this task complete? If not, continue executing it.',
       'Check the task status; if unfinished, retry it.',
+      '上一轮是否调用工具？现在请调用另一个工具核实。',
+      'Did the previous turn call a tool? Now use another tool to verify it.',
     ];
     for (const text of mixedExecutionTurns) {
       expect(classifyRecentActionFollowupIntent(text), text).toBe('execute');
@@ -135,6 +137,8 @@ describe('recent action continuation', () => {
       '这个任务完成了吗？继续执行了吗？',
       'Is it done?',
       'Is it done? Continue executing?',
+      '上一轮是否调用工具？不要再次调用工具，只根据回执回答。',
+      'Did the previous turn call a tool? Now use another tool to verify?',
     ]) {
       expect(classifyConversationActionFollowupIntent(text, unfinished), text).toBe('status');
       expect(buildRecentActionContinuationBridge(text, [], unfinished), text)

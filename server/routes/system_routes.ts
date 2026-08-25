@@ -5,6 +5,7 @@ import fs from "fs";
 import path from "path";
 import { getDatabasePersistenceStatus, readDB, writeDB, isDbDirty } from "../../db_layer";
 import { logger } from "../../logger";
+import { getDataRoot } from "../config/data_path";
 import { toolRegistry } from "../tools/registry";
 import { scheduler } from "../scheduler";
 import { classifyCloudError, getCloudHealth, recordFailure, resetCircuit } from "../cloud/core";
@@ -160,12 +161,38 @@ export function getRuntimeVersionInfo() {
   };
 }
 
-function tailLogFile(filePath: string, maxLines: number): string[] {
+const MAX_RUNTIME_LOG_TAIL_BYTES = 512 * 1024;
+
+/** Read only a bounded suffix so a large diagnostic file cannot block the API. */
+export async function tailLogFile(
+  filePath: string,
+  maxLines: number,
+  maxBytes = MAX_RUNTIME_LOG_TAIL_BYTES,
+): Promise<string[]> {
+  let handle: fs.promises.FileHandle | null = null;
   try {
-    const raw = fs.readFileSync(filePath, "utf-8");
-    return raw.split(/\r?\n/).filter(Boolean).slice(-maxLines);
+    const boundedLines = Math.min(Math.max(Math.trunc(Number(maxLines)) || 1, 1), 600);
+    const boundedBytes = Math.min(
+      Math.max(Math.trunc(Number(maxBytes)) || MAX_RUNTIME_LOG_TAIL_BYTES, 1),
+      MAX_RUNTIME_LOG_TAIL_BYTES,
+    );
+    handle = await fs.promises.open(filePath, 'r');
+    const stat = await handle.stat();
+    const bytesToRead = Math.min(stat.size, boundedBytes);
+    if (bytesToRead <= 0) return [];
+    const start = Math.max(0, stat.size - bytesToRead);
+    const buffer = Buffer.allocUnsafe(bytesToRead);
+    const { bytesRead } = await handle.read(buffer, 0, bytesToRead, start);
+    let raw = buffer.subarray(0, bytesRead).toString('utf8');
+    if (start > 0) {
+      const firstCompleteLine = raw.indexOf('\n');
+      raw = firstCompleteLine >= 0 ? raw.slice(firstCompleteLine + 1) : '';
+    }
+    return raw.split(/\r?\n/).filter(Boolean).slice(-boundedLines);
   } catch {
     return [];
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
 }
 
@@ -184,6 +211,7 @@ function collectRuntimeLogSources() {
 
   addMatchingFiles(path.join(cwd, ".codex-run"), /^lumi-tauri-.*\.(out|err)\.log$/);
   addMatchingFiles(path.join(cwd, "logs"), /\.log$/i);
+  addMatchingFiles(path.join(getDataRoot(), "runtime"), /^server-\d{8}(?:-\d{3})?\.log$/i);
   addFile(path.join(cwd, "server_output.log"));
   addFile(path.join(cwd, "server_startup.log"));
 
@@ -284,21 +312,25 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
     res.json(getRuntimeVersionInfo());
   });
 
-  router.get("/runtime/logs", requireAuth, requireAdmin, requireLocalRequest, (req, res) => {
-    const maxLines = Math.min(Math.max(Number(req.query.lines) || 240, 40), 600);
-    const sources = collectRuntimeLogSources().map(source => ({
-      id: source.id,
-      path: source.path,
-      name: source.name,
-      modifiedAt: source.modifiedAt,
-      size: source.size,
-      lines: tailLogFile(source.filePath, maxLines),
-    }));
-    res.json({
-      runtime: getRuntimeVersionInfo(),
-      generatedAt: new Date().toISOString(),
-      sources,
-    });
+  router.get("/runtime/logs", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
+    try {
+      const maxLines = Math.min(Math.max(Number(req.query.lines) || 240, 40), 600);
+      const sources = await Promise.all(collectRuntimeLogSources().map(async source => ({
+        id: source.id,
+        path: source.path,
+        name: source.name,
+        modifiedAt: source.modifiedAt,
+        size: source.size,
+        lines: await tailLogFile(source.filePath, maxLines),
+      })));
+      res.json({
+        runtime: getRuntimeVersionInfo(),
+        generatedAt: new Date().toISOString(),
+        sources,
+      });
+    } catch {
+      res.status(500).json({ error: 'Runtime diagnostics are temporarily unavailable' });
+    }
   });
 
   // Health Check

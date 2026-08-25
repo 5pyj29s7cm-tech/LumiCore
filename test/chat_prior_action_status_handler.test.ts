@@ -67,8 +67,11 @@ describe('chat prior-action status handler', () => {
   const priorRequestId = `chat-prior-action-seed-${suffix}`;
   const firstRequestId = `chat-prior-action-first-${suffix}`;
   const secondRequestId = `chat-prior-action-second-${suffix}`;
+  const windowSeedRequestId = `chat-prior-action-window-seed-${suffix}`;
+  const exactReceiptRequestId = `chat-prior-action-exact-receipt-${suffix}`;
   const englishStatusQuestion = 'What did you just do, and what evidence proved it succeeded?';
   const chineseStatusQuestion = '你刚才做了什么，什么证据证明成功了？';
+  const exactReceiptQuestion = '你上一轮是否真的调用过工具？不要再次调用工具，只根据已保存的回执告诉我：工具名、成功还是失败。';
   const llmTripwire = vi.fn(() => {
     throw new Error('The prior-action status fast path must not resolve an LLM client.');
   });
@@ -219,6 +222,7 @@ describe('chat prior-action status handler', () => {
     );
     const ack = await client.timeout(5_000).emitWithAck('agent:chat', {
       text,
+      history: [],
       agentId: 'lumi',
       domain: 'personal',
       source: 'command-center-chat',
@@ -327,6 +331,106 @@ describe('chat prior-action status handler', () => {
       });
       expect(storedToolCalls(reply.toolCalls)).toEqual([]);
     }
+    expect(llmTripwire).not.toHaveBeenCalled();
+    expect(queryMemoriesVector).not.toHaveBeenCalled();
+    expect(retrieveChunks).not.toHaveBeenCalled();
+  });
+
+  it('answers the exact history-empty prior-turn tool question from the adjacent persisted receipt', async () => {
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId,
+      role: 'user',
+      content: '只读查看当前前台窗口并告诉我窗口标题。',
+      domain: 'personal',
+      orgId: '',
+      source: 'command-center-chat',
+      channel: 'chat',
+      requestId: windowSeedRequestId,
+      deferActionPreparation: true,
+    });
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId,
+      role: 'assistant',
+      content: '当前前台窗口是 LumiOS。',
+      domain: 'personal',
+      orgId: '',
+      source: 'command-center-chat',
+      channel: 'chat',
+      requestId: windowSeedRequestId,
+      llmWasCalled: true,
+      toolCalls: [{
+        id: 'active_window_receipt',
+        key: 'desktop_active_window:{}',
+        name: 'desktop_active_window',
+        arguments: {},
+        result: JSON.stringify({
+          ok: true,
+          status: 'verified',
+          title: 'LumiOS',
+          processName: 'lumi-os.exe',
+        }),
+        error: '',
+        outcome: 'success',
+        terminalVerification: {
+          status: 'verified',
+          strategy: 'terminal_receipt',
+          reason: 'active window returned',
+        },
+        envelope: {
+          status: 'verified_success',
+          verification: { status: 'verified' },
+        },
+        capability: {
+          capabilityId: 'desktop.active_window',
+          lane: 'desktop',
+          operation: 'observe',
+          risk: 'none',
+          sideEffects: [{ type: 'local_read', scope: 'foreground window', reversible: true }],
+          verification: {
+            strategy: 'terminal_receipt',
+            required: true,
+            requiredFields: ['title'],
+            successSignals: ['active window returned'],
+            limitations: [],
+          },
+        },
+      }],
+    });
+
+    const baselineReceiptCount = (readDB().conversationActionReceipts || []).length;
+    const eventStart = observedEvents.length;
+    const response = await sendStatusQuestion(exactReceiptRequestId, exactReceiptQuestion);
+
+    expect(response).toMatchObject({
+      requestId: exactReceiptRequestId,
+      conversationId,
+      source: 'command-center-chat',
+      reason: 'execution_facts',
+      finalized: true,
+      blocked: false,
+      text: '上一轮确实调用了工具：desktop_active_window（成功）。',
+    });
+    expect(response.text).not.toMatch(/desktop_poll_activity|保存产物|写入\/验收|No successful current-turn tool execution|我还不能说/iu);
+    expect(observedEvents.slice(eventStart).filter(item => (
+      String(item.payload.requestId || '') === exactReceiptRequestId
+      && (item.event === 'agent:tool_call' || item.event === 'agent:tool')
+    ))).toEqual([]);
+    expect((readDB().conversationActionReceipts || []).length).toBe(baselineReceiptCount);
+
+    const reply = (readDB().interactions || []).find((item: any) => (
+      item.role === 'assistant'
+      && String(item.requestId || item.externalMessageId || '') === exactReceiptRequestId
+    ));
+    expect(reply).toMatchObject({
+      source: 'chat_conversation_execution_facts',
+      cognitiveIntent: 'execution_facts',
+      llmWasCalled: false,
+    });
+    expect(storedToolCalls(reply?.toolCalls)).toEqual([]);
     expect(llmTripwire).not.toHaveBeenCalled();
     expect(queryMemoriesVector).not.toHaveBeenCalled();
     expect(retrieveChunks).not.toHaveBeenCalled();

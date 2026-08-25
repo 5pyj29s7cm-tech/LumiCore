@@ -26,8 +26,8 @@ import { createResilientStreamingSession, getActiveStreamingSTTProvider } from "
 import { transcribeAudioFile } from "../stt/file_transcription";
 import { computeAdaptiveEndpointSilenceMs } from "../stt/adaptive_endpointing";
 import { getMeetingAudioDir } from "../stt/artifact_paths";
-import { isVoiceProfileAccessible, voiceProfileScope } from '../tts/profile_store';
-import { synthesizeSpeech, getActiveProvider as getTTSProvider, resolveEmotionVoice } from "../tts/adapter";
+import { isVoiceProfileAccessible, listScopedVoiceProfiles, voiceProfileScope } from '../tts/profile_store';
+import { synthesizeSpeech, getActiveProvider as getTTSProvider, listVoices as listTTSVoices, resolveEmotionVoice } from "../tts/adapter";
 import { extractFirstCompleteSpeechSentence } from "../tts/speculative_sentence";
 import { recordLatency } from "../monitor/latency_store";
 import { markVoiceLatencyMilestone, startVoiceLatencyTrace } from "../monitor/voice_latency_store";
@@ -94,6 +94,7 @@ import { formatOperationModeSwitchResponse } from "../i18n/operation_mode_messag
 import { buildInternalOpenCommand } from "../i18n/naturalness_messages";
 import { buildInteractionModeOverlay } from "../cognition/turn_flow";
 import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
+import { buildModelToolProjection } from "../cognition/capability_selection";
 import { shouldRunLegacyDirectExecution } from "../cognition/legacy_route_policy";
 import { bindCapabilityExecutionPlanTask } from "../cognition/capability_execution_plan";
 import { buildForegroundMessagingArguments, executeForegroundMessagingAction } from "../cognition/foreground_messaging_execution";
@@ -197,6 +198,7 @@ interface AudioSession {
   isActive: boolean;
   ttsAbortController: AbortController | null;
   currentVoiceId: string | null;
+  voiceSwitchGeneration: number;
   personalityId: string;
   userId: string;
   agentId: string;
@@ -290,6 +292,95 @@ interface AudioSession {
   lastAcceptedCommandChunkAt: number;
   /** Requests whose remaining speech was stopped while their work kept running. */
   suppressedSpeechRequestIds: Set<string>;
+}
+
+export interface VoiceSwitchRequest {
+  voiceId?: unknown;
+  sessionId?: unknown;
+}
+
+export type VoiceSwitchSession = Pick<
+  AudioSession,
+  'isActive' | 'sessionId' | 'userId' | 'domain' | 'orgId' | 'currentVoiceId'
+>;
+
+export type VoiceSwitchResolution =
+  | {
+      accepted: true;
+      voiceId: string;
+      previousVoiceId: string | null;
+      sessionId: string;
+    }
+  | {
+      accepted: false;
+      reason: 'inactive_session' | 'session_mismatch' | 'invalid_voice_id' | 'voice_profile_scope_mismatch' | 'voice_not_available';
+      requestedVoiceId: string;
+      currentVoiceId: string | null;
+      sessionId: string;
+    };
+
+function normalizeVoiceSwitchId(value: unknown): string {
+  const voiceId = String(value || '').trim();
+  if (!voiceId || voiceId.length > 256 || /[\u0000-\u001f\u007f]/.test(voiceId)) return '';
+  return voiceId;
+}
+
+/** Validate and atomically apply a voice change without restarting microphone/STT. */
+export function applyVoiceSwitchRequest(
+  session: VoiceSwitchSession,
+  data: VoiceSwitchRequest,
+  canAccess: typeof isVoiceProfileAccessible = isVoiceProfileAccessible,
+  isAvailable: (scope: ReturnType<typeof voiceProfileScope>, voiceId: string) => boolean = () => true,
+): VoiceSwitchResolution {
+  const requestedVoiceId = normalizeVoiceSwitchId(data?.voiceId);
+  const requestedSessionId = String(data?.sessionId || '').trim();
+  const rejected = (reason: Exclude<VoiceSwitchResolution, { accepted: true }>['reason']): VoiceSwitchResolution => ({
+    accepted: false,
+    reason,
+    requestedVoiceId,
+    currentVoiceId: session.currentVoiceId,
+    sessionId: session.sessionId,
+  });
+
+  if (!session.isActive) return rejected('inactive_session');
+  if (!requestedSessionId || requestedSessionId !== session.sessionId) return rejected('session_mismatch');
+  if (!requestedVoiceId) return rejected('invalid_voice_id');
+
+  const scope = voiceProfileScope(session.userId, session.domain, session.orgId);
+  if (!canAccess(scope, requestedVoiceId)) return rejected('voice_profile_scope_mismatch');
+  if (!isAvailable(scope, requestedVoiceId)) return rejected('voice_not_available');
+
+  const previousVoiceId = session.currentVoiceId;
+  session.currentVoiceId = requestedVoiceId;
+  return {
+    accepted: true,
+    voiceId: requestedVoiceId,
+    previousVoiceId,
+    sessionId: session.sessionId,
+  };
+}
+
+async function isVoiceSwitchSelectionAvailable(
+  scope: ReturnType<typeof voiceProfileScope>,
+  voiceId: string,
+): Promise<boolean> {
+  if (voiceId === 'default') return true;
+  const provider = getTTSProvider();
+  if (!provider) return false;
+
+  const profile = listScopedVoiceProfiles(scope).find((entry: any) => String(entry?.voiceId || '') === voiceId);
+  if (profile) {
+    return String(profile.provider || 'cosyvoice') === provider
+      && profile.status !== 'training'
+      && profile.status !== 'failed';
+  }
+
+  try {
+    const voices = await listTTSVoices(provider);
+    return voices.some(voice => voice.voiceId === voiceId);
+  } catch {
+    return false;
+  }
 }
 
 interface VoiceInputTiming {
@@ -567,6 +658,7 @@ function getAudioSession(socket: Socket): AudioSession {
       isActive: false,
       ttsAbortController: null,
       currentVoiceId: null,
+      voiceSwitchGeneration: 0,
       personalityId: 'lumi',
       accumulatedText: '',
       isSpeaking: false,
@@ -1663,6 +1755,7 @@ async function processVoiceInput(
     executionDecision.toolRoute,
     toolSecurityContext.executionBoundary,
   );
+  const modelToolProjection = buildModelToolProjection(executionDecision);
   const actionFollowupIntent = classifyConversationActionFollowupIntent(
     actionIntentText,
     conversationTurn.conversation.actionContinuationState,
@@ -2088,6 +2181,7 @@ async function processVoiceInput(
       }
     },
     toolPolicy: routedToolPolicy,
+    modelToolProjection,
     desktopExecutionTracker,
   };
   const ttsProvider = getTTSProvider();
@@ -4066,6 +4160,7 @@ export function registerVoiceHandlers(
       cancelActiveVoiceTurn(session);
     }
     session.isActive = true;
+    session.voiceSwitchGeneration += 1;
     session.accumulatedText = '';
     session.isSpeaking = false;
     session.isProcessing = false;
@@ -4123,8 +4218,13 @@ export function registerVoiceHandlers(
     const voiceScope = voiceProfileScope(session.userId, session.domain, session.orgId);
     if (requestedVoiceId && !isVoiceProfileAccessible(voiceScope, requestedVoiceId)) {
       logger.warn(`[Audio] Refused voice profile from another domain: ${requestedVoiceId}`);
-      socket.emit('audio:voice_unavailable', { reason: 'voice_profile_scope_mismatch' });
       session.currentVoiceId = null;
+      socket.emit('audio:voice_unavailable', {
+        reason: 'voice_profile_scope_mismatch',
+        requestedVoiceId,
+        currentVoiceId: session.currentVoiceId,
+        sessionId: session.sessionId,
+      });
     } else {
       session.currentVoiceId = requestedVoiceId;
     }
@@ -4480,6 +4580,42 @@ export function registerVoiceHandlers(
         message: "Realtime speech recognition is not configured. Set DOUBAO_SPEECH_KEY to a new-console API Key value, or configure DASHSCOPE_API_KEY/QWEN_API_KEY. Local/OpenAI Whisper can still transcribe uploaded audio files.",
       });
     }
+  });
+
+  socket.on('audio:switch-voice', async (data: VoiceSwitchRequest = {}) => {
+    const session = getAudioSession(socket);
+    const switchGeneration = ++session.voiceSwitchGeneration;
+    const requestedVoiceId = normalizeVoiceSwitchId(data?.voiceId);
+    const scope = voiceProfileScope(session.userId, session.domain, session.orgId);
+    const available = requestedVoiceId
+      ? await isVoiceSwitchSelectionAvailable(scope, requestedVoiceId)
+      : false;
+    if (session.voiceSwitchGeneration !== switchGeneration) {
+      socket.emit('audio:voice_unavailable', {
+        accepted: false,
+        reason: 'voice_switch_superseded',
+        requestedVoiceId,
+        currentVoiceId: session.currentVoiceId,
+        sessionId: session.sessionId,
+      });
+      return;
+    }
+    const resolution = applyVoiceSwitchRequest(
+      session,
+      data,
+      isVoiceProfileAccessible,
+      () => available,
+    );
+    if (!resolution.accepted) {
+      socket.emit('audio:voice_unavailable', resolution);
+      return;
+    }
+
+    socket.emit('audio:voice_changed', {
+      voiceId: resolution.voiceId,
+      previousVoiceId: resolution.previousVoiceId,
+      sessionId: resolution.sessionId,
+    });
   });
 
   let chunkCount = 0;

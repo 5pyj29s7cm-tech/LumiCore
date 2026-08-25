@@ -20,10 +20,46 @@ const BASE = {
 };
 
 describe('background delegation', () => {
-  it('delegates moderate or complex work to background agents', () => {
+  it('keeps moderate work in the foreground and delegates genuinely complex work', () => {
     const decision = shouldDelegateWorkInBackground(BASE);
-    expect(decision.shouldDelegate).toBe(true);
-    expect(decision.reason).toBe('work_complexity_moderate');
+    expect(decision).toEqual({
+      shouldDelegate: false,
+      reason: 'moderate_foreground_work',
+    });
+
+    expect(shouldDelegateWorkInBackground({
+      ...BASE,
+      complexity: 'complex',
+    })).toEqual({
+      shouldDelegate: true,
+      reason: 'work_complexity_complex',
+    });
+  });
+
+  it('keeps the exact read-only foreground-window acceptance request out of background work', () => {
+    const text = '\u8fd9\u662f\u9694\u79bb\u7684\u53ea\u8bfb\u9a8c\u6536\u3002\u8bf7\u5b9e\u9645\u67e5\u770b\u5f53\u524d\u524d\u53f0\u7a97\u53e3\uff0c\u5fc5\u987b\u8c03\u7528\u76f8\u5e94\u684c\u9762\u89c2\u5bdf\u5de5\u5177\uff0c\u7136\u540e\u53ea\u544a\u8bc9\u6211\u7a97\u53e3\u6807\u9898\uff1b\u4e0d\u8981\u70b9\u51fb\u3001\u8f93\u5165\u6216\u4fee\u6539\u4efb\u4f55\u5185\u5bb9\u3002';
+    expect(shouldDelegateWorkInBackground({
+      ...BASE,
+      text,
+      complexity: 'moderate',
+    })).toEqual({
+      shouldDelegate: false,
+      reason: 'foreground_desktop_observation',
+    });
+  });
+
+  it('preserves an explicit multi-agent request for desktop observation', () => {
+    const text = '\u8bf7\u6d3e\u7ed9\u4e24\u4e2a\u5b50\u667a\u80fd\u4f53\u5e76\u884c\u67e5\u770b\u5f53\u524d\u524d\u53f0\u7a97\u53e3\u5e76\u4ea4\u53c9\u9a8c\u8bc1\u3002';
+    expect(shouldDelegateWorkInBackground({
+      ...BASE,
+      text,
+      complexity: 'complex',
+      directDesktop: true,
+      capabilityLane: 'desktop_control',
+    })).toEqual({
+      shouldDelegate: true,
+      reason: 'explicit_background_preference',
+    });
   });
 
   it('honors explicit background delegation preference', () => {

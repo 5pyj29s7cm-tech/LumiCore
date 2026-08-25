@@ -1,0 +1,305 @@
+import path from 'node:path';
+import type { ToolExecutionRecord } from '../tools/types';
+import { CN_USER_OUTPUT_PROTECTION_MESSAGES } from '../regions/packs/cn/user_output_protection_messages';
+
+export interface UserFacingOutputProtectionOptions {
+  task?: string;
+  toolRecords?: ToolExecutionRecord[];
+}
+
+const MAX_PERSISTED_TOOL_RECORDS = 80;
+const MAX_PERSISTED_STRING = 4_000;
+const MAX_PERSISTED_COLLECTION = 80;
+
+const DATA_URL_RE = /data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\r\n]+/iu;
+const IMAGE_BASE64_FIELD_RE = /["']?image_base64["']?\s*[:=]\s*["'][^"']*["']/iu;
+const LARGE_BASE64_RE = /(?:^|["'\s:])(?:[A-Za-z0-9+/]{320,}={0,2})(?=$|["'\s,}])/u;
+const INTERNAL_RECEIPT_RE = /(?:terminalVerification|targetIdentity|idempotencyKey|allowedTools|desktop_execution_plan_receipt|execution-status claim|work[_ -]?product[_ -]?guard)/iu;
+const RAW_WINDOW_RE = /["']?(?:window_id|process_name|executable_path)["']?\s*[:=]/iu;
+const RAW_DIRECTORY_RE = /["']?(?:modifiedMs|isDirectory|fileType)["']?\s*[:=]|(?:["']path["']\s*:\s*["'][A-Za-z]:\\[^"']+["'])/iu;
+// i18n-allow -- Chinese task-list header recognition; not user-visible copy.
+const RAW_TASKLIST_RE = /(?:Image Name\s+PID\s+Session Name|映像名称\s+PID\s+会话名)|(?:^[^\r\n]{1,80}\.exe\s+\d+\s+(?:Console|Services)\s+\d+\s+[\d,]+\s+K\s*$)/imu;
+// i18n-allow -- Chinese internal checkpoint recognition; not user-visible copy.
+const VERIFIED_CHECKPOINT_RE = /(?:已核验的执行结果|Verified execution results|immutable tool receipts|terminal=verified|verification=verified)/iu;
+const SECRET_DETAIL_RE = /((?:password|passphrase|secret|token|api.?key|authorization|cookie|credential))\s*[:=]\s*\S+/giu;
+const STRUCTURED_SECRET_DETAIL_RE = /(["'](?:password|passphrase|secret|token|api.?key|authorization|cookie|credential)["']\s*:\s*["'])[^"']+/giu;
+const GENERIC_STRUCTURED_FIELD_RE = /(["']?([A-Za-z][A-Za-z0-9_-]{0,80})["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}\]]+)/gu;
+const BEARER_SECRET_RE = /\bBearer\s+\S+/giu;
+
+function isSensitivePersistenceKey(value: string): boolean {
+  const key = String(value || '').replace(/[^a-z0-9]/giu, '').toLowerCase();
+  if (!key) return false;
+  // Token accounting is ordinary telemetry, not a credential.
+  if (/^(?:max|total|input|output|prompt|completion|reasoning|cached|estimated)?tokens?(?:count|used|usage|budget|limit)?$/u.test(key)) {
+    return false;
+  }
+  return key === 'authorization'
+    || key === 'authheader'
+    || key === 'otp'
+    || key.endsWith('token')
+    || key.endsWith('cookie')
+    || key.endsWith('apikey')
+    || key.endsWith('privatekey')
+    || key.endsWith('credential')
+    || key.endsWith('credentials')
+    || key.includes('password')
+    || key.includes('passwd')
+    || key.includes('passphrase')
+    || key.includes('passkey')
+    || key.includes('secret')
+    || key.includes('captcha')
+    || key.includes('verificationcode');
+}
+
+function stringify(value: unknown): string {
+  if (typeof value === 'string') return value;
+  try { return JSON.stringify(value); } catch { return String(value ?? ''); }
+}
+
+function parseJson(value: unknown): unknown {
+  if (value && typeof value === 'object') return value;
+  const raw = String(value || '').trim();
+  if (!raw || (!raw.startsWith('{') && !raw.startsWith('['))) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+function isChinese(value: string): boolean {
+  return /[\u3400-\u9fff]/u.test(value);
+}
+
+function hasHighStructuredDensity(value: string): boolean {
+  if (value.length < 8_000) return false;
+  const structural = (value.match(/[{}\[\]":,]/g) || []).length;
+  return structural / value.length > 0.035;
+}
+
+export function containsUnsafeToolPayload(value: unknown): boolean {
+  const raw = stringify(value);
+  if (!raw) return false;
+  return DATA_URL_RE.test(raw)
+    || IMAGE_BASE64_FIELD_RE.test(raw)
+    || LARGE_BASE64_RE.test(raw)
+    || INTERNAL_RECEIPT_RE.test(raw)
+    || RAW_WINDOW_RE.test(raw)
+    || RAW_DIRECTORY_RE.test(raw)
+    || RAW_TASKLIST_RE.test(raw)
+    || VERIFIED_CHECKPOINT_RE.test(raw)
+    || hasHighStructuredDensity(raw);
+}
+
+function redactSensitive(value: string): string {
+  return value
+    .replace(GENERIC_STRUCTURED_FIELD_RE, (match, prefix: string, key: string, secretValue: string) => {
+      if (!isSensitivePersistenceKey(key)) return match;
+      const quote = secretValue.startsWith('"')
+        ? '"'
+        : secretValue.startsWith("'")
+          ? "'"
+          : '';
+      return `${prefix}${quote}[redacted]${quote}`;
+    })
+    .replace(STRUCTURED_SECRET_DETAIL_RE, '$1[redacted]')
+    .replace(SECRET_DETAIL_RE, '$1=[redacted]')
+    .replace(BEARER_SECRET_RE, 'Bearer [redacted]')
+    .replace(/(?:sk|key)-[A-Za-z0-9_-]{8,}/giu, '[redacted]')
+    .replace(/data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\r\n]+/giu, '[image omitted]')
+    .replace(/(["']?image_base64["']?\s*[:=]\s*["'])[^"']+(["'])/giu, '$1[image omitted]$2');
+}
+
+function looksLikeLargeBase64(value: string): boolean {
+  if (/[ \t]/u.test(value)) return false;
+  const compacted = value.replace(/\s+/g, '');
+  return compacted.length > 512
+    && /^[A-Za-z0-9+/]+={0,2}$/u.test(compacted);
+}
+
+function compactPersistedToolValue(value: unknown, key = '', depth = 0): unknown {
+  if (depth > 6) return '[nested value omitted]';
+  if (key && isSensitivePersistenceKey(key)) return '[redacted]';
+  if (value === null || value === undefined || typeof value === 'number' || typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    if (/(?:image_base64|base64_image|screenshot_base64|imageData|dataUrl)/iu.test(key)) {
+      return `[binary image omitted: ${value.length} chars]`;
+    }
+    if (DATA_URL_RE.test(value) || looksLikeLargeBase64(value)) {
+      return `[binary payload omitted: ${value.length} chars]`;
+    }
+    const redacted = redactSensitive(value);
+    if (redacted.length <= MAX_PERSISTED_STRING) return redacted;
+    const tailLength = 400;
+    return `${redacted.slice(0, MAX_PERSISTED_STRING - tailLength - 48)}\n[stored result truncated: ${redacted.length} chars]\n${redacted.slice(-tailLength)}`;
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, MAX_PERSISTED_COLLECTION)
+      .map(item => compactPersistedToolValue(item, key, depth + 1));
+  }
+  if (typeof value !== 'object') return String(value).slice(0, MAX_PERSISTED_STRING);
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .slice(0, MAX_PERSISTED_COLLECTION)
+      .map(([nestedKey, nested]) => [
+        nestedKey,
+        compactPersistedToolValue(nested, nestedKey, depth + 1),
+      ]),
+  );
+}
+
+/**
+ * Tool receipts remain useful across turns, but binary screenshots, secrets,
+ * and unbounded adapter returns must never be copied into conversation rows.
+ */
+export function sanitizeToolRecordsForPersistence(value: unknown): any[] | undefined {
+  let records = value;
+  for (let depth = 0; depth < 2 && typeof records === 'string' && records.trim(); depth += 1) {
+    try { records = JSON.parse(records); } catch { return undefined; }
+  }
+  if (!Array.isArray(records) || records.length === 0) return undefined;
+  return records.slice(-MAX_PERSISTED_TOOL_RECORDS)
+    .map(record => compactPersistedToolValue(record));
+}
+
+function boundedLabel(value: unknown): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const base = path.win32.basename(raw.replace(/["']/g, '')) || raw;
+  return redactSensitive(base).replace(/[\r\n\t]+/g, ' ').trim().slice(0, 100);
+}
+
+function collectDirectoryEntries(value: unknown, output: string[], depth = 0): void {
+  if (depth > 4 || output.length >= 20 || value === null || value === undefined) return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectDirectoryEntries(item, output, depth + 1);
+    return;
+  }
+  if (typeof value !== 'object') return;
+  const record = value as Record<string, unknown>;
+  const candidate = record.name || record.fileName || record.path || record.fullPath;
+  const label = boundedLabel(candidate);
+  if (label && !output.includes(label)) output.push(label);
+  for (const [key, nested] of Object.entries(record)) {
+    if (/^(?:files|entries|items|children|results)$/iu.test(key)) {
+      collectDirectoryEntries(nested, output, depth + 1);
+    }
+  }
+}
+
+function collectProcessNames(value: unknown, output: string[], depth = 0): void {
+  if (depth > 4 || output.length >= 30 || value === null || value === undefined) return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectProcessNames(item, output, depth + 1);
+    return;
+  }
+  if (typeof value !== 'object') return;
+  const record = value as Record<string, unknown>;
+  const candidate = record.process_name || record.processName || record.name || record.executable;
+  const label = boundedLabel(candidate);
+  if (label && /(?:\.exe$|^[\p{L}\p{N} ._-]{2,80}$)/iu.test(label) && !output.includes(label)) {
+    output.push(label);
+  }
+  for (const [key, nested] of Object.entries(record)) {
+    if (/^(?:processes|items|results|windows)$/iu.test(key)) {
+      collectProcessNames(nested, output, depth + 1);
+    }
+  }
+}
+
+function resultValues(records: ToolExecutionRecord[]): unknown[] {
+  return records.map(record => parseJson(record.receipt) || parseJson(record.result)).filter(Boolean);
+}
+
+function humanSummary(
+  raw: string,
+  options: UserFacingOutputProtectionOptions,
+): string {
+  const records = options.toolRecords || [];
+  const names = records.map(record => String(record.name || ''));
+  const combined = `${options.task || ''}\n${names.join('\n')}\n${raw}`;
+  const zh = isChinese(combined);
+  const failed = records.some(record => Boolean(record.error)
+    || record.terminalVerification?.status === 'failed'
+    || record.envelope?.status === 'failed');
+  const rawValue = parseJson(raw);
+  const values = [
+    ...resultValues(records),
+    ...(rawValue ? [rawValue] : []),
+  ];
+
+  // i18n-allow -- Chinese screen-tool intent recognition; not user-visible copy.
+  const screen = /(?:screen|capture|screenshot|ocr|vision|屏幕|截图)/iu.test(combined)
+    || DATA_URL_RE.test(raw)
+    || IMAGE_BASE64_FIELD_RE.test(raw);
+  if (screen) {
+    // i18n-allow -- Chinese vision failure recognition; not user-visible copy.
+    const visionIncomplete = failed || /(?:ocr|vision|视觉|识别).{0,40}(?:failed|error|unavailable|未完成|失败|不可用)/iu.test(combined);
+    if (zh) {
+      return visionIncomplete
+        ? CN_USER_OUTPUT_PROTECTION_MESSAGES.screenVisionIncomplete
+        : CN_USER_OUTPUT_PROTECTION_MESSAGES.screenCaptured;
+    }
+    return visionIncomplete
+      ? 'The screen image was captured, but visual recognition did not finish, so I cannot reliably describe it yet. Raw image data was omitted.'
+      : 'The screen image was captured. Raw image data was omitted; I will report only the relevant visible details.';
+  }
+
+  const directory = names.some(name => /(?:list_files|list_directory|directory|desktop_files)/iu.test(name))
+    || RAW_DIRECTORY_RE.test(raw);
+  if (directory) {
+    const entries: string[] = [];
+    for (const value of values) collectDirectoryEntries(value, entries);
+    const visible = entries.slice(0, 5);
+    const count = entries.length;
+    if (zh) {
+      return visible.length > 0
+        ? CN_USER_OUTPUT_PROTECTION_MESSAGES.directoryExamples(count, visible)
+        : CN_USER_OUTPUT_PROTECTION_MESSAGES.directoryRead;
+    }
+    return visible.length > 0
+      ? `The directory was read${count ? ` (${count} item(s))` : ''}. Examples: ${visible.join(', ')}. Raw paths and system fields were omitted.`
+      : 'The directory was read. Raw paths and system fields were omitted; I can organize the result by name or type.';
+  }
+
+  const processList = names.some(name => /(?:running_processes|process_list|tasklist)/iu.test(name))
+    || RAW_TASKLIST_RE.test(raw);
+  if (processList) {
+    const processes: string[] = [];
+    for (const value of values) collectProcessNames(value, processes);
+    for (const match of raw.matchAll(/^\s*([^\s]+\.exe)\s+\d+\s+/gimu)) {
+      const label = boundedLabel(match[1]);
+      if (label && !processes.includes(label)) processes.push(label);
+      if (processes.length >= 30) break;
+    }
+    const visible = processes.slice(0, 6);
+    if (zh) {
+      return visible.length > 0
+        ? CN_USER_OUTPUT_PROTECTION_MESSAGES.processExamples(visible)
+        : CN_USER_OUTPUT_PROTECTION_MESSAGES.processesChecked;
+    }
+    return visible.length > 0
+      ? `Running programs were checked. Examples: ${visible.join(', ')}. The raw process table and system fields were omitted.`
+      : 'Running programs were checked. The raw process table and system fields were omitted; I can list only the relevant programs.';
+  }
+
+  return zh
+    ? CN_USER_OUTPUT_PROTECTION_MESSAGES.genericSummary
+    : 'The execution result was received. Raw system data was omitted for readability and privacy; only task-relevant conclusions and exceptions will be reported.';
+}
+
+/**
+ * Last-mile protection for assistant prose. It deliberately targets native
+ * tool payloads and internal receipt protocol, not ordinary user-requested
+ * JSON or code.
+ */
+export function sanitizeUserFacingExecutionOutput(
+  value: unknown,
+  options: UserFacingOutputProtectionOptions = {},
+): string {
+  const raw = stringify(value).trim();
+  if (!raw) return '';
+  const redacted = redactSensitive(raw);
+  const oversizedToolOutput = raw.length > 8_000 && (options.toolRecords || []).length > 0;
+  const oversizedUnscopedOutput = raw.length > 50_000;
+  if (!containsUnsafeToolPayload(raw) && !oversizedToolOutput && !oversizedUnscopedOutput) return redacted;
+  return humanSummary(redacted, options).slice(0, 1_200);
+}

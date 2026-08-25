@@ -2171,7 +2171,7 @@ export function DesktopUI({
     voiceprint.templatesLoaded,
   ]);
   useAmbientPoller(socket); // Ambient awareness: polls window, clipboard, idle state
-  const { callState, audioLevel, startCall, startCallRef, endCall, error: callError, transcript, interrupt, toggleMute, isMuted, switchPersonality } = useVoiceCall({
+  const { callState, audioLevel, startCall, startCallRef, switchVoice, endCall, error: callError, transcript, interrupt, toggleMute, isMuted, switchPersonality } = useVoiceCall({
     socket,
     onTranscript: appendMeetingTranscript,
   });
@@ -2181,6 +2181,9 @@ export function DesktopUI({
       : { domain: 'personal' as const }
   ), [orgConnection?.connected, orgConnection?.orgId, workDomain]);
   const getVoiceScopeOptions = useCallback(() => voiceScopeOptions, [voiceScopeOptions]);
+  useEffect(() => {
+    switchVoice(selectedVoiceId);
+  }, [selectedVoiceId, switchVoice]);
   useEffect(() => {
     void loadVoiceprintTemplates();
   }, [loadVoiceprintTemplates]);

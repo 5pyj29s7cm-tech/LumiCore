@@ -11,6 +11,7 @@ import {
   type ExternalCommitJournalAdapter,
   type ExternalCommitJournalEntry,
 } from './server/tools/external_commit_journal';
+import { sanitizeToolRecordsForPersistence } from './server/cognition/user_output_protection';
 
 // Production persistence is process-exclusive per canonical Lumi data root.
 // Acquire synchronously before even the legacy migration can inspect/copy data.
@@ -161,7 +162,7 @@ function parseStoredToolCalls(value: unknown): any[] | undefined {
 }
 
 function serializeStoredToolCalls(value: unknown): string {
-  const records = parseStoredToolCalls(value);
+  const records = sanitizeToolRecordsForPersistence(value);
   return records?.length ? JSON.stringify(records) : '';
 }
 

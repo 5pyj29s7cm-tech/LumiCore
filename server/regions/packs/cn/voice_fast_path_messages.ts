@@ -56,6 +56,7 @@ export const CN_VOICE_FAST_PATH_MESSAGES = {
   opening: (target: string) => `正在打开${target}。`,
   opened: (target: string) => `已打开${target}。`,
   partialOpen: (target: string) => `已打开${target}，但后续操作还没有验证成功。`,
+  postOpenObservationIncomplete: '后续窗口焦点核验没有完成，但这不影响已经完成的打开动作。',
   partialArtifact: (path: string) => `文件已生成：${path}。但没有在目标应用中完成对应操作。`,
   openFailed: (target: string, error: string) => `这次没能打开${target}：${formatCnToolFailureDetail(error)}`,
   openReceiptMissing: (target: string) => `这次没有拿到${target}的启动回执。`,

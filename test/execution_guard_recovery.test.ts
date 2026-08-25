@@ -11,6 +11,7 @@ import {
 } from '../server/cognition/execution_guard_recovery';
 import type { ExecutionGuardRecoveryFinalization } from '../server/cognition/execution_guard_recovery';
 import type { ToolExecutionRecord } from '../server/tools/types';
+import { sanitizeToolRecordsForPersistence } from '../server/cognition/user_output_protection';
 
 function record(patch: Partial<ToolExecutionRecord> = {}): ToolExecutionRecord {
   return {
@@ -114,8 +115,8 @@ describe('execution guard recovery', () => {
       error: 'authorization=Bearer-secret-token connection refused',
     })]);
     expect(text).toContain('这项任务还没有执行成功');
-    expect(text).toContain('client_action');
-    expect(text).toContain('[redacted]');
+    expect(text).toContain('客户端操作');
+    expect(text).not.toContain('client_action');
     expect(text).not.toContain('No successful current-turn tool execution');
     expect(text).not.toContain('我需要先真正调用');
     expect(text).not.toContain('Bearer-secret-token');
@@ -258,6 +259,163 @@ describe('execution guard recovery', () => {
     expect(successful.reason).toBe('');
   });
 
+  it('never exposes the production completion-guard interruption as assistant prose', () => {
+    const delivery = sanitizeExecutionResponseForDelivery({
+      text: [
+        '我还不能说正在执行：No successful current-turn tool execution was recorded for that execution-status claim.',
+        '这一轮没有记录到成功的真实工具执行。',
+        '我需要先真正调用对应工具，再按当前轮回执汇报进度。',
+      ].join('\n'),
+      finalized: true,
+      blocked: false,
+      reason: 'chat',
+    }, { task: '打开浏览器' });
+
+    expect(delivery.blocked).toBe(true);
+    expect(delivery.reason).toBe('execution_recovery_incomplete');
+    expect(delivery.text).toContain('还没有执行成功');
+    expect(JSON.stringify(delivery)).not.toMatch(/No successful current-turn|我还不能说正在执行|真实工具执行|先真正调用对应工具/iu);
+  });
+
+  it('summarizes screenshot payloads without forwarding base64 or internal receipt objects', () => {
+    const delivery = sanitizeExecutionResponseForDelivery({
+      text: JSON.stringify({
+        active_window: { window_id: '42', process_name: 'chrome.exe' },
+        image_base64: 'A'.repeat(16_000),
+        terminalVerification: { status: 'verified' },
+      }),
+      finalized: true,
+      blocked: false,
+    }, {
+      task: '看看当前屏幕是什么',
+      toolRecords: [record({
+        name: 'desktop_capture_screen',
+        result: JSON.stringify({ image_base64: 'A'.repeat(16_000), width: 1920, height: 1080 }),
+        terminalVerification: { status: 'verified', strategy: 'visual', reason: 'captured' },
+      }), record({
+        name: 'computer_vision',
+        error: 'vision provider unavailable',
+      })],
+    });
+
+    expect(delivery.blocked).toBe(false);
+    expect(delivery.text).toContain('已获取屏幕画面');
+    expect(delivery.text).toContain('视觉识别没有完成');
+    expect(delivery.text).not.toMatch(/image_base64|data:image|AAAAA|window_id|terminalVerification/iu);
+    expect(String(delivery.text).length).toBeLessThan(300);
+  });
+
+  it('turns raw directory JSON and tasklist tables into bounded human summaries', () => {
+    const directoryResult = JSON.stringify([
+      { path: 'C:\\Users\\Administrator\\Desktop\\alpha.docx', type: 'file', modifiedMs: 1 },
+      { path: 'C:\\Users\\Administrator\\Desktop\\beta.xlsx', type: 'file', modifiedMs: 2 },
+    ]);
+    const directory = sanitizeExecutionResponseForDelivery({
+      text: directoryResult,
+      finalized: true,
+      blocked: false,
+    }, {
+      task: '列出桌面文件',
+      toolRecords: [record({ name: 'desktop_list_files', result: directoryResult })],
+    });
+    expect(directory.text).toContain('已读取目录');
+    expect(directory.text).toContain('alpha.docx');
+    expect(directory.text).not.toMatch(/C:\\Users|modifiedMs|"path"/u);
+
+    const tasklist = sanitizeExecutionResponseForDelivery({
+      text: [
+        'Image Name                     PID Session Name        Session#    Mem Usage',
+        'chrome.exe                   12345 Console                    1    100,000 K',
+        'wps.exe                      23456 Console                    1     80,000 K',
+      ].join('\n'),
+      finalized: true,
+      blocked: false,
+    }, { task: '看看运行中的程序' });
+    expect(tasklist.text).toContain('已检查运行中的程序');
+    expect(tasklist.text).toContain('chrome.exe');
+    expect(tasklist.text).not.toMatch(/PID Session Name|100,000 K/iu);
+    expect(String(tasklist.text).length).toBeLessThan(300);
+  });
+
+  it('persists verified receipt facts without storing screenshot or oversized raw payloads', () => {
+    const records = sanitizeToolRecordsForPersistence([record({
+      name: 'desktop_capture_screen',
+      arguments: {
+        target: 'desktop',
+        credential: 'must-not-persist',
+        preview: `data:image/png;base64,${'A'.repeat(12_000)}`,
+      },
+      result: JSON.stringify({
+        image_base64: 'B'.repeat(20_000),
+        width: 1920,
+        height: 1080,
+      }),
+      terminalVerification: {
+        status: 'verified',
+        strategy: 'visual',
+        reason: 'capture completed',
+      },
+      envelope: {
+        version: 1,
+        status: 'verified_success',
+        toolName: 'desktop_capture_screen',
+        taskId: 'task-screen',
+        turnId: 'turn-screen',
+        requestId: 'request-screen',
+        idempotencyKey: 'screen-key',
+        targetIdentity: 'desktop',
+        completedAt: '2026-08-25T09:10:00.000Z',
+        result: { image_base64: 'C'.repeat(20_000) },
+        verification: { status: 'verified', reason: 'capture completed' },
+      },
+    }), record({
+      name: 'read_file',
+      result: 'plain text '.repeat(2_000),
+    })]);
+    const serialized = JSON.stringify(records);
+
+    expect(records?.[0].terminalVerification.status).toBe('verified');
+    expect(records?.[0].envelope.status).toBe('verified_success');
+    expect(serialized).toContain('binary image omitted');
+    expect(serialized).toContain('stored result truncated');
+    expect(serialized).not.toMatch(/must-not-persist|data:image|AAAAA|BBBBB|CCCCC/iu);
+    expect(serialized.length).toBeLessThan(12_000);
+  });
+
+  it('redacts nested and serialized credential aliases before persisting tool receipts', () => {
+    const records = sanitizeToolRecordsForPersistence([record({
+      name: 'credential_probe',
+      arguments: {
+        access_token: 'access-must-not-persist',
+        refreshToken: 'refresh-must-not-persist',
+        appSecret: 'secret-must-not-persist',
+        verificationToken: 'verification-must-not-persist',
+        nested: {
+          client_secret: 'client-secret-must-not-persist',
+          tokenCount: 42,
+          maxTokens: 4_096,
+        },
+      },
+      result: JSON.stringify({
+        accessToken: 'result-access-must-not-persist',
+        secretAccessKey: 'result-secret-must-not-persist',
+        verification_code: 'code-must-not-persist',
+        promptTokens: 128,
+      }),
+    })]);
+    const serialized = JSON.stringify(records);
+
+    expect(serialized).not.toMatch(/access-must-not-persist|refresh-must-not-persist|secret-must-not-persist|verification-must-not-persist|code-must-not-persist/u);
+    expect(serialized.match(/\[redacted\]/gu)?.length).toBeGreaterThanOrEqual(7);
+    expect(records?.[0].arguments.nested).toMatchObject({ tokenCount: 42, maxTokens: 4_096 });
+    expect(JSON.parse(records?.[0].result || '{}')).toMatchObject({
+      accessToken: '[redacted]',
+      secretAccessKey: '[redacted]',
+      verification_code: '[redacted]',
+      promptTokens: 128,
+    });
+  });
+
   it('returns only a human-readable blocker when the single recovery remains blocked', async () => {
     let attempts = 0;
     const recovered = await recoverBlockedExecutionOnce<ExecutionGuardRecoveryFinalization>({
@@ -294,7 +452,8 @@ describe('execution guard recovery', () => {
     expect(attempts).toBe(1);
     expect(recovered.recoveryFailed).toBe(true);
     expect(recovered.responseText).toContain('这项任务还没有执行成功');
-    expect(recovered.responseText).toContain('client_action');
+    expect(recovered.responseText).toContain('客户端操作');
+    expect(recovered.responseText).not.toContain('client_action');
     expect(recovered.responseText).not.toContain('Internal execution recovery');
     expect(recovered.responseText).not.toContain('very-secret');
     expect(recovered.finalization.reason).toBe('execution_recovery_incomplete');
@@ -332,7 +491,8 @@ describe('execution guard recovery', () => {
     expect(recovered.toolRecords.map(item => item.id)).toEqual([
       'terminal-before-provider-failure',
     ]);
-    expect(recovered.responseText).toContain('client_action');
+    expect(recovered.responseText).toContain('client operation');
+    expect(recovered.responseText).not.toContain('client_action');
     expect(recovered.responseText).not.toContain('provider disconnected');
     expect(recovered.finalization).toMatchObject({
       reason: 'execution_recovery_incomplete',

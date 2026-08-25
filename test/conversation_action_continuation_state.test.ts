@@ -7,6 +7,7 @@ import {
   getOrCreateActiveConversation,
   prepareConversationActionExecution,
   recoverOrphanedConversationActionExecutions,
+  setConversationActionExecutionStatus,
 } from '../server/conversation/manager';
 
 describe('conversation action continuation state', () => {
@@ -584,6 +585,186 @@ describe('conversation action continuation state', () => {
       activeRequestId: '',
     });
     expect(oldTask.blocker).toContain(second.state?.taskId);
+  });
+
+  it('binds a durable task and receipt to the real user message instead of assistant evidence', () => {
+    const userId = `conversation-action-user-root-${Date.now()}-${Math.random()}`;
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    const requestId = `request-user-root-${Date.now()}`;
+    const userMessageId = addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'user',
+      content: 'Open the desktop settings panel.',
+      requestId,
+      deferActionPreparation: true,
+      domain: 'personal',
+    });
+    const prepared = prepareConversationActionExecution({
+      conversationId: conversation.id,
+      userId,
+      userText: 'Open the desktop settings panel.',
+      requestId,
+      toolPolicy: { allowedTools: ['client_action'], requireConfirmation: [], forbiddenTools: [], maxIterations: 4 },
+      forceTask: true,
+    });
+    const assistantMessageId = addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'assistant',
+      content: 'The settings panel is open.',
+      requestId,
+      taskIntent: 'task',
+      toolCalls: [{
+        taskId: prepared.state?.taskId,
+        requestId,
+        name: 'client_action',
+        arguments: { action: 'open_settings' },
+        result: JSON.stringify({ ok: true, status: 'verified' }),
+        capability: {
+          capabilityId: 'client.navigation',
+          lane: 'client',
+          operation: 'mutate',
+          risk: 'low',
+          sideEffects: [{ type: 'local_state_change', scope: 'client_surface', reversible: true }],
+          verification: {
+            strategy: 'terminal_receipt', required: true, requiredFields: [], successSignals: [], limitations: [],
+          },
+        },
+        terminalVerification: {
+          status: 'verified', strategy: 'terminal_receipt', reason: 'Client surface changed.',
+        },
+      }],
+      domain: 'personal',
+    });
+
+    const db = readDB();
+    const task = (db.conversationActionTasks || []).find((row: any) => row.id === prepared.state?.taskId);
+    expect(task?.rootUserMessageId).toBe(userMessageId);
+    expect(task?.rootUserMessageId).not.toBe(assistantMessageId);
+    expect((db.interactions || []).find((row: any) => row.id === task?.rootUserMessageId)?.role).toBe('user');
+    const receipts = (db.conversationActionReceipts || []).filter((row: any) => row.taskId === task?.id);
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({ turnId: userMessageId, requestId });
+  });
+
+  it('detaches a stale confirmation task before model, voiceprint, and screen turns', () => {
+    const userId = `conversation-action-detach-${Date.now()}-${Math.random()}`;
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    const oldRequestId = `request-browser-${Date.now()}`;
+    const oldUserMessageId = addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'user',
+      content: 'Open the browser and sign in.',
+      requestId: oldRequestId,
+      deferActionPreparation: true,
+      domain: 'personal',
+    });
+    const oldTask = prepareConversationActionExecution({
+      conversationId: conversation.id,
+      userId,
+      userText: 'Open the browser and sign in.',
+      requestId: oldRequestId,
+      toolPolicy: { allowedTools: ['desktop_open'], requireConfirmation: ['desktop_open'], forbiddenTools: [], maxIterations: 4 },
+      forceTask: true,
+    });
+    setConversationActionExecutionStatus(conversation.id, userId, 'waiting_confirmation', {
+      requestId: oldRequestId,
+    });
+
+    for (const [requestId, userText, assistantText] of [
+      ['request-model-question', 'Which model are you using right now?', 'The configured primary model.'],
+      ['request-voiceprint-question', 'Check the voiceprint enrollment status.', 'No voiceprint is enrolled.'],
+    ]) {
+      addMessage({
+        userId, agentId: 'lumi', conversationId: conversation.id, role: 'user',
+        content: userText, requestId, domain: 'personal',
+      });
+      addMessage({
+        userId, agentId: 'lumi', conversationId: conversation.id, role: 'assistant',
+        content: assistantText, requestId, domain: 'personal',
+      });
+    }
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'user',
+      content: 'Look at the current screen.',
+      requestId: 'request-screen-question',
+      domain: 'personal',
+    });
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'assistant',
+      content: 'The active window is the Lumi client.',
+      requestId: 'request-screen-question',
+      toolCalls: [{
+        name: 'desktop_get_active_window',
+        arguments: {},
+        result: JSON.stringify({ ok: true, title: 'Lumi' }),
+        capability: {
+          capabilityId: 'desktop.window.observe',
+          lane: 'desktop',
+          operation: 'observe',
+          risk: 'low',
+          sideEffects: [{ type: 'local_read', scope: 'active_window', reversible: true }],
+          verification: {
+            strategy: 'terminal_receipt', required: true, requiredFields: [], successSignals: [], limitations: [],
+          },
+        },
+        terminalVerification: {
+          status: 'verified', strategy: 'terminal_receipt', reason: 'Active window returned.',
+        },
+      }],
+      domain: 'personal',
+    });
+
+    const db = readDB();
+    const archived = (db.conversationActionTasks || []).find((row: any) => row.id === oldTask.state?.taskId);
+    expect(archived).toMatchObject({
+      status: 'cancelled', activeRequestId: '', rootUserMessageId: oldUserMessageId,
+    });
+    expect((db.conversationActionReceipts || []).filter((row: any) => row.taskId === oldTask.state?.taskId))
+      .toHaveLength(0);
+    expect(getOrCreateActiveConversation(userId, 'lumi', 'personal', '').actionContinuationState)
+      .toBeUndefined();
+  });
+
+  it('returns no task identity when an unrelated plain turn detaches blocked work', () => {
+    const userId = `conversation-action-plain-detach-${Date.now()}-${Math.random()}`;
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    const oldTask = prepareConversationActionExecution({
+      conversationId: conversation.id,
+      userId,
+      userText: 'Open the browser.',
+      requestId: 'request-old-browser',
+      toolPolicy: { allowedTools: ['desktop_open'], requireConfirmation: [], forbiddenTools: [], maxIterations: 4 },
+      forceTask: true,
+    });
+    setConversationActionExecutionStatus(conversation.id, userId, 'blocked', {
+      blocker: 'Browser launch failed.', requestId: 'request-old-browser',
+    });
+
+    const plain = prepareConversationActionExecution({
+      conversationId: conversation.id,
+      userId,
+      userText: 'Which model are you using right now?',
+      requestId: 'request-new-model-question',
+      toolPolicy: { allowedTools: [], requireConfirmation: [], forbiddenTools: [], maxIterations: 1 },
+    });
+
+    expect(plain).toEqual({ state: null, kind: 'conversation' });
+    expect(getOrCreateActiveConversation(userId, 'lumi', 'personal', '').actionContinuationState)
+      .toBeUndefined();
+    expect((readDB().conversationActionTasks || []).find((row: any) => row.id === oldTask.state?.taskId))
+      .toMatchObject({ status: 'cancelled', activeRequestId: '' });
   });
 
   it('archives a late receipt on its bound task without mutating the newer turn', () => {

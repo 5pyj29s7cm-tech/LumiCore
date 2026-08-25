@@ -52,6 +52,12 @@ const EXPLICIT_FOREGROUND_ONLY_RE =
 const FOREGROUND_STATUS_OR_RECALL_RE =
   /(?:\u786e\u8ba4|\u544a\u8bc9\u6211|\u56de\u7b54|\u67e5\u8be2|\u67e5\u770b|\u8fd8\u8bb0\u5f97|\u56de\u5fc6|\u6838\u5bf9).{0,96}(?:\u72b6\u6001|\u8fdb\u5ea6|\u56de\u6267|\u4efb\u52a1\u53f7|\u6848\u4ef6\s*id|\u4e89\u8bae\u91d1\u989d|\u5df2\u77e5\u4e8b\u5b9e|\u5f53\u524d\u6848\u4ef6)|(?:\u5f53\u524d|\u521a\u624d|\u521a\u521a|\u4e4b\u524d|\u4e0a\u4e00\u4e2a).{0,72}(?:\u6848\u4ef6|\u4efb\u52a1|\u8349\u7a3f|\u5de5\u4f5c\u6d41).{0,32}(?:\u72b6\u6001|\u8fdb\u5ea6|\u56de\u6267|id|\u91d1\u989d|\u4e8b\u5b9e|\u7ed3\u679c)/iu;
 
+// Current foreground-window observation is a bounded, single-turn read. It
+// must stay with the foreground executor even when generic action verbs make
+// the legacy complexity classifier label the sentence as "moderate".
+const FOREGROUND_DESKTOP_OBSERVATION_RE =
+  /(?:\u67e5\u770b|\u770b\u770b|\u89c2\u5bdf|\u8bfb\u53d6|\u68c0\u67e5|\u6838\u5b9e|\u544a\u8bc9\u6211|\u6c47\u62a5).{0,56}(?:\u5f53\u524d|\u73b0\u5728|\u6b64\u523b|\u524d\u53f0|\u6d3b\u52a8|\u7126\u70b9).{0,32}(?:\u7a97\u53e3|\u5c4f\u5e55|\u684c\u9762)|(?:\u5f53\u524d|\u73b0\u5728|\u6b64\u523b|\u524d\u53f0|\u6d3b\u52a8|\u7126\u70b9).{0,32}(?:\u7a97\u53e3|\u5c4f\u5e55|\u684c\u9762).{0,56}(?:\u6807\u9898|\u8fdb\u7a0b|\u72b6\u6001|\u67e5\u770b|\u89c2\u5bdf|\u8bfb\u53d6|\u544a\u8bc9|\u6c47\u62a5)|\b(?:inspect|observe|read|check|report|tell\s+me)\b[^.!?\n]{0,64}\b(?:current|active|foreground|focused)\b[^.!?\n]{0,32}\b(?:window|screen|desktop)\b|\bdesktop_(?:active_window|ui_snapshot|running_processes|capture_screen)\b/iu;
+
 const WORK_CATEGORY_ALLOWLIST = new Set(['command', 'code', 'question', 'analysis']);
 
 export function hasExplicitBackgroundDelegationPreference(text: string): boolean {
@@ -99,11 +105,14 @@ export function shouldDelegateWorkInBackground(input: BackgroundDelegationDecisi
   if (input.selfRepair) return { shouldDelegate: false, reason: 'self_repair' };
   if (input.sanctuary) return { shouldDelegate: false, reason: 'sanctuary_agent' };
   const explicitlyRequested = hasExplicitBackgroundDelegationPreference(input.text);
-  if (input.directDesktop) return { shouldDelegate: false, reason: 'direct_desktop_visible_work' };
+  if (!explicitlyRequested && FOREGROUND_DESKTOP_OBSERVATION_RE.test(input.text)) {
+    return { shouldDelegate: false, reason: 'foreground_desktop_observation' };
+  }
+  if (input.directDesktop && !explicitlyRequested) return { shouldDelegate: false, reason: 'direct_desktop_visible_work' };
   if (input.capabilityLane === 'desktop_control' && !explicitlyRequested) {
     return { shouldDelegate: false, reason: 'desktop_control_foreground' };
   }
-  if (input.prefersSequentialWorkflow) return { shouldDelegate: false, reason: 'artifact_first_sequential_workflow' };
+  if (input.prefersSequentialWorkflow && !explicitlyRequested) return { shouldDelegate: false, reason: 'artifact_first_sequential_workflow' };
   if (isBackgroundMetaInquiry(input.text)) return { shouldDelegate: false, reason: 'background_meta_inquiry' };
   if (isBackgroundAppInspection(input.text)) return { shouldDelegate: false, reason: 'background_app_inspection' };
   if (input.availableAgentCount < 1) return { shouldDelegate: false, reason: 'no_available_workers' };
@@ -115,8 +124,11 @@ export function shouldDelegateWorkInBackground(input: BackgroundDelegationDecisi
     return { shouldDelegate: false, reason: 'foreground_task_continuation' };
   }
   if (explicitlyRequested) return { shouldDelegate: true, reason: 'explicit_background_preference' };
-  if (input.complexity === 'complex' || input.complexity === 'moderate') {
-    return { shouldDelegate: true, reason: `work_complexity_${input.complexity}` };
+  if (input.complexity === 'complex') {
+    return { shouldDelegate: true, reason: 'work_complexity_complex' };
+  }
+  if (input.complexity === 'moderate') {
+    return { shouldDelegate: false, reason: 'moderate_foreground_work' };
   }
 
   return { shouldDelegate: false, reason: 'simple_foreground_chat' };

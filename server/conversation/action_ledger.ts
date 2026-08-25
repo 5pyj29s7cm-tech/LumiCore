@@ -281,6 +281,58 @@ function ensureTables(db: any): void {
   if (!Array.isArray(db.conversationActionReceipts)) db.conversationActionReceipts = [];
 }
 
+function scopedUserMessage(
+  db: any,
+  conversation: { id: string; userId: string },
+  messageId: string | undefined,
+): any | null {
+  const id = String(messageId || '').trim();
+  if (!id) return null;
+  return (db.interactions || []).find((message: any) => (
+    message.id === id
+    && message.conversationId === conversation.id
+    && message.userId === conversation.userId
+    && message.role === 'user'
+  )) || null;
+}
+
+function resolveTaskRootUserMessageId(
+  db: any,
+  input: {
+    conversation: { id: string; userId: string };
+    state: ConversationActionContinuationState;
+    existing?: string;
+    candidate?: string;
+  },
+): string {
+  const existing = scopedUserMessage(db, input.conversation, input.existing);
+  if (existing) return existing.id;
+
+  const userMessages = (db.interactions || []).filter((message: any) => (
+    message.conversationId === input.conversation.id
+    && message.userId === input.conversation.userId
+    && message.role === 'user'
+  ));
+  const normalizedGoal = String(input.state.goal || '').replace(/\s+/gu, ' ').trim();
+  const exactGoal = [...userMessages].reverse().find((message: any) => (
+    String(message.message || '').replace(/\s+/gu, ' ').trim() === normalizedGoal
+  ));
+  if (exactGoal) return exactGoal.id;
+
+  const candidate = scopedUserMessage(db, input.conversation, input.candidate);
+  if (candidate) return candidate.id;
+
+  const requestId = String(input.state.activeRequestId || '').trim();
+  if (requestId) {
+    const requestMessage = [...userMessages].reverse().find((message: any) => (
+      String(message.requestId || '') === requestId
+      || String(message.externalMessageId || '') === requestId
+    ));
+    if (requestMessage) return requestMessage.id;
+  }
+  return '';
+}
+
 function latestParentTask(
   tasks: ConversationActionTaskRow[],
   conversationId: string,
@@ -337,6 +389,7 @@ export function syncConversationActionTaskLedger(
     state: ConversationActionContinuationState;
     userText?: string;
     rootUserMessageId?: string;
+    currentUserMessageId?: string;
     now?: string;
   },
 ): ConversationActionTaskRow | null {
@@ -374,6 +427,12 @@ export function syncConversationActionTaskLedger(
   };
   const completed = state.status === 'completed' || !state.unfinished;
   const taskStatus = state.status || (state.unfinished ? 'blocked' : 'completed');
+  const rootUserMessageId = resolveTaskRootUserMessageId(db, {
+    conversation: input.conversation,
+    state,
+    existing: task?.rootUserMessageId,
+    candidate: input.rootUserMessageId,
+  });
   context.focusThread = reconcileConversationFocusThread(currentContext.focusThread, {
     id: state.taskId,
     goal: redactGoal(state.goal, intent),
@@ -388,7 +447,7 @@ export function syncConversationActionTaskLedger(
     domain: input.conversation.domain || 'personal',
     orgId: input.conversation.orgId || '',
     parentTaskId: parent?.id || task?.parentTaskId || '',
-    rootUserMessageId: task?.rootUserMessageId || input.rootUserMessageId || '',
+    rootUserMessageId,
     intentKind: intent.kind === 'none' ? task?.intentKind || 'desktop_operation' : intent.kind,
     operation: intent.kind === 'none' ? task?.operation || 'mutate' : intent.operation,
     goal: redactGoal(state.goal, intent),
@@ -413,7 +472,7 @@ export function syncConversationActionTaskLedger(
   appendConversationActionReceipts(db, {
     task,
     records,
-    turnId: state.evidenceMessageId || input.rootUserMessageId || '',
+    turnId: input.currentUserMessageId || input.rootUserMessageId || state.evidenceMessageId || '',
     requestId: state.activeRequestId || '',
     now,
   });

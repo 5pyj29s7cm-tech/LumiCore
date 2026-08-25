@@ -211,6 +211,93 @@ function addAvailable(out: Set<string>, available: Set<string>, names: string[])
   }
 }
 
+function retainSemanticToolsWithinLimit(
+  ordered: string[],
+  semanticPriority: string[],
+  maxTools: number,
+): string[] {
+  const limited = ordered.slice(0, maxTools);
+  const present = new Set(limited);
+  const required = unique(semanticPriority).filter(name => ordered.includes(name));
+  const protectedNames = new Set(required);
+
+  for (const name of required) {
+    if (present.has(name)) continue;
+    let replacementIndex = -1;
+    for (let index = limited.length - 1; index >= 0; index -= 1) {
+      if (!protectedNames.has(limited[index])) {
+        replacementIndex = index;
+        break;
+      }
+    }
+    if (replacementIndex < 0) break;
+    present.delete(limited[replacementIndex]);
+    limited.splice(replacementIndex, 1);
+    limited.push(name);
+    present.add(name);
+  }
+
+  return limited;
+}
+
+const CAPABILITY_LEARNING_SEMANTIC_TOOLS = [
+  'capability_learning_list',
+  'self_extension_plan',
+  'capability_gap_autofix',
+  'list_skills',
+  'adapter_registry_list',
+  'external_app_list_adapters',
+  'external_control_candidates',
+];
+
+const TASK_CENTER_SEMANTIC_TOOLS = [
+  'work_takeover_task_get',
+  'work_takeover_task_continue',
+  'work_takeover_task_advance',
+  'work_takeover_task_autorun',
+  'work_takeover_task_verify_result',
+  'work_takeover_task_export_packet',
+  'work_takeover_task_run_suggested_tool',
+];
+
+// History work must expose the same non-submitting external-AI surface on
+// chat, voice, and task entry points. Keeping this small family ahead of
+// generic route matches prevents the 24-tool voice envelope from losing the
+// actual sync/query tools while the 32-tool chat envelope retains them.
+const EXTERNAL_AI_HISTORY_SEMANTIC_TOOLS = [
+  'external_ai_history_source_register',
+  'external_ai_history_source_list',
+  'external_ai_history_source_revoke',
+  'external_ai_history_sync',
+  'external_ai_history_status',
+  'external_ai_history_query',
+  'external_ai_route_plan',
+  'external_ai_collect_answers',
+  'external_ai_session_status',
+];
+
+const DESKTOP_CONTROL_SEMANTIC_TOOLS = [
+  'desktop_list_apps',
+  'desktop_open',
+  'desktop_active_window',
+  'desktop_ui_snapshot',
+  'desktop_capture_screen',
+  'mouse_drag',
+  'keyboard_press',
+  'computer_use',
+];
+
+const CURRENT_APP_CONTROL_SEMANTIC_TOOLS = [
+  'desktop_active_window',
+  'desktop_ui_snapshot',
+  'desktop_ui_focus',
+  'desktop_ui_invoke',
+  'desktop_ui_click',
+  'desktop_ui_type',
+  'keyboard_press',
+  'desktop_keyboard_press',
+];
+
 function enhanceToolRouteForFlow(
   route: ToolRoute,
   flow: LumiTurnFlow,
@@ -221,11 +308,17 @@ function enhanceToolRouteForFlow(
 
   const available = new Set(declarations.map(declaration => declaration.function.name));
   const additions = new Set<string>();
+  const semanticPriority = new Set<string>();
   const categories = [...route.categories];
   const reasons = [...route.reasons];
   const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(flow.routeText);
   const recoveredWpsCreateAndType = isRecoveredWpsCreateTask(flow.routeText);
   const actionContract = buildActionContract(flow.routeText);
+  // Keep one compact discovery schema in every non-hard model route. Its
+  // receipt can re-project an already-authorized hidden capability on the
+  // next iteration without restoring the complete registry to the prompt.
+  addAvailable(additions, available, ['client_capability_manifest']);
+  addAvailable(semanticPriority, available, ['client_capability_manifest']);
   const discoveredEvidenceTools = registry?.findRelevant(flow.routeText, {
     limit: 8,
     evidenceOperations: ['observe', 'test'],
@@ -237,29 +330,15 @@ function enhanceToolRouteForFlow(
   }
 
   if (!recoveredCurrentAppEdit && (flow.channel === 'task' || flow.workTakeover.shouldResumeTask)) {
-    addAvailable(additions, available, [
-      'work_takeover_task_get',
-      'work_takeover_task_continue',
-      'work_takeover_task_advance',
-      'work_takeover_task_autorun',
-      'work_takeover_task_verify_result',
-      'work_takeover_task_export_packet',
-      'work_takeover_task_run_suggested_tool',
-    ]);
+    addAvailable(additions, available, TASK_CENTER_SEMANTIC_TOOLS);
+    addAvailable(semanticPriority, available, TASK_CENTER_SEMANTIC_TOOLS);
     categories.push(flow.channel === 'task' ? 'task_center' : 'work_takeover');
     reasons.push(flow.channel === 'task' ? 'task center turns need task-state tools' : 'active work takeover turns need continuation tools');
   }
 
   if (!recoveredCurrentAppEdit && flow.executionGovernance.capabilityLearningIntent !== 'none') {
-    addAvailable(additions, available, [
-      'capability_learning_list',
-      'self_extension_plan',
-      'capability_gap_autofix',
-      'list_skills',
-      'adapter_registry_list',
-      'external_app_list_adapters',
-      'external_control_candidates',
-    ]);
+    addAvailable(additions, available, CAPABILITY_LEARNING_SEMANTIC_TOOLS);
+    addAvailable(semanticPriority, available, CAPABILITY_LEARNING_SEMANTIC_TOOLS);
     categories.push('capability_learning');
     reasons.push('capability learning turns must inspect and reuse existing skills/adapters before adding new code');
   }
@@ -307,6 +386,13 @@ function enhanceToolRouteForFlow(
           'computer_use',
         ]);
     categories.push('desktop_control');
+    addAvailable(
+      semanticPriority,
+      available,
+      recoveredCurrentAppEdit
+        ? CURRENT_APP_CONTROL_SEMANTIC_TOOLS
+        : DESKTOP_CONTROL_SEMANTIC_TOOLS,
+    );
     reasons.push(recoveredCurrentAppEdit
       ? 'recovered current-app editing must stay on active-window and visible UI controls'
       : 'direct desktop/software turns need visible UI control tools');
@@ -326,6 +412,10 @@ function enhanceToolRouteForFlow(
     reasons.push('artifact-first turns need production and verification tools');
   }
 
+  if (!recoveredCurrentAppEdit && actionContract.kind === 'external_ai_history') {
+    addAvailable(semanticPriority, available, EXTERNAL_AI_HISTORY_SEMANTIC_TOOLS);
+  }
+
   const routeNames = route.toolNames.filter(name => (
     name !== WPS_CREATE_DOCUMENT_TOOL || recoveredWpsCreateAndType
   ));
@@ -341,7 +431,12 @@ function enhanceToolRouteForFlow(
           'read_files_batch',
         ].filter(name => available.has(name))
       : [];
-  const merged = unique([...priority, ...routeNames, ...Array.from(additions)]);
+  const merged = unique([
+    ...priority,
+    ...routeNames,
+    ...Array.from(additions),
+    ...Array.from(semanticPriority),
+  ]);
   if (
     merged.length === route.toolNames.length
     && merged.every((name, index) => name === route.toolNames[index])
@@ -351,7 +446,11 @@ function enhanceToolRouteForFlow(
   const truncated = route.truncated || merged.length > route.maxTools;
   return {
     ...route,
-    toolNames: merged.slice(0, route.maxTools),
+    toolNames: retainSemanticToolsWithinLimit(
+      merged,
+      Array.from(semanticPriority),
+      route.maxTools,
+    ),
     categories: unique(categories),
     reasons: unique(reasons),
     truncated,
@@ -384,7 +483,11 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
           : NO_TOOLS_POLICY;
   const rawToolRoute = allowToolUse && shouldRouteTools(input.flow, input.isSanctuary)
     ? routeToolsForTurn(input.flow.routeText || input.text, input.toolDeclarations, {
-        maxTools: input.flow.channel === 'voice' ? 32 : 64,
+        // Permission to use the full registry is not a reason to inject the
+        // full registry into every model turn. A narrow per-turn manifest
+        // keeps context stable while preserving access to every tool through
+        // routing on the turn that actually needs it.
+        maxTools: input.flow.channel === 'voice' ? 24 : 32,
         capabilityManifest: input.toolRegistry?.getCapabilityManifest(baseToolPolicy),
       })
     : null;
@@ -414,6 +517,10 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
   const requestedMaxIterations = uncappedToolPolicy.maxIterations
     ?? input.personalityToolPolicy?.maxIterations
     ?? 5;
+  // Preserve the product's model-planning depth. Actual adapter entries are
+  // independently bounded by the hard 8-per-response / 24-per-turn canonical
+  // invocation budget, so a large planning limit cannot cause an unbounded
+  // number of real tool actions.
   const channelIterationCap = input.flow.channel === 'voice'
     ? 12
     : Number.MAX_SAFE_INTEGER;

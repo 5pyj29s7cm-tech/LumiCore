@@ -1,5 +1,9 @@
 import type { ToolExecutionRecord } from '../tools/types';
 import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../regions/packs/cn/execution_evidence_messages';
+import {
+  containsUnsafeToolPayload,
+  sanitizeUserFacingExecutionOutput,
+} from './user_output_protection';
 
 export type ExecutionGuardRecoveryCode =
   | 'missing_tool_execution'
@@ -92,7 +96,8 @@ const CONFIRMATION_BLOCK = /requires? (?:explicit )?(?:user )?confirmation|waiti
 const SECRET_DETAIL = /((?:password|passphrase|secret|token|api.?key|authorization|cookie|credential))\s*[:=]\s*\S+/gi;
 const STRUCTURED_SECRET_DETAIL = /("(?:password|passphrase|secret|token|api.?key|authorization|cookie|credential)"\s*:\s*")[^"]+/gi;
 const BEARER_SECRET = /\bBearer\s+\S+/gi;
-const INTERNAL_GUARD_DETAIL = /No successful (?:current-turn )?tool execution|without a current-turn tool receipt|No tool execution started|execution-status claim|Missing (?:core|verified|current-turn|in-app|desktop|client|content-read|action) evidence|tool-call protocol leaked|internal tool request|fictional tool-mode|fictional user-switchable tool availability|claimed tool execution without matching tool records|Internal execution recovery/i;
+// i18n-allow -- Chinese internal execution-guard recognition; not user-visible copy.
+const INTERNAL_GUARD_DETAIL = /No successful (?:current-turn )?tool execution|without a current-turn tool receipt|No tool execution started|execution-status claim|Missing (?:core|verified|current-turn|in-app|desktop|client|content-read|action) evidence|tool-call protocol leaked|internal tool request|fictional tool-mode|fictional user-switchable tool availability|claimed tool execution without matching tool records|Internal execution recovery|我还不能说正在执行|这一轮没有记录到成功的真实工具执行|这一轮没有成功执行任何工具|我需要先真正调用对应工具|再按当前轮回执汇报进度/iu;
 const PUBLIC_RECOVERY_FAILURE_REASON = 'execution_recovery_incomplete';
 const MAX_RECEIPTS_IN_RECOVERY_PROMPT = 40;
 const PUBLIC_REASON_CODE = /^[a-z][a-z0-9_]{0,79}$/;
@@ -213,8 +218,8 @@ function safeFailureDetail(records: ToolExecutionRecord[], chinese: boolean): st
     || record.terminalVerification?.status === 'unverified'
   ));
   if (!failed) return chinese
-    ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryExecutorDidNotStart
-    : 'the executor still did not select or start a tool that can complete the task';
+    ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryNoVerifiableResult
+    : 'no verifiable execution result is available yet';
   const rawDetail = String(
     failed.error
     || failed.terminalVerification?.reason
@@ -222,15 +227,44 @@ function safeFailureDetail(records: ToolExecutionRecord[], chinese: boolean): st
   );
   if (INTERNAL_GUARD_DETAIL.test(rawDetail)) {
     return chinese
-      ? `${failed.name}: ${CN_EXECUTION_EVIDENCE_MESSAGES.recoveryExecutorDidNotStart}`
-      : `${failed.name}: the executor did not produce independently verifiable completion evidence`;
+      ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryNoVerifiableResult
+      : 'no independently verifiable execution result was produced';
   }
   const detail = rawDetail
+    .replace(STRUCTURED_SECRET_DETAIL, '$1[redacted]')
     .replace(SECRET_DETAIL, '$1=[redacted]')
+    .replace(BEARER_SECRET, 'Bearer [redacted]')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 240);
-  return `${failed.name}: ${detail}`;
+  const action = (() => {
+    const name = String(failed.name || '');
+    if (/desktop|computer|window|screen/i.test(name)) return chinese ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryActionDesktop : 'desktop operation';
+    if (/browser|web/i.test(name)) return chinese ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryActionBrowser : 'browser operation';
+    if (/client/i.test(name)) return chinese ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryActionClient : 'client operation';
+    if (/file|document|docx|pdf/i.test(name)) return chinese ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryActionFile : 'file operation';
+    if (/voice|speech|tts|stt/i.test(name)) return chinese ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryActionVoice : 'voice operation';
+    return chinese ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryActionCurrent : 'the current operation';
+  })();
+  const mappedDetail = (() => {
+    if (/global desktop lease|desktop.*(?:busy|occupied)/i.test(detail)) {
+      return chinese ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryDesktopBusy : 'desktop control is busy with another operation';
+    }
+    if (/paused_for_user_activity|desktop control is paused/i.test(detail)) {
+      return chinese ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryDesktopPaused : 'desktop control paused while you were using the computer';
+    }
+    if (/target[_ ]?mismatch|fingerprint changed|window\/display fingerprint/i.test(detail)) {
+      return chinese ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryForegroundUnverified : 'the later window check could not confirm the foreground state';
+    }
+    if (/not (?:declared|allowed)|allowlist|forbidden/i.test(detail)) {
+      return chinese ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryCapabilityMissing : 'the task did not receive the required capability';
+    }
+    if (/provider unavailable|service unavailable|connection refused/i.test(detail)) {
+      return chinese ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryServiceUnavailable : 'the required service is temporarily unavailable';
+    }
+    return detail;
+  })();
+  return chinese ? `${action}：${mappedDetail}` : `${action}: ${mappedDetail}`;
 }
 
 function containsInternalGuardDetail(value: unknown): boolean {
@@ -277,17 +311,27 @@ export function sanitizeExecutionResponseForDelivery<
   delivery: TDelivery,
   options: { task?: string; toolRecords?: ToolExecutionRecord[] } = {},
 ): TDelivery {
-  const blocked = delivery.blocked === true;
-  const reason = publicDeliveryReason(delivery.reason, blocked);
-  const textLeaks = blocked && containsInternalGuardDetail(delivery.text);
-  const notificationLeaks = containsInternalGuardDetail(delivery.notification);
+  const initiallyBlocked = delivery.blocked === true;
+  const textLeaks = containsInternalGuardDetail(delivery.text);
+  const notificationLeaks = containsInternalGuardDetail(delivery.notification)
+    || containsUnsafeToolPayload(delivery.notification);
+  const blocked = initiallyBlocked || textLeaks;
+  const reason = publicDeliveryReason(
+    textLeaks ? PUBLIC_RECOVERY_FAILURE_REASON : delivery.reason,
+    blocked,
+  );
+  const fallbackText = textLeaks
+    ? formatExecutionRecoveryFailure(options.task || String(delivery.text || ''), options.toolRecords || [])
+    : String(delivery.text || '');
+  const protectedText = sanitizeUserFacingExecutionOutput(fallbackText, options);
   const reasonChanged = reason !== String(delivery.reason || '').trim();
-  if (!textLeaks && !notificationLeaks && !reasonChanged) return delivery;
+  const textChanged = protectedText !== String(delivery.text || '');
+  const blockedChanged = blocked !== initiallyBlocked;
+  if (!textChanged && !notificationLeaks && !reasonChanged && !blockedChanged) return delivery;
   return {
     ...delivery,
-    text: textLeaks
-      ? formatExecutionRecoveryFailure(options.task || String(delivery.text || ''), options.toolRecords || [])
-      : delivery.text,
+    text: protectedText,
+    blocked,
     reason,
     notification: blocked || notificationLeaks ? undefined : delivery.notification,
   } as TDelivery;

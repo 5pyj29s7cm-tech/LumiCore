@@ -37,6 +37,7 @@ import {
   initializeChatExecutionRegistryPersistence,
   waitForChatExecutionPersistence,
 } from "../socket/chat_execution_registry";
+import { installRuntimeFileLogger } from './file_logger';
 
 interface BootstrapContext {
   server: any;
@@ -150,6 +151,8 @@ function schedulePostStartupFlush(delayMs: number) {
 
 export async function bootstrap(ctx: BootstrapContext) {
   const { server, io, PORT, HOST, jwtSecret, llm, __dirname } = ctx;
+  const runtimeLogPath = installRuntimeFileLogger();
+  if (runtimeLogPath) console.log(`[RuntimeLog] Writing sanitized diagnostics to ${runtimeLogPath}`);
 
   if (!jwtSecret) {
     console.error('FATAL: JWT_SECRET environment variable is not set.');

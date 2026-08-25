@@ -767,7 +767,12 @@ export class ToolRegistry {
    */
   getToolDeclarationsForPolicy(
     policy?: ToolPolicy,
-    options?: { failClosedWithoutPolicy?: boolean; context?: ToolContext },
+    options?: {
+      failClosedWithoutPolicy?: boolean;
+      context?: ToolContext;
+      /** Priority-ordered model projection; authorization is still `policy`. */
+      visibleToolNames?: Iterable<string>;
+    },
   ): ReturnType<ToolRegistry['getToolDeclarations']> {
     const effectivePolicy = options?.context?.executionBoundary === 'remote_restricted'
       ? restrictToolPolicyForExecutionBoundary(policy || {
@@ -782,9 +787,22 @@ export class ToolRegistry {
       this.getCapabilityManifest(effectivePolicy, { executableOnly: true })
         .map(entry => entry.toolName),
     );
-    return this.getToolDeclarations().filter(declaration => (
-      executable.has(declaration.function.name)
-    ));
+    const declarations = this.getToolDeclarations();
+    if (options?.visibleToolNames) {
+      const byName = new Map(declarations.map(declaration => [declaration.function.name, declaration]));
+      const projected: ReturnType<ToolRegistry['getToolDeclarations']> = [];
+      const seen = new Set<string>();
+      for (const rawName of options.visibleToolNames) {
+        const name = String(rawName || '').trim();
+        if (!name || seen.has(name) || !executable.has(name)) continue;
+        const declaration = byName.get(name);
+        if (!declaration) continue;
+        seen.add(name);
+        projected.push(declaration);
+      }
+      return projected;
+    }
+    return declarations.filter(declaration => executable.has(declaration.function.name));
   }
 
   /** Resolve effective security level for a tool given a personality's policy */

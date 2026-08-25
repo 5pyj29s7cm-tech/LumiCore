@@ -48,7 +48,7 @@ interface EndCallOptions {
   refineTranscript?: boolean;
 }
 
-interface VoiceStartPayload {
+export interface VoiceStartPayload {
   voiceId?: string;
   personalityId: string;
   agentId?: string;
@@ -56,6 +56,39 @@ interface VoiceStartPayload {
   domain: 'personal' | 'work';
   orgId?: string;
   sessionId: string;
+}
+
+export interface VoiceSwitchPayload {
+  voiceId: string;
+  sessionId: string;
+}
+
+export interface VoiceSwitchTransition {
+  nextPayload: VoiceStartPayload;
+  event: VoiceSwitchPayload | null;
+}
+
+export function normalizeSelectedVoiceId(value: unknown): string | undefined {
+  const normalized = String(value || '').trim();
+  if (!normalized || normalized.length > 256 || /[\u0000-\u001f\u007f]/.test(normalized)) return undefined;
+  return normalized;
+}
+
+/**
+ * Keep the reconnect payload and live socket update on the same voice revision.
+ * Returning no event for the existing voice prevents duplicate server updates.
+ */
+export function prepareVoiceSwitch(
+  payload: VoiceStartPayload | null,
+  nextVoiceId: unknown,
+): VoiceSwitchTransition | null {
+  const voiceId = normalizeSelectedVoiceId(nextVoiceId);
+  if (!payload || !voiceId) return null;
+  const nextPayload = { ...payload, voiceId };
+  return {
+    nextPayload,
+    event: payload.voiceId === voiceId ? null : { voiceId, sessionId: payload.sessionId },
+  };
 }
 
 interface VoiceAudioResponse {
@@ -144,6 +177,7 @@ export function useVoiceCall({
   const callStateRef = useRef<CallState>('idle');
   const lastPassiveSilenceKeepAlive = useRef(0);
   const activeStartPayload = useRef<VoiceStartPayload | null>(null);
+  const preferredVoiceIdRef = useRef<string | undefined>(undefined);
   const activeVoiceRequestIdRef = useRef<string | null>(null);
   const activeWorkRequestIdRef = useRef<string | null>(null);
   const socketRef = useRef(socket);
@@ -522,6 +556,39 @@ export function useVoiceCall({
       setCallState('idle');
     };
 
+    const onAudioVoiceChanged = (data: { voiceId?: string; sessionId?: string }) => {
+      const payload = activeStartPayload.current;
+      const acknowledgedVoiceId = normalizeSelectedVoiceId(data?.voiceId);
+      if (
+        !isCallActive.current
+        || !payload
+        || !acknowledgedVoiceId
+        || data?.sessionId !== payload.sessionId
+        || payload.voiceId !== acknowledgedVoiceId
+      ) return;
+      preferredVoiceIdRef.current = acknowledgedVoiceId;
+    };
+
+    const onAudioVoiceUnavailable = (data: {
+      reason?: string;
+      requestedVoiceId?: string;
+      currentVoiceId?: string | null;
+      sessionId?: string;
+    }) => {
+      const payload = activeStartPayload.current;
+      if (!isCallActive.current || !payload) return;
+      if (data?.sessionId && data.sessionId !== payload.sessionId) return;
+      const requestedVoiceId = normalizeSelectedVoiceId(data?.requestedVoiceId);
+      if (requestedVoiceId && payload.voiceId !== requestedVoiceId) return;
+
+      const currentVoiceId = normalizeSelectedVoiceId(data?.currentVoiceId);
+      activeStartPayload.current = { ...payload, voiceId: currentVoiceId };
+      preferredVoiceIdRef.current = currentVoiceId;
+      setError(data?.reason === 'voice_profile_scope_mismatch'
+        ? 'The selected voice is unavailable in this Lumi workspace.'
+        : 'The selected voice could not be applied to the active call.');
+    };
+
     const onAudioInterruptAck = (data?: { workContinues?: boolean; requestId?: string }) => {
       if (data?.workContinues) {
         if (data.requestId) activeVoiceRequestIdRef.current = data.requestId;
@@ -618,6 +685,8 @@ export function useVoiceCall({
     socket.on('audio:transcript', onAudioTranscript);
     socket.on('agent:response', onAgentResponse);
     socket.on('audio:error', onAudioError);
+    socket.on('audio:voice_changed', onAudioVoiceChanged);
+    socket.on('audio:voice_unavailable', onAudioVoiceUnavailable);
     socket.on('audio:interrupt-ack', onAudioInterruptAck);
     socket.on('audio:end-call-request', onAudioEndCallRequest);
     socket.on('audio:sidecar_response', onAudioSidecarResponse);
@@ -631,6 +700,8 @@ export function useVoiceCall({
       socket.off('audio:transcript', onAudioTranscript);
       socket.off('agent:response', onAgentResponse);
       socket.off('audio:error', onAudioError);
+      socket.off('audio:voice_changed', onAudioVoiceChanged);
+      socket.off('audio:voice_unavailable', onAudioVoiceUnavailable);
       socket.off('audio:interrupt-ack', onAudioInterruptAck);
       socket.off('audio:end-call-request', onAudioEndCallRequest);
       socket.off('audio:sidecar_response', onAudioSidecarResponse);
@@ -683,6 +754,8 @@ export function useVoiceCall({
   const startCall = useCallback(async (voiceId?: string, personalityId: string = 'lumi', agentId?: string, options: StartCallOptions = {}) => {
     if (disabled) return;
     if (isCallActive.current || startInFlightRef.current) return;
+    const requestedVoiceId = normalizeSelectedVoiceId(voiceId);
+    if (voiceId !== undefined) preferredVoiceIdRef.current = requestedVoiceId;
     const generation = ++callGenerationRef.current;
     startInFlightRef.current = true;
     try {
@@ -813,7 +886,7 @@ export function useVoiceCall({
       isCallActive.current = true;
       callStartTime.current = Date.now();
       const startPayload: VoiceStartPayload = {
-        voiceId,
+        voiceId: preferredVoiceIdRef.current || requestedVoiceId,
         personalityId,
         agentId,
         transcriptionOnly: options.transcriptionOnly === true,
@@ -837,6 +910,20 @@ export function useVoiceCall({
       startInFlightRef.current = false;
     }
   }, [cleanupCapture, disabled, stopAllPlayback]);
+
+  const switchVoice = useCallback((voiceId?: string): boolean => {
+    const normalizedVoiceId = normalizeSelectedVoiceId(voiceId);
+    if (!normalizedVoiceId) return false;
+    preferredVoiceIdRef.current = normalizedVoiceId;
+
+    const transition = prepareVoiceSwitch(activeStartPayload.current, normalizedVoiceId);
+    if (!isCallActive.current || !transition) return false;
+    activeStartPayload.current = transition.nextPayload;
+    if (transition.event && socketRef.current?.connected) {
+      socketRef.current.emit('audio:switch-voice', transition.event);
+    }
+    return true;
+  }, []);
 
   useEffect(() => {
     const applyOutputPreference = () => {
@@ -961,6 +1048,7 @@ export function useVoiceCall({
     connectionQuality,
     startCall,
     startCallRef,
+    switchVoice,
     endCall,
     interrupt,
     toggleMute,

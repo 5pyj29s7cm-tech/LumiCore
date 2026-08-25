@@ -56,6 +56,7 @@ import { CN_RESULT_GROUNDING_MESSAGES } from '../regions/packs/cn/voice_fast_pat
 import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../regions/packs/cn/execution_evidence_messages';
 import { CN_EXTERNAL_AI_MESSAGES } from '../regions/packs/cn/external_ai_messages';
 import { coalesceToolExecutionRecords, toolRecordSucceeded } from './task_execution_ledger';
+import { sanitizeUserFacingExecutionOutput } from './user_output_protection';
 import {
   hasContinuousStockWatchIntent,
   hasContinuousStockWatchEvidence,
@@ -472,35 +473,165 @@ function formatGroundedDesktopEvidence(input: LumiResultFinalizerInput): string 
   return formatDesktopObservationResult(input.toolRecords || [], resultTaskText(input));
 }
 
+function parseDesktopOpenResult(record: ToolExecutionRecord): Record<string, any> {
+  if (record.receipt && typeof record.receipt === 'object' && !Array.isArray(record.receipt)) {
+    return record.receipt as Record<string, any>;
+  }
+  try {
+    const parsed = JSON.parse(String(record.result || '{}'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, any>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function normalizeSimpleOpenTarget(value: unknown): string {
+  const normalized = String(value || '')
+    .toLowerCase()
+    .replace(/^.*[\\/]/, '')
+    .replace(/\.(?:exe|lnk|url)$/i, '');
+  // i18n-allow -- Chinese desktop-target normalization; not user-visible copy.
+  return normalized.replace(/(?:桌面|上的|文件|文档|程序|应用|软件|快捷方式|给我|请|打开|启动|运行|一下)/gu, '')
+    .replace(/(?:the|my|desktop|file|document|program|application|app|shortcut|please|open|launch|start|run)/giu, '')
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function desktopOpenTargetCandidates(record: ToolExecutionRecord, payload: Record<string, any>): string[] {
+  return [
+    record.arguments?.target,
+    record.arguments?.path,
+    record.arguments?.url,
+    payload.target,
+    payload.path,
+    payload.application,
+    payload.actualTarget?.title,
+    payload.actualTarget?.processName,
+    payload.verification?.actualTarget?.title,
+    payload.verification?.actualTarget?.processName,
+  ].map(value => String(value || '').trim()).filter(Boolean);
+}
+
+function desktopOpenTargetMatches(
+  requestedTarget: string,
+  record: ToolExecutionRecord,
+  payload: Record<string, any>,
+): boolean {
+  const candidates = desktopOpenTargetCandidates(record, payload);
+  // i18n-allow -- Chinese generic-browser target recognition; not user-visible copy.
+  const genericBrowser = /^(?:(?:默认|系统|网页|web)\s*)?(?:浏览器|browser|webbrowser)$/iu
+    .test(requestedTarget.replace(/\s+/g, ''));
+  // i18n-allow -- Browser application identity recognition; not user-visible copy.
+  if (genericBrowser && candidates.some(candidate => (
+    /(?:Google\s*Chrome|chrome(?:\.exe)?|Microsoft\s*Edge|msedge(?:\.exe)?|Firefox|firefox(?:\.exe)?|Safari|Brave|Opera|浏览器)/iu.test(candidate)
+  ))) return true;
+
+  const requested = normalizeSimpleOpenTarget(requestedTarget);
+  if (requested.length < 2) return false;
+  return candidates.some(candidate => {
+    const normalized = normalizeSimpleOpenTarget(candidate);
+    return normalized.length >= 2 && (
+      normalized === requested
+      || normalized.includes(requested)
+      || requested.includes(normalized)
+    );
+  });
+}
+
+function isVerifiedPrimaryDesktopOpen(record: ToolExecutionRecord, requestedTarget: string): boolean {
+  if (
+    !/^(?:desktop_open|browser_open_task)$/i.test(String(record.name || ''))
+    || record.error
+    || !String(record.result || '').trim()
+  ) return false;
+  const payload = parseDesktopOpenResult(record);
+  const status = String(payload.status || payload.verification?.status || '').trim().toLowerCase();
+  const targetMatched = payload.targetMatched === true
+    || payload.verification?.targetMatched === true;
+  const envelopeVerified = record.envelope?.status === 'verified_success'
+    && record.envelope.verification?.status === 'verified';
+  const terminalVerified = record.terminalVerification?.status === 'verified';
+  const payloadVerified = status === 'verified' && targetMatched;
+  if (
+    payload.ok === false
+    || payload.success === false
+    || payload.opened === false
+    || /^(?:failed|error|blocked|denied|forbidden|timeout|timed_out|cancelled|canceled|target_mismatch)$/.test(status)
+  ) return false;
+  if (!(envelopeVerified || (terminalVerified && targetMatched) || payloadVerified)) return false;
+  return desktopOpenTargetMatches(requestedTarget, record, payload);
+}
+
+function friendlyDesktopOpenTarget(
+  requestedTarget: string,
+  record: ToolExecutionRecord,
+  payload: Record<string, any>,
+): string {
+  const invoked = String(
+    record.arguments?.target
+    || record.arguments?.path
+    || record.arguments?.url
+    || payload.target
+    || requestedTarget,
+  ).trim();
+  const baseName = invoked.split(/[\\/]/).pop() || invoked;
+  // i18n-allow -- Chinese generic-browser target recognition; not user-visible copy.
+  if (/^(?:浏览器|browser|webbrowser)$/iu.test(requestedTarget.replace(/\s+/g, ''))) {
+    const actual = `${payload.actualTarget?.processName || ''} ${payload.actualTarget?.title || ''} ${invoked}`;
+    if (/chrome/iu.test(actual)) return 'Google Chrome';
+    if (/msedge|microsoft\s*edge/iu.test(actual)) return 'Microsoft Edge';
+    if (/firefox/iu.test(actual)) return 'Firefox';
+    if (/safari/iu.test(actual)) return 'Safari';
+  }
+  const invokedLooksLikeFile = /[\\/]/u.test(invoked) || /\.[a-z0-9]{1,10}$/iu.test(invoked);
+  // i18n-allow -- Chinese file-reference recognition; not user-visible copy.
+  const requestedIsFileReference = /(?:桌面|文件|文档|file|document)/iu.test(requestedTarget);
+  return invokedLooksLikeFile && requestedIsFileReference
+    ? (baseName || requestedTarget)
+    : requestedTarget;
+}
+
+function isFailedOptionalPostOpenObservation(record: ToolExecutionRecord): boolean {
+  const failed = Boolean(record.error)
+    || record.terminalVerification?.status === 'failed'
+    || record.terminalVerification?.status === 'unverified'
+    || Boolean(record.envelope && record.envelope.status !== 'verified_success');
+  if (!failed) return false;
+  const name = String(record.name || '');
+  if (/^(?:desktop_execution_plan_receipt|desktop_active_window|get_active_window_info|desktop_running_processes|get_running_processes|desktop_capture_screen|desktop_ocr|computer_vision)$/i.test(name)) {
+    return true;
+  }
+  if (!/^desktop_run_command$/i.test(name)) return false;
+  return /(?:fingerprint|target[_ ]?mismatch|focus|foreground|window|display|paused_for_user_activity)/iu
+    .test(`${record.error || ''}\n${record.result || ''}`);
+}
+
 function formatGroundedSimpleDesktopOpenResult(
   input: LumiResultFinalizerInput,
-): string | null {
+): LumiResultFinalizerResult | null {
   const actionText = resultTaskText(input);
-  const successfulOpen = [...(input.toolRecords || [])].reverse().find(record => (
-    /^(?:desktop_open|browser_open_task)$/i.test(String(record.name || ''))
-    && !record.error
-    && String(record.result || '').trim()
-  ));
-  if (!successfulOpen) return null;
   const primaryTask = actionText.split(/\n## Recent action continuation context\b/i, 1)[0].trim();
-  const receiptTarget = String(
-    successfulOpen.arguments?.target
-    || successfulOpen.arguments?.url
-    || successfulOpen.arguments?.path
-    || '',
-  ).trim();
   const requestedTarget = extractSimpleDesktopOpenTarget(actionText)
     || (/^(?:你)?(?:直接)?(?:把)?(?:它|这个|那个|文件|文档)?(?:给我)?打开(?:一下)?[。！？.!?]*$/iu.test(primaryTask) // i18n-allow: Chinese referential-open recognition; not user-visible copy.
-      ? receiptTarget
+      ? String([...(input.toolRecords || [])].reverse().find(record => /^(?:desktop_open|browser_open_task)$/i.test(record.name))?.arguments?.target || '')
       : '');
   if (!requestedTarget) return null;
   const contract = buildActionContract(actionText);
-  if (
-    contract.kind !== 'desktop_operation'
-    || !hasCoreActionEvidence(contract, input.toolRecords || [], actionText)
-  ) {
-    return null;
+  if (contract.kind !== 'desktop_operation') return null;
+  const records = input.toolRecords || [];
+  let openIndex = -1;
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    if (isVerifiedPrimaryDesktopOpen(records[index], requestedTarget)) {
+      openIndex = index;
+      break;
+    }
   }
+  if (openIndex < 0) return null;
+  const successfulOpen = records[openIndex];
+  const openPayload = parseDesktopOpenResult(successfulOpen);
+  const targetLabel = friendlyDesktopOpenTarget(requestedTarget, successfulOpen, openPayload);
+  const laterObservationFailed = records.slice(openIndex + 1).some(isFailedOptionalPostOpenObservation);
 
   // A launch request may explicitly require the real foreground process and
   // window as its completion proof. Keep that receipt detail instead of
@@ -537,24 +668,49 @@ function formatGroundedSimpleDesktopOpenResult(
         && Boolean(processName || windowTitle)
         && !/^(?:failed|error|blocked|unknown|unverified)$/i.test(verificationStatus);
       if (isChineseText(actionText)) {
-        return [
-          CN_VOICE_FAST_PATH_MESSAGES.opened(requestedTarget),
+        return {
+          text: [
+          CN_VOICE_FAST_PATH_MESSAGES.opened(targetLabel),
           `实际进程：${processName || '回执未记录'}${processId ? ` (PID ${processId})` : ''}`,
           `窗口：${windowTitle || '回执未记录'}`,
           `验证状态：${verified ? '已验证（目标精确匹配）' : '未验证'}`,
-        ].join('\n');
+          ].join('\n'),
+          blocked: false,
+          reason: 'Grounded exact desktop-open success from the requested target receipt.',
+        };
       }
-      return [
-        `Opened ${requestedTarget}.`,
-        `Actual process: ${processName || 'not recorded'}${processId ? ` (PID ${processId})` : ''}`,
-        `Window: ${windowTitle || 'not recorded'}`,
-        `Verification: ${verified ? 'verified (exact target match)' : 'unverified'}`,
-      ].join('\n');
+      return {
+        text: [
+          `Opened ${targetLabel}.`,
+          `Actual process: ${processName || 'not recorded'}${processId ? ` (PID ${processId})` : ''}`,
+          `Window: ${windowTitle || 'not recorded'}`,
+          `Verification: ${verified ? 'verified (exact target match)' : 'unverified'}`,
+        ].join('\n'),
+        blocked: false,
+        reason: 'Grounded exact desktop-open success from the requested target receipt.',
+      };
     }
   }
-  return isChineseText(actionText)
-    ? CN_VOICE_FAST_PATH_MESSAGES.opened(requestedTarget)
-    : `Opened ${requestedTarget}.`;
+  const text = isChineseText(actionText)
+    ? [
+        CN_VOICE_FAST_PATH_MESSAGES.opened(targetLabel),
+        ...(laterObservationFailed
+          ? [CN_VOICE_FAST_PATH_MESSAGES.postOpenObservationIncomplete]
+          : []),
+      ].join('\n')
+    : [
+        `Opened ${targetLabel}.`,
+        ...(laterObservationFailed
+          ? ['A later window/focus check did not finish, but that does not undo the verified open action.']
+          : []),
+      ].join('\n');
+  return {
+    text,
+    blocked: false,
+    reason: laterObservationFailed
+      ? 'Primary desktop-open verified; optional post-open observation incomplete.'
+      : 'Grounded exact desktop-open success from the requested target receipt.',
+  };
 }
 
 function recordHasTerminalSuccess(record: ToolExecutionRecord): boolean {
@@ -1812,6 +1968,13 @@ function preserveModelWordingOnGroundedSuccess(
   ) {
     return formatStructuredEvidenceCorrection(input, grounded);
   }
+  // i18n-allow -- Chinese grounded-open contradiction recognition; not user-visible copy.
+  const groundedOpenSuccess = /(?:已打开|已启动)|\b(?:opened|launched)\b/iu.test(grounded.text);
+  // i18n-allow -- Chinese grounded-open contradiction recognition; not user-visible copy.
+  const modelDeniesOpen = /(?:没有|没能|未|并未|无法)[^。！？.!?\n]{0,24}(?:打开|启动|运行)|\b(?:did\s+not|didn't|was\s+not|wasn't|could\s+not|couldn't|failed\s+to)\b[^.!?\n]{0,32}\b(?:open|launch|start|run)/iu.test(modelText);
+  if (groundedOpenSuccess && modelDeniesOpen) {
+    return formatStructuredEvidenceCorrection(input, grounded);
+  }
   if (!modelWordingMatchesGroundedEvidence(input, modelText, grounded.text)) {
     return formatStructuredEvidenceCorrection(input, grounded);
   }
@@ -1907,8 +2070,12 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     input.responseText,
     isChineseText(actionText) || isChineseText(input.responseText),
   );
-  if (safeResponseText !== input.responseText) {
-    input = { ...input, responseText: safeResponseText };
+  const protectedResponseText = sanitizeUserFacingExecutionOutput(safeResponseText, {
+    task: actionText,
+    toolRecords: input.toolRecords || [],
+  });
+  if (protectedResponseText !== input.responseText) {
+    input = { ...input, responseText: protectedResponseText };
   }
   const factualResponseText = sanitizeUnsupportedRestatementAdditions(actionText, input.responseText, input.toolRecords || []);
   if (factualResponseText !== input.responseText) {
@@ -2076,11 +2243,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   }
   const groundedSimpleOpen = formatGroundedSimpleDesktopOpenResult(input);
   if (groundedSimpleOpen) {
-    return preserveModelWordingOnGroundedSuccess(input, {
-      text: groundedSimpleOpen,
-      blocked: false,
-      reason: 'Grounded exact desktop-open success from the requested target receipt.',
-    });
+    return preserveModelWordingOnGroundedSuccess(input, groundedSimpleOpen);
   }
   const groundedPartialAction = formatGroundedPartialActionResult(input);
   if (groundedPartialAction) return preserveModelWordingOnGroundedSuccess(input, groundedPartialAction);

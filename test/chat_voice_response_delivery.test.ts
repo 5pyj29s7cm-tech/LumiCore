@@ -68,7 +68,8 @@ describe('chat and voice finalized delivery paths', () => {
 
   it('answers receipt-backed status follow-ups deterministically in both chat and voice', () => {
     expect(chat).toContain("actionFollowupIntent === 'status'");
-    expect(chat).toContain("source: 'chat_task_status'");
+    expect(chat).toContain('isPriorTurnToolReceiptQuestion(');
+    expect(chat).toContain("priorToolReceiptQuestion ? 'chat_conversation_execution_facts' : 'chat_task_status'");
     expect(chat).toContain('getConversationActionStatus(');
     expect(chat).toContain("acceptedNormalizedIntent.target === 'previous_action'");
     expect(voice).toContain("actionFollowupIntent === 'status'");

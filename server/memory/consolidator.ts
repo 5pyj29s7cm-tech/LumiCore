@@ -91,6 +91,7 @@ export interface ConsolidationContext {
   model: string;
   domain?: string;
   orgId?: string;
+  source?: string;
 }
 
 /**
@@ -138,7 +139,7 @@ export async function consolidateEpisodic(
     const response = await makeLLMCall(
       messages,
       [],
-      { provider: ctx.provider, model: ctx.model, maxTokens: 512, userId: ctx.userId },
+      { provider: ctx.provider, model: ctx.model, maxTokens: 512, userId: ctx.userId, domain: ctx.domain, orgId: ctx.orgId, source: ctx.source || 'memory_consolidation' },
       getDeepSeek,
       getGemini,
       getOpenAI,
@@ -239,7 +240,7 @@ export async function selfReflect(
     const response = await makeLLMCall(
       messages,
       [],
-      { provider: ctx.provider, model: ctx.model, maxTokens: 512, userId: ctx.userId },
+      { provider: ctx.provider, model: ctx.model, maxTokens: 512, userId: ctx.userId, domain: ctx.domain, orgId: ctx.orgId, source: ctx.source || 'memory_self_reflection' },
       getDeepSeek,
       getGemini,
       getOpenAI,
@@ -348,7 +349,7 @@ export async function consolidateNarrative(
     const response = await makeLLMCall(
       messages,
       [],
-      { provider: ctx.provider, model: ctx.model, maxTokens: 512, userId: ctx.userId },
+      { provider: ctx.provider, model: ctx.model, maxTokens: 512, userId: ctx.userId, domain: ctx.domain, orgId: ctx.orgId, source: ctx.source || 'memory_narrative_consolidation' },
       getDeepSeek,
       getGemini,
       getOpenAI,

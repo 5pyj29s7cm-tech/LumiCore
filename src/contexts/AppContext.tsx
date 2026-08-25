@@ -823,19 +823,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setUser((prev) => prev ? { ...prev, balance: (prev.balance || 0) + amount } : prev);
   };
 
-  const setSelectedVoiceId = (id: string, provider?: string) => {
+  const setSelectedVoiceId = useCallback((id: string, provider?: string) => {
     setSelectedVoiceIdState(id);
     localStorage.setItem(voiceStorageKeys.selected, id);
     if (provider) {
       localStorage.setItem(voiceStorageKeys.provider, provider);
       localStorage.setItem(`${voiceStorageKeys.selected}_provider_${provider}`, id);
     }
-  };
+  }, [voiceStorageKeys.provider, voiceStorageKeys.selected]);
 
-  const getSelectedVoiceIdForProvider = (provider: string) => {
+  const getSelectedVoiceIdForProvider = useCallback((provider: string) => {
     if (!provider) return undefined;
     return localStorage.getItem(`${voiceStorageKeys.selected}_provider_${provider}`) || undefined;
-  };
+  }, [voiceStorageKeys.selected]);
 
   const toggleFavoriteVoice = (id: string) => {
     setFavoriteVoices(prev => {

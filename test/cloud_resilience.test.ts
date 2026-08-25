@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { classifyCloudError, getCloudHealth } from '../server/cloud/core';
+import { withCloudResilience } from '../server/cloud/resilience';
 import {
   getCircuitStatus,
   isCircuitClosed,
@@ -26,7 +27,35 @@ describe('cloud provider failure feedback', () => {
   it('classifies overdue account responses as quota failures', () => {
     const result = classifyCloudError(new Error('Access denied: overdue-payment'));
     expect(result.category).toBe('quota');
-    expect(result.isRetryable).toBe(true);
+    expect(result.isRetryable).toBe(false);
+  });
+
+  it('classifies a bare HTTP 402 as a non-retryable same-provider billing failure', () => {
+    const result = classifyCloudError(new Error('Request failed with status 402'), 'deepseek');
+    expect(result.category).toBe('quota');
+    expect(result.isRetryable).toBe(false);
+  });
+
+  it('classifies an SDK status-only 402 without requiring the status in its message', () => {
+    const error = Object.assign(new Error('account unavailable'), { status: 402 });
+    const result = classifyCloudError(error, 'deepseek');
+    expect(result).toMatchObject({ category: 'quota', isRetryable: false, provider: 'deepseek' });
+  });
+
+  it('does not replay a billing failure against the same provider and opens its circuit', async () => {
+    let attempts = 0;
+    await expect(withCloudResilience(async () => {
+      attempts += 1;
+      throw Object.assign(new Error('payment required'), { status: 402 });
+    }, {
+      provider: 'billing-provider',
+      model: 'billing-model',
+      maxRetries: 3,
+      baseDelayMs: 1,
+    })).rejects.toThrow('payment required');
+
+    expect(attempts).toBe(1);
+    expect(isCircuitClosed('billing-provider', 'billing-model')).toBe(false);
   });
 
   it('does not mistake Doubao business code 55000000 for an HTTP 500', () => {

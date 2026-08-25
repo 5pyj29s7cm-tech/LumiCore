@@ -3,6 +3,7 @@ import { estimateTokenCount } from '../llm/providers';
 import {
   buildConversationActionContinuationState,
   classifyToolRecordTaskDurability,
+  classifyConversationActionFollowupIntent,
   classifyRecentActionFollowupIntent,
   formatConversationActionTaskStatus,
   isUserObservedTaskCompletion,
@@ -26,6 +27,7 @@ import {
   isUnverifiedExecutionAssistantText,
   sanitizeSummaryForPrompt,
 } from './summary_grounding';
+import { sanitizeToolRecordsForPersistence } from '../cognition/user_output_protection';
 import {
   formatConversationActionLedgerStatus,
   attachConversationExecutionPlan,
@@ -114,6 +116,54 @@ function hydrateConversationActionState(
   if (state) conversation.actionContinuationState = state;
   else delete conversation.actionContinuationState;
   return state;
+}
+
+function shouldDetachUnrelatedActionState(
+  state: ConversationActionContinuationState | null | undefined,
+  userText: string,
+): boolean {
+  const current = normalizeConversationActionState(state);
+  if (
+    !current?.unfinished
+    || !['blocked', 'waiting_confirmation'].includes(current.status || '')
+  ) return false;
+  return classifyConversationActionFollowupIntent(userText, current) === 'none';
+}
+
+/**
+ * A blocked/confirmation-waiting task stays in the durable ledger for audit,
+ * but must stop being the conversation's live pointer once the user clearly
+ * starts an unrelated turn. Keeping that pointer live caused later model,
+ * screen and biometric questions to inherit the older task id.
+ */
+function detachUnrelatedConversationActionState(
+  db: any,
+  conversation: Conversation,
+  userText: string,
+  now: string,
+): boolean {
+  const previous = normalizeConversationActionState(conversation.actionContinuationState);
+  if (!previous || !shouldDetachUnrelatedActionState(previous, userText)) return false;
+  const cancelled = normalizeConversationActionState({
+    ...previous,
+    version: 2,
+    status: 'cancelled',
+    unfinished: false,
+    latestBlocker: '',
+    activeRequestId: undefined,
+    assistantState: 'Detached because the user started an unrelated turn.',
+    revision: (previous.revision || 0) + 1,
+    updatedAt: now,
+  });
+  if (cancelled) {
+    syncConversationActionTaskLedger(db, {
+      conversation,
+      state: cancelled,
+      now,
+    });
+  }
+  delete conversation.actionContinuationState;
+  return true;
 }
 
 export interface Conversation {
@@ -619,15 +669,39 @@ export function prepareConversationActionExecution(input: {
   if (!conversation) return { state: null, kind: 'conversation' };
   hydrateConversationActionState(db, conversation, input.userText);
   const prepared = prepareConversationActionTaskState(conversation.actionContinuationState, input);
+  if (prepared.kind === 'conversation') {
+    const detached = detachUnrelatedConversationActionState(
+      db,
+      conversation,
+      input.userText,
+      new Date().toISOString(),
+    );
+    if (detached) {
+      delete conversation.pendingActionContinuation;
+      conversation.lastActiveAt = new Date().toISOString();
+      writeDB(db);
+    }
+    // The ledger may retain the previous task for status/history, but a plain
+    // turn never receives that task id for plan/receipt binding.
+    return { state: null, kind: 'conversation' };
+  }
   if (prepared.state !== conversation.actionContinuationState) {
     if (prepared.state) conversation.actionContinuationState = prepared.state;
     else delete conversation.actionContinuationState;
     conversation.lastActiveAt = new Date().toISOString();
     if (prepared.state) {
+      const pending = conversation.pendingActionContinuation;
+      const rootUserMessageId = pending
+        && (!pending.requestId || pending.requestId === input.requestId)
+        && pending.userText === input.userText
+        ? pending.messageId
+        : undefined;
       syncConversationActionTaskLedger(db, {
         conversation,
         state: prepared.state,
         userText: input.userText,
+        rootUserMessageId,
+        currentUserMessageId: rootUserMessageId,
         now: conversation.lastActiveAt,
       });
     }
@@ -923,6 +997,7 @@ export function addMessage(msg: {
   const id = 'msg_' + crypto.randomUUID();
   const now = msg.timestamp || new Date().toISOString();
   const normalizedToolCalls = normalizeToolCalls(msg.toolCalls);
+  let currentUserMessageIdForLedger = '';
 
   const interaction: any = {
     id,
@@ -968,6 +1043,7 @@ export function addMessage(msg: {
       if (!msg.skipActionContinuation && msg.role === 'user') {
         const userText = String(msg.content || '').trim();
         if (userText) {
+          currentUserMessageIdForLedger = id;
           const userObservedCompletion = isUserObservedTaskCompletion(
             userText,
             conv.actionContinuationState,
@@ -975,6 +1051,9 @@ export function addMessage(msg: {
           const continuationTurn = needsRecentActionContinuationContext(userText);
           const contract = buildActionContract(userText);
           const actionTurn = contract.applies && contract.kind !== 'none';
+          if (!userObservedCompletion) {
+            detachUnrelatedConversationActionState(db, conv, userText, now);
+          }
           const preparedSameTurn = Boolean(
             conv.actionContinuationState
             && conv.actionContinuationState.latestInstruction === userText
@@ -1028,6 +1107,7 @@ export function addMessage(msg: {
         && conv.pendingActionContinuation
       ) {
         const pending = conv.pendingActionContinuation;
+        currentUserMessageIdForLedger = pending.messageId;
         const activeTaskId = String(conv.actionContinuationState?.taskId || '');
         const activeRequestId = String(conv.actionContinuationState?.activeRequestId || pending.requestId || '');
         const records = normalizedToolCalls || [];
@@ -1109,7 +1189,7 @@ export function addMessage(msg: {
             toolCalls: currentToolRecords,
             updatedAt: now,
             evidenceMessageId: id,
-            requestId: conv.actionContinuationState?.activeRequestId,
+            requestId: conv.actionContinuationState?.activeRequestId || pending.requestId || msg.requestId,
             toolPolicy: conv.actionContinuationState?.policySnapshot,
           });
           if (nextState) conv.actionContinuationState = nextState;
@@ -1166,9 +1246,12 @@ export function addMessage(msg: {
           userText: msg.role === 'user'
             ? String(msg.content || '')
             : conv.actionContinuationState.latestInstruction,
-          rootUserMessageId: msg.role === 'user'
-            ? id
-            : conv.actionContinuationState.evidenceMessageId,
+          ...(msg.role === 'assistant' && currentUserMessageIdForLedger
+            ? { rootUserMessageId: currentUserMessageIdForLedger }
+            : {}),
+          ...(currentUserMessageIdForLedger
+            ? { currentUserMessageId: currentUserMessageIdForLedger }
+            : {}),
           now,
         });
       }
@@ -1272,15 +1355,7 @@ function compactPromptText(value: string, limit: number): string {
 }
 
 function normalizeToolCalls(value: unknown): any[] | undefined {
-  let current = value;
-  for (let depth = 0; depth < 2 && typeof current === 'string' && current.trim(); depth += 1) {
-    try {
-      current = JSON.parse(current);
-    } catch {
-      return undefined;
-    }
-  }
-  return Array.isArray(current) && current.length > 0 ? current : undefined;
+  return sanitizeToolRecordsForPersistence(value);
 }
 
 function isPromptEligibleMessage(m: MessageRecord): boolean {

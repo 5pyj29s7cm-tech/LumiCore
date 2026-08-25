@@ -262,18 +262,88 @@ describe('One-time pending tool confirmations', () => {
 
   it('keeps chat confirmation scope stable across transport reconnects', () => {
     const scope = buildConversationConfirmationChannelScope({
-      source: 'chat', domain: 'personal', conversationId: 'conversation-1',
+      source: 'chat',
+      domain: 'personal',
+      conversationId: 'conversation-1',
+      taskId: 'task-1',
+      originRequestId: 'request-1',
     });
     const pending = recordPendingConfirmation(
       'chat-user',
       'wechat_send_message',
       { contact: '客户甲', message: '固定正文' },
       'chat',
-      { ...scope, taskId: 'task-1' },
+      scope,
     );
 
     expect(scope.channelId).toBe('conversation:conversation-1');
     expect(getPendingConfirmation('chat-user', scope)?.id).toBe(pending.id);
+  });
+
+  it('does not let a later unrelated request adopt a task-bound confirmation', () => {
+    const exactScope = buildConversationConfirmationChannelScope({
+      source: 'chat',
+      domain: 'personal',
+      conversationId: 'conversation-confirmation-owner',
+      taskId: 'task-owner',
+      originRequestId: 'request-owner',
+    });
+    const pending = recordPendingConfirmation(
+      'chat-owner',
+      'wechat_send_message',
+      { contact: 'Alice', message: 'Immutable payload' },
+      'chat',
+      exactScope,
+    );
+    const wrongOrigin = buildConversationConfirmationChannelScope({
+      source: 'chat',
+      domain: 'personal',
+      conversationId: 'conversation-confirmation-owner',
+      taskId: 'task-owner',
+      originRequestId: 'request-later-unrelated',
+    });
+    const noTask = buildConversationConfirmationChannelScope({
+      source: 'chat',
+      domain: 'personal',
+      conversationId: 'conversation-confirmation-owner',
+    });
+
+    expect(getPendingConfirmation('chat-owner', wrongOrigin)).toBeNull();
+    expect(getPendingConfirmation('chat-owner', noTask)).toBeNull();
+    expect(consumePendingConfirmation(
+      'chat-owner', pending.id, pending.toolName, pending.exactArgs, wrongOrigin,
+    )).toBe(false);
+    expect(consumePendingConfirmation(
+      'chat-owner', pending.id, pending.toolName, pending.exactArgs, exactScope,
+    )).toBe(true);
+  });
+
+  it('keeps a fresh taskless confirmation consumable after its first receipt creates the task', () => {
+    const channelScope = buildConversationConfirmationChannelScope({
+      source: 'chat',
+      domain: 'personal',
+      conversationId: 'conversation-model-owned-task',
+    });
+    const pending = recordPendingConfirmation(
+      'chat-fresh-task',
+      'desktop_run_command',
+      { command: 'immutable-command' },
+      'chat',
+      { ...channelScope, originRequestId: 'request-that-proposed-command' },
+    );
+    const laterTaskScope = buildConversationConfirmationChannelScope({
+      source: 'chat',
+      domain: 'personal',
+      conversationId: 'conversation-model-owned-task',
+      taskId: 'task-created-from-blocked-receipt',
+      originRequestId: 'request-that-proposed-command',
+    });
+
+    expect(getPendingConfirmation('chat-fresh-task', laterTaskScope)).toBeNull();
+    expect(getPendingConfirmation('chat-fresh-task', channelScope)?.id).toBe(pending.id);
+    expect(consumePendingConfirmation(
+      'chat-fresh-task', pending.id, pending.toolName, pending.exactArgs, channelScope,
+    )).toBe(true);
   });
 
   it('recognizes a concise confirmation without treating ordinary messages as approval', () => {

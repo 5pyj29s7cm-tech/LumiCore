@@ -293,6 +293,99 @@ describe('completion guard generic execution claims', () => {
     expect(result.reason).toContain('\u5199\u5165/\u751f\u6210/\u9a8c\u6536\u8bb0\u5f55');
   });
 
+  it('does not mistake a saved prior-turn receipt for a saved artifact', () => {
+    const task = '你上一轮是否真的调用过工具？不要再次调用工具，只根据已保存的回执告诉我：工具名、成功还是失败。';
+    const response = '上一轮确实调用过工具。工具名：desktop_active_window；已保存的回执显示执行成功。';
+    const result = guardCompletionClaims({
+      task,
+      response,
+      toolCalls: [{
+        name: 'desktop_poll_activity',
+        arguments: {},
+        result: JSON.stringify({ ok: true, status: 'observed' }),
+        terminalVerification: {
+          status: 'verified',
+          strategy: 'terminal_receipt',
+          reason: 'Desktop observation returned.',
+        },
+      }],
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(response);
+    expect(result.reason || '').not.toContain('生成或保存产物');
+  });
+
+  it.each([
+    '回执已经保存，结果为成功。',
+    '执行记录已保存，状态为成功。',
+    '任务账本已保存，证据状态为成功。',
+    'The receipt was saved and the result was successful.',
+    'The execution log was saved with a successful status result.',
+  ])('does not classify persisted execution metadata as an artifact: %s', (response) => {
+    const result = guardCompletionClaims({
+      task: '核对上一轮执行状态',
+      response,
+      toolCalls: [{
+        name: 'desktop_poll_activity',
+        arguments: {},
+        result: JSON.stringify({ ok: true, status: 'observed' }),
+      }],
+    });
+
+    expect(result.reason || '').not.toContain('生成或保存产物');
+    expect(result.text).not.toContain('生成或保存产物');
+  });
+
+  it('still requires producer evidence for an explicit saved file claim', () => {
+    const result = guardCompletionClaims({
+      task: '保存报告文件',
+      response: '报告文件已保存。',
+      toolCalls: [{
+        name: 'desktop_list_files',
+        arguments: { path: 'D:\\reports' },
+        result: '[{"name":"report.docx"}]',
+      }],
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain('写入/生成/验收记录');
+  });
+
+  it('does not let receipt wording hide an explicit saved-file claim', () => {
+    const result = guardCompletionClaims({
+      task: '核对报告文件是否已保存',
+      response: '执行记录显示报告文件已保存。',
+      toolCalls: [{
+        name: 'desktop_list_files',
+        arguments: { path: 'D:\\reports' },
+        result: '[{"name":"report.docx"}]',
+      }],
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain('写入/生成/验收记录');
+  });
+
+  it.each([
+    '已经保存成功。',
+    '已保存，路径是 D:\\x.txt。',
+    'report.txt 已保存。',
+  ])('still guards a bare save, path, or filename claim: %s', (response) => {
+    const result = guardCompletionClaims({
+      task: '保存内容',
+      response,
+      toolCalls: [{
+        name: 'desktop_list_files',
+        arguments: { path: 'D:\\' },
+        result: '[{"name":"x.txt"}]',
+      }],
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain('写入/生成/验收记录');
+  });
+
   it('does not count a confirmation blocker returned as tool text as success', () => {
     const result = guardCompletionClaims({
       task: '\u786e\u8ba4',

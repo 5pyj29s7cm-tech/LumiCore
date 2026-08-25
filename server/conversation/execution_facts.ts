@@ -1,21 +1,38 @@
 import { readDB } from '../../db_layer';
+import { CN_CONVERSATION_EXECUTION_FACT_MESSAGES } from '../regions/packs/cn/conversation_execution_facts_messages';
+import { isPriorTurnToolReceiptQuestion } from '../cognition/normalized_action_intent';
+import { toolRecordSucceeded } from '../cognition/task_execution_ledger';
 
 export interface ConversationExecutionFactScope {
   conversationId: string;
   userId: string;
   domain?: string;
   orgId?: string;
+  /** The just-persisted user request, used to locate the immediately preceding turn. */
+  currentRequestId?: string;
 }
 
 export interface ConversationExecutionFacts {
-  toolCalls: Array<{
-    name: string;
-    error: boolean;
-    arguments?: Record<string, unknown>;
-    result?: string;
-  }>;
+  toolCalls: ConversationExecutionToolFact[];
+  /** Tool receipts belonging only to the user turn immediately before this one. */
+  priorTurnToolCalls?: ConversationExecutionToolFact[];
   tasks: Array<{ id: string; status: string }>;
   recentUserMessages?: string[];
+}
+
+export interface ConversationExecutionToolFact {
+  name: string;
+  error: boolean;
+  errorDetail?: string;
+  turnId?: string;
+  requestId?: string;
+  arguments?: Record<string, unknown>;
+  result?: string;
+  terminalVerification?: { status?: string };
+  envelope?: {
+    status?: string;
+    verification?: { status?: string };
+  };
 }
 
 function parseToolCalls(value: unknown): any[] {
@@ -33,6 +50,10 @@ function parseToolCalls(value: unknown): any[] {
 export function isConversationExecutionFactQuestion(text: string): boolean {
   const normalized = String(text || '').trim();
   if (!normalized) return false;
+  if (isPriorTurnToolReceiptQuestion(normalized)) return true;
+  // i18n-allow -- Chinese prior-open fact-question recognition; not user-visible copy.
+  const asksAboutPriorOpen = /(?:你)?(?:不是|不都|难道没)?(?:已经|刚才|刚刚|之前).{0,16}(?:打开|启动|运行).{0,24}(?:吗|没有|没|不知道|忘了)|(?:你)?(?:已经|刚才|刚刚).{0,16}(?:打开|启动|运行)了[，,。！？!?\s]*(?:你)?(?:自己)?(?:不知道|忘了)|\b(?:didn'?t|did\s+you\s+not|you\s+already).{0,40}\b(?:open|launch|start)(?:ed)?\b/iu.test(normalized);
+  if (asksAboutPriorOpen) return true;
   const conversationScope = /(?:这|本|当前|刚才|刚刚|整个).{0,10}(?:轮|段|次)?(?:对话|会话|聊天)|\b(?:this|current|that)\s+(?:conversation|chat|session)\b/iu.test(normalized);
   const asksWhether = /(?:有没有|有没|是否|究竟|到底|真的)|\b(?:did|have|was|were)\b/iu.test(normalized);
   const executionSubject = /(?:(?:调用|执行|使用|跑).{0,10}(?:工具|插件|技能)|(?:创建|新建|建立).{0,10}(?:任务|计划))|\b(?:call|use|run|execute)(?:d|ing)?\s+(?:any\s+)?tools?\b|\bcreat(?:e|ed|ing)\s+(?:any\s+)?tasks?\b/iu.test(normalized);
@@ -48,6 +69,77 @@ function parseRecordArguments(value: unknown): Record<string, unknown> {
   return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
     ? parsed as Record<string, unknown>
     : {};
+}
+
+function parseRecordResult(value: unknown): Record<string, any> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, any>;
+  }
+  try {
+    const parsed = JSON.parse(String(value || '{}'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, any>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function interactionRequestId(item: any): string {
+  return String(item?.requestId || item?.externalMessageId || '').trim();
+}
+
+function verifiedPriorOpen(record: ConversationExecutionFacts['toolCalls'][number]): boolean {
+  if (!/^(?:desktop_open|browser_open_task)$/i.test(record.name) || record.error) return false;
+  const payload = parseRecordResult(record.result);
+  const status = String(payload.status || payload.verification?.status || '').trim().toLowerCase();
+  const targetMatched = payload.targetMatched === true || payload.verification?.targetMatched === true;
+  if (payload.ok === false || payload.success === false || payload.opened === false) return false;
+  return (
+    record.envelope?.status === 'verified_success'
+      && record.envelope.verification?.status === 'verified'
+  ) || (
+    record.terminalVerification?.status === 'verified'
+      && targetMatched
+  ) || (
+    status === 'verified'
+      && targetMatched
+  );
+}
+
+function priorOpenTarget(record: ConversationExecutionFacts['toolCalls'][number]): string {
+  const payload = parseRecordResult(record.result);
+  const invoked = String(
+    record.arguments?.target
+    || record.arguments?.path
+    || record.arguments?.url
+    || payload.target
+    || '',
+  ).trim();
+  const actual = `${payload.actualTarget?.processName || ''} ${payload.actualTarget?.title || ''} ${invoked}`;
+  if (/chrome/iu.test(actual)) return 'Google Chrome';
+  if (/msedge|microsoft\s*edge/iu.test(actual)) return 'Microsoft Edge';
+  if (/firefox/iu.test(actual)) return 'Firefox';
+  return invoked.split(/[\\/]/).pop() || invoked || CN_CONVERSATION_EXECUTION_FACT_MESSAGES.unnamedOpenTarget;
+}
+
+function optionalOpenObservationFailed(
+  records: ConversationExecutionFacts['toolCalls'],
+  openIndex: number,
+): boolean {
+  const openTurnId = records[openIndex]?.turnId;
+  return records.slice(openIndex + 1).some(record => {
+    if (openTurnId && record.turnId && record.turnId !== openTurnId) return false;
+    if (!record.error && record.terminalVerification?.status !== 'failed' && record.terminalVerification?.status !== 'unverified') {
+      return false;
+    }
+    if (/^(?:desktop_execution_plan_receipt|desktop_active_window|get_active_window_info|desktop_running_processes|get_running_processes|desktop_capture_screen|desktop_ocr|computer_vision)$/i.test(record.name)) {
+      return true;
+    }
+    return /^desktop_run_command$/i.test(record.name)
+      && /(?:fingerprint|target[_ ]?mismatch|focus|foreground|window|display|paused_for_user_activity)/iu
+        .test(record.errorDetail || record.result || '');
+  });
 }
 
 function verifiedClientAction(record: ConversationExecutionFacts['toolCalls'][number]): string {
@@ -91,14 +183,75 @@ export function getConversationExecutionFacts(scope: ConversationExecutionFactSc
     && String(item.domain || 'personal') === domain
     && (domain !== 'work' || String(item.orgId || '') === orgId)
   ));
-  const toolCalls = interactions.flatMap((item: any) => parseToolCalls(item.toolCalls))
-    .map((record: any) => ({
+  const mapInteractionToolCalls = (item: any): ConversationExecutionToolFact[] => (
+    parseToolCalls(item.toolCalls).map((record: any) => ({
       name: String(record?.name || record?.toolName || '').trim(),
       error: Boolean(record?.error),
+      errorDetail: String(record?.error || '').trim() || undefined,
+      turnId: String(record?.turnId || record?.requestId || item?.requestId || item?.turnId || '').trim() || undefined,
+      requestId: String(record?.requestId || item?.requestId || item?.externalMessageId || '').trim() || undefined,
       arguments: parseRecordArguments(record?.arguments ?? record?.args),
       result: typeof record?.result === 'string' ? record.result : JSON.stringify(record?.result ?? ''),
-    }))
-    .filter((record: { name: string }) => Boolean(record.name));
+      terminalVerification: record?.terminalVerification && typeof record.terminalVerification === 'object'
+        ? { status: String(record.terminalVerification.status || '') }
+        : undefined,
+      envelope: record?.envelope && typeof record.envelope === 'object'
+        ? {
+            status: String(record.envelope.status || ''),
+            verification: record.envelope.verification && typeof record.envelope.verification === 'object'
+              ? { status: String(record.envelope.verification.status || '') }
+              : undefined,
+          }
+        : undefined,
+    })).filter((record: ConversationExecutionToolFact) => Boolean(record.name))
+  );
+  const toolCalls = interactions.flatMap(mapInteractionToolCalls);
+  const currentUserIndex = (() => {
+    const exactRequestId = String(scope.currentRequestId || '').trim();
+    if (!exactRequestId) return -1;
+    if (exactRequestId) {
+      for (let index = interactions.length - 1; index >= 0; index -= 1) {
+        const item = interactions[index];
+        if (
+          String(item?.role || '').toLowerCase() === 'user'
+          && String(item?.requestId || item?.externalMessageId || '') === exactRequestId
+        ) return index;
+      }
+    }
+    return -1;
+  })();
+  let previousUserIndex = -1;
+  for (let index = currentUserIndex - 1; index >= 0; index -= 1) {
+    if (String(interactions[index]?.role || '').toLowerCase() === 'user') {
+      previousUserIndex = index;
+      break;
+    }
+  }
+  const previousUserRequestId = previousUserIndex >= 0
+    ? interactionRequestId(interactions[previousUserIndex])
+    : '';
+  const priorTurnToolCalls = scope.currentRequestId
+    ? previousUserIndex >= 0
+      ? previousUserRequestId
+        // Accepted user turns are persisted before they wait for an older
+        // foreground lease. A queued transcript can therefore be ordered as
+        // user1, user2, assistant1. Bind receipts to user1's immutable request
+        // id instead of assuming assistant1 must sit between the two users.
+        ? interactions.flatMap((item: any) => {
+            const itemRequestId = interactionRequestId(item);
+            return mapInteractionToolCalls(item).filter(record => (
+              itemRequestId === previousUserRequestId
+              || record.requestId === previousUserRequestId
+            ));
+          })
+        // Legacy rows may predate durable request ids. Preserve the original
+        // adjacency fallback only for those rows; a modern request with no
+        // matching receipt must remain an authoritative empty result.
+        : interactions
+          .slice(previousUserIndex + 1, currentUserIndex >= 0 ? currentUserIndex : interactions.length)
+          .flatMap(mapInteractionToolCalls)
+      : []
+    : undefined;
   const tasks = (db.conversationActionTasks || []).filter((task: any) => (
     String(task.conversationId || '') === scope.conversationId
     && String(task.userId || '') === scope.userId
@@ -113,7 +266,19 @@ export function getConversationExecutionFacts(scope: ConversationExecutionFactSc
     .map((item: any) => String(item.message || '').trim())
     .filter(Boolean)
     .slice(-24);
-  return { toolCalls, tasks, recentUserMessages };
+  return { toolCalls, priorTurnToolCalls, tasks, recentUserMessages };
+}
+
+function priorTurnToolOutcome(record: ConversationExecutionToolFact): 'success' | 'failed' {
+  if (record.error) return 'failed';
+  if (
+    record.terminalVerification?.status === 'verified'
+    || (
+      record.envelope?.status === 'verified_success'
+      && record.envelope.verification?.status === 'verified'
+    )
+  ) return 'success';
+  return toolRecordSucceeded(record as any) ? 'success' : 'failed';
 }
 
 export function formatConversationExecutionFactAnswer(
@@ -121,8 +286,63 @@ export function formatConversationExecutionFactAnswer(
   text: string,
 ): string {
   const zh = /[\u3400-\u9fff]/u.test(text);
+  if (isPriorTurnToolReceiptQuestion(text)) {
+    const records = facts.priorTurnToolCalls || (() => {
+      const latest = facts.toolCalls[facts.toolCalls.length - 1];
+      if (!latest) return [];
+      const turnId = String(latest.turnId || latest.requestId || '').trim();
+      return turnId
+        ? facts.toolCalls.filter(record => String(record.turnId || record.requestId || '').trim() === turnId)
+        : [latest];
+    })();
+    if (records.length === 0) {
+      return zh
+        ? CN_CONVERSATION_EXECUTION_FACT_MESSAGES.noPriorTurnToolReceipt
+        : 'No tool-call receipt was recorded for the previous turn.';
+    }
+    const outcomes = records.map(record => ({
+      name: record.name,
+      outcome: priorTurnToolOutcome(record),
+    }));
+    if (zh) {
+      return CN_CONVERSATION_EXECUTION_FACT_MESSAGES.priorTurnTools(outcomes);
+    }
+    return `The previous turn called: ${outcomes.map(item => `${item.name} (${item.outcome})`).join(', ')}.`;
+  }
   const toolNames = Array.from(new Set(facts.toolCalls.map(record => record.name)));
   const taskStatuses = Array.from(new Set(facts.tasks.map(task => task.status)));
+  // i18n-allow -- Chinese prior-open fact-question recognition; not user-visible copy.
+  const asksAboutPriorOpen = /(?:你)?(?:不是|不都|难道没)?(?:已经|刚才|刚刚|之前).{0,16}(?:打开|启动|运行).{0,24}(?:吗|没有|没|不知道|忘了)|(?:你)?(?:已经|刚才|刚刚).{0,16}(?:打开|启动|运行)了[，,。！？!?\s]*(?:你)?(?:自己)?(?:不知道|忘了)|\b(?:didn'?t|did\s+you\s+not|you\s+already).{0,40}\b(?:open|launch|start)(?:ed)?\b/iu.test(text);
+  if (asksAboutPriorOpen) {
+    let openIndex = -1;
+    for (let index = facts.toolCalls.length - 1; index >= 0; index -= 1) {
+      if (verifiedPriorOpen(facts.toolCalls[index])) {
+        openIndex = index;
+        break;
+      }
+    }
+    if (openIndex < 0) {
+      return zh
+        ? CN_CONVERSATION_EXECUTION_FACT_MESSAGES.noVerifiedOpen
+        : 'I checked this conversation and found no verified successful open receipt.';
+    }
+    const target = priorOpenTarget(facts.toolCalls[openIndex]);
+    const observationFailed = optionalOpenObservationFailed(facts.toolCalls, openIndex);
+    if (zh) {
+      return [
+        CN_CONVERSATION_EXECUTION_FACT_MESSAGES.verifiedOpen(target),
+        ...(observationFailed
+          ? [CN_CONVERSATION_EXECUTION_FACT_MESSAGES.laterObservationIncomplete]
+          : []),
+      ].join('');
+    }
+    return [
+      `Yes. ${target} was opened and the action has a verified receipt.`,
+      ...(observationFailed
+        ? [' A later window/focus check did not finish, but it does not undo the completed open action.']
+        : []),
+    ].join('');
+  }
   const asksVerifiedClientNavigation = /(?:成功|实际|真实|回执).{0,24}(?:客户端)?(?:导航|界面动作|页面动作)|(?:哪一个|哪个|什么).{0,24}(?:客户端)?(?:导航动作|界面动作)/u.test(text);
   if (zh && asksVerifiedClientNavigation) {
     const action = [...facts.toolCalls].reverse().map(verifiedClientAction).find(Boolean) || '';

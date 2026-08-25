@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   hasMixedStatusExecutionIntent,
+  isPriorTurnToolReceiptQuestion,
   normalizeActionIntent,
 } from '../server/cognition/normalized_action_intent';
 import {
@@ -330,9 +331,9 @@ describe('normalized desktop intent priority', () => {
   });
 
   it('preserves the named personal-home target in a status-only follow-up', () => {
-    expect(normalizeActionIntent(
-      '刚才“返回 Lumi 个人主页”的任务最终状态是什么？说明执行动作、目标页面和验证状态，不要执行任何新工具。',
-    )).toMatchObject({
+    const text = '刚才“返回 Lumi 个人主页”的任务最终状态是什么？说明执行动作、目标页面和验证状态，不要执行任何新工具。';
+    expect(isPriorTurnToolReceiptQuestion(text)).toBe(false);
+    expect(normalizeActionIntent(text)).toMatchObject({
       kind: 'status_query',
       operation: 'status',
       target: 'home',
@@ -483,6 +484,8 @@ describe('normalized desktop intent priority', () => {
     '\u521a\u624d\u505a\u4e86\u4ec0\u4e48\u2026\u73b0\u5728\u521b\u5efa\u4e00\u4e2a\u65b0\u6587\u4ef6\u3002',
     '\u521a\u624d\u505a\u4e86\u4ec0\u4e48\uff0c\u7136\u540e\u6253\u5f00\u804a\u5929\u754c\u9762\u3002',
     '\u521a\u624d\u505a\u4e86\u4ec0\u4e48\u5e76\u6253\u5f00\u804a\u5929\u754c\u9762\u3002',
+    '上一轮是否调用工具？现在请调用另一个工具核实。',
+    'Did the previous turn call a tool? Now use another tool to verify it.',
   ])('does not let a previous-action receipt question swallow a new instruction: %s', (text) => {
     expect(hasMixedStatusExecutionIntent(text)).toBe(true);
     expect(normalizeActionIntent(text).kind).not.toBe('status_query');
@@ -491,6 +494,7 @@ describe('normalized desktop intent priority', () => {
   it.each([
     'What did you just do? Only answer from the receipt; do not execute a new action.',
     '\u521a\u624d\u6253\u5f00\u4e86\u4ec0\u4e48\uff1f\u53ea\u6839\u636e\u4e0a\u4e00\u8f6e\u56de\u6267\u56de\u7b54\uff0c\u4e0d\u8981\u6267\u884c\u65b0\u64cd\u4f5c\u3002',
+    '上一轮是否调用工具？不要再次调用工具，只根据回执回答。',
   ])('keeps an explicitly read-only previous-action query out of execution: %s', (text) => {
     expect(hasMixedStatusExecutionIntent(text)).toBe(false);
     expect(normalizeActionIntent(text)).toMatchObject({
@@ -514,6 +518,8 @@ describe('normalized desktop intent priority', () => {
     '刚才做了什么，打开聊天界面了吗？',
     '刚才做了什么，并打开聊天界面了吗？',
     '刚才做了什么，打开过聊天界面吗？',
+    '上一轮是否调用工具？现在调用另一个工具核实了吗？',
+    'Did the previous turn call a tool? Now use another tool to verify?',
   ])('does not upgrade a retrospective Chinese action question into a new navigation: %s', (text) => {
     expect(hasMixedStatusExecutionIntent(text)).toBe(false);
     expect(normalizeActionIntent(text)).toMatchObject({

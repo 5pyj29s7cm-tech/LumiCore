@@ -286,6 +286,22 @@ export interface ToolContext {
   supervisedExternalCommits?: boolean;
   /** Personality's tool policy for security level resolution */
   toolPolicy?: import('../personality/types').ToolPolicy;
+  /**
+   * Bounded declaration projection shown to the model. This is deliberately
+   * separate from `toolPolicy`: hiding a noisy schema does not revoke the
+   * executor's authority, while every projected declaration is still
+   * intersected with the effective authorization policy before model use.
+   */
+  modelToolProjection?: {
+    /** Priority-ordered declaration names selected for this turn. */
+    toolNames: string[];
+    /** Hard declaration ceiling, independent from the tool-call budget. */
+    maxTools: number;
+    /** Allow the manifest discovery receipt to replace low-priority schemas. */
+    allowDynamicDiscovery?: boolean;
+    /** Canonical discovery tool; defaults to client_capability_manifest. */
+    discoveryToolName?: string;
+  };
   /** Returns true if the task has been cancelled — checked between tool iterations */
   isCancelled?: () => boolean;
   /** Progress callback for long-running tools (computer_use) — reports each step */

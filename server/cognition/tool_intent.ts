@@ -53,8 +53,9 @@ export interface ToolIntentDecisionTrace {
 
 const EXPLICIT_NO_TOOL_PATTERNS: RegExp[] = [
   /(?:\u4e0d\u8981|\u522b|\u65e0\u9700|\u4e0d\u7528)\s*(?:\u518d)?(?:\u6267\u884c|\u8fdb\u884c|\u505a)\s*(?:\u4efb\u4f55|\u65b0\u7684?|\u5176\u4ed6|\u5176\u5b83)?\s*(?:\u64cd\u4f5c|\u52a8\u4f5c|\u4efb\u52a1)/u,
-  /(?:不要|别|无需|不用|禁止|请勿|勿)\s*(?:再|继续)?\s*(?:调用|使用|执行|启动)?\s*(?:任何|这些|外部|新(?:的)?|其他|其它)?\s*(?:工具|插件|技能|脚本)/u,
-  /不\s*(?:再|继续)?\s*(?:调用|使用|执行|启动)\s*(?:任何|这些|外部|其他|其它)?\s*(?:工具|插件|技能|脚本)/u,
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  /(?:不要|别|无需|不用|禁止|请勿|勿)\s*(?:再|继续|再次)?\s*(?:调用|使用|执行|启动)?\s*(?:(?:任何|这些|外部|新(?:的)?|其他|其它)\s*){0,3}(?:工具|插件|技能|脚本)/u,
+  /不\s*(?:再|继续)?\s*(?:调用|使用|执行|启动)\s*(?:(?:任何|这些|外部|新(?:的)?|其他|其它)\s*){0,3}(?:工具|插件|技能|脚本)/u,
   /(?:只|仅)\s*(?:回复|回答|解释|复述|确认)\s*[,，、]?\s*(?:不要|别|无需|不用)\s*(?:调用|使用|执行)?\s*(?:工具|插件|技能|脚本)/u,
   /\b(?:do\s+not|don't|without|no)\s+(?:call(?:ing)?|use|using|run(?:ning)?|execute|executing)?\s*(?:any\s+)?(?:tools?|plugins?|skills?|scripts?)\b/i,
   /\b(?:reply|answer|explain|repeat)\s+only\b[^.!?\n]{0,24}\b(?:no|without)\s+(?:tools?|plugins?|skills?|scripts?)\b/i,

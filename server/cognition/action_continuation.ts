@@ -802,7 +802,13 @@ export function prepareConversationActionTaskState(
   if (followupIntent === 'status' && previous) return { state: previous, kind: 'status' };
   const contract = buildActionContract(userText);
   const isAction = (contract.applies && contract.kind !== 'none') || input.forceTask === true;
-  if (!resume && !isAction) return { state: previous, kind: 'conversation' };
+  // An unrelated conversational turn may inspect the same conversation, but
+  // it does not own the durable action pointer. Returning the previous task
+  // here caused callers to bind the new turn's execution plan and receipts to
+  // an older blocked task (for example, a model question being attached to an
+  // earlier "open browser" task). The conversation manager keeps the durable
+  // ledger separately; callers receive no task identity for a plain turn.
+  if (!resume && !isAction) return { state: null, kind: 'conversation' };
 
   const now = input.now || new Date().toISOString();
   if (resume && previous) {

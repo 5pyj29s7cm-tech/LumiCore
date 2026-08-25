@@ -2,6 +2,36 @@ import './helpers';
 import { describe, expect, it } from 'vitest';
 
 describe('Lumi turn flow', () => {
+  it('treats the exact prior-turn receipt question as status-only, not saved-artifact work', async () => {
+    const text = '你上一轮是否真的调用过工具？不要再次调用工具，只根据已保存的回执告诉我：工具名、成功还是失败。';
+    const { initDatabase } = await import('../db_layer');
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+    const { normalizeActionIntent } = await import('../server/cognition/normalized_action_intent');
+    const { buildActionContract } = await import('../server/cognition/action_contract');
+    await initDatabase();
+
+    expect(normalizeActionIntent(text)).toMatchObject({
+      kind: 'status_query',
+      target: 'previous_action',
+      sideEffectClass: 'none',
+    });
+    expect(buildActionContract(text)).toMatchObject({ applies: false, kind: 'none' });
+
+    const flow = buildLumiTurnFlow({
+      userId: 'turn_flow_exact_prior_receipt',
+      text,
+      channel: 'chat',
+      source: 'command-center-chat',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+    expect(flow.allowToolUseForTurn).toBe(false);
+    expect(flow.modelToolAccess).toBe('hard_off');
+    expect(flow.selfRepairTurn).toBe(false);
+    expect(flow.completionEvidenceNeeded).toBe(false);
+    expect(flow.executionGovernance.verificationIntent).toBe('none');
+  });
+
   it.each(['chat', 'voice'] as const)('keeps explicit no-tool continuity tests conversational in %s', async (channel) => {
     const { initDatabase } = await import('../db_layer');
     const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
@@ -136,6 +166,7 @@ describe('Lumi turn flow', () => {
   it.each([
     '这个任务完成了吗？没完成就继续执行。',
     'Check the task status; if unfinished, retry it.',
+    '上一轮是否调用工具？现在请调用另一个工具核实。',
   ])('keeps a mixed status and resume turn executable with continuation context: %s', async (text) => {
     const { initDatabase } = await import('../db_layer');
     const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');

@@ -20,6 +20,7 @@ import {
 } from '../tools/registry';
 import { projectToolDeclarationForRouting } from '../tools/capability_projection';
 import type { CapabilityLane } from '../tools/types';
+import type { ToolContext } from '../tools/types';
 import type { NormalizedActionIntent } from './normalized_action_intent';
 import {
   rankReadOnlyToolPatterns,
@@ -85,6 +86,44 @@ export function buildModelCapabilityPolicy(
     forbiddenTools: blockAll ? unique([...forbiddenTools, '*']) : forbiddenTools,
     requireConfirmation: unique(base.requireConfirmation || []).filter(name => !forbidden.has(name)),
     maxIterations: blockAll ? 0 : (base.maxIterations ?? execution.maxIterations),
+  };
+}
+
+export const MODEL_CAPABILITY_DISCOVERY_TOOL = 'client_capability_manifest';
+
+/**
+ * Select the small schema set a model sees without changing what the
+ * executor may authorize. Normal routes stay bounded; hard allowlists remain
+ * exact; a non-hard route retains one manifest query that can re-project an
+ * already-authorized capability on the next model iteration.
+ */
+export function buildModelToolProjection(
+  execution: LumiExecutionDecision,
+): NonNullable<ToolContext['modelToolProjection']> {
+  if (!execution.allowToolUse || execution.baseToolPolicy.forbiddenTools?.includes('*')) {
+    return { toolNames: [], maxTools: 0, allowDynamicDiscovery: false };
+  }
+
+  const route = execution.toolRoute;
+  const hardAllowlist = route?.hardAllowlist === true;
+  const maxTools = Math.max(1, Math.min(route?.maxTools || 32, 32));
+  const routedNames = route?.toolNames?.length
+    ? route.toolNames
+    : (execution.toolPolicy.allowedTools || []).filter(name => name && name !== '*');
+  const toolNames = unique(routedNames).slice(0, maxTools);
+
+  if (!hardAllowlist && !toolNames.includes(MODEL_CAPABILITY_DISCOVERY_TOOL)) {
+    // Never evict a semantic route winner merely to add discovery. Normal
+    // routed turns reserve this tool in enhanceToolRouteForFlow; a saturated
+    // externally supplied route remains exact instead of losing its tail.
+    if (toolNames.length < maxTools) toolNames.push(MODEL_CAPABILITY_DISCOVERY_TOOL);
+  }
+
+  return {
+    toolNames,
+    maxTools,
+    allowDynamicDiscovery: !hardAllowlist && toolNames.includes(MODEL_CAPABILITY_DISCOVERY_TOOL),
+    discoveryToolName: MODEL_CAPABILITY_DISCOVERY_TOOL,
   };
 }
 

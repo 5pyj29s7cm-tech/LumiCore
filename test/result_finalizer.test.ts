@@ -2178,6 +2178,128 @@ describe('Lumi result finalizer', () => {
     ].join('\n'));
   });
 
+  it('keeps a verified file open successful when later optional focus checks fail', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const target = 'C:\\Users\\Administrator\\Desktop\\领航员计划_介绍手册_2026.docx';
+    const result = finalizeLumiResponse({
+      taskText: '打开桌面上的领航员计划文件',
+      responseText: '这次没有成功打开文件。',
+      toolRecords: [{
+        name: 'desktop_list_files',
+        arguments: { path: 'C:\\Users\\Administrator\\Desktop' },
+        result: JSON.stringify([{ path: target, type: 'file' }]),
+      }, {
+        name: 'desktop_open',
+        arguments: { target },
+        result: JSON.stringify({
+          ok: true,
+          status: 'verified',
+          target,
+          application: 'WPS Office',
+          targetMatched: true,
+          actualTarget: {
+            title: '领航员计划_介绍手册_2026.docx - WPS Office',
+            processName: 'wps.exe',
+          },
+        }),
+        terminalVerification: {
+          status: 'verified',
+          strategy: 'state_diff',
+          reason: 'Exact target opened.',
+        },
+        envelope: {
+          version: 1,
+          status: 'verified_success',
+          toolName: 'desktop_open',
+          taskId: 'task-file-open',
+          turnId: 'turn-file-open',
+          requestId: 'request-file-open',
+          idempotencyKey: 'file-open-key',
+          targetIdentity: target,
+          completedAt: '2026-08-25T09:00:00.000Z',
+          verification: { status: 'verified', reason: 'Exact target opened.' },
+        },
+      }, {
+        name: 'desktop_execution_plan_receipt',
+        arguments: {},
+        result: '',
+        error: 'Desktop execution ended as target_mismatch.',
+      }, {
+        name: 'desktop_active_window',
+        arguments: {},
+        result: '',
+        error: 'Desktop control is paused: desktop_control_paused_for_user_activity',
+      }, {
+        name: 'read_docx',
+        arguments: { path: target },
+        result: 'Document text was read.',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toContain('已打开领航员计划_介绍手册_2026.docx');
+    expect(result.text).toContain('后续窗口焦点核验没有完成');
+    expect(result.text).not.toMatch(/target_mismatch|desktop_control_paused|没有成功打开/iu);
+    expect(result.reason).toContain('Primary desktop-open verified');
+  });
+
+  it('keeps a verified browser open successful when a later plan fingerprint becomes stale', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '打开浏览器',
+      responseText: '浏览器没有打开。',
+      toolRecords: [{
+        name: 'desktop_open',
+        arguments: { target: 'Google Chrome' },
+        result: JSON.stringify({
+          ok: true,
+          status: 'verified',
+          target: 'Google Chrome',
+          targetMatched: true,
+          actualTarget: {
+            title: '新标签页 - Google Chrome',
+            processName: 'chrome.exe',
+          },
+        }),
+        terminalVerification: {
+          status: 'verified',
+          strategy: 'state_diff',
+          reason: 'Chrome window opened.',
+        },
+        envelope: {
+          version: 1,
+          status: 'verified_success',
+          toolName: 'desktop_open',
+          taskId: 'task-browser-open',
+          turnId: 'turn-browser-open',
+          requestId: 'request-browser-open',
+          idempotencyKey: 'browser-open-key',
+          targetIdentity: 'Google Chrome',
+          completedAt: '2026-08-25T09:05:00.000Z',
+          verification: { status: 'verified', reason: 'Chrome window opened.' },
+        },
+      }, {
+        name: 'desktop_execution_plan_receipt',
+        arguments: {},
+        result: '',
+        error: 'Desktop execution ended as target_mismatch.',
+      }, {
+        name: 'desktop_run_command',
+        arguments: { command: 'observe only' },
+        result: '',
+        error: 'Desktop window/display fingerprint changed; the compiled UI/vision plan is invalid and must be rebuilt.',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toContain('已打开Google Chrome');
+    expect(result.text).toContain('后续窗口焦点核验没有完成');
+    expect(result.text).not.toMatch(/target_mismatch|fingerprint|没有打开/iu);
+    expect(result.reason).toContain('Primary desktop-open verified');
+  });
+
   it('keeps socket entrypoints on the shared finalizer path', () => {
     const root = process.cwd();
     const chatSource = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');

@@ -201,18 +201,43 @@ const EN_MIXED_STATUS_EXECUTION_RE =
 const RECENT_ACTION_RECEIPT_QUERY_RE =
   /(?:\u4f60|lumi)?\s*(?:\u521a\u624d|\u521a\u521a|\u4e0a\u4e00\u8f6e|\u4e0a\u6b21).{0,48}(?:\u505a|\u6253\u5f00|\u6267\u884c|\u53d1\u9001|\u521b\u5efa|\u64cd\u4f5c)(?:\u4e86)?.{0,36}(?:\u4ec0\u4e48|\u54ea\u4e2a|\u54ea\u4e9b|\u6210\u529f|\u5b8c\u6210|\u8bc1\u636e|\u56de\u6267)|\bwhat\s+did\s+(?:you|lumi)\s+(?:just\s+)?(?:do|open|run|send|create)\b|\bdid\s+(?:you|lumi)\s+(?:just\s+)?(?:open|run|send|create).{0,40}\bsuccessfully\b|\bwhat\s+evidence\b.{0,48}\b(?:succeed|succeeded|success|complete|completed)\b/iu;
 
-function isRecentActionReceiptQuery(text: string): boolean {
-  return RECENT_ACTION_RECEIPT_QUERY_RE.test(text);
+/**
+ * A narrow, read-only query for the immediately preceding turn's persisted
+ * tool receipts. Keep this separate from generic task status so Chat can
+ * answer it locally without exposing the model to a tool manifest.
+ */
+export function isPriorTurnToolReceiptQuestion(text: string): boolean {
+  const value = currentTurnText(String(text || '')).replace(/\s+/gu, ' ').trim();
+  if (!value) return false;
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  const positiveToolText = value.replace(
+    /(?:不要|别|无需|不用|禁止|请勿|勿)\s*(?:再|继续|再次)?\s*(?:调用|使用|执行|启动)?\s*(?:(?:任何|这些|外部|新(?:的)?|其他|其它)\s*){0,3}(?:工具|插件|技能|脚本)/giu,
+    ' ',
+  );
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  const priorTurn = /(?:上一轮|上一回合|上一次|上次|刚才|刚刚|前一轮)|\b(?:previous|prior|last)\s+(?:turn|request|message)\b|\bjust\b/iu.test(value);
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  const toolReceipt = /(?:(?:调用|执行|使用|跑).{0,12}(?:工具|插件|技能)|(?:工具名|工具调用|工具回执|执行回执|已保存的回执|持久化回执))|\b(?:call|use|run|execute)(?:d|ing)?\s+(?:(?:any|a|the)\s+)?tools?\b|\btool\s+(?:name|call|receipt|result)\b/iu.test(positiveToolText);
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  const asksFact = /(?:是否|有没有|有没|真的|究竟|到底|哪(?:个|些)|什么|成功|失败|结果|回执|告诉|说明)|\b(?:did|was|were|which|what|success|succeed(?:ed)?|fail(?:ed|ure)?|result|receipt)\b/iu.test(value);
+  return priorTurn && toolReceipt && asksFact;
+}
+
+export function isRecentActionReceiptQuery(text: string): boolean {
+  return isPriorTurnToolReceiptQuestion(text) || RECENT_ACTION_RECEIPT_QUERY_RE.test(text);
 }
 
 const CN_INDEPENDENT_ACTION_AFTER_STATUS_RE =
-  /(?:[\uff1f?\uff1b;\uff0c,\u3002.!\u2026\n]\s*(?:(?:\u7136\u540e|\u73b0\u5728|\u63a5\u7740|\u4e0b\u4e00\u6b65|\u53e6\u5916|\u5e76(?:\u4e14)?|\u518d)\s*)?|(?:\u7136\u540e|\u73b0\u5728|\u63a5\u7740|\u4e0b\u4e00\u6b65|\u53e6\u5916|\u5e76(?:\u4e14)?|\u518d)\s*)(?!(?:\u4e0d\u8981|\u522b|\u65e0\u9700|\u4e0d\u5fc5|\u53ea|\u4ec5))(?:(?:\u8bf7|\u9a6c\u4e0a|\u7acb\u5373)\s*)?(?:\u6253\u5f00|\u542f\u52a8|\u65b0\u5efa|\u521b\u5efa|\u4fdd\u5b58|\u5199\u5165|\u53d1\u9001|\u5173\u95ed|\u5220\u9664|\u4fee\u6539|\u5bfc\u51fa|\u4e0a\u4f20|\u4e0b\u8f7d|\u5b89\u88c5|\u7ee7\u7eed|\u6062\u590d|\u91cd\u8bd5|\u6267\u884c|\u5904\u7406)/u;
+  /(?:[\uff1f?\uff1b;\uff0c,\u3002.!\u2026\n]\s*(?:(?:\u7136\u540e|\u73b0\u5728|\u63a5\u7740|\u4e0b\u4e00\u6b65|\u53e6\u5916|\u5e76(?:\u4e14)?|\u518d)\s*)?|(?:\u7136\u540e|\u73b0\u5728|\u63a5\u7740|\u4e0b\u4e00\u6b65|\u53e6\u5916|\u5e76(?:\u4e14)?|\u518d)\s*)(?!(?:\u4e0d\u8981|\u522b|\u65e0\u9700|\u4e0d\u5fc5|\u53ea|\u4ec5))(?:(?:\u8bf7|\u9a6c\u4e0a|\u7acb\u5373)\s*)?(?:\u6253\u5f00|\u542f\u52a8|\u65b0\u5efa|\u521b\u5efa|\u4fdd\u5b58|\u5199\u5165|\u53d1\u9001|\u5173\u95ed|\u5220\u9664|\u4fee\u6539|\u5bfc\u51fa|\u4e0a\u4f20|\u4e0b\u8f7d|\u5b89\u88c5|\u7ee7\u7eed|\u6062\u590d|\u91cd\u8bd5|\u6267\u884c|\u5904\u7406|\u8c03\u7528|\u4f7f\u7528|\u68c0\u67e5|\u6838\u5b9e|\u6838\u9a8c)/u;
 
 const EN_INDEPENDENT_ACTION_AFTER_STATUS_RE =
-  /(?:[?;.!,\u2026\n]\s*(?:(?:then|now|next|also|and|please)\s*[,;:]?\s*)*|\b(?:(?:and\s+)?(?:then|now|next|also)|and)\b\s*)(?!(?:do\s+not|don['\u2019]?t|never|only|just\s+(?:answer|report))\b)(?:open|launch|start|create|save|write|send|close|delete|modify|update|export|upload|download|install|continue|resume|retry|re-?try|execute|run|finish|complete|proceed)\b/iu;
+  /(?:[?;.!,\u2026\n]\s*(?:(?:then|now|next|also|and|please)\s*[,;:]?\s*)*|\b(?:(?:and\s+)?(?:then|now|next|also)|and)\b\s*)(?!(?:do\s+not|don['\u2019]?t|never|only|just\s+(?:answer|report))\b)(?:open|launch|start|create|save|write|send|close|delete|modify|update|export|upload|download|install|continue|resume|retry|re-?try|execute|run|finish|complete|proceed|call|use|check|verify|inspect)\b/iu;
+
+const EN_TRAILING_ACTION_QUESTION_RE =
+  /\b(?:open|launch|start|create|save|write|send|close|delete|modify|update|export|upload|download|install|continue|resume|retry|re-?try|execute|run|finish|complete|proceed|call|use|check|verify|inspect)\b[^.!?;\n]{0,64}\?\s*$/iu;
 
 const CN_TRAILING_ACTION_QUESTION_RE =
-  /(?:\u6253\u5f00|\u542f\u52a8|\u65b0\u5efa|\u521b\u5efa|\u4fdd\u5b58|\u5199\u5165|\u53d1\u9001|\u5173\u95ed|\u5220\u9664|\u4fee\u6539|\u5bfc\u51fa|\u4e0a\u4f20|\u4e0b\u8f7d|\u5b89\u88c5|\u7ee7\u7eed|\u6062\u590d|\u91cd\u8bd5|\u6267\u884c|\u5904\u7406)[^\u3002\uff01!\uff1b;\n]{0,64}(?:(?:\u4e86|\u8fc7)?\u5417|\u4e86\u6ca1|\u6ca1\u6709?|\u5462|\u662f\u5426|\u662f\u4e0d\u662f)[\uff1f?]?\s*$/u;
+  /(?:\u6253\u5f00|\u542f\u52a8|\u65b0\u5efa|\u521b\u5efa|\u4fdd\u5b58|\u5199\u5165|\u53d1\u9001|\u5173\u95ed|\u5220\u9664|\u4fee\u6539|\u5bfc\u51fa|\u4e0a\u4f20|\u4e0b\u8f7d|\u5b89\u88c5|\u7ee7\u7eed|\u6062\u590d|\u91cd\u8bd5|\u6267\u884c|\u5904\u7406|\u8c03\u7528|\u4f7f\u7528|\u68c0\u67e5|\u6838\u5b9e|\u6838\u9a8c)[^\u3002\uff01!\uff1b;\n]{0,64}(?:(?:\u4e86|\u8fc7)?\u5417|\u4e86\u6ca1|\u6ca1\u6709?|\u5462|\u662f\u5426|\u662f\u4e0d\u662f)[\uff1f?]?\s*$/u;
 
 /**
  * A status question is not status-only when the same turn also contains an
@@ -227,13 +252,16 @@ export function hasMixedStatusExecutionIntent(value: string): boolean {
   const hasRecentActionStatusSignal = isRecentActionReceiptQuery(text);
   if (!hasTaskStatusSignal && !hasRecentActionStatusSignal) return false;
   const chineseExecutionQuestion = /(?:\u7ee7\u7eed(?:\u6267\u884c|\u5904\u7406|\u63a8\u8fdb|\u5b8c\u6210)?|\u63a5\u7740(?:\u6267\u884c|\u5904\u7406|\u63a8\u8fdb|\u505a)?|\u6062\u590d(?:\u6267\u884c|\u4efb\u52a1)?|\u91cd\u8bd5|\u518d\u8bd5|\u91cd\u65b0\u6267\u884c|\u6267\u884c|\u5904\u7406|\u63a8\u8fdb)(?:\u5b83|\u8fd9\u4e2a|\u90a3\u4e2a|\u4efb\u52a1)?(?:\u4e86)?(?:(?:\u5417|\u6ca1|\u6ca1\u6709|\u5462)[\uff1f?]?|[\uff1f?])\s*$/u.test(text);
-  const englishExecutionQuestion = /\b(?:continue|resume|retry|re-?try|execute|run|finish|complete|proceed)(?:\s+(?:executing|execution|running|working\s+on|with)(?:\s+(?:it|this|that|the\s+task))?)?\s*\?\s*$/iu.test(text);
+  const englishExecutionQuestion = /\b(?:continue|resume|retry|re-?try|execute|run|finish|complete|proceed)(?:\s+(?:executing|execution|running|working\s+on|with)(?:\s+(?:it|this|that|the\s+task))?)?\s*\?\s*$/iu.test(text)
+    || EN_TRAILING_ACTION_QUESTION_RE.test(text);
   const chineseIndependentAction = CN_INDEPENDENT_ACTION_AFTER_STATUS_RE.test(text)
     && !CN_TRAILING_ACTION_QUESTION_RE.test(text);
+  const englishIndependentAction = EN_INDEPENDENT_ACTION_AFTER_STATUS_RE.test(text)
+    && !EN_TRAILING_ACTION_QUESTION_RE.test(text);
   return (CN_MIXED_STATUS_EXECUTION_RE.test(text) && !chineseExecutionQuestion)
     || (EN_MIXED_STATUS_EXECUTION_RE.test(text) && !englishExecutionQuestion)
     || (hasRecentActionStatusSignal && chineseIndependentAction)
-    || (hasRecentActionStatusSignal && EN_INDEPENDENT_ACTION_AFTER_STATUS_RE.test(text));
+    || (hasRecentActionStatusSignal && englishIndependentAction);
 }
 
 function statusQuery(text: string): NormalizedActionIntent | null {

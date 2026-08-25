@@ -14,7 +14,10 @@ import { buildUnifiedLegalEntryPrompt } from "../cognition/legal_entry";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
 import { buildLumiExecutionDecision } from "../cognition/execution_decision";
-import { buildModelCapabilityPolicy } from "../cognition/capability_selection";
+import {
+  buildModelCapabilityPolicy,
+  buildModelToolProjection,
+} from "../cognition/capability_selection";
 import {
   createPreFinalizationTextGate,
   shouldDeferModelOutputUntilFinalized,
@@ -296,6 +299,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       buildModelCapabilityPolicy(restExecutionDecision),
       executionBoundary,
     );
+    const restModelToolProjection = buildModelToolProjection(restExecutionDecision);
     const deferRestStream =
       restExecutionDecision.allowToolUse
       || shouldDeferModelOutputUntilFinalized({
@@ -316,6 +320,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       actionIntent: routeText,
       routedTaskText: restTurnDispatch.flow.routeText,
       toolPolicy: restModelToolPolicy,
+      modelToolProjection: restModelToolProjection,
     };
     const systemInstruction = buildRestChatSystemInstruction({
       routeText,

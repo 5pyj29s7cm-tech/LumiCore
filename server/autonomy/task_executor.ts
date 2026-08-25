@@ -39,6 +39,7 @@ import {
   buildLumiExecutionPipeline,
   type LumiExecutionPipeline,
 } from '../cognition/execution_pipeline';
+import { buildModelToolProjection } from '../cognition/capability_selection';
 import { sanitizeCapabilityExecutionPlan } from '../conversation/action_ledger';
 import { snapshotDurableToolRecords } from '../cognition/durable_task_recovery';
 import {
@@ -561,6 +562,7 @@ export async function executeNextAutonomousTask(
       actionIntent: task.description,
       routedTaskText: executionPipeline.turnIntent.flow.routeText,
       toolPolicy,
+      modelToolProjection: buildModelToolProjection(executionPipeline.execution),
       isCancelled: () => isTaskCancellationRequested(task.id, task.userId)
         || isTaskPauseRequested(task.id, task.userId)
         || isRealtimeUserActive(task.userId)

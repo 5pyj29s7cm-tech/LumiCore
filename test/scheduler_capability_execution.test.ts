@@ -5,6 +5,7 @@ import {
   buildScheduledExecutionId,
   buildScheduledProactiveInteractionId,
   buildScheduledTaskExecutionPlan,
+  resolveScheduledUserIds,
 } from '../server/scheduler';
 import {
   compactLegacyScheduledCapabilityExecutions,
@@ -43,6 +44,28 @@ function verifiedRecord(plan: ReturnType<typeof buildScheduledTaskExecutionPlan>
 }
 
 describe('scheduler capability execution protocol', () => {
+  it('runs proactive/background work only for registered users', () => {
+    const db = {
+      users: [
+        { uid: 'admin-uid', role: 'admin' },
+        { uid: 'member-uid', role: 'member' },
+      ],
+      memories: [
+        { userId: 'agent-id-1' },
+        { userId: 'mcp_remote' },
+        { userId: 'unknown' },
+      ],
+      interactions: [
+        { userId: 'anonymous' },
+        { userId: 'agent-id-2' },
+      ],
+    };
+
+    expect(resolveScheduledUserIds(db)).toEqual(['admin-uid', 'member-uid']);
+    expect(resolveScheduledUserIds({ users: [], memories: [{ userId: 'agent-id' }] }))
+      .toEqual(['anonymous']);
+  });
+
   it('builds a stable, local-only semantic plan for each schedule slot', () => {
     const at = new Date('2026-07-29T01:02:03.000Z');
     const task = {

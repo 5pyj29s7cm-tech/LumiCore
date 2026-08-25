@@ -455,7 +455,15 @@ export function AgentChatPage({
   const commandCenterPlannerText = commandCenterPlannerCopy(isZh ? 'zh' : 'en');
   const ui = (zh: string, en: string) => isZh ? zh : en;
   const { platform, isElectron } = usePlatform();
-  const { orgConnection, workDomain, operationMode, resolvedAppearanceMode } = useApp();
+  const {
+    orgConnection,
+    workDomain,
+    operationMode,
+    resolvedAppearanceMode,
+    selectedVoiceId,
+    setSelectedVoiceId,
+    getSelectedVoiceIdForProvider,
+  } = useApp();
   const isWorkChat = workDomain === 'work' && Boolean(orgConnection?.connected && orgConnection?.orgId);
   const activeDomain = isWorkChat ? 'work' : 'personal';
   const activeOrgId = isWorkChat ? orgConnection?.orgId : undefined;
@@ -524,7 +532,6 @@ export function AgentChatPage({
     enabled: isOpen && isOfficeCommandCenter && Boolean(user),
     scopeKey: `${activeDomain}:${activeDomain === 'work' ? activeOrgId || '' : ''}`,
   });
-  const [selectedVoiceId, setSelectedVoiceId] = useState<string | undefined>();
   const [voices, setVoices] = useState<any[]>([]);
   const [voiceProviderRevision, setVoiceProviderRevision] = useState(0);
   const [showVoicePicker, setShowVoicePicker] = useState(false);
@@ -588,6 +595,7 @@ export function AgentChatPage({
   const callError = voiceSession?.error ?? localVoiceSession.error;
   const localCallState = localVoiceSession.callState;
   const endLocalVoiceSession = localVoiceSession.endCall;
+  const switchLocalVoice = localVoiceSession.switchVoice;
   const startVoiceSession = voiceSession?.onStart
     ?? (() => {
       void localVoiceSession.startCall(
@@ -630,11 +638,28 @@ export function AgentChatPage({
     listVoices().then(data => {
       const all = [...data.cloned, ...data.premade];
       setVoices(all);
-      if (all.length > 0 && !all.some(voice => voice.voiceId === selectedVoiceId)) {
-        setSelectedVoiceId(all[0].voiceId);
+      const selectable = all.filter(voice => voice.status !== 'training' && voice.status !== 'failed');
+      const rememberedVoiceId = data.provider ? getSelectedVoiceIdForProvider(data.provider) : undefined;
+      const preferredVoice = selectable.find(voice => voice.voiceId === rememberedVoiceId)
+        || selectable.find(voice => voice.voiceId === selectedVoiceId)
+        || selectable[0];
+      if (preferredVoice && preferredVoice.voiceId !== selectedVoiceId) {
+        setSelectedVoiceId(preferredVoice.voiceId, preferredVoice.provider || data.provider || undefined);
       }
     }).catch(err => toast.error(t.failedToLoadVoices || 'Failed to load voices'));
-  }, [selectedVoiceId, t.failedToLoadVoices, voiceProviderRevision]);
+  }, [
+    activeDomain,
+    activeOrgId,
+    getSelectedVoiceIdForProvider,
+    selectedVoiceId,
+    setSelectedVoiceId,
+    t.failedToLoadVoices,
+    voiceProviderRevision,
+  ]);
+
+  useEffect(() => {
+    switchLocalVoice(selectedVoiceId);
+  }, [selectedVoiceId, switchLocalVoice]);
 
   useEffect(() => {
     const handleProviderChanged = () => setVoiceProviderRevision(value => value + 1);
@@ -3221,7 +3246,7 @@ export function AgentChatPage({
                     <button
                       key={v.voiceId}
                       onClick={() => {
-                        setSelectedVoiceId(v.voiceId);
+                        setSelectedVoiceId(v.voiceId, v.provider);
                         setShowVoicePicker(false);
                       }}
                       className={`w-full text-left p-2 rounded-xl text-xs font-bold uppercase transition-all ${

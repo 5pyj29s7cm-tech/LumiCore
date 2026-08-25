@@ -139,6 +139,36 @@ const FILE_CREATION_CLAIM_RE =
   // i18n-allow: Chinese file-production claim recognition pattern; not user-visible copy.
   /(?:已经|已|都)?[^。！？\n]{0,18}(?:生成|新建|创建|保存|输出|写入|写好|写完|导出)|(?:生成好了|新建好了|创建好了|保存好了|输出好了|写好了|写完了)|\b(?:created|saved|exported|generated)\b/i;
 
+// i18n-allow: Multilingual artifact-subject recognition; not user-visible copy.
+const ARTIFACT_PRODUCTION_SUBJECT_RE =
+  /(?:文件|文档|产物|报告|表格|演示文稿|幻灯片|图像|图片|图纸|附件|导出物|输出文件|保存路径|文件路径|路径|PPT|PDF|DOCX|XLSX|DXF|DWG|(?:[A-Za-z]:[\\/]|\/)[^\s，。！？!?；;"'<>|]{1,240}\.(?:txt|md|docx?|xlsx?|pptx?|pdf|csv|json|dxf|dwg|svg|png|jpe?g|webp|html?)|(?:^|[\s"'（(])[^\s，。！？!?；;"'<>|\\/]{1,160}\.(?:txt|md|docx?|xlsx?|pptx?|pdf|csv|json|dxf|dwg|svg|png|jpe?g|webp|html?)\b)|\b(?:file|document|artifact|report|spreadsheet|workbook|presentation|slide\s*deck|deck|image|drawing|attachment|output\s+file|file\s+path|path)\b/iu;
+
+// i18n-allow: Multilingual receipt/status persistence-claim recognition; not user-visible copy.
+const NON_ARTIFACT_PRODUCTION_CLAIM_RE =
+  /(?:(?:已经|已|都)?[^。！？!?；;，,\n]{0,12}(?:生成|新建|创建|保存|输出|写入|写好|写完|导出)(?:好|完|成功|完成|了)?(?:的)?\s*(?:回执|记录|账本|证据|状态|结果)|(?:回执|记录|账本|证据|状态|结果)[^。！？!?；;，,\n]{0,12}(?:(?:已经|已|都)?[^。！？!?；;，,\n]{0,8})?(?:生成|新建|创建|保存|输出|写入|写好|写完|导出)(?:好|完|成功|完成|了)?)|\b(?:(?:created|saved|exported|generated|written)\s+(?:the\s+)?(?:receipt|log|ledger|evidence|status|result)s?|(?:receipt|log|ledger|evidence|status|result)s?\s+(?:(?:has|have|had|was|were|is|are)\s+(?:been\s+)?)?(?:created|saved|exported|generated|written))\b/iu;
+
+/**
+ * Persistence words are not inherently file-production claims. In
+ * particular, "the receipt was saved" describes execution evidence rather
+ * than an artifact. Exempt only clauses where receipt/log/ledger/evidence/
+ * status/result is explicitly the persisted subject. Bare save claims remain
+ * guarded, while a path or filename also makes the artifact subject explicit.
+ */
+function hasArtifactCreationClaim(value: string): boolean {
+  const clauses = String(value || '')
+    .split(/[。！？!?；;，,\n]+/u)
+    .map(clause => clause.trim())
+    .filter(Boolean);
+
+  return clauses.some(clause => {
+    if (!FILE_CREATION_CLAIM_RE.test(clause)) return false;
+    const hasArtifactSubject = ARTIFACT_PRODUCTION_SUBJECT_RE.test(clause);
+    if (hasArtifactSubject) return true;
+    if (NON_ARTIFACT_PRODUCTION_CLAIM_RE.test(clause)) return false;
+    return true;
+  });
+}
+
 const COMMUNICATION_CLAIM_RE =
   // i18n-allow: user-visible completion-claim recognition; not response copy.
   /(?:已经|已|都)?[^。！？\n]{0,18}(?:发送|提交|发布|送达|回复)|(?:发送成功|提交成功|发布成功|已经回复)|\b(?:sent|submitted|published|delivered|replied)\b/i;
@@ -414,7 +444,7 @@ function unverifiedCompletionReceipts(
   if (sideEffectCalls.length === 0) return [];
 
   const expectedStrategies = new Set<NonNullable<ToolExecutionRecord['terminalVerification']>['strategy']>();
-  if (FILE_CREATION_CLAIM_RE.test(claimText)) expectedStrategies.add('artifact');
+  if (hasArtifactCreationClaim(claimText)) expectedStrategies.add('artifact');
   if (OPEN_CLAIM_RE.test(claimText)) {
     expectedStrategies.add('state_diff');
     expectedStrategies.add('visual');
@@ -604,7 +634,7 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
   } else if (OPEN_CLAIM_RE.test(claimText) && !hasOpenTool) {
     reason = '回复声称已经打开或加载，但没有成功的打开/客户端动作记录';
   } else if (
-    FILE_CREATION_CLAIM_RE.test(claimText)
+    hasArtifactCreationClaim(claimText)
     && !currentAppMutationTask
     && !hasFileProducer
     && !hasPassingVerification

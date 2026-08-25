@@ -46,7 +46,11 @@ export interface ClassifiedError {
  */
 export function classifyCloudError(error: Error, provider?: string): ClassifiedError {
   const msg = error.message?.toLowerCase() || '';
-  const hasStatus = (...codes: number[]) => codes.some(code => new RegExp(`(?:^|\\D)${code}(?:\\D|$)`).test(msg));
+  const attachedStatus = Number((error as Error & { status?: unknown; statusCode?: unknown }).status
+    ?? (error as Error & { statusCode?: unknown }).statusCode);
+  const hasStatus = (...codes: number[]) => codes.some(code => (
+    attachedStatus === code || new RegExp(`(?:^|\\D)${code}(?:\\D|$)`).test(msg)
+  ));
 
   if (msg.includes('circuit') || msg.includes('circuit breaker')) {
     return { category: 'circuit_open', message: error.message, isRetryable: true, provider };
@@ -62,17 +66,23 @@ export function classifyCloudError(error: Error, provider?: string): ClassifiedE
     return { category: 'auth', message: error.message, isRetryable: false, provider };
   }
 
+  const billingFailure = hasStatus(402)
+    || msg.includes('overdue')
+    || msg.includes('payment required')
+    || msg.includes('insufficient balance')
+    || msg.includes('account is in good standing');
   if (
+    billingFailure ||
     hasStatus(429) ||
     msg.includes('rate limit') ||
     msg.includes('quota') ||
-    msg.includes('too many requests') ||
-    msg.includes('overdue') ||
-    msg.includes('payment required') ||
-    msg.includes('insufficient balance') ||
-    msg.includes('account is in good standing')
+    msg.includes('too many requests')
   ) {
-    return { category: 'quota', message: error.message, isRetryable: true, provider };
+    // Billing exhaustion cannot succeed by immediately retrying the same
+    // provider. It still opens that provider's circuit immediately, while the
+    // independent model dispatcher remains free to select a configured
+    // fallback candidate.
+    return { category: 'quota', message: error.message, isRetryable: !billingFailure, provider };
   }
 
   if (

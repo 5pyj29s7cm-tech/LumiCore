@@ -322,7 +322,15 @@ export function getScopedPreferredLLM(
 
 export function getUserPreferredLLMConfig(
   userId: string,
-  options: { maxTokens?: number; domain?: string; orgId?: string } = {},
+  options: {
+    maxTokens?: number;
+    domain?: string;
+    orgId?: string;
+    source?: string;
+    conversationId?: string;
+    requestId?: string;
+    interactionId?: string;
+  } = {},
 ): {
   provider: UserLLMProvider;
   model: string;
@@ -333,6 +341,10 @@ export function getUserPreferredLLMConfig(
   maxTokens?: number;
   domain?: string;
   orgId?: string;
+  source?: string;
+  conversationId?: string;
+  requestId?: string;
+  interactionId?: string;
 } {
   const pref = getScopedPreferredLLM(userId, { domain: options.domain, orgId: options.orgId });
   return {
@@ -345,5 +357,9 @@ export function getUserPreferredLLMConfig(
     ...(options.maxTokens ? { maxTokens: options.maxTokens } : {}),
     ...(options.domain ? { domain: options.domain } : {}),
     ...(options.orgId ? { orgId: options.orgId } : {}),
+    ...(options.source ? { source: options.source } : {}),
+    ...(options.conversationId ? { conversationId: options.conversationId } : {}),
+    ...(options.requestId ? { requestId: options.requestId } : {}),
+    ...(options.interactionId ? { interactionId: options.interactionId } : {}),
   };
 }

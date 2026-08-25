@@ -19,6 +19,8 @@ export interface PendingToolConfirmation {
   orgId: string;
   channelId: string;
   taskId: string;
+  /** Request that proposed the exact action; later turns cannot adopt it. */
+  originRequestId: string;
   createdAt: string;
   expiresAt: number;
 }
@@ -29,32 +31,37 @@ export interface PendingConfirmationScope {
   orgId?: string;
   channelId?: string;
   taskId?: string;
+  originRequestId?: string;
   actionIntent?: string;
 }
 
 /** Stable across separate utterances on the same voice channel. */
 export function buildVoiceConfirmationChannelScope(input: {
-  domain?: string; orgId?: string; channelId?: string; taskId?: string;
+  domain?: string; orgId?: string; channelId?: string; taskId?: string; originRequestId?: string;
 }): PendingConfirmationScope {
   const taskId = String(input.taskId || '').trim();
+  const originRequestId = String(input.originRequestId || '').trim();
   return {
     source: 'voice', domain: String(input.domain || ''), orgId: String(input.orgId || ''),
     channelId: String(input.channelId || ''),
     ...(taskId ? { taskId } : {}),
+    ...(originRequestId ? { originRequestId } : {}),
   };
 }
 
 /** Stable across Socket.IO reconnects for one persisted conversation. */
 export function buildConversationConfirmationChannelScope(input: {
-  source?: string; domain?: string; orgId?: string; conversationId: string; taskId?: string;
+  source?: string; domain?: string; orgId?: string; conversationId: string; taskId?: string; originRequestId?: string;
 }): PendingConfirmationScope {
   const taskId = String(input.taskId || '').trim();
+  const originRequestId = String(input.originRequestId || '').trim();
   return {
     source: String(input.source || 'chat'),
     domain: String(input.domain || ''),
     orgId: String(input.orgId || ''),
     channelId: `conversation:${String(input.conversationId || '').trim()}`,
     ...(taskId ? { taskId } : {}),
+    ...(originRequestId ? { originRequestId } : {}),
   };
 }
 
@@ -157,11 +164,19 @@ function confirmationModelSafeArgs(pending: PendingToolConfirmation): Record<str
 
 function matchesScope(pending: PendingToolConfirmation, scope?: PendingConfirmationScope): boolean {
   if (!scope) return true;
+  // Once an action is task-bound, a later generic turn in the same channel is
+  // not allowed to adopt it merely because it says "confirm". The live
+  // conversation/task pointer must present the exact task id again.
+  if (pending.taskId && scope.taskId === undefined) return false;
   if (scope.source !== undefined && pending.source !== scope.source) return false;
   if (scope.domain !== undefined && pending.domain !== scope.domain) return false;
   if (scope.orgId !== undefined && pending.orgId !== scope.orgId) return false;
   if (scope.channelId !== undefined && pending.channelId !== scope.channelId) return false;
   if (scope.taskId !== undefined && pending.taskId !== scope.taskId) return false;
+  if (
+    scope.originRequestId !== undefined
+    && pending.originRequestId !== scope.originRequestId
+  ) return false;
   return true;
 }
 
@@ -192,6 +207,7 @@ export function recordPendingConfirmation(
       orgId: scope.orgId || '',
       channelId: scope.channelId || '',
       taskId,
+      ...(scope.originRequestId ? { originRequestId: scope.originRequestId } : {}),
     });
     // One unfinished task owns one immutable confirmation boundary. Until it
     // is consumed or cleared, a retry/re-plan cannot replace its tool or args.
@@ -212,6 +228,7 @@ export function recordPendingConfirmation(
     orgId: scope.orgId || '',
     channelId: scope.channelId || '',
     taskId,
+    originRequestId: String(scope.originRequestId || '').trim(),
     createdAt: new Date().toISOString(),
     expiresAt: Date.now() + CONFIRMATION_TTL_MS,
   };
@@ -293,6 +310,7 @@ export function formatPendingConfirmationPrompt(pending: PendingToolConfirmation
     'Execute the exact pending tool now, then report only its real result.',
     `Pending id: ${pending.id}`,
     `Task id: ${pending.taskId || '(conversation turn)'}`,
+    `Origin request id: ${pending.originRequestId || '(not recorded)'}`,
     `Tool: ${pending.toolName}`,
     `Target: ${pending.target || '(current verified target)'}`,
     `Payload digest: ${pending.payloadDigest}`,
