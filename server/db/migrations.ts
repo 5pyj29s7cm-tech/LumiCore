@@ -81,6 +81,7 @@ export const MIGRATIONS: Migration[] = [
     lastRunAt TEXT NOT NULL DEFAULT '', lastRuntimeTaskId TEXT NOT NULL DEFAULT '',
     createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
   )` },
+  { version: 38, description: 'Add completion feedback to interactions', sql: `ALTER TABLE interactions ADD COLUMN completionFeedback TEXT DEFAULT ''` },
 ];
 
 // Indexes are safe to create repeatedly

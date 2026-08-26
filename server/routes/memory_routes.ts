@@ -1,5 +1,4 @@
 import { Router } from "express";
-import jwt from "jsonwebtoken";
 import { readDB, writeDB } from "../../db_layer";
 import {
   queryMemories, addMemory, removeMemory, updateMemoryLifecycle,
@@ -14,26 +13,17 @@ import { buildNarrativeChain } from "../memory/narrative";
 import { makeLLMCall } from "../llm/providers";
 import { getMemoryFirewallPolicy } from "../memory/firewall";
 import { getUserPreferredLLMConfig } from "../llm/user_preferences";
-
-function getAuthToken(req: any): string | undefined {
-  let token = req.cookies?.token;
-  if (!token && req.headers.authorization?.startsWith('Bearer ')) {
-    token = req.headers.authorization.slice(7);
-  }
-  return token;
-}
+import { requireAuth, resolveDomain } from "../middleware/auth";
 
 type MemoryScope = { domain: 'personal' | 'work'; orgId: string };
 
-function getMemoryScope(req: any, decoded: any): MemoryScope {
-  return decoded.orgId
-    ? { domain: 'work', orgId: String(decoded.orgId) }
-    : { domain: 'personal', orgId: '' };
+function getMemoryScope(req: Express.Request): MemoryScope {
+  return resolveDomain(req.user!);
 }
 
 export function mountMemoryRoutes(
   router: Router,
-  jwtSecret: string,
+  _jwtSecret: string,
   llmGetters: {
     getDeepSeek: () => any;
     getGemini: () => any;
@@ -54,17 +44,14 @@ export function mountMemoryRoutes(
   });
 
   // Memory CRUD
-  router.get("/memories", (req, res) => {
-    const token = getAuthToken(req);
-    if (!token) return res.status(401).json({ error: "Unauthorized" });
-
+  router.get("/memories", requireAuth, (req, res) => {
     try {
-      const decoded: any = jwt.verify(token, jwtSecret);
+      const decoded = req.user!;
       const type = req.query.type as string | undefined;
       const search = req.query.search as string | undefined;
       const limit = parseInt(req.query.limit as string) || 50;
       const includeOperationalTraces = req.query.includeOperationalTraces === 'true';
-      const scope = getMemoryScope(req, decoded);
+      const scope = getMemoryScope(req);
 
       const memories = queryMemories({
         userId: decoded.uid,
@@ -82,14 +69,11 @@ export function mountMemoryRoutes(
     }
   });
 
-  router.post("/memories", (req, res) => {
-    const token = getAuthToken(req);
-    if (!token) return res.status(401).json({ error: "Unauthorized" });
-
+  router.post("/memories", requireAuth, (req, res) => {
     try {
-      const decoded: any = jwt.verify(token, jwtSecret);
+      const decoded = req.user!;
       const { type, content, keywords, confidence } = req.body;
-      const scope = getMemoryScope(req, decoded);
+      const scope = getMemoryScope(req);
 
       if (!type || !content) {
         return res.status(400).json({ error: "type and content are required" });
@@ -110,15 +94,12 @@ export function mountMemoryRoutes(
     }
   });
 
-  router.put("/memories/:id", (req, res) => {
-    const token = getAuthToken(req);
-    if (!token) return res.status(401).json({ error: "Unauthorized" });
-
+  router.put("/memories/:id", requireAuth, (req, res) => {
     try {
-      const decoded: any = jwt.verify(token, jwtSecret);
+      const decoded = req.user!;
       const { id } = req.params;
       const { content, keywords, confidence, type, parentId, nodeType } = req.body;
-      const scope = getMemoryScope(req, decoded);
+      const scope = getMemoryScope(req);
 
       const all = readDB().memories || [];
       const idx = all.findIndex((m: any) => (
@@ -148,14 +129,11 @@ export function mountMemoryRoutes(
     }
   });
 
-  router.delete("/memories/:id", (req, res) => {
-    const token = getAuthToken(req);
-    if (!token) return res.status(401).json({ error: "Unauthorized" });
-
+  router.delete("/memories/:id", requireAuth, (req, res) => {
     try {
-      const decoded: any = jwt.verify(token, jwtSecret);
+      const decoded = req.user!;
       const { id } = req.params;
-      const scope = getMemoryScope(req, decoded);
+      const scope = getMemoryScope(req);
 
       const all = readDB().memories || [];
       const idx = all.findIndex((m: any) => (
@@ -176,14 +154,10 @@ export function mountMemoryRoutes(
   });
 
   // Behavioral analysis
-  router.post("/memory/analyze-behavior", (req, res) => {
+  router.post("/memory/analyze-behavior", requireAuth, (req, res) => {
     try {
-      const token = getAuthToken(req);
-      let uid = 'anonymous';
-      if (token) {
-        try { const decoded: any = jwt.verify(token, jwtSecret); uid = decoded.uid; } catch {}
-      }
-      const count = runBehavioralAnalysis(uid);
+      const scope = getMemoryScope(req);
+      const count = runBehavioralAnalysis(req.user!.uid, scope.domain, scope.orgId);
       res.json({ success: true, patternsFound: count });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -191,12 +165,10 @@ export function mountMemoryRoutes(
   });
 
   // Reminders CRUD
-  router.get("/reminders", (req, res) => {
-    const token = getAuthToken(req);
-    if (!token) return res.status(401).json({ error: "Unauthorized" });
+  router.get("/reminders", requireAuth, (req, res) => {
     try {
-      const decoded: any = jwt.verify(token, jwtSecret);
-      const scope = getMemoryScope(req, decoded);
+      const decoded = req.user!;
+      const scope = getMemoryScope(req);
       const db = readDB();
       const reminders = (db.reminders || []).filter((r: any) =>
         r.userId === decoded.uid &&
@@ -209,12 +181,10 @@ export function mountMemoryRoutes(
     }
   });
 
-  router.post("/reminders", (req, res) => {
-    const token = getAuthToken(req);
-    if (!token) return res.status(401).json({ error: "Unauthorized" });
+  router.post("/reminders", requireAuth, (req, res) => {
     try {
-      const decoded: any = jwt.verify(token, jwtSecret);
-      const scope = getMemoryScope(req, decoded);
+      const decoded = req.user!;
+      const scope = getMemoryScope(req);
       const { content, dueAt } = req.body || {};
       if (!content || typeof content !== "string") {
         return res.status(400).json({ error: "content is required" });
@@ -233,12 +203,10 @@ export function mountMemoryRoutes(
     }
   });
 
-  router.put("/reminders/:id", (req, res) => {
-    const token = getAuthToken(req);
-    if (!token) return res.status(401).json({ error: "Unauthorized" });
+  router.put("/reminders/:id", requireAuth, (req, res) => {
     try {
-      const decoded: any = jwt.verify(token, jwtSecret);
-      const scope = getMemoryScope(req, decoded);
+      const decoded = req.user!;
+      const scope = getMemoryScope(req);
       const db = readDB();
       const reminders = db.reminders || [];
       const reminder = reminders.find((r: any) =>
@@ -268,12 +236,10 @@ export function mountMemoryRoutes(
     }
   });
 
-  router.delete("/reminders/:id", (req, res) => {
-    const token = getAuthToken(req);
-    if (!token) return res.status(401).json({ error: "Unauthorized" });
+  router.delete("/reminders/:id", requireAuth, (req, res) => {
     try {
-      const decoded: any = jwt.verify(token, jwtSecret);
-      const scope = getMemoryScope(req, decoded);
+      const decoded = req.user!;
+      const scope = getMemoryScope(req);
       const db = readDB();
       const reminders = db.reminders || [];
       const idx = reminders.findIndex((r: any) =>
@@ -293,14 +259,10 @@ export function mountMemoryRoutes(
   });
 
   // Memory consolidation
-  router.post("/memory/consolidate", async (req, res) => {
+  router.post("/memory/consolidate", requireAuth, async (req, res) => {
     try {
-      const token = getAuthToken(req);
-      if (!token) return res.status(401).json({ error: 'Authentication required' });
-      let decoded: any;
-      try { decoded = jwt.verify(token, jwtSecret); } catch { return res.status(401).json({ error: 'Invalid token' }); }
-      const userId = decoded.uid || 'anonymous';
-      const scope = getMemoryScope(req, decoded);
+      const userId = req.user!.uid;
+      const scope = getMemoryScope(req);
       const preferred = getUserPreferredLLMConfig(userId, { domain: scope.domain, orgId: scope.orgId });
       const ctx: ConsolidationContext = {
         userId,
@@ -329,14 +291,10 @@ export function mountMemoryRoutes(
   });
 
   // Self-reflection
-  router.post("/memory/self-reflect", async (req, res) => {
+  router.post("/memory/self-reflect", requireAuth, async (req, res) => {
     try {
-      const token = getAuthToken(req);
-      if (!token) return res.status(401).json({ error: 'Authentication required' });
-      let decoded: any;
-      try { decoded = jwt.verify(token, jwtSecret); } catch { return res.status(401).json({ error: 'Invalid token' }); }
-      const userId = decoded.uid || 'anonymous';
-      const scope = getMemoryScope(req, decoded);
+      const userId = req.user!.uid;
+      const scope = getMemoryScope(req);
       const preferred = getUserPreferredLLMConfig(userId, { domain: scope.domain, orgId: scope.orgId });
       const ctx: ConsolidationContext = {
         userId,
@@ -363,24 +321,18 @@ export function mountMemoryRoutes(
   });
 
   // Growth timeline
-  router.get("/memory/growth", (req, res) => {
-    const token = getAuthToken(req);
-    if (!token) return res.status(401).json({ error: 'Authentication required' });
-    let decoded: any;
-    try { decoded = jwt.verify(token, jwtSecret); } catch { return res.status(401).json({ error: 'Invalid token' }); }
-    const userId = decoded.uid || 'anonymous';
-    const scope = getMemoryScope(req, decoded);
+  router.get("/memory/growth", requireAuth, (req, res) => {
+    const userId = req.user!.uid;
+    const scope = getMemoryScope(req);
     const growth = queryMemories({ userId, tier: 'growth', limit: Number(req.query.limit) || 50, minConfidence: 0.4, domain: scope.domain, orgId: scope.orgId });
     const core = queryMemories({ userId, tier: 'core_identity', limit: 10, domain: scope.domain, orgId: scope.orgId });
     res.json({ growth, coreIdentity: core });
   });
 
-  router.post("/memory/:id/conflict/resolve", (req, res) => {
-    const token = getAuthToken(req);
-    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+  router.post("/memory/:id/conflict/resolve", requireAuth, (req, res) => {
     try {
-      const decoded: any = jwt.verify(token, jwtSecret);
-      const scope = getMemoryScope(req, decoded);
+      const decoded = req.user!;
+      const scope = getMemoryScope(req);
       const resolution = String(req.body?.resolution || '');
       if (resolution !== 'keep_both' && resolution !== 'prefer_one') {
         return res.status(400).json({ error: 'resolution must be keep_both or prefer_one' });
@@ -402,13 +354,9 @@ export function mountMemoryRoutes(
   });
 
   // Memory tiers
-  router.get("/memory/tiers", (req, res) => {
-    const token = getAuthToken(req);
-    if (!token) return res.status(401).json({ error: 'Authentication required' });
-    let decoded: any;
-    try { decoded = jwt.verify(token, jwtSecret); } catch { return res.status(401).json({ error: 'Invalid token' }); }
-    const userId = decoded.uid || 'anonymous';
-    const scope = getMemoryScope(req, decoded);
+  router.get("/memory/tiers", requireAuth, (req, res) => {
+    const userId = req.user!.uid;
+    const scope = getMemoryScope(req);
     const tiers: Record<string, any[]> = {};
     for (const tier of ['core_identity', 'growth', 'internalized', 'episodic']) {
       tiers[tier] = queryMemories({ userId, tier: tier as any, limit: Number(req.query.limit) || 100, domain: scope.domain, orgId: scope.orgId });
@@ -417,17 +365,14 @@ export function mountMemoryRoutes(
   });
 
   // Change memory tier
-  router.put("/memory/:id/tier", (req, res) => {
-    const token2 = getAuthToken(req);
-    if (!token2) return res.status(401).json({ error: 'Authentication required' });
-    let decoded: any;
-    try { decoded = jwt.verify(token2, jwtSecret); } catch { return res.status(401).json({ error: 'Invalid token' }); }
+  router.put("/memory/:id/tier", requireAuth, (req, res) => {
+    const decoded = req.user!;
     const { tier } = req.body;
     const validTiers = ['episodic', 'internalized', 'growth', 'core_identity'];
     if (!tier || !validTiers.includes(tier)) {
       return res.status(400).json({ error: `Invalid tier. Must be one of: ${validTiers.join(', ')}` });
     }
-    const scope = getMemoryScope(req, decoded);
+    const scope = getMemoryScope(req);
     const all = queryMemories({ userId: decoded.uid, limit: 9999, domain: scope.domain, orgId: scope.orgId });
     const mem = all.find(m => m.id === req.params.id);
     if (!mem) return res.status(404).json({ error: 'Memory not found' });
@@ -453,14 +398,12 @@ export function mountMemoryRoutes(
   });
 
   // Memory tree — returns full nested tree structure
-  router.get("/memory/tree", (req, res) => {
-    const token = getAuthToken(req);
-    if (!token) return res.status(401).json({ error: "Unauthorized" });
+  router.get("/memory/tree", requireAuth, (req, res) => {
     try {
-      const decoded: any = jwt.verify(token, jwtSecret);
+      const decoded = req.user!;
       const agentId = (req.query.agentId as string) || '';
       const before = (req.query.before as string) || undefined;
-      const scope = getMemoryScope(req, decoded);
+      const scope = getMemoryScope(req);
       const all = queryMemories({ userId: decoded.uid, agentId, limit: 9999, minConfidence: 0, before, domain: scope.domain, orgId: scope.orgId });
       const tree = buildTree(all);
       res.json({ tree });
@@ -470,13 +413,11 @@ export function mountMemoryRoutes(
   });
 
   // Move a memory node to a new parent
-  router.put("/memory/:id/move", (req, res) => {
-    const token = getAuthToken(req);
-    if (!token) return res.status(401).json({ error: "Unauthorized" });
+  router.put("/memory/:id/move", requireAuth, (req, res) => {
     try {
-      const decoded: any = jwt.verify(token, jwtSecret);
+      const decoded = req.user!;
       const { parentId } = req.body;
-      const scope = getMemoryScope(req, decoded);
+      const scope = getMemoryScope(req);
       const db = readDB();
       const mem = (db.memories || []).find((m: any) =>
         m.id === req.params.id &&
@@ -495,13 +436,11 @@ export function mountMemoryRoutes(
   });
 
   // LLM auto-organize — group unorganized leaf memories into topic branches
-  router.post("/memory/auto-organize", async (req, res) => {
-    const token = getAuthToken(req);
-    if (!token) return res.status(401).json({ error: "Unauthorized" });
+  router.post("/memory/auto-organize", requireAuth, async (req, res) => {
     try {
-      const decoded: any = jwt.verify(token, jwtSecret);
+      const decoded = req.user!;
       const userId = decoded.uid;
-      const scope = getMemoryScope(req, decoded);
+      const scope = getMemoryScope(req);
       const db = readDB();
       const allMemories: any[] = db.memories || [];
 
@@ -586,12 +525,9 @@ Rules:
   });
 
   // Toggle core identity protection
-  router.put("/memory/:id/protect", (req, res) => {
-    const token3 = getAuthToken(req);
-    if (!token3) return res.status(401).json({ error: 'Authentication required' });
-    let decoded3: any;
-    try { decoded3 = jwt.verify(token3, jwtSecret); } catch { return res.status(401).json({ error: 'Invalid token' }); }
-    const scope = getMemoryScope(req, decoded3);
+  router.put("/memory/:id/protect", requireAuth, (req, res) => {
+    const decoded3 = req.user!;
+    const scope = getMemoryScope(req);
     const all = queryMemories({ userId: decoded3.uid, limit: 9999, domain: scope.domain, orgId: scope.orgId });
     const mem = all.find(m => m.id === req.params.id);
     if (!mem) return res.status(404).json({ error: 'Memory not found' });
@@ -630,13 +566,11 @@ Rules:
   });
 
   // Memory narrative chain — weave related memories into a chronological story
-  router.get("/memory/narrative", async (req, res) => {
+  router.get("/memory/narrative", requireAuth, async (req, res) => {
     try {
-      const token = getAuthToken(req);
-      if (!token) return res.status(401).json({ error: "Unauthorized" });
-      const decoded: any = jwt.verify(token, jwtSecret);
+      const decoded = req.user!;
       const userId = decoded.uid;
-      const scope = getMemoryScope(req, decoded);
+      const scope = getMemoryScope(req);
       const topic = req.query.topic as string;
       if (!topic) return res.status(400).json({ error: "topic query parameter is required" });
 
@@ -667,13 +601,11 @@ Rules:
   });
 
   // Memory timeline — returns chronological memory timeline view grouped by date
-  router.get("/memory/timeline", (req, res) => {
+  router.get("/memory/timeline", requireAuth, (req, res) => {
     try {
-      const token = getAuthToken(req);
-      if (!token) return res.status(401).json({ error: "Unauthorized" });
-      const decoded: any = jwt.verify(token, jwtSecret);
+      const decoded = req.user!;
       const userId = decoded.uid;
-      const scope = getMemoryScope(req, decoded);
+      const scope = getMemoryScope(req);
 
       const start = (req.query.start as string) || undefined;
       const end = (req.query.end as string) || undefined;

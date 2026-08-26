@@ -67,6 +67,7 @@ import { queryWindowsGpuName } from "../adapters/host_probe";
 import { loadRuntimeBuildMetadata } from "../../shared/runtime_build_metadata";
 import {
   testLLMProviderConnection,
+  testLumiModelFailoverConfiguration,
   testLumiModelConfiguration,
   testVisionProviderConnection,
   type TestableModelRuntime,
@@ -856,7 +857,9 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
   router.post("/llm/route/test", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
     const uid = getUserIdFromRequest(req, jwtSecret);
     try {
-      res.json(await testLumiModelConfiguration(uid, 'reasoning', llm));
+      res.json(req.body?.probe === 'forced_primary_failure'
+        ? await testLumiModelFailoverConfiguration(uid, llm)
+        : await testLumiModelConfiguration(uid, 'reasoning', llm));
     } catch (err: any) {
       const message = sanitizedProviderError(err);
       const configurationError = /not configured|not currently reachable|unsupported provider|valid model/i.test(message);

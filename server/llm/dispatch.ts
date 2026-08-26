@@ -137,8 +137,18 @@ function skippedAttempt(
   candidate: { provider: string; model: string },
   reason: string,
 ): ModelRouteAttempt {
-  const now = Date.now();
-  return completedAttempt(candidate, 'skipped', now, { reason });
+  // No provider call happened. Keep this deterministic instead of measuring
+  // event-loop time between two Date.now() calls and occasionally reporting
+  // a misleading 1 ms "execution" for a policy/health skip.
+  const at = new Date().toISOString();
+  return {
+    ...candidate,
+    status: 'skipped',
+    reason,
+    startedAt: at,
+    completedAt: at,
+    durationMs: 0,
+  };
 }
 
 function providerClientConfigured(provider: string, getters: LLMGetters, userId?: string): boolean | null {
@@ -217,7 +227,7 @@ async function tryLocal(
         callArguments(config, candidate.provider, candidate.model),
         ...getterArguments(getters),
       );
-      if (result.text || result.toolCalls) {
+      if (responseHasSemanticContent(result)) {
         attempts.push(completedAttempt(candidate, 'succeeded', startedAt));
         return { result, attempts, selected: { provider: candidate.provider, model: candidate.model } };
       }
@@ -283,13 +293,58 @@ function isLocalProvider(provider: string, userId?: string): boolean {
   return provider === 'ollama' || provider === 'lmstudio' || isRegisteredProviderLocal(provider, userId);
 }
 
-function lastRouteReason(attempts: ModelRouteAttempt[]): string {
-  for (let index = attempts.length - 1; index >= 0; index -= 1) {
-    if (attempts[index].status !== 'succeeded') {
-      return attempts[index].reason || (attempts[index].status === 'skipped' ? 'candidate_skipped' : 'candidate_failed');
+const ROUTE_REASON_PRIORITY: Readonly<Record<string, number>> = Object.freeze({
+  // Terminal policy/caller decisions are the most important explanation when
+  // they are the reason an attempted route stopped.
+  cancelled: 1_000,
+  privacy_policy_blocked: 950,
+  // Actionable provider failures outrank generic availability failures.
+  provider_auth_failed: 900,
+  quota_or_billing: 850,
+  timeout: 800,
+  provider_unreachable: 750,
+  model_unavailable: 700,
+  unsupported_provider_or_model: 650,
+  provider_call_failed: 600,
+  empty_response: 550,
+  unknown_error: 500,
+  candidate_failed: 450,
+  // Health/configuration skips only explain a route when no candidate was
+  // actually attempted and failed.
+  circuit_open: 400,
+  recent_probe_failed: 350,
+  runtime_client_unavailable: 300,
+  provider_not_configured: 250,
+  candidate_skipped: 200,
+});
+
+function routeAttemptReason(attempt: ModelRouteAttempt): string {
+  return attempt.reason || (attempt.status === 'skipped' ? 'candidate_skipped' : 'candidate_failed');
+}
+
+/**
+ * Select one stable top-level diagnostic without discarding the per-candidate
+ * attempt history. A real failed call always outranks a candidate that was
+ * merely skipped, so a trailing unconfigured optional provider cannot hide a
+ * primary quota/auth/timeout/provider failure. Within the selected status we
+ * use an explicit priority and preserve route order as the tie-breaker.
+ */
+function dominantRouteReason(attempts: ModelRouteAttempt[]): string {
+  const failed = attempts.filter(attempt => attempt.status === 'failed');
+  const candidates = failed.length > 0
+    ? failed
+    : attempts.filter(attempt => attempt.status === 'skipped');
+  let selected = '';
+  let selectedPriority = Number.NEGATIVE_INFINITY;
+  for (const attempt of candidates) {
+    const reason = routeAttemptReason(attempt);
+    const priority = ROUTE_REASON_PRIORITY[reason] ?? 0;
+    if (priority > selectedPriority) {
+      selected = reason;
+      selectedPriority = priority;
     }
   }
-  return '';
+  return selected;
 }
 
 async function dispatchOrderedCall(
@@ -333,7 +388,7 @@ async function dispatchOrderedCall(
           config,
           selectedProvider: candidate.provider,
           selectedModel: candidate.model,
-          fallbackReason: index === 0 ? '' : lastRouteReason(attempts.slice(0, -1)) || 'primary_failed',
+          fallbackReason: index === 0 ? '' : dominantRouteReason(attempts.slice(0, -1)) || 'primary_failed',
           attempts,
         }),
       };
@@ -352,7 +407,7 @@ async function dispatchOrderedCall(
       }
     }
   }
-  const trace = routingTrace({ config, attempts, fallbackReason: lastRouteReason(attempts) || modelRoutingErrorReason(lastError) });
+  const trace = routingTrace({ config, attempts, fallbackReason: dominantRouteReason(attempts) || modelRoutingErrorReason(lastError) });
   throw new ModelRoutingDispatchError(String((lastError as any)?.message || lastError), trace);
 }
 
@@ -429,7 +484,7 @@ export async function dispatchLLMCall(
           config,
           selectedProvider: fallback.provider,
           selectedModel: fallback.model,
-          fallbackReason: lastRouteReason(local.attempts) || 'no_healthy_local_model',
+          fallbackReason: dominantRouteReason(attempts.slice(0, -1)) || 'no_healthy_local_model',
           attempts,
         }),
       };
@@ -450,7 +505,7 @@ export async function dispatchLLMCall(
   }
   throw new ModelRoutingDispatchError(
     String((lastError as any)?.message || lastError),
-    routingTrace({ config, attempts, fallbackReason: lastRouteReason(attempts) || modelRoutingErrorReason(lastError) }),
+    routingTrace({ config, attempts, fallbackReason: dominantRouteReason(attempts) || modelRoutingErrorReason(lastError) }),
   );
 }
 
@@ -506,14 +561,14 @@ export async function dispatchLLMCallStreaming(
           config,
           selectedProvider: candidate.provider,
           selectedModel: candidate.model,
-          fallbackReason: index === 0 ? '' : lastRouteReason(attempts.slice(0, -1)) || 'primary_failed',
+          fallbackReason: index === 0 ? '' : dominantRouteReason(attempts.slice(0, -1)) || 'primary_failed',
           attempts,
         }),
       };
     }
     throw new ModelRoutingDispatchError(
       String((lastError as any)?.message || lastError),
-      routingTrace({ config, attempts, fallbackReason: lastRouteReason(attempts) || modelRoutingErrorReason(lastError) }),
+      routingTrace({ config, attempts, fallbackReason: dominantRouteReason(attempts) || modelRoutingErrorReason(lastError) }),
     );
   }
 
@@ -611,14 +666,14 @@ export async function dispatchLLMCallStreaming(
         config,
         selectedProvider: candidate.provider,
         selectedModel: candidate.model,
-        fallbackReason: lastRouteReason(attempts.slice(0, -1)) || 'no_healthy_local_model',
+        fallbackReason: dominantRouteReason(attempts.slice(0, -1)) || 'no_healthy_local_model',
         attempts,
       }),
     };
   }
   throw new ModelRoutingDispatchError(
     String((lastError as any)?.message || lastError),
-    routingTrace({ config, attempts, fallbackReason: lastRouteReason(attempts) || modelRoutingErrorReason(lastError) }),
+    routingTrace({ config, attempts, fallbackReason: dominantRouteReason(attempts) || modelRoutingErrorReason(lastError) }),
   );
 }
 

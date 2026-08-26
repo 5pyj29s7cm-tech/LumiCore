@@ -490,5 +490,7 @@ export interface ToolExecutionEnvelope<T = unknown> {
   verification: {
     status: 'verified' | 'unverified' | 'failed';
     reason: string;
+    /** Distinguishes a real terminal verifier from legacy success inference. */
+    basis?: 'terminal_verification' | 'compatibility_inference';
   };
 }

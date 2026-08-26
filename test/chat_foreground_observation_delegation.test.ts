@@ -232,4 +232,85 @@ describe('chat foreground desktop observation delegation gate', () => {
     expect(backgroundEvents).toEqual([]);
     expect(listBackgroundTasks(userId)).toEqual([]);
   });
+
+  it('recovers an unsupported completion claim inside the same Socket turn with a real receipt', async () => {
+    const recoveryRequestId = `chat-foreground-observation-recovery-${suffix}`;
+    let attempt = 0;
+    desktopCalls.length = 0;
+    backgroundEvents.length = 0;
+    mocks.runWithTools.mockClear();
+    mocks.runWithTools.mockImplementation(async (...args: any[]) => {
+      attempt++;
+      if (attempt === 1) {
+        return {
+          text: '当前前台窗口标题是 Fabricated Window。',
+          toolCalls: [],
+          usageRecords: [],
+        };
+      }
+
+      const registry = args[1];
+      const onToolCall = args[3] as ((record: Record<string, any>) => void) | undefined;
+      const context = args[11];
+      expect(context.source).toBe('chat_guard_recovery');
+      expect(context.turnId).toBe(recoveryRequestId);
+      expect(context.priorToolRecords).toEqual([]);
+      const result = await registry.execute('desktop_active_window', {}, context);
+      const record = {
+        id: `desktop-active-window-recovery-${suffix}`,
+        key: 'desktop_active_window:{}',
+        name: 'desktop_active_window',
+        arguments: {},
+        result,
+        error: '',
+        outcome: 'success',
+        terminalVerification: {
+          status: 'verified',
+          strategy: 'terminal_receipt',
+          reason: 'active window returned during bounded recovery',
+        },
+      };
+      onToolCall?.(record);
+      return {
+        text: '当前前台窗口标题是 Acceptance Window。',
+        toolCalls: [record],
+        usageRecords: [],
+      };
+    });
+
+    const responsePromise = waitForRequestEvent<Record<string, any>>(
+      client,
+      'agent:response',
+      recoveryRequestId,
+    );
+    const ack = await client.timeout(5_000).emitWithAck('agent:chat', {
+      text: EXACT_OBSERVATION_REQUEST,
+      history: [],
+      agentId: 'lumi',
+      domain: 'personal',
+      source: 'command-center-chat',
+      requestId: recoveryRequestId,
+      conversationId,
+    });
+    expect(ack).toMatchObject({ ok: true, requestId: recoveryRequestId });
+
+    const response = await responsePromise;
+    expect(response).toMatchObject({
+      requestId: recoveryRequestId,
+      conversationId,
+      finalized: true,
+      blocked: false,
+      completionFeedback: {
+        status: 'completed',
+      },
+    });
+    expect(response.text).toContain('Acceptance Window');
+    expect(JSON.stringify(response)).not.toMatch(
+      /No successful current-turn tool execution|这一轮没有记录到成功的真实工具执行|我需要先真正调用/iu,
+    );
+    expect(mocks.runWithTools).toHaveBeenCalledTimes(2);
+    expect(desktopCalls).toEqual([{ name: 'desktop_active_window', arguments: {} }]);
+    expect(backgroundEvents).toEqual([]);
+    expect(listBackgroundTasks(userId)).toEqual([]);
+  });
 });

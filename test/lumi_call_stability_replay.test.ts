@@ -886,6 +886,7 @@ describe('Lumi field-call stability replay', () => {
       status: 'blocked',
       unfinished: true,
       latestBlocker: result,
+      activeRequestId: 'request_repair',
       completionSource: undefined,
       receipts: [{
         id: 'receipt_repair',
@@ -905,7 +906,11 @@ describe('Lumi field-call stability replay', () => {
     });
     conversation.actionContinuationState = state;
     db.conversations.push(conversation);
-    syncConversationActionTaskLedger(db, { conversation, state });
+    syncConversationActionTaskLedger(db, {
+      conversation,
+      state,
+      currentUserMessageId: 'turn_repair',
+    });
 
     expect(repairContradictoryConversationActionReceipts(db)).toBe(1);
     expect(db.conversationActionReceipts[0].outcome).toBe('verified_success');

@@ -8,12 +8,13 @@ import {
   queryMemories,
   removeMemory,
 } from '../server/memory/store';
+import * as OrgDB from '../server/org/db';
 
 describe('memory route scope and stable evidence identity', () => {
   let cleanup = () => {};
   let baseUrl = '';
   const userId = `memory-route-scope-${Date.now()}`;
-  const orgId = `memory-route-org-${Date.now()}`;
+  let orgId = '';
   const createdIds: string[] = [];
   let personalId = '';
   let workId = '';
@@ -36,6 +37,12 @@ describe('memory route scope and stable evidence identity', () => {
     cleanup = app.cleanup;
     baseUrl = app.url;
     mountMemoryRoutes(app.apiRouter, JWT_SECRET, LLM_GETTERS);
+    orgId = OrgDB.createOrg(
+      'Memory Route Scope Test',
+      `memory-route-scope-${Date.now()}`,
+      userId,
+    ).id;
+    OrgDB.addMember(orgId, userId, 'owner');
 
     const personal = addMemory({
       userId,
@@ -81,6 +88,7 @@ describe('memory route scope and stable evidence identity', () => {
 
   afterAll(() => {
     for (const id of createdIds) removeMemory(id);
+    if (orgId) OrgDB.deleteOrg(orgId);
     cleanup();
   });
 

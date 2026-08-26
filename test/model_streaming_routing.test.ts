@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { dispatchLLMCallStreaming, type LLMGetters } from '../server/llm/dispatch';
+import { dispatchLLMCall, dispatchLLMCallStreaming, type LLMGetters } from '../server/llm/dispatch';
 import { makeLLMCallStreaming } from '../server/llm/providers';
 import { resetCircuit } from '../server/cloud/circuit_breaker';
+import { resolveAutoLocalModelCandidates } from '../server/llm/local_models';
 
 vi.mock('../server/llm/local_models', async importOriginal => {
   const actual = await importOriginal<typeof import('../server/llm/local_models')>();
   return {
     ...actual,
     resolveAutoLocalModelCandidates: vi.fn(async () => []),
+    ensureLocalModelReady: vi.fn(async (_provider: string, model: string) => model),
   };
 });
 
@@ -36,9 +38,215 @@ const deadlines = {
   absoluteMs: 100,
 };
 
-afterEach(() => resetCircuit());
+afterEach(() => {
+  resetCircuit();
+  vi.mocked(resolveAutoLocalModelCandidates).mockResolvedValue([]);
+});
 
 describe('transactional streaming model routing', () => {
+  it('fails over when a local model returns only whitespace and an empty tool list', async () => {
+    vi.mocked(resolveAutoLocalModelCandidates).mockResolvedValueOnce([
+      { provider: 'lmstudio', model: 'empty-local', baseUrl: 'http://127.0.0.1:1234' },
+    ]);
+    const lmStudio = {
+      chat: { completions: { create: async () => ({
+        choices: [{ message: { role: 'assistant', content: '   ', tool_calls: [] } }],
+      }) } },
+    };
+    const openAI = {
+      chat: { completions: { create: async () => ({
+        choices: [{ message: { role: 'assistant', content: 'cloud fallback answer' } }],
+      }) } },
+    };
+
+    const result = await dispatchLLMCall(
+      [{ role: 'user', content: 'recover from an empty local response' }],
+      [],
+      {
+        provider: 'openai',
+        model: 'cloud-fallback',
+        selectionMode: 'auto',
+        allowCloudFallback: true,
+        attemptTimeouts: deadlines,
+      },
+      getters({ getLmStudio: () => lmStudio, getOpenAI: () => openAI }),
+    );
+
+    expect(result.text).toBe('cloud fallback answer');
+    expect(result.routing).toMatchObject({
+      selectedProvider: 'openai',
+      selectedModel: 'cloud-fallback',
+      fallbackReason: 'empty_response',
+    });
+    expect(result.routing.attempts).toEqual([
+      expect.objectContaining({ provider: 'lmstudio', status: 'failed', reason: 'empty_response' }),
+      expect.objectContaining({ provider: 'openai', status: 'succeeded' }),
+    ]);
+  });
+
+  it('reports the failed cloud root cause after local-first auto routing reaches a later cloud candidate', async () => {
+    const deepSeek = {
+      chat: { completions: { create: async () => {
+        throw new Error('402 Payment Required: insufficient balance');
+      } } },
+    };
+    const openAI = {
+      chat: { completions: { create: async () => ({
+        choices: [{ message: { role: 'assistant', content: 'auto cloud recovery' } }],
+      }) } },
+    };
+
+    const result = await dispatchLLMCall(
+      [{ role: 'user', content: 'exercise local-first automatic routing' }],
+      [],
+      {
+        provider: 'deepseek',
+        model: 'auto-cloud-primary',
+        selectionMode: 'auto',
+        fallbackCandidates: [{ provider: 'openai', model: 'auto-cloud-fallback' }],
+        allowCloudFallback: true,
+        attemptTimeouts: deadlines,
+      },
+      getters({ getDeepSeek: () => deepSeek, getOpenAI: () => openAI }),
+    );
+
+    expect(result.text).toBe('auto cloud recovery');
+    expect(result.routing.fallbackReason).toBe('quota_or_billing');
+    expect(result.routing.attempts.slice(-2).map(attempt => ({
+      provider: attempt.provider,
+      status: attempt.status,
+      reason: attempt.reason,
+    }))).toEqual([
+      { provider: 'deepseek', status: 'failed', reason: 'quota_or_billing' },
+      { provider: 'openai', status: 'succeeded', reason: undefined },
+    ]);
+  });
+
+  it('does not let a trailing unconfigured candidate mask an attempted quota failure', async () => {
+    const deepSeek = {
+      chat: { completions: { create: async () => {
+        throw new Error('402 Payment Required: insufficient balance');
+      } } },
+    };
+    const openAI = {
+      chat: { completions: { create: async () => ({
+        choices: [{ message: { role: 'assistant', content: 'recovered answer' } }],
+      }) } },
+    };
+
+    const result = await dispatchLLMCall(
+      [{ role: 'user', content: 'recover with an exact diagnosis' }],
+      [],
+      {
+        provider: 'deepseek',
+        model: 'quota-primary',
+        selectionMode: 'ordered_fallback',
+        fallbackCandidates: [
+          { provider: 'anthropic', model: 'unconfigured-middle' },
+          { provider: 'openai', model: 'healthy-last' },
+        ],
+        allowCloudFallback: true,
+        attemptTimeouts: deadlines,
+      },
+      getters({ getDeepSeek: () => deepSeek, getOpenAI: () => openAI }),
+    );
+
+    expect(result.text).toBe('recovered answer');
+    expect(result.routing.fallbackReason).toBe('quota_or_billing');
+    expect(result.routing.attempts.map(attempt => ({
+      provider: attempt.provider,
+      status: attempt.status,
+      reason: attempt.reason,
+    }))).toEqual([
+      { provider: 'deepseek', status: 'failed', reason: 'quota_or_billing' },
+      { provider: 'anthropic', status: 'skipped', reason: 'provider_not_configured' },
+      { provider: 'openai', status: 'succeeded', reason: undefined },
+    ]);
+  });
+
+  it('keeps the attempted provider root cause when the remaining route is only skipped', async () => {
+    const deepSeek = {
+      chat: { completions: { create: async () => {
+        throw new Error('401 Unauthorized: invalid API key');
+      } } },
+    };
+
+    await expect(dispatchLLMCall(
+      [{ role: 'user', content: 'preserve the failed route diagnosis' }],
+      [],
+      {
+        provider: 'deepseek',
+        model: 'auth-primary-all-failed',
+        selectionMode: 'ordered_fallback',
+        fallbackCandidates: [{ provider: 'anthropic', model: 'unconfigured-last' }],
+        allowCloudFallback: true,
+        attemptTimeouts: deadlines,
+      },
+      getters({ getDeepSeek: () => deepSeek }),
+    )).rejects.toMatchObject({
+      name: 'ModelRoutingDispatchError',
+      routing: {
+        fallbackReason: 'provider_auth_failed',
+        attempts: [
+          expect.objectContaining({
+            provider: 'deepseek',
+            status: 'failed',
+            reason: 'provider_auth_failed',
+          }),
+          expect.objectContaining({
+            provider: 'anthropic',
+            status: 'skipped',
+            reason: 'provider_not_configured',
+          }),
+        ],
+      },
+    });
+  });
+
+  it('uses the same attempted-failure priority for streaming failover', async () => {
+    const deepSeek = {
+      chat: { completions: { create: async () => {
+        throw new Error('401 Unauthorized: invalid API key');
+      } } },
+    };
+    async function* available() {
+      yield { choices: [{ delta: { content: 'stream recovered' } }] };
+    }
+    const openAI = { chat: { completions: { create: async () => available() } } };
+    const chunks: string[] = [];
+
+    const result = await dispatchLLMCallStreaming(
+      [{ role: 'user', content: 'recover the stream with an exact diagnosis' }],
+      [],
+      {
+        provider: 'deepseek',
+        model: 'auth-primary',
+        selectionMode: 'ordered_fallback',
+        fallbackCandidates: [
+          { provider: 'anthropic', model: 'unconfigured-middle-stream' },
+          { provider: 'openai', model: 'healthy-last-stream' },
+        ],
+        allowCloudFallback: true,
+        attemptTimeouts: deadlines,
+      },
+      chunk => chunks.push(chunk),
+      getters({ getDeepSeek: () => deepSeek, getOpenAI: () => openAI }),
+    );
+
+    expect(result.text).toBe('stream recovered');
+    expect(chunks).toEqual(['stream recovered']);
+    expect(result.routing.fallbackReason).toBe('provider_auth_failed');
+    expect(result.routing.attempts.map(attempt => ({
+      provider: attempt.provider,
+      status: attempt.status,
+      reason: attempt.reason,
+    }))).toEqual([
+      { provider: 'deepseek', status: 'failed', reason: 'provider_auth_failed' },
+      { provider: 'anthropic', status: 'skipped', reason: 'provider_not_configured' },
+      { provider: 'openai', status: 'succeeded', reason: undefined },
+    ]);
+  });
+
   it('does not expand an exact streaming graph candidate into the global fallback route', async () => {
     const primaryCreate = vi.fn(async () => {
       throw new Error('exact stream candidate failed');

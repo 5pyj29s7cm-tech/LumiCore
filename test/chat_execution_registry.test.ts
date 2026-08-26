@@ -243,6 +243,48 @@ describe('chat execution registry', () => {
     });
   });
 
+  it('persists and replays only the bounded completion-feedback contract', async () => {
+    const persistence = memoryPersistence();
+    await initializeChatExecutionRegistryPersistence(persistence.adapter, Date.now());
+    beginChatExecution(scope, 'strict-terminal-feedback');
+
+    await expect(recordChatExecutionTerminalEventDurably(
+      scope,
+      'strict-terminal-feedback',
+      'agent:response',
+      {
+        text: 'Verified foreground result.',
+        finalized: true,
+        blocked: false,
+        completionFeedback: {
+          status: 'completed',
+          completed: ['Foreground task completed.'],
+          evidence: ['Verified tool receipt: desktop_active_window'],
+          incomplete: [],
+          blockers: [],
+          nextSteps: [],
+          providerTrace: { authorization: 'Bearer must-not-persist' },
+        },
+      },
+    )).resolves.toBe(true);
+
+    expect(persistence.rows[0].payload.completionFeedback).toEqual({
+      status: 'completed',
+      completed: ['Foreground task completed.'],
+      evidence: ['Verified tool receipt: desktop_active_window'],
+      incomplete: [],
+      blockers: [],
+      nextSteps: [],
+    });
+    expect(JSON.stringify(persistence.rows[0])).not.toContain('providerTrace');
+    expect(JSON.stringify(persistence.rows[0])).not.toContain('must-not-persist');
+
+    resetChatExecutionRegistryForTests();
+    await initializeChatExecutionRegistryPersistence(persistence.adapter, Date.now());
+    expect(getChatExecution(scope, 'strict-terminal-feedback')?.terminalEvent?.payload.completionFeedback)
+      .toMatchObject({ status: 'completed', evidence: ['Verified tool receipt: desktop_active_window'] });
+  });
+
   it('quarantines a failed strict terminal as persistence_unknown and never exposes or rebinds its success', async () => {
     const adapter: ChatExecutionPersistenceAdapter = {
       async loadRecoverable() { return []; },

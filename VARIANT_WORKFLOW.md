@@ -115,3 +115,13 @@ npm run variant:promote -- `
 - 可复用核心能力与客户专属修改必须分开提交。
 - 不在子仓库重写身份隔离、记忆隔离、安全确认、统一回执和模型路由底层。
 - 不提交客户数据、数据库、日志、语音、安装包、API 密钥或其他凭据。
+
+## 可验证的同步门禁
+
+```powershell
+npm run variant:check
+```
+
+该命令强制刷新主核与每个子仓的实时远端头，并要求所有子程序同时满足：已吸收当前主核提交、本地交付提交与远端交付提交完全一致、默认分支已对齐，以及当前提交组合存在 lint/test/build 全通过的持久化回执。普通 `variant:status` 只使用缓存远端时，不会把旧回执报告为当前通过，而是返回 `remote_check_required`。
+
+`variant:new`、正式 `variant:sync`、`variant:publish-default` 和 `variant:status --verify` 会在主仓 Git 公共目录的 `lumi/variant-gate-receipts/` 中原子记录回执。回执绑定主核 SHA、子程序 SHA、实时远端 SHA、每项门禁耗时和 SHA-256 完整性摘要；任一提交变化、远端前移、门禁缺失或回执损坏都会使严格检查失败。回执不写入产品仓库，也不包含凭据。

@@ -1,4 +1,5 @@
 import { ensureDatabaseInitialized, querySQL, runSQL } from '../../db_layer';
+import { normalizeCompletionFeedbackForPersistence } from '../conversation/completion_feedback';
 
 export type ChatExecutionStatus =
   | 'acknowledged'
@@ -148,6 +149,8 @@ function sanitizeTerminalPayload(
   const agentName = compactString(payload.agentName, 120);
   if (reason) sanitized.reason = reason;
   if (agentName) sanitized.agentName = agentName;
+  const completionFeedback = normalizeCompletionFeedbackForPersistence(payload.completionFeedback);
+  if (completionFeedback) sanitized.completionFeedback = completionFeedback;
   if (record.sidecar === true && record.controlIntentTarget) {
     sanitized.controlIntent = 'cancel';
     sanitized.targetRequestId = compactString(record.controlIntentTarget, 180);
@@ -709,6 +712,9 @@ export async function recordChatExecutionTerminalEventDurably(
     })
     .catch(error => {
       if (record.terminalReceiptPending === pending) {
+        const completionFeedback = normalizeCompletionFeedbackForPersistence(
+          persistenceUnknownPayload.completionFeedback,
+        );
         const unknownEvent: ChatExecutionEvent = {
           event: 'agent:response',
           payload: {
@@ -721,6 +727,7 @@ export async function recordChatExecutionTerminalEventDurably(
             finalized: true,
             blocked: true,
             reason: 'persistence_unknown',
+            ...(completionFeedback ? { completionFeedback } : {}),
           },
         };
         record.status = 'failed';
@@ -770,6 +777,7 @@ export async function recordChatExecutionPersistenceUnknownDurably(
   }
 
   const now = new Date().toISOString();
+  const completionFeedback = normalizeCompletionFeedbackForPersistence(payload.completionFeedback);
   const unknownEvent: ChatExecutionEvent = {
     event: 'agent:response',
     payload: {
@@ -782,6 +790,7 @@ export async function recordChatExecutionPersistenceUnknownDurably(
       finalized: true,
       blocked: true,
       reason: 'persistence_unknown',
+      ...(completionFeedback ? { completionFeedback } : {}),
     },
   };
   // Quarantine synchronously before the durable attempt so a reconnect in the

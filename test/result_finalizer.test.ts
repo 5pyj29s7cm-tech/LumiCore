@@ -4,6 +4,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+const verifiedDesktopReceipt = {
+  terminalVerification: {
+    status: 'verified' as const,
+    strategy: 'terminal_receipt' as const,
+    reason: 'Fresh desktop snapshot returned by the connected desktop client.',
+  },
+};
+
 describe('Lumi result finalizer', () => {
   it('blocks a fenced legacy tool protocol from leaking into a read-only conversation', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
@@ -1430,14 +1438,17 @@ describe('Lumi result finalizer', () => {
         name: 'desktop_active_window',
         arguments: {},
         result: '{"title":"LumiCore","process_name":"lumi-core.exe","pid":3928,"width":1920,"height":1080}',
+        ...verifiedDesktopReceipt,
       }, {
         name: 'desktop_running_processes',
         arguments: { top: 20 },
         result: '[{"pid":3928,"name":"lumi-core.exe"},{"pid":22920,"name":"msedge.exe"}]',
+        ...verifiedDesktopReceipt,
       }, {
         name: 'desktop_idle_time',
         arguments: {},
         result: '{"idle_seconds":160}',
+        ...verifiedDesktopReceipt,
       }],
       source: 'chat',
     });
@@ -1460,6 +1471,7 @@ describe('Lumi result finalizer', () => {
         name: 'desktop_running_processes',
         arguments: { top: 20 },
         result: '[{"pid":3928,"name":"lumi-core.exe"},{"pid":22920,"name":"msedgewebview2.exe"}]',
+        ...verifiedDesktopReceipt,
       }, {
         name: 'write_file',
         arguments: {},

@@ -29,12 +29,17 @@ import {
 } from './summary_grounding';
 import { sanitizeToolRecordsForPersistence } from '../cognition/user_output_protection';
 import {
+  normalizeCompletionFeedbackForPersistence,
+  type TaskCompletionFeedback,
+} from './completion_feedback';
+import {
   formatConversationActionLedgerStatus,
   attachConversationExecutionPlan,
   attachConversationModelExecutionGraph,
   loadConversationModelExecutionRecovery,
   migrateLegacyConversationActionLedger,
   recoverConversationActionTaskLeases,
+  repairTerminalConversationActionTaskLeases,
   repairContradictoryConversationActionReceipts,
   compactLegacyScheduledCapabilityExecutions,
   archiveBoundConversationActionReceipts,
@@ -245,6 +250,8 @@ export interface MessageRecord {
   requestId?: string;
   /** Structured model/runtime classification for durable task ownership. */
   taskIntent?: 'task' | 'conversation' | '';
+  /** Bounded, allowlisted task outcome summary shown after history reload. */
+  completionFeedback?: TaskCompletionFeedback;
   timestamp: string;
 }
 
@@ -1169,6 +1176,7 @@ export function recoverOrphanedConversationActionExecutions(
 ): number {
   const db = readDB();
   const migrated = migrateLegacyConversationActionLedger(db);
+  const repairedTerminalLeases = repairTerminalConversationActionTaskLeases(db);
   const recoveredLedgerLeases = recoverConversationActionTaskLeases(db, now);
   const repairedReceipts = repairContradictoryConversationActionReceipts(db);
   const schedulerCompaction = compactLegacyScheduledCapabilityExecutions(db);
@@ -1203,12 +1211,13 @@ export function recoverOrphanedConversationActionExecutions(
   }
   if (
     migrated > 0
+    || repairedTerminalLeases > 0
     || recoveredLedgerLeases > 0
     || repairedReceipts > 0
     || schedulerCompaction.tasksRemoved > 0
     || recovered > 0
   ) writeDB(db);
-  return recoveredLedgerLeases + recovered;
+  return repairedTerminalLeases + recoveredLedgerLeases + recovered;
 }
 
 export function setConversationActionExecutionStatus(
@@ -1224,18 +1233,22 @@ export function setConversationActionExecutionStatus(
   if (conversation) hydrateConversationActionState(db, conversation);
   const previous = normalizeConversationActionState(conversation?.actionContinuationState);
   if (!conversation || !previous) return null;
+  const unfinished = status !== 'completed' && status !== 'cancelled';
+  const requestLeaseActive = unfinished;
   conversation.actionContinuationState = {
     ...previous,
     version: 2,
     status,
-    unfinished: status !== 'completed' && status !== 'cancelled',
+    unfinished,
     latestBlocker: options.blocker !== undefined ? options.blocker : previous.latestBlocker,
     assistantState: options.assistantState !== undefined
       ? options.assistantState
       : previous.assistantState,
-    activeRequestId: options.requestId !== undefined
-      ? options.requestId || undefined
-      : previous.activeRequestId,
+    activeRequestId: requestLeaseActive
+      ? options.requestId !== undefined
+        ? options.requestId || undefined
+        : previous.activeRequestId
+      : undefined,
     revision: (previous.revision || 0) + 1,
     updatedAt: new Date().toISOString(),
   };
@@ -1271,6 +1284,8 @@ export function addMessage(msg: {
   requestId?: string;
   /** Explicit structured intent emitted by the model/runtime for this reply. */
   taskIntent?: 'task' | 'conversation';
+  /** User-visible structured outcome; normalized before it reaches memory/SQLite. */
+  completionFeedback?: unknown;
   /**
    * Persist the accepted instruction before routing/tool selection finishes,
    * while leaving creation of the real task state to the foreground executor.
@@ -1286,6 +1301,7 @@ export function addMessage(msg: {
   const id = 'msg_' + crypto.randomUUID();
   const now = msg.timestamp || new Date().toISOString();
   const normalizedToolCalls = normalizeToolCalls(msg.toolCalls);
+  const completionFeedback = normalizeCompletionFeedbackForPersistence(msg.completionFeedback);
   let currentUserMessageIdForLedger = '';
 
   const interaction: any = {
@@ -1311,6 +1327,7 @@ export function addMessage(msg: {
     receivedAt: msg.receivedAt || '',
     requestId: msg.requestId || '',
     taskIntent: msg.taskIntent || '',
+    ...(completionFeedback ? { completionFeedback } : {}),
     timestamp: now,
   };
 
@@ -1666,6 +1683,45 @@ export function addMessageIdempotent(msg: IdempotentConversationMessage): string
     externalMessageId: msg.externalMessageId || requestId,
     routeSequence: Number.isFinite(msg.routeSequence) ? msg.routeSequence : nextRouteSequence,
   });
+}
+
+/**
+ * Replace only the user-visible terminal projection of an already accepted
+ * assistant turn. This is used when cancellation or a failed durability fence
+ * supersedes a response that was staged in memory before the strict flush.
+ */
+export function updateAssistantMessageTerminalPresentation(input: {
+  userId: string;
+  conversationId: string;
+  requestId: string;
+  content: string;
+  completionFeedback: unknown;
+  source?: string;
+  channel?: string;
+}): boolean {
+  const completionFeedback = normalizeCompletionFeedbackForPersistence(input.completionFeedback);
+  if (!completionFeedback) return false;
+  const db = readDB();
+  const requestId = String(input.requestId || '').trim();
+  const row = (db.interactions || []).find((item: any) => (
+    item.userId === input.userId
+    && item.conversationId === input.conversationId
+    && item.role === 'assistant'
+    && (!input.source || item.source === input.source)
+    && (!input.channel || item.channel === input.channel)
+    && (
+      String(item.requestId || '') === requestId
+      || String(item.externalMessageId || '') === requestId
+    )
+  ));
+  if (!row) return false;
+  const content = String(input.content || '').replace(/\0/g, '').trim().slice(0, 8_000);
+  row.message = content;
+  row.content = content;
+  row.response = '';
+  row.completionFeedback = completionFeedback;
+  writeDB(db);
+  return true;
 }
 
 const DEFAULT_CONTEXT_TOKENS = parseInt(process.env.CONTEXT_TOKEN_BUDGET || '18000', 10);

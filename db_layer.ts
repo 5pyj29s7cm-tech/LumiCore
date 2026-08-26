@@ -17,6 +17,10 @@ import {
   type ExternalCommitJournalEntry,
 } from './server/tools/external_commit_journal';
 import { sanitizeToolRecordsForPersistence } from './server/cognition/user_output_protection';
+import {
+  parseCompletionFeedbackFromPersistence,
+  serializeCompletionFeedbackForPersistence,
+} from './server/conversation/completion_feedback';
 
 // Production persistence is process-exclusive per canonical Lumi data root.
 // Acquire synchronously before even the legacy migration can inspect/copy data.
@@ -602,6 +606,7 @@ function migrateSchema(): Promise<void> {
     // Add cognitiveIntent and llmWasCalled columns to interactions
     db!.run("ALTER TABLE interactions ADD COLUMN cognitiveIntent TEXT DEFAULT ''", onAlter);
     db!.run("ALTER TABLE interactions ADD COLUMN llmWasCalled INTEGER DEFAULT 0", onAlter);
+    db!.run("ALTER TABLE interactions ADD COLUMN completionFeedback TEXT DEFAULT ''", onAlter);
     // Add reminders table if it doesn't exist
     db!.run(`CREATE TABLE IF NOT EXISTS reminders (
       id TEXT PRIMARY KEY,
@@ -668,6 +673,7 @@ function createTables(): Promise<void> {
         conversationId TEXT DEFAULT '',
         cognitiveIntent TEXT DEFAULT '',
         llmWasCalled INTEGER DEFAULT 0,
+        completionFeedback TEXT DEFAULT '',
         domain TEXT DEFAULT 'personal',
         orgId TEXT DEFAULT '',
         source TEXT DEFAULT '',
@@ -1399,6 +1405,7 @@ async function loadMemoryDB(): Promise<void> {
     conversationId: i.conversationId || '',
     cognitiveIntent: i.cognitiveIntent || '',
     llmWasCalled: i.llmWasCalled ? true : false,
+    completionFeedback: parseCompletionFeedbackFromPersistence(i.completionFeedback),
     domain: i.domain || 'personal',
     orgId: i.orgId || '',
     source: i.source || '',
@@ -2005,9 +2012,9 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
     },
     {
       name: 'interactions',
-      createSQL: `CREATE TABLE _temp_interactions (id TEXT PRIMARY KEY, userId TEXT NOT NULL, agentId TEXT, module TEXT, message TEXT NOT NULL, response TEXT, role TEXT DEFAULT '', personality TEXT DEFAULT '', mode TEXT DEFAULT '', toolCalls TEXT DEFAULT '', conversationId TEXT DEFAULT '', cognitiveIntent TEXT DEFAULT '', llmWasCalled INTEGER DEFAULT 0, domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '', source TEXT DEFAULT '', channel TEXT DEFAULT '', externalMessageId TEXT DEFAULT '', routeSequence INTEGER, receivedAt TEXT DEFAULT '', timestamp TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_interactions (id, userId, agentId, module, message, response, role, personality, mode, toolCalls, conversationId, cognitiveIntent, llmWasCalled, domain, orgId, source, channel, externalMessageId, routeSequence, receivedAt, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => memoryDB.interactions.map((i: any) => [i.id, i.userId || 'unknown', i.agentId || null, i.personality || i.module || null, i.content || i.message || '', i.response || '', i.role || '', i.personality || '', i.mode || '', serializeStoredToolCalls(i.toolCalls), i.conversationId || '', i.cognitiveIntent || '', i.llmWasCalled ? 1 : 0, i.domain || 'personal', i.orgId || '', i.source || '', i.channel || '', i.externalMessageId || '', Number.isFinite(i.routeSequence) ? i.routeSequence : null, i.receivedAt || '', i.timestamp]),
+      createSQL: `CREATE TABLE _temp_interactions (id TEXT PRIMARY KEY, userId TEXT NOT NULL, agentId TEXT, module TEXT, message TEXT NOT NULL, response TEXT, role TEXT DEFAULT '', personality TEXT DEFAULT '', mode TEXT DEFAULT '', toolCalls TEXT DEFAULT '', conversationId TEXT DEFAULT '', cognitiveIntent TEXT DEFAULT '', llmWasCalled INTEGER DEFAULT 0, completionFeedback TEXT DEFAULT '', domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '', source TEXT DEFAULT '', channel TEXT DEFAULT '', externalMessageId TEXT DEFAULT '', routeSequence INTEGER, receivedAt TEXT DEFAULT '', timestamp TEXT NOT NULL)`,
+      insertSQL: `INSERT INTO _temp_interactions (id, userId, agentId, module, message, response, role, personality, mode, toolCalls, conversationId, cognitiveIntent, llmWasCalled, completionFeedback, domain, orgId, source, channel, externalMessageId, routeSequence, receivedAt, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => memoryDB.interactions.map((i: any) => [i.id, i.userId || 'unknown', i.agentId || null, i.personality || i.module || null, i.content || i.message || '', i.response || '', i.role || '', i.personality || '', i.mode || '', serializeStoredToolCalls(i.toolCalls), i.conversationId || '', i.cognitiveIntent || '', i.llmWasCalled ? 1 : 0, serializeCompletionFeedbackForPersistence(i.completionFeedback), i.domain || 'personal', i.orgId || '', i.source || '', i.channel || '', i.externalMessageId || '', Number.isFinite(i.routeSequence) ? i.routeSequence : null, i.receivedAt || '', i.timestamp]),
     },
     {
       name: 'memories',

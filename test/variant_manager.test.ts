@@ -126,6 +126,7 @@ describe('Lumi variant release train', () => {
     expect(packageJson.scripts).toMatchObject({
       'variant:new': 'node scripts/variant-manager.mjs new',
       'variant:status': 'node scripts/variant-manager.mjs status',
+      'variant:check': 'node scripts/variant-manager.mjs status --all --fetch --strict',
       'variant:sync': 'node scripts/variant-manager.mjs sync',
       'variant:publish-default': 'node scripts/variant-manager.mjs publish-default',
       'variant:promote': 'node scripts/variant-manager.mjs promote',
@@ -146,6 +147,7 @@ describe('Lumi variant release train', () => {
   it('documents discovery, status, synchronization, default alignment, and failure recovery', () => {
     const guide = source('VARIANT_WORKFLOW.md');
     expect(guide).toContain('npm run variant:status');
+    expect(guide).toContain('npm run variant:check');
     expect(guide).toContain('npm run variant:sync -- --all --dry-run');
     expect(guide).toContain('npm run variant:publish-default');
     expect(guide).toContain('lint、全量测试、build');
@@ -374,6 +376,70 @@ describe('Lumi variant release train', () => {
         blockers: [],
         core: { commitsBehind: 0 },
         delivery: { remoteBranch: 'main', defaultAligned: true },
+        gates: { status: 'remote_check_required', current: false },
+      });
+      expect(status.releaseReady).toBe(false);
+      expect(status.variants[0].warnings).toContain('live_remote_check_required');
+
+      const strictStatus = parseLastJson(execute(process.execPath, [
+        managerPath,
+        'status',
+        '--root', mainRepository,
+        '--all',
+        '--fetch',
+        '--strict',
+      ]));
+      expect(strictStatus).toMatchObject({ releaseReady: true, liveRemote: true });
+      expect(strictStatus.variants[0]).toMatchObject({
+        state: 'ready',
+        delivery: { remoteSource: 'live' },
+        gates: { status: 'passed', current: true, source: 'variant_sync' },
+      });
+
+      const commonDir = path.resolve(mainRepository, git(mainRepository, 'rev-parse', '--git-common-dir'));
+      const receiptPath = path.join(commonDir, 'lumi', 'variant-gate-receipts', 'test-client.json');
+      const durableReceipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+      expect(durableReceipt).toMatchObject({
+        schemaVersion: 1,
+        variantId: 'test-client',
+        source: 'variant_sync',
+        coreCommit: updatedMainCommit,
+        variantCommit: git(childWorktree, 'rev-parse', 'HEAD'),
+        remoteCommit: git(childWorktree, 'rev-parse', 'HEAD'),
+        integrity: { algorithm: 'sha256' },
+      });
+      expect(durableReceipt.gates.map((gate: { name: string }) => gate.name)).toEqual(
+        expect.arrayContaining(['lint', 'test', 'build']),
+      );
+      durableReceipt.integrity.digest = '0'.repeat(64);
+      writeJson(receiptPath, durableReceipt);
+      const invalidReceiptStatus = executeResult(process.execPath, [
+        managerPath,
+        'status',
+        '--root', mainRepository,
+        '--all',
+        '--fetch',
+        '--strict',
+      ]);
+      expect(invalidReceiptStatus.status).not.toBe(0);
+      expect(parseLastJson(String(invalidReceiptStatus.stdout))).toMatchObject({
+        releaseReady: false,
+        variants: [expect.objectContaining({
+          gates: expect.objectContaining({ status: 'invalid', staleReasons: ['integrity_mismatch'] }),
+        })],
+      });
+      const repairedReceiptStatus = parseLastJson(execute(process.execPath, [
+        managerPath,
+        'status',
+        '--root', mainRepository,
+        '--all',
+        '--fetch',
+        '--verify',
+        '--strict',
+      ]));
+      expect(repairedReceiptStatus).toMatchObject({
+        releaseReady: true,
+        variants: [expect.objectContaining({ gates: expect.objectContaining({ status: 'passed', current: true }) })],
       });
 
       fs.writeFileSync(path.join(childWorktree, 'generic.txt'), 'reusable capability\n', 'utf8');
@@ -595,6 +661,58 @@ describe('Lumi variant release train', () => {
       ]));
       expect(git(beta.worktree, 'ls-remote', '--heads', beta.id, 'refs/heads/main')).toContain(betaPreparedHead);
       expect(fs.existsSync(releaseStateFile)).toBe(false);
+
+      const strictBeforeRemoteChange = parseLastJson(execute(process.execPath, [
+        managerPath,
+        'status',
+        '--root', mainRepository,
+        '--all',
+        '--fetch',
+        '--strict',
+      ]));
+      expect(strictBeforeRemoteChange.releaseReady).toBe(true);
+
+      const externalWriter = path.join(temporaryRoot, 'alpha-remote-writer');
+      execute('git', ['clone', alpha.childOrigin, externalWriter]);
+      git(externalWriter, 'config', 'user.name', 'External Variant Writer');
+      git(externalWriter, 'config', 'user.email', 'external-variant@localhost');
+      fs.writeFileSync(path.join(externalWriter, 'remote-only.txt'), 'advanced outside the cached worktree\n', 'utf8');
+      git(externalWriter, 'add', 'remote-only.txt');
+      git(externalWriter, 'commit', '-m', 'test: advance live remote only');
+      const liveRemoteHead = git(externalWriter, 'rev-parse', 'HEAD');
+      git(externalWriter, 'push', 'origin', 'main');
+
+      const cachedStatus = parseLastJson(execute(process.execPath, [
+        managerPath,
+        'status',
+        '--root', mainRepository,
+        '--all',
+      ]));
+      const cachedAlpha = cachedStatus.variants.find((variant: { id: string }) => variant.id === alpha.id);
+      expect(cachedAlpha).toMatchObject({
+        delivery: { remoteHead: alphaPreparedHead, remoteSource: 'cached' },
+        gates: { status: 'remote_check_required', current: false },
+      });
+      expect(cachedStatus.releaseReady).toBe(false);
+
+      const liveStatus = executeResult(process.execPath, [
+        managerPath,
+        'status',
+        '--root', mainRepository,
+        '--all',
+        '--fetch',
+        '--strict',
+      ]);
+      expect(liveStatus.status).not.toBe(0);
+      const liveReport = parseLastJson(String(liveStatus.stdout));
+      const liveAlpha = liveReport.variants.find((variant: { id: string }) => variant.id === alpha.id);
+      expect(liveAlpha).toMatchObject({
+        state: 'blocked',
+        delivery: { remoteHead: liveRemoteHead, remoteSource: 'live', localBehind: 1 },
+        gates: { status: 'stale', current: false },
+      });
+      expect(liveAlpha.blockers).toContain('remote_delivery_ahead');
+      expect(liveAlpha.gates.staleReasons).toContain('remote_commit_changed');
     } finally {
       const resolvedTemporaryRoot = path.resolve(temporaryRoot);
       if (resolvedTemporaryRoot.startsWith(path.resolve(os.tmpdir()))

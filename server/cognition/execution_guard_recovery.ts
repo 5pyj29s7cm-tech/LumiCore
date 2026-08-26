@@ -118,6 +118,18 @@ function redactReceiptDetail(value: unknown, maxLength = 180): string {
   return redacted.slice(0, maxLength);
 }
 
+/**
+ * Shared final-boundary sanitizer for compact user-visible diagnostics.
+ * Internal verifier prose is an implementation signal for automatic recovery,
+ * never a task blocker that should enter chat history or task feedback.
+ */
+export function sanitizeExecutionDiagnosticForPublicFeedback(
+  value: unknown,
+  maxLength = 500,
+): string {
+  return redactReceiptDetail(value, Math.max(1, Math.min(500, maxLength)));
+}
+
 function receiptTerminalLabel(record: ToolExecutionRecord): string {
   if (String(record.error || '').trim()) return 'failed';
   if (record.terminalVerification?.status) return record.terminalVerification.status;

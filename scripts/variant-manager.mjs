@@ -508,6 +508,140 @@ function clearReleaseState(filePath) {
   if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
 }
 
+function variantStateDirectory(coreRoot) {
+  const commonDirRaw = git(coreRoot, ['rev-parse', '--git-common-dir']).stdout;
+  return path.join(path.resolve(coreRoot, commonDirRaw), 'lumi');
+}
+
+function gateReceiptPath(coreRoot, id) {
+  return path.join(variantStateDirectory(coreRoot), 'variant-gate-receipts', `${normalizeVariantId(id)}.json`);
+}
+
+function receiptDigest(payload) {
+  return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+}
+
+function writeGateReceipt(coreRoot, payload) {
+  const filePath = gateReceiptPath(coreRoot, payload.variantId);
+  const receipt = {
+    ...payload,
+    integrity: {
+      algorithm: 'sha256',
+      digest: receiptDigest(payload),
+    },
+  };
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const temporaryPath = `${filePath}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(temporaryPath, `${JSON.stringify(receipt, null, 2)}\n`, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    });
+    fs.renameSync(temporaryPath, filePath);
+  } finally {
+    if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
+  }
+  return receipt;
+}
+
+function readGateReceipt(coreRoot, id) {
+  const filePath = gateReceiptPath(coreRoot, id);
+  if (!fs.existsSync(filePath)) return { filePath, receipt: null, valid: false, reason: 'not_recorded' };
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    const { integrity, ...payload } = parsed;
+    const structurallyValid = parsed.schemaVersion === 1
+      && parsed.variantId === normalizeVariantId(id)
+      && typeof parsed.coreCommit === 'string'
+      && typeof parsed.variantCommit === 'string'
+      && typeof parsed.remoteCommit === 'string'
+      && typeof parsed.completedAt === 'string'
+      && Array.isArray(parsed.gates)
+      && integrity?.algorithm === 'sha256'
+      && /^[0-9a-f]{64}$/.test(String(integrity.digest || ''));
+    if (!structurallyValid) return { filePath, receipt: parsed, valid: false, reason: 'invalid_schema' };
+    if (receiptDigest(payload) !== integrity.digest) {
+      return { filePath, receipt: parsed, valid: false, reason: 'integrity_mismatch' };
+    }
+    return { filePath, receipt: parsed, valid: true, reason: '' };
+  } catch {
+    return { filePath, receipt: null, valid: false, reason: 'invalid_json' };
+  }
+}
+
+function buildGateStatus(coreRoot, record, identity = {}) {
+  const stored = readGateReceipt(coreRoot, record.id);
+  const base = {
+    required: [...REQUIRED_GATES],
+    receiptPath: stored.filePath,
+  };
+  if (!stored.receipt) {
+    return { ...base, lastRun: 'not_run', status: stored.reason, current: false, staleReasons: [] };
+  }
+  if (!stored.valid) {
+    return {
+      ...base,
+      lastRun: stored.receipt.completedAt || 'unknown',
+      status: 'invalid',
+      current: false,
+      staleReasons: [stored.reason],
+    };
+  }
+
+  const receipt = stored.receipt;
+  const staleReasons = [];
+  const passedGates = new Set(receipt.gates
+    .filter(gate => gate && gate.status === 'passed')
+    .map(gate => gate.name));
+  if (REQUIRED_GATES.some(gate => !passedGates.has(gate))) staleReasons.push('required_gate_missing');
+  if (receipt.coreCommit !== identity.coreCommit) staleReasons.push('core_commit_changed');
+  if (receipt.variantCommit !== identity.variantCommit) staleReasons.push('variant_commit_changed');
+  if (identity.remoteSource !== 'live') {
+    return {
+      ...base,
+      lastRun: receipt.completedAt,
+      status: staleReasons.length ? 'stale' : 'remote_check_required',
+      current: false,
+      staleReasons,
+      source: receipt.source,
+      coreCommit: receipt.coreCommit,
+      variantCommit: receipt.variantCommit,
+      remoteCommit: receipt.remoteCommit,
+      receipts: receipt.gates,
+    };
+  }
+  if (receipt.remoteCommit !== identity.remoteCommit) staleReasons.push('remote_commit_changed');
+  return {
+    ...base,
+    lastRun: receipt.completedAt,
+    status: staleReasons.length ? 'stale' : 'passed',
+    current: staleReasons.length === 0,
+    staleReasons,
+    source: receipt.source,
+    coreCommit: receipt.coreCommit,
+    variantCommit: receipt.variantCommit,
+    remoteCommit: receipt.remoteCommit,
+    receipts: receipt.gates,
+  };
+}
+
+function recordGateReceipt(coreRoot, record, details) {
+  return writeGateReceipt(coreRoot, {
+    schemaVersion: 1,
+    variantId: record.id,
+    source: details.source,
+    coreRepository: record.metadata.upstream.repository,
+    coreCommit: details.coreCommit,
+    variantRepository: record.metadata.repository,
+    variantCommit: details.variantCommit,
+    remoteBranch: record.metadata.delivery.remoteBranch,
+    remoteCommit: details.remoteCommit,
+    completedAt: new Date().toISOString(),
+    gates: details.gates.map(gate => ({ ...gate })),
+  });
+}
+
 function releaseFailure(message, state) {
   return new VariantReleaseError(message, state);
 }
@@ -548,24 +682,36 @@ export function inspectVariantStatus(coreRootInput, record, options = {}) {
   if (record.currentBranch !== record.metadata.delivery.localBranch) blockers.push('delivery_branch_mismatch');
   const coreCommit = resolveOptionalCommit(coreRoot, record.metadata.upstream.branch);
   if (!coreCommit) blockers.push('core_branch_missing');
+  const coreRemoteCommit = options.liveRemote && coreCommit
+    ? remoteBranchHead(coreRoot, 'origin', record.metadata.upstream.branch)
+    : '';
+  if (coreRemoteCommit && coreCommit !== coreRemoteCommit) blockers.push('core_branch_not_at_remote_head');
+  const coreTargetCommit = coreRemoteCommit || coreCommit;
   if (git(coreRoot, ['status', '--porcelain']).stdout) blockers.push('core_worktree_dirty');
   if (git(record.worktree, ['status', '--porcelain']).stdout) blockers.push('variant_worktree_dirty');
-  if (coreCommit) validateCoreLineage(coreRoot, record, coreCommit, blockers);
+  if (coreTargetCommit) validateCoreLineage(coreRoot, record, coreTargetCommit, blockers);
   if (record.needsMigration) warnings.push('metadata_schema_upgrade_pending');
 
   if (options.fetch && remote) git(record.worktree, ['fetch', '--prune', remote], { label: `Fetch ${record.id}` });
   const head = resolveOptionalCommit(record.worktree, 'HEAD');
   const remoteDeliveryRef = remote ? `${remote}/${record.metadata.delivery.remoteBranch}` : '';
   const remoteDefaultRef = remote ? `${remote}/${record.metadata.delivery.defaultBranch}` : '';
-  const remoteDeliveryHead = remoteDeliveryRef ? resolveOptionalCommit(record.worktree, remoteDeliveryRef) : '';
-  const remoteDefaultHead = remoteDefaultRef ? resolveOptionalCommit(record.worktree, remoteDefaultRef) : '';
+  const remoteDeliveryHead = options.liveRemote && remote
+    ? remoteBranchHead(record.worktree, remote, record.metadata.delivery.remoteBranch)
+    : (remoteDeliveryRef ? resolveOptionalCommit(record.worktree, remoteDeliveryRef) : '');
+  const remoteDefaultHead = options.liveRemote && remote
+    ? (record.metadata.delivery.defaultBranch === record.metadata.delivery.remoteBranch
+      ? remoteDeliveryHead
+      : remoteBranchHead(record.worktree, remote, record.metadata.delivery.defaultBranch))
+    : (remoteDefaultRef ? resolveOptionalCommit(record.worktree, remoteDefaultRef) : '');
+  const remoteSource = options.liveRemote ? 'live' : 'cached';
   if (remote && !remoteDeliveryHead) blockers.push('remote_delivery_branch_missing');
   const localAhead = remoteDeliveryHead ? countCommits(record.worktree, `${remoteDeliveryHead}..${head}`) : null;
   const localBehind = remoteDeliveryHead ? countCommits(record.worktree, `${head}..${remoteDeliveryHead}`) : null;
   if (localBehind) blockers.push('remote_delivery_ahead');
   if (localAhead) warnings.push('local_delivery_not_pushed');
-  const coreBehind = coreCommit && resolveOptionalCommit(coreRoot, record.metadata.upstream.lastSyncedCommit)
-    ? countCommits(coreRoot, `${record.metadata.upstream.lastSyncedCommit}..${coreCommit}`)
+  const coreBehind = coreTargetCommit && resolveOptionalCommit(coreRoot, record.metadata.upstream.lastSyncedCommit)
+    ? countCommits(coreRoot, `${record.metadata.upstream.lastSyncedCommit}..${coreTargetCommit}`)
     : null;
   const defaultAligned = Boolean(remoteDefaultHead && remoteDefaultHead === head);
   if (!defaultAligned) warnings.push('remote_default_branch_stale');
@@ -576,6 +722,14 @@ export function inspectVariantStatus(coreRootInput, record, options = {}) {
   else if (localAhead || localBehind) state = 'delivery_out_of_sync';
   else if (!defaultAligned) state = 'default_branch_stale';
   else if (record.needsMigration) state = 'metadata_upgrade_required';
+
+  const gates = buildGateStatus(coreRoot, record, {
+    coreCommit: coreTargetCommit,
+    variantCommit: head,
+    remoteCommit: remoteDeliveryHead,
+    remoteSource,
+  });
+  if (gates.status === 'remote_check_required') warnings.push('live_remote_check_required');
 
   return {
     id: record.id,
@@ -598,6 +752,8 @@ export function inspectVariantStatus(coreRootInput, record, options = {}) {
       baselineCommit: record.metadata.upstream.baselineCommit,
       lastSyncedCommit: record.metadata.upstream.lastSyncedCommit,
       currentCommit: coreCommit,
+      remoteCommit: coreRemoteCommit || null,
+      targetCommit: coreTargetCommit,
       commitsBehind: coreBehind,
     },
     delivery: {
@@ -609,12 +765,13 @@ export function inspectVariantStatus(coreRootInput, record, options = {}) {
       defaultBranch: record.metadata.delivery.defaultBranch,
       head,
       remoteHead: remoteDeliveryHead,
+      remoteSource,
       defaultHead: remoteDefaultHead,
       localAhead,
       localBehind,
       defaultAligned,
     },
-    gates: { required: [...REQUIRED_GATES], lastRun: 'not_run' },
+    gates,
   };
 }
 
@@ -730,6 +887,30 @@ export function verifyVariant(worktree) {
   return receipts;
 }
 
+function verifyAndRecordCurrentVariant(coreRoot, record, status, source) {
+  if (status.state !== 'ready' || status.delivery.remoteSource !== 'live') {
+    throw new Error(`${record.id} cannot record a gate receipt until core, local delivery, and live remote heads are aligned.`);
+  }
+  const before = {
+    coreCommit: status.core.targetCommit,
+    variantCommit: status.delivery.head,
+    remoteCommit: status.delivery.remoteHead,
+  };
+  const gates = verifyVariant(record.worktree);
+  assertClean(coreRoot, 'Lumi main worktree');
+  assertClean(record.worktree, `${record.id} worktree`);
+  const after = {
+    coreCommit: resolveOptionalCommit(coreRoot, record.metadata.upstream.branch),
+    variantCommit: resolveOptionalCommit(record.worktree, 'HEAD'),
+    remoteCommit: remoteBranchHead(record.worktree, status.delivery.remote, record.metadata.delivery.remoteBranch),
+  };
+  if (Object.keys(before).some(key => before[key] !== after[key])) {
+    throw new Error(`${record.id} changed while verification gates were running; no gate receipt was recorded.`);
+  }
+  recordGateReceipt(coreRoot, record, { source, ...after, gates });
+  return buildGateStatus(coreRoot, record, { ...after, remoteSource: 'live' });
+}
+
 async function createVariant(rawOptions) {
   const options = await promptFor(rawOptions, [
     { key: 'name', label: '业务名称' },
@@ -796,9 +977,24 @@ async function createVariant(rawOptions) {
     git(paths.worktree, ['add', '--', '.lumi/variant.json', 'VARIANT_DEVELOPMENT.md']);
     git(paths.worktree, ['commit', '-m', `chore: initialize ${id} variant`], { label: `Initialize ${id}` });
   }
+  let gateReceipt = null;
   if (!options['skip-push']) {
-    verifyVariant(paths.worktree);
+    const gates = verifyVariant(paths.worktree);
     git(paths.worktree, ['push', '-u', paths.remote, 'HEAD:main'], { label: `Publish ${id}` });
+    const record = findVariantWorktree(coreRoot, id);
+    const variantCommit = resolveOptionalCommit(paths.worktree, 'HEAD');
+    const durableReceipt = recordGateReceipt(coreRoot, record, {
+      source: 'variant_create',
+      coreCommit: baselineCommit,
+      variantCommit,
+      remoteCommit: remoteBranchHead(paths.worktree, paths.remote, 'main'),
+      gates,
+    });
+    gateReceipt = {
+      status: 'recorded',
+      completedAt: durableReceipt.completedAt,
+      integrity: durableReceipt.integrity,
+    };
   }
   if (!options['skip-open']) {
     const opened = runCode(['-n', paths.workspace], { cwd: paths.worktree, allowFailure: true });
@@ -815,6 +1011,7 @@ async function createVariant(rawOptions) {
     workspace: paths.workspace,
     repository: parsedRepository.repository,
     upstreamCommit: baselineCommit,
+    gateReceipt,
   });
 }
 
@@ -832,26 +1029,53 @@ function selectRecords(coreRoot, options) {
 async function statusVariants(rawOptions) {
   const coreRoot = resolveCoreRoot(rawOptions.root || process.cwd());
   const records = rawOptions.id ? [findVariantWorktree(coreRoot, rawOptions.id)] : discoverVariants(coreRoot);
-  const variants = records.map(record => inspectVariantStatus(coreRoot, record, { fetch: Boolean(rawOptions.fetch) }));
-  if (rawOptions.verify) {
-    for (let index = 0; index < records.length; index += 1) {
-      if (variants[index].blockers.length) {
-        variants[index].gates = { required: [...REQUIRED_GATES], lastRun: 'blocked', receipts: [] };
-        continue;
-      }
-      variants[index].gates = {
-        required: [...REQUIRED_GATES],
-        lastRun: 'passed',
-        receipts: verifyVariant(records[index].worktree),
-      };
+  const liveRemote = Boolean(rawOptions.fetch || rawOptions.verify || rawOptions.strict);
+  if (liveRemote) {
+    const branches = [...new Set(records.map(record => record.metadata.upstream.branch))];
+    for (const branch of branches) {
+      git(coreRoot, ['fetch', '--prune', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`], {
+        label: `Fetch Lumi core ${branch}`,
+      });
     }
   }
-  return writeResult({
+  const variants = records.map(record => inspectVariantStatus(coreRoot, record, {
+    fetch: liveRemote,
+    liveRemote,
+  }));
+  if (rawOptions.verify) {
+    for (let index = 0; index < records.length; index += 1) {
+      if (variants[index].state !== 'ready') {
+        variants[index].gates = {
+          ...variants[index].gates,
+          status: 'blocked',
+          current: false,
+          blockedBy: variants[index].blockers.length
+            ? [...variants[index].blockers]
+            : [variants[index].state],
+        };
+        continue;
+      }
+      variants[index].gates = verifyAndRecordCurrentVariant(
+        coreRoot,
+        records[index],
+        variants[index],
+        'status_verify',
+      );
+    }
+  }
+  const releaseReady = variants.every(variant => variant.state === 'ready' && variant.gates.current === true);
+  const result = writeResult({
     ok: variants.every(variant => variant.blockers.length === 0),
+    releaseReady,
     command: 'status',
+    liveRemote,
     coreRoot,
     variants,
   });
+  if (rawOptions.strict && !releaseReady) {
+    throw new Error('Variant release gate failed: every variant must be ready with a current live-remote gate receipt.');
+  }
+  return result;
 }
 
 function syncPlan(coreRoot, record) {
@@ -995,6 +1219,10 @@ async function syncVariants(rawOptions) {
   assertClean(coreRoot, 'Lumi main worktree');
   git(coreRoot, ['pull', '--ff-only', 'origin', 'main'], { label: 'Fast-forward Lumi main' });
   const releaseCoreCommit = git(coreRoot, ['rev-parse', 'main']).stdout;
+  const releaseCoreRemoteCommit = remoteBranchHead(coreRoot, 'origin', 'main');
+  if (releaseCoreRemoteCommit !== releaseCoreCommit) {
+    throw new Error('Lumi main must exactly match the live origin/main head before variants can be synchronized.');
+  }
   records = selectRecords(coreRoot, options);
   for (const record of records) assertReleaseReady(coreRoot, record);
   const snapshots = new Map(records.map(record => [record.id, worktreeSnapshot(record)]));
@@ -1191,6 +1419,19 @@ async function syncVariants(rawOptions) {
         receipt.remoteAfter = receipt.variantCommit;
         receipt.publicationStatus = receipt.remoteBefore === receipt.variantCommit ? 'already_published' : 'published';
       }
+      const record = findVariantWorktree(coreRoot, receipt.id);
+      const durableReceipt = recordGateReceipt(coreRoot, record, {
+        source: 'variant_sync',
+        coreCommit: releaseCoreCommit,
+        variantCommit: receipt.variantCommit,
+        remoteCommit: receipt.remoteAfter,
+        gates: receipt.gates,
+      });
+      receipt.gateReceipt = {
+        status: 'recorded',
+        completedAt: durableReceipt.completedAt,
+        integrity: durableReceipt.integrity,
+      };
     }
   }
   return writeResult({
@@ -1212,6 +1453,10 @@ async function publishDefaultBranch(rawOptions) {
   const coreRoot = resolveCoreRoot(options.root || process.cwd());
   const record = findVariantWorktree(coreRoot, options.id);
   assertReleaseReady(coreRoot, record);
+  const currentCoreCommit = resolveOptionalCommit(coreRoot, record.metadata.upstream.branch);
+  if (record.metadata.upstream.lastSyncedCommit !== currentCoreCommit) {
+    throw new Error(`${record.id} must absorb the current Lumi core commit before its default branch can be published.`);
+  }
   const remote = findVariantRemote(coreRoot, record, false);
   if (!remote) throw new Error(`${record.id} repository remote is missing.`);
   const { remoteBranch, defaultBranch } = record.metadata.delivery;
@@ -1254,7 +1499,12 @@ async function publishDefaultBranch(rawOptions) {
       publishedCommit: head,
       status: 'already_aligned',
       trackingUpdated: !options['dry-run'] && !trackingAligned,
-      gates: { required: [...REQUIRED_GATES], lastRun: 'not_needed' },
+      gates: buildGateStatus(coreRoot, record, {
+        coreCommit: currentCoreCommit,
+        variantCommit: head,
+        remoteCommit: remoteBranchHead(record.worktree, remote, defaultBranch),
+        remoteSource: 'live',
+      }),
     });
   }
 
@@ -1342,6 +1592,17 @@ async function publishDefaultBranch(rawOptions) {
       recovery: `Rerun publish-default for ${record.id}; it will repair tracking without creating another metadata commit.`,
     });
   }
+  const refreshedRecord = {
+    ...record,
+    ...readMetadata(record.worktree, record.currentBranch),
+  };
+  const gateReceipt = recordGateReceipt(coreRoot, refreshedRecord, {
+    source: 'publish_default',
+    coreCommit: currentCoreCommit,
+    variantCommit: publishedCommit,
+    remoteCommit: remoteBranchHead(record.worktree, remote, defaultBranch),
+    gates,
+  });
   return writeResult({
     ok: true,
     command: 'publish-default',
@@ -1352,6 +1613,11 @@ async function publishDefaultBranch(rawOptions) {
     defaultBranch,
     fastForward: true,
     gates,
+    gateReceipt: {
+      status: 'recorded',
+      completedAt: gateReceipt.completedAt,
+      integrity: gateReceipt.integrity,
+    },
   });
 }
 

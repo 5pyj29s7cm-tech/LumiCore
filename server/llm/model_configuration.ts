@@ -19,6 +19,8 @@ import {
 } from './generation_preferences';
 import { ensureLocalModelReady, getLocalModelConfig } from './local_models';
 import { makeLLMCall, makeLLMCallDirect } from './providers';
+import { dispatchLLMCall } from './dispatch';
+import { compileReasoningFailoverCandidates } from './failover_policy';
 import { rerankConfiguredDocuments } from './rerank_provider';
 import {
   DEFAULT_EMBEDDING_MODELS,
@@ -523,5 +525,71 @@ export async function testLumiModelConfiguration(
     verification: 'adapter_and_credentials',
     artifactGenerated: false,
     latencyMs: Date.now() - startedAt,
+  };
+}
+
+/**
+ * Local-admin diagnostic for the real reasoning failover path. It never
+ * changes preferences. The synthetic primary is rejected locally before any
+ * network request; an authorized alternate candidate must then complete a
+ * real, bounded model call through the production dispatcher. The successful
+ * candidate receives only the same health accounting as an ordinary call.
+ */
+export async function testLumiModelFailoverConfiguration(
+  userId: string,
+  llm: TestableModelRuntime = {},
+): Promise<Record<string, unknown>> {
+  const uid = userId || 'anonymous';
+  const preference = getUserPreferredLLM(uid);
+  const fallbackCandidates = compileReasoningFailoverCandidates({
+    primaryProvider: preference.provider,
+    primaryModel: preference.model,
+    explicitCandidates: preference.fallbackCandidates,
+    preferences: preference,
+  });
+  if (fallbackCandidates.length === 0) {
+    throw new Error('No authorized alternate reasoning model is configured for the failover probe');
+  }
+  const startedAt = Date.now();
+  const result = await dispatchLLMCall(
+    [{ role: 'user', content: 'Reply with only OK.' }],
+    [],
+    {
+      provider: '__lumi_forced_unavailable_primary__',
+      model: '__lumi_forced_unavailable_model__',
+      requestedProvider: preference.provider,
+      requestedModel: preference.model,
+      userId: uid,
+      selectionMode: 'ordered_fallback',
+      fallbackCandidates,
+      allowCloudFallback: preference.allowCloudFallback,
+      maxTokens: 8,
+    },
+    {
+      getDeepSeek: llm.getDeepSeek || (() => null),
+      getGemini: llm.getGemini || (() => null),
+      getOpenAI: llm.getOpenAI || (() => null),
+      getAnthropic: llm.getAnthropic || (() => null),
+      getQwen: llm.getQwen || (() => null),
+      getOllama: llm.getOllama || (() => null),
+      getLmStudio: llm.getLmStudio || (() => null),
+      getArk: llm.getArk || (() => null),
+      getXiaomi: llm.getXiaomi || (() => null),
+      getKimi: llm.getKimi || (() => null),
+      getGlm: llm.getGlm || (() => null),
+      getRelay: llm.getRelay || (() => null),
+    },
+  );
+  return {
+    ok: true,
+    requestedProvider: result.routing.requestedProvider,
+    requestedModel: result.routing.requestedModel,
+    provider: result.routing.selectedProvider,
+    model: result.routing.selectedModel,
+    selectionMode: result.routing.selectionMode,
+    fallbackReason: result.routing.fallbackReason,
+    attempts: result.routing.attempts,
+    latencyMs: Date.now() - startedAt,
+    verification: 'live_forced_primary_failure_failover',
   };
 }

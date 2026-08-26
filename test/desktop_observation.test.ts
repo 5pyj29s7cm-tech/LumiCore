@@ -4,6 +4,15 @@ import {
   formatDesktopObservationResult,
 } from '../server/cognition/desktop_observation';
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
+import { buildToolExecutionEnvelope } from '../server/tools/execution_envelope';
+
+const verifiedTerminalReceipt = {
+  terminalVerification: {
+    status: 'verified' as const,
+    strategy: 'terminal_receipt' as const,
+    reason: 'Fresh desktop snapshot returned by the connected desktop client.',
+  },
+};
 
 describe('desktop observation routing', () => {
   it('targets a named installed application without turning the check into app control', () => {
@@ -69,12 +78,34 @@ describe('desktop observation routing', () => {
     }]);
   });
 
+  it.each([
+    'Explain the Java memory model.',
+    'Summarize this disk scheduling algorithm.',
+    'Compare CPU architectures.',
+    'Explain process state in operating systems.',
+    '\u89e3\u91ca\u8fdb\u7a0b\u72b6\u6001\u8f6c\u6362\u539f\u7406\u3002',
+    'How does the CPU scheduler currently work?',
+    '\u73b0\u5728\u89e3\u91ca\u4e00\u4e0b\u5185\u5b58\u7ba1\u7406\u7b97\u6cd5\u3002',
+  ])('does not turn a conceptual system question into a live desktop probe: %s', (text) => {
+    expect(buildDesktopObservationPlan(text)).toEqual([]);
+  });
+
+  it('still routes an explicitly live local resource check to system observation', () => {
+    expect(buildDesktopObservationPlan(
+      'Check this computer\'s current CPU, memory, and disk usage.',
+    )).toEqual([{
+      name: 'desktop_system_info',
+      arguments: {},
+    }]);
+  });
+
   it('formats an active window and desktop file count from fresh receipts', () => {
     const taskText = '\u5148\u67e5\u770b\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\uff0c\u518d\u5217\u51fa\u684c\u9762\u6587\u4ef6\uff0c\u6700\u540e\u544a\u8bc9\u6211\u7a97\u53e3\u6807\u9898\u548c\u6587\u4ef6\u6570\u91cf\u3002';
     const records = [{
       name: 'desktop_active_window',
       arguments: {},
       result: '{"title":"WPS Writer","process_name":"wps.exe","pid":9988}',
+      ...verifiedTerminalReceipt,
     }, {
       name: 'desktop_list_files',
       arguments: { path: '~/Desktop', limit: 100 },
@@ -83,6 +114,7 @@ describe('desktop observation routing', () => {
         { name: 'b.lnk', path: 'C:\\Users\\tester\\Desktop\\b.lnk', type: 'file' },
         { name: 'folder', path: 'C:\\Users\\tester\\Desktop\\folder', type: 'directory' },
       ]),
+      ...verifiedTerminalReceipt,
     }];
 
     const text = formatDesktopObservationResult(records, taskText);
@@ -101,6 +133,98 @@ describe('desktop observation routing', () => {
     expect(finalized.text).toBe(text);
   });
 
+  it('preserves successful facts but blocks a partial multi-probe observation', () => {
+    const taskText = 'Show the current active window and list desktop files.';
+    const records = [{
+      name: 'desktop_active_window',
+      arguments: {},
+      result: '{"title":"LumiCore Settings","process_name":"lumi-core.exe","pid":7788}',
+      terminalVerification: {
+        status: 'verified' as const,
+        strategy: 'terminal_receipt' as const,
+        reason: 'Active-window snapshot returned by the connected client.',
+      },
+    }];
+
+    const text = formatDesktopObservationResult(records, taskText);
+    expect(text).toContain('partial fresh evidence');
+    expect(text).toContain('Active window: LumiCore Settings');
+    expect(text).toContain('desktop_list_files');
+    expect(text).not.toContain('check completed');
+
+    const finalized = finalizeLumiResponse({
+      taskText,
+      responseText: 'Both checks are complete.',
+      toolRecords: records,
+      source: 'chat',
+    });
+    expect(finalized.blocked).toBe(true);
+    expect(finalized.reason).toContain('Missing desktop evidence for the requested live observation');
+    expect(finalized.reason).toContain('desktop_list_files');
+    expect(finalized.text).toContain('Active window: LumiCore Settings');
+    expect(finalized.text).toContain('partial fresh evidence');
+  });
+
+  it.each(['unverified', 'failed'] as const)(
+    'does not accept an explicitly %s desktop receipt as fresh evidence',
+    status => {
+      const taskText = 'Show the current active window.';
+      const records = [{
+        name: 'desktop_active_window',
+        arguments: {},
+        result: '{"title":"Fabricated Window","process_name":"fake.exe"}',
+        terminalVerification: {
+          status,
+          strategy: 'terminal_receipt' as const,
+          reason: 'The observation could not be verified.',
+        },
+      }];
+
+      expect(formatDesktopObservationResult(records, taskText)).toBeNull();
+      const finalized = finalizeLumiResponse({
+        taskText,
+        responseText: 'The active window is Fabricated Window.',
+        toolRecords: records,
+        source: 'chat',
+      });
+      expect(finalized.blocked).toBe(true);
+      expect(finalized.reason).toContain('Missing desktop evidence for the requested live observation');
+      expect(finalized.text).not.toContain('Fabricated Window');
+    },
+  );
+
+  it('accepts canonical envelope verification when the legacy terminal projection is absent', () => {
+    const verifiedRecord = {
+      name: 'desktop_active_window',
+      arguments: {},
+      result: '{"title":"LumiCore","process_name":"lumi-core.exe","pid":7788}',
+      ...verifiedTerminalReceipt,
+    };
+    const records = [{
+      name: verifiedRecord.name,
+      arguments: verifiedRecord.arguments,
+      result: verifiedRecord.result,
+      envelope: buildToolExecutionEnvelope(verifiedRecord),
+    }];
+
+    const text = formatDesktopObservationResult(records, 'Show the current active window.');
+    expect(text).toContain('Active window: LumiCore');
+  });
+
+  it('does not treat compatibility-inferred success as fresh desktop evidence', () => {
+    const legacyRecord = {
+      name: 'desktop_active_window',
+      arguments: {},
+      result: '{"title":"Unverified Window","process_name":"legacy.exe","pid":7788}',
+    };
+    const records = [{
+      ...legacyRecord,
+      envelope: buildToolExecutionEnvelope(legacyRecord),
+    }];
+
+    expect(formatDesktopObservationResult(records, 'Show the current active window.')).toBeNull();
+  });
+
   it('labels a process report as a point-in-time sample without diagnosing a leak or hang', () => {
     const text = formatDesktopObservationResult([{
       name: 'desktop_running_processes',
@@ -111,6 +235,7 @@ describe('desktop observation routing', () => {
           { pid: 12, name: 'wps.exe', memory_mb: 800 },
         ],
       }),
+      ...verifiedTerminalReceipt,
     }], '做个桌面程序检查');
 
     expect(text).toContain('运行快照');
@@ -177,14 +302,17 @@ describe('desktop observation routing', () => {
       name: 'desktop_active_window',
       arguments: {},
       result: '{"title":"LumiCore","process_name":"lumi-core.exe","pid":3928,"width":1920,"height":1080}',
+      ...verifiedTerminalReceipt,
     }, {
       name: 'desktop_running_processes',
       arguments: { top: 20 },
       result: '[{"name":"lumi-core.exe"},{"name":"msedge.exe"}]',
+      ...verifiedTerminalReceipt,
     }, {
       name: 'desktop_idle_time',
       arguments: {},
       result: '{"idle_seconds":160}',
+      ...verifiedTerminalReceipt,
     }];
     const taskText = '\u53ea\u8bfb\u53d6\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\u548c\u684c\u9762\u8fd0\u884c\u72b6\u6001';
     const text = formatDesktopObservationResult(records, taskText);
@@ -210,10 +338,12 @@ describe('desktop observation routing', () => {
       name: 'desktop_running_processes',
       arguments: { top: 240 },
       result: '[{"name":"explorer.exe"},{"name":"ChatGPT.exe"},{"name":"claude.exe"}]',
+      ...verifiedTerminalReceipt,
     }, {
       name: 'desktop_list_apps',
       arguments: { limit: 200 },
       result: '[{"app_id":"codex","label":"Codex","path":"C:\\\\Users\\\\tester\\\\Desktop\\\\Codex.lnk"},{"app_id":"autocad","label":"AutoCAD"}]',
+      ...verifiedTerminalReceipt,
     }];
 
     const text = formatDesktopObservationResult(
@@ -233,10 +363,12 @@ describe('desktop observation routing', () => {
       name: 'desktop_running_processes',
       arguments: {},
       result: '[{"name":"claude.exe"},{"name":"Claude.exe"},{"name":"codex.exe"}]',
+      ...verifiedTerminalReceipt,
     }, {
       name: 'desktop_list_apps',
       arguments: {},
       result: '[{"app_id":"claude","label":"Claude","path":"C:\\\\Claude.exe"},{"app_id":"claude","label":"Claude","path":"C:\\\\Claude.lnk"},{"app_id":"vscode","label":"Visual Studio Code","path":"C:\\\\.codex\\\\Code.exe"},{"app_id":"lmstudio","label":"LM Studio","path":"C:\\\\LM Studio.exe"}]',
+      ...verifiedTerminalReceipt,
     }];
 
     const text = formatDesktopObservationResult(
@@ -259,6 +391,7 @@ describe('desktop observation routing', () => {
         { name: '说明.txt', path: 'C:\\Users\\tester\\Desktop\\说明.txt', type: 'file' },
         { name: '项目', path: 'C:\\Users\\tester\\Desktop\\项目', type: 'directory' },
       ]),
+      ...verifiedTerminalReceipt,
     }];
 
     const text = formatDesktopObservationResult(records, '你看一下，我现在桌面上有多少个软件。');

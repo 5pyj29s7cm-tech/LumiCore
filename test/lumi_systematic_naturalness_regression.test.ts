@@ -30,6 +30,14 @@ import { normalizeVoiceHistory, normalizeVoiceHistoryRecord } from '../server/so
 import { registerExternalAppTools } from '../server/tools/definitions/external_app_tools';
 import { isToolNameAllowedByPolicy, ToolRegistry, toolRegistry } from '../server/tools/registry';
 
+const verifiedDesktopReceipt = {
+  terminalVerification: {
+    status: 'verified' as const,
+    strategy: 'terminal_receipt' as const,
+    reason: 'Fresh desktop snapshot returned by the connected desktop client.',
+  },
+};
+
 describe('systematic naturalness regressions', () => {
   beforeAll(async () => {
     await initDatabase();
@@ -99,6 +107,7 @@ describe('systematic naturalness regressions', () => {
         { pid: 2, name: 'chrome.exe' },
         { pid: 3, name: 'Weixin.exe' },
       ]),
+      ...verifiedDesktopReceipt,
     }], text);
     expect(answer).toContain('3 个活跃进程条目');
     expect(answer).toContain('2 个进程名称');

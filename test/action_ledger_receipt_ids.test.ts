@@ -4,6 +4,7 @@ import {
   archiveBoundConversationActionReceipts,
   appendConversationActionReceipts,
   repairContradictoryConversationActionReceipts,
+  repairTerminalConversationActionTaskLeases,
   type ConversationActionTaskRow,
 } from '../server/conversation/action_ledger';
 import {
@@ -37,6 +38,50 @@ function task(id: string): ConversationActionTaskRow {
 }
 
 describe('conversation action receipt ids', () => {
+  function contradictoryReceipt(
+    basis: 'terminal_verification' | 'compatibility_inference' | undefined,
+    mutateEnvelope?: (envelope: Record<string, any>) => void,
+  ) {
+    const taskId = 'task-contradictory';
+    const turnId = 'turn-contradictory';
+    const requestId = 'request-contradictory';
+    const idempotencyKey = 'idempotency-contradictory';
+    const toolName = 'controlled_probe';
+    const targetIdentity = 'target-contradictory';
+    const envelope: Record<string, any> = {
+      version: 1,
+      status: 'failed',
+      toolName,
+      taskId,
+      turnId,
+      requestId,
+      idempotencyKey,
+      targetIdentity,
+      completedAt: '2026-08-16T00:00:01.000Z',
+      result: { ok: true, status: 'completed', failed: 0 },
+      verification: {
+        status: 'verified',
+        ...(basis ? { basis } : {}),
+        reason: 'Structured terminal verification succeeded.',
+      },
+    };
+    mutateEnvelope?.(envelope);
+    return {
+      id: 'receipt-contradictory',
+      taskId,
+      conversationId: 'conversation-1',
+      turnId,
+      requestId,
+      idempotencyKey,
+      toolName,
+      targetIdentity,
+      inputDigest: 'input-digest',
+      envelope: JSON.stringify(envelope),
+      outcome: 'failed',
+      createdAt: '2026-08-16T00:00:01.000Z',
+    };
+  }
+
   it('allocates a new durable row id when one tool record is associated with another task', () => {
     const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
     const record = { id: 'tool-call-1', name: 'write_file', arguments: { path: 'result.md' }, result: 'ok' };
@@ -181,7 +226,71 @@ describe('conversation action receipt ids', () => {
       updatedAt: '2026-08-17T00:01:00.000Z',
     });
 
-    expect(cancelled).toMatchObject({ status: 'cancelled', latestBlocker: '', unfinished: false });
+    expect(cancelled).toMatchObject({
+      status: 'cancelled',
+      latestBlocker: '',
+      unfinished: false,
+      activeRequestId: undefined,
+    });
+  });
+
+  it('never exposes a request lease on completed continuation state', () => {
+    const completed = normalizeConversationActionState({
+      version: 2,
+      taskId: 'task-completed-with-stale-lease',
+      status: 'completed',
+      receipts: [],
+      revision: 2,
+      goal: 'open the requested document',
+      latestInstruction: 'open the requested document',
+      unfinished: true,
+      activeRequestId: 'request-must-be-cleared',
+      updatedAt: '2026-08-17T00:01:00.000Z',
+    });
+
+    expect(completed).toMatchObject({
+      status: 'completed',
+      unfinished: false,
+      activeRequestId: undefined,
+    });
+  });
+
+  it('repairs historical terminal task leases without changing completion ordering', () => {
+    const completedTask = task('task-completed-stale-row');
+    completedTask.status = 'completed';
+    completedTask.activeRequestId = 'request-stale';
+    completedTask.completedAt = '2026-08-16T00:00:05.000Z';
+    completedTask.updatedAt = '2026-08-16T00:00:05.000Z';
+    completedTask.context = JSON.stringify({
+      actionState: {
+        version: 2,
+        taskId: completedTask.id,
+        status: 'completed',
+        receipts: [],
+        revision: 1,
+        goal: completedTask.goal,
+        latestInstruction: completedTask.goal,
+        unfinished: false,
+        activeRequestId: 'request-stale',
+        updatedAt: completedTask.updatedAt,
+      },
+    });
+    const db: any = { conversationActionTasks: [completedTask], conversationActionReceipts: [] };
+
+    expect(repairTerminalConversationActionTaskLeases(db)).toBe(1);
+    expect(completedTask).toMatchObject({
+      status: 'completed',
+      activeRequestId: '',
+      updatedAt: '2026-08-16T00:00:05.000Z',
+      completedAt: '2026-08-16T00:00:05.000Z',
+      revision: 2,
+    });
+    expect(JSON.parse(String(completedTask.context)).actionState).toMatchObject({
+      status: 'completed',
+      unfinished: false,
+    });
+    expect(JSON.parse(String(completedTask.context)).actionState.activeRequestId).toBeUndefined();
+    expect(repairTerminalConversationActionTaskLeases(db)).toBe(0);
   });
 
   it('repairs an already-persisted cancelled task that still has a confirmation blocker', () => {
@@ -212,5 +321,30 @@ describe('conversation action receipt ids', () => {
     expect(repairContradictoryConversationActionReceipts(db)).toBe(1);
     expect(cancelledTask.blocker).toBe('');
     expect(JSON.parse(String(cancelledTask.context)).actionState.latestBlocker).toBe('');
+  });
+
+  it('repairs a contradictory receipt only when the full durable identity has explicit terminal verification', () => {
+    const verifiedDb: any = {
+      conversationActionTasks: [],
+      conversationActionReceipts: [contradictoryReceipt('terminal_verification')],
+    };
+    expect(repairContradictoryConversationActionReceipts(verifiedDb)).toBe(1);
+    expect(verifiedDb.conversationActionReceipts[0].outcome).toBe('verified_success');
+    expect(JSON.parse(verifiedDb.conversationActionReceipts[0].envelope)).toMatchObject({
+      status: 'verified_success',
+      verification: { status: 'verified', basis: 'terminal_verification' },
+    });
+
+    for (const receipt of [
+      contradictoryReceipt(undefined),
+      contradictoryReceipt('compatibility_inference'),
+      contradictoryReceipt('terminal_verification', envelope => { envelope.requestId = 'forged-request'; }),
+      contradictoryReceipt('terminal_verification', envelope => { envelope.toolName = 'forged-tool'; }),
+      contradictoryReceipt('terminal_verification', envelope => { envelope.status = 'verified_success'; }),
+    ]) {
+      const db: any = { conversationActionTasks: [], conversationActionReceipts: [receipt] };
+      expect(repairContradictoryConversationActionReceipts(db)).toBe(0);
+      expect(db.conversationActionReceipts[0].outcome).toBe('failed');
+    }
   });
 });

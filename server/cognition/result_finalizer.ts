@@ -3,7 +3,7 @@ import { guardCompletionClaims } from '../work_product/completion_guard';
 import type { ToolExecutionRecord } from '../tools/types';
 import type { LumiTurnFlow } from './turn_flow';
 import {
-  formatDesktopObservationResult,
+  evaluateDesktopObservationEvidence,
   requiresActiveWindowObservation,
 } from './desktop_observation';
 import {
@@ -470,7 +470,8 @@ function formatCompactBlockedResponse(input: LumiResultFinalizerInput, reason?: 
 }
 
 function formatGroundedDesktopEvidence(input: LumiResultFinalizerInput): string | null {
-  return formatDesktopObservationResult(input.toolRecords || [], resultTaskText(input));
+  const evidence = evaluateDesktopObservationEvidence(input.toolRecords || [], resultTaskText(input));
+  return evidence.complete ? evidence.text : null;
 }
 
 function parseDesktopOpenResult(record: ToolExecutionRecord): Record<string, any> {
@@ -2259,13 +2260,45 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   // task. Do not let an unrelated auxiliary failure (for example a worker
   // attempting write_file after the process list was already returned)
   // overwrite that evidence with a generic incomplete-work guard.
-  const groundedDesktopObservation = formatGroundedDesktopEvidence(input);
-  if (groundedDesktopObservation) {
+  const desktopObservation = evaluateDesktopObservationEvidence(input.toolRecords || [], actionText);
+  if (desktopObservation.complete && desktopObservation.text) {
     return preserveModelWordingOnGroundedSuccess(input, {
-      text: groundedDesktopObservation,
+      text: desktopObservation.text,
       blocked: false,
       reason: 'Grounded desktop observation from current-turn tool receipts.',
     });
+  }
+  // A live desktop question is itself an execution contract. The model can
+  // answer it in factual prose without saying "I checked", so claim-wording
+  // heuristics alone are insufficient: accepting that prose would let a
+  // fabricated title/process/file count bypass the bounded recovery path.
+  // Require one usable current-turn receipt for every deterministic probe.
+  // Partial evidence remains visible, but it must not be promoted to complete;
+  // the stable reason prefix also enters the bounded same-turn recovery path.
+  if (desktopObservation.requested) {
+    const missing = desktopObservation.missingToolNames.join(', ');
+    const irrelevantEvidenceReason = guard.blocked && guard.reasonCode === 'successful_irrelevant_evidence'
+      ? guard.reason
+      : '';
+    const reason = [
+      `Missing desktop evidence for the requested live observation${missing ? `: ${missing}` : ''}.`,
+      irrelevantEvidenceReason,
+    ].filter(Boolean).join(' ');
+    const partialText = desktopObservation.text;
+    const blockedText = partialText
+      || (irrelevantEvidenceReason
+        ? guard.text
+        : formatCompactBlockedResponse(input, reason));
+    return {
+      text: blockedText,
+      blocked: true,
+      reason,
+      notification: {
+        type: 'work_product_guard',
+        level: 'warning',
+        message: reason,
+      },
+    };
   }
   const responseClaimsIncomplete = /(?:\u8fd8|\u5c1a|\u4ecd)?(?:\u6ca1\u6709|\u6ca1|\u672a|\u5e76\u672a|\u4e0d\u7b97|\u4e0d\u80fd\u8bf4)[^\u3002\uFF01\uFF1F.!?\n]{0,18}(?:\u5b8c\u6210|\u53d1\u9001|\u53d1\u51fa|\u6253\u5f00|\u8bfb\u53d6|\u751f\u6210)|\b(?:not|isn'?t|wasn'?t|didn'?t|incomplete|unfinished)\b[^.!?\n]{0,40}\b(?:complete|completed|sent|opened|read|created|generated)\b/iu
     .test(input.responseText || '');

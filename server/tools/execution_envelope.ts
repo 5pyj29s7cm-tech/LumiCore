@@ -72,10 +72,13 @@ export function buildToolExecutionEnvelope(
   );
   const succeeded = toolRecordSucceeded(record);
   const verificationRequired = record.capability?.verification.required === true;
-  const terminalVerified = !verificationRequired
-    || record.terminalVerification?.status === 'verified';
-  const verificationStatus = record.terminalVerification?.status
-    || (succeeded && terminalVerified ? 'verified' : succeeded ? 'unverified' : 'failed');
+  const terminalVerificationStatus = record.terminalVerification?.status;
+  const terminalVerified = terminalVerificationStatus === 'verified';
+  const compatibilitySuccess = terminalVerificationStatus === undefined
+    && !verificationRequired
+    && succeeded;
+  const verificationStatus = terminalVerificationStatus
+    || (succeeded ? 'unverified' : 'failed');
 
   let status: ToolExecutionEnvelope['status'];
   if (waitingConfirmation) status = 'waiting_confirmation';
@@ -83,7 +86,7 @@ export function buildToolExecutionEnvelope(
   else if (forbidden) status = 'forbidden';
   else if (((timeout || unknownOutcome) && externalCommit) || unverifiedExternalResult) status = 'unknown_outcome';
   else if (timeout) status = 'timeout';
-  else status = succeeded && terminalVerified ? 'verified_success' : 'failed';
+  else status = succeeded && (terminalVerified || compatibilitySuccess) ? 'verified_success' : 'failed';
 
   return {
     version: 1,
@@ -101,8 +104,13 @@ export function buildToolExecutionEnvelope(
     ...(rawError ? { error: rawError } : {}),
     verification: {
       status: verificationStatus,
+      basis: terminalVerificationStatus === undefined
+        ? 'compatibility_inference'
+        : 'terminal_verification',
       reason: record.terminalVerification?.reason
-        || (succeeded ? 'Terminal tool receipt satisfied the capability contract.' : rawError || status),
+        || (succeeded
+          ? 'Successful result recorded without explicit terminal verification.'
+          : rawError || status),
     },
   };
 }

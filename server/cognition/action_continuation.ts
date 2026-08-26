@@ -603,7 +603,7 @@ function summarizeToolCalls(history: ActionContinuationHistoryItem[]): string[] 
 }
 
 export function normalizeConversationActionState(
-  value: ConversationActionContinuationState | null | undefined,
+  value: Partial<ConversationActionContinuationState> | null | undefined,
 ): ConversationActionContinuationState | null {
   if (!value || typeof value !== 'object') return null;
   const goal = compact(value.goal, 700);
@@ -626,13 +626,19 @@ export function normalizeConversationActionState(
   const receiptCompletion = receipts.length > 0
     ? taskCompletionFromReceipts(goal, receipts)
     : null;
+  const unfinished = status === 'completed' || status === 'cancelled'
+    ? false
+    : Boolean(value.unfinished);
+  const requestLeaseActive = unfinished;
   return {
     version: Number(value.version) === 1 && !value.taskId ? 1 : 2,
     taskId: compact(value.taskId, 180) || undefined,
     status,
     policySnapshot: snapshotTaskPolicy(value.policySnapshot as ToolPolicy) || undefined,
     receipts,
-    activeRequestId: compact(value.activeRequestId, 180) || undefined,
+    activeRequestId: requestLeaseActive
+      ? compact(value.activeRequestId, 180) || undefined
+      : undefined,
     supersededTaskId: compact(value.supersededTaskId, 180) || undefined,
     revision: Math.max(0, Math.trunc(Number(value.revision) || 0)),
     goal,
@@ -645,7 +651,7 @@ export function normalizeConversationActionState(
     latestBlocker: status === 'completed' || status === 'waiting_confirmation' || status === 'cancelled'
       ? ''
       : compact(receiptCompletion?.blocker || value.latestBlocker, 380),
-    unfinished: Boolean(value.unfinished),
+    unfinished,
     evidenceTools: Array.from(new Set(Array.isArray(value.evidenceTools) ? value.evidenceTools : []))
       .map(name => compact(name, 120))
       .filter(Boolean)

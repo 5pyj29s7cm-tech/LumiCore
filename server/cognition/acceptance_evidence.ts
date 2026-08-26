@@ -6,10 +6,14 @@ import {
 } from '../agents/model_execution_graph';
 import { getJwtSecret } from '../config/local_identity';
 import type { CapabilityManifestEntry, ToolExecutionRecord } from '../tools/types';
+import {
+  inspectPersistedToolExecutionReceipt,
+  type PersistedToolExecutionReceiptExpectation,
+} from '../tools/persisted_execution_receipt';
 
 export type AcceptanceStage = 'registered' | 'available' | 'exercised' | 'verified';
 export type RuntimeSampleStatus = 'not_exercised' | 'unknown' | 'degraded' | 'verified';
-export type TaskRuntimeKind = 'background' | 'autonomous' | 'conversation';
+export type TaskRuntimeKind = 'background' | 'autonomous' | 'conversation' | 'scheduler';
 export type TaskTerminalOutcome = 'completed' | 'failed' | 'blocked' | 'cancelled';
 
 export interface TaskTerminalReceipt {
@@ -405,7 +409,7 @@ export function validateCompletionTerminalReceipt(
     !Array.isArray(receipt.evidenceRefs)
     || !Array.isArray(receipt.toolNames)
     || !Array.isArray(receipt.workerIds)
-    || !['background', 'autonomous', 'conversation'].includes(receipt.runtime)
+    || !['background', 'autonomous', 'conversation', 'scheduler'].includes(receipt.runtime)
     || !['completed', 'failed', 'blocked', 'cancelled'].includes(receipt.outcome)
     || !['verified', 'unverified', 'failed'].includes(receipt.verification)
     || !['tool', 'model_graph', 'mixed', 'none'].includes(receipt.evidenceKind)
@@ -466,7 +470,7 @@ export function buildTaskCompletionFeedback(
         ? 'failed'
         : trustedReceipt?.outcome === 'cancelled'
           ? 'cancelled'
-          : ['queued', 'pending', 'running', 'pausing', 'paused', 'cancelling', 'executing', 'planning'].includes(String(fallback?.status || ''))
+          : ['queued', 'pending', 'running', 'pausing', 'paused', 'cancelling', 'executing', 'planning', 'waiting_confirmation'].includes(String(fallback?.status || ''))
             ? 'working'
             : fallback?.status === 'blocked'
               ? 'blocked'
@@ -500,9 +504,97 @@ export function buildTaskCompletionFeedback(
   };
 }
 
-function receiptVerification(row: any): string {
-  const envelope = parseObject(row?.envelope);
-  return compact(envelope.verification?.status || envelope.terminalVerification?.status, 40).toLowerCase();
+function isRegisteredBackgroundDelegation(record: ToolExecutionRecord): boolean {
+  if (record.name !== 'agent_delegate_background' || record.error) return false;
+  try {
+    const result = JSON.parse(String(record.result || '{}'));
+    return result?.ok === true && result?.status === 'registered' && Boolean(result?.task?.id);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Build a structured foreground result without turning ordinary conversation
+ * into a fake task. Only an actual tool receipt, a blocked execution, or an
+ * explicit task lifecycle status produces feedback.
+ */
+export function buildForegroundTaskCompletionFeedback(input: {
+  taskId: string;
+  taskLabel: string;
+  toolRecords?: ToolExecutionRecord[];
+  blocked?: boolean;
+  reason?: string;
+  status?: 'waiting_confirmation' | 'cancelled' | 'persistence_unknown';
+}): TaskCompletionFeedback | undefined {
+  const records = input.toolRecords || [];
+  const label = compact(input.taskLabel, 200) || 'Task';
+  // Transport-owned lifecycle state outranks a registration-shaped tool
+  // payload. A late/duplicated delegation receipt must not turn cancellation,
+  // persistence uncertainty, or a confirmation wait back into "working".
+  if (input.status === 'waiting_confirmation') {
+    return {
+      status: 'working',
+      completed: records.length > 0 ? ['The requested action was prepared and recorded.'] : [],
+      evidence: boundedUnique(records.map(record => `Observed tool receipt: ${compact(record.name, 120)}`), 20),
+      incomplete: [`${label} is waiting for confirmation.`],
+      blockers: [],
+      nextSteps: ['Approve or reject the pending action to continue.'],
+    };
+  }
+  if (input.status !== 'cancelled' && input.status !== 'persistence_unknown') {
+    const registeredDelegation = records.find(isRegisteredBackgroundDelegation);
+    if (registeredDelegation) {
+      const verified = registeredDelegation.terminalVerification?.status === 'verified';
+      return {
+        status: 'working',
+        completed: [verified
+          ? 'Background delegation was registered with a verified durable task identity.'
+          : 'Background delegation registration was observed but is not machine-verified.'],
+        evidence: [verified
+          ? 'Verified tool receipt: agent_delegate_background'
+          : 'Observed unverified tool receipt: agent_delegate_background'],
+        incomplete: [`${label} is still running in the background.`],
+        blockers: [],
+        nextSteps: ['Track the delegated task until it publishes a verified terminal receipt.'],
+      };
+    }
+  }
+  if (records.length === 0 && !input.blocked && !input.status) return undefined;
+  const outcome: TaskTerminalOutcome = input.status === 'cancelled'
+    ? 'cancelled'
+    : input.blocked || input.status === 'persistence_unknown'
+      ? 'blocked'
+      : 'completed';
+  const receipt = buildTaskTerminalReceipt({
+    taskId: input.taskId,
+    runtime: 'conversation',
+    outcome,
+    toolRecords: records,
+    reasonCode: input.status === 'persistence_unknown'
+      ? 'terminal_persistence_unknown'
+      : input.status === 'cancelled'
+        ? 'task_cancelled'
+        : input.blocked
+          ? 'foreground_execution_blocked'
+          : undefined,
+    reason: input.reason,
+  });
+  return buildTaskCompletionFeedback(receipt, label, {
+    status: outcome,
+    reason: input.reason,
+    accepted: outcome === 'completed' && receipt.verification === 'verified',
+  });
+}
+
+function receiptVerification(
+  row: any,
+  expected: PersistedToolExecutionReceiptExpectation = {},
+): string {
+  const inspection = inspectPersistedToolExecutionReceipt(row, expected);
+  if (!inspection.valid) return 'unverified';
+  if (inspection.explicitlyTerminalVerified) return 'verified';
+  return inspection.verificationStatus === 'failed' ? 'failed' : 'unverified';
 }
 
 function capabilityAvailability(
@@ -549,11 +641,13 @@ export function buildCapabilityAcceptanceProjections(input: {
     const persisted = persistedByTool.get(entry.toolName) || { exercised: 0, verified: 0, latestOutcome: '', latestAt: '' };
     const metric = input.toolMetrics?.[entry.toolName] || {};
     const metricCalls = Math.max(0, Number(metric.calls) || 0);
-    const metricVerified = Math.max(0, Number(metric.outcomes?.verified_success) || 0);
     // Current-process metrics and persisted receipts can describe the same
     // execution. Use the larger lower bound instead of double-counting it.
     const exerciseCount = Math.max(persisted.exercised, metricCalls);
-    const verifiedCount = Math.max(persisted.verified, metricVerified);
+    // Process metrics record an outcome label, not the verification source.
+    // Only a persisted envelope explicitly produced by a terminal verifier can
+    // promote a capability to machine-verified acceptance.
+    const verifiedCount = persisted.verified;
     const exercised = exerciseCount > 0;
     const verified = verifiedCount > 0;
     const availability = capabilityAvailability(entry, input.mcpHealth || {});
@@ -706,6 +800,149 @@ function projectConversationTask(task: any, receipts: any[]): TaskAcceptanceProj
   };
 }
 
+function isVerifiedCurrentSchedulerCheckpoint(
+  row: any,
+  task: any,
+  context: Record<string, any>,
+  currentExecutionId: string,
+): boolean {
+  const envelope = parseObject(row?.envelope);
+  const result = parseObject(envelope.result);
+  const plan = parseObject(context.executionPlan);
+  const intent = parseObject(plan.intent);
+  const nodes = Array.isArray(plan.nodes) ? plan.nodes : [];
+  const expectedEvidence = Array.isArray(plan.expectedEvidence) ? plan.expectedEvidence : [];
+  const target = compact(context.scheduledTaskId || task?.target, 180);
+  const expectedCapabilityId = target ? `lumi.scheduler.${target}` : '';
+  const adapter = nodes.find((candidate: any) => (
+    compact(candidate?.toolName, 120) === 'scheduler_task_handler'
+    && compact(candidate?.capabilityId, 240) === expectedCapabilityId
+    && candidate?.executionRole === 'adapter'
+  ));
+  const evidenceContract = expectedEvidence.find((candidate: any) => (
+    compact(candidate?.nodeId, 180) === compact(adapter?.nodeId, 180)
+    && compact(candidate?.capabilityId, 240) === expectedCapabilityId
+  ));
+  const requiredFields = Array.isArray(evidenceContract?.requiredFields)
+    ? evidenceContract.requiredFields.map((value: unknown) => compact(value, 120))
+    : [];
+  const requiredValues = parseObject(evidenceContract?.requiredValues);
+
+  return Boolean(
+    currentExecutionId
+    && target
+    && compact(row?.taskId, 180) === compact(task?.id, 180)
+    && compact(row?.turnId, 180) === currentExecutionId
+    && compact(row?.requestId, 180) === currentExecutionId
+    && compact(row?.toolName, 120) === 'scheduler_task_handler'
+    && row?.outcome === 'verified_success'
+    && envelope.status === 'verified_success'
+    && compact(envelope.toolName, 120) === 'scheduler_task_handler'
+    && compact(envelope.taskId, 180) === currentExecutionId
+    && compact(envelope.turnId, 180) === currentExecutionId
+    && compact(envelope.requestId, 180) === currentExecutionId
+    && receiptVerification(row, {
+      rowTaskId: compact(task?.id, 180),
+      envelopeTaskId: currentExecutionId,
+      turnId: currentExecutionId,
+      requestId: currentExecutionId,
+      toolName: 'scheduler_task_handler',
+      outcome: 'verified_success',
+    }) === 'verified'
+    && compact(plan.taskId, 180) === currentExecutionId
+    && intent.kind === 'scheduled_task'
+    && compact(intent.target, 180) === target
+    && compact(task?.target, 180) === target
+    && compact(context.scheduledTaskId, 180) === target
+    && compact(task?.conversationId, 240) === `scheduler:${target}`
+    && adapter
+    && adapter.verificationStrategy === 'terminal_receipt'
+    && evidenceContract?.required === true
+    && evidenceContract.strategy === 'terminal_receipt'
+    && ['status', 'verified', 'scheduledTaskId'].every(field => requiredFields.includes(field))
+    && requiredValues.status === 'verified'
+    && requiredValues.verified === true
+    && compact(requiredValues.scheduledTaskId, 180) === target
+    && result.status === 'verified'
+    && result.verified === true
+    && compact(result.scheduledTaskId, 180) === target
+  );
+}
+
+function projectCompactSchedulerTask(task: any, receipts: any[], context: Record<string, any>): TaskAcceptanceProjection {
+  const taskReceipts = receipts.filter(row => row?.taskId === task?.id);
+  const audit = parseObject(context.schedulerAudit);
+  const currentExecution = parseObject(audit.currentExecution);
+  const currentExecutionId = compact(currentExecution.executionId, 180);
+  const currentReceipts = currentExecutionId
+    ? taskReceipts.filter(row => (
+        compact(row?.turnId, 180) === currentExecutionId
+        || compact(row?.requestId, 180) === currentExecutionId
+      ))
+    : [];
+  const verifiedCheckpoint = currentReceipts.some(row => (
+    isVerifiedCurrentSchedulerCheckpoint(row, task, context, currentExecutionId)
+  ));
+  const latest = [...currentReceipts].sort((left, right) => (
+    String(right?.createdAt || '').localeCompare(String(left?.createdAt || ''))
+  ))[0];
+  const currentOutcome = compact(currentExecution.status, 60).toLowerCase();
+  const status = currentOutcome === 'verified'
+    ? 'completed'
+    : currentOutcome || compact(task?.status || 'unknown', 60);
+  const accepted = currentOutcome === 'verified' && verifiedCheckpoint;
+  const diagnosticCode = accepted
+    ? 'scheduler_compact_checkpoint_verified'
+    : currentOutcome === 'verified'
+      ? currentReceipts.length > 0
+        ? 'scheduler_compact_checkpoint_unverified'
+        : 'scheduler_compact_checkpoint_missing'
+      : currentOutcome === 'executing'
+        ? 'not_terminal'
+        : currentOutcome
+          ? `scheduler_compact_${currentOutcome}`
+          : 'scheduler_compact_current_execution_missing';
+  const diagnosticReason = accepted
+    ? 'The latest compact scheduler execution is verified and the stable audit row has a verified checkpoint receipt.'
+    : currentOutcome === 'verified'
+      ? currentReceipts.length > 0
+        ? 'The latest compact scheduler execution has a checkpoint receipt, but that receipt is not verified.'
+        : 'The latest compact scheduler execution has no checkpoint receipt bound to its execution identity; an older checkpoint cannot verify the current run.'
+      : currentOutcome
+        ? `The latest compact scheduler execution outcome is ${currentOutcome}.`
+        : 'The compact scheduler audit row has no current execution identity.';
+  const terminalVerification: TaskAcceptanceProjection['terminalVerification'] = accepted
+    ? 'verified'
+    : ['failed', 'blocked', 'unknown'].includes(currentOutcome)
+      ? 'failed'
+      : latest
+        ? receiptVerification(latest) === 'failed' ? 'failed' : 'unverified'
+        : 'missing';
+  return {
+    taskId: compact(task?.id, 180),
+    runtime: 'scheduler',
+    status,
+    accepted,
+    terminalReceiptPresent: currentReceipts.length > 0,
+    terminalVerification,
+    diagnosticCode,
+    diagnosticReason,
+    updatedAt: compact(currentExecution.completedAt || currentExecution.startedAt || task?.updatedAt || task?.createdAt, 80),
+    continuity: {
+      goalPreserved: Boolean(compact(task?.goal || task?.target, 20)),
+      planPreserved: Boolean(parseObject(context.executionPlan).planId),
+      receiptLedgerPreserved: taskReceipts.length > 0,
+      blockerPreserved: !['blocked', 'failed', 'unknown'].includes(currentOutcome)
+        || Boolean(compact(task?.blocker || diagnosticReason, 20)),
+    },
+    completionFeedback: buildTaskCompletionFeedback(undefined, task?.goal || 'Scheduled task', {
+      status,
+      reason: diagnosticReason,
+      accepted,
+    }),
+  };
+}
+
 function scopeMatches(task: any, input: { userId?: string; domain?: 'personal' | 'work'; orgId?: string }): boolean {
   if (input.userId && task?.userId !== input.userId) return false;
   if (!input.domain) return true;
@@ -722,7 +959,12 @@ export function buildTaskAcceptanceProjections(db: any, input: {
   const actionReceipts = Array.isArray(db?.conversationActionReceipts) ? db.conversationActionReceipts : [];
   const conversation = (Array.isArray(db?.conversationActionTasks) ? db.conversationActionTasks : [])
     .filter((task: any) => scopeMatches(task, input))
-    .map((task: any) => projectConversationTask(task, actionReceipts));
+    .map((task: any) => {
+      const context = parseObject(task?.context);
+      return context.source === 'scheduler' && context.compactAudit === true
+        ? projectCompactSchedulerTask(task, actionReceipts, context)
+        : projectConversationTask(task, actionReceipts);
+    });
   const background = (Array.isArray(db?.backgroundDelegationTasks) ? db.backgroundDelegationTasks : [])
     .filter((task: any) => scopeMatches(task, input))
     .map((task: any) => projectDurableTask(task, 'background'));
