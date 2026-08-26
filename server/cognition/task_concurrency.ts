@@ -1,5 +1,6 @@
 import {
   classifyConversationActionFollowupIntent,
+  conversationActionRequiresFreshConfirmationReview,
   type ConversationActionContinuationState,
 } from './action_continuation';
 
@@ -92,7 +93,7 @@ const RETRY_ONLY_RE =
 // a fix. Generic referents bind to that action; concrete new objects do not.
 // i18n-allow: multilingual task-feedback recognition; not user-visible copy.
 const CONTINUE_ONLY_RE =
-  /^(?:(?:请|现在|那就|赶紧|快点)\s*)?(?:修|修复|处理|继续|接着|推进|执行|完成|做)(?:一下)?(?:它|这个|这些|上述|当前)?(?:问题|任务|工作|操作)?[了吧啊呀。！？.!?]*$|^(?:(?:please|now|then)\s+)?(?:fix|continue|resume|proceed|execute|finish|do)(?:\s+(?:it|this|these|that|the\s+(?:current\s+)?(?:issue|task|work)))?[.!?]*$/iu; // i18n-allow: multilingual task-feedback recognition; not user-visible copy.
+  /^(?:(?:请|现在|那就|赶紧|快点)\s*)?(?:修|修复|处理|清理|继续|接着|推进|执行|完成|做)(?:一下)?(?:它|这个|这些|上述|当前)?(?:问题|任务|工作|操作)?[了吧啊呀。！？.!?]*$|^(?:(?:please|now|then)\s+)?(?:fix|clean(?:\s+it)?|continue|resume|proceed|execute|finish|do)(?:\s+(?:it|this|these|that|the\s+(?:current\s+)?(?:issue|task|work)))?[.!?]*$/iu; // i18n-allow: multilingual task-feedback recognition; not user-visible copy.
 
 // Keep acceptance narrow. Longer action-bearing messages such as “好的，帮我
 // 写一份报告” are new work, while these terse replies bind to the adjacent
@@ -107,6 +108,8 @@ const ACCEPT_ONLY_RE =
 // i18n-allow: multilingual task-feedback recognition; not user-visible copy.
 const CORRECTION_RE =
   /^(?:(?:不对|错了|搞错了|弄错了|纠正一下|更正一下|不是这样)[，,:：\s]*|(?:no|wrong|that(?:'s| is)\s+wrong|correction)\b[,:\s]*).{1,500}$|^(?:把|将)(?:它|这个|那个|刚才的|上一步|当前步骤).{0,80}(?:改成|换成|更正为|调整为).{1,360}$|^(?:不是).{1,160}(?:而是|应该是).{1,320}$|^(?:(?:我说的|我的意思|刚才说的).{0,80}(?:是|要).{1,220}(?:不是|而不是).{1,220})$|^(?:change|correct|update)\s+(?:it|this|that|the\s+(?:last|current)\s+step)\b.{1,360}$|^(?:I\s+meant|what\s+I\s+meant\s+was)\b.{1,220}\b(?:not|instead\s+of)\b.{1,220}$/iu; // i18n-allow: multilingual task-feedback recognition; not user-visible copy.
+const TERSE_TARGET_CORRECTION_RE =
+  /^(?:不是|并不是|别用|不要用)(?:这|那|刚才|之前|当前)?(?:个|份|张|条)?\s*(?:文件|文档|PPT|演示文稿|表格|图片|资料|窗口|页面|应用|软件|路径|目录|版本|目标)?[^。！？!?]{0,160}[。！？!?]*$|^(?:no|wrong|not)\s+(?:this|that|the\s+(?:current|previous|last))?\s*(?:file|document|presentation|sheet|image|window|app|path|target)?[.!?]*$/iu; // i18n-allow: multilingual task-target correction recognition; not user-visible copy.
 
 function compact(value: unknown, limit = 180): string {
   return String(value || '').replace(/\s+/gu, ' ').trim().slice(0, limit);
@@ -124,10 +127,15 @@ function feedbackKind(
   if (REPLACE_RE.test(normalized)) return 'replace';
   if (CANCEL_ONLY_RE.test(normalized)) return 'cancel';
   if (RETRY_ONLY_RE.test(normalized)) return 'retry';
-  if (ACCEPT_ONLY_RE.test(normalized)) return 'accept';
+  if (ACCEPT_ONLY_RE.test(normalized)) {
+    return conversationActionRequiresFreshConfirmationReview(state) ? 'status' : 'accept';
+  }
   if (CONTINUE_ONLY_RE.test(normalized)) return 'continue';
 
-  if (CORRECTION_RE.test(normalized)) return 'correction';
+  if (
+    CORRECTION_RE.test(normalized)
+    || (state?.unfinished && TERSE_TARGET_CORRECTION_RE.test(normalized))
+  ) return 'correction';
 
   const followup = classifyConversationActionFollowupIntent(normalized, state);
   if (followup === 'status') return 'status';

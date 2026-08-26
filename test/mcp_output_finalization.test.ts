@@ -256,8 +256,12 @@ describe('MCP finalized output delivery', () => {
       finalized: true,
       blocked: true,
     });
-    expect(responseEvent?.[1].reason).toContain('in-app UI mutation');
+    expect(responseEvent?.[1].reason).toBe('execution_recovery_incomplete');
     expect(responseEvent?.[1].text).not.toBe('\u5df2\u5b8c\u6210\uff0c\u6587\u6863\u5df2\u5199\u597d\u3002');
+    expect(JSON.stringify(responseEvent?.[1])).not.toMatch(
+      /No successful current-turn tool execution|Missing in-app UI mutation evidence/u,
+    );
+    expect(mocks.runWithTools).toHaveBeenCalledTimes(2);
 
     const chunkEvents = broadcast.mock.calls.filter(([event]) => event === 'mcp:chunk');
     expect(chunkEvents).toHaveLength(1);
@@ -337,9 +341,15 @@ describe('MCP finalized output delivery', () => {
     vi.useFakeTimers();
     try {
       let resolveResponse!: (value: any) => void;
-      mocks.runWithTools.mockImplementation(() => new Promise(resolve => {
-        resolveResponse = resolve;
-      }));
+      mocks.runWithTools
+        .mockImplementationOnce(() => new Promise(resolve => {
+          resolveResponse = resolve;
+        }))
+        .mockResolvedValue({
+          text: '\u4ecd\u672a\u62ff\u5230\u53ef\u9a8c\u8bc1\u7684\u5ba2\u6237\u7aef\u64cd\u4f5c\u7ed3\u679c\u3002',
+          toolCalls: [falseSuccessRecord()],
+          usageRecords: [],
+        });
       const broadcast = vi.fn();
       const server = createLumiMcpServer(undefined, {} as any, broadcast);
       const pending = getHandler(server, 'lumi_chat')({ message: wpsContinuationTask() });
@@ -404,8 +414,12 @@ describe('MCP finalized output delivery', () => {
       blocked: true,
       toolCalls: 1,
     });
-    expect(payload.reason).toContain('in-app UI mutation');
+    expect(payload.reason).toBe('execution_recovery_incomplete');
     expect(payload.result).not.toBe('\u5df2\u5b8c\u6210\uff0c\u6587\u6863\u5df2\u5199\u597d\u3002');
+    expect(JSON.stringify(payload)).not.toMatch(
+      /No successful current-turn tool execution|Missing in-app UI mutation evidence/u,
+    );
+    expect(mocks.runWithTools).toHaveBeenCalledTimes(2);
     const context = mocks.runWithTools.mock.calls[0][11] as any;
     expect(context).toMatchObject({
       authenticated: false,
@@ -438,6 +452,11 @@ describe('MCP finalized output delivery', () => {
       totalAgentsUsed: 1,
     });
     mocks.aggregateWithLLM.mockResolvedValue('\u540e\u53f0\u4efb\u52a1\u5df2\u5b8c\u6210\uff0cWPS \u6587\u6863\u5df2\u5199\u597d\u3002');
+    mocks.runWithTools.mockResolvedValue({
+      text: '\u4ecd\u672a\u62ff\u5230\u53ef\u9a8c\u8bc1\u7684\u5ba2\u6237\u7aef\u64cd\u4f5c\u7ed3\u679c\u3002',
+      toolCalls: [],
+      usageRecords: [],
+    });
     const workScope = {
       userId: 'scoped-route-user',
       username: 'scoped-route-user',

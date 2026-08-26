@@ -1,5 +1,6 @@
 import { ToolRegistry } from '../registry';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
+import { assertValidCommandForHost } from '../command_platform';
 import { desktopFingerprintMatchesRequestedTarget } from '../../desktop/execution_plan';
 import crypto from 'node:crypto';
 
@@ -211,6 +212,7 @@ async function desktopRunCommand(args: Record<string, any>, context?: any): Prom
   if (!context?.desktopRelay) {
     throw new Error('Desktop tools require a Tauri frontend relay (not available in web mode)');
   }
+  assertValidCommandForHost(args.command, context.desktopPlatform || process.platform);
   return context.desktopRelay('desktop_run_command', {
     command: args.command || '',
     cwd: args.cwd || '',

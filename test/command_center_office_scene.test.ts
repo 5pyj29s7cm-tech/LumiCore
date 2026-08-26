@@ -89,7 +89,7 @@ describe('command center live agent office', () => {
     expect(chatPage).toContain('<div className="lumi-chat-voice-picker relative"');
     expect(chatPage).toContain('onClick={requestMeetingMode}');
     expect(chatPage).toContain("isOfficeCommandCenter ? 'hidden' : ''");
-    expect(taskWidget).toContain("const ACTIVE_TASK_STATUSES = new Set(['planning', 'executing', 'waiting_confirmation'])");
+    expect(taskWidget).toContain("const ACTIVE_TASK_STATUSES = new Set(['created', 'planning', 'executing', 'verifying', 'waiting_confirmation'])");
     expect(taskWidget).toContain('AnimatePresence');
     expect(taskWidget).toContain('view.visible &&');
     expect(taskWidget).toContain('primaryTask?.evidence.verified');

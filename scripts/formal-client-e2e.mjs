@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -10,8 +11,9 @@ import { bootstrapDesktopTestSession } from './lib/desktop-bootstrap.mjs';
 const INTERNAL_BLOCK_RE = /(?:No (?:successful|verified) current[- ]turn tool execution|这一轮没有记录到成功的真实工具执行|我还不能说正在执行|我需要先真正调用对应工具)/iu;
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
 const TERMINAL_BACKGROUND_STATUSES = new Set(['completed', 'blocked', 'failed', 'cancelled']);
+const CONFIRMATION_TEXT_RE = /^(?:确认|确定|同意|继续执行|yes|confirm|confirmed|proceed)[。.!！\s]*$/iu;
 
-class E2EError extends Error {
+export class E2EError extends Error {
   constructor(code) {
     super(code);
     this.name = 'E2EError';
@@ -39,6 +41,196 @@ export function parseWorkerReceiptCount(feedback) {
     if (match) return Math.max(0, Number.parseInt(match[1], 10) || 0);
   }
   return 0;
+}
+
+export function evidenceTextHash(value) {
+  return crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('hex');
+}
+
+function parseToolCalls(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string' || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function messageTransport(message) {
+  return String(message?.channel || message?.source || message?.mode || '').trim().toLowerCase();
+}
+
+export function findRuntimeTaskByMarker(runtime, marker) {
+  return (Array.isArray(runtime?.tasks) ? runtime.tasks : []).find(task => (
+    String(task?.goal || '').includes(String(marker || ''))
+  )) || null;
+}
+
+export function runtimeReceiptSignature(task) {
+  return (Array.isArray(task?.evidence?.latest) ? task.evidence.latest : [])
+    .map(receipt => [
+      String(receipt?.receiptId || ''),
+      String(receipt?.requestId || ''),
+      String(receipt?.toolName || ''),
+      String(receipt?.outcome || ''),
+      String(receipt?.verification || ''),
+    ].join(':'))
+    .sort()
+    .join('|');
+}
+
+export function buildLifecycleTurnEvidence({ messages, requestId, runtimeTask }) {
+  const records = Array.isArray(messages) ? messages : [];
+  const user = records.find(message => message?.role === 'user' && message?.requestId === requestId);
+  const assistant = records.find(message => message?.role === 'assistant' && message?.requestId === requestId);
+  const reply = messageText(assistant);
+  const receipts = (Array.isArray(runtimeTask?.evidence?.latest) ? runtimeTask.evidence.latest : [])
+    .filter(receipt => receipt?.requestId === requestId);
+  return {
+    requestId: String(requestId || ''),
+    taskId: String(runtimeTask?.taskId || ''),
+    taskRevision: Math.max(0, Number(runtimeTask?.revision) || 0),
+    taskStatus: String(runtimeTask?.status || ''),
+    userMessageId: String(user?.id || ''),
+    assistantMessageId: String(assistant?.id || ''),
+    receiptIds: receipts.map(receipt => String(receipt?.receiptId || '')).filter(Boolean),
+    receiptTools: receipts.map(receipt => String(receipt?.toolName || '')).filter(Boolean),
+    receiptLedger: {
+      signature: runtimeReceiptSignature(runtimeTask),
+      total: Math.max(0, Number(runtimeTask?.evidence?.total)
+        || (Array.isArray(runtimeTask?.evidence?.latest) ? runtimeTask.evidence.latest.length : 0)),
+    },
+    userFacingReply: {
+      persisted: Boolean(assistant && reply),
+      sha256: evidenceTextHash(reply),
+      characterCount: reply.length,
+      internalGuardLeaked: containsInternalExecutionBlock(reply),
+    },
+  };
+}
+
+export function validateCorrectionLifecycleEvidence(items) {
+  const evidence = Array.isArray(items) ? items : [];
+  if (evidence.length !== 4) return { ok: false, code: 'task_correction_evidence_count_invalid' };
+  const taskIds = new Set(evidence.map(item => String(item?.taskId || '')).filter(Boolean));
+  if (taskIds.size !== 1) return { ok: false, code: 'task_correction_identity_changed' };
+  if (evidence.some(item => !item?.requestId || !item?.userMessageId || !item?.assistantMessageId)) {
+    return { ok: false, code: 'task_correction_transcript_evidence_missing' };
+  }
+  if (evidence.some(item => !item?.userFacingReply?.persisted || item?.userFacingReply?.internalGuardLeaked)) {
+    return { ok: false, code: 'task_correction_reply_evidence_invalid' };
+  }
+  for (let index = 1; index < evidence.length; index += 1) {
+    if (Number(evidence[index]?.taskRevision) <= Number(evidence[index - 1]?.taskRevision)) {
+      return { ok: false, code: 'task_correction_revision_not_advanced' };
+    }
+  }
+  return { ok: true, code: '', taskId: [...taskIds][0], corrections: 3 };
+}
+
+export function validateStatusQueryNoReplay({ beforeTask, afterTask, turnEvidence, toolEventCount }) {
+  if (!beforeTask?.taskId || beforeTask.taskId !== afterTask?.taskId) {
+    return { ok: false, code: 'status_query_task_identity_changed' };
+  }
+  if (runtimeReceiptSignature(beforeTask) !== runtimeReceiptSignature(afterTask)) {
+    return { ok: false, code: 'status_query_replayed_receipt' };
+  }
+  if (Number(toolEventCount) !== 0 || (turnEvidence?.receiptIds || []).length !== 0) {
+    return { ok: false, code: 'status_query_executed_tool' };
+  }
+  if (!turnEvidence?.userFacingReply?.persisted || turnEvidence?.userFacingReply?.internalGuardLeaked) {
+    return { ok: false, code: 'status_query_reply_evidence_invalid' };
+  }
+  return { ok: true, code: '' };
+}
+
+export function validateCancellationLeaseRelease({ beforeTask, afterTask, turnEvidence }) {
+  if (!beforeTask?.taskId || beforeTask.taskId !== afterTask?.taskId) {
+    return { ok: false, code: 'task_cancel_identity_changed' };
+  }
+  if (afterTask?.status !== 'cancelled') return { ok: false, code: 'task_cancel_not_terminal' };
+  if (afterTask?.activeRequest !== false) return { ok: false, code: 'task_cancel_lease_not_released' };
+  if (!turnEvidence?.userFacingReply?.persisted || turnEvidence?.userFacingReply?.internalGuardLeaked) {
+    return { ok: false, code: 'task_cancel_reply_evidence_invalid' };
+  }
+  return { ok: true, code: '' };
+}
+
+export function validateManualVoiceConfirmationEvidence({
+  messages,
+  task,
+  taskId,
+  toolName,
+  expectedPath,
+  since,
+}) {
+  const sinceMs = new Date(since || 0).getTime();
+  const records = (Array.isArray(messages) ? messages : []).filter(message => {
+    const timestamp = new Date(message?.timestamp || 0).getTime();
+    return !Number.isFinite(sinceMs) || timestamp >= sinceMs;
+  });
+  const voiceUser = records.find(message => (
+    message?.role === 'user'
+    && /voice/.test(messageTransport(message))
+    && CONFIRMATION_TEXT_RE.test(messageText(message))
+  ));
+  const voiceAssistant = records.find(message => (
+    message?.role === 'assistant'
+    && /voice/.test(messageTransport(message))
+    && parseToolCalls(message?.toolCalls).some(call => (
+      call?.name === toolName
+      && String(call?.taskId || '') === String(taskId || '')
+      && !call?.error
+      && call?.terminalVerification?.status === 'verified'
+      && String(call?.arguments?.path || call?.arguments?.filePath || '') === String(expectedPath || '')
+    ))
+  ));
+  const receipt = (Array.isArray(task?.evidence?.latest) ? task.evidence.latest : []).find(item => (
+    item?.taskId === taskId
+    && item?.toolName === toolName
+    && item?.verification === 'verified'
+    && voiceAssistant?.requestId
+    && item?.requestId === voiceAssistant.requestId
+  ));
+  if (!voiceUser) return { ok: false, code: 'manual_voice_confirmation_user_evidence_missing' };
+  if (!voiceAssistant) return { ok: false, code: 'manual_voice_confirmation_assistant_evidence_missing' };
+  if (!receipt) return { ok: false, code: 'manual_voice_confirmation_receipt_missing' };
+  if (!['completed', 'verifying'].includes(String(task?.status || '')) || task?.activeRequest !== false) {
+    return { ok: false, code: 'manual_voice_confirmation_task_not_settled' };
+  }
+  return {
+    ok: true,
+    code: '',
+    evidence: {
+      taskId,
+      voiceUserMessageId: String(voiceUser.id || ''),
+      voiceAssistantMessageId: String(voiceAssistant.id || ''),
+      requestId: String(voiceAssistant.requestId || ''),
+      receiptId: String(receipt.receiptId || ''),
+      userFacingReplyHash: evidenceTextHash(messageText(voiceAssistant)),
+    },
+  };
+}
+
+export function validatePersistedConversationScope({ conversationId, activated, active }) {
+  const expected = String(conversationId || '');
+  const activatedId = String(activated?.conversation?.id || '');
+  const activeId = String(active?.activeConversation?.id || '');
+  if (!expected || activatedId !== expected || activeId !== expected) {
+    return { ok: false, code: 'manual_voice_conversation_scope_not_active' };
+  }
+  return {
+    ok: true,
+    code: '',
+    evidence: {
+      domain: 'personal',
+      conversationId: expected,
+      activatedConversationId: activatedId,
+      activeApiConversationId: activeId,
+    },
+  };
 }
 
 export function validateRoutingTrace(value, { allowProviderProbe = false } = {}) {
@@ -107,12 +299,15 @@ function usage() {
     '  --expected-build-id <sha>     Exact runtime build; default current git HEAD',
     '  --timeout-ms <ms>             Foreground turn timeout; default 180000',
     '  --background-timeout-ms <ms>  Background terminal timeout; default 600000',
+    '  --manual-gate-timeout-ms <ms>  Human microphone gate timeout; default 300000',
     '  --skip-desktop                Skip native desktop observation',
     '  --skip-multi-agent            Skip durable multi-Agent acceptance',
+    '  --manual-voice-confirmation   Wait for a human to say the confirmation in the real client',
     '  --keep-conversation           Keep the E2E-owned conversation',
     '  --help                        Show this help without touching the runtime',
     '',
-    'The script refuses non-loopback URLs and emits only aggregate pass/fail data.',
+    'The script refuses non-loopback URLs. It never emits synthetic voice/STT events.',
+    'Without --manual-voice-confirmation, microphone/cross-channel voice remains an explicit manual gate.',
   ].join('\n');
 }
 
@@ -121,15 +316,17 @@ function parseArgs(argv) {
     baseUrl: 'http://127.0.0.1:3000/api',
     timeoutMs: 180_000,
     backgroundTimeoutMs: 600_000,
+    manualGateTimeoutMs: 300_000,
     skipDesktop: false,
     skipMultiAgent: false,
     keepConversation: false,
+    manualVoiceConfirmation: false,
     confirmed: false,
     help: false,
     dataRoot: '',
     expectedBuildId: '',
   };
-  const valueFlags = new Set(['--base-url', '--data-root', '--expected-build-id', '--timeout-ms', '--background-timeout-ms']);
+  const valueFlags = new Set(['--base-url', '--data-root', '--expected-build-id', '--timeout-ms', '--background-timeout-ms', '--manual-gate-timeout-ms']);
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     if (valueFlags.has(flag)) {
@@ -141,11 +338,13 @@ function parseArgs(argv) {
       if (flag === '--expected-build-id') args.expectedBuildId = value;
       if (flag === '--timeout-ms') args.timeoutMs = Number.parseInt(value, 10);
       if (flag === '--background-timeout-ms') args.backgroundTimeoutMs = Number.parseInt(value, 10);
+      if (flag === '--manual-gate-timeout-ms') args.manualGateTimeoutMs = Number.parseInt(value, 10);
       continue;
     }
     if (flag === '--confirm-live-e2e') args.confirmed = true;
     else if (flag === '--skip-desktop') args.skipDesktop = true;
     else if (flag === '--skip-multi-agent') args.skipMultiAgent = true;
+    else if (flag === '--manual-voice-confirmation') args.manualVoiceConfirmation = true;
     else if (flag === '--keep-conversation') args.keepConversation = true;
     else if (flag === '--help' || flag === '-h') args.help = true;
     else throw new E2EError('invalid_arguments');
@@ -156,11 +355,12 @@ function parseArgs(argv) {
   if (!isLoopbackBaseUrl(args.baseUrl)) throw new E2EError('loopback_api_required');
   if (!Number.isFinite(args.timeoutMs) || args.timeoutMs < 10_000 || args.timeoutMs > 900_000) throw new E2EError('invalid_timeout');
   if (!Number.isFinite(args.backgroundTimeoutMs) || args.backgroundTimeoutMs < 30_000 || args.backgroundTimeoutMs > 1_800_000) throw new E2EError('invalid_background_timeout');
+  if (!Number.isFinite(args.manualGateTimeoutMs) || args.manualGateTimeoutMs < 30_000 || args.manualGateTimeoutMs > 1_800_000) throw new E2EError('invalid_manual_gate_timeout');
   args.baseUrl = String(args.baseUrl).replace(/\/$/, '');
   return args;
 }
 
-function currentGitHead() {
+export function currentGitHead() {
   try {
     return execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch {
@@ -176,7 +376,7 @@ function apiUrl(baseUrl, pathname, query = {}) {
   return url;
 }
 
-async function fetchJson(baseUrl, pathname, { token = '', method = 'GET', body, timeoutMs = 30_000, query } = {}) {
+export async function fetchJson(baseUrl, pathname, { token = '', method = 'GET', body, timeoutMs = 30_000, query } = {}) {
   let response;
   try {
     response = await fetch(apiUrl(baseUrl, pathname, query), {
@@ -198,7 +398,7 @@ async function fetchJson(baseUrl, pathname, { token = '', method = 'GET', body, 
   return parsed;
 }
 
-function waitForSocketReady(socket, timeoutMs) {
+export function waitForSocketReady(socket, timeoutMs) {
   return new Promise((resolve, reject) => {
     let connected = false;
     let boundary = null;
@@ -239,7 +439,7 @@ function emitChatAck(socket, payload, timeoutMs) {
   });
 }
 
-async function runTurn(socket, input) {
+export async function runTurn(socket, input) {
   const toolEvents = [];
   const delegations = [];
   let settled = false;
@@ -317,12 +517,90 @@ function findAssistant(messages, requestId) {
   ));
 }
 
-async function persistedMessages(baseUrl, token, conversationId) {
+export async function persistedMessages(baseUrl, token, conversationId) {
   const body = await fetchJson(baseUrl, `/conversations/${encodeURIComponent(conversationId)}/messages`, {
     token,
     query: { domain: 'personal', limit: 200 },
   });
   return Array.isArray(body?.messages) ? body.messages : [];
+}
+
+export function isPathInside(basePath, candidatePath) {
+  const base = path.resolve(String(basePath || ''));
+  const candidate = path.resolve(String(candidatePath || ''));
+  const relative = path.relative(base, candidate);
+  return Boolean(relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+export function buildOwnedArtifactLayout(dataRoot, runMarker) {
+  const rawBase = String(dataRoot || '').trim();
+  const marker = String(runMarker || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 80);
+  if (!rawBase || !path.isAbsolute(rawBase) || !marker) throw new E2EError('e2e_artifact_root_invalid');
+  const base = path.resolve(rawBase);
+  const parent = path.resolve(base, 'formal-client-e2e-artifacts');
+  const root = path.resolve(parent, marker);
+  if (!isPathInside(base, parent) || !isPathInside(parent, root)) {
+    throw new E2EError('e2e_artifact_scope_invalid');
+  }
+  const files = [
+    'target-0.txt',
+    'target-1.txt',
+    'target-2.txt',
+    'target-final.txt',
+    'manual-voice-confirmation.txt',
+  ].map(name => path.resolve(root, name));
+  if (files.some(file => !isPathInside(root, file))) throw new E2EError('e2e_artifact_scope_invalid');
+  return { base, parent, root, files };
+}
+
+export function cleanOwnedArtifactLayout(layout) {
+  const failed = [];
+  for (const file of layout?.files || []) {
+    try {
+      if (!isPathInside(layout.root, file)) throw new Error('outside-owned-root');
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+    } catch {
+      failed.push(file);
+    }
+  }
+  for (const directory of [layout?.root, layout?.parent]) {
+    if (!directory) continue;
+    try {
+      if (fs.existsSync(directory) && fs.readdirSync(directory).length === 0) fs.rmdirSync(directory);
+    } catch {
+      failed.push(directory);
+    }
+  }
+  return { ok: failed.length === 0, failedCount: failed.length };
+}
+
+export async function runtimeStatus(baseUrl, token) {
+  return fetchJson(baseUrl, '/runtime/status', { token, query: { domain: 'personal' } });
+}
+
+export async function pollRuntimeTaskByMarker(baseUrl, token, marker, timeoutMs, predicate = () => true) {
+  const deadline = Date.now() + timeoutMs;
+  let latest = null;
+  while (Date.now() < deadline) {
+    const runtime = await runtimeStatus(baseUrl, token);
+    latest = findRuntimeTaskByMarker(runtime, marker);
+    if (latest && predicate(latest)) return { runtime, task: latest };
+    await new Promise(resolve => setTimeout(resolve, 750));
+  }
+  throw new E2EError(latest ? 'task_lifecycle_state_timeout' : 'task_lifecycle_not_persisted');
+}
+
+async function captureLifecycleTurn(baseUrl, token, conversationId, marker, requestId, timeoutMs) {
+  const [{ task }, messages] = await Promise.all([
+    pollRuntimeTaskByMarker(baseUrl, token, marker, timeoutMs),
+    persistedMessages(baseUrl, token, conversationId),
+  ]);
+  const evidence = buildLifecycleTurnEvidence({ messages, requestId, runtimeTask: task });
+  requireCondition(evidence.userMessageId, 'task_lifecycle_user_message_missing');
+  requireCondition(evidence.assistantMessageId, 'task_lifecycle_assistant_message_missing');
+  requireCondition(evidence.userFacingReply.persisted, 'task_lifecycle_reply_missing');
+  requireCondition(!evidence.userFacingReply.internalGuardLeaked, 'task_lifecycle_internal_guard_leaked');
+  return { task, evidence };
 }
 
 async function routingReceiptCheck(baseUrl, token, requestId) {
@@ -354,8 +632,222 @@ async function pollBackground(baseUrl, token, taskId, timeoutMs) {
   throw new E2EError('background_terminal_timeout');
 }
 
-function requireCondition(condition, code) {
+export function requireCondition(condition, code) {
   if (!condition) throw new E2EError(code);
+}
+
+async function runTaskLifecycleAcceptance({
+  baseUrl,
+  token,
+  socket,
+  conversationId,
+  runMarker,
+  requestId,
+  timeoutMs,
+  artifactLayout,
+}) {
+  const content = `${runMarker}:task-lifecycle-confirmation-gate`;
+  const turns = [
+    {
+      phase: 'task-create',
+      text: `[${runMarker}] 创建一个仅用于正式 E2E 的确认门控文件 ${artifactLayout.files[0]}，内容严格写成 ${content}。必须调用 write_file，但不要代替用户确认；到确认边界立即停止。`,
+    },
+    {
+      phase: 'task-correction-1',
+      text: `不是 ${artifactLayout.files[0]}，把同一个任务的目标改成 ${artifactLayout.files[1]}，内容保持不变；不要沿用或重试旧目标。`,
+    },
+    {
+      phase: 'task-correction-2',
+      text: `再纠正一次：不要 ${artifactLayout.files[1]}，改成 ${artifactLayout.files[2]}，仍是同一个任务且内容不变。`,
+    },
+    {
+      phase: 'task-correction-3',
+      text: `最后一次纠正：拒绝 ${artifactLayout.files[2]}，最终目标是 ${artifactLayout.files[3]}，内容不变；等待我的确认。`,
+    },
+  ];
+  const correctionEvidence = [];
+  let taskId = '';
+  for (const turn of turns) {
+    const id = requestId(turn.phase);
+    await runTurn(socket, {
+      requestId: id,
+      conversationId,
+      timeoutMs,
+      text: turn.text,
+    });
+    const captured = await captureLifecycleTurn(baseUrl, token, conversationId, runMarker, id, timeoutMs);
+    requireCondition(captured.task.status === 'waiting_confirmation', `${turn.phase}_not_waiting_confirmation`);
+    requireCondition(captured.task.activeRequest === false, `${turn.phase}_lease_not_yielded`);
+    requireCondition(captured.evidence.receiptIds.length > 0, `${turn.phase}_receipt_missing`);
+    if (taskId) requireCondition(captured.task.taskId === taskId, 'task_correction_identity_changed');
+    taskId = captured.task.taskId;
+    correctionEvidence.push(captured.evidence);
+  }
+  const correctionValidation = validateCorrectionLifecycleEvidence(correctionEvidence);
+  requireCondition(correctionValidation.ok, correctionValidation.code);
+  requireCondition(artifactLayout.files.every(file => !fs.existsSync(file)), 'unconfirmed_artifact_created');
+
+  const beforeStatus = (await pollRuntimeTaskByMarker(baseUrl, token, runMarker, timeoutMs)).task;
+  const statusId = requestId('task-status');
+  const statusTurn = await runTurn(socket, {
+    requestId: statusId,
+    conversationId,
+    timeoutMs,
+    text: '这个任务完成了吗？只报告当前持久状态，不要执行、确认或重放任何动作。',
+  });
+  const statusCaptured = await captureLifecycleTurn(baseUrl, token, conversationId, runMarker, statusId, timeoutMs);
+  const statusValidation = validateStatusQueryNoReplay({
+    beforeTask: beforeStatus,
+    afterTask: statusCaptured.task,
+    turnEvidence: statusCaptured.evidence,
+    toolEventCount: statusTurn.toolEvents.length,
+  });
+  requireCondition(statusValidation.ok, statusValidation.code);
+  requireCondition(artifactLayout.files.every(file => !fs.existsSync(file)), 'status_query_created_artifact');
+
+  const cancelId = requestId('task-cancel');
+  await runTurn(socket, {
+    requestId: cancelId,
+    conversationId,
+    timeoutMs,
+    text: '取消这个任务。',
+  });
+  const cancelled = await pollRuntimeTaskByMarker(
+    baseUrl,
+    token,
+    runMarker,
+    timeoutMs,
+    task => task.status === 'cancelled' && task.activeRequest === false,
+  );
+  const cancelMessages = await persistedMessages(baseUrl, token, conversationId);
+  const cancelEvidence = buildLifecycleTurnEvidence({
+    messages: cancelMessages,
+    requestId: cancelId,
+    runtimeTask: cancelled.task,
+  });
+  const cancelValidation = validateCancellationLeaseRelease({
+    beforeTask: statusCaptured.task,
+    afterTask: cancelled.task,
+    turnEvidence: cancelEvidence,
+  });
+  requireCondition(cancelValidation.ok, cancelValidation.code);
+  requireCondition(artifactLayout.files.every(file => !fs.existsSync(file)), 'cancelled_task_created_artifact');
+
+  return {
+    passed: true,
+    taskId,
+    correctionCount: 3,
+    turns: correctionEvidence,
+    statusQuery: {
+      ...statusCaptured.evidence,
+      receiptSignatureBefore: runtimeReceiptSignature(beforeStatus),
+      receiptSignatureAfter: runtimeReceiptSignature(statusCaptured.task),
+    },
+    cancellation: {
+      ...cancelEvidence,
+      receiptSignatureBefore: runtimeReceiptSignature(statusCaptured.task),
+      receiptSignatureAfter: runtimeReceiptSignature(cancelled.task),
+    },
+    finalStatus: cancelled.task.status,
+    activeLease: cancelled.task.activeRequest,
+    artifactContentSha256: evidenceTextHash(content),
+  };
+}
+
+async function runManualVoiceConfirmationGate({
+  baseUrl,
+  token,
+  socket,
+  conversationId,
+  runMarker,
+  requestId,
+  timeoutMs,
+  manualGateTimeoutMs,
+  artifactLayout,
+}) {
+  const marker = `${runMarker}-VOICE-GATE`;
+  const targetPath = artifactLayout.files[4];
+  const content = `${marker}:human-microphone-confirmation`;
+  const pendingRequestId = requestId('manual-voice-pending');
+  await runTurn(socket, {
+    requestId: pendingRequestId,
+    conversationId,
+    timeoutMs,
+    text: `[${marker}] 创建确认门控文件 ${targetPath}，内容严格写成 ${content}。必须调用 write_file 并等待确认，不得自行确认。`,
+  });
+  const pending = await captureLifecycleTurn(
+    baseUrl,
+    token,
+    conversationId,
+    marker,
+    pendingRequestId,
+    timeoutMs,
+  );
+  requireCondition(pending.task.status === 'waiting_confirmation', 'manual_voice_pending_not_persisted');
+  requireCondition(pending.task.activeRequest === false, 'manual_voice_pending_lease_not_yielded');
+  requireCondition(pending.evidence.receiptIds.length > 0, 'manual_voice_pending_receipt_missing');
+  requireCondition(!fs.existsSync(targetPath), 'manual_voice_artifact_created_before_confirmation');
+
+  const activated = await fetchJson(
+    baseUrl,
+    `/conversations/${encodeURIComponent(conversationId)}/activate`,
+    {
+      token,
+      method: 'POST',
+      body: { agentId: 'lumi' },
+      query: { domain: 'personal' },
+    },
+  );
+  const active = await fetchJson(baseUrl, '/conversations/active', {
+    token,
+    query: { domain: 'personal', agentId: 'lumi' },
+  });
+  const scopeValidation = validatePersistedConversationScope({ conversationId, activated, active });
+  requireCondition(scopeValidation.ok, scopeValidation.code);
+
+  const since = new Date().toISOString();
+  process.stderr.write([
+    '',
+    'MANUAL GATE REQUIRED — no synthetic voice/STT event will be emitted.',
+    'In the real Lumi client, use the physical microphone and say “确认” once.',
+    `The script will wait up to ${manualGateTimeoutMs} ms for persisted voice-channel evidence.`,
+    '',
+  ].join('\n'));
+
+  const deadline = Date.now() + manualGateTimeoutMs;
+  let lastCode = 'manual_voice_confirmation_timeout';
+  while (Date.now() < deadline) {
+    const [messages, runtime] = await Promise.all([
+      persistedMessages(baseUrl, token, conversationId),
+      runtimeStatus(baseUrl, token),
+    ]);
+    const task = findRuntimeTaskByMarker(runtime, marker);
+    const validation = validateManualVoiceConfirmationEvidence({
+      messages,
+      task,
+      taskId: pending.task.taskId,
+      toolName: 'write_file',
+      expectedPath: targetPath,
+      since,
+    });
+    if (validation.ok) {
+      requireCondition(fs.existsSync(targetPath), 'manual_voice_artifact_missing');
+      const actual = fs.readFileSync(targetPath, 'utf8');
+      requireCondition(actual === content, 'manual_voice_artifact_content_mismatch');
+      return {
+        passed: true,
+        humanMicrophoneRequired: true,
+        syntheticSttEmitted: false,
+        pending: pending.evidence,
+        confirmation: validation.evidence,
+        persistedScope: scopeValidation.evidence,
+        artifactContentSha256: evidenceTextHash(actual),
+      };
+    }
+    lastCode = validation.code;
+    await new Promise(resolve => setTimeout(resolve, 1_000));
+  }
+  throw new E2EError(lastCode || 'manual_voice_confirmation_timeout');
 }
 
 async function runFormalE2E(args) {
@@ -363,12 +855,27 @@ async function runFormalE2E(args) {
   requireCondition(/^[a-f0-9]{7,64}$/i.test(expectedBuildId), 'expected_build_id_required');
   const runMarker = `LUMI-E2E-${crypto.randomBytes(8).toString('hex')}`;
   const requestId = phase => `e2e-${runMarker.toLowerCase()}-${phase}`;
+  const artifactLayout = buildOwnedArtifactLayout(args.dataRoot, runMarker);
   const summary = {
     ok: false,
+    fullAcceptance: false,
     runtime: { healthy: false, buildMatches: false, sourceClean: false },
     socket: { trustedLocal: false, registeredByHarness: false },
     checks: {},
-    cleanup: { conversationDeleted: false, backgroundAuditRetained: false },
+    manualGates: {
+      microphoneVoiceConfirmation: {
+        required: true,
+        status: args.manualVoiceConfirmation ? 'pending' : 'not_run',
+        syntheticSttEmitted: false,
+        claimedVoiceTurns: 0,
+      },
+    },
+    cleanup: {
+      conversationDeleted: false,
+      backgroundAuditRetained: false,
+      ownedArtifactFilesRemoved: false,
+      ownedArtifactCleanupFailedCount: 0,
+    },
   };
   let token = '';
   let desktopSessionProof = '';
@@ -467,6 +974,17 @@ async function runFormalE2E(args) {
       receiptCount: firstRouting.receiptCount + secondRouting.receiptCount,
     };
 
+    summary.checks.taskLifecycle = await runTaskLifecycleAcceptance({
+      baseUrl: args.baseUrl,
+      token,
+      socket,
+      conversationId,
+      runMarker,
+      requestId,
+      timeoutMs: args.timeoutMs,
+      artifactLayout,
+    });
+
     if (!args.skipDesktop) {
       const desktopId = requestId('desktop');
       const desktop = await runTurn(socket, {
@@ -541,8 +1059,32 @@ async function runFormalE2E(args) {
       summary.cleanup.backgroundAuditRetained = true;
     }
 
+    if (args.manualVoiceConfirmation) {
+      summary.manualGates.microphoneVoiceConfirmation = {
+        required: true,
+        status: 'passed',
+        syntheticSttEmitted: false,
+        claimedVoiceTurns: 1,
+        evidence: await runManualVoiceConfirmationGate({
+          baseUrl: args.baseUrl,
+          token,
+          socket,
+          conversationId,
+          runMarker,
+          requestId,
+          timeoutMs: args.timeoutMs,
+          manualGateTimeoutMs: args.manualGateTimeoutMs,
+          artifactLayout,
+        }),
+      };
+    }
+
     summary.ok = true;
+    summary.fullAcceptance = summary.manualGates.microphoneVoiceConfirmation.status === 'passed';
     return summary;
+  } catch (error) {
+    if (error && typeof error === 'object') error.e2eSummary = summary;
+    throw error;
   } finally {
     try { socket?.disconnect(); } catch {}
     if (conversationId && !args.keepConversation && token) {
@@ -559,6 +1101,14 @@ async function runFormalE2E(args) {
     }
     if (args.keepConversation) summary.cleanup.conversationDeleted = false;
     if (backgroundCreated) summary.cleanup.backgroundAuditRetained = true;
+    const artifactCleanup = cleanOwnedArtifactLayout(artifactLayout);
+    summary.cleanup.ownedArtifactFilesRemoved = artifactCleanup.ok;
+    summary.cleanup.ownedArtifactCleanupFailedCount = artifactCleanup.failedCount;
+    if (!artifactCleanup.ok) {
+      summary.ok = false;
+      summary.fullAcceptance = false;
+      summary.failedCheck = 'e2e_artifact_cleanup_failed';
+    }
     token = '';
     desktopSessionProof = '';
   }
@@ -573,11 +1123,25 @@ async function main() {
       return;
     }
     summary = await runFormalE2E(args);
+    if (!summary.ok) process.exitCode = 1;
   } catch (error) {
+    const retained = error && typeof error === 'object' && error.e2eSummary
+      ? error.e2eSummary
+      : summary;
+    const primaryFailure = error instanceof E2EError ? error.code : 'unexpected_e2e_failure';
+    const cleanupFailure = retained.failedCheck === 'e2e_artifact_cleanup_failed';
     summary = {
+      ...retained,
       ok: false,
-      failedCheck: error instanceof E2EError ? error.code : 'unexpected_e2e_failure',
-      cleanup: summary.cleanup || { conversationDeleted: false, backgroundAuditRetained: false },
+      fullAcceptance: false,
+      failedCheck: cleanupFailure ? retained.failedCheck : primaryFailure,
+      ...(cleanupFailure ? { primaryFailure } : {}),
+      cleanup: retained.cleanup || {
+        conversationDeleted: false,
+        backgroundAuditRetained: false,
+        ownedArtifactFilesRemoved: false,
+        ownedArtifactCleanupFailedCount: 0,
+      },
     };
     process.exitCode = 1;
   }

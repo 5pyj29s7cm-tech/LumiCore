@@ -5,13 +5,16 @@ import type { ConversationFocusThread, FocusThreadStatus } from '@/hooks/useFocu
 
 function statusCopy(status: FocusThreadStatus): string {
   switch (status) {
+    case 'created':
     case 'planning':
       return uiMessage('focus-thread-panel.planning.46c9f7780c');
     case 'executing':
+    case 'verifying':
       return uiMessage('focus-thread-panel.executing.76b91cbb06');
     case 'waiting_confirmation':
       return uiMessage('focus-thread-panel.waiting-confirmation.266caeaec0');
     case 'blocked':
+    case 'failed':
       return uiMessage('focus-thread-panel.blocked.d42294315f');
     case 'completed':
       return uiMessage('focus-thread-panel.completed.d824a8a52c');
@@ -22,7 +25,7 @@ function statusCopy(status: FocusThreadStatus): string {
 
 function statusClass(status: FocusThreadStatus): string {
   if (status === 'waiting_confirmation') return 'border-amber-300/20 bg-amber-300/10 text-amber-100';
-  if (status === 'blocked') return 'border-red-300/20 bg-red-300/10 text-red-100';
+  if (status === 'blocked' || status === 'failed') return 'border-red-300/20 bg-red-300/10 text-red-100';
   if (status === 'completed') return 'border-emerald-300/20 bg-emerald-300/10 text-emerald-100';
   if (status === 'cancelled') return 'border-white/10 bg-white/[0.04] text-white/45';
   return 'border-cyan-300/20 bg-cyan-300/10 text-cyan-100';
@@ -30,7 +33,7 @@ function statusClass(status: FocusThreadStatus): string {
 
 function StatusIcon({ status }: { status: FocusThreadStatus }) {
   if (status === 'waiting_confirmation') return <ShieldAlert size={13} className="text-amber-200" />;
-  if (status === 'blocked' || status === 'cancelled') return <CirclePause size={13} className="text-red-200" />;
+  if (status === 'blocked' || status === 'failed' || status === 'cancelled') return <CirclePause size={13} className="text-red-200" />;
   if (status === 'completed') return <CheckCircle2 size={13} className="text-emerald-200" />;
   return <Crosshair size={13} className="text-cyan-200" />;
 }

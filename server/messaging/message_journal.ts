@@ -33,6 +33,7 @@ export interface MessagingJournalEntry {
   orgId?: string;
   replyText?: string;
   replyMessageId?: string;
+  replyRetryable?: boolean;
   error?: string;
 }
 
@@ -93,7 +94,7 @@ export function recordMessagingIngress(message: IncomingMessage): void {
 
 export function updateMessagingJournal(
   message: Pick<IncomingMessage, 'platform' | 'messageId'>,
-  update: Partial<Pick<MessagingJournalEntry, 'status' | 'replyText' | 'replyMessageId' | 'error' | 'routeSequence' | 'boundUserId' | 'domain' | 'orgId'>>,
+  update: Partial<Pick<MessagingJournalEntry, 'status' | 'replyText' | 'replyMessageId' | 'replyRetryable' | 'error' | 'routeSequence' | 'boundUserId' | 'domain' | 'orgId'>>,
 ): void {
   const current = readEntries();
   const entry = current.find(item => item.key === journalKey(message));
@@ -104,6 +105,15 @@ export function updateMessagingJournal(
 
 export function listMessagingJournal(limit = 100): MessagingJournalEntry[] {
   return readEntries().slice(-Math.max(1, limit)).map(entry => ({ ...entry }));
+}
+
+export function getMessagingJournalEntry(
+  message: Pick<IncomingMessage, 'platform' | 'messageId'>,
+): MessagingJournalEntry | null {
+  const entry = readEntries().find(item => item.key === journalKey(message));
+  return entry
+    ? { ...entry, attachmentNames: Array.isArray(entry.attachmentNames) ? [...entry.attachmentNames] : [] }
+    : null;
 }
 
 export function resetMessagingJournalForTest(): void {

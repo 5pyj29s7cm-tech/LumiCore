@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import {
   formatConversationActionTaskStatus,
   normalizeConversationActionState,
+  RECONFIRMATION_REQUIRED_BLOCKER,
   type ConversationActionContinuationState,
 } from '../cognition/action_continuation';
 import { normalizeActionIntent, type NormalizedActionIntent } from '../cognition/normalized_action_intent';
@@ -10,6 +11,9 @@ import {
   taskCompletionFromReceipts,
   taskReceiptsToRecords,
   toolRecordSucceeded,
+  conversationTaskStatusOwnsExecutionLease,
+  canTransitionConversationTaskStatus,
+  isTerminalConversationTaskStatus,
   type ConversationTaskStatus,
 } from '../cognition/task_execution_ledger';
 import { buildToolExecutionEnvelope, toolRecordIdempotencyKey } from '../tools/execution_envelope';
@@ -353,7 +357,7 @@ function markSupersededTask(
 ): void {
   if (!supersededTaskId || supersededTaskId === replacementTaskId) return;
   const previous = tasks.find(candidate => candidate.id === supersededTaskId);
-  if (!previous || previous.status === 'completed' || previous.status === 'cancelled') return;
+  if (!previous || isTerminalConversationTaskStatus(previous.status)) return;
   const context = parseObject(previous.context);
   const actionState = normalizeConversationActionState(context.actionState);
   const blocker = `Superseded by task ${replacementTaskId}.`;
@@ -395,6 +399,11 @@ export function syncConversationActionTaskLedger(
   },
 ): ConversationActionTaskRow | null {
   ensureTables(db);
+  // A request id is both historical receipt correlation and, in executing
+  // phases only, a live lease. Normalization deliberately drops the lease for
+  // blocked/waiting/terminal states, but must not erase the immutable request
+  // identity from receipts produced by that request.
+  const receiptRequestId = String(input.state?.activeRequestId || '').trim().slice(0, 180);
   const state = normalizeConversationActionState(input.state);
   if (!state?.taskId) return null;
   const now = input.now || state.updatedAt || new Date().toISOString();
@@ -407,10 +416,17 @@ export function syncConversationActionTaskLedger(
     : undefined;
   const parentContext = parent ? parseObject(parent.context) : {};
   const currentContext = parseObject(task?.context);
+  if (task && !canTransitionConversationTaskStatus(task.status, state.status)) {
+    // Late/replayed requests may still archive their immutable receipts through
+    // archiveBoundConversationActionReceipts, but they cannot reopen a durable
+    // terminal task by overwriting its state projection.
+    return task;
+  }
   const parentState = normalizeConversationActionState(parentContext.actionState);
   const taskStatus = state.status || (state.unfinished ? 'blocked' : 'completed');
-  const terminal = taskStatus === 'completed' || taskStatus === 'cancelled';
-  const requestLeaseActive = Boolean(state.unfinished) && !terminal;
+  const terminal = isTerminalConversationTaskStatus(taskStatus);
+  const requestLeaseActive = Boolean(state.unfinished)
+    && conversationTaskStatusOwnsExecutionLease(taskStatus);
   const persistedState = requestLeaseActive
     ? state
     : normalizeConversationActionState({
@@ -482,7 +498,7 @@ export function syncConversationActionTaskLedger(
     task,
     records,
     turnId: input.currentUserMessageId || input.rootUserMessageId || state.evidenceMessageId || '',
-    requestId: state.activeRequestId || '',
+    requestId: receiptRequestId || state.activeRequestId || '',
     now,
   });
   return task;
@@ -539,29 +555,34 @@ export function archiveBoundConversationActionReceipts(
       const completion = taskCompletionFromReceipts(state.goal || task.goal, receipts);
       const waitingForConfirmation = records.some(isConfirmationBlockedToolRecord);
       const hasFailure = records.some(record => !toolRecordSucceeded(record));
-      const status: ConversationTaskStatus = completion.complete
-        ? 'completed'
-        : task.status === 'cancelled'
-          ? 'cancelled'
+      const status: ConversationTaskStatus = isTerminalConversationTaskStatus(task.status)
+        ? task.status
+        : completion.complete
+          ? 'completed'
           : waitingForConfirmation
             ? 'waiting_confirmation'
-          : hasFailure
-            ? 'blocked'
-            : task.status;
+            : hasFailure
+              ? 'blocked'
+              : task.status;
       const requestLeaseActive = Boolean(state.unfinished)
-        && status !== 'completed'
-        && status !== 'cancelled';
+        && conversationTaskStatusOwnsExecutionLease(status);
       const nextState = normalizeConversationActionState({
         ...state,
         receipts,
         status,
-        unfinished: status !== 'completed' && status !== 'cancelled',
-        latestBlocker: status === 'blocked' ? completion.blocker || task.blocker : status === 'cancelled' ? task.blocker : '',
+        unfinished: !isTerminalConversationTaskStatus(status),
+        latestBlocker: status === 'blocked'
+          ? completion.blocker || task.blocker
+          : status === 'failed' || status === 'cancelled'
+            ? task.blocker
+            : '',
         activeRequestId: requestLeaseActive
           && !records.some(record => record.requestId === state.activeRequestId)
           ? state.activeRequestId
           : undefined,
-        completionSource: completion.complete ? 'tool_receipt' : state.completionSource,
+        completionSource: status === 'completed' && completion.complete
+          ? 'tool_receipt'
+          : state.completionSource,
         revision: Math.max(state.revision || 0, task.revision || 0) + 1,
         updatedAt: now,
       });
@@ -577,7 +598,7 @@ export function archiveBoundConversationActionReceipts(
       task.completionSource = nextState?.completionSource || task.completionSource;
       task.updatedAt = now;
       task.revision = nextState?.revision || task.revision;
-      if (status === 'completed' || status === 'cancelled') task.completedAt = task.completedAt || now;
+      if (isTerminalConversationTaskStatus(status)) task.completedAt = task.completedAt || now;
     }
     taskIds.push(taskId);
   }
@@ -1431,7 +1452,7 @@ export function conversationActionStateFromTask(
   if (!task) return null;
   const context = parseObject(task.context);
   const persisted = normalizeConversationActionState(context.actionState);
-  const requestLeaseActive = task.status !== 'completed' && task.status !== 'cancelled';
+  const requestLeaseActive = conversationTaskStatusOwnsExecutionLease(task.status);
   return normalizeConversationActionState({
     ...(persisted || {}),
     version: 2,
@@ -1446,7 +1467,7 @@ export function conversationActionStateFromTask(
       : task.completionSource === 'tool_receipt'
         ? 'tool_receipt'
         : undefined,
-    unfinished: task.status !== 'completed' && task.status !== 'cancelled',
+    unfinished: !isTerminalConversationTaskStatus(task.status),
     updatedAt: task.updatedAt,
     appTarget: persisted?.appTarget || task.target,
     sourcePaths: persisted?.sourcePaths || [],
@@ -1696,7 +1717,7 @@ export function repairTerminalConversationActionTaskLeases(db: any): number {
   let repaired = 0;
   for (const task of db.conversationActionTasks as ConversationActionTaskRow[]) {
     if (task.conversationId.startsWith('scheduler:')) continue;
-    if (!['completed', 'cancelled'].includes(task.status)) continue;
+    if (!isTerminalConversationTaskStatus(task.status)) continue;
     const context = parseObject(task.context);
     const rawActionState = parseObject(context.actionState);
     if (!String(task.activeRequestId || '').trim() && !String(rawActionState.activeRequestId || '').trim()) continue;
@@ -1726,6 +1747,10 @@ export function repairTerminalConversationActionTaskLeases(db: any): number {
 export function recoverConversationActionTaskLeases(
   db: any,
   now = new Date().toISOString(),
+  options: {
+    /** True only when startup hydration restored the exact one-time envelope. */
+    hasExactPendingConfirmation?: (task: ConversationActionTaskRow) => boolean;
+  } = {},
 ): number {
   ensureTables(db);
   const tasks = db.conversationActionTasks as ConversationActionTaskRow[];
@@ -1733,7 +1758,7 @@ export function recoverConversationActionTaskLeases(
 
   for (const task of tasks) {
     if (task.conversationId.startsWith('scheduler:')) continue;
-    if (!['planning', 'executing', 'waiting_confirmation'].includes(task.status)) continue;
+    if (!['planning', 'executing', 'verifying', 'waiting_confirmation'].includes(task.status)) continue;
 
     const hasNewerTask = tasks.some(candidate => (
       candidate.id !== task.id
@@ -1742,8 +1767,17 @@ export function recoverConversationActionTaskLeases(
       && candidate.createdAt.localeCompare(task.createdAt) > 0
     ));
     const previousStatus = task.status;
+    if (
+      previousStatus === 'waiting_confirmation'
+      && options.hasExactPendingConfirmation?.(task)
+    ) {
+      // A hydrated encrypted envelope still owns this boundary. It has no
+      // process-local executor lease to recover, so leave the task untouched.
+      // In particular, do not reduce Windows DPAPI-backed restart behavior.
+      continue;
+    }
     const blocker = previousStatus === 'waiting_confirmation'
-      ? 'The pending confirmation expired when the previous runtime ended.'
+      ? RECONFIRMATION_REQUIRED_BLOCKER
       : 'The previous runtime ended before this task reached a terminal receipt.';
     const context = parseObject(task.context);
     const actionState = normalizeConversationActionState(context.actionState);
@@ -1854,9 +1888,11 @@ export function repairContradictoryConversationActionReceipts(db: any): number {
       ...state,
       receipts,
       status,
-      unfinished: status !== 'completed' && status !== 'cancelled',
+      unfinished: !isTerminalConversationTaskStatus(status),
       latestBlocker: completion.complete ? '' : state.latestBlocker,
-      activeRequestId: completion.complete ? undefined : state.activeRequestId,
+      activeRequestId: conversationTaskStatusOwnsExecutionLease(status)
+        ? state.activeRequestId
+        : undefined,
       completionSource: completion.complete ? 'tool_receipt' : state.completionSource,
       revision: Math.max(state.revision || 0, task.revision || 0) + 1,
       updatedAt: task.updatedAt,
@@ -1878,7 +1914,7 @@ export function repairContradictoryConversationActionReceipts(db: any): number {
   // text behind after cancellation, which made the command-center widget show
   // a contradictory cancelled+error state. Repair those rows on bootstrap.
   for (const task of tasks) {
-    if (!['completed', 'cancelled', 'waiting_confirmation'].includes(task.status)) continue;
+    if (!['completed', 'failed', 'cancelled', 'waiting_confirmation'].includes(task.status)) continue;
     if (!String(task.blocker || '').trim()) continue;
     const context = parseObject(task.context);
     const state = normalizeConversationActionState(context.actionState);
@@ -1887,7 +1923,7 @@ export function repairContradictoryConversationActionReceipts(db: any): number {
         ...state,
         status: task.status,
         latestBlocker: '',
-        unfinished: task.status !== 'completed' && task.status !== 'cancelled',
+        unfinished: !isTerminalConversationTaskStatus(task.status),
       });
       if (nextState) context.actionState = sanitizeState(nextState);
       task.context = JSON.stringify(context);

@@ -13,9 +13,13 @@ import { isGuardGeneratedConversationRecord } from '../conversation/guard_histor
 import { buildActionContract } from './action_contract';
 import type { ToolPolicy } from '../personality/types';
 import { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
+import { isExplicitConfirmationReply } from '../tools/pending_confirmation';
 import {
   coalesceToolExecutionRecords,
   applyTaskPolicySnapshot,
+  CONVERSATION_TASK_STATUSES,
+  conversationTaskStatusOwnsExecutionLease,
+  isTerminalConversationTaskStatus,
   mergeTaskReceipts,
   normalizeConversationTaskReceipt,
   snapshotTaskPolicy,
@@ -25,6 +29,14 @@ import {
   type ConversationTaskReceipt,
   type ConversationTaskStatus,
 } from './task_execution_ledger';
+import {
+  buildTaskCapsuleV1,
+  formatTaskCapsuleForPrompt,
+  isTaskCapsuleTargetContinuation,
+  normalizeTaskCapsuleV1,
+  type TaskCapsuleV1,
+} from '../conversation/task_capsule';
+import { isUnconfirmedRuntimeCandidate } from '../conversation/task_target_anchor';
 
 export interface ActionContinuationHistoryItem {
   role?: string;
@@ -68,9 +80,21 @@ export interface ConversationActionContinuationState extends RecentActionContinu
   latestInstruction: string;
   assistantState: string;
   toolSummaries: string[];
+  /** Durable semantic projection shared by chat, voice, and restart hydration. */
+  taskCapsule?: TaskCapsuleV1;
   updatedAt: string;
   evidenceMessageId?: string;
   completionSource?: 'tool_receipt' | 'user_observation';
+  /**
+   * A terminal projection was staged in memory, but its strict persistence
+   * fence failed.  Keep this marker with the resumable task so restart
+   * hydration cannot turn the staged success back into an authoritative one.
+   */
+  terminalPersistence?: {
+    status: 'persistence_unknown';
+    requestId: string;
+    quarantinedAt: string;
+  };
 }
 
 export interface ConversationActionContinuationUpdate {
@@ -384,6 +408,24 @@ function currentTurnText(text: string): string {
   return String(text || '').split(/\n## Recent action continuation context\b/i, 1)[0].trim();
 }
 
+/**
+ * Durable fail-closed marker used when a restart cannot recover the exact
+ * confirmation envelope. The old task description remains available for
+ * context, but it is not authority to reconstruct dangerous tool arguments.
+ */
+export const RECONFIRMATION_REQUIRED_BLOCKER =
+  'reconfirmation_required: The exact pending confirmation is unavailable after runtime restart. Generate and display a fresh review proposal before accepting confirmation.';
+
+export function conversationActionRequiresFreshConfirmationReview(
+  value: ConversationActionContinuationState | null | undefined,
+): boolean {
+  return Boolean(
+    value?.unfinished
+    && value.status === 'blocked'
+    && /^reconfirmation_required(?:\b|:)/iu.test(String(value.latestBlocker || '').trim()),
+  );
+}
+
 function recoveredStructuredState(text: string): string {
   const raw = String(text || '');
   const markerIndex = raw.search(/## Recent action continuation context\b/i);
@@ -532,7 +574,9 @@ export function extractRecentActionContinuationState(
   return {
     goal,
     appTarget,
-    sourcePaths: Array.from(sourcePaths).slice(0, 8),
+    sourcePaths: Array.from(sourcePaths)
+      .filter(candidate => !isUnconfirmedRuntimeCandidate(candidate, goal))
+      .slice(0, 8),
     latestBlocker,
     unfinished,
     evidenceTools: Array.from(new Set(evidenceTools)).slice(-10),
@@ -609,14 +653,7 @@ export function normalizeConversationActionState(
   const goal = compact(value.goal, 700);
   if (!goal) return null;
   const statusValue = compact(value.status, 40) as ConversationTaskStatus;
-  const status: ConversationTaskStatus = [
-    'planning',
-    'executing',
-    'waiting_confirmation',
-    'blocked',
-    'completed',
-    'cancelled',
-  ].includes(statusValue)
+  const status: ConversationTaskStatus = (CONVERSATION_TASK_STATUSES as readonly string[]).includes(statusValue)
     ? statusValue
     : value.unfinished ? 'blocked' : 'completed';
   const receipts = (Array.isArray(value.receipts) ? value.receipts : [])
@@ -626,11 +663,11 @@ export function normalizeConversationActionState(
   const receiptCompletion = receipts.length > 0
     ? taskCompletionFromReceipts(goal, receipts)
     : null;
-  const unfinished = status === 'completed' || status === 'cancelled'
+  const unfinished = isTerminalConversationTaskStatus(status)
     ? false
     : Boolean(value.unfinished);
-  const requestLeaseActive = unfinished;
-  return {
+  const requestLeaseActive = conversationTaskStatusOwnsExecutionLease(status);
+  const normalizedState: ConversationActionContinuationState = {
     version: Number(value.version) === 1 && !value.taskId ? 1 : 2,
     taskId: compact(value.taskId, 180) || undefined,
     status,
@@ -647,6 +684,10 @@ export function normalizeConversationActionState(
     sourcePaths: Array.from(new Set(Array.isArray(value.sourcePaths) ? value.sourcePaths : []))
       .map(path => compact(path, 500))
       .filter(Boolean)
+      .filter(candidate => !isUnconfirmedRuntimeCandidate(
+        candidate,
+        `${value.latestInstruction || ''}\n${goal}`,
+      ))
       .slice(0, 8),
     latestBlocker: status === 'completed' || status === 'waiting_confirmation' || status === 'cancelled'
       ? ''
@@ -668,6 +709,26 @@ export function normalizeConversationActionState(
       : value.completionSource === 'tool_receipt'
         ? 'tool_receipt'
         : undefined,
+    terminalPersistence: value.terminalPersistence?.status === 'persistence_unknown'
+      ? {
+          status: 'persistence_unknown',
+          requestId: compact(value.terminalPersistence.requestId, 180),
+          quarantinedAt: compact(value.terminalPersistence.quarantinedAt, 80),
+        }
+      : undefined,
+  };
+  const storedCapsule = normalizeTaskCapsuleV1(value.taskCapsule);
+  const previousCapsule = storedCapsule
+    && (!normalizedState.taskId || storedCapsule.taskId === normalizedState.taskId)
+    ? storedCapsule
+    : null;
+  const taskCapsule = buildTaskCapsuleV1(normalizedState, {
+    previousCapsule,
+    observedAt: normalizedState.updatedAt,
+  });
+  return {
+    ...normalizedState,
+    ...(taskCapsule ? { taskCapsule } : {}),
   };
 }
 
@@ -676,6 +737,19 @@ export function classifyConversationActionFollowupIntent(
   state?: ConversationActionContinuationState | null,
 ): RecentActionFollowupIntent {
   if (isImmediateAssistantRestatementRequest(text)) return 'repeat';
+  const durableState = normalizeConversationActionState(state);
+  const compactText = compact(text, 500);
+  if (
+    durableState?.unfinished
+    && isTaskCapsuleTargetContinuation(compactText, durableState)
+  ) return 'execute';
+  // A restart without the exact one-time envelope invalidates the old grant.
+  // Treat a bare confirmation as a deterministic status/review request, never
+  // as permission to reconstruct or execute the previous dangerous action.
+  if (
+    conversationActionRequiresFreshConfirmationReview(durableState)
+    && isExplicitConfirmationReply(compactText)
+  ) return 'status';
   const normalizedIntent = normalizeActionIntent(text);
   if (
     normalizedIntent.kind === 'correction_explanation'
@@ -685,7 +759,6 @@ export function classifyConversationActionFollowupIntent(
   if (normalizedIntent.kind === 'status_query') return 'status';
   const direct = classifyRecentActionFollowupIntent(text);
   if (direct !== 'none') return direct;
-  const durableState = normalizeConversationActionState(state);
   if (!durableState?.unfinished) return 'none';
   return AMBIGUOUS_UNFINISHED_TASK_STATUS_RE.test(compact(text, 500)) ? 'status' : 'none';
 }
@@ -782,6 +855,7 @@ export function buildConversationActionContinuationState(
       ...(inheritsPrevious ? previous!.toolSummaries : []),
       ...currentSummaries,
     ])).slice(-10),
+    taskCapsule: inheritsPrevious ? previous?.taskCapsule : undefined,
     updatedAt: input.updatedAt || new Date().toISOString(),
     evidenceMessageId: input.evidenceMessageId,
     completionSource: completion.complete
@@ -878,6 +952,16 @@ export function formatConversationActionTaskStatus(
     ? CN_TASK_EXECUTION_MESSAGES.goalWithCurrentStep(rootGoal, latestInstruction)
     : rootGoal;
   const successes = (state.receipts || []).filter(receipt => receipt.outcome === 'success').length;
+  if (state.status === 'cancelled') return CN_TASK_EXECUTION_MESSAGES.cancelled;
+  if (conversationActionRequiresFreshConfirmationReview(state)) {
+    return CN_TASK_EXECUTION_MESSAGES.reconfirmationRequired(goal);
+  }
+  if (state.status === 'failed') {
+    return CN_TASK_EXECUTION_MESSAGES.blocked(
+      goal,
+      formatCnToolFailureDetail(state.latestBlocker || 'The task ended without a verified result.'),
+    );
+  }
   if (state.status === 'completed' || !state.unfinished) {
     if (state.completionSource === 'user_observation') {
       return CN_TASK_EXECUTION_MESSAGES.completedFromUserObservation(goal);
@@ -1034,6 +1118,13 @@ export function buildRecentActionContinuationBridge(
     ? durableState.toolSummaries
     : summarizeToolCalls(executionTail);
   const state = durableState || extractRecentActionContinuationState(executionTail);
+  const taskCapsule = durableState
+    ? buildTaskCapsuleV1(durableState, {
+        previousCapsule: durableState.taskCapsule,
+        currentTurnText: currentText,
+      })
+    : null;
+  const taskCapsulePrompt = taskCapsule ? formatTaskCapsuleForPrompt(taskCapsule) : '';
 
   // A terse conversational follow-up must not promote an ordinary prior
   // exchange into executable work. Guard output is excluded above, and a
@@ -1063,6 +1154,7 @@ export function buildRecentActionContinuationBridge(
     state.latestBlocker ? `- latestBlocker: ${state.latestBlocker}` : '',
     `- unfinished: ${state.unfinished ? 'yes' : 'no'}`,
     durableState?.updatedAt ? `- stateUpdatedAt: ${durableState.updatedAt}` : '',
+    taskCapsulePrompt,
     userTurns.length ? 'Recent user task context:' : '',
     ...userTurns.map(turn => `- ${turn}`),
     assistantTurns.length ? 'Recent Lumi execution state:' : '',

@@ -163,6 +163,38 @@ describe('remote messaging turn integrity', () => {
     expect(sent[1]).toBe('\u597d\uff0c\u7ee7\u7eed\u804a\u3002');
   });
 
+  it('sanitizes an internal execution guard before a remote reply is persisted or sent', async () => {
+    const userId = `guard-boundary-${Date.now()}-${Math.random()}`;
+    const message = incoming(userId, '\u4f60\u597d\uff0c\u4ecb\u7ecd\u4e00\u4e0b\u81ea\u5df1', 'guard-boundary');
+    const internalGuard = 'No successful current-turn tool execution was recorded for that execution-status claim.';
+    const sent: string[] = [];
+    const transport = {
+      enrich: async (incomingMessage: IncomingMessage) => incomingMessage,
+      reply: async (_message: IncomingMessage, text: string) => {
+        sent.push(text);
+        return 'guard-safe-reply';
+      },
+    };
+
+    routes.dispatchIncomingMessage(message, transport, {
+      onMessage: async incomingMessage => ({
+        platform: incomingMessage.platform,
+        text: internalGuard,
+      }),
+    });
+
+    await waitFor(() => sent.length === 1);
+    expect(sent[0]).toContain('\u666e\u901a\u5bf9\u8bdd');
+    expect(sent[0]).not.toMatch(
+      /No successful current-turn tool execution|\u8fd9\u4e00\u8f6e\u6ca1\u6709\u8bb0\u5f55\u5230\u6210\u529f\u7684\u771f\u5b9e\u5de5\u5177\u6267\u884c/u,
+    );
+    const conversation = conversations.getActiveConversation(userId, 'lumi', 'personal', '')!;
+    const assistant = conversations.getMessages(conversation.id)
+      .filter(item => item.role === 'assistant')
+      .at(-1);
+    expect(assistant?.message).toBe(sent[0]);
+  });
+
   it('keeps one visible remote conversation ordered across personal and organization scope changes', async () => {
     const userId = `scope-queue-${Date.now()}-${Math.random()}`;
     const first = incoming(userId, 'personal turn', 'personal-turn');
@@ -224,6 +256,39 @@ describe('remote messaging turn integrity', () => {
       'history-first',
     );
     expect(history.map(item => item.message)).toEqual(['first turn']);
+  });
+
+  it('remote_history_keeps_prior_identical_user_turn_after_excluding_current_message_id', () => {
+    const message = {
+      ...incoming(`identical-history-${Date.now()}`, '同一句话', 'current-identical'),
+      userMessagePersisted: true,
+      userMessageId: 'current-row-id',
+    };
+    const history = routes.buildRemoteConversationHistory([
+      {
+        role: 'user',
+        message: '同一句话',
+        externalMessageId: 'prior-identical',
+        requestId: 'wechat_bot:prior-identical',
+      },
+      {
+        role: 'assistant',
+        message: '上一轮的回答',
+        externalMessageId: 'prior-identical',
+        requestId: 'wechat_bot:prior-identical',
+      },
+      {
+        role: 'user',
+        message: '同一句话',
+        externalMessageId: 'current-identical',
+        requestId: 'wechat_bot:current-identical',
+      },
+    ], message);
+
+    expect(history).toEqual([
+      { role: 'user', content: '同一句话' },
+      { role: 'assistant', content: '上一轮的回答' },
+    ]);
   });
 
   it('returns WeChat intake immediately while shared routing continues in the background', async () => {

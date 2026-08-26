@@ -229,10 +229,11 @@ describe('execution guard recovery', () => {
 
     expect(recovered.attempted).toBe(false);
     expect(recovered.finalization).toMatchObject({
-      text: '当前无法继续执行。',
       reason: 'execution_capability_unavailable',
       notification: undefined,
     });
+    expect(recovered.finalization.text).toContain('状态：受阻');
+    expect(recovered.finalization.text).toContain('证据：');
     expect(JSON.stringify(recovered.finalization)).not.toContain('No successful current-turn');
   });
 
@@ -257,6 +258,32 @@ describe('execution guard recovery', () => {
       reason: 'Grounded artifact completion from current-turn receipts.',
     });
     expect(successful.reason).toBe('');
+
+    const secretNotification = sanitizeExecutionResponseForDelivery({
+      text: 'Operation failed: password=hunter2',
+      finalized: true,
+      blocked: false,
+      notification: {
+        type: 'warning',
+        message: 'password=hunter2; internal=/srv/private/config.json',
+        details: { apiToken: 'top-secret', stack: 'at /srv/private/worker.js:12' },
+      },
+    });
+    expect(JSON.stringify(secretNotification)).not.toContain('hunter2');
+    expect(JSON.stringify(secretNotification)).not.toContain('top-secret');
+    expect(JSON.stringify(secretNotification)).not.toContain('/srv/private');
+    expect(secretNotification.notification).toMatchObject({
+      type: 'warning',
+      details: { apiToken: '[redacted]', stack: '[internal detail omitted]' },
+    });
+  });
+
+  it('routes every socket notification event through the shared sanitizer', () => {
+    for (const file of ['chat.ts', 'task.ts', 'voice.ts']) {
+      const source = readFileSync(path.resolve('server/socket', file), 'utf8');
+      expect(source).toContain("event === 'agent:notification'");
+      expect(source).toContain('sanitizeExecutionNotificationForDelivery');
+    }
   });
 
   it('never exposes the production completion-guard interruption as assistant prose', () => {

@@ -149,6 +149,7 @@ export const CN_TASK_EXECUTION_MESSAGES = {
   completed: (goal: string, receiptCount: number) => `“${goal}”已完成${receiptCount ? `，已核对${receiptCount}个执行回执` : ''}。`,
   completedFromUserObservation: (goal: string) => `好，以你看到的桌面结果为准，“${goal}”记为已完成。`,
   waitingConfirmation: (goal: string) => `“${goal}”正在等你确认下一步；确认后会续接原任务，不会重新路由。`,
+  reconfirmationRequired: (goal: string) => `“${goal}”上次等待确认的具体操作只存在于已结束的客户端进程中，重启后无法安全恢复，所以我没有执行旧操作。请让我重新生成并展示这一步的目标、参数和影响；你审阅新提议后再确认。`,
   blocked: (goal: string, detail: string) => `“${goal}”还没完成。最后阻塞在：${detail}我会从这一步继续，不需要你重新描述。`,
   executing: (goal: string, receiptCount: number) => `“${goal}”还在执行链上${receiptCount ? `，已完成${receiptCount}个可验证步骤` : ''}。`,
   activeWithoutReceipt: '当前任务仍在执行，暂时还没有终态回执。',

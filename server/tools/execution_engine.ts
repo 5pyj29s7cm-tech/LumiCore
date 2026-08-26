@@ -7,11 +7,20 @@ import { decodeToolResult } from './result_envelope';
 import { buildToolExecutionEnvelope, toolRecordIdempotencyKey } from './execution_envelope';
 import { inspectExternalCommitAttempt, settleExternalCommitAttempt } from './external_commit_journal';
 import { isToolLifecyclePersistenceFailure } from './lifecycle_persistence_error';
+import {
+  guardTaskTargetToolCall,
+  isFileTargetTask,
+  type TaskTargetEvidenceRecord,
+} from '../conversation/task_target_anchor';
 
 const CANONICAL_TOOL_EXECUTION_RECORD = Symbol('lumi.canonical_tool_execution_record');
 const CANONICAL_EXTERNAL_COMMIT_RECONCILIATION = Symbol('lumi.canonical_external_commit_reconciliation');
 const canonicalRecordDigests = new WeakMap<ToolExecutionRecord, string>();
 const canonicalInputDigests = new WeakMap<ToolExecutionRecord, ToolExecutionInputDigests>();
+const serverTargetPolicyRecords = new WeakMap<object, {
+  scopeKey: string;
+  records: ToolExecutionRecord[];
+}>();
 
 export interface ToolExecutionInputDigests {
   argumentsDigest: string;
@@ -107,6 +116,48 @@ function brandCanonicalToolExecutionRecord(
   canonicalRecordDigests.set(record, canonicalRecordDigest(record));
   canonicalInputDigests.set(record, { ...inputDigests });
   return record;
+}
+
+function serverTargetPolicyTaskText(context?: ToolContext): string {
+  return [context?.routedTaskText, context?.actionIntent]
+    .map(value => String(value || '').trim())
+    .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index)
+    .join('\n');
+}
+
+function serverTargetPolicyScopeKey(context: ToolContext, taskText: string): string {
+  return [
+    context.taskId || '',
+    context.turnId || '',
+    context.requestId || '',
+    createHash('sha256').update(taskText).digest('hex'),
+  ].join(':');
+}
+
+function serverTargetPolicyEvidence(
+  context: ToolContext | undefined,
+  taskText: string,
+): TaskTargetEvidenceRecord[] {
+  if (!context) return [];
+  const scopeKey = serverTargetPolicyScopeKey(context, taskText);
+  const current = serverTargetPolicyRecords.get(context as object);
+  const liveRecords = current?.scopeKey === scopeKey ? current.records : [];
+  return [...(context.priorToolRecords || []), ...liveRecords].slice(-64);
+}
+
+function rememberServerTargetPolicyRecord(
+  context: ToolContext | undefined,
+  taskText: string,
+  record: ToolExecutionRecord,
+): void {
+  if (!context || !taskText) return;
+  const scopeKey = serverTargetPolicyScopeKey(context, taskText);
+  const current = serverTargetPolicyRecords.get(context as object);
+  const records = current?.scopeKey === scopeKey ? current.records : [];
+  serverTargetPolicyRecords.set(context as object, {
+    scopeKey,
+    records: [...records, record].slice(-64),
+  });
 }
 
 const SECRET_ARGUMENT_RE =
@@ -373,19 +424,48 @@ export async function executeToolCall(
   const startedAt = new Date().toISOString();
   const startedMs = Date.now();
   const requestedArguments = input.arguments || {};
-  const callerPreflight = input.preflight?.(input.name, requestedArguments)
-    || { allowed: true, arguments: requestedArguments };
   const capabilityGetter = (input.registry as any)?.getCapabilityManifestEntry;
   const capability = typeof capabilityGetter === 'function'
     ? capabilityGetter.call(input.registry, input.name, input.context?.toolPolicy)
     : undefined;
-  const desktopAuthorization = callerPreflight.allowed
+  // Snapshot the server-routed contract before invoking any caller-supplied
+  // compatibility preflight. A preflight may narrow arguments, but it cannot
+  // rewrite the task contract that the mandatory target guard enforces.
+  const targetPolicyTaskText = serverTargetPolicyTaskText(input.context);
+  const callerPreflight = input.preflight?.(input.name, requestedArguments)
+    || { allowed: true, arguments: requestedArguments };
+  const callerArguments = callerPreflight.arguments || requestedArguments;
+  const targetPolicy = callerPreflight.allowed && isFileTargetTask(targetPolicyTaskText)
+    ? guardTaskTargetToolCall({
+        taskText: targetPolicyTaskText,
+        toolName: input.name,
+        arguments: callerArguments,
+        toolRecords: serverTargetPolicyEvidence(input.context, targetPolicyTaskText),
+        enforceStructuredFileRead: Boolean(
+          capability
+          && ['files', 'office'].includes(capability.lane)
+          && capability.sideEffects.some((effect: { type?: string }) => effect.type === 'local_read'),
+        ),
+        forbidUnstructuredExecution: Boolean(
+          capability?.sideEffects.some((effect: { type?: string }) => effect.type === 'process_execution'),
+        ),
+      })
+    : { allowed: true, reason: '' };
+  const serverPreflight: ToolExecutionPreflightResult = !callerPreflight.allowed
+    ? { ...callerPreflight, arguments: callerArguments }
+    : !targetPolicy.allowed
+      ? { allowed: false, arguments: callerArguments, reason: targetPolicy.reason }
+      : {
+          allowed: true,
+          arguments: targetPolicy.normalizedArguments || callerArguments,
+        };
+  const desktopAuthorization = serverPreflight.allowed
     ? input.context?.desktopExecutionTracker?.authorize(input.name, capability)
     : undefined;
   const preflight = desktopAuthorization && !desktopAuthorization.allowed
-    ? { allowed: false, arguments: callerPreflight.arguments, reason: desktopAuthorization.reason }
-    : callerPreflight;
-  const executionArguments = preflight.arguments || requestedArguments;
+    ? { allowed: false, arguments: serverPreflight.arguments, reason: desktopAuthorization.reason }
+    : serverPreflight;
+  const executionArguments = preflight.arguments || callerArguments;
   const receiptArguments = sanitizeReceiptValue(executionArguments) as Record<string, any>;
   const evidenceBuilder = (input.registry as any)?.buildEvidenceRecord;
   const record: ToolExecutionRecord = {
@@ -426,7 +506,9 @@ export async function executeToolCall(
     } catch {
       // Desktop observability must not change the canonical tool outcome.
     }
-    return brandCanonicalToolExecutionRecord(record, toolExecutionInputDigests(executionArguments));
+    const finalized = brandCanonicalToolExecutionRecord(record, toolExecutionInputDigests(executionArguments));
+    rememberServerTargetPolicyRecord(input.context, targetPolicyTaskText, finalized);
+    return finalized;
   };
 
   if (!preflight.allowed) {

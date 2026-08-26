@@ -102,7 +102,7 @@ export function RuntimeEvidencePanel({
       </section>
     );
   }
-  const activeTasks = status.tasks.filter(task => ['planning', 'executing', 'waiting_confirmation', 'blocked'].includes(task.status));
+  const activeTasks = status.tasks.filter(task => ['created', 'planning', 'executing', 'verifying', 'waiting_confirmation', 'blocked'].includes(task.status));
   const visibleTasks = (variant === 'compact' ? activeTasks.slice(0, 1) : status.tasks.slice(0, 8));
 
   return (

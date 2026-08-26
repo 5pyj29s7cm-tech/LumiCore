@@ -66,7 +66,7 @@ async function generateSummaryWithLlm(
 ): Promise<string> {
   const getters = input.llmGetters;
   if (!getters) throw new Error('Conversation summary LLM getters are unavailable.');
-  const summaryPrompt = `Summarize this conversation in 2-3 concise sentences. Focus on key decisions, topics discussed, and user preferences revealed. Assistant execution outcomes may be included only when their transcript line is annotated "verified current-turn tools". Prefix every retained execution outcome with "Verified by current-turn tool receipts:". Omit all unverified execution, diagnostic, mode-switch, and completion claims. Output only the summary, with no preamble.\n\n${transcript}`;
+  const summaryPrompt = `Summarize this conversation in 2-3 concise sentences. Focus on key decisions, topics discussed, and user preferences revealed. Omit assistant execution, diagnostic, mode-switch, and completion claims; durable task capsules and server-owned receipt ledgers carry those facts separately. Output only the summary, with no preamble.\n\n${transcript}`;
   const result = await makeLLMCall(
     [{ role: 'user', content: summaryPrompt }],
     [],

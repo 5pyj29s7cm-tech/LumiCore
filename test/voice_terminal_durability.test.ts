@@ -289,6 +289,8 @@ describe('voice terminal wiring', () => {
       source.indexOf('const maxIterations =', source.indexOf('const commitVoiceTerminal = async')),
     );
     expect(strictHelper.indexOf('settleConversationActionExecutionRequest(')).toBeGreaterThan(0);
+    expect(strictHelper.indexOf('settleConversationActionExecutionRequest('))
+      .toBeGreaterThan(strictHelper.indexOf('persistVoiceAssistantMessage('));
     expect(strictHelper.indexOf('flush: flushDBOrThrow'))
       .toBeGreaterThan(strictHelper.indexOf('settleConversationActionExecutionRequest('));
     expect(source).toContain("socket.on('audio:cancel_turn', async");

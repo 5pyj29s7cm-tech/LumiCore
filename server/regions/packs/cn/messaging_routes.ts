@@ -15,7 +15,7 @@ import type { FeishuConfig } from '../../../messaging/feishu';
 import type { IncomingAttachment, IncomingMessage, MessageHandler } from '../../../messaging/types';
 import { getMessagingConfig, updateMessagingConfig } from '../../../messaging/config';
 import {
-  consumeBindingCode,
+  commitBindingCodeConsumption,
   createBindingCode,
   deleteBindingForUser,
   getBinding,
@@ -24,9 +24,13 @@ import {
   revokeMessagingGroupAuthorization,
   listBindingsForUser,
   parseMessagingBindingCommand,
+  planBindingCodeConsumption,
+  rollbackBindingCodeConsumption,
+  type BindingCodeConsumptionPlan,
+  type MessagingPlatformId,
 } from '../../../messaging/bindings';
 import { evaluateMessagingIngress } from '../../../messaging/ingress_policy';
-import { readDB } from '../../../../db_layer';
+import { flushDBOrThrow, readDB } from '../../../../db_layer';
 import { requireAuth } from '../../../middleware/auth';
 import { getDataPath } from '../../../config/data_path';
 import { parseDocument } from '../../../legal/parser';
@@ -53,10 +57,12 @@ import {
   prepareConversationActionExecution,
   settleConversationActionExecutionRequest,
   setConversationActionExecutionStatus,
+  startConversationActionExecutionHeartbeat,
 } from '../../../conversation/manager';
 import { CN_TASK_EXECUTION_MESSAGES } from './voice_fast_path_messages';
 import { acceptMessageOnce, completeMessageDelivery, releaseMessageDelivery } from '../../../messaging/delivery_ledger';
 import {
+  getMessagingJournalEntry,
   recordMessagingIngress,
   updateMessagingJournal,
 } from '../../../messaging/message_journal';
@@ -69,9 +75,17 @@ import { executeToolCall } from '../../../tools/execution_engine';
 import type { ToolExecutionRecord } from '../../../tools/types';
 import { buildUnifiedLegalEntryPrompt } from '../../../cognition/legal_entry';
 import { finalizeLumiResponse } from '../../../cognition/result_finalizer';
+import {
+  finalizeExecutionForOutboundDelivery,
+  type ExecutionGuardRecoveryRunInput,
+} from '../../../cognition/execution_guard_recovery';
 import { recordTokenUsage } from '../../../llm/token_tracker';
 import type { ToolPolicy } from '../../../personality/types';
-import { requestsOrganizationScope, resolvePersonalOrganizationScope } from '../../../messaging/personal_org_scope';
+import {
+  commitPersonalOrganizationScopePlan,
+  planPersonalOrganizationScope,
+  requestsOrganizationScope,
+} from '../../../messaging/personal_org_scope';
 import { buildLumiTurnDispatch, type LumiTurnDispatch } from '../../../cognition/turn_dispatch';
 import { buildLumiExecutionPipeline, type LumiExecutionPipeline } from '../../../cognition/execution_pipeline';
 import {
@@ -80,6 +94,7 @@ import {
 } from '../../../cognition/capability_selection';
 import { buildLumiRuntimeCapabilityContext } from '../../../cognition/capability_context';
 import { buildInteractionModeOverlay } from '../../../cognition/turn_flow';
+import type { LumiTurnFlow } from '../../../cognition/turn_flow';
 import { bindCapabilityExecutionPlanTask } from '../../../cognition/capability_execution_plan';
 import { buildDesktopExecutionStabilityPolicy } from '../../../cognition/desktop_execution_stability';
 import { createDesktopExecutionTracker, withDesktopExecutionReceipt } from '../../../desktop/execution_runtime';
@@ -103,17 +118,24 @@ import {
   persistRemotePostTurnLearning,
 } from './remote_memory';
 import {
-  clearPendingConfirmation,
-  consumePendingConfirmation,
-  formatPendingConfirmationPrompt,
+  buildTransportNeutralConfirmationScope,
+  consumePendingConfirmationDurably,
   formatPendingConfirmationRequest,
-  getPendingConfirmation,
-  isConfirmationCancellation,
-  isExplicitConfirmationReply,
-  recordPendingConfirmation,
+  recordPendingConfirmationDurably,
 } from '../../../tools/pending_confirmation';
+import { ensurePendingConfirmationPersistenceInitialized } from '../../../tools/pending_confirmation_repository';
+import {
+  admitAcceptedUserTurnDurably,
+  resolveAcceptedTurnConfirmation,
+  type AcceptedUserTurnAdmission,
+} from '../../../socket/action_turn_durability';
+import {
+  buildPendingAssistantOfferContextFromTranscript,
+  type PendingAssistantOfferContext,
+} from '../../../cognition/pending_assistant_offer';
 
 const messageRouteQueues = new Map<string, Promise<void>>();
+const bindingCodeQueues = new Map<string, Promise<unknown>>();
 const messageRouteActivity = new Map<string, {
   latestSequence: number;
   latestMessageId: string;
@@ -122,6 +144,75 @@ const messageRouteActivity = new Map<string, {
 }>();
 const MAX_MESSAGING_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const MESSAGE_ACTIVITY_TTL_MS = 24 * 60 * 60 * 1000;
+
+export class MessagingReplyDurabilityError extends Error {
+  readonly stage: 'accepted_turn' | 'terminal_reply';
+
+  constructor(stage: 'accepted_turn' | 'terminal_reply', cause: unknown) {
+    super(`Remote messaging ${stage} durability fence failed`, { cause });
+    this.name = 'MessagingReplyDurabilityError';
+    this.stage = stage;
+  }
+}
+
+function isMessagingReplyDurabilityError(error: unknown): error is MessagingReplyDurabilityError {
+  return error instanceof MessagingReplyDurabilityError;
+}
+
+async function flushMessagingStateOrThrow(
+  stage: 'accepted_turn' | 'terminal_reply',
+): Promise<void> {
+  try {
+    await flushDBOrThrow();
+  } catch (error) {
+    throw new MessagingReplyDurabilityError(stage, error);
+  }
+}
+
+type MessagingFinalization = ReturnType<typeof finalizeLumiResponse>;
+
+async function finalizeMessagingResponseForDelivery(input: {
+  taskText: string;
+  responseText: string;
+  toolRecords: ToolExecutionRecord[];
+  source: string;
+  flow?: LumiTurnFlow;
+  initialFinalization?: MessagingFinalization;
+  allowToolUse?: boolean;
+  pendingConfirmation?: boolean;
+  aborted?: boolean;
+  isPendingConfirmation?: () => boolean;
+  isAborted?: () => boolean;
+  attempt?: ExecutionGuardRecoveryRunInput<MessagingFinalization>['attempt'];
+  refinalize?: ExecutionGuardRecoveryRunInput<MessagingFinalization>['finalize'];
+}) {
+  const finalization = input.initialFinalization || finalizeLumiResponse({
+    taskText: input.taskText,
+    responseText: input.responseText,
+    toolRecords: input.toolRecords,
+    source: input.source,
+    flow: input.flow,
+  });
+  return finalizeExecutionForOutboundDelivery({
+    task: input.taskText,
+    responseText: input.responseText,
+    finalization,
+    allowToolUse: input.allowToolUse === true,
+    pendingConfirmation: input.pendingConfirmation,
+    aborted: input.aborted,
+    isPendingConfirmation: input.isPendingConfirmation,
+    isAborted: input.isAborted,
+    toolRecords: input.toolRecords,
+    attempt: input.attempt,
+    finalize: input.refinalize || ((candidateText, records) => finalizeLumiResponse({
+        taskText: input.taskText,
+        responseText: candidateText,
+        toolRecords: records,
+        source: `${input.source}_guard_recovery`,
+        flow: input.flow,
+      })),
+  });
+}
 
 export interface MessagingRouteOptions {
   onMessage?: MessageHandler;
@@ -409,6 +500,39 @@ export function persistBoundMessagingMessage(
   };
   onConversationUpdated?.(update);
   return update;
+}
+
+async function admitBoundMessagingTurnDurably(
+  message: IncomingMessage,
+  onConversationUpdated?: MessagingRouteOptions['onConversationUpdated'],
+): Promise<{ message: IncomingMessage; admission: AcceptedUserTurnAdmission<string> | null }> {
+  if (!message.boundUserId) return { message, admission: null };
+  const persisted = message.userMessagePersisted && message.userMessageId
+    ? { messageId: message.userMessageId }
+    : persistBoundMessagingMessage(message, 'user', getDisplayText(message), onConversationUpdated);
+  const acceptedMessage: IncomingMessage = {
+    ...message,
+    userMessagePersisted: Boolean(persisted?.messageId),
+    userMessageId: persisted?.messageId,
+  };
+  let admissionFailure: unknown;
+  const admission = await admitAcceptedUserTurnDurably({
+    persistAcceptedUserTurn: () => {
+      if (!acceptedMessage.userMessagePersisted || !acceptedMessage.userMessageId) {
+        throw new Error('Accepted remote user transcript was not persisted');
+      }
+      return acceptedMessage.userMessageId;
+    },
+    flush: flushDBOrThrow,
+    onPersistenceUnknown: error => {
+      admissionFailure = error;
+    },
+  });
+  if (!admission) {
+    console.error('[Messaging] Accepted remote turn is not durable:', admissionFailure);
+    throw new MessagingReplyDurabilityError('accepted_turn', admissionFailure);
+  }
+  return { message: acceptedMessage, admission };
 }
 
 export async function enqueueMessageRoute(message: IncomingMessage, work: () => Promise<void>): Promise<void> {
@@ -701,46 +825,91 @@ function remoteMaterialSource(platform: IncomingMessage['platform']): 'feishu' |
   return 'feishu';
 }
 
-function handleMessagingBindingCommand(msg: IncomingMessage): string | null {
-  if (msg.platform !== 'feishu' && msg.platform !== 'wecom') return null;
+interface PlannedMessagingBindingCommand {
+  reply: string;
+  consumption?: BindingCodeConsumptionPlan;
+}
+
+function isBindingPlatform(platform: IncomingMessage['platform']): platform is MessagingPlatformId {
+  return platform === 'feishu' || platform === 'wecom' || platform === 'wechat';
+}
+
+function planMessagingBindingCommand(msg: IncomingMessage): PlannedMessagingBindingCommand | null {
+  if (!isBindingPlatform(msg.platform)) return null;
   const command = parseMessagingBindingCommand(msg.text);
   if (!command) return null;
   if (msg.chatType === 'group' && command.kind === 'bind') {
-    return 'For security, Lumi identity binding codes can only be used in a private chat with the bot. This group must be authorized separately by an organization owner or administrator.';
+    return {
+      reply: 'For security, Lumi identity binding codes can only be used in a private chat with the bot. This group must be authorized separately by an organization owner or administrator.',
+    };
   }
   if (command.kind === 'status') {
     const current = getBinding(msg.platform, msg.userId, msg.chatId, msg.chatType);
     if (!current) {
-      return `当前${remotePlatformLabel(msg.platform)}身份尚未绑定 Lumi。请在组织工作台生成一次性绑定码后发送“绑定 Lumi 绑定码”。`;
+      return { reply: `当前${remotePlatformLabel(msg.platform)}身份尚未绑定 Lumi。请在 Lumi 桌面端生成一次性绑定码后发送“绑定 Lumi 绑定码”。` };
     }
-    const membership = getMember(current.orgId, current.lumiUserId);
-    if (!membership || membership.status !== 'active') {
-      return '已找到绑定记录，但对应组织成员权限已经失效。请在 Lumi 中恢复成员权限或重新绑定。';
+    if (current.domain === 'work') {
+      const membership = getMember(current.orgId, current.lumiUserId);
+      if (!membership || membership.status !== 'active') {
+        return { reply: '已找到绑定记录，但对应组织成员权限已经失效。请在 Lumi 中恢复成员权限或重新绑定。' };
+      }
     }
-    return `绑定状态已核验：当前${msg.chatType === 'group' ? '群成员身份' : '会话身份'}已连接到 Lumi 组织工作域。`;
+    return {
+      reply: current.domain === 'personal'
+        ? `绑定状态已核验：当前${remotePlatformLabel(msg.platform)}身份已连接到你的个人 Lumi。`
+        : `绑定状态已核验：当前${msg.chatType === 'group' ? '群成员身份' : '会话身份'}已连接到 Lumi 组织工作域。`,
+    };
   }
   if (command.kind === 'invalid') {
-    return `绑定命令格式不完整。请原样发送“绑定 Lumi 绑定码”，或在 Lumi 桌面端重新生成${remotePlatformLabel(msg.platform)}绑定码。`;
+    return { reply: `绑定命令格式不完整。请原样发送“绑定 Lumi 绑定码”，或在 Lumi 桌面端重新生成${remotePlatformLabel(msg.platform)}绑定码。` };
   }
-  const binding = consumeBindingCode(msg.platform, command.code, msg.userId, msg.chatId, msg.chatType);
-  if (!binding) {
-    return `绑定码无效或已过期。请在 Lumi 桌面端重新生成${remotePlatformLabel(msg.platform)}绑定码。`;
+  const consumption = planBindingCodeConsumption(
+    msg.platform,
+    command.code,
+    msg.userId,
+    msg.chatId,
+    msg.chatType,
+  );
+  if (!consumption) {
+    return { reply: `绑定码无效或已过期。请在 Lumi 桌面端重新生成${remotePlatformLabel(msg.platform)}绑定码。` };
   }
-  return msg.chatType === 'group'
-    ? '绑定成功。你在这个群里的消息会按你的 Lumi 身份和组织权限独立路由；其他成员仍需分别绑定，不会共享你的权限或对话。'
-    : '绑定成功。这个会话现在会按所选组织和你的 Lumi 身份路由；可以查询组织知识库、查询案件，或发送案件文件归档。';
+  if (consumption.code.domain === 'work') {
+    const membership = getMember(consumption.code.orgId, consumption.code.lumiUserId);
+    if (!membership || membership.status !== 'active') {
+      return { reply: '绑定码对应的组织成员权限已经失效。请在 Lumi 中恢复成员权限后重新生成绑定码。' };
+    }
+  }
+  return {
+    consumption,
+    reply: consumption.code.domain === 'personal'
+      ? '绑定成功。这里的消息会由你的个人 Lumi 处理，并同步到 Lumi 客户端聊天。'
+      : '绑定成功。这个会话现在会按所选组织和你的 Lumi 身份路由；可以查询组织知识库、查询案件，或发送案件文件归档。',
+  };
 }
 
 function applyMessagingBinding(msg: IncomingMessage): IncomingMessage {
-  if (msg.platform !== 'feishu' && msg.platform !== 'wecom') return msg;
+  if (!isBindingPlatform(msg.platform)) return msg;
   const binding = getBinding(msg.platform, msg.userId, msg.chatId, msg.chatType);
   if (!binding) return msg;
-  const membership = getMember(binding.orgId, binding.lumiUserId);
-  if (!membership || membership.status !== 'active') return msg;
+  if (binding.domain === 'work') {
+    const membership = getMember(binding.orgId, binding.lumiUserId);
+    if (!membership || membership.status !== 'active') return msg;
+  }
   return {
     ...msg,
     boundUserId: binding.lumiUserId,
-    boundOrgId: binding.orgId,
+    boundOrgId: binding.domain === 'work' ? binding.orgId : undefined,
+  };
+}
+
+function applyPlannedMessagingBinding(
+  msg: IncomingMessage,
+  plan: BindingCodeConsumptionPlan,
+): IncomingMessage {
+  return {
+    ...msg,
+    boundUserId: plan.code.lumiUserId,
+    boundOrgId: plan.code.domain === 'work' ? plan.code.orgId : undefined,
   };
 }
 
@@ -764,70 +933,175 @@ export function dispatchIncomingMessage(
       return false;
     }
   } catch (err: any) {
-    console.warn('[Messaging] Delivery ledger unavailable; continuing with this message:', err?.message || err);
+    recordMessagingIngress(message);
+    updateMessagingJournal(message, {
+      status: 'delivery_unknown',
+      error: `Delivery ledger unavailable: ${err?.message || err}`,
+    });
+    console.error('[Messaging] Delivery ledger unavailable; refusing an untracked remote turn:', err?.message || err);
+    return false;
   }
 
   const trackedMessage = registerMessageRouteActivity(message);
   recordMessagingIngress(trackedMessage);
   let finalJournalStatus: 'completed' | 'superseded' = 'completed';
+  let terminalReplyDurable = false;
+  let retryableBindingTurn = false;
+  let retryableReplyDelivery = false;
 
   setImmediate(() => {
     void (async () => {
-      updateMessagingJournal(trackedMessage, { status: 'processing' });
-      const bindingReply = handleMessagingBindingCommand(trackedMessage);
-      if (bindingReply) {
-        const correlated = correlateMessagingReply(trackedMessage, bindingReply);
-        if (correlated.superseded) {
-          finalJournalStatus = 'superseded';
-          return;
-        }
-        const replyMessageId = await transport.reply(trackedMessage, correlated.text);
+      const interruptedDelivery = getMessagingJournalEntry(trackedMessage);
+      if (
+        interruptedDelivery?.status === 'delivery_unknown'
+        && interruptedDelivery.replyRetryable
+        && interruptedDelivery.replyText
+      ) {
+        retryableBindingTurn = true;
+        retryableReplyDelivery = true;
+        updateMessagingJournal(trackedMessage, { status: 'processing' });
+        const replyMessageId = await transport.reply(trackedMessage, interruptedDelivery.replyText);
+        retryableReplyDelivery = false;
         updateMessagingJournal(trackedMessage, {
           status: 'replied',
-          replyText: correlated.text,
+          replyText: interruptedDelivery.replyText,
           replyMessageId: String(replyMessageId || ''),
+          replyRetryable: false,
+          error: '',
+        });
+        return;
+      }
+
+      updateMessagingJournal(trackedMessage, { status: 'processing' });
+      const bindingCommand = planMessagingBindingCommand(trackedMessage);
+      if (bindingCommand) {
+        await enqueueMessageRoute(trackedMessage, async () => {
+          const correlated = correlateMessagingReply(trackedMessage, bindingCommand.reply);
+          if (correlated.superseded) {
+            finalJournalStatus = 'superseded';
+            return;
+          }
+          if (!bindingCommand.consumption) {
+            const existingTarget = applyMessagingBinding(trackedMessage);
+            const accepted = await admitBoundMessagingTurnDurably(
+              existingTarget,
+              options?.onConversationUpdated,
+            );
+            if (accepted.message.boundUserId) {
+              persistBoundMessagingExchange(
+                accepted.message,
+                correlated.text,
+                options?.onConversationUpdated,
+              );
+              await flushMessagingStateOrThrow('terminal_reply');
+              terminalReplyDurable = true;
+            }
+            const replyMessageId = await transport.reply(trackedMessage, correlated.text);
+            updateMessagingJournal(trackedMessage, {
+              status: 'replied',
+              replyText: correlated.text,
+              replyMessageId: String(replyMessageId || ''),
+            });
+            return;
+          }
+
+          await enqueueBindingCodeTransaction(bindingCommand.consumption, async () => {
+            const refreshedPlan = planBindingCodeConsumption(
+              bindingCommand.consumption!.platform,
+              bindingCommand.consumption!.code.code,
+              bindingCommand.consumption!.platformUserId,
+              bindingCommand.consumption!.chatId,
+              bindingCommand.consumption!.chatType,
+            );
+            if (!refreshedPlan) {
+              const invalidReply = `绑定码无效或已过期。请在 Lumi 桌面端重新生成${remotePlatformLabel(trackedMessage.platform)}绑定码。`;
+              const replyMessageId = await transport.reply(trackedMessage, invalidReply);
+              updateMessagingJournal(trackedMessage, {
+                status: 'replied',
+                replyText: invalidReply,
+                replyMessageId: String(replyMessageId || ''),
+              });
+              return;
+            }
+            retryableBindingTurn = true;
+            const plannedTarget = applyPlannedMessagingBinding(trackedMessage, refreshedPlan);
+            const accepted = await admitBoundMessagingTurnDurably(
+              plannedTarget,
+              options?.onConversationUpdated,
+            );
+            const committed = commitBindingCodeConsumption(refreshedPlan);
+            if (!committed) {
+              throw new Error('The binding code was already consumed by another durable request');
+            }
+            const committedTarget: IncomingMessage = {
+              ...accepted.message,
+              boundUserId: committed.binding.lumiUserId,
+              boundOrgId: committed.binding.domain === 'work' ? committed.binding.orgId : undefined,
+            };
+            try {
+              persistBoundMessagingExchange(
+                committedTarget,
+                correlated.text,
+                options?.onConversationUpdated,
+              );
+              await flushMessagingStateOrThrow('terminal_reply');
+              terminalReplyDurable = true;
+            } catch (error) {
+              rollbackBindingCodeConsumption(committed);
+              throw error;
+            }
+            updateMessagingJournal(trackedMessage, {
+              boundUserId: committedTarget.boundUserId || '',
+              domain: committedTarget.boundOrgId ? 'work' : 'personal',
+              orgId: committedTarget.boundOrgId || '',
+              replyText: correlated.text,
+              replyRetryable: true,
+            });
+            retryableReplyDelivery = true;
+            const replyMessageId = await transport.reply(trackedMessage, correlated.text);
+            retryableReplyDelivery = false;
+            updateMessagingJournal(trackedMessage, {
+              status: 'replied',
+              replyText: correlated.text,
+              replyMessageId: String(replyMessageId || ''),
+              replyRetryable: false,
+            });
+          });
         });
         return;
       }
 
       const boundMessage = applyMessagingBinding(trackedMessage);
-      const initialScope = resolvePersonalOrganizationScope(
+      const scopePlan = planPersonalOrganizationScope(
         boundMessage,
         requestsOrganizationScope(getRequestText(boundMessage)),
       );
-      const scopedBaseMessage = initialScope.message;
-      const persistedUserMessage = scopedBaseMessage.boundUserId
-        ? persistBoundMessagingMessage(
-          scopedBaseMessage,
-          'user',
-          getDisplayText(scopedBaseMessage),
-          options?.onConversationUpdated,
-        )
-        : null;
-      const userMessagePersisted = Boolean(persistedUserMessage?.messageId);
-      const routeBaseMessage: IncomingMessage = {
-        ...scopedBaseMessage,
-        userMessagePersisted,
-        userMessageId: persistedUserMessage?.messageId,
-      };
-      updateMessagingJournal(trackedMessage, {
-        boundUserId: routeBaseMessage.boundUserId || '',
-        domain: routeBaseMessage.boundOrgId ? 'work' : 'personal',
-        orgId: routeBaseMessage.boundOrgId || '',
-      });
-      // Long-connection attachment URLs can expire within minutes. Download before
-      // waiting behind another long-running task from the same conversation. Start
-      // enrichment now while queue registration preserves receive order.
-      const enrichment = initialScope.kind === 'reply'
+      // Accepted transcripts are persisted immediately, even when execution is
+      // queued behind an older long-running turn. Side effects remain fenced.
+      const accepted = await admitBoundMessagingTurnDurably(
+        scopePlan.resolution.message,
+        options?.onConversationUpdated,
+      );
+      const routeBaseMessage = accepted.message;
+      const enrichment = scopePlan.resolution.kind === 'reply'
         ? Promise.resolve(routeBaseMessage)
         : transport.enrich(routeBaseMessage);
-      await enqueueMessageRoute(routeBaseMessage, async () => {
+      await enqueueMessageRoute(trackedMessage, async () => {
+        commitPersonalOrganizationScopePlan(scopePlan);
+        updateMessagingJournal(trackedMessage, {
+          boundUserId: routeBaseMessage.boundUserId || '',
+          domain: routeBaseMessage.boundOrgId ? 'work' : 'personal',
+          orgId: routeBaseMessage.boundOrgId || '',
+        });
+        // Attachment enrichment may download and write local files. It starts
+        // only after a bound user's accepted transcript is durably flushed,
+        // but before a long-running predecessor can let signed URLs expire.
         const enriched = await enrichment;
         const enrichedMessage: IncomingMessage = applyRemoteAttachmentContext({
           ...enriched,
           receivedAt: routeBaseMessage.receivedAt,
           routeSequence: routeBaseMessage.routeSequence,
-          userMessagePersisted,
+          userMessagePersisted: routeBaseMessage.userMessagePersisted,
           userMessageId: routeBaseMessage.userMessageId,
         });
         const deliverExchange = async (target: IncomingMessage, reply: string): Promise<void> => {
@@ -837,6 +1111,10 @@ export function dispatchIncomingMessage(
             return;
           }
           persistBoundMessagingExchange(target, correlated.text, options?.onConversationUpdated);
+          if (target.boundUserId) {
+            await flushMessagingStateOrThrow('terminal_reply');
+            terminalReplyDurable = true;
+          }
           const replyMessageId = await transport.reply(target, correlated.text);
           updateMessagingJournal(trackedMessage, {
             status: 'replied',
@@ -845,18 +1123,19 @@ export function dispatchIncomingMessage(
           });
         };
 
-        if (initialScope.kind === 'reply') {
-          await deliverExchange(enrichedMessage, initialScope.reply);
+        if (scopePlan.resolution.kind === 'reply') {
+          await deliverExchange(enrichedMessage, scopePlan.resolution.reply);
           return;
         }
 
         const routedMessage = enrichedMessage;
 
-        const replyText = await processWithPersonality(routedMessage, options);
+        const replyText = await processWithPersonality(routedMessage, options, accepted.admission);
         if (!replyText) {
           finalJournalStatus = 'superseded';
           return;
         }
+        terminalReplyDurable = Boolean(routedMessage.boundUserId);
         const replyMessageId = await transport.reply(routedMessage, replyText);
         updateMessagingJournal(trackedMessage, {
           status: 'replied',
@@ -868,7 +1147,20 @@ export function dispatchIncomingMessage(
       completeMessageDelivery(trackedMessage.platform, trackedMessage.messageId);
       updateMessagingJournal(trackedMessage, { status: finalJournalStatus });
     }).catch(async (err: any) => {
-      if (isMessagingDeliveryUnknownError(err)) {
+      if (retryableBindingTurn) {
+        releaseMessageDelivery(trackedMessage.platform, trackedMessage.messageId);
+        updateMessagingJournal(trackedMessage, {
+          status: retryableReplyDelivery ? 'delivery_unknown' : 'failed',
+          error: err?.message || String(err),
+        });
+        console.error(`[Messaging] ${trackedMessage.platform} binding route failed:`, err?.message || err);
+        return;
+      }
+      if (
+        isMessagingReplyDurabilityError(err)
+        || isMessagingDeliveryUnknownError(err)
+        || terminalReplyDurable
+      ) {
         completeMessageDelivery(trackedMessage.platform, trackedMessage.messageId);
         updateMessagingJournal(trackedMessage, {
           status: 'delivery_unknown',
@@ -879,13 +1171,6 @@ export function dispatchIncomingMessage(
       releaseMessageDelivery(trackedMessage.platform, trackedMessage.messageId);
       updateMessagingJournal(trackedMessage, { status: 'failed', error: err?.message || String(err) });
       console.error(`[Messaging] ${trackedMessage.platform} route failed:`, err?.message || err);
-      const correlated = correlateMessagingReply(
-        trackedMessage,
-        '这次处理没有完成，请稍后重试。',
-      );
-      if (!correlated.superseded) {
-        await transport.reply(trackedMessage, correlated.text).catch(() => undefined);
-      }
     });
   });
   return true;
@@ -1429,6 +1714,7 @@ export interface RemoteLumiExecutionPlanInput {
   dispatch?: LumiTurnDispatch;
   actionTaskState?: import('../../../cognition/action_continuation').ConversationActionContinuationState | null;
   taskId?: string;
+  pendingAssistantOfferContext?: PendingAssistantOfferContext;
 }
 
 function unauthenticatedRemoteDispatch(dispatch: LumiTurnDispatch): LumiTurnDispatch {
@@ -1488,6 +1774,7 @@ export function buildRemoteLumiExecutionPlan(input: RemoteLumiExecutionPlanInput
     registry: toolRegistry,
     personalityToolPolicy: input.personalityToolPolicy,
     actionTaskState: input.actionTaskState,
+    pendingAssistantOfferContext: input.pendingAssistantOfferContext,
     isSanctuary: !input.identityBound,
     additionalForbiddenTools: input.domain === 'work' && !input.canWriteOrganization
       ? ORGANIZATION_VIEWER_WRITE_TOOLS
@@ -1510,9 +1797,76 @@ function desktopRelayReportedSuccess(raw: string): boolean {
   }
 }
 
+async function enqueueBindingCodeTransaction<T>(
+  plan: BindingCodeConsumptionPlan,
+  work: () => Promise<T>,
+): Promise<T> {
+  const key = `${plan.platform}:${plan.code.code}`;
+  const previous = bindingCodeQueues.get(key) || Promise.resolve();
+  const next = previous.catch(() => undefined).then(work);
+  bindingCodeQueues.set(key, next);
+  try {
+    return await next;
+  } finally {
+    if (bindingCodeQueues.get(key) === next) bindingCodeQueues.delete(key);
+  }
+}
+
+export function buildRemoteConversationHistory(
+  priorMessages: any[],
+  msg: IncomingMessage,
+): Array<{ role: 'user' | 'assistant'; content: string }> {
+  const stableMessageId = String(msg.messageId || '').trim();
+  const stableRequestId = stableMessageId ? `${msg.platform}_bot:${stableMessageId}` : '';
+  let historicalMessages = msg.userMessagePersisted && stableMessageId
+    ? priorMessages.filter(item => !(
+        item.role === 'user'
+        && (item.externalMessageId === stableMessageId || item.requestId === stableRequestId)
+      ))
+    : [...priorMessages];
+
+  // Compatibility for old rows that predate remote message IDs. When identity
+  // is unavailable, remove the legacy turn as a unit so its assistant response
+  // cannot be left orphaned. Modern turns are filtered only by stable identity;
+  // identical text from a prior message is legitimate history.
+  if (msg.userMessagePersisted && !stableMessageId) {
+    const currentDisplayText = getDisplayText(msg).trim();
+    for (let index = historicalMessages.length - 1; index >= 0; index -= 1) {
+      const item = historicalMessages[index];
+      const content = String(item.message || item.content || '').trim();
+      if (item.role !== 'user' || item.externalMessageId || item.requestId || content !== currentDisplayText) continue;
+      const remove = new Set([index]);
+      const following = historicalMessages[index + 1];
+      if (
+        following?.role === 'assistant'
+        && !following.externalMessageId
+        && !following.requestId
+      ) {
+        remove.add(index + 1);
+      }
+      historicalMessages = historicalMessages.filter((_, itemIndex) => !remove.has(itemIndex));
+      break;
+    }
+  }
+
+  return historicalMessages.flatMap((item: any) => {
+    const content = String(item.message || item.content || '').trim();
+    const response = String(item.response || '').trim();
+    if (item.role === 'assistant') return content ? [{ role: 'assistant' as const, content }] : [];
+    if (item.role === 'user') {
+      return [
+        ...(content ? [{ role: 'user' as const, content }] : []),
+        ...(response ? [{ role: 'assistant' as const, content: response }] : []),
+      ];
+    }
+    return [];
+  }).slice(-16);
+}
+
 export async function processWithPersonality(
   msg: IncomingMessage,
   options?: MessagingRouteOptions,
+  preacceptedAdmission?: AcceptedUserTurnAdmission<string> | null,
 ): Promise<string> {
   const llm = options?.llmGetters;
   const requestText = getRequestText(msg);
@@ -1524,21 +1878,102 @@ export async function processWithPersonality(
   const orgId = isOrganizationBound ? msg.boundOrgId! : '';
   const source = `${msg.platform}_bot`;
   const requestId = `${source}:${msg.messageId}`;
-  const confirmationScope = {
-    source,
-    domain,
-    orgId,
-    channelId: [msg.platform, msg.chatType, msg.chatId, msg.threadId || 'main'].join(':'),
+  const flushTerminalReply = async (): Promise<void> => {
+    if (isIdentityBound) await flushMessagingStateOrThrow('terminal_reply');
   };
-  if (isIdentityBound && isConfirmationCancellation(requestText)) {
-    clearPendingConfirmation(effectiveUserId, confirmationScope);
-  }
-  const pendingConfirmation = isIdentityBound && isExplicitConfirmationReply(requestText)
-    ? getPendingConfirmation(effectiveUserId, confirmationScope)
+  const conversationAgentId = messagingConversationAgentId(msg);
+  let conversation = isIdentityBound
+    ? getOrCreateActiveConversation(effectiveUserId, conversationAgentId, domain, orgId)
     : null;
-  const pendingConfirmationPrompt = pendingConfirmation
-    ? formatPendingConfirmationPrompt(pendingConfirmation)
-    : '';
+  let acceptedTurnAdmission: AcceptedUserTurnAdmission<string> | null =
+    preacceptedAdmission?.persisted === msg.userMessageId ? preacceptedAdmission : null;
+  if (isIdentityBound && (!msg.userMessagePersisted || !msg.userMessageId)) {
+    const persistedUserMessage = persistBoundMessagingMessage(
+      msg,
+      'user',
+      getDisplayText(msg),
+      options?.onConversationUpdated,
+    );
+    msg = {
+      ...msg,
+      userMessagePersisted: Boolean(persistedUserMessage?.messageId),
+      userMessageId: persistedUserMessage?.messageId,
+    };
+    conversation = getOrCreateActiveConversation(effectiveUserId, conversationAgentId, domain, orgId);
+  }
+  if (isIdentityBound && !acceptedTurnAdmission) {
+    let admissionFailure: unknown;
+    acceptedTurnAdmission = await admitAcceptedUserTurnDurably({
+      persistAcceptedUserTurn: () => {
+        if (!msg.userMessagePersisted || !msg.userMessageId) {
+          throw new Error('Accepted remote user transcript was not persisted');
+        }
+        return msg.userMessageId;
+      },
+      flush: flushDBOrThrow,
+      onPersistenceUnknown: error => {
+        admissionFailure = error;
+      },
+    });
+    if (!acceptedTurnAdmission) {
+      console.error('[Messaging] Accepted remote turn is not durable:', admissionFailure);
+      throw new MessagingReplyDurabilityError('accepted_turn', admissionFailure);
+    }
+    try {
+      await ensurePendingConfirmationPersistenceInitialized();
+    } catch (error: any) {
+      console.error('[Messaging] Encrypted confirmation store is unavailable:', error);
+      if (isMessagingReplyDurabilityError(error)) throw error;
+      throw new MessagingReplyDurabilityError('accepted_turn', error);
+    }
+  }
+  const precedingTranscript = conversation
+    ? getMessagesThroughExternalMessage(conversation.id, msg.messageId, 8).filter(item => !(
+        item.role === 'user'
+        && (item.externalMessageId === msg.messageId || item.requestId === requestId)
+      ))
+    : [];
+  const pendingAssistantOfferContext = conversation
+    ? buildPendingAssistantOfferContextFromTranscript({
+        messages: precedingTranscript,
+        userId: effectiveUserId,
+        domain,
+        orgId,
+        conversationId: conversation.id,
+        taskId: conversation.actionContinuationState?.taskId,
+      })
+    : undefined;
+  const confirmationChannelScope = conversation
+    ? buildTransportNeutralConfirmationScope({
+        domain,
+        orgId,
+        conversationId: conversation.id,
+      })
+    : undefined;
+  let confirmationScope = conversation
+    ? buildTransportNeutralConfirmationScope({
+        domain,
+        orgId,
+        conversationId: conversation.id,
+        taskId: conversation.actionContinuationState?.taskId,
+      })
+    : undefined;
+  const confirmationResolution = isIdentityBound
+    && acceptedTurnAdmission
+    && confirmationScope
+    && confirmationChannelScope
+    ? await resolveAcceptedTurnConfirmation({
+        admission: acceptedTurnAdmission,
+        userId: effectiveUserId,
+        userText: requestText,
+        actionState: conversation?.actionContinuationState,
+        taskScope: confirmationScope,
+        channelScope: confirmationChannelScope,
+      })
+    : null;
+  if (confirmationResolution) confirmationScope = confirmationResolution.scope;
+  const pendingConfirmation = confirmationResolution?.pending || null;
+  const pendingConfirmationPrompt = confirmationResolution?.prompt || '';
   const organizationMembership = isOrganizationBound ? getMember(orgId, effectiveUserId) : null;
   const canWriteOrganization = organizationMembership?.status === 'active' && organizationMembership.role !== 'viewer';
   const routingText = [
@@ -1556,6 +1991,7 @@ export async function processWithPersonality(
     operationMode,
     identityBound: isIdentityBound,
     canWriteOrganization,
+    pendingAssistantOfferContext,
   });
   const desktopRelay = isIdentityBound
     ? options?.createScopedDesktopRelay?.(effectiveUserId, source, domain, orgId)
@@ -1563,58 +1999,14 @@ export async function processWithPersonality(
   const personalDesktopRelay = isIdentityBound
     ? options?.createPersonalDesktopRelay?.(effectiveUserId, source)
     : undefined;
-  const conversationAgentId = messagingConversationAgentId(msg);
-  let conversation = isIdentityBound
-    ? getOrCreateActiveConversation(effectiveUserId, conversationAgentId, domain, orgId)
-    : null;
   const priorMessages = conversation
     ? getMessagesByTokenBudget(conversation.id, 6000, 8, msg.messageId)
     : [];
   const priorRuntimeEvidence = conversation
     ? buildRemoteRuntimeEvidenceContext(getMessagesThroughExternalMessage(conversation.id, msg.messageId, 12))
     : '';
-  const historicalMessages = msg.userMessagePersisted
-    ? priorMessages.filter(item => !(item.role === 'user' && item.externalMessageId === msg.messageId))
-    : priorMessages;
-  let conversationHistory = historicalMessages.flatMap((item: any) => {
-    const content = String(item.message || item.content || '').trim();
-    const response = String(item.response || '').trim();
-    if (item.role === 'assistant') return content ? [{ role: 'assistant', content }] : [];
-    if (item.role === 'user') {
-      return [
-        ...(content ? [{ role: 'user', content }] : []),
-        ...(response ? [{ role: 'assistant', content: response }] : []),
-      ];
-    }
-    return [];
-  }).slice(-16);
-  if (msg.userMessagePersisted) {
-    const currentDisplayText = getDisplayText(msg).trim();
-    for (let index = conversationHistory.length - 1; index >= 0; index -= 1) {
-      if (conversationHistory[index].role !== 'user') continue;
-      if (conversationHistory[index].content.trim() !== currentDisplayText) continue;
-      conversationHistory = conversationHistory.filter((_, itemIndex) => itemIndex !== index);
-      break;
-    }
-  }
+  const conversationHistory = buildRemoteConversationHistory(priorMessages, msg);
 
-  if (isIdentityBound && (!msg.userMessagePersisted || !msg.userMessageId)) {
-    const persistedUserMessage = persistBoundMessagingMessage(
-      msg,
-      'user',
-      getDisplayText(msg),
-      options?.onConversationUpdated,
-    );
-    msg = {
-      ...msg,
-      userMessagePersisted: Boolean(persistedUserMessage?.messageId),
-      userMessageId: persistedUserMessage?.messageId,
-    };
-    // The early persistence call owns a fresh DB transaction. Reload the
-    // conversation so continuation/status planning sees the exact durable
-    // pointer that was accepted with this remote message.
-    conversation = getOrCreateActiveConversation(effectiveUserId, conversationAgentId, domain, orgId);
-  }
   let explicitRemoteMemoryIds: string[] = [];
   if (isIdentityBound) {
     try {
@@ -1704,6 +2096,7 @@ export async function processWithPersonality(
     personalityToolPolicy: personality?.toolPolicy,
     dispatch: provisionalPlan.dispatch,
     actionTaskState: conversation?.actionContinuationState,
+    pendingAssistantOfferContext,
   });
   const turnDispatch = executionPlan.dispatch;
   const turnFlow = turnDispatch.flow;
@@ -1738,8 +2131,30 @@ export async function processWithPersonality(
       staleText,
       options?.onConversationUpdated,
     );
+    await flushTerminalReply();
     return staleText;
   }
+  const actionAbortController = new AbortController();
+  const actionLeaseHeartbeat = isIdentityBound && conversation
+    ? startConversationActionExecutionHeartbeat({
+        conversationId: conversation.id,
+        userId: effectiveUserId,
+        requestId,
+        abortController: actionAbortController,
+        onPersistenceUnknown: flushDBOrThrow,
+      })
+    : null;
+  const actionLeaseWasLost = () => Boolean(actionLeaseHeartbeat?.isLeaseLost());
+  const actionWasCancelled = () => (
+    actionAbortController.signal.aborted || newerMessageCancelsThisTurn(msg)
+  );
+  const throwIfActionLeaseWasLost = () => {
+    if (!actionLeaseWasLost()) return;
+    const error = new Error('Remote conversation action execution lease was lost');
+    error.name = 'AbortError';
+    throw error;
+  };
+  try {
   if (conversation && actionTaskExecution.state?.taskId) {
     executionPlan.executionPlan = bindCapabilityExecutionPlanTask(
       executionPlan.executionPlan,
@@ -1761,6 +2176,7 @@ export async function processWithPersonality(
     const correlated = correlateMessagingReply(msg, statusText);
     if (correlated.superseded) return '';
     persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
+    await flushTerminalReply();
     return correlated.text;
   }
   let organizationWorkRoute: RouteOrganizationWorkResult | null = null;
@@ -1820,6 +2236,7 @@ export async function processWithPersonality(
       const response = `组织任务没有开始执行：${error?.message || '业务路由校验失败'}。请由组织管理员检查部门、岗位、成员、技能或智能体配置。`;
       const correlated = correlateMessagingReply(msg, response);
       if (!correlated.superseded) persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
+      await flushTerminalReply();
       return correlated.text;
     }
   }
@@ -1831,6 +2248,7 @@ export async function processWithPersonality(
     const response = `任务已完成组织路由，但尚未执行。工作项 ${organizationWorkRoute.workItem.id} 正在等待组织管理员审批（审批单 ${approvalId}）。审批通过后，在当前会话说“继续”即可恢复原任务。`;
     const correlated = correlateMessagingReply(msg, response);
     if (!correlated.superseded) persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
+    await flushTerminalReply();
     return correlated.text;
   }
   if (organizationWorkRoute?.workItem.status === 'waiting_human') {
@@ -1841,6 +2259,7 @@ export async function processWithPersonality(
     const response = `任务已转交给组织成员 ${owner}，Lumi 已停止自动执行。工作项：${organizationWorkRoute.workItem.id}。后续只有收到转派或退回智能体的持久回执后才会恢复。`;
     const correlated = correlateMessagingReply(msg, response);
     if (!correlated.superseded) persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
+    await flushTerminalReply();
     return correlated.text;
   }
   if (
@@ -1907,6 +2326,7 @@ export async function processWithPersonality(
   const userLLMPrefs = {
     ...getUserPreferredLLMConfig(effectiveUserId, { domain, orgId, maxTokens: 4096, source }),
     inputTokenBudget: resolveModelRequestInputBudget(),
+    signal: actionAbortController.signal,
   };
   const messages: NormalizedMessage[] = [
     { role: 'system', content: systemPrompt },
@@ -1916,14 +2336,16 @@ export async function processWithPersonality(
     })),
     { role: 'user', content: [msg.text, pendingConfirmationPrompt].filter(Boolean).join('\n\n') },
   ];
-  let pendingConfirmationCreatedThisTurn: ReturnType<typeof recordPendingConfirmation> | null = null;
+  let pendingConfirmationCreatedThisTurn: Awaited<ReturnType<typeof recordPendingConfirmationDurably>> | null = null;
   const requestToolConfirmation = async (
     toolName: string,
     args: Record<string, any>,
   ): Promise<boolean> => {
+    if (actionWasCancelled()) return false;
     if (
       pendingConfirmation
-      && consumePendingConfirmation(
+      && confirmationScope
+      && await consumePendingConfirmationDurably(
         effectiveUserId,
         pendingConfirmation.id,
         toolName,
@@ -1936,14 +2358,18 @@ export async function processWithPersonality(
     }
     if (canAutoApproveAction(toolName, args, { actionIntent: requestText })) return true;
     if (pendingConfirmationCreatedThisTurn) return false;
-    const pending = recordPendingConfirmation(
+    if (!confirmationChannelScope) return false;
+    const pending = await recordPendingConfirmationDurably(
       effectiveUserId,
       toolName,
       args,
       source,
       {
-        ...confirmationScope,
+        domain,
+        orgId,
+        channelId: confirmationChannelScope.channelId,
         taskId: actionTaskExecution.state?.taskId,
+        originRequestId: requestId,
         actionIntent: requestText,
       },
     );
@@ -1984,6 +2410,7 @@ export async function processWithPersonality(
     // through the receipt-producing tool route and its exact confirmation gate.
     if (options?.onMessage && !callbackBlockedForExternalCommit) {
       callbackReply = await options.onMessage(msg);
+      throwIfActionLeaseWasLost();
     }
     let deterministicEntryReply: string | null = callbackReply?.text
       || (callbackBlockedForExternalCommit
@@ -2022,10 +2449,11 @@ export async function processWithPersonality(
           desktopRelay,
           personalDesktopRelay,
           desktopExecutionTracker,
-          isCancelled: () => newerMessageCancelsThisTurn(msg),
+          isCancelled: actionWasCancelled,
           requestConfirmation: requestToolConfirmation,
         },
       });
+      throwIfActionLeaseWasLost();
       toolRecords.push(modeRecord);
       const modeSynced = !modeRecord.error && desktopRelayReportedSuccess(modeRecord.result);
       if (modeSynced) saveStoredOperationMode(effectiveUserId, directlyAppliedMode);
@@ -2034,16 +2462,21 @@ export async function processWithPersonality(
         const candidate = pendingConfirmationCreatedThisTurn
           ? formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn)
           : formatOperationModeSwitchResponse(directlyAppliedMode, modeSynced, requestText);
-        const finalizedMode = finalizeLumiResponse({
+        const modeOutbound = await finalizeMessagingResponseForDelivery({
           taskText: routingText,
           responseText: candidate,
           toolRecords: taskAwareRecords(toolRecords),
           source,
           flow: turnFlow,
+          pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
+          isPendingConfirmation: () => Boolean(pendingConfirmationCreatedThisTurn),
         });
+        const finalizedMode = modeOutbound.finalization;
+        toolRecords = withDesktopExecutionReceipt(modeOutbound.toolRecords, desktopExecutionTracker);
         const correlated = correlateMessagingReply(msg, finalizedMode.text);
         if (correlated.superseded) {
           settleRemoteTask('The remote turn was superseded by a newer user message.');
+          await flushTerminalReply();
           return '';
         }
         persistBoundMessagingMessage(
@@ -2060,6 +2493,7 @@ export async function processWithPersonality(
           });
         }
         settleRemoteTask();
+        await flushTerminalReply();
         return correlated.text;
       }
     }
@@ -2136,7 +2570,7 @@ export async function processWithPersonality(
       desktopExecutionTracker,
       requestConfirmation: requestToolConfirmation,
       supervisedExternalCommits: isIdentityBound,
-      isCancelled: () => newerMessageCancelsThisTurn(msg),
+      isCancelled: actionWasCancelled,
     };
     const complexity = classifyComplexity(routingText, orchestrationContext);
     const shouldOrchestrate = isIdentityBound && shouldAttemptOrchestration({
@@ -2210,6 +2644,52 @@ export async function processWithPersonality(
       }
     }
 
+    const runMessagingToolTurn = (
+      turnMessages: NormalizedMessage[],
+      onToolRecord?: (record: ToolExecutionRecord) => void,
+      executionSource = source,
+    ) => runWithTools(
+      turnMessages,
+      toolRegistry,
+      userLLMPrefs,
+      onToolRecord,
+      modelToolPolicy.maxIterations || executionDecision.maxIterations,
+      llm?.getDeepSeek,
+      llm?.getGemini,
+      llm?.getOpenAI,
+      llm?.getAnthropic,
+      llm?.getQwen,
+      undefined,
+      {
+        userId: effectiveUserId,
+        taskId: actionTaskExecution.state?.taskId,
+        conversationId: conversation?.id,
+        turnId: msg.messageId,
+        requestId,
+        domain,
+        orgId,
+        actionIntent: requestText,
+        routedTaskText: routingText,
+        supervisedExternalCommits: isIdentityBound,
+        toolPolicy: modelToolPolicy,
+        modelToolProjection,
+        source: executionSource,
+        llmGetters: llm as any,
+        desktopRelay,
+        personalDesktopRelay,
+        desktopExecutionTracker,
+        isCancelled: actionWasCancelled,
+        requestConfirmation: requestToolConfirmation,
+      },
+      llm?.getOllama,
+      llm?.getLmStudio,
+      llm?.getArk,
+      llm?.getXiaomi,
+      llm?.getKimi,
+      llm?.getGlm,
+      llm?.getRelay,
+    );
+
     if (!usedOrchestrator && !executionDecision.allowToolUse) {
       const response = await makeLLMCall(
         messages,
@@ -2233,47 +2713,7 @@ export async function processWithPersonality(
         recordTokenUsage(effectiveUserId, userLLMPrefs.provider, userLLMPrefs.model, response.usage, usageInteractionId, 'chat');
       }
     } else if (!usedOrchestrator) {
-      const result = await runWithTools(
-        messages,
-        toolRegistry,
-        userLLMPrefs,
-        undefined,
-        modelToolPolicy.maxIterations || executionDecision.maxIterations,
-        llm?.getDeepSeek,
-        llm?.getGemini,
-        llm?.getOpenAI,
-        llm?.getAnthropic,
-        llm?.getQwen,
-        undefined,
-        {
-          userId: effectiveUserId,
-          taskId: actionTaskExecution.state?.taskId,
-          conversationId: conversation?.id,
-          turnId: msg.messageId,
-          requestId,
-          domain,
-          orgId,
-          actionIntent: requestText,
-          routedTaskText: routingText,
-          supervisedExternalCommits: isIdentityBound,
-          toolPolicy: modelToolPolicy,
-          modelToolProjection,
-          source,
-          llmGetters: llm as any,
-          desktopRelay,
-          personalDesktopRelay,
-          desktopExecutionTracker,
-          isCancelled: () => newerMessageCancelsThisTurn(msg),
-          requestConfirmation: requestToolConfirmation,
-        },
-        llm?.getOllama,
-        llm?.getLmStudio,
-        llm?.getArk,
-        llm?.getXiaomi,
-        llm?.getKimi,
-        llm?.getGlm,
-        llm?.getRelay,
-      );
+      const result = await runMessagingToolTurn(messages);
       responseText = result.text || '';
       toolRecords.push(...(result.toolCalls || []));
       for (const usage of result.usageRecords || []) {
@@ -2285,16 +2725,9 @@ export async function processWithPersonality(
     if (pendingConfirmationCreatedThisTurn) {
       responseText = formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn);
     }
-    let finalized = callbackReply && organizationWorkRoute?.workItem.sideEffectClass !== 'external_commit'
-      ? { text: responseText || callbackReply.text, blocked: false as const }
-      : finalizeLumiResponse({
-          taskText: routingText,
-          responseText: responseText || '这次没有生成可用回复，请稍后重试。',
-          toolRecords: taskAwareRecords(toolRecords),
-          source,
-          flow: turnFlow,
-        });
-    const organizationVerifiedTerminalReceipt = taskAwareRecords(toolRecords).some(record => {
+    const deliveryText = responseText || '这次没有生成可用回复，请稍后重试。';
+    const preDeliveryRecords = taskAwareRecords(toolRecords);
+    const organizationVerifiedTerminalReceipt = preDeliveryRecords.some(record => {
       const verified = record.envelope?.status === 'verified_success'
         || record.terminalVerification?.status === 'verified';
       if (!verified) return false;
@@ -2306,14 +2739,87 @@ export async function processWithPersonality(
     const missingOrganizationExternalCommitReceipt = organizationWorkRoute?.workItem.sideEffectClass === 'external_commit'
       && !pendingConfirmationCreatedThisTurn
       && !organizationVerifiedTerminalReceipt;
-    if (missingOrganizationExternalCommitReceipt) {
-      finalized = {
+    const initialFinalization: MessagingFinalization = callbackReply
+      && organizationWorkRoute?.workItem.sideEffectClass !== 'external_commit'
+      ? { text: responseText || callbackReply.text, blocked: false }
+      : missingOrganizationExternalCommitReceipt
+        ? {
         text: /[\u3400-\u9fff]/u.test(routingText)
           ? '这次外部提交还没有完成：没有收到可验证的终态回执，Lumi 已停止，且不会盲目重试。'
           : 'The external commit is not complete: no verified terminal receipt was received, so Lumi stopped and will not retry blindly.',
         blocked: true,
         reason: 'The external commit has no verified terminal receipt.',
-      };
+          }
+        : finalizeLumiResponse({
+            taskText: routingText,
+            responseText: deliveryText,
+            toolRecords: preDeliveryRecords,
+            source,
+            flow: turnFlow,
+          });
+    const outbound = await finalizeMessagingResponseForDelivery({
+      taskText: routingText,
+      responseText: deliveryText,
+      toolRecords: preDeliveryRecords,
+      source,
+      flow: turnFlow,
+      initialFinalization,
+      allowToolUse: executionDecision.allowToolUse
+        && !callbackReply
+        && !missingOrganizationExternalCommitReceipt,
+      pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
+      aborted: actionWasCancelled(),
+      isPendingConfirmation: () => Boolean(pendingConfirmationCreatedThisTurn),
+      isAborted: actionWasCancelled,
+      attempt: async ({ instruction, recordTool }) => {
+        const recovery = await runMessagingToolTurn(
+          [
+            ...messages,
+            ...(deliveryText.trim()
+              ? [{ role: 'assistant' as const, content: deliveryText }]
+              : []),
+            { role: 'user', content: instruction },
+          ],
+          recordTool,
+          `${source}_guard_recovery`,
+        );
+        for (const usage of recovery.usageRecords || []) {
+          recordTokenUsage(
+            effectiveUserId,
+            usage.provider,
+            usage.model,
+            usage,
+            usageInteractionId,
+            'chat',
+          );
+        }
+        return {
+          text: recovery.text,
+          toolRecords: withDesktopExecutionReceipt(
+            recovery.toolCalls || [],
+            desktopExecutionTracker,
+          ),
+        };
+      },
+      refinalize: (candidateText, records) => pendingConfirmationCreatedThisTurn
+        ? {
+            text: formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn),
+            blocked: false,
+            reason: 'waiting_confirmation',
+          }
+        : finalizeLumiResponse({
+            taskText: routingText,
+            responseText: candidateText,
+            toolRecords: withDesktopExecutionReceipt(records, desktopExecutionTracker),
+            source: `${source}_guard_recovery`,
+            flow: turnFlow,
+          }),
+    });
+    toolRecords = withDesktopExecutionReceipt(outbound.toolRecords, desktopExecutionTracker);
+    const finalized = outbound.finalization;
+    if (actionLeaseWasLost()) {
+      await actionLeaseHeartbeat!.leaseLoss;
+      return CN_TASK_EXECUTION_MESSAGES.persistenceUnknown;
     }
     const correlated = correlateMessagingReply(msg, finalized.text);
     if (correlated.superseded) {
@@ -2327,6 +2833,7 @@ export async function processWithPersonality(
         });
       }
       settleRemoteTask('The remote turn was superseded by a newer user message.');
+      await flushTerminalReply();
       return '';
     }
     persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated, toolRecords);
@@ -2360,17 +2867,27 @@ export async function processWithPersonality(
       }
     }
     settleRemoteTask();
-    persistRemotePostTurnLearning({
-      message: msg,
-      responseText: correlated.text,
-      llmGetters: llm,
-      modelConfig: {
-        provider: userLLMPrefs.provider,
-        model: userLLMPrefs.model,
-      },
-    });
+    await flushTerminalReply();
+    try {
+      persistRemotePostTurnLearning({
+        message: msg,
+        responseText: correlated.text,
+        llmGetters: llm,
+        modelConfig: {
+          provider: userLLMPrefs.provider,
+          model: userLLMPrefs.model,
+        },
+      });
+    } catch (learningError: any) {
+      console.warn('[Messaging] Remote post-turn learning could not be scheduled:', learningError?.message || learningError);
+    }
     return correlated.text;
   } catch (err: any) {
+    if (actionLeaseWasLost()) {
+      await actionLeaseHeartbeat!.leaseLoss;
+      return CN_TASK_EXECUTION_MESSAGES.persistenceUnknown;
+    }
+    if (isMessagingReplyDurabilityError(err)) throw err;
     console.warn(`[Messaging] ${msg.platform} model pipeline failed:`, err?.message || err);
     const fallback = '当前语言模型暂时不可用，这次处理没有完成，请稍后再试。';
     const correlated = correlateMessagingReply(msg, fallback);
@@ -2385,6 +2902,7 @@ export async function processWithPersonality(
         });
       }
       settleRemoteTask('The remote turn failed after it was superseded by a newer user message.');
+      await flushTerminalReply();
       return '';
     }
     if (isIdentityBound) {
@@ -2400,7 +2918,11 @@ export async function processWithPersonality(
       });
     }
     settleRemoteTask(err?.message || 'The remote model/tool pipeline failed before a terminal receipt was recorded.');
+    await flushTerminalReply();
     return correlated.text;
+  }
+  } finally {
+    actionLeaseHeartbeat?.stop();
   }
 }
 

@@ -32,8 +32,8 @@ describe('active task widget', () => {
     expect(select({ status: { tasks: [task('blocked')] } }).visible).toBe(false);
   });
 
-  it('shows planning, executing, and confirmation tasks from the durable ledger', () => {
-    for (const status of ['planning', 'executing', 'waiting_confirmation']) {
+  it('shows created, planning, executing, verifying, and confirmation tasks from the durable ledger', () => {
+    for (const status of ['created', 'planning', 'executing', 'verifying', 'waiting_confirmation']) {
       const view = select({ status: { tasks: [task(status)] } });
       expect(view).toMatchObject({
         visible: true,

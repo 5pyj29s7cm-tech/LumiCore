@@ -1125,6 +1125,8 @@ const CAD_GEOMETRY_ZH = {
   receiptState: '\u56de\u6267\u72b6\u6001\uff1a',
   // i18n-allow: Reviewed Chinese CAD geometry receipt result copy.
   next: '\u4e0b\u4e00\u6b65\uff1a',
+  // i18n-allow: Reviewed Chinese CAD geometry public failure copy.
+  retry: '\u8bf7\u68c0\u67e5\u6e90\u6587\u4ef6\u540e\u91cd\u8bd5\uff0c\u6216\u6362\u4e00\u4efd\u53ef\u8bfb\u7684\u56fe\u7eb8\u3002',
 } as const;
 
 function formatGroundedCadGeometryExtractionResult(
@@ -1139,23 +1141,17 @@ function formatGroundedCadGeometryExtractionResult(
 
   const zh = isChineseText(actionText);
   if (record.error) {
-    const blocker = String(record.error || '').trim() || 'floorplan_extract_geometry failed.';
+    const publicMessage = zh
+      ? `${CAD_GEOMETRY_ZH.failed}\n${CAD_GEOMETRY_ZH.retry}`
+      : 'Geometry extraction did not succeed; no drawing was executed. Check the source file and retry, or use another readable drawing.';
     return {
-      text: zh
-        ? [
-            CAD_GEOMETRY_ZH.failed,
-            `${CAD_GEOMETRY_ZH.reason}${blocker}`,
-          ].join('\n')
-        : [
-            'Geometry extraction did not succeed; no drawing was executed.',
-            `Reason: ${blocker}`,
-          ].join('\n'),
+      text: publicMessage,
       blocked: true,
-      reason: `Geometry extraction tool failed: ${blocker}`,
+      reason: 'floorplan_geometry_extraction_failed',
       notification: {
         type: 'work_product_guard',
         level: 'warning',
-        message: blocker,
+        message: publicMessage,
       },
     };
   }

@@ -25,6 +25,8 @@ const SECRET_DETAIL_RE = /((?:password|passphrase|secret|token|api.?key|authoriz
 const STRUCTURED_SECRET_DETAIL_RE = /(["'](?:password|passphrase|secret|token|api.?key|authorization|cookie|credential)["']\s*:\s*["'])[^"']+/giu;
 const GENERIC_STRUCTURED_FIELD_RE = /(["']?([A-Za-z][A-Za-z0-9_-]{0,80})["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}\]]+)/gu;
 const BEARER_SECRET_RE = /\bBearer\s+\S+/giu;
+const NOTIFICATION_ABSOLUTE_PATH_RE = /(?:\b[A-Za-z]:[\\/][^\s,;]+|(?<![\p{L}\p{N}_])\/(?:Users|home|root|srv|etc|var|opt|tmp|private)\/[^\s,;]+)/giu;
+const NOTIFICATION_RAW_KEY_RE = /^(?:raw|stack|stackTrace|toolRecords?|receipts?|arguments?|exactArgs|ciphertext|debug|diagnostic)$/iu;
 
 function isSensitivePersistenceKey(value: string): boolean {
   const key = String(value || '').replace(/[^a-z0-9]/giu, '').toLowerCase();
@@ -383,4 +385,43 @@ export function sanitizeUserFacingExecutionOutput(
   const oversizedUnscopedOutput = raw.length > 50_000;
   if (!containsUnsafeToolPayload(raw) && !oversizedToolOutput && !oversizedUnscopedOutput) return redacted;
   return humanSummary(redacted, options).slice(0, 1_200);
+}
+
+function sanitizeNotificationValue(
+  value: unknown,
+  options: UserFacingOutputProtectionOptions,
+  key = '',
+  depth = 0,
+): unknown {
+  if (depth > 5) return '[nested value omitted]';
+  if (key && isSensitivePersistenceKey(key)) return '[redacted]';
+  if (key && NOTIFICATION_RAW_KEY_RE.test(key)) return '[internal detail omitted]';
+  if (value === null || value === undefined || typeof value === 'number' || typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    return sanitizeUserFacingExecutionOutput(value, options)
+      .replace(NOTIFICATION_ABSOLUTE_PATH_RE, '[path omitted]')
+      .slice(0, 1_200);
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 20).map(item => sanitizeNotificationValue(item, options, key, depth + 1));
+  }
+  if (typeof value !== 'object') return String(value).slice(0, 200);
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .slice(0, 40)
+      .map(([nestedKey, nested]) => [
+        nestedKey,
+        sanitizeNotificationValue(nested, options, nestedKey, depth + 1),
+      ]),
+  );
+}
+
+/** Recursively sanitize every independently emitted user notification. */
+export function sanitizeUserFacingNotification(
+  value: unknown,
+  options: UserFacingOutputProtectionOptions = {},
+): unknown {
+  return sanitizeNotificationValue(value, options);
 }

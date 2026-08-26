@@ -24,6 +24,10 @@ import path from 'path';
 import { logger } from '../../logger';
 import type { Request, Response } from 'express';
 import { finalizeLumiResponse } from '../cognition/result_finalizer';
+import {
+  finalizeExecutionForOutboundDelivery,
+  type ExecutionGuardRecoveryRunInput,
+} from '../cognition/execution_guard_recovery';
 import type { ToolExecutionRecord } from '../tools/types';
 import { getScopedPreferredLLM } from '../llm/user_preferences';
 import {
@@ -70,6 +74,39 @@ function mcpToolFailure(operation: string, error: unknown) {
     content: [{ type: 'text' as const, text: publicMcpToolFailure() }],
     isError: true,
   };
+}
+
+type McpFinalization = ReturnType<typeof finalizeLumiResponse>;
+
+async function finalizeMcpResponseForDelivery(input: {
+  taskText: string;
+  responseText: string;
+  toolRecords?: ToolExecutionRecord[];
+  source: string;
+  allowToolUse?: boolean;
+  attempt?: ExecutionGuardRecoveryRunInput<McpFinalization>['attempt'];
+}) {
+  const toolRecords = input.toolRecords || [];
+  const finalization = finalizeLumiResponse({
+    taskText: input.taskText,
+    responseText: input.responseText,
+    toolRecords,
+    source: input.source,
+  });
+  return finalizeExecutionForOutboundDelivery({
+    task: input.taskText,
+    responseText: input.responseText,
+    finalization,
+    allowToolUse: input.allowToolUse === true,
+    toolRecords,
+    attempt: input.attempt,
+    finalize: (candidateText, records) => finalizeLumiResponse({
+      taskText: input.taskText,
+      responseText: candidateText,
+      toolRecords: records,
+      source: `${input.source}_guard_recovery`,
+    }),
+  });
 }
 
 export function createLumiMcpServer(llmGetters?: {
@@ -208,14 +245,7 @@ export function createLumiMcpServer(llmGetters?: {
         const mcpToolRecords: ToolExecutionRecord[] = [];
         const bufferedChunks: string[] = [];
 
-        const responsePromise = runWithTools(
-          messages,
-          tr,
-          {
-            ...chatLLM,
-            maxTokens: 2048,
-          },
-          (record) => {
+        const recordMcpChatTool = (record: ToolRecordEvent) => {
             upsertCompletedToolRecord(mcpToolRecords, record);
             const cid = `${record.name}-${Date.now()}`;
             bc('agent:tool_call', { correlationId: cid, name: record.name, status: 'started' });
@@ -225,14 +255,27 @@ export function createLumiMcpServer(llmGetters?: {
             } else {
               bc('agent:tool_call', { correlationId: cid, name: record.name, status: 'completed', result: 'completed' });
             }
+        };
+        const runMcpChatTurn = (
+          turnMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+          onToolRecord?: (record: ToolRecordEvent) => void,
+          onChunk?: (chunk: string) => void,
+          source = 'mcp_chat',
+        ) => runWithTools(
+          turnMessages,
+          tr,
+          {
+            ...chatLLM,
+            maxTokens: 2048,
           },
+          onToolRecord,
           Math.min(4, personality.toolPolicy.maxIterations),
           g.getDeepSeek || (() => null),
           g.getGemini || (() => null),
           g.getOpenAI || (() => null),
           g.getAnthropic || (() => null),
           g.getQwen || (() => null),
-          (chunk) => bufferedChunks.push(chunk),
+          onChunk,
           {
             userId: scope.userId,
             domain: scope.domain,
@@ -241,7 +284,7 @@ export function createLumiMcpServer(llmGetters?: {
               personality.toolPolicy,
               'remote_restricted',
             ),
-            source: 'mcp_chat',
+            source,
             ...mcpToolSecurityContext,
           } as any,
           g.getOllama,
@@ -251,6 +294,11 @@ export function createLumiMcpServer(llmGetters?: {
           g.getKimi,
           g.getGlm,
           g.getRelay,
+        );
+        const responsePromise = runMcpChatTurn(
+          messages,
+          recordMcpChatTool,
+          chunk => bufferedChunks.push(chunk),
         );
 
         const queueMemoryExtraction = (assistantResponse: string) => {
@@ -287,12 +335,44 @@ export function createLumiMcpServer(llmGetters?: {
             upsertCompletedToolRecord(toolRecords, record);
           }
           const candidateText = String(response.text || bufferedChunks.join('') || 'No response.').trim();
-          const finalized = finalizeLumiResponse({
+          const outbound = await finalizeMcpResponseForDelivery({
             taskText: message,
             responseText: candidateText,
             toolRecords,
             source: background ? 'mcp_chat_background' : 'mcp_chat',
+            allowToolUse: true,
+            attempt: async ({ instruction, recordTool }) => {
+              const recovery = await runMcpChatTurn(
+                [
+                  ...messages,
+                  ...(candidateText
+                    ? [{ role: 'assistant' as const, content: candidateText }]
+                    : []),
+                  { role: 'user', content: instruction },
+                ],
+                record => {
+                  recordMcpChatTool(record);
+                  if (record.result !== undefined || record.error !== undefined) {
+                    recordTool({
+                      id: record.id,
+                      name: record.name,
+                      arguments: record.arguments || {},
+                      result: record.result || '',
+                      error: record.error,
+                    });
+                  }
+                },
+                undefined,
+                'mcp_chat_guard_recovery',
+              );
+              return {
+                text: recovery.text,
+                toolRecords: recovery.toolCalls,
+              };
+            },
           });
+          const finalized = outbound.finalization;
+          toolRecords.splice(0, toolRecords.length, ...outbound.toolRecords);
           queueMemoryExtraction(finalized.text);
 
           const metadata = {
@@ -536,12 +616,13 @@ export function createLumiMcpServer(llmGetters?: {
     },
     async ({ text, voiceId }) => {
       try {
-        const finalized = finalizeLumiResponse({
+        const outbound = await finalizeMcpResponseForDelivery({
           taskText: `Proactive speech request: ${text}`,
           responseText: text,
           toolRecords: [],
           source: 'mcp_speak',
         });
+        const finalized = outbound.finalization;
         if (finalized.blocked) {
           bc('mcp:activity', {
             device: 'xiaozhi',
@@ -854,10 +935,14 @@ export function createLumiMcpServer(llmGetters?: {
             { role: 'user', content: task },
           ];
 
-          const result = await runWithTools(
-            messages, tr,
+          const runMcpSimpleTaskTurn = (
+            turnMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+            onToolRecord?: (record: ToolRecordEvent) => void,
+            source = 'mcp_route_task',
+          ) => runWithTools(
+            turnMessages, tr,
             { ...routeLLM, maxTokens: 2048 },
-            undefined, 2,
+            onToolRecord, 2,
             g.getDeepSeek || (() => null), g.getGemini || (() => null), g.getOpenAI || (() => null),
             g.getAnthropic || (() => null), g.getQwen || (() => null),
             undefined,
@@ -866,7 +951,7 @@ export function createLumiMcpServer(llmGetters?: {
               userId: scope.userId,
               domain: scope.domain,
               orgId: scope.orgId,
-              source: 'mcp_route_task',
+              source,
               toolPolicy: restrictToolPolicyForExecutionBoundary(
                 personality.toolPolicy,
                 'remote_restricted',
@@ -880,12 +965,39 @@ export function createLumiMcpServer(llmGetters?: {
             g.getGlm,
             g.getRelay,
           );
-          const finalized = finalizeLumiResponse({
+          const result = await runMcpSimpleTaskTurn(messages);
+          const outbound = await finalizeMcpResponseForDelivery({
             taskText: task,
             responseText: result.text,
             toolRecords: result.toolCalls,
             source: 'mcp_route_task',
+            allowToolUse: true,
+            attempt: async ({ instruction, recordTool }) => {
+              const recovery = await runMcpSimpleTaskTurn(
+                [
+                  ...messages,
+                  ...(String(result.text || '').trim()
+                    ? [{ role: 'assistant' as const, content: result.text }]
+                    : []),
+                  { role: 'user', content: instruction },
+                ],
+                record => {
+                  if (record.result !== undefined || record.error !== undefined) {
+                    recordTool({
+                      id: record.id,
+                      name: record.name,
+                      arguments: record.arguments || {},
+                      result: record.result || '',
+                      error: record.error,
+                    });
+                  }
+                },
+                'mcp_route_task_guard_recovery',
+              );
+              return { text: recovery.text, toolRecords: recovery.toolCalls };
+            },
           });
+          const finalized = outbound.finalization;
           bc('mcp:activity', {
             device: 'xiaozhi',
             action: 'route_task',
@@ -903,7 +1015,7 @@ export function createLumiMcpServer(llmGetters?: {
                 complexity: 'simple',
                 handledBy: 'Lumi (direct)',
                 result: finalized.text,
-                toolCalls: result.toolCalls.length,
+                toolCalls: outbound.toolRecords.length,
                 finalized: true,
                 blocked: finalized.blocked,
                 reason: finalized.reason || '',
@@ -972,12 +1084,91 @@ export function createLumiMcpServer(llmGetters?: {
           routeLLM,
           { getDeepSeek: g.getDeepSeek || (() => null), getGemini: g.getGemini || (() => null), getOpenAI: g.getOpenAI || (() => null), getAnthropic: g.getAnthropic || (() => null), getQwen: g.getQwen || (() => null) },
         );
-        const finalized = finalizeLumiResponse({
+        const recoveryPersonality = personalityRegistry.get('lumi') || personalityRegistry.getDefault();
+        const { systemPrompt: recoverySystemPrompt } = personalityRegistry.buildSystemPrompt('lumi', {
+          mode: 'task',
+          sensory: {
+            audio: false,
+            visual: false,
+            spatial: false,
+            haptic: false,
+            holographic: false,
+            activeDeviceTypes: [],
+            deviceCount: 0,
+          },
+        });
+        const runMcpWorkflowRecovery = (
+          turnMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+          onToolRecord?: (record: ToolRecordEvent) => void,
+        ) => runWithTools(
+          turnMessages,
+          tr,
+          { ...routeLLM, maxTokens: 2048 },
+          onToolRecord,
+          Math.min(4, recoveryPersonality.toolPolicy.maxIterations),
+          g.getDeepSeek || (() => null),
+          g.getGemini || (() => null),
+          g.getOpenAI || (() => null),
+          g.getAnthropic || (() => null),
+          g.getQwen || (() => null),
+          undefined,
+          {
+            ...mcpToolSecurityContext,
+            userId: scope.userId,
+            domain: scope.domain,
+            orgId: scope.orgId,
+            source: 'mcp_route_task_guard_recovery',
+            toolPolicy: restrictToolPolicyForExecutionBoundary(
+              recoveryPersonality.toolPolicy,
+              'remote_restricted',
+            ),
+          } as any,
+          g.getOllama,
+          g.getLmStudio,
+          g.getArk,
+          g.getXiaomi,
+          g.getKimi,
+          g.getGlm,
+          g.getRelay,
+        );
+        const outbound = await finalizeMcpResponseForDelivery({
           taskText: task,
           responseText: aggregated,
           toolRecords: workflowToolRecords,
           source: 'mcp_route_task',
+          allowToolUse: true,
+          attempt: async ({ instruction, recordTool }) => {
+            const recovery = await runMcpWorkflowRecovery(
+              [
+                {
+                  role: 'system',
+                  content: restrictSystemPromptForExecutionBoundary(
+                    recoverySystemPrompt,
+                    'remote_restricted',
+                  ),
+                },
+                { role: 'user', content: task },
+                ...(String(aggregated || '').trim()
+                  ? [{ role: 'assistant' as const, content: aggregated }]
+                  : []),
+                { role: 'user', content: instruction },
+              ],
+              record => {
+                if (record.result !== undefined || record.error !== undefined) {
+                  recordTool({
+                    id: record.id,
+                    name: record.name,
+                    arguments: record.arguments || {},
+                    result: record.result || '',
+                    error: record.error,
+                  });
+                }
+              },
+            );
+            return { text: recovery.text, toolRecords: recovery.toolCalls };
+          },
         });
+        const finalized = outbound.finalization;
 
         bc('mcp:activity', {
           device: 'xiaozhi',
@@ -1000,7 +1191,7 @@ export function createLumiMcpServer(llmGetters?: {
               assignments: assignments.map(a => ({ subTaskId: a.subTask.id, agentId: a.agent.id, agentName: a.agent.name })),
               result: finalized.text,
               workflowSteps: workflowResult.subTaskResults.length,
-              toolCalls: workflowToolRecords.length,
+              toolCalls: outbound.toolRecords.length,
               finalized: true,
               blocked: finalized.blocked,
               reason: finalized.reason || '',

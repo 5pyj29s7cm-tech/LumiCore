@@ -8,6 +8,15 @@ vi.mock('../server/llm/adapter', () => ({
 }));
 
 vi.mock('../server/llm/vision_preferences', () => ({
+  DEFAULT_VISION_MODELS: {
+    openai: 'gpt-4o',
+    gemini: 'gemini-2.0-flash',
+    ark: 'doubao-1-5-vision-pro-32k',
+    qwen: 'qwen-vl-max',
+    ollama: 'qwen2.5vl:7b',
+    lmstudio: 'local-vision-model',
+    relay: 'qwen2.5-vl-7b-instruct',
+  },
   getUserPreferredVision: () => ({ provider: 'qwen', model: 'test-vision' }),
 }));
 

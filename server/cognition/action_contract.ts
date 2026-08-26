@@ -694,7 +694,7 @@ function isDesktopLaunchVerificationOnly(
 }
 
 export function requiresArtifactPostWriteReadback(input: string): boolean {
-  return /(?:\u5199\u5165|\u4fdd\u5b58|\u521b\u5efa|\u65b0\u5efa|\u751f\u6210).{0,48}(?:\u540e|\u4e4b\u540e|\u2192|->|\u7136\u540e|\u63a5\u7740|\u518d|\u5e76).{0,48}(?:\u91cd\u8bfb|\u56de\u8bfb|\u91cd\u65b0\u8bfb\u53d6|\u518d\u8bfb)|(?:\u91cd\u8bfb|\u56de\u8bfb|\u91cd\u65b0\u8bfb\u53d6|\u518d\u8bfb).{0,32}(?:\u6838\u9a8c|\u9a8c\u8bc1|\u68c0\u67e5|\u62a5\u544a)|\b(?:after\s+(?:writing|saving|creating)|write\s+then)\b.{0,48}\b(?:read|verify|check)\b/iu.test(String(input || ''));
+  return /(?:\u5199\u5165|\u4fdd\u5b58|\u521b\u5efa|\u65b0\u5efa|\u751f\u6210).{0,48}(?:\u540e|\u4e4b\u540e|\u2192|->|\u7136\u540e|\u63a5\u7740|\u518d|\u5e76).{0,48}(?:\u91cd\u8bfb|\u56de\u8bfb|\u91cd\u65b0\u8bfb\u53d6|\u518d\u8bfb)|(?:\u91cd\u8bfb|\u56de\u8bfb|\u91cd\u65b0\u8bfb\u53d6|\u518d\u8bfb).{0,32}(?:\u6838\u9a8c|\u9a8c\u8bc1|\u68c0\u67e5|\u62a5\u544a)|\bafter\s+(?:writing|saving|creating)\b[\s\S]{0,420}\b(?:read|verify|check)\b|\b(?:write|save|create)\b[\s\S]{0,220}\b(?:then|afterwards|next)\b[\s\S]{0,220}\b(?:read|verify|check)\b/iu.test(String(input || ''));
 }
 
 function artifactTargetFromRecord(record: ToolExecutionRecord): string {

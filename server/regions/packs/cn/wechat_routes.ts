@@ -5,7 +5,6 @@ import { getMessagingConfig, updateMessagingConfig } from '../../../messaging/co
 import { requireAuth } from '../../../middleware/auth';
 import type { IncomingMessage } from '../../../messaging/types';
 import {
-  consumeBindingCode,
   createBindingCode,
   deleteBindingForUser,
   getBinding,
@@ -243,9 +242,6 @@ export function startWeChatPolling(
   options?: MessagingRouteOptions,
 ): void {
   void adapter.startPolling(async (msg) => {
-    const bindingReply = handleWeChatBindingCommand(msg);
-    if (bindingReply) return { text: bindingReply, platform: 'wechat' as const };
-
     const boundMsg = applyWeChatBinding(msg);
     dispatchIncomingMessage(boundMsg, {
       enrich: message => enrichMessagingAttachments(
@@ -287,13 +283,9 @@ export function handleWeChatBindingCommand(msg: IncomingMessage): string | null 
   if (command.kind === 'invalid') {
     return '绑定命令格式不完整。请从 Lumi 客户端复制完整命令，并原样发送“绑定 Lumi 绑定码”。';
   }
-  const binding = consumeBindingCode('wechat', command.code, msg.userId, msg.chatId, msg.chatType);
-  if (!binding) {
-    return '绑定码无效或已过期。请在 Lumi 桌面端重新生成微信绑定码。';
-  }
-  return binding.domain === 'personal'
-    ? '绑定成功。这里的消息会由你的个人 Lumi 处理，并同步到 Lumi 客户端聊天。'
-    : '绑定成功。之后你可以把法院短信链接、案件材料或查询指令发给我，我会按组织案件空间处理。';
+  // One-time binding credentials are committed only inside the shared remote
+  // durability transaction. Returning null delegates the bind command to it.
+  return null;
 }
 
 function applyWeChatBinding(msg: IncomingMessage): IncomingMessage {

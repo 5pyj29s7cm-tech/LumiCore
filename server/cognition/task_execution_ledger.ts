@@ -4,12 +4,54 @@ import type { ToolExecutionRecord } from '../tools/types';
 import { buildActionContract, hasCoreActionEvidence } from './action_contract';
 
 export type ConversationTaskStatus =
+  | 'created'
   | 'planning'
   | 'executing'
   | 'waiting_confirmation'
+  | 'verifying'
   | 'blocked'
   | 'completed'
+  | 'failed'
   | 'cancelled';
+
+export const CONVERSATION_TASK_STATUSES = [
+  'created',
+  'planning',
+  'executing',
+  'waiting_confirmation',
+  'verifying',
+  'blocked',
+  'completed',
+  'failed',
+  'cancelled',
+] as const satisfies readonly ConversationTaskStatus[];
+
+/** A task can be unfinished without owning a foreground execution request. */
+export function conversationTaskStatusOwnsExecutionLease(
+  status: ConversationTaskStatus | string | undefined,
+): boolean {
+  return status === 'planning' || status === 'executing' || status === 'verifying';
+}
+
+export function isTerminalConversationTaskStatus(
+  status: ConversationTaskStatus | string | undefined,
+): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled';
+}
+
+/**
+ * Durable task terminals are monotonic. Non-terminal phases may move between
+ * planning, execution, verification and user-wait states as recovery proceeds.
+ */
+export function canTransitionConversationTaskStatus(
+  from: ConversationTaskStatus | string | undefined,
+  to: ConversationTaskStatus | string | undefined,
+): boolean {
+  if (!from || !to) return false;
+  if (from === to) return true;
+  if (isTerminalConversationTaskStatus(from)) return false;
+  return (CONVERSATION_TASK_STATUSES as readonly string[]).includes(to);
+}
 
 export interface ConversationTaskPolicySnapshot {
   allowedTools: string[];

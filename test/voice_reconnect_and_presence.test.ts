@@ -40,14 +40,34 @@ describe('voice reconnect and perception continuity', () => {
   it('durably delivers finalized text before queueing speech playback', () => {
     const root = process.cwd();
     const server = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
+    const terminalBoundarySource = readFileSync(path.join(root, 'server/socket/chat_terminal_boundary.ts'), 'utf8');
     const client = readFileSync(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
-    const terminalBoundary = server.indexOf('return commitChatTerminalBoundary<T | undefined>({');
+    const terminalBoundary = server.indexOf('const committed = await commitChatTerminalBoundary<T | undefined>({');
+    const publishCommitted = server.indexOf('publishCommitted: terminalState => {', terminalBoundary);
     const finalizedText = server.indexOf("publishRecordedAgent('agent:response', terminalPayload)", terminalBoundary);
     const speechQueue = server.indexOf('queueFinalizedSpeech(input.speechText!)', terminalBoundary);
+    const publishUnknown = server.indexOf('publishUnknown: () => {', publishCommitted);
+
+    const persistAssistant = terminalBoundarySource.indexOf('input.persistAssistantMessage();');
+    const durableFlush = terminalBoundarySource.indexOf('await input.flush();', persistAssistant);
+    const terminalReceipt = terminalBoundarySource.indexOf(
+      'await input.persistTerminalReceipt(terminalState)',
+      durableFlush,
+    );
+    const terminalPublish = terminalBoundarySource.indexOf(
+      'input.publishCommitted(terminalState);',
+      terminalReceipt,
+    );
 
     expect(terminalBoundary).toBeGreaterThan(0);
-    expect(finalizedText).toBeGreaterThan(terminalBoundary);
+    expect(publishCommitted).toBeGreaterThan(terminalBoundary);
+    expect(finalizedText).toBeGreaterThan(publishCommitted);
     expect(speechQueue).toBeGreaterThan(finalizedText);
+    expect(speechQueue).toBeLessThan(publishUnknown);
+    expect(persistAssistant).toBeGreaterThan(0);
+    expect(durableFlush).toBeGreaterThan(persistAssistant);
+    expect(terminalReceipt).toBeGreaterThan(durableFlush);
+    expect(terminalPublish).toBeGreaterThan(terminalReceipt);
     expect(client).not.toContain("if (data.finalized === true) activeVoiceRequestIdRef.current = null");
   });
 

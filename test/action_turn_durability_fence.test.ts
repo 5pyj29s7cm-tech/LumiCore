@@ -1,0 +1,200 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  admitAcceptedUserTurnDurably,
+  resolveAcceptedTurnConfirmation,
+  runAfterAcceptedUserTurnAdmission,
+} from '../server/socket/action_turn_durability';
+import {
+  beginChatExecution,
+  beginChatExecutionDurably,
+  getChatExecution,
+  resetChatExecutionRegistryForTests,
+  type ChatExecutionScope,
+} from '../server/socket/chat_execution_registry';
+import {
+  buildTransportNeutralConfirmationScope,
+  clearAllPendingConfirmationsForTests,
+  getPendingConfirmation,
+  recordPendingConfirmation,
+} from '../server/tools/pending_confirmation';
+
+afterEach(() => {
+  resetChatExecutionRegistryForTests();
+  clearAllPendingConfirmationsForTests();
+});
+
+describe('accepted action-turn durability fence', () => {
+  it('does not admit the executor when the accepted transcript flush fails', async () => {
+    const executor = vi.fn(async () => 'should-never-run');
+    const onPersistenceUnknown = vi.fn();
+    const admission = await admitAcceptedUserTurnDurably({
+      persistAcceptedUserTurn: () => 'message-id',
+      flush: async () => { throw new Error('disk unavailable'); },
+      onPersistenceUnknown,
+    });
+    if (admission) await runAfterAcceptedUserTurnAdmission(admission, executor);
+
+    expect(admission).toBeNull();
+    expect(onPersistenceUnknown).toHaveBeenCalledOnce();
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it('admits execution only after the flush has completed', async () => {
+    const order: string[] = [];
+    const admission = await admitAcceptedUserTurnDurably({
+      persistAcceptedUserTurn: () => { order.push('persist'); return 'message-id'; },
+      flush: async () => { order.push('flush'); },
+      onPersistenceUnknown: () => { order.push('unknown'); },
+    });
+    if (admission) runAfterAcceptedUserTurnAdmission(admission, () => { order.push('executor'); });
+    expect(order).toEqual(['persist', 'flush', 'executor']);
+  });
+
+  it('keeps the real active execution and every admission-sensitive operation untouched when flush rejects', async () => {
+    const scope: ChatExecutionScope = {
+      userId: 'admission-user',
+      domain: 'personal',
+      source: 'voice',
+      conversationId: 'admission-conversation',
+    };
+    beginChatExecution(scope, 'old-active-request');
+    const clearConfirmation = vi.fn();
+    const consumeConfirmation = vi.fn();
+    const cancelOld = vi.fn();
+    const reserve = vi.fn();
+    const beginDurable = vi.fn(() => beginChatExecutionDurably(
+      scope,
+      'new-request',
+      { text: 'persistence unknown' },
+    ));
+
+    const admission = await admitAcceptedUserTurnDurably({
+      persistAcceptedUserTurn: vi.fn(() => 'persisted-user-message'),
+      flush: async () => { throw new Error('disk unavailable'); },
+      onPersistenceUnknown: vi.fn(),
+    });
+    if (admission) {
+      await runAfterAcceptedUserTurnAdmission(admission, async () => {
+        clearConfirmation();
+        consumeConfirmation();
+        cancelOld();
+        reserve();
+        await beginDurable();
+      });
+    }
+
+    expect(admission).toBeNull();
+    expect(clearConfirmation).toHaveBeenCalledTimes(0);
+    expect(consumeConfirmation).toHaveBeenCalledTimes(0);
+    expect(cancelOld).toHaveBeenCalledTimes(0);
+    expect(reserve).toHaveBeenCalledTimes(0);
+    expect(beginDurable).toHaveBeenCalledTimes(0);
+    expect(getChatExecution(scope)).toMatchObject({
+      requestId: 'old-active-request',
+      terminal: false,
+    });
+    expect(getChatExecution(scope, 'new-request')).toBeNull();
+  });
+
+  it('revokes a taskless grant only after the unrelated accepted turn is durable', async () => {
+    const channelScope = buildTransportNeutralConfirmationScope({
+      domain: 'personal',
+      conversationId: 'confirmation-conversation',
+    });
+    const taskScope = buildTransportNeutralConfirmationScope({
+      domain: 'personal',
+      conversationId: 'confirmation-conversation',
+      taskId: 'durable-task',
+    });
+    recordPendingConfirmation(
+      'confirmation-user',
+      'desktop_open',
+      { target: 'Notepad' },
+      'chat',
+      channelScope,
+    );
+    const admission = await admitAcceptedUserTurnDurably({
+      persistAcceptedUserTurn: () => 'message-id',
+      flush: async () => undefined,
+      onPersistenceUnknown: vi.fn(),
+    });
+    expect(admission).not.toBeNull();
+
+    const resolution = await resolveAcceptedTurnConfirmation({
+      admission: admission!,
+      userId: 'confirmation-user',
+      userText: 'Tell me about the weather.',
+      taskScope,
+      channelScope,
+    });
+
+    expect(resolution).toMatchObject({ pending: null, prompt: '', cleared: true });
+    expect(getPendingConfirmation('confirmation-user', channelScope)).toBeNull();
+  });
+
+  it('does not revoke a task-bound grant for an unrelated accepted turn', async () => {
+    const channelScope = buildTransportNeutralConfirmationScope({
+      domain: 'personal',
+      conversationId: 'bound-confirmation-conversation',
+    });
+    const taskScope = buildTransportNeutralConfirmationScope({
+      domain: 'personal',
+      conversationId: 'bound-confirmation-conversation',
+      taskId: 'durable-task',
+    });
+    const taskBound = recordPendingConfirmation(
+      'bound-confirmation-user',
+      'desktop_open',
+      { target: 'Calculator' },
+      'chat',
+      taskScope,
+    );
+    const admission = await admitAcceptedUserTurnDurably({
+      persistAcceptedUserTurn: () => 'message-id',
+      flush: async () => undefined,
+      onPersistenceUnknown: vi.fn(),
+    });
+
+    const resolution = await resolveAcceptedTurnConfirmation({
+      admission: admission!,
+      userId: 'bound-confirmation-user',
+      userText: 'Tell me about the weather.',
+      taskScope,
+      channelScope,
+    });
+
+    expect(resolution.cleared).toBe(false);
+    expect(getPendingConfirmation('bound-confirmation-user', taskScope)?.id).toBe(taskBound.id);
+  });
+
+  it.each([
+    ['chat.ts', 'const chatAdmission = await admitAcceptedUserTurnDurably({', 'chatExecutionQueue.reserve(', 'beginChatExecutionDurably('],
+    ['voice.ts', 'const voiceAdmission = await admitAcceptedUserTurnDurably({', 'resolveAcceptedTurnConfirmation({', 'beginChatExecutionDurably('],
+    ['task.ts', 'const taskAdmission = await admitAcceptedUserTurnDurably({', 'taskExecutionQueue.reserve(', 'beginChatExecutionDurably('],
+  ])('places the %s source-order fence before confirmation, reservation, replacement and routing', (
+    fileName,
+    admissionMarker,
+    reservationMarker,
+    durableBeginMarker,
+  ) => {
+    const source = fs.readFileSync(path.resolve('server/socket', fileName), 'utf8');
+    const admission = source.indexOf(admissionMarker);
+    const persist = source.indexOf('persistAcceptedUserTurn:', admission);
+    const flush = source.indexOf('flush: flushDBOrThrow', persist);
+    const confirmation = source.indexOf('resolveAcceptedTurnConfirmation({', flush);
+    const reservation = source.indexOf(reservationMarker, flush);
+    const durableBegin = source.indexOf(durableBeginMarker, flush);
+    const consume = source.indexOf('consumePendingConfirmationDurably(', flush);
+    const routing = source.indexOf('buildLumiExecutionPipeline({', flush);
+    expect(admission).toBeGreaterThanOrEqual(0);
+    expect(persist).toBeGreaterThan(admission);
+    expect(flush).toBeGreaterThan(persist);
+    expect(confirmation).toBeGreaterThan(flush);
+    expect(reservation).toBeGreaterThan(flush);
+    expect(durableBegin).toBeGreaterThan(flush);
+    expect(consume).toBeGreaterThan(flush);
+    expect(routing).toBeGreaterThan(durableBegin);
+  });
+});

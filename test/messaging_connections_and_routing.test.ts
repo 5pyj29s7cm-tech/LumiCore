@@ -308,7 +308,7 @@ describe('messaging long connections and organization routing', () => {
     expect(bindings.getBinding('wechat', 'wx-personal-user', 'wx-personal-user', 'private')?.domain).toBe('personal');
   });
 
-  it('answers WeChat binding status from persisted state instead of model agreement', () => {
+  it('answers WeChat binding status from persisted state instead of model agreement', async () => {
     const message = incoming({
       platform: 'wechat',
       userId: 'wx-status-user',
@@ -319,10 +319,24 @@ describe('messaging long connections and organization routing', () => {
 
     const lumiUserId = `wechat-status-${Date.now()}-${Math.random()}`;
     const code = bindings.createBindingCode('wechat', lumiUserId, '', 'personal');
-    expect(wechatRoutes.handleWeChatBindingCommand({
+    const bindingMessage = {
       ...message,
+      messageId: `wechat-binding-${Date.now()}`,
       text: `绑定 Lumi ${code.code}`,
-    })).toContain('绑定成功');
+    };
+    expect(wechatRoutes.handleWeChatBindingCommand(bindingMessage)).toBeNull();
+    const bindingReply = await new Promise<string>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('durable WeChat binding timed out')), 2_000);
+      routes.dispatchIncomingMessage(bindingMessage, {
+        enrich: async value => value,
+        reply: async (_value, text) => {
+          clearTimeout(timeout);
+          resolve(text);
+          return 'wechat-binding-reply';
+        },
+      });
+    });
+    expect(bindingReply).toContain('绑定成功');
     expect(wechatRoutes.handleWeChatBindingCommand(message)).toContain('已连接到你的个人 Lumi');
   });
 

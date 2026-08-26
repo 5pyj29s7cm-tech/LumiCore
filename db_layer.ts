@@ -82,6 +82,10 @@ const PERFORMANCE_INDEX_SQL = [
   `CREATE INDEX IF NOT EXISTS idx_conversations_org ON conversations(orgId, userId)`,
   `CREATE INDEX IF NOT EXISTS idx_action_tasks_conversation_updated ON conversation_action_tasks(conversationId, updatedAt)`,
   `CREATE INDEX IF NOT EXISTS idx_action_tasks_user_status ON conversation_action_tasks(userId, status)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_action_turns_request_identity ON conversation_action_turns(conversationId, userId, requestId)`,
+  `CREATE INDEX IF NOT EXISTS idx_action_turns_conversation_status ON conversation_action_turns(conversationId, userId, status, updatedAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_action_turns_lease_expiry ON conversation_action_turns(status, leaseExpiresAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_action_turns_task_updated ON conversation_action_turns(taskId, updatedAt)`,
   `CREATE INDEX IF NOT EXISTS idx_action_receipts_task_created ON conversation_action_receipts(taskId, createdAt)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_action_receipts_idempotency ON conversation_action_receipts(taskId, idempotencyKey, toolName, outcome)`,
   `CREATE INDEX IF NOT EXISTS idx_model_routing_user_completed ON model_routing_receipts(userId, completedAt)`,
@@ -750,6 +754,33 @@ function createTables(): Promise<void> {
         completedAt TEXT DEFAULT ''
       );
 
+      CREATE TABLE IF NOT EXISTS conversation_action_turns (
+        id TEXT PRIMARY KEY,
+        conversationId TEXT NOT NULL,
+        userId TEXT NOT NULL,
+        domain TEXT NOT NULL DEFAULT 'personal',
+        orgId TEXT NOT NULL DEFAULT '',
+        requestId TEXT NOT NULL,
+        userMessageId TEXT NOT NULL,
+        taskId TEXT NOT NULL DEFAULT '',
+        channel TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'accepted',
+        leaseOwnerId TEXT NOT NULL DEFAULT '',
+        leaseEpoch TEXT NOT NULL DEFAULT '',
+        leaseAcquiredAt TEXT NOT NULL DEFAULT '',
+        leaseHeartbeatAt TEXT NOT NULL DEFAULT '',
+        leaseExpiresAt TEXT NOT NULL DEFAULT '',
+        terminalMessageId TEXT NOT NULL DEFAULT '',
+        terminalReason TEXT NOT NULL DEFAULT '',
+        recoveryReason TEXT NOT NULL DEFAULT '',
+        recoveredAt TEXT NOT NULL DEFAULT '',
+        revision INTEGER NOT NULL DEFAULT 1,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        terminalAt TEXT NOT NULL DEFAULT ''
+      );
+
       CREATE TABLE IF NOT EXISTS conversation_action_receipts (
         id TEXT PRIMARY KEY,
         taskId TEXT NOT NULL,
@@ -1314,6 +1345,7 @@ async function loadMemoryDB(): Promise<void> {
   // Load conversations
   const conversationsRaw = await query<any>('SELECT * FROM conversations');
   const conversationActionTasks = await query<any>('SELECT * FROM conversation_action_tasks');
+  const conversationActionTurns = await query<any>('SELECT * FROM conversation_action_turns');
   const conversationActionReceipts = await query<any>('SELECT * FROM conversation_action_receipts');
   const modelRoutingReceiptsRaw = await query<any>('SELECT * FROM model_routing_receipts');
   const readOnlyToolPatternsRaw = await query<any>('SELECT * FROM read_only_tool_patterns');
@@ -1467,6 +1499,7 @@ async function loadMemoryDB(): Promise<void> {
     reminders: remindersRaw || [],
     conversations,
     conversationActionTasks: conversationActionTasks || [],
+    conversationActionTurns: conversationActionTurns || [],
     conversationActionReceipts: conversationActionReceipts || [],
     modelRoutingReceipts: (modelRoutingReceiptsRaw || []).map((receipt: any) => ({
       ...receipt,
@@ -1706,6 +1739,22 @@ function withDatabaseWriteLock<T>(operation: () => Promise<T>): Promise<T> {
   }).then(operation);
   writeLock = scheduled.then(() => undefined, () => undefined);
   return scheduled;
+}
+
+export interface DatabaseSqlWriteSession {
+  query<T = any>(sql: string, params?: any[]): Promise<T[]>;
+  run(sql: string, params?: any[]): Promise<void>;
+}
+
+/**
+ * Serialize an auxiliary SQLite write sequence with the whole-database
+ * snapshot transaction. Callers receive raw operations that are safe to use
+ * inside this lock; using the public runSQL helper here would deadlock.
+ */
+export function withDatabaseSqlWriteLock<T>(
+  operation: (session: DatabaseSqlWriteSession) => Promise<T>,
+): Promise<T> {
+  return withDatabaseWriteLock(() => operation({ query, run }));
 }
 
 let writeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2039,6 +2088,12 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
       createSQL: `CREATE TABLE _temp_conversation_action_tasks (id TEXT PRIMARY KEY, conversationId TEXT NOT NULL, userId TEXT NOT NULL, domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '', parentTaskId TEXT DEFAULT '', rootUserMessageId TEXT DEFAULT '', intentKind TEXT NOT NULL DEFAULT 'none', operation TEXT NOT NULL DEFAULT 'read', goal TEXT NOT NULL, target TEXT DEFAULT '', status TEXT NOT NULL DEFAULT 'planning', blocker TEXT DEFAULT '', activeRequestId TEXT DEFAULT '', completionSource TEXT DEFAULT '', context TEXT NOT NULL DEFAULT '{}', revision INTEGER NOT NULL DEFAULT 1, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, completedAt TEXT DEFAULT '')`,
       insertSQL: `INSERT INTO _temp_conversation_action_tasks (id, conversationId, userId, domain, orgId, parentTaskId, rootUserMessageId, intentKind, operation, goal, target, status, blocker, activeRequestId, completionSource, context, revision, createdAt, updatedAt, completedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       rows: () => (memoryDB.conversationActionTasks || []).map((t: any) => [t.id, t.conversationId, t.userId, t.domain || 'personal', t.orgId || '', t.parentTaskId || '', t.rootUserMessageId || '', t.intentKind || 'none', t.operation || 'read', t.goal || '', t.target || '', t.status || 'planning', t.blocker || '', t.activeRequestId || '', t.completionSource || '', typeof t.context === 'string' ? t.context : JSON.stringify(t.context || {}), Number(t.revision) || 1, t.createdAt, t.updatedAt, t.completedAt || '']),
+    },
+    {
+      name: 'conversation_action_turns',
+      createSQL: `CREATE TABLE _temp_conversation_action_turns (id TEXT PRIMARY KEY, conversationId TEXT NOT NULL, userId TEXT NOT NULL, domain TEXT NOT NULL DEFAULT 'personal', orgId TEXT NOT NULL DEFAULT '', requestId TEXT NOT NULL, userMessageId TEXT NOT NULL, taskId TEXT NOT NULL DEFAULT '', channel TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'accepted', leaseOwnerId TEXT NOT NULL DEFAULT '', leaseEpoch TEXT NOT NULL DEFAULT '', leaseAcquiredAt TEXT NOT NULL DEFAULT '', leaseHeartbeatAt TEXT NOT NULL DEFAULT '', leaseExpiresAt TEXT NOT NULL DEFAULT '', terminalMessageId TEXT NOT NULL DEFAULT '', terminalReason TEXT NOT NULL DEFAULT '', recoveryReason TEXT NOT NULL DEFAULT '', recoveredAt TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, terminalAt TEXT NOT NULL DEFAULT '')`,
+      insertSQL: `INSERT INTO _temp_conversation_action_turns (id, conversationId, userId, domain, orgId, requestId, userMessageId, taskId, channel, source, status, leaseOwnerId, leaseEpoch, leaseAcquiredAt, leaseHeartbeatAt, leaseExpiresAt, terminalMessageId, terminalReason, recoveryReason, recoveredAt, revision, createdAt, updatedAt, terminalAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.conversationActionTurns || []).map((turn: any) => [turn.id, turn.conversationId, turn.userId, turn.domain || 'personal', turn.orgId || '', turn.requestId || '', turn.userMessageId || '', turn.taskId || '', turn.channel || '', turn.source || '', turn.status || 'accepted', turn.leaseOwnerId || '', turn.leaseEpoch || '', turn.leaseAcquiredAt || '', turn.leaseHeartbeatAt || '', turn.leaseExpiresAt || '', turn.terminalMessageId || '', turn.terminalReason || '', turn.recoveryReason || '', turn.recoveredAt || '', Number(turn.revision) || 1, turn.createdAt, turn.updatedAt, turn.terminalAt || '']),
     },
     {
       name: 'conversation_action_receipts',
@@ -2554,9 +2609,10 @@ export function ensureDatabaseInitialized(): Promise<void> {
 }
 
 export async function querySQL<T = any>(sql: string, params: any[] = []): Promise<T[]> {
+  await writeLock;
   return query<T>(sql, params);
 }
 
 export async function runSQL(sql: string, params: any[] = []): Promise<void> {
-  return run(sql, params);
+  return withDatabaseWriteLock(() => run(sql, params));
 }

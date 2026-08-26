@@ -1,4 +1,5 @@
 import { readDB, writeDB } from '../../db_layer';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { estimateTokenCount } from '../llm/providers';
 import {
   buildConversationActionContinuationState,
@@ -10,9 +11,14 @@ import {
   needsRecentActionContinuationContext,
   normalizeConversationActionState,
   prepareConversationActionTaskState,
+  RECONFIRMATION_REQUIRED_BLOCKER,
   type ConversationActionContinuationState,
 } from '../cognition/action_continuation';
-import { taskCompletionFromReceipts } from '../cognition/task_execution_ledger';
+import {
+  conversationTaskStatusOwnsExecutionLease,
+  isTerminalConversationTaskStatus,
+  taskCompletionFromReceipts,
+} from '../cognition/task_execution_ledger';
 import { buildActionContract } from '../cognition/action_contract';
 import { normalizeActionIntent } from '../cognition/normalized_action_intent';
 import type { ToolPolicy } from '../personality/types';
@@ -70,6 +76,41 @@ import {
   updateConversationFocusThread,
   type ConversationFocusThread,
 } from './focus_threads';
+import {
+  acceptConversationActionTurn,
+  acquireConversationActionTurnLease,
+  bindConversationActionTurnTask,
+  finalizeConversationActionTurn,
+  getConversationActionTurn,
+  listConversationActionTurns,
+  quarantineConversationActionTurnPersistenceInDb,
+  reconcileConversationActionTurnLease,
+  reconcileConversationActionTurnLeases,
+  releaseConversationActionTurnLease,
+} from './action_turn_ledger';
+import {
+  buildTransportNeutralConfirmationScope,
+  getPendingConfirmation,
+} from '../tools/pending_confirmation';
+
+function hasExactPendingConfirmationForTask(input: {
+  id: string;
+  conversationId: string;
+  userId: string;
+  domain?: string;
+  orgId?: string;
+}): boolean {
+  if (!input.id || !input.conversationId || !input.userId) return false;
+  return Boolean(getPendingConfirmation(
+    input.userId,
+    buildTransportNeutralConfirmationScope({
+      domain: input.domain,
+      orgId: input.orgId,
+      conversationId: input.conversationId,
+      taskId: input.id,
+    }),
+  ));
+}
 
 export function getConversationFocusThreads(input: {
   userId: string;
@@ -234,6 +275,8 @@ export interface MessageRecord {
   personality?: string;
   mode?: string;
   toolCalls?: any[];
+  /** Server-derived receipt evidence retained after prompt compaction removes raw tool calls. */
+  toolReceiptLedger?: string;
   domain?: string;
   orgId?: string;
   source?: string;
@@ -577,9 +620,45 @@ export function closeConversation(conversationId: string, summary?: string, user
   const conv = db.conversations.find((c: Conversation) => c.id === conversationId);
   if (!conv) return null;
   if (userId && conv.userId !== userId) return null;
+  const closingRequestId = String(
+    conv.actionContinuationState?.activeRequestId
+    || conv.pendingActionContinuation?.requestId
+    || '',
+  );
+  const now = new Date().toISOString();
+  cancelManagerActionTurns({
+    conversationId: conv.id,
+    userId: conv.userId,
+    reason: 'Conversation closed before the request reached a terminal result.',
+    now,
+  });
+  const previous = normalizeConversationActionState(conv.actionContinuationState);
+  if (previous?.unfinished) {
+    conv.actionContinuationState = {
+      ...previous,
+      status: 'cancelled',
+      unfinished: false,
+      latestBlocker: '',
+      assistantState: 'Conversation closed by the user.',
+      activeRequestId: undefined,
+      revision: (previous.revision || 0) + 1,
+      updatedAt: now,
+    };
+    syncConversationActionTaskLedger(db, {
+      conversation: conv,
+      state: conv.actionContinuationState,
+      now,
+    });
+  } else if (closingRequestId) {
+    finalizeConversationActionRequestInDb(db, conv, closingRequestId, {
+      fallbackBlocker: 'The conversation was closed before the request reached a verified terminal result.',
+      now,
+    });
+  }
+  delete conv.pendingActionContinuation;
   conv.status = 'closed';
   conv.summary = summary || '';
-  conv.lastActiveAt = new Date().toISOString();
+  conv.lastActiveAt = now;
   writeDB(db);
   return conv;
 }
@@ -690,17 +769,502 @@ export interface BoundConversationActionExecutionTurn {
   conversationId: string;
   messageId: string;
   requestId: string;
+  leaseOwnerId: string;
   updatedAt: string;
+}
+
+export const CONVERSATION_ACTION_EXECUTION_LEASE_TTL_MS = 5 * 60 * 1_000;
+export const CONVERSATION_ACTION_EXECUTION_HEARTBEAT_INTERVAL_MS = Math.floor(
+  CONVERSATION_ACTION_EXECUTION_LEASE_TTL_MS / 3,
+);
+
+interface ManagerActionTurnLease {
+  ownerId: string;
+  prepared: boolean;
+}
+
+const managerActionTurnLeases = new Map<string, ManagerActionTurnLease>();
+const managerActionTurnHeartbeatStops = new Map<string, () => void>();
+
+export interface ConversationTerminalPersistenceUnknownProjection {
+  text: string;
+  completionFeedback?: unknown;
+  reason?: string;
+}
+
+interface StagedConversationTerminalTurn {
+  conversationId: string;
+  userId: string;
+  requestId: string;
+  assistantMessageId: string;
+  desiredStatus: 'terminal' | 'cancelled';
+  reason: string;
+  now?: string;
+}
+
+export interface ConversationTerminalDurabilityStage {
+  turns: Map<string, StagedConversationTerminalTurn>;
+  settled: boolean;
+}
+
+const conversationTerminalDurabilityStorage = new AsyncLocalStorage<ConversationTerminalDurabilityStage>();
+
+export function runWithConversationTerminalDurabilityStage<T>(
+  operation: (stage: ConversationTerminalDurabilityStage) => Promise<T>,
+): Promise<T> {
+  const stage: ConversationTerminalDurabilityStage = {
+    turns: new Map(),
+    settled: false,
+  };
+  return conversationTerminalDurabilityStorage.run(stage, () => operation(stage));
+}
+
+function stageConversationTerminalTurn(input: StagedConversationTerminalTurn): boolean {
+  const stage = conversationTerminalDurabilityStorage.getStore();
+  if (!stage || stage.settled) return false;
+  const key = managerActionTurnKey(input);
+  const previous = stage.turns.get(key);
+  stage.turns.set(key, {
+    ...previous,
+    ...input,
+    assistantMessageId: input.assistantMessageId || previous?.assistantMessageId || '',
+    desiredStatus: input.desiredStatus === 'cancelled' || previous?.desiredStatus === 'cancelled'
+      ? 'cancelled'
+      : 'terminal',
+    reason: input.reason || previous?.reason || '',
+    now: input.now || previous?.now,
+  });
+  return true;
+}
+
+function stopManagerActionTurnHeartbeat(input: {
+  conversationId: string;
+  userId: string;
+  requestId: string;
+}): void {
+  managerActionTurnHeartbeatStops.get(managerActionTurnKey(input))?.();
+}
+
+function managerActionTurnKey(input: {
+  conversationId: string;
+  userId: string;
+  requestId: string;
+}): string {
+  return JSON.stringify([input.conversationId, input.userId, input.requestId]);
+}
+
+function acquireManagerActionTurnLease(input: {
+  conversationId: string;
+  userId: string;
+  requestId: string;
+  reuseExistingLease: boolean;
+}): { acquired: true; ownerId: string } | { acquired: false; reason: 'busy' | 'stale' } {
+  const key = managerActionTurnKey(input);
+  const existingManagerLease = managerActionTurnLeases.get(key);
+  if (!input.reuseExistingLease && existingManagerLease) {
+    return { acquired: false, reason: 'busy' };
+  }
+  if (input.reuseExistingLease && existingManagerLease?.prepared) {
+    return { acquired: false, reason: 'busy' };
+  }
+
+  // The database is process-exclusive. Reconcile abandoned process epochs and
+  // expired leases synchronously before enforcing one live request per thread.
+  reconcileConversationActionTurnLeases();
+  const competing = listConversationActionTurns({
+    conversationId: input.conversationId,
+    userId: input.userId,
+    statuses: ['leased'],
+  }).find(turn => turn.requestId !== input.requestId);
+  if (competing) return { acquired: false, reason: 'busy' };
+
+  const turn = getConversationActionTurn(input);
+  if (!turn) return { acquired: false, reason: 'stale' };
+  if (!input.reuseExistingLease && turn.status === 'leased') {
+    return { acquired: false, reason: 'busy' };
+  }
+
+  const ownerId = existingManagerLease?.ownerId || `manager:${crypto.randomUUID()}`;
+  const acquired = acquireConversationActionTurnLease({
+    ...input,
+    leaseOwnerId: ownerId,
+    ttlMs: CONVERSATION_ACTION_EXECUTION_LEASE_TTL_MS,
+  });
+  if (acquired.acquired === false) {
+    return {
+      acquired: false,
+      reason: acquired.reason === 'not_found' || acquired.reason === 'terminal' ? 'stale' : 'busy',
+    };
+  }
+  managerActionTurnLeases.set(key, {
+    ownerId,
+    prepared: input.reuseExistingLease,
+  });
+  return { acquired: true, ownerId };
+}
+
+function releaseManagerActionTurnLease(input: {
+  conversationId: string;
+  userId: string;
+  requestId: string;
+  reason: string;
+}): void {
+  const key = managerActionTurnKey(input);
+  stopManagerActionTurnHeartbeat(input);
+  const managerLease = managerActionTurnLeases.get(key);
+  const turn = getConversationActionTurn(input);
+  if (managerLease && turn?.status === 'leased') {
+    releaseConversationActionTurnLease({
+      ...input,
+      leaseOwnerId: managerLease.ownerId,
+    });
+  } else if (turn?.status === 'leased') {
+    // The executor is exiting but its in-process owner token is unavailable.
+    // Fence replay until durable transcript/task reconciliation proves safety.
+    reconcileConversationActionTurnLease({
+      ...input,
+      observedStatus: 'persistence_unknown',
+      reason: input.reason,
+    });
+  }
+  managerActionTurnLeases.delete(key);
+}
+
+function finalizeManagerActionTurnFromAssistant(input: {
+  conversationId: string;
+  userId: string;
+  requestId: string;
+  assistantMessageId: string;
+  reason?: string;
+  now?: string;
+}): void {
+  if (stageConversationTerminalTurn({
+    ...input,
+    desiredStatus: 'terminal',
+    reason: input.reason || 'assistant transcript staged behind strict durability fence',
+  })) return;
+  finalizeManagerActionTurnFromAssistantImmediately(input);
+}
+
+function finalizeManagerActionTurnFromAssistantImmediately(input: {
+  conversationId: string;
+  userId: string;
+  requestId: string;
+  assistantMessageId: string;
+  reason?: string;
+  now?: string;
+}): void {
+  stopManagerActionTurnHeartbeat(input);
+  finalizeConversationActionTurn({
+    conversationId: input.conversationId,
+    userId: input.userId,
+    requestId: input.requestId,
+    status: 'terminal',
+    terminalMessageId: input.assistantMessageId,
+    reason: input.reason || 'assistant transcript persisted',
+    force: true,
+    now: input.now,
+  });
+  managerActionTurnLeases.delete(managerActionTurnKey(input));
+}
+
+/**
+ * Release staged action turns only after the first strict transcript/task
+ * flush has succeeded. The durable assistant row can recover this projection
+ * after a crash, so the post-fence turn update may use the normal debounced
+ * database writer.
+ */
+export function commitConversationTerminalDurabilityStage(
+  stage: ConversationTerminalDurabilityStage,
+): number {
+  if (stage.settled) return 0;
+  stage.settled = true;
+  let committed = 0;
+  for (const entry of stage.turns.values()) {
+    if (entry.desiredStatus === 'cancelled') {
+      stopManagerActionTurnHeartbeat(entry);
+      const result = finalizeConversationActionTurn({
+        conversationId: entry.conversationId,
+        userId: entry.userId,
+        requestId: entry.requestId,
+        status: 'cancelled',
+        reason: entry.reason || 'cancelled terminal persisted',
+        force: true,
+        now: entry.now,
+      });
+      managerActionTurnLeases.delete(managerActionTurnKey(entry));
+      if (result.finalized) committed += 1;
+      continue;
+    }
+    finalizeManagerActionTurnFromAssistantImmediately({
+      conversationId: entry.conversationId,
+      userId: entry.userId,
+      requestId: entry.requestId,
+      assistantMessageId: entry.assistantMessageId,
+      reason: entry.reason,
+      now: entry.now,
+    });
+    committed += 1;
+  }
+  return committed;
+}
+
+function parsePersistedObject(value: unknown): Record<string, any> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, any>;
+  }
+  if (typeof value !== 'string' || !value.trim()) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, any>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Replace every staged success projection synchronously before a failed
+ * terminal fence can be retried or picked up by the normal delayed writer.
+ * The action-turn transition uses the same live DB object, so transcript,
+ * continuation, durable task and lease can never be observed as a mixed
+ * success/unknown in memory.
+ */
+export function quarantineConversationTerminalDurabilityStage(
+  stage: ConversationTerminalDurabilityStage,
+  projection: ConversationTerminalPersistenceUnknownProjection,
+): number {
+  if (stage.turns.size === 0) return 0;
+  const text = String(projection.text || 'The terminal persistence outcome is unknown.')
+    .replace(/\0/g, '')
+    .trim()
+    .slice(0, 8_000) || 'The terminal persistence outcome is unknown.';
+  const reason = String(projection.reason || 'Terminal persistence outcome is unknown.')
+    .replace(/\0/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 380) || 'Terminal persistence outcome is unknown.';
+  const blocker = `persistence_unknown: ${reason}`;
+  const completionFeedback = normalizeCompletionFeedbackForPersistence(
+    projection.completionFeedback || {
+      status: 'unknown',
+      incomplete: ['The terminal result could not be durably verified.'],
+      blockers: [reason],
+      nextSteps: ['Review the task state before retrying the action.'],
+    },
+  );
+  const db = readDB();
+  let quarantined = 0;
+
+  for (const entry of stage.turns.values()) {
+    const now = new Date().toISOString();
+    const assistant = (db.interactions || []).find((row: any) => (
+      row.userId === entry.userId
+      && row.conversationId === entry.conversationId
+      && row.role === 'assistant'
+      && (
+        row.id === entry.assistantMessageId
+        || String(row.requestId || '') === entry.requestId
+        || String(row.externalMessageId || '') === entry.requestId
+      )
+    ));
+    if (assistant) {
+      assistant.message = text;
+      assistant.content = text;
+      assistant.response = '';
+      assistant.toolCalls = [];
+      assistant.toolReceiptLedger = '';
+      assistant.cognitiveIntent = 'persistence_unknown';
+      if (completionFeedback) assistant.completionFeedback = completionFeedback;
+    }
+
+    const turn = (db.conversationActionTurns || []).find((candidate: any) => (
+      candidate.conversationId === entry.conversationId
+      && candidate.userId === entry.userId
+      && candidate.requestId === entry.requestId
+    ));
+    const conversation = (db.conversations || []).find((candidate: Conversation) => (
+      candidate.id === entry.conversationId && candidate.userId === entry.userId
+    ));
+    const currentState = normalizeConversationActionState(conversation?.actionContinuationState);
+    const taskId = String(turn?.taskId || (
+      currentState?.activeRequestId === entry.requestId ? currentState.taskId : ''
+    ) || '').trim();
+    const durableTask = taskId
+      ? (db.conversationActionTasks || []).find((candidate: any) => (
+          candidate.id === taskId
+          && candidate.conversationId === entry.conversationId
+          && candidate.userId === entry.userId
+        ))
+      : null;
+    const taskContext = parsePersistedObject(durableTask?.context);
+    const taskState = normalizeConversationActionState(taskContext.actionState);
+    const pendingOwnsRequest = conversation?.pendingActionContinuation?.requestId === entry.requestId;
+    const currentOwnsTask = Boolean(
+      currentState
+      && (
+        currentState.activeRequestId === entry.requestId
+        || (taskId && currentState.taskId === taskId)
+        || pendingOwnsRequest
+      ),
+    );
+    const previous = currentOwnsTask ? currentState : taskState;
+    const marker = {
+      status: 'persistence_unknown' as const,
+      requestId: entry.requestId,
+      quarantinedAt: now,
+    };
+    const unknownState = previous
+      ? normalizeConversationActionState({
+          ...previous,
+          version: 2,
+          status: 'blocked',
+          unfinished: true,
+          latestBlocker: blocker,
+          assistantState: text,
+          activeRequestId: undefined,
+          completionSource: undefined,
+          terminalPersistence: marker,
+          revision: (previous.revision || 0) + 1,
+          updatedAt: now,
+        })
+      : null;
+
+    if (conversation && currentOwnsTask && unknownState) {
+      conversation.actionContinuationState = unknownState;
+    }
+    if (conversation?.pendingActionContinuation?.requestId === entry.requestId) {
+      delete conversation.pendingActionContinuation;
+    }
+    if (durableTask) {
+      // Durable task terminals are normally monotonic. A failed strict fence
+      // is the exceptional case where the in-memory terminal was never safe
+      // to publish, so reset it before the normal sync applies the quarantine.
+      durableTask.status = 'blocked';
+      durableTask.blocker = blocker;
+      durableTask.activeRequestId = '';
+      durableTask.completionSource = '';
+      durableTask.completedAt = '';
+      durableTask.updatedAt = now;
+      durableTask.revision = Math.max(1, Number(durableTask.revision) || 0) + 1;
+      if (unknownState && conversation) {
+        syncConversationActionTaskLedger(db, {
+          conversation,
+          state: unknownState,
+          now,
+        });
+      }
+      const refreshedContext = parsePersistedObject(durableTask.context);
+      durableTask.context = JSON.stringify({
+        ...refreshedContext,
+        terminalPersistence: marker,
+      });
+    }
+
+    quarantineConversationActionTurnPersistenceInDb(db, {
+      conversationId: entry.conversationId,
+      userId: entry.userId,
+      requestId: entry.requestId,
+      reason: blocker,
+      now,
+    });
+    stopManagerActionTurnHeartbeat(entry);
+    managerActionTurnLeases.delete(managerActionTurnKey(entry));
+    quarantined += 1;
+  }
+
+  stage.settled = true;
+  if (quarantined > 0) writeDB(db);
+  return quarantined;
+}
+
+function finalizePersistedAssistantActionTurnInDb(
+  db: any,
+  input: {
+    conversationId: string;
+    userId: string;
+    requestId: string;
+    assistantMessageId: string;
+    assistantText: string;
+    now: string;
+  },
+): void {
+  const conversation = (db.conversations || []).find((item: Conversation) => (
+    item.id === input.conversationId && item.userId === input.userId
+  ));
+  if (conversation) {
+    finalizeConversationActionRequestInDb(db, conversation, input.requestId, {
+      assistantState: input.assistantText,
+      fallbackBlocker: 'The terminal assistant record has no verified task outcome.',
+      now: input.now,
+    });
+  }
+  finalizeManagerActionTurnFromAssistant({
+    conversationId: input.conversationId,
+    userId: input.userId,
+    requestId: input.requestId,
+    assistantMessageId: input.assistantMessageId,
+    now: input.now,
+  });
+}
+
+function cancelManagerActionTurns(input: {
+  conversationId: string;
+  userId: string;
+  requestId?: string;
+  reason: string;
+  now?: string;
+}): number {
+  const candidates = listConversationActionTurns({
+    conversationId: input.conversationId,
+    userId: input.userId,
+    statuses: ['accepted', 'leased', 'persistence_unknown'],
+  }).filter(turn => !input.requestId || turn.requestId === input.requestId);
+  let cancelled = 0;
+  for (const turn of candidates) {
+    if (stageConversationTerminalTurn({
+      conversationId: turn.conversationId,
+      userId: turn.userId,
+      requestId: turn.requestId,
+      assistantMessageId: '',
+      desiredStatus: 'cancelled',
+      reason: input.reason,
+      now: input.now,
+    })) {
+      cancelled += 1;
+      continue;
+    }
+    stopManagerActionTurnHeartbeat(turn);
+    const result = finalizeConversationActionTurn({
+      conversationId: turn.conversationId,
+      userId: turn.userId,
+      requestId: turn.requestId,
+      status: 'cancelled',
+      reason: input.reason,
+      force: true,
+      now: input.now,
+    });
+    managerActionTurnLeases.delete(managerActionTurnKey(turn));
+    if (result.finalized && result.changed) cancelled += 1;
+  }
+  return cancelled;
+}
+
+interface BindConversationActionExecutionTurnResult {
+  turn: BoundConversationActionExecutionTurn | null;
+  failure: 'busy' | 'stale' | null;
 }
 
 function bindConversationActionExecutionTurnInDb(
   db: any,
   conversation: Conversation,
   input: BindConversationActionExecutionTurnInput,
-): BoundConversationActionExecutionTurn | null {
+  reuseExistingLease: boolean,
+): BindConversationActionExecutionTurnResult {
   const requestId = String(input.requestId || '').trim();
   const userMessageId = String(input.userMessageId || '').trim();
-  if (!requestId || !userMessageId) return null;
+  if (!requestId || !userMessageId) return { turn: null, failure: 'stale' };
   const row = (db.interactions || []).find((item: any) => (
     item.userId === input.userId
     && item.conversationId === input.conversationId
@@ -711,9 +1275,14 @@ function bindConversationActionExecutionTurnInDb(
       || String(item.externalMessageId || '') === requestId
     )
   ));
-  if (!row) return null;
-  const pending = conversation.pendingActionContinuation;
-  if (pending?.requestId && pending.requestId !== requestId) return null;
+  if (!row) return { turn: null, failure: 'stale' };
+  const lease = acquireManagerActionTurnLease({
+    conversationId: input.conversationId,
+    userId: input.userId,
+    requestId,
+    reuseExistingLease,
+  });
+  if (lease.acquired === false) return { turn: null, failure: lease.reason };
 
   if (!input.preserveExistingTask) {
     detachUnrelatedConversationActionState(db, conversation, input.userText, new Date().toISOString());
@@ -726,10 +1295,14 @@ function bindConversationActionExecutionTurnInDb(
     updatedAt,
   };
   return {
-    conversationId: conversation.id,
-    messageId: row.id,
-    requestId,
-    updatedAt,
+    turn: {
+      conversationId: conversation.id,
+      messageId: row.id,
+      requestId,
+      leaseOwnerId: lease.ownerId,
+      updatedAt,
+    },
+    failure: null,
   };
 }
 
@@ -770,11 +1343,199 @@ export function bindConversationActionExecutionTurn(
   ));
   if (!conversation) return null;
   hydrateConversationActionState(db, conversation, input.userText);
-  const bound = bindConversationActionExecutionTurnInDb(db, conversation, input);
-  if (!bound) return null;
+  const binding = bindConversationActionExecutionTurnInDb(db, conversation, input, false);
+  if (!binding.turn) return null;
   conversation.lastActiveAt = new Date().toISOString();
   writeDB(db);
-  return bound;
+  return binding.turn;
+}
+
+/** Refresh the foreground fencing lease from any foreground channel heartbeat. */
+export function renewConversationActionExecutionLease(
+  conversationId: string,
+  userId: string,
+  requestId: string,
+): boolean {
+  const key = managerActionTurnKey({ conversationId, userId, requestId });
+  const lease = managerActionTurnLeases.get(key);
+  if (!lease) return false;
+  const renewed = acquireConversationActionTurnLease({
+    conversationId,
+    userId,
+    requestId,
+    leaseOwnerId: lease.ownerId,
+    ttlMs: CONVERSATION_ACTION_EXECUTION_LEASE_TTL_MS,
+  });
+  // Re-acquiring an already expired/released lease is not a renewal. There was
+  // an ownership gap, so the executor must fail closed instead of continuing
+  // side effects under a newly created lease that only happens to share its id.
+  return renewed.acquired && renewed.renewed && !renewed.recovered;
+}
+
+export interface ConversationActionExecutionLeaseLoss {
+  conversationId: string;
+  userId: string;
+  requestId: string;
+  status: 'persistence_unknown';
+  reason: string;
+  persisted: boolean;
+  occurredAt: string;
+}
+
+export interface ConversationActionExecutionHeartbeat {
+  stop(): void;
+  isRunning(): boolean;
+  isLeaseLost(): boolean;
+  /** Resolves after the durable quarantine and optional entrypoint receipt finish. */
+  leaseLoss: Promise<ConversationActionExecutionLeaseLoss>;
+}
+
+function persistConversationActionLeaseLoss(input: {
+  conversationId: string;
+  userId: string;
+  requestId: string;
+  reason: string;
+  occurredAt: string;
+}): boolean {
+  const reconciled = reconcileConversationActionTurnLease({
+    conversationId: input.conversationId,
+    userId: input.userId,
+    requestId: input.requestId,
+    observedStatus: 'persistence_unknown',
+    reason: input.reason,
+    now: input.occurredAt,
+  });
+  managerActionTurnLeases.delete(managerActionTurnKey(input));
+
+  const db = readDB();
+  const conversation = (db.conversations || []).find((item: Conversation) => (
+    item.id === input.conversationId && item.userId === input.userId
+  ));
+  if (conversation) {
+    hydrateConversationActionState(db, conversation);
+    finalizeConversationActionRequestInDb(db, conversation, input.requestId, {
+      fallbackBlocker: input.reason,
+      now: input.occurredAt,
+    });
+    writeDB(db);
+  }
+  return reconciled.turn?.status === 'persistence_unknown';
+}
+
+/**
+ * Keep one prepared foreground action turn fenced for the full executor
+ * lifetime. A lost renewal is a hard execution boundary: quarantine the
+ * durable turn first, abort the entrypoint controller, then persist its
+ * channel-specific unknown receipt.
+ */
+export function startConversationActionExecutionHeartbeat(input: {
+  conversationId: string;
+  userId: string;
+  requestId: string;
+  abortController: AbortController;
+  onPersistenceUnknown?: (
+    loss: ConversationActionExecutionLeaseLoss,
+  ) => void | Promise<void>;
+}): ConversationActionExecutionHeartbeat {
+  const identity = {
+    conversationId: String(input.conversationId || '').trim(),
+    userId: String(input.userId || '').trim(),
+    requestId: String(input.requestId || '').trim(),
+  };
+  if (!identity.conversationId || !identity.userId || !identity.requestId) {
+    throw new TypeError('conversationId, userId, and requestId are required');
+  }
+
+  const key = managerActionTurnKey(identity);
+  stopManagerActionTurnHeartbeat(identity);
+  let running = true;
+  let leaseLost = false;
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let resolveLeaseLoss!: (loss: ConversationActionExecutionLeaseLoss) => void;
+  const leaseLoss = new Promise<ConversationActionExecutionLeaseLoss>(resolve => {
+    resolveLeaseLoss = resolve;
+  });
+
+  const stop = () => {
+    if (!running && !timer) return;
+    running = false;
+    if (timer) clearInterval(timer);
+    timer = null;
+    input.abortController.signal.removeEventListener('abort', stop);
+    if (managerActionTurnHeartbeatStops.get(key) === stop) {
+      managerActionTurnHeartbeatStops.delete(key);
+    }
+  };
+
+  const loseLease = () => {
+    if (!running || leaseLost) return;
+    leaseLost = true;
+    const occurredAt = new Date().toISOString();
+    const reason = 'The execution lease heartbeat could not be renewed; the outcome is unknown.';
+    const persisted = persistConversationActionLeaseLoss({
+      ...identity,
+      reason,
+      occurredAt,
+    });
+    stop();
+    if (!input.abortController.signal.aborted) {
+      input.abortController.abort(new Error('Conversation action execution lease was lost'));
+    }
+    const loss: ConversationActionExecutionLeaseLoss = {
+      ...identity,
+      status: 'persistence_unknown',
+      reason,
+      persisted,
+      occurredAt,
+    };
+    Promise.resolve(input.onPersistenceUnknown?.(loss))
+      .catch(error => {
+        console.error('[ConversationActionHeartbeat] Failed to persist entrypoint receipt:', error);
+      })
+      .finally(() => resolveLeaseLoss(loss));
+  };
+
+  const tick = () => {
+    if (!running) return;
+    if (input.abortController.signal.aborted) {
+      stop();
+      return;
+    }
+    if (renewConversationActionExecutionLease(
+      identity.conversationId,
+      identity.userId,
+      identity.requestId,
+    )) return;
+
+    const turn = getConversationActionTurn(identity);
+    if (turn?.status === 'terminal') {
+      stop();
+      return;
+    }
+    if (turn?.status === 'cancelled') {
+      stop();
+      if (!input.abortController.signal.aborted) {
+        input.abortController.abort(new Error('Conversation action execution was cancelled'));
+      }
+      return;
+    }
+    // An independently installed quarantine is also an execution stop, and its
+    // channel callback still needs a chance to write the public-safe receipt.
+    loseLease();
+  };
+
+  managerActionTurnHeartbeatStops.set(key, stop);
+  input.abortController.signal.addEventListener('abort', stop, { once: true });
+  timer = setInterval(tick, CONVERSATION_ACTION_EXECUTION_HEARTBEAT_INTERVAL_MS);
+  timer.unref?.();
+  if (input.abortController.signal.aborted) stop();
+
+  return {
+    stop,
+    isRunning: () => running,
+    isLeaseLost: () => leaseLost,
+    leaseLoss,
+  };
 }
 
 export function prepareConversationActionExecution(input: {
@@ -802,31 +1563,53 @@ export function prepareConversationActionExecution(input: {
     );
   }
   hydrateConversationActionState(db, conversation, input.userText);
-  const boundTurn = bindConversationActionExecutionTurnInDb(db, conversation, {
+  const binding = bindConversationActionExecutionTurnInDb(db, conversation, {
     userId: input.userId,
     conversationId: input.conversationId,
     userText: input.userText,
     requestId: input.requestId,
     userMessageId: input.userMessageId,
     preserveExistingTask: input.preserveExistingTask ?? input.forceResume === true,
-  });
+  }, true);
+  const boundTurn = binding.turn;
   // The durable transcript identity is the ownership fence for every channel.
   // A different pending request is busy; a missing/mismatched transcript is
   // stale. Neither case may fall through and mutate the prior task.
   if (!boundTurn) {
-    const pendingRequestId = String(conversation.pendingActionContinuation?.requestId || '').trim();
-    const competingRequestId = pendingRequestId
-      && pendingRequestId !== String(input.requestId || '').trim()
-      ? pendingRequestId
-      : '';
     return rejectedConversationActionExecution(
-      competingRequestId ? 'busy' : 'stale',
-      competingRequestId
+      binding.failure === 'busy' ? 'busy' : 'stale',
+      binding.failure === 'busy'
         ? 'conversation_action_turn_busy'
         : 'conversation_action_turn_not_persisted',
     );
   }
   const prepared = prepareConversationActionTaskState(conversation.actionContinuationState, input);
+  if (prepared.state?.taskId) {
+    const taskBinding = bindConversationActionTurnTask({
+      conversationId: input.conversationId,
+      userId: input.userId,
+      requestId: input.requestId,
+      taskId: prepared.state.taskId,
+    });
+    if (taskBinding.bound === false) {
+      releaseManagerActionTurnLease({
+        conversationId: input.conversationId,
+        userId: input.userId,
+        requestId: input.requestId,
+        reason: `task binding failed: ${taskBinding.reason}`,
+      });
+      if (conversation.pendingActionContinuation?.requestId === input.requestId) {
+        delete conversation.pendingActionContinuation;
+      }
+      writeDB(db);
+      return rejectedConversationActionExecution(
+        taskBinding.reason === 'task_conflict' ? 'busy' : 'stale',
+        taskBinding.reason === 'task_conflict'
+          ? 'conversation_action_turn_busy'
+          : 'conversation_action_turn_not_persisted',
+      );
+    }
+  }
   if (prepared.kind === 'conversation') {
     const detached = detachUnrelatedConversationActionState(
       db,
@@ -1049,6 +1832,81 @@ export function getConversationModelExecutionRecovery(input: {
   };
 }
 
+interface FinalizeConversationActionRequestOptions {
+  assistantState?: string;
+  fallbackBlocker?: string;
+  now?: string;
+}
+
+/**
+ * End one foreground request without conflating that request lease with the
+ * durable task. A blocked or confirmation-waiting task remains resumable, but
+ * the process-local request that produced this terminal assistant record no
+ * longer owns it.
+ */
+function finalizeConversationActionRequestInDb(
+  db: any,
+  conversation: Conversation,
+  requestId: string,
+  options: FinalizeConversationActionRequestOptions = {},
+): ConversationActionContinuationState | null {
+  const normalizedRequestId = String(requestId || '').trim();
+  const previous = normalizeConversationActionState(conversation.actionContinuationState);
+  const pendingOwnsRequest = Boolean(
+    conversation.pendingActionContinuation
+    && (normalizedRequestId
+      ? conversation.pendingActionContinuation.requestId === normalizedRequestId
+      : !conversation.pendingActionContinuation.requestId),
+  );
+  const stateOwnsRequest = Boolean(
+    previous
+    && normalizedRequestId
+    && previous.activeRequestId === normalizedRequestId,
+  );
+  const now = options.now || new Date().toISOString();
+
+  if (previous && stateOwnsRequest) {
+    const completion = taskCompletionFromReceipts(previous.goal, previous.receipts || []);
+    const requestWasRunning = conversationTaskStatusOwnsExecutionLease(previous.status);
+    const status = completion.complete
+      ? 'completed'
+      : requestWasRunning
+        ? 'blocked'
+        : previous.status;
+    const next = normalizeConversationActionState({
+      ...previous,
+      status,
+      unfinished: !isTerminalConversationTaskStatus(status),
+      latestBlocker: status === 'blocked'
+        ? previous.latestBlocker
+          || completion.blocker
+          || options.fallbackBlocker
+          || 'The execution request ended without a verified terminal result.'
+        : status === 'completed' || status === 'waiting_confirmation'
+          ? ''
+          : previous.latestBlocker,
+      assistantState: options.assistantState !== undefined
+        ? compactRolloverText(options.assistantState, 700)
+        : previous.assistantState,
+      completionSource: completion.complete ? 'tool_receipt' : previous.completionSource,
+      activeRequestId: undefined,
+      revision: (previous.revision || 0) + 1,
+      updatedAt: now,
+    });
+    if (next) {
+      conversation.actionContinuationState = next;
+      syncConversationActionTaskLedger(db, {
+        conversation,
+        state: next,
+        now,
+      });
+    }
+  }
+
+  if (pendingOwnsRequest) delete conversation.pendingActionContinuation;
+  return normalizeConversationActionState(conversation.actionContinuationState);
+}
+
 export function cancelConversationActionExecution(
   conversationId: string,
   userId: string,
@@ -1063,6 +1921,18 @@ export function cancelConversationActionExecution(
   const previous = normalizeConversationActionState(conversation?.actionContinuationState);
   if (!conversation || !previous) return null;
   if (expectedRequestId && previous.activeRequestId !== expectedRequestId) return previous;
+  const requestId = String(
+    expectedRequestId
+    || previous.activeRequestId
+    || conversation.pendingActionContinuation?.requestId
+    || '',
+  ).trim();
+  cancelManagerActionTurns({
+    conversationId,
+    userId,
+    requestId: requestId || undefined,
+    reason,
+  });
   conversation.actionContinuationState = {
     ...previous,
     version: 2,
@@ -1112,6 +1982,7 @@ export function completeConversationActionFromUserObservation(
     state: conversation.actionContinuationState,
     userText,
   });
+  delete conversation.pendingActionContinuation;
   writeDB(db);
   return conversation.actionContinuationState;
 }
@@ -1132,44 +2003,52 @@ export function settleConversationActionExecutionRequest(
   ));
   if (conversation) hydrateConversationActionState(db, conversation);
   const previous = normalizeConversationActionState(conversation?.actionContinuationState);
-  if (!conversation || !previous || previous.activeRequestId !== requestId) return previous;
-
-  const completion = taskCompletionFromReceipts(previous.goal, previous.receipts || []);
-  const stillRunning = previous.status === 'planning' || previous.status === 'executing';
-  const status = completion.complete
-    ? 'completed'
-    : stillRunning
-      ? 'blocked'
-      : previous.status;
-  conversation.actionContinuationState = {
-    ...previous,
-    status,
-    unfinished: status !== 'completed' && status !== 'cancelled',
-    latestBlocker: status === 'blocked'
-      ? previous.latestBlocker || completion.blocker || fallbackBlocker
-      : '',
-    completionSource: completion.complete ? 'tool_receipt' : previous.completionSource,
-    activeRequestId: undefined,
-    revision: (previous.revision || 0) + 1,
-    updatedAt: new Date().toISOString(),
-  };
-  if (conversation.pendingActionContinuation?.requestId === requestId) {
-    delete conversation.pendingActionContinuation;
+  if (!conversation) return previous;
+  const actionTurn = getConversationActionTurn({ conversationId, userId, requestId });
+  if (actionTurn?.status === 'persistence_unknown') {
+    // A failed terminal fence is authoritative. A voice/task finally block or
+    // delayed replay must not recompute a completed projection from receipts.
+    return previous;
   }
-  syncConversationActionTaskLedger(db, {
-    conversation,
-    state: conversation.actionContinuationState,
+  const settled = finalizeConversationActionRequestInDb(db, conversation, requestId, {
+    fallbackBlocker,
   });
+  const assistant = (db.interactions || []).find((row: any) => (
+    row.userId === userId
+    && row.conversationId === conversationId
+    && row.role === 'assistant'
+    && (
+      String(row.requestId || '') === requestId
+      || String(row.externalMessageId || '') === requestId
+    )
+  ));
+  if (assistant) {
+    finalizeManagerActionTurnFromAssistant({
+      conversationId,
+      userId,
+      requestId,
+      assistantMessageId: assistant.id,
+      reason: 'settled after durable assistant transcript was found',
+      now: assistant.receivedAt || assistant.timestamp,
+    });
+  } else {
+    releaseManagerActionTurnLease({
+      conversationId,
+      userId,
+      requestId,
+      reason: fallbackBlocker,
+    });
+  }
   writeDB(db);
-  return conversation.actionContinuationState;
+  return settled;
 }
 
 /**
  * Foreground request leases are process-local. After a backend restart there
  * is no executor that can still own a persisted planning/executing state, and
- * one-time confirmations have also expired from memory. Convert those states
- * to resumable blockers instead of telling the next turn that old work is
- * still running.
+ * a waiting confirmation is valid only when startup hydration restored its
+ * exact one-time envelope. Convert true orphans to resumable blockers instead
+ * of telling the next turn that old work is still running.
  */
 export function recoverOrphanedConversationActionExecutions(
   now = new Date().toISOString(),
@@ -1177,25 +2056,93 @@ export function recoverOrphanedConversationActionExecutions(
   const db = readDB();
   const migrated = migrateLegacyConversationActionLedger(db);
   const repairedTerminalLeases = repairTerminalConversationActionTaskLeases(db);
-  const recoveredLedgerLeases = recoverConversationActionTaskLeases(db, now);
+  const recoveredLedgerLeases = recoverConversationActionTaskLeases(db, now, {
+    hasExactPendingConfirmation: hasExactPendingConfirmationForTask,
+  });
   const repairedReceipts = repairContradictoryConversationActionReceipts(db);
   const schedulerCompaction = compactLegacyScheduledCapabilityExecutions(db);
+  for (const stopHeartbeat of [...managerActionTurnHeartbeatStops.values()]) {
+    stopHeartbeat();
+  }
+  managerActionTurnLeases.clear();
+  let reconciledActionTurns = 0;
+  for (const turn of listConversationActionTurns()) {
+    const assistant = (db.interactions || []).find((row: any) => (
+      row.userId === turn.userId
+      && row.conversationId === turn.conversationId
+      && row.role === 'assistant'
+      && (
+        String(row.requestId || '') === turn.requestId
+        || String(row.externalMessageId || '') === turn.requestId
+      )
+    ));
+    const conversation = (db.conversations || []).find((row: Conversation) => (
+      row.id === turn.conversationId && row.userId === turn.userId
+    ));
+    const result = assistant
+      ? reconcileConversationActionTurnLease({
+          conversationId: turn.conversationId,
+          userId: turn.userId,
+          requestId: turn.requestId,
+          observedStatus: 'terminal',
+          terminalMessageId: assistant.id,
+          reason: 'assistant transcript found during restart reconciliation',
+          now,
+        })
+      : conversation?.status === 'closed'
+        ? reconcileConversationActionTurnLease({
+            conversationId: turn.conversationId,
+            userId: turn.userId,
+            requestId: turn.requestId,
+            observedStatus: 'cancelled',
+            reason: 'conversation was already closed during restart reconciliation',
+            now,
+          })
+        : null;
+    if (result?.reconciled) reconciledActionTurns += 1;
+  }
+  const recoveredActionTurnLeases = reconcileConversationActionTurnLeases({
+    // This function is a startup hook. A synthetic epoch also makes its
+    // restart behavior deterministic in same-process integration tests.
+    processEpoch: `manager-restart:${crypto.randomUUID()}`,
+    now,
+  }).released;
   let recovered = 0;
+  let recoveredPendingTurns = 0;
   for (const conversation of db.conversations || []) {
     hydrateConversationActionState(db, conversation);
+    // Foreground request ownership is process-local. After restart every
+    // transcript pairing slot is orphaned, including terminal/no-task states
+    // that the older recovery filter skipped entirely.
+    if (conversation.pendingActionContinuation) {
+      delete conversation.pendingActionContinuation;
+      recoveredPendingTurns += 1;
+    }
     const previous = normalizeConversationActionState(conversation.actionContinuationState);
     if (
       !previous?.unfinished
-      || !['planning', 'executing', 'waiting_confirmation'].includes(previous.status || '')
+      || (!conversationTaskStatusOwnsExecutionLease(previous.status)
+        && previous.status !== 'waiting_confirmation')
     ) continue;
-    const waitingForExpiredConfirmation = previous.status === 'waiting_confirmation';
+    const waitingForConfirmation = previous.status === 'waiting_confirmation';
+    if (waitingForConfirmation && previous.taskId && hasExactPendingConfirmationForTask({
+      id: previous.taskId,
+      conversationId: conversation.id,
+      userId: conversation.userId,
+      domain: conversation.domain,
+      orgId: conversation.orgId,
+    })) {
+      // The exact encrypted envelope was hydrated before this startup hook.
+      // Keep the task waiting; its one-time grant is still safe to consume.
+      continue;
+    }
     conversation.actionContinuationState = {
       ...previous,
       version: 2,
       status: 'blocked',
       unfinished: true,
-      latestBlocker: waitingForExpiredConfirmation
-        ? 'The pending confirmation expired when the previous runtime ended.'
+      latestBlocker: waitingForConfirmation
+        ? RECONFIRMATION_REQUIRED_BLOCKER
         : 'The previous runtime ended before this task reached a terminal receipt.',
       activeRequestId: undefined,
       revision: (previous.revision || 0) + 1,
@@ -1215,9 +2162,17 @@ export function recoverOrphanedConversationActionExecutions(
     || recoveredLedgerLeases > 0
     || repairedReceipts > 0
     || schedulerCompaction.tasksRemoved > 0
+    || reconciledActionTurns > 0
+    || recoveredActionTurnLeases > 0
+    || recoveredPendingTurns > 0
     || recovered > 0
   ) writeDB(db);
-  return repairedTerminalLeases + recoveredLedgerLeases + recovered;
+  return repairedTerminalLeases
+    + recoveredLedgerLeases
+    + reconciledActionTurns
+    + recoveredActionTurnLeases
+    + recovered
+    + recoveredPendingTurns;
 }
 
 export function setConversationActionExecutionStatus(
@@ -1233,8 +2188,18 @@ export function setConversationActionExecutionStatus(
   if (conversation) hydrateConversationActionState(db, conversation);
   const previous = normalizeConversationActionState(conversation?.actionContinuationState);
   if (!conversation || !previous) return null;
-  const unfinished = status !== 'completed' && status !== 'cancelled';
-  const requestLeaseActive = unfinished;
+  const unfinished = !isTerminalConversationTaskStatus(status);
+  const requestIdForLease = String(
+    options.requestId
+    || previous.activeRequestId
+    || conversation.pendingActionContinuation?.requestId
+    || '',
+  ).trim();
+  // A task can remain resumable while no executor owns it. The accepted turn,
+  // however, stays fenced until its assistant terminal crosses the strict DB
+  // boundary; otherwise a failed flush could release it while a false success
+  // projection is still waiting in the debounced writer.
+  const requestLeaseActive = conversationTaskStatusOwnsExecutionLease(status);
   conversation.actionContinuationState = {
     ...previous,
     version: 2,
@@ -1256,6 +2221,16 @@ export function setConversationActionExecutionStatus(
     conversation,
     state: conversation.actionContinuationState,
   });
+  if (!requestLeaseActive && requestIdForLease) {
+    if (status === 'cancelled') {
+      cancelManagerActionTurns({
+        conversationId,
+        userId,
+        requestId: requestIdForLease,
+        reason: options.blocker || options.assistantState || 'Task cancelled.',
+      });
+    }
+  }
   writeDB(db);
   return conversation.actionContinuationState;
 }
@@ -1334,6 +2309,28 @@ export function addMessage(msg: {
   if (!db.interactions) db.interactions = [];
   db.interactions.push(interaction);
 
+  // The transcript row and accepted turn enter the same in-memory persistence
+  // snapshot. Callers must flush this snapshot before any side-effecting tool
+  // execution; the ledger then becomes the sole durable request authority.
+  if (msg.role === 'user' && msg.conversationId && msg.requestId) {
+    const accepted = acceptConversationActionTurn({
+      conversationId: msg.conversationId,
+      userId: msg.userId,
+      requestId: msg.requestId,
+      userMessageId: id,
+      domain: msg.domain,
+      orgId: msg.orgId,
+      channel: msg.channel,
+      source: msg.source,
+      now,
+    });
+    if (!accepted.accepted) {
+      const insertedIndex = db.interactions.findIndex((row: any) => row.id === id);
+      if (insertedIndex >= 0) db.interactions.splice(insertedIndex, 1);
+      return accepted.turn.userMessageId;
+    }
+  }
+
   // Update conversation messageCount and lastActiveAt
   if (msg.conversationId && db.conversations) {
     const conv = db.conversations.find((c: Conversation) => c.id === msg.conversationId);
@@ -1363,8 +2360,9 @@ export function addMessage(msg: {
           const preparedSameTurn = Boolean(
             conv.actionContinuationState
             && conv.actionContinuationState.latestInstruction === userText
-            && ['planning', 'executing', 'waiting_confirmation'].includes(
-              conv.actionContinuationState.status || '',
+            && (
+              conversationTaskStatusOwnsExecutionLease(conv.actionContinuationState.status)
+              || conv.actionContinuationState.status === 'waiting_confirmation'
             ),
           );
           if (userObservedCompletion && conv.actionContinuationState) {
@@ -1439,11 +2437,48 @@ export function addMessage(msg: {
         // A superseded pipeline may still finish and persist its terminal
         // reply. Archive its bound receipts above, but leave the newer turn's
         // pending pointer and state untouched.
-        if (requestMismatch || (records.length > 0 && currentToolRecords.length === 0)) {
+        if (requestMismatch) {
           if (conv.actionContinuationState) {
             syncConversationActionTaskLedger(db, {
               conversation: conv,
               state: conv.actionContinuationState,
+              now,
+            });
+          }
+          if (msg.requestId) {
+            finalizePersistedAssistantActionTurnInDb(db, {
+              conversationId: conv.id,
+              userId: conv.userId,
+              requestId: msg.requestId,
+              assistantMessageId: id,
+              assistantText: msg.content,
+              now,
+            });
+          }
+          writeDB(db);
+          return id;
+        }
+        if (records.length > 0 && currentToolRecords.length === 0) {
+          // The assistant terminal is already durable and visible. Stale
+          // receipts remain quarantined above, but they must never keep this
+          // request's transcript pointer or execution lease alive forever.
+          finalizeConversationActionRequestInDb(
+            db,
+            conv,
+            msg.requestId || pending.requestId || '',
+            {
+              assistantState: msg.content,
+              fallbackBlocker: 'The terminal tool receipts could not be bound to the active task identity.',
+              now,
+            },
+          );
+          if (msg.requestId) {
+            finalizePersistedAssistantActionTurnInDb(db, {
+              conversationId: conv.id,
+              userId: conv.userId,
+              requestId: msg.requestId,
+              assistantMessageId: id,
+              assistantText: msg.content,
               now,
             });
           }
@@ -1584,7 +2619,26 @@ export function addMessage(msg: {
             updatedAt: now,
           };
         }
-        delete conv.pendingActionContinuation;
+        const terminalRequestId = String(msg.requestId || pending.requestId || '').trim();
+        if (terminalRequestId && conv.actionContinuationState?.taskId) {
+          bindConversationActionTurnTask({
+            conversationId: conv.id,
+            userId: conv.userId,
+            requestId: terminalRequestId,
+            taskId: conv.actionContinuationState.taskId,
+            now,
+          });
+        }
+        finalizeConversationActionRequestInDb(
+          db,
+          conv,
+          terminalRequestId,
+          {
+            assistantState: msg.content,
+            fallbackBlocker: 'The execution request ended without a terminal tool receipt.',
+            now,
+          },
+        );
       }
 
       if (conv.actionContinuationState) {
@@ -1604,6 +2658,22 @@ export function addMessage(msg: {
         });
       }
     }
+  }
+
+  if (
+    msg.role === 'assistant'
+    && msg.mode !== 'proactive'
+    && msg.conversationId
+    && msg.requestId
+  ) {
+    finalizePersistedAssistantActionTurnInDb(db, {
+      conversationId: msg.conversationId,
+      userId: msg.userId,
+      requestId: msg.requestId,
+      assistantMessageId: id,
+      assistantText: msg.content,
+      now,
+    });
   }
 
   writeDB(db);
@@ -1666,7 +2736,42 @@ export function addMessageIdempotent(msg: IdempotentConversationMessage): string
     source: msg.source,
     channel: msg.channel,
   });
-  if (existing) return existing.id;
+  if (existing) {
+    if (msg.role === 'user') {
+      acceptConversationActionTurn({
+        conversationId: msg.conversationId,
+        userId: msg.userId,
+        requestId,
+        userMessageId: existing.id,
+        domain: msg.domain,
+        orgId: msg.orgId,
+        channel: msg.channel,
+        source: msg.source,
+        now: existing.receivedAt || existing.timestamp,
+      });
+    } else if (msg.role === 'assistant') {
+      const db = readDB();
+      const conversation = (db.conversations || []).find((item: Conversation) => (
+        item.id === msg.conversationId && item.userId === msg.userId
+      ));
+      if (conversation) {
+        finalizeConversationActionRequestInDb(db, conversation, requestId, {
+          assistantState: existing.message,
+          fallbackBlocker: 'The terminal assistant record was replayed without a verified task outcome.',
+        });
+      }
+      finalizeManagerActionTurnFromAssistant({
+        conversationId: msg.conversationId,
+        userId: msg.userId,
+        requestId,
+        assistantMessageId: existing.id,
+        reason: 'idempotent assistant transcript replay',
+        now: existing.receivedAt || existing.timestamp,
+      });
+      writeDB(db);
+    }
+    return existing.id;
+  }
 
   const rows = (readDB().interactions || []).filter((item: any) => (
     item.conversationId === msg.conversationId
@@ -1752,7 +2857,7 @@ function isPromptEligibleMessage(m: MessageRecord): boolean {
   return Boolean((m.message || '').trim() || (m.response || '').trim());
 }
 
-function compactRecordForPrompt(m: MessageRecord): MessageRecord {
+export function compactRecordForPrompt(m: MessageRecord): MessageRecord {
   const legacyCombinedGuardResponse = m.role === 'user'
     && Boolean(String(m.response || '').trim())
     && (
@@ -1775,6 +2880,7 @@ function compactRecordForPrompt(m: MessageRecord): MessageRecord {
     response: evidenceNote && m.role === 'user' && compactedResponse
       ? `${compactedResponse}\n${evidenceNote}`.trim()
       : compactedResponse,
+    toolReceiptLedger: evidenceNote || undefined,
     toolCalls: undefined,
   };
 }

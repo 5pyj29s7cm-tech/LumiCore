@@ -35,6 +35,54 @@ export interface PendingConfirmationScope {
   actionIntent?: string;
 }
 
+export const PENDING_CONFIRMATION_PERSISTENCE_VERSION = 1 as const;
+
+export type PendingConfirmationPersistenceStatus =
+  | 'pending'
+  | 'consumed'
+  | 'cancelled'
+  | 'expired';
+
+/**
+ * Storage-safe confirmation envelope. Exact arguments are deliberately absent
+ * and must be encrypted by the persistence adapter before this record is
+ * written. `revision` and `status` are the future atomic-CAS boundary.
+ */
+export interface PendingConfirmationPersistenceRecord {
+  schemaVersion: typeof PENDING_CONFIRMATION_PERSISTENCE_VERSION;
+  revision: number;
+  status: PendingConfirmationPersistenceStatus;
+  id: string;
+  userId: string;
+  toolName: string;
+  argsHash: string;
+  target: string;
+  payloadDigest: string;
+  exactArgsCiphertext: string;
+  safeArgs: Record<string, any>;
+  actionIntent: string;
+  source: string;
+  domain: string;
+  orgId: string;
+  channelId: string;
+  taskId: string;
+  originRequestId: string;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: number;
+}
+
+export interface PendingConfirmationPersistenceAdapter {
+  persist(pending: PendingToolConfirmation): Promise<number>;
+  consume(input: { id: string; userId: string; revision: number }): Promise<boolean>;
+  cancel(input: {
+    id: string;
+    userId: string;
+    revision: number;
+    expiresAt?: number;
+  }): Promise<boolean>;
+}
+
 /** Stable across separate utterances on the same voice channel. */
 export function buildVoiceConfirmationChannelScope(input: {
   domain?: string; orgId?: string; channelId?: string; taskId?: string; originRequestId?: string;
@@ -65,7 +113,31 @@ export function buildConversationConfirmationChannelScope(input: {
   };
 }
 
+/**
+ * Conversation identity without a transport source. A voice proposal and a
+ * typed confirmation can intentionally share this scope when both transports
+ * supply the same persisted conversation and task ids.
+ */
+export function buildTransportNeutralConfirmationScope(input: {
+  domain?: string; orgId?: string; conversationId: string; taskId?: string; originRequestId?: string;
+}): PendingConfirmationScope {
+  const conversationId = String(input.conversationId || '').trim();
+  if (!conversationId) throw new Error('Transport-neutral confirmation scope requires a conversation id');
+  const taskId = String(input.taskId || '').trim();
+  const originRequestId = String(input.originRequestId || '').trim();
+  return {
+    domain: String(input.domain || ''),
+    orgId: String(input.orgId || ''),
+    channelId: `conversation:${conversationId}`,
+    ...(taskId ? { taskId } : {}),
+    ...(originRequestId ? { originRequestId } : {}),
+  };
+}
+
 const pendingById = new Map<string, PendingToolConfirmation>();
+const persistedRevisionById = new Map<string, number>();
+const revocationQuarantineIds = new Set<string>();
+let persistenceAdapter: PendingConfirmationPersistenceAdapter | null = null;
 const CONFIRMATION_TTL_MS = 10 * 60 * 1000;
 const SECRET_KEY_RE = /password|passkey|secret|token|api.?key|credential|otp|captcha|verification.?code/i;
 
@@ -162,6 +234,81 @@ function confirmationModelSafeArgs(pending: PendingToolConfirmation): Record<str
   };
 }
 
+export function buildPendingConfirmationPersistenceRecord(
+  pending: PendingToolConfirmation,
+  exactArgsCiphertext: string,
+  updatedAt = new Date().toISOString(),
+): PendingConfirmationPersistenceRecord {
+  const ciphertext = String(exactArgsCiphertext || '').trim();
+  if (!ciphertext) {
+    throw new Error('Pending confirmation persistence requires encrypted exact arguments');
+  }
+  return {
+    schemaVersion: PENDING_CONFIRMATION_PERSISTENCE_VERSION,
+    revision: 1,
+    status: 'pending',
+    id: pending.id,
+    userId: pending.userId,
+    toolName: pending.toolName,
+    argsHash: pending.argsHash,
+    target: pending.target,
+    payloadDigest: pending.payloadDigest,
+    exactArgsCiphertext: ciphertext,
+    safeArgs: stableValue(pending.safeArgs),
+    actionIntent: pending.actionIntent,
+    source: pending.source,
+    domain: pending.domain,
+    orgId: pending.orgId,
+    channelId: pending.channelId,
+    taskId: pending.taskId,
+    originRequestId: pending.originRequestId,
+    createdAt: pending.createdAt,
+    updatedAt,
+    expiresAt: pending.expiresAt,
+  };
+}
+
+/**
+ * Rebuild an in-memory confirmation only after an external persistence adapter
+ * decrypts the exact arguments. Hash and payload checks fail closed if either
+ * the database envelope or ciphertext result was changed.
+ */
+export function hydratePendingConfirmationFromPersistence(
+  record: PendingConfirmationPersistenceRecord,
+  decryptedExactArgs: Record<string, any>,
+  now = Date.now(),
+): PendingToolConfirmation | null {
+  if (!record || record.schemaVersion !== PENDING_CONFIRMATION_PERSISTENCE_VERSION) return null;
+  if (record.status !== 'pending' || record.revision < 1 || record.expiresAt <= now) return null;
+  if (!record.id || !record.userId || !record.toolName || !record.exactArgsCiphertext) return null;
+  if (argsHash(decryptedExactArgs) !== record.argsHash) return null;
+  if (confirmationPayloadDigest(decryptedExactArgs) !== record.payloadDigest) return null;
+  if (confirmationTarget(decryptedExactArgs) !== record.target) return null;
+  if (
+    JSON.stringify(stableValue(confirmationSafeArgs(record.toolName, decryptedExactArgs)))
+    !== JSON.stringify(stableValue(record.safeArgs || {}))
+  ) return null;
+  return {
+    id: record.id,
+    userId: record.userId,
+    toolName: record.toolName,
+    argsHash: record.argsHash,
+    target: record.target,
+    payloadDigest: record.payloadDigest,
+    exactArgs: stableValue(decryptedExactArgs || {}),
+    safeArgs: stableValue(record.safeArgs || {}),
+    actionIntent: record.actionIntent,
+    source: record.source,
+    domain: record.domain,
+    orgId: record.orgId,
+    channelId: record.channelId,
+    taskId: record.taskId,
+    originRequestId: record.originRequestId,
+    createdAt: record.createdAt,
+    expiresAt: record.expiresAt,
+  };
+}
+
 function matchesScope(pending: PendingToolConfirmation, scope?: PendingConfirmationScope): boolean {
   if (!scope) return true;
   // Once an action is task-bound, a later generic turn in the same channel is
@@ -185,8 +332,11 @@ function readFresh(userId: string, scope?: PendingConfirmationScope): PendingToo
   for (const [id, pending] of pendingById.entries()) {
     if (pending.expiresAt <= Date.now()) {
       pendingById.delete(id);
+      persistedRevisionById.delete(id);
+      revocationQuarantineIds.delete(id);
       continue;
     }
+    if (revocationQuarantineIds.has(id)) continue;
     if (pending.userId === userId && matchesScope(pending, scope)) fresh.push(pending);
   }
   return fresh.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] || null;
@@ -202,12 +352,10 @@ export function recordPendingConfirmation(
   const taskId = String(scope.taskId || '').trim();
   if (taskId) {
     const existing = readFresh(userId, {
-      source,
       domain: scope.domain || '',
       orgId: scope.orgId || '',
       channelId: scope.channelId || '',
       taskId,
-      ...(scope.originRequestId ? { originRequestId: scope.originRequestId } : {}),
     });
     // One unfinished task owns one immutable confirmation boundary. Until it
     // is consumed or cleared, a retry/re-plan cannot replace its tool or args.
@@ -235,22 +383,155 @@ export function recordPendingConfirmation(
   for (const [id, existing] of pendingById.entries()) {
     if (
       existing.userId === userId &&
-      existing.source === pending.source &&
       existing.domain === pending.domain &&
       existing.orgId === pending.orgId &&
       existing.channelId === pending.channelId
     ) {
       pendingById.delete(id);
+      persistedRevisionById.delete(id);
     }
   }
   pendingById.set(pending.id, pending);
   return pending;
 }
 
+/** Configure the encrypted durable adapter after it has hydrated active rows. */
+export function configurePendingConfirmationPersistence(
+  adapter: PendingConfirmationPersistenceAdapter | null,
+): void {
+  persistenceAdapter = adapter;
+}
+
+/** Restore one already decrypted and envelope-verified record at startup. */
+export function restorePendingConfirmationForRuntime(
+  pending: PendingToolConfirmation,
+  revision: number,
+): boolean {
+  if (!pending?.id || !pending.userId || pending.expiresAt <= Date.now() || revision < 1) return false;
+  const currentRevision = persistedRevisionById.get(pending.id) || 0;
+  if (pendingById.has(pending.id) && currentRevision >= revision) return false;
+  pendingById.set(pending.id, pending);
+  persistedRevisionById.set(pending.id, revision);
+  return true;
+}
+
+export async function recordPendingConfirmationDurably(
+  userId: string,
+  toolName: string,
+  args: Record<string, any>,
+  source = 'chat',
+  scope: Omit<PendingConfirmationScope, 'source'> = {},
+): Promise<PendingToolConfirmation> {
+  const pending = recordPendingConfirmation(userId, toolName, args, source, scope);
+  if (!persistenceAdapter || persistedRevisionById.has(pending.id)) return pending;
+  try {
+    const revision = await persistenceAdapter.persist(pending);
+    if (!Number.isSafeInteger(revision) || revision < 1) {
+      throw new Error('Pending confirmation persistence returned an invalid revision');
+    }
+    persistedRevisionById.set(pending.id, revision);
+    return pending;
+  } catch (error) {
+    pendingById.delete(pending.id);
+    persistedRevisionById.delete(pending.id);
+    throw error;
+  }
+}
+
+function validatesPendingConsumption(
+  userId: string,
+  pendingId: string,
+  toolName: string,
+  args: Record<string, any>,
+  scope?: PendingConfirmationScope,
+): PendingToolConfirmation | null {
+  if (revocationQuarantineIds.has(pendingId)) return null;
+  const pending = pendingById.get(pendingId);
+  if (!pending || pending.expiresAt <= Date.now()) return null;
+  if (pending.userId !== userId || !matchesScope(pending, scope)) return null;
+  if (pending.toolName !== toolName || pending.argsHash !== argsHash(args)) return null;
+  return pending;
+}
+
+export async function consumePendingConfirmationDurably(
+  userId: string,
+  pendingId: string,
+  toolName: string,
+  args: Record<string, any>,
+  scope?: PendingConfirmationScope,
+): Promise<boolean> {
+  const pending = validatesPendingConsumption(userId, pendingId, toolName, args, scope);
+  if (!pending) {
+    if (revocationQuarantineIds.has(pendingId)) return false;
+    pendingById.delete(pendingId);
+    persistedRevisionById.delete(pendingId);
+    return false;
+  }
+  const revision = persistedRevisionById.get(pendingId);
+  if (persistenceAdapter && revision) {
+    const claimed = await persistenceAdapter.consume({ id: pendingId, userId, revision });
+    // A competing process may have consumed/cancelled this row. Either way,
+    // the local grant disappears and cannot be retried.
+    if (!claimed) {
+      pendingById.delete(pendingId);
+      persistedRevisionById.delete(pendingId);
+      return false;
+    }
+  }
+  pendingById.delete(pending.id);
+  persistedRevisionById.delete(pending.id);
+  return true;
+}
+
+export async function clearPendingConfirmationDurably(
+  userId: string,
+  scope?: PendingConfirmationScope,
+): Promise<boolean> {
+  let cleared = false;
+  const candidates = [...pendingById.values()].filter(pending => (
+    pending.userId === userId && matchesScope(pending, scope)
+  ));
+  for (const pending of candidates) {
+    const revision = persistedRevisionById.get(pending.id);
+    if (persistenceAdapter && revision) {
+      try {
+        await persistenceAdapter.cancel({
+          id: pending.id,
+          userId,
+          revision,
+          expiresAt: pending.expiresAt,
+        });
+      } catch (error) {
+        // Deny this grant immediately, but retain its identity so cancellation
+        // can be retried. The production repository writes a durable revocation
+        // barrier before attempting the SQLite CAS, preventing restart revival.
+        revocationQuarantineIds.add(pending.id);
+        throw error;
+      }
+      pendingById.delete(pending.id);
+      persistedRevisionById.delete(pending.id);
+      revocationQuarantineIds.delete(pending.id);
+    } else {
+      pendingById.delete(pending.id);
+      persistedRevisionById.delete(pending.id);
+    }
+    cleared = true;
+  }
+  return cleared;
+}
+
 export function getPendingConfirmation(
   userId: string,
   scope?: PendingConfirmationScope,
 ): PendingToolConfirmation | null {
+  return readFresh(userId, scope);
+}
+
+/** Async production API paired with startup hydration and durable CAS writes. */
+export async function getPendingConfirmationDurably(
+  userId: string,
+  scope?: PendingConfirmationScope,
+): Promise<PendingToolConfirmation | null> {
   return readFresh(userId, scope);
 }
 
@@ -262,13 +543,16 @@ export function consumePendingConfirmation(
   scope?: PendingConfirmationScope,
 ): boolean {
   const pending = pendingById.get(pendingId);
+  if (revocationQuarantineIds.has(pendingId)) return false;
   if (!pending || pending.expiresAt <= Date.now()) {
     if (pending) pendingById.delete(pendingId);
+    persistedRevisionById.delete(pendingId);
     return false;
   }
   if (pending.userId !== userId || !matchesScope(pending, scope)) return false;
   if (pending.toolName !== toolName || pending.argsHash !== argsHash(args)) return false;
   pendingById.delete(pending.id);
+  persistedRevisionById.delete(pending.id);
   return true;
 }
 
@@ -277,6 +561,8 @@ export function clearPendingConfirmation(userId: string, scope?: PendingConfirma
   for (const [id, pending] of pendingById.entries()) {
     if (pending.userId === userId && matchesScope(pending, scope)) {
       pendingById.delete(id);
+      persistedRevisionById.delete(id);
+      revocationQuarantineIds.delete(id);
       cleared = true;
     }
   }
@@ -284,7 +570,7 @@ export function clearPendingConfirmation(userId: string, scope?: PendingConfirma
 }
 
 export function isExplicitConfirmationReply(text: string): boolean {
-  return /^(?:\u786e\u8ba4|\u786e\u8ba4\u6267\u884c|\u7ee7\u7eed\u6267\u884c|\u540c\u610f|\u6388\u6743\u7ee7\u7eed|\u53ef\u4ee5\u6267\u884c|\u53ef\u4ee5|\u597d|\u597d\u7684|\u5f00\u59cb|yes|confirm|proceed|approve|go)[\u3002\uff01\uff1f.!?\s]*$/iu.test(String(text || '').trim());
+  return /^(?:\u786e\u8ba4(?:\u4e86|\u6267\u884c)?|\u7ee7\u7eed\u6267\u884c|\u540c\u610f|\u6388\u6743\u7ee7\u7eed|\u53ef\u4ee5\u6267\u884c|\u53ef\u4ee5|\u597d|\u597d\u7684|\u5f00\u59cb|yes|confirm|proceed|approve|go)[\u3002\uff01\uff1f.!?\s]*$/iu.test(String(text || '').trim());
 }
 
 export function isConfirmationCancellation(text: string): boolean {
@@ -325,4 +611,7 @@ export function formatPendingConfirmationRequest(pending: PendingToolConfirmatio
 
 export function clearAllPendingConfirmationsForTests(): void {
   pendingById.clear();
+  persistedRevisionById.clear();
+  revocationQuarantineIds.clear();
+  persistenceAdapter = null;
 }

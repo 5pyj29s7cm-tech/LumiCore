@@ -3,24 +3,70 @@ import {
   isGuardGeneratedAssistantText,
   isGuardGeneratedConversationRecord,
 } from '../conversation/guard_history';
-import { isUnverifiedExecutionAssistantRecord } from '../conversation/summary_grounding';
+import {
+  buildCompactToolEvidenceNote,
+  containsCompactToolEvidenceMarker,
+  isUnverifiedExecutionAssistantRecord,
+  isUnverifiedExecutionAssistantText,
+  readCompactToolEvidenceNote,
+} from '../conversation/summary_grounding';
 
 export function normalizeVoiceHistoryRecord(record: any): NormalizedMessage[] {
   const hasToolCalls = Array.isArray(record?.toolCalls)
     ? record.toolCalls.length > 0
     : Boolean(String(record?.toolCalls || '').trim());
-  if (record?.role === 'tool' || record?.mode === 'proactive' || hasToolCalls || record?.tool_call_id) return [];
+  if (record?.role === 'tool' || record?.mode === 'proactive' || record?.tool_call_id) return [];
   const role = record?.role === 'assistant' ? 'assistant' : record?.role === 'user' ? 'user' : '';
   if (!role) return [];
-  if (role === 'assistant' && isGuardGeneratedConversationRecord(record)) return [];
-  if (role === 'assistant' && isUnverifiedExecutionAssistantRecord(record)) return [];
+  const unsafeAssistantProse = role === 'assistant' && (
+    isGuardGeneratedConversationRecord(record)
+    || isUnverifiedExecutionAssistantRecord(record)
+  );
   const message = typeof record?.message === 'string' ? record.message.trim() : '';
   const response = typeof record?.response === 'string' ? record.response.trim() : '';
-  const responseIsGuard = String(record?.cognitiveIntent || '').toLowerCase() === 'work_product_guard'
-    || isGuardGeneratedAssistantText(response);
+  const responseIsUnsafe = String(record?.cognitiveIntent || '').toLowerCase() === 'work_product_guard'
+    || isGuardGeneratedAssistantText(response)
+    || isUnverifiedExecutionAssistantText(response);
   const entries: NormalizedMessage[] = [];
-  if (message) entries.push({ role, content: message });
-  if (response && role === 'user' && !responseIsGuard) entries.push({ role: 'assistant', content: response });
+  const embeddedAssistantReceipt = role === 'assistant'
+    ? readCompactToolEvidenceNote(record)
+    : '';
+  const embeddedLegacyResponseReceipt = role === 'user'
+    ? readCompactToolEvidenceNote(record)
+    : '';
+  const untrustedAssistantReceiptMarker = role === 'assistant'
+    && !embeddedAssistantReceipt
+    && containsCompactToolEvidenceMarker(message);
+  const untrustedLegacyResponseReceiptMarker = role === 'user'
+    && !embeddedLegacyResponseReceipt
+    && containsCompactToolEvidenceMarker(response);
+  const receiptNote = role === 'assistant'
+    ? hasToolCalls
+      ? buildCompactToolEvidenceNote(record.toolCalls)
+      : embeddedAssistantReceipt
+    : '';
+  // Tool-bearing prose may overstate or misread the receipt. Preserve the
+  // evidence and its paired user request, but let the next model reason from
+  // the bounded receipt ledger instead of replaying the old claim verbatim.
+  const safeMessage = unsafeAssistantProse
+    || untrustedAssistantReceiptMarker
+    || (role === 'assistant' && (hasToolCalls || receiptNote))
+    ? ''
+    : message;
+  const assistantContent = role === 'assistant'
+    ? [safeMessage, receiptNote].filter(Boolean).join('\n')
+    : safeMessage;
+  if (assistantContent) entries.push({ role, content: assistantContent });
+  if (role === 'user' && embeddedLegacyResponseReceipt) {
+    entries.push({ role: 'assistant', content: embeddedLegacyResponseReceipt });
+  } else if (
+    response
+    && role === 'user'
+    && !responseIsUnsafe
+    && !untrustedLegacyResponseReceiptMarker
+  ) {
+    entries.push({ role: 'assistant', content: response });
+  }
   return entries;
 }
 

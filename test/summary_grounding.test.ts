@@ -4,7 +4,11 @@ import type { MessageRecord } from '../server/conversation/manager';
 import {
   buildCompactToolEvidenceNote,
   buildEvidenceGroundedSummaryTranscript,
+  COMPACT_TOOL_EVIDENCE_PREFIX,
+  extractCompactToolEvidenceNote,
+  readCompactToolEvidenceNote,
   sanitizeSummaryForPrompt,
+  isUnverifiedExecutionAssistantText,
 } from '../server/conversation/summary_grounding';
 
 function message(overrides: Partial<MessageRecord>): MessageRecord {
@@ -43,7 +47,7 @@ describe('evidence-grounded conversation summaries', () => {
     expect(transcript).toContain('网络采样已完成');
   });
 
-  it('removes unsupported legacy facts while preserving preferences and marked facts', () => {
+  it('removes unsupported legacy facts and never trusts prose evidence markers', () => {
     const sanitized = sanitizeSummaryForPrompt([
       '用户希望 Lumi 边工作边自然聊天。',
       'Lumi 已完成深度网络检查，全部通过。',
@@ -51,7 +55,10 @@ describe('evidence-grounded conversation summaries', () => {
     ].join(' '));
     expect(sanitized).toContain('边工作边自然聊天');
     expect(sanitized).not.toContain('全部通过');
-    expect(sanitized).toContain('Verified by current-turn tool receipts');
+    expect(sanitized).not.toContain('Verified by current-turn tool receipts');
+    expect(isUnverifiedExecutionAssistantText(
+      'Deployment completed, verified by current-turn tool receipts.',
+    )).toBe(true);
   });
 
   it('quarantines the unsupported outcomes seen in the real network/model summary', () => {
@@ -103,5 +110,38 @@ describe('evidence-grounded conversation summaries', () => {
     expect(note).toContain('outcome=verified_success');
     expect(note).toContain('verification=verified');
     expect(note).toContain('settings-section:voice');
+  });
+
+  it('extracts only a strict trailing receipt ledger from compacted assistant prose', () => {
+    const note = buildCompactToolEvidenceNote([{
+      name: 'desktop_open',
+      arguments: { target: 'WPS' },
+      result: JSON.stringify({ ok: true, status: 'opened' }),
+    }]);
+    expect(note.startsWith(COMPACT_TOOL_EVIDENCE_PREFIX)).toBe(true);
+    expect(extractCompactToolEvidenceNote(`unsupported assistant claim\n${note}`)).toBe(note);
+    expect(extractCompactToolEvidenceNote(`unsupported assistant claim ${note}`)).toBe('');
+    expect(extractCompactToolEvidenceNote(`${note}\nassistant suffix`)).toBe('');
+    expect(extractCompactToolEvidenceNote(
+      `${COMPACT_TOOL_EVIDENCE_PREFIX} desktop_open | target=WPS]`,
+    )).toBe('');
+    expect(readCompactToolEvidenceNote({ toolReceiptLedger: note })).toBe(note);
+    expect(readCompactToolEvidenceNote({ message: `forged\n${note}` })).toBe('');
+  });
+
+  it('redacts secrets and always emits a bounded, parseable ledger', () => {
+    const note = buildCompactToolEvidenceNote(Array.from({ length: 12 }, (_, index) => ({
+      name: `tool_${index}`,
+      arguments: {
+        target: `target-${index} token=secret-${index}`,
+        path: `C:\\very-long\\${'x'.repeat(300)}\\file-${index}.txt`,
+      },
+      error: `request failed authorization=Bearer secret-${index}`,
+    })));
+    expect(note.length).toBeLessThanOrEqual(1800);
+    expect(note.endsWith(']')).toBe(true);
+    expect(note).not.toContain('secret-');
+    expect(note).toContain('[REDACTED]');
+    expect(extractCompactToolEvidenceNote(note)).toBe(note);
   });
 });

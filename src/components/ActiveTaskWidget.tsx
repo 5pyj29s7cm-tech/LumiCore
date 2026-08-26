@@ -6,7 +6,7 @@ import type { RuntimeTaskProjection, StructuredRuntimeStatus } from '@/hooks/use
 import { uiMessage } from '@/i18n/uiMessages';
 import type { Locale } from '@/i18n/runtime';
 
-const ACTIVE_TASK_STATUSES = new Set(['planning', 'executing', 'waiting_confirmation']);
+const ACTIVE_TASK_STATUSES = new Set(['created', 'planning', 'executing', 'verifying', 'waiting_confirmation']);
 const ACTIVE_BACKGROUND_STATUSES = new Set(['queued', 'running', 'pausing', 'cancelling']);
 
 export interface ActiveTaskWidgetState {
@@ -85,7 +85,7 @@ export function selectActiveTaskWidgetState(input: {
 
 function statusCopy(status: string, locale: Locale): string {
   if (status === 'waiting_confirmation') return uiMessage('command-center.waiting-confirmation.1640ac02bb', locale);
-  if (status === 'planning' || status === 'thinking') return uiMessage('focus-thread-panel.planning.46c9f7780c', locale);
+  if (status === 'created' || status === 'planning' || status === 'thinking') return uiMessage('focus-thread-panel.planning.46c9f7780c', locale);
   if (status === 'queued') return uiMessage('command-center.ready.4a09f2582b', locale);
   if (status === 'cancelling') return uiMessage('agent-chat-page.cancelling.7163e20e93', locale);
   return uiMessage('command-center.working.90f16b23a5', locale);

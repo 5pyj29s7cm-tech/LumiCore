@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  buildPendingConfirmationPersistenceRecord,
   buildConversationConfirmationChannelScope,
+  buildTransportNeutralConfirmationScope,
   buildVoiceConfirmationChannelScope,
   clearAllPendingConfirmationsForTests,
   consumePendingConfirmation,
   formatPendingConfirmationPrompt,
   formatPendingConfirmationRequest,
   getPendingConfirmation,
+  hydratePendingConfirmationFromPersistence,
   isConfirmationCancellation,
   isExplicitConfirmationReply,
   recordPendingConfirmation,
@@ -348,11 +351,84 @@ describe('One-time pending tool confirmations', () => {
 
   it('recognizes a concise confirmation without treating ordinary messages as approval', () => {
     expect(isExplicitConfirmationReply('确认')).toBe(true);
+    expect(isExplicitConfirmationReply('确认了')).toBe(true);
     expect(isExplicitConfirmationReply('确认执行')).toBe(true);
     expect(isExplicitConfirmationReply('同意')).toBe(true);
     expect(isExplicitConfirmationReply('好的')).toBe(true);
     expect(isExplicitConfirmationReply('可以')).toBe(true);
     expect(isExplicitConfirmationReply('确认一下这个文件内容')).toBe(false);
+  });
+
+  it('provides one transport-neutral conversation scope for voice-to-text confirmation', () => {
+    const scope = buildTransportNeutralConfirmationScope({
+      domain: 'personal',
+      conversationId: 'conversation-cross-channel',
+      taskId: 'task-cross-channel',
+      originRequestId: 'request-cross-channel',
+    });
+    const pending = recordPendingConfirmation(
+      'cross-channel-user',
+      'desktop_open',
+      { target: 'WPS' },
+      'voice',
+      scope,
+    );
+
+    expect(scope.source).toBeUndefined();
+    expect(scope.channelId).toBe('conversation:conversation-cross-channel');
+    expect(getPendingConfirmation('cross-channel-user', scope)?.id).toBe(pending.id);
+    expect(consumePendingConfirmation(
+      'cross-channel-user',
+      pending.id,
+      pending.toolName,
+      pending.exactArgs,
+      scope,
+    )).toBe(true);
+  });
+
+  it('defines a storage-safe persistence envelope and verifies decrypted arguments on hydration', () => {
+    const pending = recordPendingConfirmation(
+      'persistent-user',
+      'wechat_send_message',
+      { contact: 'Alice', message: 'Exact body', apiToken: 'secret-token' },
+      'voice',
+      {
+        domain: 'personal',
+        channelId: 'conversation:persistent-conversation',
+        taskId: 'persistent-task',
+        originRequestId: 'persistent-request',
+      },
+    );
+    const stored = buildPendingConfirmationPersistenceRecord(
+      pending,
+      'vault:v1:encrypted-exact-args',
+      '2026-08-27T00:00:01.000Z',
+    );
+
+    expect(stored).toMatchObject({
+      schemaVersion: 1,
+      revision: 1,
+      status: 'pending',
+      exactArgsCiphertext: 'vault:v1:encrypted-exact-args',
+      source: 'voice',
+      channelId: 'conversation:persistent-conversation',
+    });
+    expect(JSON.stringify(stored)).not.toContain('secret-token');
+    expect(hydratePendingConfirmationFromPersistence(stored, pending.exactArgs))
+      .toEqual(pending);
+    expect(hydratePendingConfirmationFromPersistence(stored, {
+      ...pending.exactArgs,
+      message: 'Tampered body',
+    })).toBeNull();
+    expect(hydratePendingConfirmationFromPersistence({
+      ...stored,
+      safeArgs: { contact: 'Mallory', message: 'Misleading body' },
+    }, pending.exactArgs)).toBeNull();
+    expect(hydratePendingConfirmationFromPersistence({
+      ...stored,
+      status: 'consumed',
+      revision: 2,
+    }, pending.exactArgs)).toBeNull();
   });
 
   it('recognizes natural cancellation of the pending external confirmation', () => {

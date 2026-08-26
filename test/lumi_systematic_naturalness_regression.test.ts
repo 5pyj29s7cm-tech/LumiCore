@@ -298,12 +298,16 @@ describe('systematic naturalness regressions', () => {
     expect(result.text).toContain('自动打开没有完成');
   });
 
-  it('does not feed an old tool-bearing assistant result back into ordinary voice chat', () => {
-    expect(normalizeVoiceHistoryRecord({
+  it('keeps compact tool evidence without replaying old assistant claims into ordinary voice chat', () => {
+    const toolHistory = normalizeVoiceHistoryRecord({
       role: 'assistant',
       message: '后台有 50 个进程。',
       toolCalls: [{ name: 'desktop_running_processes', result: '[]' }],
-    })).toEqual([]);
+    });
+    expect(toolHistory).toHaveLength(1);
+    expect(toolHistory[0].content).toContain('desktop_running_processes');
+    expect(toolHistory[0].content).toContain('items=0');
+    expect(toolHistory[0].content).not.toContain('50 个进程');
     expect(normalizeVoiceHistoryRecord({
       role: 'assistant',
       message: '我们接着聊。',
@@ -319,6 +323,8 @@ describe('systematic naturalness regressions', () => {
       { role: 'user', message: '你的音频怎么降级了？' },
       { role: 'assistant', message: '当前语音没有切换备用音色。', toolCalls: [] },
     ])).toEqual([
+      { role: 'user', content: '打开 AutoCAD 并画图' },
+      expect.objectContaining({ role: 'assistant', content: expect.stringContaining('desktop_open') }),
       { role: 'user', content: '你的音频怎么降级了？' },
       { role: 'assistant', content: '当前语音没有切换备用音色。' },
     ]);

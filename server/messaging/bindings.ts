@@ -48,6 +48,20 @@ export type MessagingBindingCommand =
   | { kind: 'status' }
   | { kind: 'invalid' };
 
+export interface BindingCodeConsumptionPlan {
+  code: BindingCode;
+  platform: MessagingPlatformId;
+  platformUserId: string;
+  chatId: string;
+  chatType: 'private' | 'group';
+}
+
+export interface BindingCodeConsumptionCommit {
+  plan: BindingCodeConsumptionPlan;
+  binding: MessagingBinding;
+  previousBinding: MessagingBinding | null;
+}
+
 interface StoreShape {
   bindings: MessagingBinding[];
   codes: BindingCode[];
@@ -179,39 +193,77 @@ export function consumeBindingCode(
   chatId = '',
   chatType: 'private' | 'group' = 'private',
 ): MessagingBinding | null {
+  const plan = planBindingCodeConsumption(platform, code, platformUserId, chatId, chatType);
+  return plan ? commitBindingCodeConsumption(plan)?.binding || null : null;
+}
+
+export function planBindingCodeConsumption(
+  platform: MessagingPlatformId,
+  code: string,
+  platformUserId: string,
+  chatId = '',
+  chatType: 'private' | 'group' = 'private',
+): BindingCodeConsumptionPlan | null {
+  // Planning is deliberately read-only. The one-time credential is consumed
+  // only after the remote user transcript passes its strict durability fence.
+  if (chatType === 'group') return null;
   const store = readStore();
-  pruneExpiredCodes(store);
-  // Binding codes are identity credentials. Never expose or consume them in a group.
-  if (chatType === 'group') {
-    writeStore(store);
-    return null;
-  }
   const normalized = code.trim().toUpperCase();
-  const idx = store.codes.findIndex(item => item.platform === platform && item.code === normalized);
-  if (idx < 0) {
-    writeStore(store);
-    return null;
-  }
-  const found = store.codes.splice(idx, 1)[0];
-  const ts = now();
-  let existingIdx = store.bindings.findIndex(item =>
+  const found = store.codes.find(item =>
     item.platform === platform
-    && item.platformUserId === platformUserId
-    && String(item.chatId || '') === String(chatId || '')
+    && item.code === normalized
+    && item.expiresAt > now()
   );
-  if (existingIdx < 0 && chatId && chatType === 'private') {
-    existingIdx = store.bindings.findIndex(item =>
-      item.platform === platform
-      && item.platformUserId === platformUserId
+  if (!found) return null;
+  return {
+    code: { ...found },
+    platform,
+    platformUserId,
+    chatId,
+    chatType,
+  };
+}
+
+function bindingIndexForPlan(store: StoreShape, plan: BindingCodeConsumptionPlan): number {
+  let index = store.bindings.findIndex(item =>
+    item.platform === plan.platform
+    && item.platformUserId === plan.platformUserId
+    && String(item.chatId || '') === String(plan.chatId || '')
+  );
+  if (index < 0 && plan.chatId && plan.chatType === 'private') {
+    index = store.bindings.findIndex(item =>
+      item.platform === plan.platform
+      && item.platformUserId === plan.platformUserId
       && !item.chatId
     );
   }
+  return index;
+}
+
+export function commitBindingCodeConsumption(
+  plan: BindingCodeConsumptionPlan,
+): BindingCodeConsumptionCommit | null {
+  const store = readStore();
+  pruneExpiredCodes(store);
+  const codeIndex = store.codes.findIndex(item =>
+    item.platform === plan.platform
+    && item.code === plan.code.code
+    && item.createdAt === plan.code.createdAt
+    && item.lumiUserId === plan.code.lumiUserId
+    && item.orgId === plan.code.orgId
+    && item.domain === plan.code.domain
+  );
+  if (codeIndex < 0) return null;
+  const found = store.codes.splice(codeIndex, 1)[0];
+  const ts = now();
+  const existingIdx = bindingIndexForPlan(store, plan);
+  const previousBinding = existingIdx >= 0 ? { ...store.bindings[existingIdx] } : null;
   const binding: MessagingBinding = {
     id: existingIdx >= 0 ? store.bindings[existingIdx].id : randomUUID(),
-    platform,
-    platformUserId,
-    chatId: chatId || undefined,
-    chatType,
+    platform: plan.platform,
+    platformUserId: plan.platformUserId,
+    chatId: plan.chatId || undefined,
+    chatType: plan.chatType,
     lumiUserId: found.lumiUserId,
     orgId: found.orgId,
     domain: found.domain,
@@ -221,7 +273,34 @@ export function consumeBindingCode(
   if (existingIdx >= 0) store.bindings[existingIdx] = binding;
   else store.bindings.push(binding);
   writeStore(store);
-  return binding;
+  return { plan, binding, previousBinding };
+}
+
+export function rollbackBindingCodeConsumption(commit: BindingCodeConsumptionCommit): boolean {
+  const store = readStore();
+  const bindingIndex = store.bindings.findIndex(item =>
+    item.id === commit.binding.id
+    && item.platform === commit.binding.platform
+    && item.platformUserId === commit.binding.platformUserId
+    && String(item.chatId || '') === String(commit.binding.chatId || '')
+    && item.lumiUserId === commit.binding.lumiUserId
+    && item.orgId === commit.binding.orgId
+    && item.domain === commit.binding.domain
+    && item.updatedAt === commit.binding.updatedAt
+  );
+  // A newer binding owns this identity now. Never roll it back underneath a
+  // later successful transaction.
+  if (bindingIndex < 0) return false;
+  if (commit.previousBinding) store.bindings[bindingIndex] = commit.previousBinding;
+  else store.bindings.splice(bindingIndex, 1);
+  if (
+    commit.plan.code.expiresAt > now()
+    && !store.codes.some(item => item.platform === commit.plan.platform && item.code === commit.plan.code.code)
+  ) {
+    store.codes.push({ ...commit.plan.code });
+  }
+  writeStore(store);
+  return true;
 }
 
 export function getBinding(

@@ -40,6 +40,11 @@ export type PersonalOrganizationScopeResolution =
   | { kind: 'organization'; message: IncomingMessage; org: Organization; entered: boolean }
   | { kind: 'reply'; message: IncomingMessage; reply: string };
 
+export interface PersonalOrganizationScopePlan {
+  resolution: PersonalOrganizationScopeResolution;
+  commit: () => void;
+}
+
 function requestText(text: string): string {
   const marker = '\n\n以下是用户通过';
   return text.includes(marker) ? text.slice(0, text.indexOf(marker)).trim() : text.trim();
@@ -142,30 +147,54 @@ function scopedMessage(
   };
 }
 
-export function resolvePersonalOrganizationScope(
+export function planPersonalOrganizationScope(
   message: IncomingMessage,
   requiresOrganization: boolean,
-): PersonalOrganizationScopeResolution {
-  if (!message.boundUserId || message.boundOrgId) return { kind: 'personal', message };
+): PersonalOrganizationScopePlan {
+  const noMutation = (resolution: PersonalOrganizationScopeResolution): PersonalOrganizationScopePlan => ({
+    resolution,
+    commit: () => undefined,
+  });
+  if (!message.boundUserId || message.boundOrgId) return noMutation({ kind: 'personal', message });
 
   const request = requestText(message.text);
   const key = scopeKey(message);
   const store = readStore();
   let recordIndex = store.records.findIndex(item => item.key === key);
-  let record = recordIndex >= 0 ? store.records[recordIndex] : null;
+  let record = recordIndex >= 0 ? { ...store.records[recordIndex] } : null;
+  let plannedRecord: PersonalOrganizationScopeRecord | null | undefined;
   if (record && Date.now() - new Date(record.updatedAt).getTime() > SCOPE_TTL_MS) {
-    store.records.splice(recordIndex, 1);
-    writeStore(store);
+    plannedRecord = null;
     record = null;
     recordIndex = -1;
   }
 
+  const planned = (
+    resolution: PersonalOrganizationScopeResolution,
+    nextRecord: PersonalOrganizationScopeRecord | null | undefined = plannedRecord,
+  ): PersonalOrganizationScopePlan => {
+    let committed = false;
+    return {
+      resolution,
+      commit: () => {
+        if (committed || nextRecord === undefined) return;
+        committed = true;
+        // Planning is separated from accepted-turn admission. Merge only this
+        // route's key into the latest store so other conversations cannot be
+        // overwritten while the durability fence is in flight.
+        const latest = readStore();
+        latest.records = latest.records.filter(item => item.key !== key);
+        if (nextRecord) latest.records.push(nextRecord);
+        writeStore(latest);
+      },
+    };
+  };
+
   if (isExitRequest(request)) {
-    if (record) {
-      store.records = store.records.filter(item => item.key !== key);
-      writeStore(store);
-    }
-    return { kind: 'reply', message, reply: '已退出组织工作域，后续对话回到个人 Lumi。' };
+    return planned(
+      { kind: 'reply', message, reply: '已退出组织工作域，后续对话回到个人 Lumi。' },
+      record ? null : plannedRecord,
+    );
   }
 
   const organizations = activeOrganizations(message.boundUserId);
@@ -177,12 +206,13 @@ export function resolvePersonalOrganizationScope(
     if (selected) {
       const pending = record.pending;
       record = { ...record, activeOrgId: selected.id, lastRoutedDomain: 'work', pending: undefined, updatedAt: now() };
-      store.records[recordIndex] = record;
-      writeStore(store);
-      return { kind: 'organization', message: scopedMessage(message, selected, pending), org: selected, entered: true };
+      return planned(
+        { kind: 'organization', message: scopedMessage(message, selected, pending), org: selected, entered: true },
+        record,
+      );
     }
     if (/^(?:进入|选择|切换|第|\d)/.test(request)) {
-      return { kind: 'reply', message, reply: organizationPrompt(pendingOrganizations) };
+      return planned({ kind: 'reply', message, reply: organizationPrompt(pendingOrganizations) });
     }
   }
 
@@ -200,17 +230,17 @@ export function resolvePersonalOrganizationScope(
       lastRoutedDomain: 'work',
       updatedAt: now(),
     };
-    if (recordIndex >= 0) store.records[recordIndex] = next;
-    else store.records.push(next);
-    writeStore(store);
     if (isPureEnterRequest(request)) {
-      return {
+      return planned({
         kind: 'reply',
         message: scopedMessage(message, selected),
         reply: `已进入“${selected.name}”组织工作域。后续消息按你的组织权限处理；说“切回个人”即可退出。`,
-      };
+      }, next);
     }
-    return { kind: 'organization', message: scopedMessage(message, selected), org: selected, entered: true };
+    return planned(
+      { kind: 'organization', message: scopedMessage(message, selected), org: selected, entered: true },
+      next,
+    );
   }
 
   const activeOrg = record?.activeOrgId
@@ -223,23 +253,24 @@ export function resolvePersonalOrganizationScope(
     )
   );
   if (activeOrg && continuesActiveOrganization) {
-    record!.lastRoutedDomain = 'work';
-    record!.updatedAt = now();
-    store.records[recordIndex] = record!;
-    writeStore(store);
-    return { kind: 'organization', message: scopedMessage(message, activeOrg), org: activeOrg, entered: false };
+    const next = { ...record!, lastRoutedDomain: 'work' as const, updatedAt: now() };
+    return planned(
+      { kind: 'organization', message: scopedMessage(message, activeOrg), org: activeOrg, entered: false },
+      next,
+    );
   }
 
   if (!requiresOrganization) {
     if (record && record.lastRoutedDomain !== 'personal') {
-      record.lastRoutedDomain = 'personal';
-      store.records[recordIndex] = record;
-      writeStore(store);
+      return planned(
+        { kind: 'personal', message },
+        { ...record, lastRoutedDomain: 'personal' },
+      );
     }
-    return { kind: 'personal', message };
+    return planned({ kind: 'personal', message });
   }
   if (organizations.length === 0) {
-    return { kind: 'reply', message, reply: '当前个人 Lumi 身份没有可访问的组织。请先创建组织或由组织管理员添加成员权限。' };
+    return planned({ kind: 'reply', message, reply: '当前个人 Lumi 身份没有可访问的组织。请先创建组织或由组织管理员添加成员权限。' });
   }
   if (organizations.length === 1) {
     const selected = organizations[0];
@@ -253,10 +284,10 @@ export function resolvePersonalOrganizationScope(
       lastRoutedDomain: 'work',
       updatedAt: now(),
     };
-    if (recordIndex >= 0) store.records[recordIndex] = next;
-    else store.records.push(next);
-    writeStore(store);
-    return { kind: 'organization', message: scopedMessage(message, selected), org: selected, entered: true };
+    return planned(
+      { kind: 'organization', message: scopedMessage(message, selected), org: selected, entered: true },
+      next,
+    );
   }
 
   const next: PersonalOrganizationScopeRecord = {
@@ -273,10 +304,20 @@ export function resolvePersonalOrganizationScope(
     },
     updatedAt: now(),
   };
-  if (recordIndex >= 0) store.records[recordIndex] = next;
-  else store.records.push(next);
-  writeStore(store);
-  return { kind: 'reply', message, reply: organizationPrompt(organizations) };
+  return planned({ kind: 'reply', message, reply: organizationPrompt(organizations) }, next);
+}
+
+export function commitPersonalOrganizationScopePlan(plan: PersonalOrganizationScopePlan): void {
+  plan.commit();
+}
+
+export function resolvePersonalOrganizationScope(
+  message: IncomingMessage,
+  requiresOrganization: boolean,
+): PersonalOrganizationScopeResolution {
+  const plan = planPersonalOrganizationScope(message, requiresOrganization);
+  plan.commit();
+  return plan.resolution;
 }
 
 export function resetPersonalOrganizationScopesForTest(): void {

@@ -36,6 +36,7 @@ import { parseStoredOperationMode } from './cognition/operation_modes';
 import { getUserPreferredLLMConfig } from './llm/user_preferences';
 import { refreshAuthoritativeStatuteSources } from './legal/statute_authority_refresh';
 import { finalizeLumiResponse } from './cognition/result_finalizer';
+import { sanitizeExecutionResponseForDelivery } from './cognition/execution_guard_recovery';
 import {
   authorizeCapabilityPlanTool,
   buildScheduledCapabilityExecutionPlan,
@@ -85,12 +86,13 @@ export function finalizeScheduledDelivery(
     };
   }
 
-  const finalized = finalizeLumiResponse({
-    taskText: `Scheduled proactive message (${taskId}): ${delivery.message}`,
+  const taskText = `Scheduled proactive message (${taskId}): ${delivery.message}`;
+  const finalized = sanitizeExecutionResponseForDelivery(finalizeLumiResponse({
+    taskText,
     responseText: delivery.message,
     toolRecords: [],
     source: `scheduler_${taskId}`,
-  });
+  }), { task: taskText, toolRecords: [] });
   if (finalized.blocked) {
     return {
       delivery: null,

@@ -2,6 +2,7 @@ import './helpers';
 import { describe, expect, it } from 'vitest';
 import {
   evaluateAutonomousTaskOutcome,
+  finalizeAutonomousTaskOutcomeForDelivery,
   isSuccessfulAutonomousToolRecord,
 } from '../server/autonomy/task_executor';
 import { isVerifiedAutonomousHistoryItem } from '../server/socket/ambient';
@@ -25,6 +26,24 @@ describe('remaining output bypass closure', () => {
     expect(outcome.verified).toBe(false);
     expect(outcome.blocked).toBe(true);
     expect(outcome.successfulToolRecords).toHaveLength(0);
+  });
+
+  it('removes internal finalizer protocol from autonomous user-visible feedback', async () => {
+    const internal = 'No successful current-turn tool execution was recorded for that execution-status claim.';
+    const delivery = await finalizeAutonomousTaskOutcomeForDelivery(
+      'Open WPS and create a document.',
+      { text: internal, blocked: true, reason: internal },
+      [],
+    );
+
+    expect(delivery).toMatchObject({
+      blocked: true,
+      reason: 'execution_capability_unavailable',
+    });
+    expect(JSON.stringify(delivery)).not.toMatch(
+      /No successful current-turn tool execution|Missing verified in-app UI mutation evidence/u,
+    );
+    expect(delivery.text).toContain('Status: blocked');
   });
 
   it('requires successful structured tool receipts and an actually completed response', () => {
@@ -175,6 +194,8 @@ describe('remaining output bypass closure', () => {
     expect(blocked.finalized).toBe(true);
     expect(blocked.blocked).toBe(true);
     expect(blocked.delivery).toBeNull();
+    expect(blocked.reason).toMatch(/^[a-z][a-z0-9_]*$/);
+    expect(blocked.reason).not.toMatch(/No successful|execution-status claim/u);
 
     const neutral = finalizeScheduledDelivery('daily_summary', {
       userId: 'scheduler-user',

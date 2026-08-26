@@ -16,6 +16,7 @@ import { canOutputHolographic, textToHolographicOutput } from "../output/hologra
 import {
   getConversationForScope,
   getOrCreateActiveConversation,
+  getMessages,
   getMessagesByTokenBudget,
   addMessageIdempotent,
   extractTopics,
@@ -30,6 +31,7 @@ import {
   getConversationModelExecutionRecovery,
   cancelConversationActionExecution,
   setConversationActionExecutionStatus,
+  startConversationActionExecutionHeartbeat,
   updateConversationActionFocus,
 } from "../conversation/manager";
 import { processInput, handleLLMFailure, extractSentiment, CognitiveContext, CognitiveResult } from "../cognition";
@@ -60,6 +62,7 @@ import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import {
   recoverBlockedExecutionOnce,
   sanitizeExecutionResponseForDelivery,
+  sanitizeExecutionNotificationForDelivery,
 } from "../cognition/execution_guard_recovery";
 import {
   createPreFinalizationTextGate,
@@ -71,14 +74,18 @@ import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
 import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
 import { canAutoApproveAction } from "../tools/action_constitution";
 import {
-  clearPendingConfirmation,
-  consumePendingConfirmation,
+  buildTransportNeutralConfirmationScope,
+  consumePendingConfirmationDurably,
   formatPendingConfirmationPrompt,
-  getPendingConfirmation,
-  isConfirmationCancellation,
-  isExplicitConfirmationReply,
-  recordPendingConfirmation,
+  recordPendingConfirmationDurably,
 } from "../tools/pending_confirmation";
+import { ensurePendingConfirmationPersistenceInitialized } from '../tools/pending_confirmation_repository';
+import { buildPendingAssistantOfferContextFromTranscript } from '../cognition/pending_assistant_offer';
+import {
+  admitAcceptedUserTurnDurably,
+  resolveAcceptedTurnConfirmation,
+  runAfterAcceptedUserTurnAdmission,
+} from './action_turn_durability';
 import type { ToolExecutionRecord } from "../tools/types";
 import {
   buildRecentActionContinuationBridge,
@@ -298,6 +305,8 @@ export function registerTaskHandler(
     ): Record<string, any> => {
       const publicPayload: Record<string, any> = event === 'agent:response'
         ? sanitizeExecutionResponseForDelivery(payload, { task: data.text })
+        : event === 'agent:notification'
+          ? sanitizeExecutionNotificationForDelivery(payload, { task: data.text })
         : event === 'agent:error'
           ? sanitizeChatAgentErrorPayload(payload)
           : payload;
@@ -306,6 +315,7 @@ export function registerTaskHandler(
     const publishRecordedAgent = (event: string, normalizedPayload: Record<string, any>) => {
       io.to(executionRoom).emit(event, normalizedPayload);
     };
+    let actionLeaseHeartbeat: ReturnType<typeof startConversationActionExecutionHeartbeat> | null = null;
     const emitAgent = (event: string, payload: Record<string, any> = {}) => {
       const normalizedPayload = normalizeAgentPayload(event, payload);
       if (
@@ -332,6 +342,10 @@ export function registerTaskHandler(
       publishAfter?: (terminalState: any) => void;
       errorContext?: string;
     }): Promise<boolean> => {
+      if (actionLeaseHeartbeat?.isLeaseLost()) {
+        await actionLeaseHeartbeat.leaseLoss;
+        return false;
+      }
       const event = input.event || 'agent:response';
       const terminalPayload = normalizeAgentPayload(event, input.payload);
       const unknownPayload = normalizeAgentPayload('agent:response', {
@@ -342,7 +356,7 @@ export function registerTaskHandler(
         blocked: true,
         reason: 'persistence_unknown',
       });
-      return commitChatTerminalBoundary({
+      const committed = await commitChatTerminalBoundary({
         persistTerminalState: input.persistTerminalState || (() => undefined),
         persistAssistantMessage: input.persistAssistantMessage || (() => undefined),
         flush: flushDBOrThrow,
@@ -365,10 +379,17 @@ export function registerTaskHandler(
         publishUnknown: () => {
           publishRecordedAgent('agent:response', unknownPayload);
         },
+        persistenceUnknownProjection: {
+          text: unknownPayload.text,
+          completionFeedback: unknownPayload.completionFeedback,
+          reason: 'Terminal persistence outcome is unknown.',
+        },
         onPersistenceError: error => {
           console.error(`[TaskHandler] ${input.errorContext || 'Terminal'} persistence failed:`, error);
         },
       });
+      if (committed) actionLeaseHeartbeat?.stop();
+      return committed;
     };
     const persistEarlyTerminalTranscript = (
       assistantText: string,
@@ -684,14 +705,103 @@ export function registerTaskHandler(
       return;
     }
 
-    if (previous && activeMessageRelation === 'replace') {
-      void taskExecutionQueue.cancelAll(executionKey);
+    const taskStateKey = scopedEmotionalStateKey(uid, taskScope);
+    const selectedConversation = data.conversationId
+      ? getConversationForScope(data.conversationId, uid, taskScope.domain, taskScope.orgId)
+      : null;
+    const convForHistory = selectedConversation || getOrCreateActiveConversation(uid, '', taskScope.domain, taskScope.orgId);
+    try {
+      await ensurePendingConfirmationPersistenceInitialized();
+    } catch (error) {
+      console.error('[TaskHandler] Encrypted confirmation store is unavailable:', error);
+      publishRecordedAgent('agent:response', normalizeAgentPayload('agent:response', {
+        text: taskDurabilityUnknownText(),
+        agentName: 'Lumi',
+        finalized: true,
+        blocked: true,
+        reason: 'persistence_unknown',
+      }));
+      return;
     }
-    beginQueuedChatExecution(executionScope, requestId);
-    const taskLease = taskExecutionQueue.reserve(executionKey, requestId);
+    const pendingAssistantOfferContext = buildPendingAssistantOfferContextFromTranscript({
+      messages: getMessages(convForHistory.id, 4),
+      userId: uid,
+      domain: taskScope.domain,
+      orgId: taskScope.orgId,
+      conversationId: convForHistory.id,
+      taskId: convForHistory.actionContinuationState?.taskId,
+    });
+    const confirmationChannelScope = buildTransportNeutralConfirmationScope({
+      domain: taskScope.domain,
+      orgId: taskScope.orgId,
+      conversationId: convForHistory.id,
+    });
+    let confirmationScope = buildTransportNeutralConfirmationScope({
+      domain: taskScope.domain,
+      orgId: taskScope.orgId,
+      conversationId: convForHistory.id,
+      taskId: convForHistory.actionContinuationState?.taskId,
+    });
+    const taskAdmission = await admitAcceptedUserTurnDurably({
+      persistAcceptedUserTurn: () => addMessageIdempotent({
+        userId: uid,
+        agentId: '',
+        conversationId: convForHistory.id,
+        role: 'user',
+        content: data.text,
+        personality: data.personalityId || 'lumi',
+        mode: 'task',
+        source: 'task',
+        channel: 'task',
+        cognitiveIntent: 'task_received',
+        domain: taskScope.domain,
+        orgId: taskScope.orgId,
+        requestId,
+        deferActionPreparation: true,
+      }),
+      flush: flushDBOrThrow,
+      onPersistenceUnknown: async error => {
+        console.error('[TaskHandler] Accepted user turn could not be flushed:', error);
+        const unknownPayload = normalizeAgentPayload('agent:response', {
+          text: taskDurabilityUnknownText(),
+          agentName: 'Lumi',
+          finalized: true,
+          blocked: true,
+          reason: 'persistence_unknown',
+        });
+        try {
+          await recordChatExecutionPersistenceUnknownDurably(executionScope, requestId, unknownPayload);
+        } catch {}
+        publishRecordedAgent('agent:response', unknownPayload);
+      },
+    });
+    if (!taskAdmission) {
+      return;
+    }
+    const taskUserMessageId = taskAdmission.persisted;
+    const confirmationResolution = await resolveAcceptedTurnConfirmation({
+      admission: taskAdmission,
+      userId: uid,
+      userText: data.text,
+      actionState: convForHistory.actionContinuationState,
+      taskScope: confirmationScope,
+      channelScope: confirmationChannelScope,
+    });
+    confirmationScope = confirmationResolution.scope;
+    const pendingConfirmation = confirmationResolution.pending;
+    const pendingConfirmationPrompt = confirmationResolution.prompt;
+
+    const taskLease = runAfterAcceptedUserTurnAdmission(taskAdmission, () => {
+      if (previous && activeMessageRelation === 'replace') {
+        void taskExecutionQueue.cancelAll(executionKey);
+      }
+      beginQueuedChatExecution(executionScope, requestId);
+      return taskExecutionQueue.reserve(executionKey, requestId);
+    });
     const taskAbortController = taskLease.controller;
     let releaseDesktopControlLease: (() => void) | null = null;
     const releaseTask = () => {
+      actionLeaseHeartbeat?.stop();
       releaseDesktopControlLease?.();
       releaseDesktopControlLease = null;
       taskLease.release();
@@ -739,10 +849,13 @@ export function registerTaskHandler(
     };
     let superseded = null as Awaited<ReturnType<typeof beginChatExecutionDurably>>;
     try {
-      superseded = await beginChatExecutionDurably(
-        executionScope,
-        requestId,
-        replacementUnknownPayload,
+      superseded = await runAfterAcceptedUserTurnAdmission(
+        taskAdmission,
+        () => beginChatExecutionDurably(
+          executionScope,
+          requestId,
+          replacementUnknownPayload,
+        ),
       );
     } catch (error) {
       console.error('[TaskHandler] Superseded terminal persistence failed:', error);
@@ -775,44 +888,11 @@ export function registerTaskHandler(
     if (!acknowledged) {
       try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
     }
-    const taskStateKey = scopedEmotionalStateKey(uid, taskScope);
-    const confirmationScope = {
-      source: 'task',
-      taskId: requestId,
-      domain: taskScope.domain,
-      orgId: taskScope.orgId,
-      channelId: socket.id,
-    };
-    if (isConfirmationCancellation(data.text)) clearPendingConfirmation(uid, confirmationScope);
-    const pendingConfirmation = isExplicitConfirmationReply(data.text)
-      ? getPendingConfirmation(uid, confirmationScope)
-      : null;
-    const pendingConfirmationPrompt = pendingConfirmation
-      ? formatPendingConfirmationPrompt(pendingConfirmation)
-      : '';
-    const selectedConversation = data.conversationId
-      ? getConversationForScope(data.conversationId, uid, taskScope.domain, taskScope.orgId)
-      : null;
-    const convForHistory = selectedConversation || getOrCreateActiveConversation(uid, '', taskScope.domain, taskScope.orgId);
-    const taskUserMessageId = addMessageIdempotent({
-      userId: uid,
-      agentId: '',
-      conversationId: convForHistory.id,
-      role: 'user',
-      content: data.text,
-      personality: data.personalityId || 'lumi',
-      mode: 'task',
-      source: 'task',
-      channel: 'task',
-      cognitiveIntent: 'task_received',
-      domain: taskScope.domain,
-      orgId: taskScope.orgId,
-      requestId,
-      deferActionPreparation: true,
-    });
     const taskActionBridge = buildRecentActionContinuationBridge(
       data.text,
-      getMessagesByTokenBudget(convForHistory.id)
+      // The accepted current user row is removed below; seven persisted rows
+      // therefore leave three complete historical turns for continuation.
+      getMessagesByTokenBudget(convForHistory.id, 6_000, 7)
         .filter(message => message.id !== taskUserMessageId)
         .slice(-24),
       convForHistory.actionContinuationState,
@@ -886,6 +966,7 @@ export function registerTaskHandler(
       registry: toolRegistry,
       personalityToolPolicy: personality.toolPolicy,
       actionTaskState: convForHistory.actionContinuationState,
+      pendingAssistantOfferContext,
       source: 'task',
     });
     const turnDispatch = executionPipeline.turnIntent;
@@ -960,6 +1041,25 @@ export function registerTaskHandler(
       releaseTask();
       return;
     }
+    actionLeaseHeartbeat = startConversationActionExecutionHeartbeat({
+      conversationId: convForHistory.id,
+      userId: uid,
+      requestId,
+      abortController: taskAbortController,
+      onPersistenceUnknown: async () => {
+        const recorded = await recordChatExecutionPersistenceUnknownDurably(
+          executionScope,
+          requestId,
+          replacementUnknownPayload,
+        );
+        if (recorded) {
+          publishRecordedAgent(
+            'agent:response',
+            normalizeAgentPayload('agent:response', replacementUnknownPayload),
+          );
+        }
+      },
+    });
     if (actionTaskExecution.state?.taskId) {
       executionPipeline.executionPlan = bindCapabilityExecutionPlanTask(
         executionPipeline.executionPlan,
@@ -1098,7 +1198,7 @@ export function registerTaskHandler(
       if (summaryContext) {
         effectiveSystemPrompt += `\n\n## Conversation Context\n${summaryContext}`;
       }
-      const recentMsgs = getMessagesByTokenBudget(convForHistory.id)
+      const recentMsgs = getMessagesByTokenBudget(convForHistory.id, 6_000, 7)
         .filter(message => message.id !== taskUserMessageId);
       // Persisted assistant rows store their text in `message`. Treating every
       // `message` as a user turn inverted assistant replies after reload and
@@ -1190,11 +1290,11 @@ export function registerTaskHandler(
         }),
       );
     };
-    let pendingConfirmationCreatedThisTurn: ReturnType<typeof recordPendingConfirmation> | null = null;
+    let pendingConfirmationCreatedThisTurn: Awaited<ReturnType<typeof recordPendingConfirmationDurably>> | null = null;
     const requestConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
       if (
         pendingConfirmation
-        && consumePendingConfirmation(
+        && await consumePendingConfirmationDurably(
           uid,
           pendingConfirmation.id,
           toolName,
@@ -1206,11 +1306,12 @@ export function registerTaskHandler(
         return true;
       }
       if (canAutoApproveAction(toolName, args, { actionIntent: routedTaskText })) return true;
-      const pending = recordPendingConfirmation(uid, toolName, args, 'task', {
+      const pending = await recordPendingConfirmationDurably(uid, toolName, args, 'task', {
         domain: taskScope.domain,
         orgId: taskScope.orgId,
-        channelId: socket.id,
+        channelId: confirmationChannelScope.channelId,
         taskId: actionTaskExecution.state?.taskId,
+        originRequestId: requestId,
         actionIntent: routedTaskText,
       });
       pendingConfirmationCreatedThisTurn = pending;
@@ -1255,7 +1356,7 @@ export function registerTaskHandler(
       const confirmedArgs = pendingConfirmation.exactArgs || {};
       const confirmationRecordId =
         `task-confirmed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const consumed = consumePendingConfirmation(
+      const consumed = await consumePendingConfirmationDurably(
         uid,
         pendingConfirmation.id,
         pendingConfirmation.toolName,

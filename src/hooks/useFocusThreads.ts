@@ -3,11 +3,14 @@ import type { Socket } from 'socket.io-client';
 import { socketService } from '@/services/socketService';
 
 export type FocusThreadStatus =
+  | 'created'
   | 'planning'
   | 'executing'
   | 'waiting_confirmation'
+  | 'verifying'
   | 'blocked'
   | 'completed'
+  | 'failed'
   | 'cancelled';
 
 export interface ConversationFocusThread {
@@ -106,7 +109,7 @@ export function useFocusThreads(input: {
       setThreads(current => sortThreads([
         payload.thread!,
         ...current.filter(thread => thread.taskId !== payload.thread!.taskId),
-      ]).filter(thread => !['completed', 'cancelled'].includes(thread.status)));
+      ]).filter(thread => !['completed', 'failed', 'cancelled'].includes(thread.status)));
     };
 
     refresh();

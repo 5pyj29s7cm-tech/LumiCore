@@ -95,7 +95,9 @@ describe('finalized output paths', () => {
     expect(rest).toContain("'remote_restricted'");
     expect(rest).toContain('toolPolicy: restModelToolPolicy');
     expect(rest).toContain('restModelToolPolicy.maxIterations || 3');
-    expect(rest).toContain('source: \'rest_chat_stream\'');
+    expect(rest).toContain("finalizeRestToolResult(responseText, result, 'rest_chat_stream')");
+    expect(rest).toContain('finalizeExecutionForOutboundDelivery');
+    expect(rest).toContain("'rest_chat_guard_recovery'");
     expect(rest).toContain('finalized: true');
     expect(rest).toContain('blocked: finalized.blocked');
   });
@@ -150,9 +152,11 @@ describe('finalized output paths', () => {
 
     expect(mcp).toContain("import { finalizeLumiResponse } from '../cognition/result_finalizer';");
     expect(mcp).toContain('const bufferedChunks: string[] = [];');
-    expect(mcp).toContain('(chunk) => bufferedChunks.push(chunk)');
+    expect(mcp).toContain('chunk => bufferedChunks.push(chunk)');
     expect(mcp).not.toContain("(chunk) => bc('mcp:chunk'");
-    expect(mcp).toContain('const finalized = finalizeLumiResponse({');
+    expect(mcp).toContain('finalizeMcpResponseForDelivery({');
+    expect(mcp).toContain('finalizeExecutionForOutboundDelivery({');
+    expect(mcp).toContain("'mcp_chat_guard_recovery'");
     expect(mcp).toContain("source: background ? 'mcp_chat_background' : 'mcp_chat'");
     expect(mcp).toContain('bc(\'agent:response\', {');
     expect(mcp).toContain('finalized: true');
@@ -316,6 +320,8 @@ describe('finalized output paths', () => {
     const scheduler = source('server/scheduler.ts');
 
     expect(autonomous).toContain('evaluateAutonomousTaskOutcome');
+    expect(autonomous).toContain('finalizeAutonomousTaskOutcomeForDelivery');
+    expect(autonomous).toContain('finalizeExecutionForOutboundDelivery');
     expect(autonomous).toContain('toolRecords,');
     expect(autonomous).toContain('if (!outcome.verified || !terminalAcceptance?.accepted)');
     expect(autonomous).toContain('verified: true');
@@ -347,8 +353,23 @@ describe('finalized output paths', () => {
     expect(proactive).not.toContain("from 'sonner'");
     expect(proactive).not.toContain('toast.success(`Tool:');
     expect(scheduler).toContain('finalizeScheduledDelivery(task.id, delivery)');
+    expect(scheduler).toContain('sanitizeExecutionResponseForDelivery(finalizeLumiResponse({');
     expect(scheduler).toContain('modelGenerated: true');
     expect(scheduler).toContain('if (!deliveryFinalization.delivery)');
+  });
+
+  it('routes every non-socket conversational surface through the shared outbound boundary', () => {
+    const rest = source('server/routes/chat_routes.ts');
+    const mcp = source('server/mcp/lumi_server.ts');
+    const messaging = source('server/regions/packs/cn/messaging_routes.ts');
+
+    expect(rest).toContain('finalizeExecutionForOutboundDelivery({');
+    expect(mcp).toContain('finalizeExecutionForOutboundDelivery({');
+    expect(messaging).toContain('finalizeMessagingResponseForDelivery({');
+    expect(messaging).toContain('finalizeExecutionForOutboundDelivery({');
+    expect(messaging).toContain('`${source}_guard_recovery`');
+    expect(rest.match(/\bfinalizeLumiResponse\(\{/g)).toHaveLength(2);
+    expect(mcp.match(/\bfinalizeLumiResponse\(\{/g)).toHaveLength(2);
   });
 
   it('uses one guarded summary scheduler for chat and every persisted voice path', () => {

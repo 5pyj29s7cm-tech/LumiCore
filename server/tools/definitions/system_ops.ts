@@ -2,6 +2,7 @@ import { exec } from 'child_process';
 import os from 'os';
 import { ToolRegistry } from '../registry';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
+import { assertValidCommandForHost } from '../command_platform';
 
 const DEFAULT_ALLOWED_COMMANDS = new Set([
   'ls', 'dir', 'cat', 'type', 'echo', 'find', 'grep',
@@ -15,7 +16,7 @@ const DEFAULT_ALLOWED_COMMANDS = new Set([
 function getAllowedCommands(): Set<string> {
   const envOverride = process.env.LUMI_ALLOWED_COMMANDS;
   if (envOverride) {
-    return new Set(envOverride.split(',').map(c => c.trim()).filter(Boolean));
+    return new Set(envOverride.split(',').map(c => c.trim().toLowerCase()).filter(Boolean));
   }
   return DEFAULT_ALLOWED_COMMANDS;
 }
@@ -26,9 +27,8 @@ async function runCommandHandler(args: Record<string, any>): Promise<string> {
     throw new Error('No command provided.');
   }
 
-  const baseCommand = command.trim().split(/\s+/)[0];
-  const pathParts = baseCommand.replace(/\\/g, '/').split('/');
-  const cmdName = pathParts[pathParts.length - 1];
+  const validation = assertValidCommandForHost(command, process.platform);
+  const cmdName = validation.executable;
 
   const allowedCommands = getAllowedCommands();
   if (!allowedCommands.has(cmdName)) {

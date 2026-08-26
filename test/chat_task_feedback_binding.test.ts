@@ -38,15 +38,21 @@ describe('chat task feedback binding integration', () => {
   });
 
   it('persists queued transcript first, then refreshes and binds its exact row after lease ownership', () => {
-    const persistUser = chat.indexOf('const acceptedUserMessageId = addMessageIdempotent({');
-    const wait = chat.indexOf('await sessionLease.waitForTurn()', persistUser);
+    const admission = chat.indexOf('const chatAdmission = await admitAcceptedUserTurnDurably({');
+    const persistUser = chat.indexOf('persistAcceptedUserTurn: () => addMessageIdempotent({', admission);
+    const flush = chat.indexOf('flush: flushDBOrThrow', persistUser);
+    const accepted = chat.indexOf('const acceptedUserMessageId = chatAdmission.persisted;', flush);
+    const wait = chat.indexOf('await sessionLease.waitForTurn()', accepted);
     const refresh = chat.indexOf('const refreshedConversation = getConversationForScope(', wait);
     const stale = chat.indexOf("resolvedTaskRelation.binding === 'stale'", refresh);
     const bind = chat.indexOf('const boundTurn = bindConversationActionExecutionTurn({', stale);
 
-    expect(persistUser).toBeGreaterThan(-1);
-    expect(chat.slice(persistUser, wait)).toContain('deferActionPreparation: !confirmationCancellationRequested');
-    expect(wait).toBeGreaterThan(persistUser);
+    expect(admission).toBeGreaterThan(-1);
+    expect(persistUser).toBeGreaterThan(admission);
+    expect(chat.slice(persistUser, flush)).toContain('deferActionPreparation: !confirmationCancellationRequested');
+    expect(flush).toBeGreaterThan(persistUser);
+    expect(accepted).toBeGreaterThan(flush);
+    expect(wait).toBeGreaterThan(accepted);
     expect(refresh).toBeGreaterThan(wait);
     expect(stale).toBeGreaterThan(refresh);
     expect(bind).toBeGreaterThan(stale);

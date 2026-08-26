@@ -1,3 +1,5 @@
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { executeToolCall, executeToolCallOrThrow } from '../server/tools/execution_engine';
 import { ToolRegistry } from '../server/tools/registry';
@@ -40,7 +42,117 @@ function registryWithTool() {
   return { registry, handler };
 }
 
+function registryWithTargetPolicyTools() {
+  const registry = new ToolRegistry();
+  const handlers = {
+    read_file: vi.fn(async (args: Record<string, any>) => JSON.stringify({
+      ok: true,
+      status: 'observed',
+      path: args.path,
+    })),
+    desktop_run_command: vi.fn(async () => JSON.stringify({ ok: true, status: 'completed' })),
+    python_exec: vi.fn(async () => JSON.stringify({ ok: true, status: 'completed' })),
+  };
+  for (const [name, handler] of Object.entries(handlers)) {
+    const structuredRead = name === 'read_file';
+    const successStatus = structuredRead ? 'observed' : 'completed';
+    registry.register({
+      name,
+      description: structuredRead ? 'Read one exact structured file.' : 'Execute a general process.',
+      parameters: { type: 'object', properties: {}, required: [] },
+      permission: 'public',
+      securityLevel: 'safe',
+      capability: {
+        id: `test.target-policy.${name}`,
+        family: 'target-policy-test',
+        lane: structuredRead ? 'files' : 'system',
+        operation: structuredRead ? 'observe' : 'mutate',
+        risk: 'low',
+        sideEffects: [{
+          type: structuredRead ? 'local_read' : 'process_execution',
+          scope: structuredRead ? 'one local file' : 'local process',
+          reversible: true,
+        }],
+        verification: {
+          strategy: 'terminal_receipt',
+          required: true,
+          requiredFields: ['ok', 'status'],
+          requiredValues: { ok: true },
+          successStatuses: [successStatus],
+          successSignals: ['test adapter receipt'],
+          limitations: [],
+        },
+      },
+      handler,
+    });
+  }
+  return { registry, handlers };
+}
+
 describe('unified tool execution engine', () => {
+  it('enforces the server target anchor when the caller omits preflight', async () => {
+    const { registry, handlers } = registryWithTargetPolicyTools();
+    const anchoredPath = path.join(os.homedir(), 'Desktop', 'quarterly-report.docx');
+    const otherPath = path.join(os.homedir(), 'Documents', 'private-config.json');
+
+    const record = await executeToolCall({
+      registry,
+      name: 'read_file',
+      arguments: { path: otherPath },
+      context: {
+        routedTaskText: `Analyze the file ${anchoredPath}.`,
+      },
+    });
+
+    expect(record.error).toMatch(/target does not match the anchored file/i);
+    expect(handlers.read_file).toHaveBeenCalledTimes(0);
+  });
+
+  it.each([
+    ['desktop_run_command', { command: 'type C:\\Users\\Administrator\\Documents\\private.txt' }],
+    ['python_exec', { code: 'open(r"C:\\Users\\Administrator\\Documents\\private.txt").read()' }],
+  ])('blocks %s as an alternate file-read path even when caller preflight allows it', async (name, args) => {
+    const { registry, handlers } = registryWithTargetPolicyTools();
+    const anchoredPath = path.join(os.homedir(), 'Desktop', 'quarterly-report.docx');
+
+    const record = await executeToolCall({
+      registry,
+      name,
+      arguments: args,
+      context: {
+        userConfirmed: true,
+        routedTaskText: `Analyze the file ${anchoredPath}.`,
+      },
+      preflight: () => ({ allowed: true, arguments: args }),
+    });
+
+    expect(record.error).toMatch(/general command, script, interpreter/i);
+    expect(handlers[name as keyof typeof handlers]).toHaveBeenCalledTimes(0);
+  });
+
+  it('allows a structured read only after canonical path matching and pins adapter args to the anchor', async () => {
+    const { registry, handlers } = registryWithTargetPolicyTools();
+    const anchoredPath = path.join(os.homedir(), 'Desktop', 'quarterly-report.docx');
+    const equivalentPath = path.join(os.homedir(), 'Desktop', 'temporary', '..', 'quarterly-report.docx');
+
+    const record = await executeToolCall({
+      registry,
+      name: 'read_file',
+      arguments: { path: equivalentPath },
+      context: {
+        routedTaskText: `Analyze the file ${anchoredPath}.`,
+      },
+    });
+
+    expect(record.error).toBeUndefined();
+    expect(handlers.read_file).toHaveBeenCalledWith(
+      { path: anchoredPath },
+      expect.anything(),
+    );
+    expect(record.arguments).toEqual({ path: anchoredPath });
+    expect(record.terminalVerification?.status).toBe('verified');
+  });
+
   it('returns one redacted evidence-bearing receipt for successful execution', async () => {
     const { registry, handler } = registryWithTool();
     const onToolStart = vi.fn();

@@ -177,7 +177,7 @@ function projectTask(task: ConversationActionTaskRow, receipts: ConversationActi
 }
 
 function isActionActiveStatus(status: string): boolean {
-  return ['planning', 'executing', 'waiting_confirmation'].includes(status);
+  return ['created', 'planning', 'executing', 'verifying', 'waiting_confirmation'].includes(status);
 }
 
 function isDurableActiveStatus(status: string): boolean {
@@ -244,7 +244,7 @@ export function buildStructuredRuntimeStatus(
     .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))
     .slice(0, 12);
 
-  const activeTasks = allTaskProjections.filter(task => ['planning', 'executing'].includes(task.status)).length;
+  const activeTasks = allTaskProjections.filter(task => ['created', 'planning', 'executing', 'verifying'].includes(task.status)).length;
   const waitingConfirmation = allTaskProjections.filter(task => task.status === 'waiting_confirmation').length;
   const blockedTasks = allTaskProjections.filter(task => task.status === 'blocked').length;
   const verifiedReceipts = allTaskProjections.reduce((sum, task) => sum + task.evidence.verified, 0);

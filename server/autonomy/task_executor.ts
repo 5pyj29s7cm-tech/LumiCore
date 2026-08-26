@@ -31,6 +31,7 @@ import { createDesktopRelay } from '../socket/desktop_relay';
 import type { PlanScope } from './planner';
 import { isRealtimeUserActive } from './foreground_activity';
 import { finalizeLumiResponse } from '../cognition/result_finalizer';
+import { finalizeExecutionForOutboundDelivery } from '../cognition/execution_guard_recovery';
 import {
   buildActionContract,
   hasCoreActionEvidence,
@@ -378,6 +379,31 @@ export function evaluateAutonomousTaskOutcome(
   };
 }
 
+export async function finalizeAutonomousTaskOutcomeForDelivery(
+  taskText: string,
+  outcome: Pick<AutonomousTaskOutcome, 'text' | 'blocked' | 'reason'>,
+  toolRecords: ToolExecutionRecord[],
+) {
+  return (await finalizeExecutionForOutboundDelivery({
+    task: taskText,
+    responseText: outcome.text,
+    finalization: {
+      text: outcome.text,
+      blocked: outcome.blocked,
+      reason: outcome.reason,
+    },
+    // Autonomous retries are owned by the durable queue. The public boundary
+    // sanitizes this attempt without starting an untracked nested executor.
+    allowToolUse: false,
+    toolRecords,
+    finalize: candidateText => ({
+      text: candidateText,
+      blocked: outcome.blocked,
+      reason: outcome.reason,
+    }),
+  })).finalization;
+}
+
 function upsertToolLedger(ledger: ToolExecutionRecord[], record: ToolExecutionRecord): void {
   const id = String(record.id || '').trim();
   const index = id
@@ -665,6 +691,11 @@ export async function executeNextAutonomousTask(
       toolLedger,
       task,
     );
+    const publicOutcome = await finalizeAutonomousTaskOutcomeForDelivery(
+      `${task.title}\n${task.description}`.trim(),
+      outcome,
+      toolLedger,
+    );
     const terminalReceipt = buildTaskTerminalReceipt({
       taskId: task.id,
       runtime: 'autonomous',
@@ -706,22 +737,25 @@ export async function executeNextAutonomousTask(
       io.to(`user:${task.userId}:personal`).emit(willRetry ? 'autonomous:task_retry_scheduled' : 'autonomous:task_failed', {
         taskId: task.id,
         title: task.title,
-        error: failureReason,
-        result: outcome.text,
+        error: publicOutcome.text,
+        result: publicOutcome.text,
         toolCallsCount: toolCallCount,
         tokensUsed,
         finalized: !willRetry,
         blocked: !willRetry,
         verified: false,
-        reason: outcome.reason,
+        reason: publicOutcome.reason,
         status: settled.status,
         nextAttemptAt: settled.nextAttemptAt,
         diagnosis: settled.recovery?.diagnoses.at(-1),
-        completionFeedback: buildTaskCompletionFeedback(
-          settled.terminalReceipt,
-          task.title,
-          { status: settled.status, reason: failureReason },
-        ),
+        completionFeedback: {
+          ...buildTaskCompletionFeedback(
+            settled.terminalReceipt,
+            task.title,
+            { status: settled.status, reason: publicOutcome.text },
+          ),
+          blockers: publicOutcome.blocked ? [publicOutcome.text] : [],
+        },
         timestamp: new Date().toISOString(),
       });
       console.warn(
@@ -735,7 +769,7 @@ export async function executeNextAutonomousTask(
       };
     }
 
-    const summary = outcome.text;
+    const summary = publicOutcome.text;
     checkpointAutonomousTask(task.id, {
       phase: 'verified',
       receiptIds: toolLedger.map(item => item.id).filter((id): id is string => Boolean(id)),
@@ -763,7 +797,7 @@ export async function executeNextAutonomousTask(
       finalized: true,
       blocked: false,
       verified: true,
-      reason: outcome.reason,
+      reason: publicOutcome.reason,
       terminalReceipt: completed.terminalReceipt,
       completionFeedback: buildTaskCompletionFeedback(completed.terminalReceipt, task.title, {
         status: completed.status,

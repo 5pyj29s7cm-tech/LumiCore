@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   archiveBoundConversationActionReceipts,
   appendConversationActionReceipts,
+  conversationActionStateFromTask,
   repairContradictoryConversationActionReceipts,
   repairTerminalConversationActionTaskLeases,
   type ConversationActionTaskRow,
@@ -252,6 +253,110 @@ describe('conversation action receipt ids', () => {
       status: 'completed',
       unfinished: false,
       activeRequestId: undefined,
+    });
+  });
+
+  it.each(['blocked', 'waiting_confirmation'] as const)(
+    'keeps a %s task resumable without exposing its old execution lease',
+    status => {
+      const resumable = task(`task-${status}`);
+      resumable.status = status;
+      resumable.activeRequestId = 'request-that-already-returned';
+      resumable.context = JSON.stringify({
+        actionState: {
+          version: 2,
+          taskId: resumable.id,
+          status,
+          receipts: [],
+          revision: 2,
+          goal: resumable.goal,
+          latestInstruction: resumable.goal,
+          unfinished: true,
+          activeRequestId: 'request-that-already-returned',
+          updatedAt: resumable.updatedAt,
+        },
+      });
+
+      expect(conversationActionStateFromTask(resumable)).toMatchObject({
+        status,
+        unfinished: true,
+        activeRequestId: undefined,
+      });
+    },
+  );
+
+  it('keeps a verifying request leased and treats failed as a terminal task', () => {
+    const verifying = task('task-verifying');
+    verifying.status = 'verifying';
+    verifying.activeRequestId = 'request-verifying';
+    verifying.context = JSON.stringify({
+      actionState: {
+        version: 2,
+        taskId: verifying.id,
+        status: 'verifying',
+        receipts: [],
+        revision: 2,
+        goal: verifying.goal,
+        latestInstruction: verifying.goal,
+        unfinished: true,
+        activeRequestId: verifying.activeRequestId,
+        updatedAt: verifying.updatedAt,
+      },
+    });
+    expect(conversationActionStateFromTask(verifying)).toMatchObject({
+      status: 'verifying',
+      unfinished: true,
+      activeRequestId: 'request-verifying',
+    });
+
+    const failed = task('task-failed');
+    failed.status = 'failed';
+    failed.activeRequestId = 'request-must-not-survive';
+    failed.blocker = 'No compatible execution path remained.';
+    failed.context = JSON.stringify({
+      actionState: {
+        version: 2,
+        taskId: failed.id,
+        status: 'failed',
+        receipts: [],
+        revision: 3,
+        goal: failed.goal,
+        latestInstruction: failed.goal,
+        latestBlocker: failed.blocker,
+        unfinished: true,
+        activeRequestId: failed.activeRequestId,
+        updatedAt: failed.updatedAt,
+      },
+    });
+    expect(conversationActionStateFromTask(failed)).toMatchObject({
+      status: 'failed',
+      unfinished: false,
+      activeRequestId: undefined,
+      latestBlocker: failed.blocker,
+    });
+
+    const db: any = { conversationActionTasks: [failed], conversationActionReceipts: [] };
+    archiveBoundConversationActionReceipts(db, {
+      conversationId: failed.conversationId,
+      userId: failed.userId,
+      records: [{
+        id: 'late-success-after-failure',
+        taskId: failed.id,
+        requestId: 'late-request',
+        name: 'write_file',
+        arguments: { path: 'late.md' },
+        result: JSON.stringify({ ok: true, status: 'completed' }),
+        terminalVerification: {
+          status: 'verified',
+          strategy: 'artifact',
+          reason: 'Late receipt is archived without reopening the terminal task.',
+        },
+      }],
+    });
+    expect(failed.status).toBe('failed');
+    expect(conversationActionStateFromTask(failed)).toMatchObject({
+      status: 'failed',
+      unfinished: false,
     });
   });
 

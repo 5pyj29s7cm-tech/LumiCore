@@ -9,6 +9,10 @@ import {
   isRecoveredCurrentAppEditingContinuation,
 } from './action_continuation';
 import { WPS_CREATE_DOCUMENT_TOOL } from '../external_control/wps_automation';
+import {
+  guardTaskTargetToolCall,
+  type TaskTargetToolCallGuardResult,
+} from '../conversation/task_target_anchor';
 
 export const CURRENT_APP_MAX_ITERATIONS = 10;
 export const WPS_CURRENT_APP_MAX_ITERATIONS = 4;
@@ -216,9 +220,7 @@ function successfulFocusedEditorAfter(
   ));
 }
 
-export interface CurrentAppToolCallGuardResult {
-  allowed: boolean;
-  reason: string;
+export interface CurrentAppToolCallGuardResult extends TaskTargetToolCallGuardResult {
   normalizedArguments?: Record<string, unknown>;
 }
 
@@ -228,7 +230,14 @@ export function guardCurrentAppToolCall(input: {
   arguments?: Record<string, unknown>;
   toolRecords?: ToolExecutionRecord[];
 }): CurrentAppToolCallGuardResult {
-  if (!isCurrentAppExecutionTask(input.taskText)) return { allowed: true, reason: '' };
+  const targetGuard = guardTaskTargetToolCall({
+    taskText: input.taskText,
+    toolName: input.toolName,
+    arguments: input.arguments,
+    toolRecords: input.toolRecords,
+  });
+  if (!targetGuard.allowed) return targetGuard;
+  if (!isCurrentAppExecutionTask(input.taskText)) return targetGuard;
 
   const toolName = String(input.toolName || '');
   const args = input.arguments || {};

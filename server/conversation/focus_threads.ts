@@ -1,10 +1,9 @@
-export type FocusThreadStatus =
-  | 'planning'
-  | 'executing'
-  | 'waiting_confirmation'
-  | 'blocked'
-  | 'completed'
-  | 'cancelled';
+import {
+  isTerminalConversationTaskStatus,
+  type ConversationTaskStatus,
+} from '../cognition/task_execution_ledger';
+
+export type FocusThreadStatus = ConversationTaskStatus;
 
 export interface ConversationFocusThread {
   schemaVersion: 1;
@@ -64,7 +63,7 @@ export function reconcileConversationFocusThread(
 ): ConversationFocusThread {
   const previousCandidate = parseObject(previousValue);
   const previous = previousCandidate.taskId === task.id ? previousCandidate : {};
-  const terminal = task.status === 'completed' || task.status === 'cancelled';
+  const terminal = isTerminalConversationTaskStatus(task.status);
   const waitingFor = task.status === 'waiting_confirmation'
     ? compact(previous.waitingFor, 600) || 'user_confirmation'
     : task.status === 'blocked'
@@ -134,7 +133,7 @@ export function updateConversationFocusThread(
     ...(input.dueAt !== undefined ? { dueAt: normalizedDueAt(input.dueAt) } : {}),
     updatedAt: now,
   };
-  if (task.status === 'completed' || task.status === 'cancelled') {
+  if (isTerminalConversationTaskStatus(task.status)) {
     next.nextAction = '';
     next.waitingFor = '';
   }
@@ -154,7 +153,7 @@ export function listConversationFocusThreads(
       task.userId === input.userId
       && (!input.domain || task.domain === input.domain)
       && (input.domain !== 'work' || !input.orgId || task.orgId === input.orgId)
-      && (input.includeTerminal || !['completed', 'cancelled'].includes(task.status))
+      && (input.includeTerminal || !isTerminalConversationTaskStatus(task.status))
     ))
     .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))
     .map(readConversationFocusThread);

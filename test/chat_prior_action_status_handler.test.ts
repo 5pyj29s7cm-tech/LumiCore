@@ -262,7 +262,7 @@ describe('chat prior-action status handler', () => {
       expect(response.text).toContain('Target: settings');
       expect(response.text).toContain('Target section: voice');
       expect(response.text).toContain('Verification status: verified');
-      expect(response.text).toContain('Final status: executing (no verified terminal receipt yet)');
+      expect(response.text).toContain('Final status: blocked — The task has no verified completion receipt.');
       expect(response.text).not.toMatch(/执行动作|目标页面|最终状态/u);
     } else {
       expect(response.text).toContain('执行动作：open_settings');

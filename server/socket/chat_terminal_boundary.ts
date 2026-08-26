@@ -1,3 +1,10 @@
+import {
+  commitConversationTerminalDurabilityStage,
+  quarantineConversationTerminalDurabilityStage,
+  runWithConversationTerminalDurabilityStage,
+  type ConversationTerminalPersistenceUnknownProjection,
+} from '../conversation/manager';
+
 /**
  * Commit the durable state owned by a terminal chat turn before publishing it.
  *
@@ -22,27 +29,73 @@ export async function commitChatTerminalBoundary<T>(input: {
   persistUnknownReceipt: () => Promise<boolean>;
   publishCommitted: (terminalState: T) => void;
   publishUnknown: () => void;
+  persistenceUnknownProjection?: ConversationTerminalPersistenceUnknownProjection;
   onPersistenceError?: (error: unknown) => void;
 }): Promise<boolean> {
-  let terminalState: T;
-  try {
-    terminalState = input.persistTerminalState();
-    input.persistAssistantMessage();
-    await input.flush();
-    const ownsPublication = await input.persistTerminalReceipt(terminalState);
-    if (!ownsPublication) return false;
-  } catch (error) {
-    input.onPersistenceError?.(error);
+  return runWithConversationTerminalDurabilityStage(async stage => {
+    let terminalState: T;
     try {
-      const ownsUnknownPublication = await input.persistUnknownReceipt();
+      terminalState = input.persistTerminalState();
+      input.persistAssistantMessage();
+      await input.flush();
+      const ownsPublication = await input.persistTerminalReceipt(terminalState);
+      // A slow/failing receipt must not open the request lane. Once the shared
+      // barrier resolves, both the publication owner and an idempotent waiter
+      // know that this request has a durable terminal; either may safely
+      // settle its local stage, while only the owner publishes.
+      commitConversationTerminalDurabilityStage(stage);
+      if (!ownsPublication) return false;
+    } catch (error) {
+      try { input.onPersistenceError?.(error); } catch {}
+      const quarantined = quarantineConversationTerminalDurabilityStage(
+        stage,
+        input.persistenceUnknownProjection || {
+          text: 'The terminal persistence outcome is unknown.',
+          reason: 'Terminal persistence outcome is unknown.',
+        },
+      );
+      // Quarantine is installed synchronously before this retry. Even when
+      // SQLite remains unavailable, every later debounced snapshot can now
+      // persist only the unknown projection, never the staged success.
+      if (quarantined > 0) {
+        try {
+          await input.flush();
+        } catch (quarantineError) {
+          try { input.onPersistenceError?.(quarantineError); } catch {}
+        }
+      }
+      let ownsUnknownPublication = true;
+      try {
+        ownsUnknownPublication = await input.persistUnknownReceipt();
+      } catch (unknownError) {
+        try { input.onPersistenceError?.(unknownError); } catch {}
+      }
+      // Some legacy call sites create the safe unknown assistant only inside
+      // persistUnknownReceipt when the original assistant staging itself
+      // failed. Capture and quarantine that late row before it can release the
+      // turn as an ordinary terminal.
+      if (quarantined === 0) {
+        const lateQuarantine = quarantineConversationTerminalDurabilityStage(
+          stage,
+          input.persistenceUnknownProjection || {
+            text: 'The terminal persistence outcome is unknown.',
+            reason: 'Terminal persistence outcome is unknown.',
+          },
+        );
+        if (lateQuarantine > 0) {
+          try {
+            await input.flush();
+          } catch (lateQuarantineError) {
+            try { input.onPersistenceError?.(lateQuarantineError); } catch {}
+          }
+        }
+      }
       if (!ownsUnknownPublication) return false;
-    } catch (unknownError) {
-      input.onPersistenceError?.(unknownError);
+      input.publishUnknown();
+      return false;
     }
-    input.publishUnknown();
-    return false;
-  }
 
-  input.publishCommitted(terminalState);
-  return true;
+    input.publishCommitted(terminalState);
+    return true;
+  });
 }
