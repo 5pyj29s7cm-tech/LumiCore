@@ -262,6 +262,15 @@ function externalCommitUnknownError(name: string, detail: string): Error {
   return error;
 }
 
+function localSideEffectFenceKey(name: string, context?: ToolContext): string {
+  const idempotencyKey = String(context?.idempotencyKey || '').trim();
+  if (!idempotencyKey) return '';
+  const userId = String(context?.userId || '').trim() || 'anonymous';
+  const domain = String(context?.domain || '').trim() || 'personal';
+  const orgId = String(context?.orgId || '').trim();
+  return JSON.stringify([name, userId, domain, orgId, idempotencyKey]);
+}
+
 export class ToolHandlerSettledAfterTimeoutError extends Error {
   readonly toolExecutionTimedOut = true;
   readonly handlerSettlement = 'rejected' as const;
@@ -880,6 +889,7 @@ export class ToolRegistry {
     // must not swap the reviewed implementation for this execution.
     const pinnedHandler = tool.handler;
     const pinnedReconcileExternalCommit = tool.reconcileExternalCommit;
+    const pinnedLocalIdempotencyReplay = tool.localIdempotencyReplay || 'cached_result';
 
     try {
       assertToolPermission(tool, context);
@@ -954,8 +964,8 @@ export class ToolRegistry {
         'none',
       ].includes(effect.type));
     const idempotencyKey = externalCommit ? executionIdempotencyKey(name, args, context) : '';
-    const sideEffectFenceKey = !externalCommit && hasSideEffect && context?.idempotencyKey
-      ? `${name}\0${context.idempotencyKey}`
+    const sideEffectFenceKey = !externalCommit && hasSideEffect
+      ? localSideEffectFenceKey(name, context)
       : '';
     const sideEffectInputDigest = sideEffectFenceKey ? externalCommitInputDigest(name, args) : '';
     const inputDigest = externalCommit ? externalCommitInputDigest(name, args) : '';
@@ -1340,12 +1350,16 @@ export class ToolRegistry {
           }
         }
         if (sideEffectFenceKey) {
-          sideEffectAttempts.set(sideEffectFenceKey, {
-            state: 'verified',
-            inputDigest: sideEffectInputDigest,
-            result,
-            expiresAt: Date.now() + 24 * 60 * 60_000,
-          });
+          if (pinnedLocalIdempotencyReplay === 'durable_handler') {
+            sideEffectAttempts.delete(sideEffectFenceKey);
+          } else {
+            sideEffectAttempts.set(sideEffectFenceKey, {
+              state: 'verified',
+              inputDigest: sideEffectInputDigest,
+              result,
+              expiresAt: Date.now() + 24 * 60 * 60_000,
+            });
+          }
         }
         if (!externalCommit) recordAdapterExecutionSuccess(adapterPermit);
         finishMetric('verified_success');

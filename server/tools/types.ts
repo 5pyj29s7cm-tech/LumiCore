@@ -345,6 +345,12 @@ export interface ToolDefinition {
   parameters: Record<string, any>;
   handler: (args: Record<string, any>, context?: ToolContext) => Promise<string>;
   /**
+   * Keep the generic local side-effect fence only while the handler is in
+   * flight, then let the handler's durable idempotency store describe a later
+   * retry. Use only when the handler has its own persisted replay contract.
+   */
+  localIdempotencyReplay?: 'cached_result' | 'durable_handler';
+  /**
    * Read-only reconciliation for a timed-out external commit. It must query
    * the original provider/target with the same idempotency key and must never
    * repeat the mutation. Return a verified normal tool result or null when the

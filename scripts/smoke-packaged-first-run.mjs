@@ -207,14 +207,20 @@ async function main() {
   });
 
   try {
-    const health = await waitFor('packaged backend health endpoint', args.timeoutMs, 500, async () => {
+    let health = await waitFor('packaged backend health endpoint', args.timeoutMs, 500, async () => {
       if (childExited) throw new Error('backend process exited before becoming healthy');
       return fetchJson(`${baseUrl}/health`, { timeoutMs: 2000 });
     });
     if (health?.runtime?.version !== runtimeMeta.version || health?.runtime?.buildId !== runtimeMeta.buildId) {
       throw new Error(`Runtime metadata mismatch. Expected ${runtimeMeta.version}/${runtimeMeta.buildId}, got ${health?.runtime?.version}/${health?.runtime?.buildId}`);
     }
-    if (health?.database?.dirty !== false) throw new Error(`Packaged database is not clean: ${JSON.stringify(health?.database)}`);
+    if (health?.database?.dirty !== false) {
+      health = await waitFor('packaged database startup persistence', 15_000, 250, async () => {
+        if (childExited) throw new Error('backend process exited before startup persistence completed');
+        const candidate = await fetchJson(`${baseUrl}/health`, { timeoutMs: 2000 });
+        return candidate?.database?.dirty === false ? candidate : null;
+      });
+    }
 
     const socketHandshake = await fetchText(`http://127.0.0.1:${port}/socket.io/?EIO=4&transport=polling`, { timeoutMs: 8000 });
     if (!socketHandshake.startsWith('0{')) throw new Error(`Unexpected Socket.IO handshake: ${socketHandshake.slice(0, 120)}`);

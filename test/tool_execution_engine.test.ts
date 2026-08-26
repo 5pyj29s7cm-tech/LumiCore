@@ -338,6 +338,85 @@ describe('unified tool execution engine', () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
+  it('scopes a local side-effect fence by user, domain, and organization while retaining same-scope single-flight', async () => {
+    const registry = new ToolRegistry();
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>(resolve => { releaseFirst = resolve; });
+    let invocation = 0;
+    const handler = vi.fn(async () => {
+      invocation += 1;
+      const currentInvocation = invocation;
+      if (currentInvocation === 1) await firstGate;
+      return JSON.stringify({ ok: true, status: 'updated', invocation: currentInvocation });
+    });
+    registry.register({
+      name: 'local_mutation_scoped_fence_test',
+      description: 'Scoped local mutation fence integration test.',
+      parameters: {
+        type: 'object',
+        properties: { target: { type: 'string' } },
+        required: ['target'],
+      },
+      permission: 'public',
+      securityLevel: 'confirm',
+      capability: {
+        id: 'test.registry.scoped.local-mutation',
+        family: 'test',
+        lane: 'files',
+        operation: 'mutate',
+        risk: 'medium',
+        sideEffects: [{ type: 'local_state_change', scope: 'test state', reversible: true }],
+        verification: {
+          strategy: 'terminal_receipt',
+          required: true,
+          requiredFields: ['ok'],
+          requiredValues: { ok: true },
+          successSignals: ['mutation receipt'],
+          limitations: [],
+        },
+      },
+      handler,
+    });
+
+    const args = { target: 'shared-local-state' };
+    const sameScope = {
+      userConfirmed: true,
+      idempotencyKey: 'same-logical-local-mutation',
+      userId: 'user-a',
+      domain: 'work' as const,
+      orgId: 'org-a',
+    };
+    const first = registry.execute('local_mutation_scoped_fence_test', args, sameScope);
+    await Promise.resolve();
+    const concurrentDuplicate = registry.execute('local_mutation_scoped_fence_test', args, sameScope);
+    await Promise.resolve();
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    releaseFirst();
+    const [firstResult, duplicateResult] = await Promise.all([first, concurrentDuplicate]);
+    expect(duplicateResult).toBe(firstResult);
+    expect(JSON.parse(firstResult).invocation).toBe(1);
+
+    const otherUser = await registry.execute('local_mutation_scoped_fence_test', args, {
+      ...sameScope,
+      userId: 'user-b',
+    });
+    const otherOrganization = await registry.execute('local_mutation_scoped_fence_test', args, {
+      ...sameScope,
+      orgId: 'org-b',
+    });
+    const otherDomain = await registry.execute('local_mutation_scoped_fence_test', args, {
+      ...sameScope,
+      domain: 'personal' as const,
+      orgId: '',
+    });
+
+    expect(JSON.parse(otherUser).invocation).toBe(2);
+    expect(JSON.parse(otherOrganization).invocation).toBe(3);
+    expect(JSON.parse(otherDomain).invocation).toBe(4);
+    expect(handler).toHaveBeenCalledTimes(4);
+  });
+
   it('directly propagates branded adapter-start persistence failures without manufacturing a record', async () => {
     const { registry, handler } = registryWithTool();
     const failure = new ToolLifecyclePersistenceError(new Error('durable adapter-start write failed'));
