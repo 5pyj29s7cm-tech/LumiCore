@@ -7,6 +7,9 @@ permissions:
 
 'on':
   workflow_dispatch: {}
+  push:
+    tags:
+      - 'installer-v*'
 
 concurrency:
   group: lumi-desktop-installers-${{ github.ref }}
