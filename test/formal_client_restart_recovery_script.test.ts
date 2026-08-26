@@ -140,4 +140,13 @@ describe('formal restart-recovery E2E protocol', () => {
     expect(help).toContain('This script never restarts it.');
     expect(help).toContain('contains no token, cookie, desktop proof, file payload, or tool result');
   });
+
+  it('keeps importable E2E modules free of Windows CRLF shebang parsing hazards', () => {
+    for (const script of [
+      path.resolve('scripts/formal-client-e2e.mjs'),
+      path.resolve('scripts/formal-client-restart-recovery.mjs'),
+    ]) {
+      expect(fs.readFileSync(script, 'utf8')).not.toMatch(/^#!/u);
+    }
+  });
 });
