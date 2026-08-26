@@ -153,6 +153,28 @@ describe('unified tool execution engine', () => {
     expect(record.terminalVerification?.status).toBe('verified');
   });
 
+  it('applies POSIX absolute target anchors independently of the server host', async () => {
+    const { registry, handlers } = registryWithTargetPolicyTools();
+    const anchoredPath = '/home/alice/Desktop/quarterly-report.docx';
+    const equivalentPath = '/home/alice/Desktop/temporary/../quarterly-report.docx';
+
+    const record = await executeToolCall({
+      registry,
+      name: 'read_file',
+      arguments: { path: equivalentPath },
+      context: {
+        routedTaskText: `Analyze the file ${anchoredPath}.`,
+      },
+    });
+
+    expect(record.error).toBeUndefined();
+    expect(handlers.read_file).toHaveBeenCalledWith(
+      { path: anchoredPath },
+      expect.anything(),
+    );
+    expect(record.arguments).toEqual({ path: anchoredPath });
+  });
+
   it('returns one redacted evidence-bearing receipt for successful execution', async () => {
     const { registry, handler } = registryWithTool();
     const onToolStart = vi.fn();

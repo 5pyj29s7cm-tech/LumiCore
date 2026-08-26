@@ -151,7 +151,7 @@ describe('real file/desktop target anchoring', () => {
     expect(guardCurrentAppToolCall({
       taskText,
       toolName: 'search_files',
-      arguments: { directory: 'C:\\Users\\Administrator\\Desktop', pattern: '*.ppt*' },
+      arguments: { directory: path.join(os.homedir(), 'Desktop'), pattern: '*.ppt*' },
       toolRecords: [activeWps],
     })).toMatchObject({ allowed: true });
 
@@ -261,6 +261,75 @@ describe('real file/desktop target anchoring', () => {
     )).toBe(true);
     expect(isAllowedTaskSearchDirectory('D:\\lumiOS\\dist-server', explicitTask)).toBe(false);
     expect(isAllowedTaskSearchDirectory('', explicitTask)).toBe(false);
+  });
+
+  it('normalizes paths by their own flavor and rejects ambiguous POSIX separators', () => {
+    const posixPath = '/home/alice/Desktop/Quarterly-Report.docx';
+    const allowed = guardTaskTargetToolCall({
+      taskText: `Analyze the file ${posixPath}.`,
+      toolName: 'read_file',
+      arguments: { path: '/home/alice/Desktop/temporary/../Quarterly-Report.docx' },
+      toolRecords: [],
+    });
+    expect(allowed).toMatchObject({
+      allowed: true,
+      normalizedArguments: { path: posixPath },
+    });
+
+    expect(guardTaskTargetToolCall({
+      taskText: `Analyze the file ${posixPath}.`,
+      toolName: 'read_file',
+      arguments: { path: '/home/alice/Desktop/quarterly-report.docx' },
+      toolRecords: [],
+    })).toMatchObject({ allowed: false, code: 'target_mismatch' });
+
+    const explicitPosixTask = 'Search /home/alice/Documents for report.pdf';
+    expect(isAllowedTaskSearchDirectory('/home/alice/Documents/Archive', explicitPosixTask)).toBe(true);
+    expect(isAllowedTaskSearchDirectory('/home/alice/documents/Archive', explicitPosixTask)).toBe(false);
+    expect(isAllowedTaskSearchDirectory('/home/alice/Documents-private', explicitPosixTask)).toBe(false);
+    expect(isAllowedTaskSearchDirectory('/home/alice/Documents\\..\\Secrets', explicitPosixTask)).toBe(false);
+    expect(isAllowedTaskSearchDirectory(
+      '/files',
+      'Inspect https://example.com/files/report.pdf',
+    )).toBe(false);
+
+    const ambiguousSpacePath = 'Analyze /home/alice/Private Files/report.pdf';
+    expect(isAllowedTaskSearchDirectory('/home/alice/Private', ambiguousSpacePath)).toBe(false);
+    expect(isAllowedTaskSearchDirectory('/home/alice/Private Files', ambiguousSpacePath)).toBe(false);
+    const quotedSpacePath = 'Analyze "/home/alice/Private Files/report.pdf"';
+    expect(isAllowedTaskSearchDirectory('/home/alice/Private Files', quotedSpacePath)).toBe(true);
+    expect(isAllowedTaskSearchDirectory('/home/alice/Private', quotedSpacePath)).toBe(false);
+  });
+
+  it('does not replace an explicit POSIX target with a differently cased discovery receipt', () => {
+    const requestedPath = '/tmp/report.pdf';
+    const wrongCasePath = '/tmp/Report.pdf';
+    const wrongCaseSearch = record({
+      name: 'search_files',
+      arguments: { directory: '/tmp', pattern: 'report.pdf' },
+      result: JSON.stringify([{ name: 'Report.pdf', path: wrongCasePath }]),
+      terminalVerification: {
+        status: 'verified',
+        strategy: 'terminal_receipt',
+        reason: 'bounded directory search completed',
+      },
+    });
+    const taskText = `Analyze the file ${requestedPath}`;
+
+    expect(buildTaskTargetAnchorProjection({
+      taskText,
+      evidence: [wrongCaseSearch],
+    }).target).toMatchObject({
+      path: requestedPath,
+      object: 'report.pdf',
+      source: 'user_correction',
+    });
+    expect(guardTaskTargetToolCall({
+      taskText,
+      toolName: 'read_file',
+      arguments: { path: wrongCasePath },
+      toolRecords: [wrongCaseSearch],
+    })).toMatchObject({ allowed: false, code: 'target_mismatch' });
   });
 
   it('does not treat a same-basename file as the exact anchored path', () => {
