@@ -24,7 +24,7 @@ describe('conversation execution facts', () => {
         name: 'desktop_active_window',
         error: false,
         turnId: 'prior-window-turn',
-        result: JSON.stringify({ ok: true, status: 'verified', title: 'LumiOS' }),
+        result: JSON.stringify({ ok: true, status: 'verified', title: 'LumiCore' }),
         terminalVerification: { status: 'verified' },
         envelope: { status: 'verified_success', verification: { status: 'verified' } },
       }, {
@@ -37,7 +37,7 @@ describe('conversation execution facts', () => {
         name: 'desktop_active_window',
         error: false,
         turnId: 'prior-window-turn',
-        result: JSON.stringify({ ok: true, status: 'verified', title: 'LumiOS' }),
+        result: JSON.stringify({ ok: true, status: 'verified', title: 'LumiCore' }),
         terminalVerification: { status: 'verified' },
         envelope: { status: 'verified_success', verification: { status: 'verified' } },
       }],
@@ -81,13 +81,13 @@ describe('conversation execution facts', () => {
     addMessageIdempotent({
       ...common,
       role: 'assistant',
-      content: '当前前台窗口是 LumiOS。',
+      content: '当前前台窗口是 LumiCore。',
       requestId: firstRequestId,
       toolCalls: [{
         id: `queued-window-receipt-${suffix}`,
         name: 'desktop_active_window',
         arguments: {},
-        result: JSON.stringify({ ok: true, status: 'verified', title: 'LumiOS' }),
+        result: JSON.stringify({ ok: true, status: 'verified', title: 'LumiCore' }),
         terminalVerification: {
           status: 'verified',
           strategy: 'terminal_receipt',

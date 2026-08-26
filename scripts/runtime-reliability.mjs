@@ -14,7 +14,7 @@ function parseArgs(argv) {
     mode: 'lifecycle',
     runtime: 'packaged',
     distServer: path.join(root, 'desktop-resources', 'dist-server'),
-    sourceEntry: path.join(root, 'server.ts'),
+    sourceEntry: path.join(root, 'server', 'runtime', 'server_entry.ts'),
     iterations: 50,
     durationHours: 2,
     minMixedRounds: 200,

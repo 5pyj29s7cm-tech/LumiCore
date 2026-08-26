@@ -6,7 +6,9 @@ import { io as createSocketClient, type Socket as ClientSocket } from 'socket.io
 import { initDatabase, readDB } from '../db_layer';
 import {
   addMessage,
+  bindConversationActionExecutionTurn,
   getOrCreateActiveConversation,
+  setConversationActionExecutionStatus,
 } from '../server/conversation/manager';
 import { registerChatHandler } from '../server/socket/chat';
 import { getChatExecution } from '../server/socket/chat_execution_registry';
@@ -69,6 +71,8 @@ describe('chat prior-action status handler', () => {
   const secondRequestId = `chat-prior-action-second-${suffix}`;
   const windowSeedRequestId = `chat-prior-action-window-seed-${suffix}`;
   const exactReceiptRequestId = `chat-prior-action-exact-receipt-${suffix}`;
+  const cancelSeedRequestId = `chat-durable-cancel-seed-${suffix}`;
+  const cancelRequestId = `chat-durable-cancel-${suffix}`;
   const englishStatusQuestion = 'What did you just do, and what evidence proved it succeeded?';
   const chineseStatusQuestion = '你刚才做了什么，什么证据证明成功了？';
   const exactReceiptQuestion = '你上一轮是否真的调用过工具？不要再次调用工具，只根据已保存的回执告诉我：工具名、成功还是失败。';
@@ -87,7 +91,7 @@ describe('chat prior-action status handler', () => {
     const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
     conversationId = conversation.id;
 
-    addMessage({
+    const seedUserMessageId = addMessage({
       userId,
       agentId: 'lumi',
       conversationId,
@@ -100,6 +104,13 @@ describe('chat prior-action status handler', () => {
       requestId: priorRequestId,
       deferActionPreparation: true,
     });
+    expect(bindConversationActionExecutionTurn({
+      conversationId,
+      userId,
+      userText: '打开 Lumi 设置里的语音与声音。',
+      requestId: priorRequestId,
+      userMessageId: seedUserMessageId,
+    })).toMatchObject({ requestId: priorRequestId, messageId: seedUserMessageId });
     addMessage({
       userId,
       agentId: 'lumi',
@@ -337,7 +348,7 @@ describe('chat prior-action status handler', () => {
   });
 
   it('answers the exact history-empty prior-turn tool question from the adjacent persisted receipt', async () => {
-    addMessage({
+    const windowSeedUserMessageId = addMessage({
       userId,
       agentId: 'lumi',
       conversationId,
@@ -350,12 +361,19 @@ describe('chat prior-action status handler', () => {
       requestId: windowSeedRequestId,
       deferActionPreparation: true,
     });
+    expect(bindConversationActionExecutionTurn({
+      conversationId,
+      userId,
+      userText: '只读查看当前前台窗口并告诉我窗口标题。',
+      requestId: windowSeedRequestId,
+      userMessageId: windowSeedUserMessageId,
+    })).toMatchObject({ requestId: windowSeedRequestId, messageId: windowSeedUserMessageId });
     addMessage({
       userId,
       agentId: 'lumi',
       conversationId,
       role: 'assistant',
-      content: '当前前台窗口是 LumiOS。',
+      content: '当前前台窗口是 LumiCore。',
       domain: 'personal',
       orgId: '',
       source: 'command-center-chat',
@@ -370,8 +388,8 @@ describe('chat prior-action status handler', () => {
         result: JSON.stringify({
           ok: true,
           status: 'verified',
-          title: 'LumiOS',
-          processName: 'lumi-os.exe',
+          title: 'LumiCore',
+          processName: 'lumi-core.exe',
         }),
         error: '',
         outcome: 'success',
@@ -434,5 +452,88 @@ describe('chat prior-action status handler', () => {
     expect(llmTripwire).not.toHaveBeenCalled();
     expect(queryMemoriesVector).not.toHaveBeenCalled();
     expect(retrieveChunks).not.toHaveBeenCalled();
+  });
+
+  it('cancels an exact unfinished durable task even after its foreground request lease is gone', async () => {
+    const cancelSeedUserMessageId = addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId,
+      role: 'user',
+      content: '在桌面创建一个文件。',
+      domain: 'personal',
+      orgId: '',
+      source: 'command-center-chat',
+      channel: 'chat',
+      requestId: cancelSeedRequestId,
+      deferActionPreparation: true,
+    });
+    expect(bindConversationActionExecutionTurn({
+      conversationId,
+      userId,
+      userText: '在桌面创建一个文件。',
+      requestId: cancelSeedRequestId,
+      userMessageId: cancelSeedUserMessageId,
+    })).toMatchObject({ requestId: cancelSeedRequestId });
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId,
+      role: 'assistant',
+      content: '创建尚未完成。',
+      domain: 'personal',
+      orgId: '',
+      source: 'command-center-chat',
+      channel: 'chat',
+      requestId: cancelSeedRequestId,
+      taskIntent: 'task',
+      llmWasCalled: true,
+    });
+    const idleTask = setConversationActionExecutionStatus(
+      conversationId,
+      userId,
+      'blocked',
+      { blocker: 'Waiting for retry.', requestId: '' },
+    );
+    expect(idleTask).toMatchObject({
+      status: 'blocked',
+      unfinished: true,
+      activeRequestId: undefined,
+    });
+
+    const responsePromise = waitForRequestEvent<Record<string, any>>(
+      client,
+      'agent:response',
+      cancelRequestId,
+    );
+    const ack = await client.timeout(5_000).emitWithAck('agent:chat', {
+      text: '取消当前任务',
+      history: [],
+      agentId: 'lumi',
+      domain: 'personal',
+      source: 'command-center-chat',
+      requestId: cancelRequestId,
+      conversationId,
+      controlTargetRequestId: cancelSeedRequestId,
+      controlTargetTaskId: idleTask?.taskId,
+      controlTargetRevision: idleTask?.revision,
+    });
+    expect(ack).toMatchObject({ ok: true, requestId: cancelRequestId });
+    const response = await responsePromise;
+    expect(response).toMatchObject({
+      requestId: cancelRequestId,
+      conversationId,
+      source: 'command-center-chat',
+      reason: 'cancelled_by_user',
+      finalized: true,
+      blocked: false,
+      taskRelation: {
+        taskId: idleTask?.taskId,
+        feedback: 'cancel',
+      },
+    });
+    expect(getOrCreateActiveConversation(userId, 'lumi', 'personal', '').actionContinuationState)
+      .toMatchObject({ taskId: idleTask?.taskId, status: 'cancelled', unfinished: false });
+    expect(llmTripwire).not.toHaveBeenCalled();
   });
 });

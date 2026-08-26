@@ -7,52 +7,25 @@ function source(relativePath: string): string {
 }
 
 describe('command center live agent office', () => {
-  it('renders a native 2D Lumi workspace and dispatch animation from real task state', () => {
+  it('reuses the personal Lumi sphere as a live command cosmos driven by real task state', () => {
     const panel = source('src/components/CommandCenterPanel.tsx');
-    const scene = source('src/components/AgentOfficeScene.tsx');
-    const world = source('src/components/AgentOfficeWorld.tsx');
+    const sphere = source('src/components/LocalAgentSphere.tsx');
+    const styles = source('src/index.css');
 
-    expect(panel).toContain('<AgentOfficeScene');
-    expect(panel).toContain('const state = deskState(agent, backgroundTasks)');
+    expect(panel).toContain('<LocalAgentSphere');
+    expect(panel).toContain('variant="command-center"');
+    expect(panel).toContain('buildCommandCenterCosmosAgents(agents, backgroundTasks)');
+    expect(panel).toContain('cosmosAgents={cosmosAgents}');
+    expect(panel).toContain('cosmosTasks={cosmosTasks}');
     expect(panel).toContain('taskTitle: task?.title');
-    expect(scene).toContain('<AgentOfficeWorld');
-    expect(world).toContain('function Employee');
-    expect(world).toContain('function Workstation');
-    expect(world).toContain('function OfficeChair');
-    expect(world).toContain('function LumiCommander');
-    expect(world).toContain('lumi-private-office__glass');
-    expect(world).toContain('lumi-private-office__command-wall');
-    expect(world).toContain('lumi-private-office__guest-seat');
-    expect(world).toContain("worker.state === 'working'");
-    expect(world).toContain('worker.taskTitle');
-    expect(world).toContain('function TaskDispatchLayer');
-    expect(world).toContain('const workstationPositions');
-    expect(world).toContain('const officeSlots = workstationPositions.map');
-    expect(world).toContain('is-vacant');
-    expect(world).toContain('lumi-2d-workstation__vacancy');
-    expect(scene).toContain('<AgentOfficeWorld workers={visibleWorkers}');
-    expect(scene).toContain('lumi-office-floor-switch');
-    expect(scene).toContain("workers.length === 0 && <div className=\"lumi-office-empty-note\"");
-    expect(world).toContain('const activityRoutes');
-    expect(world).toContain('function LumiWisp');
-    expect(world).toContain('lumi-wisp__shell');
-    expect(world).toContain('lumi-wisp__tendril--left');
-    expect(world).toContain('lumi-wisp__step--right');
-    expect(world).toContain('lumi-wisp__tail-shape');
-    expect(world).toContain('function OfficeLife');
-    expect(world).toContain('<animateMotion');
-    expect(world).toContain('lumi-2d-node--roaming');
-    expect(world).toContain('lumi-2d-node--seated');
-    expect(world).toContain("worker.state === 'working'");
-    expect(world).not.toContain('@react-three/fiber');
-    expect(world).not.toContain('@react-three/drei');
-    expect(world).not.toContain('useTexture');
-    expect(world).not.toContain('planeGeometry');
-    expect(world).not.toContain('lumi-actor');
-    expect(source('src/index.css')).toContain('@keyframes lumi-wisp-form-walk');
-    expect(source('src/index.css')).toContain('@keyframes lumi-wisp-work-tendril-left');
-    expect(source('src/index.css')).toContain('@keyframes lumi-wisp-tendril-wave');
-    expect(source('src/index.css')).toContain('@keyframes lumi-wisp-form-rest');
+    expect(panel).not.toContain("from './AgentOfficeScene'");
+    expect(panel).not.toContain('<AgentOfficeScene');
+    expect(sphere).toContain('data-cosmos-agent-id={cosmosAgent.id}');
+    expect(sphere).toContain('data-task-route');
+    expect(sphere).toContain('data-cosmos-unassigned-task');
+    expect(sphere).toContain('localAgentCosmosPosition(index)');
+    expect(styles).toContain('.lumi-command-cosmos__route');
+    expect(styles).toContain('@keyframes lumi-cosmos-route');
   });
 
   it('keeps the app topmost when either Command Center or Wallpaper is active', () => {
@@ -67,26 +40,23 @@ describe('command center live agent office', () => {
 
   it('does not manufacture a fake working state or random activity', () => {
     const panel = source('src/components/CommandCenterPanel.tsx');
-    const scene = source('src/components/AgentOfficeScene.tsx');
-    const world = source('src/components/AgentOfficeWorld.tsx');
 
     expect(panel).not.toContain('Math.random');
-    expect(scene).not.toContain('Math.random');
-    expect(scene).not.toContain('setInterval');
-    expect(scene).not.toContain('setTimeout');
-    expect(world).not.toContain('Math.random');
-    expect(world).not.toContain('setInterval');
-    expect(world).not.toContain('setTimeout');
+    expect(panel).toContain('taskClaimsAgent(item, agent)');
+    expect(panel).toContain('(task.workerNames || []).some(worker => identities.has');
+    expect(panel).toContain('commandCenterTaskIsActive(item)');
   });
 
   it('keeps the office mounted while task state refreshes silently', () => {
     const panel = source('src/components/CommandCenterPanel.tsx');
 
     expect(panel).toContain('const hasLoadedOfficeRef = useRef(false)');
-    expect(panel).toContain('const refreshInFlightRef = useRef<Promise<void> | null>(null)');
+    expect(panel).toContain('const refreshInFlightRef = useRef<{ scopeKey: string; generation: number; promise: Promise<void> } | null>(null)');
     expect(panel).toContain('if (firstLoad) setLoading(true)');
     expect(panel).toContain('if (firstLoad) setLoading(false)');
-    expect(panel).toContain('if (refreshInFlightRef.current) return refreshInFlightRef.current');
+    expect(panel).toContain('return inFlight.promise');
+    expect(panel).toContain('<LocalAgentSphere');
+    expect(panel).not.toContain('loading ? (');
     expect(panel).toContain('setTimeout(() => void refresh(), 600)');
     expect(panel).toContain('setInterval(() => void refresh(), 60_000)');
   });
@@ -100,7 +70,10 @@ describe('command center live agent office', () => {
 
     expect(chatPage).toContain('lumi-command-center-workspace overflow-hidden');
     expect(chatPage).toContain('lumi-command-center-office relative min-h-0 min-w-0 flex-1');
-    expect(chatPage).toContain('lumi-command-center-chat-rail w-[clamp(420px,30vw,560px)]');
+    expect(chatPage).toContain('data-command-center-cosmos-stage');
+    expect(chatPage).toContain("{ opacity: 0, x: '100%' }");
+    expect(chatPage).toContain('lumi-command-center-chat-rail--entering w-[clamp(420px,30vw,560px)]');
+    expect(chatPage).toContain('useReducedMotion()');
     expect(chatPage).not.toContain('absolute bottom-4 right-4 top-3');
     expect(styles).toContain('.lumi-command-center-workspace');
     expect(styles).toContain('flex-direction: row');

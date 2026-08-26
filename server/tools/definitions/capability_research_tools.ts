@@ -26,7 +26,7 @@ const AEC_SEED_REPOS = [
 function githubHeaders(): Record<string, string> {
   return {
     Accept: 'application/vnd.github.v3+json',
-    'User-Agent': 'LumiOS-Capability-Research',
+    'User-Agent': 'LumiCore-Capability-Research',
     ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}),
   };
 }

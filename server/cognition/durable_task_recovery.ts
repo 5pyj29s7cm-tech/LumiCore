@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { NormalizedSideEffectClass } from './normalized_action_intent';
 import type { ToolExecutionEnvelopeStatus, ToolExecutionRecord } from '../tools/types';
+import { redactDiagnosticSecrets } from '../client/diagnostic_sanitizer';
 
 export type DurableTaskFailureClass =
   | 'transient'
@@ -48,6 +49,11 @@ export interface DurableTaskPlanRevision {
   strategy: 'retry_same_plan' | 'resume_verified_receipts' | 'replan_safe_path';
   reason: string;
   preservedReceiptIds: string[];
+  /** Structured binding used by graph recovery; prose IDs alone are not a safety gate. */
+  preservedReceipts?: Array<Pick<
+    DurableTaskReceiptSnapshot,
+    'id' | 'operation' | 'sideEffects' | 'verificationStatus'
+  >>;
   createdAt: string;
 }
 
@@ -90,10 +96,8 @@ const DEPENDENCY_RE = /provider|model|mcp|adapter|sidecar|worker|runtime|service
 const CONFIRMATION_RE = /confirm|confirmation|approval|user consent|requires?\s+user|\u786e\u8ba4|\u6279\u51c6|\u6388\u6743/i;
 const POLICY_RE = /forbidden|denied|not allowed|policy|safety gate|permission|unauthori[sz]ed|\u7981\u6b62|\u62d2\u7edd|\u65e0\u6743/i;
 const PRECONDITION_RE = /missing input|precondition|requires? setup|not configured|not found|invalid target|missing target|missing credential|\u7f3a\u5c11|\u672a\u627e\u5230/i;
-const SECRET_RE = /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|cookie|password|secret))\s*[:=]\s*[^\s,;]+/gi;
-
 function compact(value: unknown, limit = 700): string {
-  return String(value || '').replace(SECRET_RE, '$1=[redacted]').replace(/\s+/g, ' ').trim().slice(0, limit);
+  return redactDiagnosticSecrets(value).replace(/\s+/g, ' ').trim().slice(0, limit);
 }
 
 function stableValue(value: unknown): unknown {
@@ -283,6 +287,15 @@ export function updateDurableTaskRecovery(
         .filter(receipt => receipt.verificationStatus === 'verified')
         .map(receipt => receipt.id)
         .slice(-80),
+      preservedReceipts: receipts
+        .filter(receipt => receipt.verificationStatus === 'verified')
+        .slice(-80)
+        .map(receipt => ({
+          id: receipt.id,
+          operation: receipt.operation,
+          sideEffects: receipt.sideEffects.map(effect => ({ ...effect })),
+          verificationStatus: receipt.verificationStatus,
+        })),
       createdAt: diagnosis.diagnosedAt,
     };
     state.planRevisions = [...state.planRevisions, revision].slice(-20);

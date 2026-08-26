@@ -60,7 +60,7 @@ describe('Lumi variant release train', () => {
   });
 
   it('creates a separate worktree, branch, remote, and workspace identity', () => {
-    const paths = buildVariantPaths(path.join('D:', 'lumiOS'), 'cad-client');
+    const paths = buildVariantPaths(path.join('D:', 'LumiCore'), 'cad-client');
     expect(paths.id).toBe('cad-client');
     expect(paths.branch).toBe('variant/cad-client');
     expect(paths.remote).toBe('cad-client');

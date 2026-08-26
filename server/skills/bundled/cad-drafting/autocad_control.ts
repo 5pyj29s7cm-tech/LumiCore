@@ -555,7 +555,7 @@ export function buildAutocadComPlaybackScript(
 }
 
 function executePowerShell(script: string, timeoutMs: number): Promise<string> {
-  const scriptDirectory = path.join(os.tmpdir(), 'lumios-autocad-mcp');
+  const scriptDirectory = path.join(os.tmpdir(), 'lumicore-autocad-mcp');
   fs.mkdirSync(scriptDirectory, { recursive: true });
   const scriptPath = path.join(scriptDirectory, `playback-${crypto.randomUUID()}.ps1`);
   fs.writeFileSync(
@@ -766,7 +766,7 @@ export async function runAutocadComPlayback(options: AutocadPlaybackOptions): Pr
     60_000,
     Math.min(options.timeoutMs || 180_000 + payload.operations.length * delayMs * 2, 30 * 60_000),
   );
-  const lockPath = options.lockPath ? path.resolve(options.lockPath) : path.join(os.tmpdir(), 'lumios-autocad-playback.lock');
+  const lockPath = options.lockPath ? path.resolve(options.lockPath) : path.join(os.tmpdir(), 'lumicore-autocad-playback.lock');
   const lockOwnerToken = options.lockOwnerToken || crypto.randomUUID();
   const acquired = await acquirePlaybackLock({
     lockPath,

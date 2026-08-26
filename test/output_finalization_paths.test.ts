@@ -9,14 +9,41 @@ function source(relativePath: string): string {
 function expectFinalizationMetadataOnEveryAgentResponse(relativePath: string): void {
   const code = source(relativePath);
   const matches = Array.from(
-    code.matchAll(/(?:socket\.emit|emitAgent|emitBackground)\(\s*['"]agent:response['"]/g),
+    code.matchAll(/(?:socket\.emit|emitAgent|emitBackground)\(\s*['"]agent:response['"]|commit(?:Chat|Task)Terminal(?:Boundary)?\(\s*\{/g),
   );
   expect(matches.length).toBeGreaterThan(0);
 
   for (const match of matches) {
     const index = match.index ?? 0;
     const line = code.slice(0, index).split('\n').length;
-    const responseBlock = code.slice(index, index + 800);
+    let responseBlock = code.slice(index, index + 800);
+    if (match[0].startsWith('commit')) {
+      expect(code).toContain('recordChatExecutionTerminalEventDurably(');
+      expect(code).toContain("reason: 'persistence_unknown'");
+      continue;
+    }
+    if (/event\s*:\s*['"]agent:error['"]/.test(responseBlock)) {
+      expect(code).toContain('sanitizeChatAgentErrorPayload(payload)');
+      continue;
+    }
+    // Strict terminal boundaries intentionally construct the payload before the
+    // publish callback. Follow an identifier argument back to its nearest
+    // declaration instead of treating that safer separation as missing
+    // metadata.
+    const payloadIdentifier = responseBlock.match(
+      /(?:socket\.emit|emitAgent|emitBackground)\(\s*['"]agent:response['"]\s*,\s*([A-Za-z_$][\w$]*)/,
+    )?.[1];
+    if (payloadIdentifier) {
+      const declarationIndex = Math.max(
+        code.lastIndexOf(`const ${payloadIdentifier} = {`, index),
+        code.lastIndexOf(`let ${payloadIdentifier} = {`, index),
+      );
+      expect(
+        declarationIndex,
+        `${relativePath}:${line} publishes an undeclared response payload`,
+      ).toBeGreaterThanOrEqual(0);
+      responseBlock = code.slice(declarationIndex, declarationIndex + 1_200);
+    }
     expect(responseBlock, `${relativePath}:${line} is missing finalized metadata`).toMatch(
       /\bfinalized\s*:/,
     );
@@ -179,23 +206,36 @@ describe('finalized output paths', () => {
 
   it('never queues model or orchestrator candidate speech before the shared voice finalizer', () => {
     const voice = source('server/socket/voice.ts');
+    const terminalBoundaryStart = voice.indexOf('const commitVoiceTerminal = async');
+    const terminalBoundaryEnd = voice.indexOf('const maxIterations =', terminalBoundaryStart);
+    const terminalBoundary = voice.slice(terminalBoundaryStart, terminalBoundaryEnd);
     const orchestratorStart = voice.indexOf('if (shouldOrchestrate) {');
     const singleModelStart = voice.indexOf('if (!usedOrchestrator) {', orchestratorStart);
     const finalizerStart = voice.indexOf('let finalResponse: ReturnType<typeof finalizeLumiResponse>', singleModelStart);
-    const finalSpeechStart = voice.indexOf('queueFinalizedSpeech(responseText)', finalizerStart);
+    const finalCommitStart = voice.indexOf('mainTerminalCommitted = await commitVoiceTerminal({', finalizerStart);
     const orchestratorCandidatePath = voice.slice(orchestratorStart, singleModelStart);
     const modelCandidatePath = voice.slice(singleModelStart, finalizerStart);
+    const finalCommitPath = voice.slice(finalCommitStart, finalCommitStart + 1_000);
 
+    expect(terminalBoundaryStart).toBeGreaterThan(0);
     expect(orchestratorStart).toBeGreaterThan(0);
     expect(singleModelStart).toBeGreaterThan(orchestratorStart);
     expect(finalizerStart).toBeGreaterThan(singleModelStart);
-    expect(finalSpeechStart).toBeGreaterThan(finalizerStart);
+    expect(finalCommitStart).toBeGreaterThan(finalizerStart);
+    expect(terminalBoundary.indexOf('recordChatExecutionTerminalEventDurably(')).toBeGreaterThan(0);
+    expect(terminalBoundary.indexOf('publishCommitted:')).toBeGreaterThan(
+      terminalBoundary.indexOf('recordChatExecutionTerminalEventDurably('),
+    );
+    expect(terminalBoundary.indexOf('queueFinalizedSpeech(input.speechText!)')).toBeGreaterThan(
+      terminalBoundary.indexOf('publishCommitted:'),
+    );
     expect(orchestratorCandidatePath).not.toContain('flushSentence(s)');
-    expect(orchestratorCandidatePath).toContain('flushSentence(voiceLeadIn)');
-    expect(orchestratorCandidatePath).toContain('shouldForwardPreFinalizationProgress(voiceLeadIn)');
+    expect(orchestratorCandidatePath).not.toContain('queueFinalizedSpeech(');
     expect(orchestratorCandidatePath).toContain('shouldForwardPreFinalizationProgress(msg)');
     expect(modelCandidatePath).not.toContain('flushSentence(');
-    expect(voice.slice(finalizerStart, finalSpeechStart + 80)).not.toContain('modelGateSnapshot');
+    expect(modelCandidatePath).not.toContain('queueFinalizedSpeech(');
+    expect(finalCommitPath).toContain('speechText: responseText');
+    expect(voice.slice(finalizerStart, finalCommitStart + 1_000)).not.toContain('modelGateSnapshot');
   });
 
   it('quarantines blocked early-return socket responses from history and learning', () => {
@@ -207,18 +247,24 @@ describe('finalized output paths', () => {
     expect(chat).toContain("cognitiveIntent: finalResponse.blocked ? 'work_product_guard' : cognition.intent.category");
     expect(chat).toContain('if (!finalResponse.blocked) {');
 
-    for (const finalized of [
-      'finalizedRecentAction',
-      'finalizedWorkflow',
-      'finalizedMode',
-      'quickFinalized',
-      'confirmedFinal',
+    for (const [finalized, committed] of [
+      ['finalizedRecentAction', 'recentActionCommitted'],
+      ['finalizedWorkflow', 'workflowCommitted'],
+      ['finalizedMode', 'modeCommitted'],
+      ['quickFinalized', 'quickCommitted'],
+      ['confirmedFinal', 'confirmationCommitted'],
     ]) {
       expect(voice).toContain(`cognitiveIntent: ${finalized}.blocked ? 'work_product_guard' :`);
-      expect(voice).toContain(`if (!${finalized}.blocked) {`);
+      expect(voice).toContain(`if (${committed} && !${finalized}.blocked) {`);
     }
     expect(voice.match(/cognitiveIntent: directFinal\.blocked \? 'work_product_guard' :/g)).toHaveLength(3);
-    expect(voice.match(/if \(!directFinal\.blocked\) \{/g)).toHaveLength(3);
+    for (const committed of [
+      'messagingReadCommitted',
+      'messagingSendCommitted',
+      'cognitionCommitted',
+    ]) {
+      expect(voice).toContain(`if (${committed} && !directFinal.blocked) {`);
+    }
   });
 
   it('keeps named workflow regex shortcuts out of main chat', () => {
@@ -240,7 +286,9 @@ describe('finalized output paths', () => {
     expect(workflowPath).toContain('const finalizedWorkflowSpeech = finalizedWorkflow.blocked || !workflowSpeechSummary');
     expect(workflowPath).toContain('const workflowSpeechText = finalizedWorkflowSpeech.blocked');
     expect(workflowPath).toContain('? responseText');
-    expect(workflowPath).toContain('queueFinalizedSpeech(workflowSpeechText)');
+    expect(workflowPath).toContain('const workflowCommitted = await commitVoiceTerminal({');
+    expect(workflowPath).toContain('speechText: workflowSpeechText');
+    expect(workflowPath).not.toContain('queueFinalizedSpeech(');
   });
 
   it('keeps chat on one canonical route with the shared capability policy and finalizer', () => {
@@ -312,8 +360,17 @@ describe('finalized output paths', () => {
     expect(voice).toContain("from \"../conversation/summary_scheduler\"");
     expect(chat).toContain('scheduleChatSummary(conversationId)');
     expect(voice).toContain('const persistVoiceAssistantMessage = (');
-    expect(voice).toContain('scheduleVoiceSummary(conversationId)');
-    expect(voice.match(/persistVoiceAssistantMessage\([^)]*\.id/g)?.length || 0).toBeGreaterThanOrEqual(10);
+    const terminalBoundaryStart = voice.indexOf('const commitVoiceTerminal = async');
+    const terminalBoundaryEnd = voice.indexOf('const maxIterations =', terminalBoundaryStart);
+    const terminalBoundary = voice.slice(terminalBoundaryStart, terminalBoundaryEnd);
+    expect(voice.match(/await commitVoiceTerminal\(\{/g)?.length || 0).toBeGreaterThanOrEqual(13);
+    expect(terminalBoundary).toContain('persistVoiceAssistantMessage(');
+    expect(terminalBoundary).toContain('recordChatExecutionTerminalEventDurably(');
+    expect(terminalBoundary).toContain('publishCommitted:');
+    expect(terminalBoundary).toContain('scheduleVoiceSummary(conversationTurn.conversation.id)');
+    expect(terminalBoundary.indexOf('scheduleVoiceSummary(conversationTurn.conversation.id)')).toBeGreaterThan(
+      terminalBoundary.indexOf('publishCommitted:'),
+    );
     expect(ambient).toContain('Auto-summary eligible for conversation');
     expect(ambient).not.toContain('Triggered auto-summary');
   });

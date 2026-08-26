@@ -51,7 +51,7 @@ async function sampleHttp(url: string, timeoutMs: number) {
       method: 'GET',
       redirect: 'follow',
       signal: controller.signal,
-      headers: { 'user-agent': 'LumiOS-Network-Diagnostic/1.0' },
+      headers: { 'user-agent': 'LumiCore-Network-Diagnostic/1.0' },
     });
     try { await response.body?.cancel(); } catch {}
     return {

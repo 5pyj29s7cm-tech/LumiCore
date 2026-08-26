@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { Send, Loader2, ArrowLeft, Ghost, Zap, Cpu, Sparkles, FileText, Mic, CheckCircle2, Square, ChevronDown, ChevronRight, XCircle, Copy, Check, Paperclip, Image as ImageIcon, MessageCircle, Briefcase, User, ExternalLink, FolderOpen, Upload, Plus, History, CalendarClock } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -71,6 +71,10 @@ import {
   upsertPersistedPendingChatExecution,
   type PersistedPendingChatExecution,
 } from '@/lib/chatEventReceipts';
+import {
+  ChatTaskRelationLedger,
+  type ServerTaskRelationEvent,
+} from '@/lib/chatTaskRelations';
 import { useFocusThreads } from '@/hooks/useFocusThreads';
 import { CommandCenterPanel } from './CommandCenterPanel';
 import type { CommandCenterView } from './commandCenterTypes';
@@ -447,6 +451,7 @@ export function AgentChatPage({
   /** Desktop command center reuses the shell's single microphone session. */
   voiceSession?: AgentChatVoiceSession;
 }) {
+  const prefersReducedMotion = useReducedMotion();
   const [messages, setMessages] = useState<any[]>([]);
   const isOfficeCommandCenter = layout === 'command-center' && (commandCenterView === 'office' || commandCenterView === 'team');
   const isCommandCenterUtility = layout === 'command-center' && !isOfficeCommandCenter;
@@ -770,6 +775,7 @@ export function AgentChatPage({
   const activeChatViewDetachersRef = useRef(new Set<() => void>());
   const terminalReceiptsRef = useRef(new ChatTerminalReceiptLedger());
   const chatRequestLedgerRef = useRef(new ChatRequestLedger());
+  const taskRelationLedgerRef = useRef(new ChatTaskRelationLedger());
   const chatTurnTimerGuardRef = useRef(new ChatTurnTimerGuard());
   const chatTurnUiMetaRef = useRef(new Map<string, ChatTurnUiMeta>());
   const conversationHistoryRef = useRef<HTMLDivElement>(null);
@@ -1569,6 +1575,11 @@ export function AgentChatPage({
       acceptChatExecutionEvent(data)
     );
 
+    const recordTaskRelation = (data?: ServerTaskRelationEvent) => {
+      if (!data) return;
+      taskRelationLedgerRef.current.record(data);
+    };
+
     const onProactive = (data: {
       message: string;
       timestamp: string;
@@ -1620,8 +1631,9 @@ export function AgentChatPage({
       }
     };
 
-    const onTool = (data: { correlationId?: string; name: string; args?: any; arguments?: any; result?: string; error?: string; requestId?: string; source?: string; conversationId?: string }) => {
+    const onTool = (data: { correlationId?: string; name: string; args?: any; arguments?: any; result?: string; error?: string; requestId?: string; source?: string; conversationId?: string; taskRelation?: unknown }) => {
       if (!isCurrentChatEvent(data)) return;
+      recordTaskRelation(data);
       const requestId = String(data.requestId || '').trim();
       const args = data.arguments ?? data.args;
       const phase = data.error !== undefined ? 'error' : data.result !== undefined ? 'result' : 'start';
@@ -1692,8 +1704,10 @@ export function AgentChatPage({
       blocked?: boolean;
       reason?: string;
       sidecar?: boolean;
+      taskRelation?: unknown;
     }) => {
       if (!isCurrentChatEvent(data)) return;
+      recordTaskRelation(data);
       if (!terminalReceiptsRef.current.claim(data)) return;
       const requestId = String(data.requestId || '').trim();
       const turnMeta = chatTurnUiMetaRef.current.get(requestId);
@@ -1793,8 +1807,9 @@ export function AgentChatPage({
       // Auto-speak disabled
     };
 
-    const onStatus = (data: { status: string; requestId?: string; source?: string; conversationId?: string }) => {
+    const onStatus = (data: { status: string; requestId?: string; source?: string; conversationId?: string; taskRelation?: unknown }) => {
       if (!isCurrentChatEvent(data)) return;
+      recordTaskRelation(data);
       const activeStatus = ['queued', 'replacing', 'acknowledged', 'planning', 'thinking', 'responding', 'executing', 'waiting_confirmation', 'cancelling'].includes(data.status);
       const terminalStatus = isTerminalAgentStatus(data.status);
       const terminalTracking = terminalStatus
@@ -1902,6 +1917,18 @@ export function AgentChatPage({
           source: 'error',
         }];
       });
+    };
+
+    const onTaskRelation = (data: ServerTaskRelationEvent) => {
+      const eventSource = String(data?.source || '').trim();
+      const eventConversationId = String(data?.conversationId || '').trim();
+      const currentConversationId = attachmentConversationIdRef.current;
+      if (eventSource && eventSource !== chatExecutionSource) return;
+      if (currentConversationId && eventConversationId && eventConversationId !== currentConversationId) return;
+      if (!currentConversationId && eventConversationId) {
+        bindAttachmentContextToConversation(eventConversationId, { carryCurrent: true });
+      }
+      recordTaskRelation(data);
     };
 
     // conversation_updated: only reload for non-text-chat channels (voice, etc.)
@@ -2020,6 +2047,7 @@ export function AgentChatPage({
     socket.on("agent:tool_call", onTool);
     socket.on("agent:response", onResponse);
     socket.on("agent:status", onStatus);
+    socket.on("agent:task_relation", onTaskRelation);
     socket.on("agent:error", onError);
     socket.on("chat:conversation_updated", onConversationUpdated);
 
@@ -2034,6 +2062,7 @@ export function AgentChatPage({
       socket.off("agent:tool_call", onTool);
       socket.off("agent:response", onResponse);
       socket.off("agent:status", onStatus);
+      socket.off("agent:task_relation", onTaskRelation);
       socket.off("agent:error", onError);
       socket.off("chat:conversation_updated", onConversationUpdated);
     };
@@ -2434,6 +2463,10 @@ export function AgentChatPage({
     if (outgoingAttachments.length > 0) rememberAttachmentContext(outgoingAttachments);
     setIsTyping(true);
     const { controlTargetRequestId } = chatRequestLedgerRef.current.begin(requestId);
+    const taskControlTarget = taskRelationLedgerRef.current.controlTarget({
+      conversationId: attachmentConversationIdRef.current,
+      foregroundRequestId: controlTargetRequestId,
+    });
     if (wasIdle) chatTurnTimerGuardRef.current.begin(requestId);
     activeChatRequestIdRef.current = chatRequestLedgerRef.current.foreground || requestId;
     textChatActiveRef.current = true;
@@ -2569,7 +2602,9 @@ export function AgentChatPage({
       source: chatExecutionSource,
       operationMode,
       requestId,
-      controlTargetRequestId: controlTargetRequestId || undefined,
+      controlTargetRequestId: taskControlTarget.controlTargetRequestId || undefined,
+      controlTargetTaskId: taskControlTarget.controlTargetTaskId,
+      controlTargetRevision: taskControlTarget.controlTargetRevision,
       conversationId: attachmentConversationIdRef.current || undefined,
     };
 
@@ -3106,10 +3141,12 @@ export function AgentChatPage({
         <motion.div
           data-lumi-rendered-surface={layout === 'command-center' ? 'command-center' : 'chat'}
           data-lumi-command-center-view={layout === 'command-center' ? commandCenterView : undefined}
-          initial={{ opacity: 0, y: 18, scale: 0.985 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 10, scale: 0.99 }}
-          transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
+          initial={prefersReducedMotion ? false : layout === 'command-center'
+            ? { opacity: 0, scale: 0.94, x: '-2.5%' }
+            : { opacity: 0, y: 18, scale: 0.985 }}
+          animate={{ opacity: 1, y: 0, scale: 1, x: 0 }}
+          exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: 10, scale: 0.99 }}
+          transition={{ duration: prefersReducedMotion ? 0 : 0.28, ease: [0.25, 0.1, 0.25, 1] }}
           className="lumi-chat-root lumi-below-topbar lumi-work-surface fixed inset-x-0 bottom-0 z-[90] flex flex-col"
           onDragEnter={handleChatDragOver}
           onDragOver={handleChatDragOver}
@@ -3328,9 +3365,10 @@ export function AgentChatPage({
 
         {isOfficeCommandCenter && (
           <motion.section
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 0.35 }}
+            data-command-center-cosmos-stage
+            initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.82, x: '-7%' }}
+            animate={{ opacity: 1, scale: 1, x: 0 }}
+            transition={{ duration: prefersReducedMotion ? 0 : 0.48, ease: [0.2, 0.75, 0.2, 1] }}
             className="lumi-command-center-office relative min-h-0 min-w-0 flex-1 overflow-hidden border-r border-white/[0.08]"
           >
             <div className="absolute inset-0">
@@ -3361,10 +3399,14 @@ export function AgentChatPage({
 
         {/* Chat Panel */}
         <>
-        <div
+        <motion.div
+          data-command-center-chat-rail={isOfficeCommandCenter ? 'true' : undefined}
+          initial={isOfficeCommandCenter && !prefersReducedMotion ? { opacity: 0, x: '100%' } : false}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ duration: prefersReducedMotion ? 0 : 0.46, ease: [0.2, 0.75, 0.2, 1], delay: isOfficeCommandCenter && !prefersReducedMotion ? 0.08 : 0 }}
           className={`lumi-chat-panel flex min-h-0 min-w-0 flex-col overflow-hidden ${
             isOfficeCommandCenter
-              ? 'lumi-command-center-chat-rail w-[clamp(420px,30vw,560px)] shrink-0 border-0 bg-[#070b12]'
+              ? 'lumi-command-center-chat-rail lumi-command-center-chat-rail--entering w-[clamp(420px,30vw,560px)] shrink-0 border-0 bg-[#070b12]'
               : 'glass flex-1 rounded-[2.5rem] border shadow-2xl md:rounded-[3rem]'
           }`}
           style={isOfficeCommandCenter ? { ...chatPanelStyle, boxShadow: 'none' } : chatPanelStyle}
@@ -3925,7 +3967,7 @@ export function AgentChatPage({
               )}
             </form>
           </div>
-        </div>
+        </motion.div>
         </>
 
         {/* Command Center or standalone chat information */}

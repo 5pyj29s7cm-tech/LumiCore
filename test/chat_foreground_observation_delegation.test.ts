@@ -86,6 +86,9 @@ describe('chat foreground desktop observation delegation gate', () => {
       ...Array.from({ length: 8 }, (_, index) => ({
         id: `foreground-worker-${suffix}-${index}`,
         name: `Foreground worker ${index}`,
+        category: 'general',
+        config: '{}',
+        createdAt: new Date().toISOString(),
         status: 'active',
         domain: 'personal',
         orgId: '',

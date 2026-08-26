@@ -1,8 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { executeToolCall, executeToolCallOrThrow } from '../server/tools/execution_engine';
 import { ToolRegistry } from '../server/tools/registry';
 import { toolRecordSucceeded } from '../server/cognition/task_execution_ledger';
 import { encodeToolResult } from '../server/tools/result_envelope';
+import { ToolLifecyclePersistenceError } from '../server/llm/adapter';
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function registryWithTool() {
   const registry = new ToolRegistry();
@@ -212,5 +217,172 @@ describe('unified tool execution engine', () => {
     expect(record.result).not.toContain('LUMI_TOOL_RECEIPT');
     expect(record.receipt).toEqual({ ok: true, status: 'updated', persisted: true });
     expect(record.terminalVerification?.status).toBe('verified');
+  });
+
+  it('never retries a timed-out read while its original pinned handler is still pending', async () => {
+    vi.useFakeTimers();
+    const registry = new ToolRegistry();
+    let rejectFirst!: (error: Error) => void;
+    const handler = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_resolve, reject) => {
+        rejectFirst = reject;
+      }))
+      .mockResolvedValueOnce(JSON.stringify({ ok: true, status: 'observed' }));
+    registry.register({
+      name: 'mcp_registry_timeout_read_test',
+      description: 'Read-only timeout fence integration test.',
+      parameters: { type: 'object', properties: {}, required: [] },
+      permission: 'public',
+      securityLevel: 'safe',
+      capability: {
+        id: 'test.registry.timeout.read',
+        family: 'test',
+        lane: 'knowledge',
+        operation: 'observe',
+        risk: 'low',
+        sideEffects: [{ type: 'network_read', scope: 'test endpoint', reversible: true }],
+        verification: {
+          strategy: 'terminal_receipt',
+          required: true,
+          requiredFields: ['ok', 'status'],
+          requiredValues: { ok: true },
+          successStatuses: ['observed'],
+          successSignals: ['read receipt'],
+          limitations: [],
+        },
+      },
+      handler,
+    });
+
+    const execution = executeToolCall({ registry, name: 'mcp_registry_timeout_read_test' });
+    let settled = false;
+    void execution.finally(() => { settled = true; }).catch(() => {});
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+
+    rejectFirst(new Error('transport closed after cancellation'));
+    await vi.advanceTimersByTimeAsync(250);
+    const record = await execution;
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(record.adapterSettlements).toEqual([
+      expect.objectContaining({ attempt: 1, status: 'rejected', timedOut: true }),
+      expect.objectContaining({ attempt: 2, status: 'fulfilled', timedOut: false }),
+    ]);
+    expect(record.envelope?.status).toBe('verified_success');
+  });
+
+  it('keeps an explicitly idempotent local mutation fenced as unknown until its handler settles', async () => {
+    vi.useFakeTimers();
+    const registry = new ToolRegistry();
+    let rejectHandler!: (error: Error) => void;
+    const handler = vi.fn(() => new Promise<string>((_resolve, reject) => {
+      rejectHandler = reject;
+    }));
+    registry.register({
+      name: 'local_mutation_timeout_fence_test',
+      description: 'Local mutation timeout fence integration test.',
+      parameters: {
+        type: 'object',
+        properties: { target: { type: 'string' } },
+        required: ['target'],
+      },
+      permission: 'public',
+      securityLevel: 'confirm',
+      capability: {
+        id: 'test.registry.timeout.local-mutation',
+        family: 'test',
+        lane: 'files',
+        operation: 'mutate',
+        risk: 'medium',
+        sideEffects: [{ type: 'local_state_change', scope: 'test state', reversible: true }],
+        verification: {
+          strategy: 'terminal_receipt',
+          required: true,
+          requiredFields: ['ok'],
+          requiredValues: { ok: true },
+          successSignals: ['mutation receipt'],
+          limitations: [],
+        },
+      },
+      handler,
+    });
+    const context = { userConfirmed: true, idempotencyKey: 'local-mutation-timeout-key' };
+
+    const args = { target: 'local-state-a' };
+    const first = registry.execute('local_mutation_timeout_fence_test', args, context);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(registry.execute(
+      'local_mutation_timeout_fence_test',
+      { target: 'local-state-b' },
+      context,
+    )).rejects.toThrow(/target mismatch.*idempotency key/i);
+    const duplicate = registry.execute('local_mutation_timeout_fence_test', args, context);
+    await Promise.resolve();
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    rejectHandler(new Error('local adapter cancelled'));
+    await expect(first).rejects.toMatchObject({
+      name: 'ToolHandlerSettledAfterTimeoutError',
+      toolExecutionTimedOut: true,
+      handlerSettlement: 'rejected',
+    });
+    await expect(duplicate).rejects.toMatchObject({
+      name: 'ToolHandlerSettledAfterTimeoutError',
+      handlerSettlement: 'rejected',
+    });
+    await expect(registry.execute('local_mutation_timeout_fence_test', args, context))
+      .rejects.toThrow(/unknown prior outcome.*automatic resend was stopped/i);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('directly propagates branded adapter-start persistence failures without manufacturing a record', async () => {
+    const { registry, handler } = registryWithTool();
+    const failure = new ToolLifecyclePersistenceError(new Error('durable adapter-start write failed'));
+
+    await expect(executeToolCall({
+      registry,
+      name: 'read_demo',
+      arguments: { target: 'desktop' },
+      context: { onAdapterStart: async () => { throw failure; } },
+    })).rejects.toBe(failure);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('directly propagates branded settlement persistence failures after the real handler settles', async () => {
+    const { registry, handler } = registryWithTool();
+    const failure = new ToolLifecyclePersistenceError(new Error('durable settlement write failed'));
+
+    await expect(executeToolCall({
+      registry,
+      name: 'read_demo',
+      arguments: { target: 'desktop' },
+      context: { onAdapterSettlement: async () => { throw failure; } },
+    })).rejects.toBe(failure);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let a provider handler spoof the lifecycle-persistence control path', async () => {
+    const registry = new ToolRegistry();
+    const spoof = new Error('provider failure');
+    spoof.name = 'ToolLifecyclePersistenceError';
+    registry.register({
+      name: 'read_lifecycle_name_spoof',
+      description: 'Provider error-name spoof test.',
+      parameters: { type: 'object', properties: {}, required: [] },
+      permission: 'public',
+      securityLevel: 'safe',
+      evidence: {
+        capability: 'test.lifecycle-name-spoof',
+        operation: 'observe',
+        assurance: 'observed',
+      },
+      handler: async () => { throw spoof; },
+    });
+
+    await expect(executeToolCall({ registry, name: 'read_lifecycle_name_spoof' }))
+      .resolves.toMatchObject({ error: 'provider failure' });
   });
 });

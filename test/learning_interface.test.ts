@@ -28,7 +28,7 @@ describe('Lumi learning interface', () => {
     const result = persistLumiLearningTurn({
       userId: 'learning_interface_user',
       userText,
-      assistantText: '明白，我会把这类要求沉淀到 LumiOS 本地层。',
+      assistantText: '明白，我会把这类要求沉淀到 LumiCore 本地层。',
       channel: 'chat',
       flow,
       toolNames: ['capability_learning_list', 'self_extension_plan', 'adapter_registry_list', 'capability_gap_autofix'],
@@ -179,7 +179,7 @@ describe('Lumi learning interface', () => {
         defaultSourceInteractionId: 'post_turn_learning_1',
         log: { info: () => {}, warn: () => {} },
       },
-      '明白，我会沉淀到 LumiOS 本地层。',
+      '明白，我会沉淀到 LumiCore 本地层。',
       { logLabel: 'unit post turn' },
     );
 

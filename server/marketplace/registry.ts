@@ -1,5 +1,5 @@
 /**
- * LumiOS Skill Marketplace Registry
+ * LumiCore Skill Marketplace Registry
  *
  * Dynamically discovers skills from:
  *   - Bundled skills in server/skills/bundled/

@@ -3,12 +3,32 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase, readDB } from '../db_layer';
 import {
   addMessage,
+  addMessageIdempotent,
   getConversationSummary,
   getOrCreateActiveConversation,
   getOrCreateConversationForTurn,
   prepareConversationActionExecution,
+  settleConversationActionExecutionRequest,
   setConversationSummary,
 } from '../server/conversation/manager';
+
+function persistActionTurn(input: {
+  conversationId: string;
+  userId: string;
+  userText: string;
+  requestId: string;
+}): string {
+  return addMessageIdempotent({
+    userId: input.userId,
+    agentId: 'lumi',
+    conversationId: input.conversationId,
+    role: 'user',
+    content: input.userText,
+    requestId: input.requestId,
+    deferActionPreparation: true,
+    domain: 'personal',
+  });
+}
 
 describe('conversation rollover', () => {
   beforeAll(async () => {
@@ -171,6 +191,12 @@ describe('conversation rollover', () => {
       userId,
       userText: '\u6253\u5f00\u8bb0\u4e8b\u672c',
       requestId: 'request-older',
+      userMessageId: persistActionTurn({
+        conversationId: conversation.id,
+        userId,
+        userText: '\u6253\u5f00\u8bb0\u4e8b\u672c',
+        requestId: 'request-older',
+      }),
       toolPolicy,
       forceTask: true,
     });
@@ -182,12 +208,19 @@ describe('conversation rollover', () => {
       content: '\u6253\u5f00\u8bb0\u4e8b\u672c',
       requestId: 'request-older',
     });
+    settleConversationActionExecutionRequest(conversation.id, userId, 'request-older');
 
     const newer = prepareConversationActionExecution({
       conversationId: conversation.id,
       userId,
       userText: '\u6253\u5f00\u8ba1\u7b97\u5668',
       requestId: 'request-newer',
+      userMessageId: persistActionTurn({
+        conversationId: conversation.id,
+        userId,
+        userText: '\u6253\u5f00\u8ba1\u7b97\u5668',
+        requestId: 'request-newer',
+      }),
       toolPolicy,
       forceTask: true,
       forceNewTask: true,

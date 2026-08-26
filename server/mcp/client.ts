@@ -13,6 +13,10 @@ import { exec, execFile } from 'child_process';
 import { getDataPath } from '../config/data_path';
 import { loadKeys } from '../config/keys';
 import { runRuntimeCapabilityCleanup } from './runtime_cleanup';
+import {
+  mayReceiveMcpHealthUpdate,
+  projectMcpServerHealth,
+} from './public_security';
 import type {
   CapabilityLane,
   CapabilityMode,
@@ -1392,6 +1396,8 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
       throw new Error(`MCP server "${name}": must provide "url" for http/ws transport or "command" for stdio transport`);
     }
 
+    // Stable MCP initialize identity: changing it would alter protocol-visible
+    // client attribution for already configured third-party servers.
     const client = new Client(
       { name: 'lumiOS-mcp-client', version: '2.0' },
       { capabilities: {} },
@@ -1663,8 +1669,13 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
   }
 
   private broadcastHealth(): void {
-    if (this.ioRef) {
-      this.ioRef.emit('mcp:health_update', { servers: this.getServerHealth() });
+    const sockets = this.ioRef?.sockets?.sockets;
+    if (!sockets || typeof sockets.values !== 'function') return;
+    const payload = { servers: projectMcpServerHealth(this.getServerHealth()) };
+    for (const socket of sockets.values()) {
+      if (mayReceiveMcpHealthUpdate(socket?.data)) {
+        socket.emit('mcp:health_update', payload);
+      }
     }
   }
 

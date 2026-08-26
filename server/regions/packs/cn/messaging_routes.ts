@@ -42,7 +42,7 @@ import * as LegalCases from '../../../org/legal_cases';
 import { handleRemoteLegalNoticeIntake } from './legal_notice_intake';
 import { getUserPreferredLLMConfig } from '../../../llm/user_preferences';
 import {
-  addMessage,
+  addMessageIdempotent,
   getConversationActionStatus,
   getConversationModelExecutionRecovery,
   getMessagesByTokenBudget,
@@ -54,6 +54,7 @@ import {
   settleConversationActionExecutionRequest,
   setConversationActionExecutionStatus,
 } from '../../../conversation/manager';
+import { CN_TASK_EXECUTION_MESSAGES } from './voice_fast_path_messages';
 import { acceptMessageOnce, completeMessageDelivery, releaseMessageDelivery } from '../../../messaging/delivery_ledger';
 import {
   recordMessagingIngress,
@@ -62,6 +63,7 @@ import {
 import { applyRemoteAttachmentContext } from '../../../messaging/attachment_context';
 import { runWithTools } from '../../../llm/adapter';
 import { makeLLMCall, type NormalizedMessage } from '../../../llm/providers';
+import { resolveModelRequestInputBudget } from '../../../llm/request_context_budget';
 import { toolRegistry } from '../../../tools/registry';
 import { executeToolCall } from '../../../tools/execution_engine';
 import type { ToolExecutionRecord } from '../../../tools/types';
@@ -85,7 +87,7 @@ import { buildLumiOperatingKernelPrompt } from '../../../cognition/operating_ker
 import { getStoredOperationMode, saveStoredOperationMode } from '../../../cognition/operation_mode_store';
 import { isPureOperationModeSwitchRequest, type OperationMode } from '../../../cognition/operation_modes';
 import { formatOperationModeSwitchResponse } from '../../../i18n/operation_mode_messages';
-import { formatClientSelfPrompt } from '../../../client/self_model';
+import { formatClientSelfPromptForTurn } from '../../../client/self_model';
 import { buildResponseLanguageInstruction } from '../../../utils/language';
 import { canAutoApproveAction } from '../../../tools/action_constitution';
 import {
@@ -147,6 +149,7 @@ export interface MessagingConversationUpdate {
   conversationId: string;
   agentId: string;
   source: string;
+  messageId: string;
 }
 
 export interface IncomingMessageTransport {
@@ -372,7 +375,9 @@ export function persistBoundMessagingMessage(
   const domain = message.boundOrgId ? 'work' as const : 'personal' as const;
   const orgId = message.boundOrgId || '';
   const conversation = getOrCreateActiveConversation(message.boundUserId, agentId, domain, orgId);
-  addMessage({
+  const source = `${message.platform}_bot`;
+  const requestId = `${source}:${message.messageId}`;
+  const messageId = addMessageIdempotent({
     userId: message.boundUserId,
     agentId,
     conversationId: conversation.id,
@@ -380,11 +385,12 @@ export function persistBoundMessagingMessage(
     content,
     domain,
     orgId,
-    source: `${message.platform}_bot`,
+    source,
     channel: message.platform,
     externalMessageId: message.messageId,
     routeSequence: message.routeSequence,
     receivedAt: message.receivedAt,
+    requestId,
     toolCalls: toolCalls?.length ? toolCalls : undefined,
     // Remote ingress persists before routing so attachment download/queueing
     // cannot lose the accepted turn. The shared executor creates the real task
@@ -398,7 +404,8 @@ export function persistBoundMessagingMessage(
     orgId,
     conversationId: conversation.id,
     agentId,
-    source: `${message.platform}_bot`,
+    source,
+    messageId,
   };
   onConversationUpdated?.(update);
   return update;
@@ -789,18 +796,19 @@ export function dispatchIncomingMessage(
         requestsOrganizationScope(getRequestText(boundMessage)),
       );
       const scopedBaseMessage = initialScope.message;
-      const userMessagePersisted = Boolean(scopedBaseMessage.boundUserId);
-      if (userMessagePersisted) {
-        persistBoundMessagingMessage(
+      const persistedUserMessage = scopedBaseMessage.boundUserId
+        ? persistBoundMessagingMessage(
           scopedBaseMessage,
           'user',
           getDisplayText(scopedBaseMessage),
           options?.onConversationUpdated,
-        );
-      }
+        )
+        : null;
+      const userMessagePersisted = Boolean(persistedUserMessage?.messageId);
       const routeBaseMessage: IncomingMessage = {
         ...scopedBaseMessage,
         userMessagePersisted,
+        userMessageId: persistedUserMessage?.messageId,
       };
       updateMessagingJournal(trackedMessage, {
         boundUserId: routeBaseMessage.boundUserId || '',
@@ -820,6 +828,7 @@ export function dispatchIncomingMessage(
           receivedAt: routeBaseMessage.receivedAt,
           routeSequence: routeBaseMessage.routeSequence,
           userMessagePersisted,
+          userMessageId: routeBaseMessage.userMessageId,
         });
         const deliverExchange = async (target: IncomingMessage, reply: string): Promise<void> => {
           const correlated = correlateMessagingReply(target, reply);
@@ -1589,8 +1598,18 @@ export async function processWithPersonality(
     }
   }
 
-  if (isIdentityBound && !msg.userMessagePersisted) {
-    persistBoundMessagingMessage(msg, 'user', getDisplayText(msg), options?.onConversationUpdated);
+  if (isIdentityBound && (!msg.userMessagePersisted || !msg.userMessageId)) {
+    const persistedUserMessage = persistBoundMessagingMessage(
+      msg,
+      'user',
+      getDisplayText(msg),
+      options?.onConversationUpdated,
+    );
+    msg = {
+      ...msg,
+      userMessagePersisted: Boolean(persistedUserMessage?.messageId),
+      userMessageId: persistedUserMessage?.messageId,
+    };
     // The early persistence call owns a fresh DB transaction. Reload the
     // conversation so continuation/status planning sees the exact durable
     // pointer that was accepted with this remote message.
@@ -1702,12 +1721,25 @@ export async function processWithPersonality(
         userId: effectiveUserId,
         userText: requestText,
         requestId,
+        userMessageId: msg.userMessageId || '',
         toolPolicy: modelToolPolicy,
         forceResume: Boolean(pendingConfirmation || actionFollowupIntent === 'execute'),
         forceTask: executionPlan.capabilityPlan.taskLedgerRequired
           || (isOrganizationBound && requestsOrganizationScope(requestText)),
       })
     : { state: null, kind: 'conversation' as const };
+  if ('bindingFailure' in actionTaskExecution) {
+    const staleText = actionTaskExecution.bindingFailure === 'busy'
+      ? CN_TASK_EXECUTION_MESSAGES.actionTurnBusy
+      : CN_TASK_EXECUTION_MESSAGES.actionTurnStale;
+    persistBoundMessagingMessage(
+      msg,
+      'assistant',
+      staleText,
+      options?.onConversationUpdated,
+    );
+    return staleText;
+  }
   if (conversation && actionTaskExecution.state?.taskId) {
     executionPlan.executionPlan = bindCapabilityExecutionPlanTask(
       executionPlan.executionPlan,
@@ -1858,7 +1890,7 @@ export async function processWithPersonality(
     if (desktopExecutionPolicy.promptOverlay) {
       systemPrompt += `\n\n${desktopExecutionPolicy.promptOverlay}`;
     }
-    systemPrompt += `\n\n${formatClientSelfPrompt(effectiveUserId, { domain, orgId })}`;
+    systemPrompt += `\n\n${formatClientSelfPromptForTurn(effectiveUserId, routingText, { domain, orgId })}`;
   }
   systemPrompt += `\n\n${buildLumiOperatingKernelPrompt({ channel: 'chat', flow: turnFlow })}`;
   systemPrompt += '\n\nRemote continuity rule: prior assistant statements about installed tool counts, missing desktop access, or mode availability are conversational history, not runtime evidence. Use the current capability map, client state, scoped relay, and actual tool results as the source of truth.';
@@ -1872,7 +1904,10 @@ export async function processWithPersonality(
   if (pendingConfirmationPrompt) systemPrompt += `\n\n${pendingConfirmationPrompt}`;
   systemPrompt += `\n\n${buildResponseLanguageInstruction(requestText)}`;
 
-  const userLLMPrefs = getUserPreferredLLMConfig(effectiveUserId, { domain, orgId, maxTokens: 4096 });
+  const userLLMPrefs = {
+    ...getUserPreferredLLMConfig(effectiveUserId, { domain, orgId, maxTokens: 4096, source }),
+    inputTokenBudget: resolveModelRequestInputBudget(),
+  };
   const messages: NormalizedMessage[] = [
     { role: 'system', content: systemPrompt },
     ...conversationHistory.map(item => ({
@@ -2132,6 +2167,7 @@ export async function processWithPersonality(
         {
           ...orchestrationContext,
           resumeNodeReceipts: recovery?.receipts,
+          resumeExecutionGraph: recovery?.graph,
         },
         {
           ...userLLMPrefs,

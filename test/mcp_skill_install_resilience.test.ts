@@ -33,7 +33,7 @@ async function importClientWithExec(
 ) {
   vi.resetModules();
   tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_mcp_install_'));
-  process.env.LUMI_DATA_DIR = path.join(tempHome, 'LumiOS');
+  process.env.LUMI_DATA_DIR = path.join(tempHome, 'LumiCore');
 
   vi.doMock('os', async () => {
     const actual = await vi.importActual<typeof import('os')>('os');

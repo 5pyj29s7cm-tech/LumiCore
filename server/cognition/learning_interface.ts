@@ -7,6 +7,7 @@ import {
 } from '../self_extension/capability_memory';
 import type { ToolExecutionRecord } from '../tools/types';
 import { CN_DURABLE_EXECUTION_MESSAGES } from '../i18n/durable_execution_messages';
+import { CN_LEARNING_INTERFACE_MESSAGES } from '../regions/packs/cn/learning_interface_messages';
 import type { LumiTurnFlow } from './turn_flow';
 
 export type LumiLearningChannel = 'chat' | 'voice' | 'task' | 'workflow';
@@ -91,7 +92,7 @@ function routeForLearningGoal(text: string, toolNames: string[]): CapabilityRout
       preferredTools,
       fallbackTools: ['capability_gap_autofix'].filter(name => hasTool(toolNames, name)),
       avoid: ['不要把大模型当作长期记忆本体', '不要让单次对话覆盖人格核心', '不要把换模型当作换了一个 Lumi'],
-      reason: '大模型只是本轮理解和推理接口；稳定人格、身体、记忆、任务和能力路线必须沉淀在 LumiOS 本地层。',
+      reason: CN_LEARNING_INTERFACE_MESSAGES.modelIndependentReason,
       confirmationRequired: ['修改人格核心、安装/修复技能、连接第三方服务、执行外部自动化前需要确认'],
     };
   }
@@ -146,7 +147,7 @@ function memoryCandidatesFor(text: string): LumiLearningTurnPlan['memoryCandidat
   if (MODEL_INTERFACE_RE.test(text)) {
     candidates.push({
       type: 'knowledge',
-      content: '用户要求 Lumi 将大模型视为可替换的理解和推理接口；稳定人格、身体、记忆、任务和能力路线必须沉淀在 LumiOS 本地系统中，不能因为换模型而遗忘。',
+      content: CN_LEARNING_INTERFACE_MESSAGES.modelIndependentMemory,
       keywords: ['Lumi', '大模型', '学习接口', '换模型', '人格核心', '能力沉淀'],
       confidence: 0.88,
     });
@@ -254,7 +255,7 @@ export function persistLumiLearningTurn(input: LumiLearningTurnInput): LumiLearn
           triggerHints: unique([candidate.goal, '人格核心', '学习接口', '换模型不遗忘', '自然自治', '身体认知']).slice(0, 10),
           preferredTools: candidate.route.preferredTools,
           firstStep: candidate.route.preferredTools[0] || 'self_extension_plan',
-          reportRule: '先复用 LumiOS 本地人格、记忆、任务、技能和能力路线；只汇报已验证结果、阻塞和下一步确认。',
+          reportRule: CN_LEARNING_INTERFACE_MESSAGES.reportRule,
         },
         experiment: {
           status: 'prepared',
@@ -278,7 +279,7 @@ export function persistLumiLearningTurn(input: LumiLearningTurnInput): LumiLearn
         safety: unique([
           ...candidate.route.confirmationRequired,
           ...candidate.route.avoid,
-          '大模型输出不是永久记忆；长期学习必须写入 LumiOS 本地层。',
+          CN_LEARNING_INTERFACE_MESSAGES.durableLearningRule,
         ]),
       });
     } catch (err: any) {

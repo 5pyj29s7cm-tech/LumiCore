@@ -6,7 +6,10 @@ import { getMemoryFirewallPolicy } from '../memory/firewall';
 import { getAdapterRegistry } from '../adapters/registry';
 import { formatLumiConstitutionForPrompt } from '../personality/constitution';
 import { getActionConstitutionPolicy } from '../tools/action_constitution';
-import { formatDesktopAwarenessForPrompt } from './desktop_awareness';
+import {
+  formatComputerCapabilityProfileForPrompt,
+  formatDesktopAwarenessForPrompt,
+} from './desktop_awareness';
 import {
   isCapabilityLearningRecordVerified,
   listCapabilityLearningRecords,
@@ -262,7 +265,7 @@ export interface SelfModelSnapshot {
   factDigest: string;
   identity: {
     name: 'Lumi';
-    product: 'LumiOS';
+    product: 'LumiCore';
     deployment: 'private_user_directed_agent';
     continuity: 'single_identity_across_surfaces';
   };
@@ -398,7 +401,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Nexus / central world view',
     kind: 'workspace',
     actions: ['open_nexus', 'close_nexus'],
-    notes: 'The large central world view inside LumiOS. It is a client-native viewMode, not an external website.',
+    notes: 'The large central world view inside LumiCore. It is a client-native viewMode, not an external website.',
     stateKeys: ['viewMode', 'surfaces.nexusOpen'],
   },
   {
@@ -1623,7 +1626,7 @@ export function getSelfModelSnapshot(
     schemaVersion: 1,
     identity: {
       name: 'Lumi',
-      product: 'LumiOS',
+      product: 'LumiCore',
       deployment: 'private_user_directed_agent',
       continuity: 'single_identity_across_surfaces',
     },
@@ -1694,7 +1697,19 @@ export function getSelfModelSnapshot(
       ...(awareness.level === 'live' ? [] : ['Live client state is unavailable or stale, so present-moment desktop claims require refresh.']),
     ],
   };
-  const factDigest = crypto.createHash('sha256').update(JSON.stringify(snapshotCore)).digest('hex');
+  // `stateAgeSeconds` is derived from wall-clock time rather than a changed
+  // client fact. Excluding that ticking value keeps the same observed client
+  // snapshot addressable across adjacent verbal/visible renderings while
+  // `sourceUpdatedAt`, awareness, and health still invalidate the digest when
+  // the underlying state or its freshness classification actually changes.
+  const digestCore = {
+    ...snapshotCore,
+    runtime: {
+      ...snapshotCore.runtime,
+      stateAgeSeconds: null,
+    },
+  };
+  const factDigest = crypto.createHash('sha256').update(JSON.stringify(digestCore)).digest('hex');
   return { ...snapshotCore, factDigest, generatedAt: new Date().toISOString() };
 }
 
@@ -1957,12 +1972,46 @@ export function formatCompactClientSelfPrompt(
     `- Connected capabilities: tools=${snapshot.connectedCapabilities.tools}; skills=${snapshot.connectedCapabilities.skills}; mcp=${snapshot.connectedCapabilities.mcp}; adaptersReady=${snapshot.connectedCapabilities.adaptersReady}; adaptersAttention=${snapshot.connectedCapabilities.adaptersAttention}`,
     configuredModels.length ? `- Configured models: ${configuredModels.join('; ')}` : '- Configured models: none reported.',
     `- Knowledge: total=${snapshot.knowledgeCoverage.totalFiles}; indexed=${snapshot.knowledgeCoverage.indexedFiles}; verified=${snapshot.knowledgeCoverage.verifiedFiles}; status=${snapshot.knowledgeCoverage.verification}`,
+    isWork
+      ? '- Personalized host-computer exploration is not organization context.'
+      : formatComputerCapabilityProfileForPrompt(userId),
     snapshot.runtime.refreshRequired && snapshot.runtime.refreshAction
       ? `- Refresh required before present-tense client claims: ${snapshot.runtime.refreshAction}.`
       : '- Current client facts may be used for this turn; refresh after an action before claiming the new state.',
     '- For a Lumi UI change, use client_get_state when needed, call client_action, and trust only its verification status. Preserve failures and retries in the receipt chain.',
     '- A routed turn manifest is not the global capability inventory. Use client_capability_manifest for an explicit inventory request.',
   ].filter(Boolean).join('\n');
+}
+
+/**
+ * The complete client self-model is a diagnostic manual, not ordinary turn
+ * context. Only an explicit request to inspect Lumi's own runtime/capability
+ * surface may opt into it; generic questions and diagnostics about the user's
+ * files, network, business, or another application stay on the live compact
+ * facts prompt.
+ */
+export function shouldUseFullClientSelfPrompt(userText: string): boolean {
+  const text = String(userText || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
+  if (!text) return false;
+  // i18n-allow -- bilingual self-audit target recognition; not user-visible copy.
+  const lumiTarget = /(?:\blumi\b|客户端|主程序|桌面端|运行时|任务调度|多\s*agent|智能体|模型路由|能力(?:清单|矩阵)|工具(?:清单|登记)|适配器|接口|权限边界|client|runtime|orchestrat|capabilit|tool registry|adapter|permission)/i;
+  // i18n-allow -- bilingual diagnostic-intent recognition; not user-visible copy.
+  const diagnosticAction = /(?:全面|完整|整体|逐项|仔细)?\s*(?:审计|诊断|自检|体检|排查|核实|检查)|(?:audit|diagnos(?:e|is|tic)?|self[- ]?check|health check|inspect|troubleshoot|verify)\b/i;
+  // i18n-allow -- bilingual exhaustive-inventory recognition; not user-visible copy.
+  const exhaustiveInventory = /(?:全部|所有|完整|逐项).{0,24}(?:能力|工具|接口|适配器|权限|运行状态|故障转移|capabilit|tools?|interfaces?|adapters?|permissions?).{0,24}(?:清单|矩阵|状态|情况|列出|核实|检查|list|inventory|status)?/i;
+  return (lumiTarget.test(text) && diagnosticAction.test(text))
+    || (lumiTarget.test(text) && exhaustiveInventory.test(text));
+}
+
+/** Shared prompt selector for chat, task, and authenticated messaging turns. */
+export function formatClientSelfPromptForTurn(
+  userId: string,
+  userText: string,
+  scope: { domain?: 'personal' | 'work'; orgId?: string } = { domain: 'personal', orgId: '' },
+): string {
+  return shouldUseFullClientSelfPrompt(userText)
+    ? formatClientSelfPrompt(userId, scope)
+    : formatCompactClientSelfPrompt(userId, scope);
 }
 
 export function formatClientSelfPrompt(
@@ -2004,7 +2053,7 @@ export function formatClientSelfPrompt(
   const adapterRegistry = getAdapterRegistry({ userId, clientState: state as Record<string, any> | null });
   const desktopAwareness = isWork
     ? '### Organization Desktop Boundary\nThe server-host exploration profile and the member\'s personal desktop snapshot are not organization knowledge. Use only the verified live organization client state above and refresh the authenticated member desktop through relay tools when the task requires it.'
-    : formatDesktopAwarenessForPrompt();
+    : formatDesktopAwarenessForPrompt(userId);
   const learnedCapabilityLines = formatLearnedCapabilityRoutes(userId, {
     domain: isWork ? 'work' : 'personal',
     orgId: isWork ? String(scope.orgId || '') : '',
@@ -2097,7 +2146,7 @@ export function formatClientSelfPrompt(
       : `The self snapshot is live. Preserve fact digest ${selfSnapshot.factDigest} across chat, voice, task, and authorized remote wording; presentation style may differ but capability facts may not.`,
     isWork
       ? `You are the same Lumi operating in organization workspace ${scope.orgId} for the currently authenticated member. Apply the organization overlay and role permissions without changing the member's core Lumi identity or exposing any other member's personal data.`
-      : 'You are the user\'s continuous Lumi running inside the LumiOS desktop client. You are not a pure voice assistant and not a boxed chat bot. Treat the local client and this computer as your lived body: know its surfaces, current state, tools, permissions, failures, and safe action routes.',
+      : 'You are the user\'s continuous Lumi running inside the LumiCore desktop client. You are not a pure voice assistant and not a boxed chat bot. Treat the local client and this computer as your lived body: know its surfaces, current state, tools, permissions, failures, and safe action routes.',
     'Keep three maps separate and current: local machine (host, files, apps, processes), visible desktop (foreground window, screen/UI controls, cursor, logged-in sessions), and background runtime (client visibility, autostart, close-to-background, backend health, runtime log, confirmed autonomous workflows).',
     'Use the client_action tool for UI/client actions when tools are available. Do not pretend a window changed if you did not call the action or ask the user.',
     'A tool omitted by the current turn policy is not a missing capability. Never infer your global capability inventory from one routed preference list. In model-owned Chat, an explicit user-present task may receive the ordinary foreground Assistant manifest for that turn while the visible UI remains in Chat; the registered runtime, adapter, and health maps determine what is actually available.',

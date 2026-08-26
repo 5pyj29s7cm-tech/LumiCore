@@ -1,11 +1,11 @@
-# LumiOS Windows Deployment
+# LumiCore Windows Deployment
 # Run as Administrator for C:\Program Files install
 #   ./scripts/deploy-windows.ps1
 # Or for per-user install (no admin needed):
-#   ./scripts/deploy-windows.ps1 -InstallDir "$env:LOCALAPPDATA\LumiOS"
+#   ./scripts/deploy-windows.ps1 -InstallDir "$env:LOCALAPPDATA\LumiCore"
 
 param(
-  [string]$InstallDir = "$env:ProgramFiles\LumiOS"
+  [string]$InstallDir = "$env:ProgramFiles\LumiCore"
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,7 +13,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectDir = Resolve-Path "$ScriptDir\.."
 
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  LumiOS Deployment" -ForegroundColor Cyan
+Write-Host "  LumiCore Deployment" -ForegroundColor Cyan
 Write-Host "  Install: $InstallDir" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 
@@ -76,13 +76,13 @@ Write-Host "[5/6] Installing to $InstallDir..." -ForegroundColor Yellow
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
 # Copy exe
-$exeSrc = "$ProjectDir\src-tauri\target\release\lumi-os.exe"
+$exeSrc = "$ProjectDir\src-tauri\target\release\lumi-core.exe"
 if (-not (Test-Path $exeSrc)) {
-  Write-Host "ERROR: lumi-os.exe not found at $exeSrc" -ForegroundColor Red
+  Write-Host "ERROR: lumi-core.exe not found at $exeSrc" -ForegroundColor Red
   exit 1
 }
-Copy-Item $exeSrc "$InstallDir\lumi-os.exe" -Force
-Write-Host "  lumi-os.exe" -ForegroundColor Gray
+Copy-Item $exeSrc "$InstallDir\lumi-core.exe" -Force
+Write-Host "  lumi-core.exe" -ForegroundColor Gray
 
 # Copy WebView2Loader.dll (Windows only)
 $dllSrc = "$ProjectDir\src-tauri\target\release\WebView2Loader.dll"
@@ -117,14 +117,14 @@ Write-Host "  Installed." -ForegroundColor Green
 Write-Host "[6/6] Creating desktop shortcut..." -ForegroundColor Yellow
 
 $desktopPath = [Environment]::GetFolderPath("Desktop")
-$shortcutPath = "$desktopPath\Lumi OS.lnk"
+$shortcutPath = "$desktopPath\LumiCore.lnk"
 $WScriptShell = New-Object -ComObject WScript.Shell
 $Shortcut = $WScriptShell.CreateShortcut($shortcutPath)
-$Shortcut.TargetPath = "$InstallDir\lumi-os.exe"
+$Shortcut.TargetPath = "$InstallDir\lumi-core.exe"
 $Shortcut.WorkingDirectory = $InstallDir
-$Shortcut.Description = "Lumi OS - Personal AI"
-if (Test-Path "$InstallDir\lumi-os.exe") {
-  $Shortcut.IconLocation = "$InstallDir\lumi-os.exe,0"
+$Shortcut.Description = "LumiCore - Personal AI"
+if (Test-Path "$InstallDir\lumi-core.exe") {
+  $Shortcut.IconLocation = "$InstallDir\lumi-core.exe,0"
 }
 $Shortcut.Save()
 Write-Host "  Shortcut: $shortcutPath" -ForegroundColor Green
@@ -133,7 +133,7 @@ Pop-Location
 
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  Deployment complete!" -ForegroundColor Cyan
-Write-Host "  Data: $env:USERPROFILE\LumiOS\data\" -ForegroundColor Cyan
+Write-Host "  Data: $env:USERPROFILE\LumiCore\data\" -ForegroundColor Cyan
 Write-Host "  App:  $InstallDir\" -ForegroundColor Cyan
 Write-Host "  Desktop shortcut ready." -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan

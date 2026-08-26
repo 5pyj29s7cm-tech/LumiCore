@@ -1,12 +1,12 @@
 [package]
-name = "lumi-os"
-version = "3.0.3"
-description = "Lumi Virtual Node OS"
-authors = ["LumiOS"]
+name = "lumi-core"
+version = "3.1.0"
+description = "LumiCore local-first personal AI"
+authors = ["LumiCore"]
 edition = "2021"
 
 [lib]
-name = "lumi_os_lib"
+name = "lumi_core_lib"
 crate-type = ["lib", "staticlib"]
 
 [build-dependencies]

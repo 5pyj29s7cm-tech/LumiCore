@@ -14,8 +14,16 @@ import { guardCurrentAppToolCall, isRecoveredWpsCreateTask } from '../server/cog
 import { matchQuickCommand } from '../server/cognition/quick_commands';
 import { routeToolsForTurn } from '../server/cognition/tool_router';
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
-import { registerBackgroundTask, resetBackgroundTasksForTest } from '../server/agents/background_tasks';
+import {
+  claimBackgroundTask,
+  recordBackgroundTaskFailure,
+  registerBackgroundTask,
+  resetBackgroundTasksForTest,
+} from '../server/agents/background_tasks';
 import { cancelRuntimeWork, getRuntimeWorkSnapshot, pauseRuntimeWork, resumeRuntimeWork } from '../server/runtime/work_control';
+import { createWorkTakeoverTask } from '../server/work_takeover/tasks';
+import { registerRuntimeWorkTools } from '../server/tools/definitions/runtime_work_tools';
+import { ToolRegistry } from '../server/tools/registry';
 import type { ToolExecutionRecord } from '../server/tools/types';
 
 function declaration(name: string, description = name) {
@@ -70,6 +78,13 @@ describe('systemic runtime work control', () => {
     expect(getRuntimeWorkSnapshot(userId).activeCount).toBe(1);
     const result = cancelRuntimeWork({ userId, kinds: ['delegation'] });
     expect(result).toMatchObject({ ok: true, status: 'cancelled', matchedCount: 1, cancelledCount: 1 });
+    expect(result.items[0]).toMatchObject({
+      status: 'cancelled',
+      phase: 'cancelled',
+      cancellationRequested: true,
+      controls: { canPause: false, canResume: false, canCancel: false },
+      evidence: { terminal: true, verification: 'unverified', reasonCode: 'background_task_cancelled' },
+    });
     expect(getRuntimeWorkSnapshot(userId).activeCount).toBe(0);
     resetBackgroundTasksForTest();
   });
@@ -92,6 +107,279 @@ describe('systemic runtime work control', () => {
       resumedCount: 1,
     });
     expect(getRuntimeWorkSnapshot(userId)).toMatchObject({ status: 'active', activeCount: 1 });
+    resetBackgroundTasksForTest({ markHydrated: true });
+  });
+
+  it('fails exact controls when the requested runtime task does not exist', () => {
+    const input = {
+      userId: `runtime-work-missing-${Date.now()}-${Math.random()}`,
+      taskId: 'missing-task-id',
+      kinds: ['delegation'] as Array<'delegation'>,
+      scope: { domain: 'personal' as const },
+    };
+    expect(pauseRuntimeWork(input)).toMatchObject({
+      ok: false,
+      status: 'failed',
+      matchedCount: 0,
+      failedCount: 1,
+    });
+    expect(resumeRuntimeWork(input)).toMatchObject({
+      ok: false,
+      status: 'failed',
+      matchedCount: 0,
+      failedCount: 1,
+    });
+    expect(cancelRuntimeWork(input)).toMatchObject({
+      ok: false,
+      status: 'failed',
+      matchedCount: 0,
+      failedCount: 1,
+    });
+  });
+
+  it('rejects a work scope without an organization instead of reading personal work', () => {
+    resetBackgroundTasksForTest({ markHydrated: true });
+    const userId = `runtime-work-invalid-scope-${Date.now()}-${Math.random()}`;
+    const personal = registerBackgroundTask({
+      userId,
+      title: 'personal task must stay private',
+      prompt: 'test',
+      context: { domain: 'personal' },
+    });
+
+    const snapshot = getRuntimeWorkSnapshot(userId, ['delegation'], { domain: 'work' });
+    expect(snapshot).toMatchObject({
+      ok: false,
+      status: 'degraded',
+      degraded: true,
+      scope: { domain: 'work' },
+      diagnostics: [{ source: 'scope', code: 'runtime_work_invalid_scope' }],
+      items: [],
+    });
+    expect(cancelRuntimeWork({
+      userId,
+      taskId: personal.id,
+      kinds: ['delegation'],
+      scope: { domain: 'work' },
+    })).toMatchObject({ ok: false, status: 'failed', matchedCount: 0, failedCount: 1 });
+    expect(getRuntimeWorkSnapshot(userId, ['delegation'], { domain: 'personal' }).items)
+      .toEqual([expect.objectContaining({ id: personal.id })]);
+    resetBackgroundTasksForTest({ markHydrated: true });
+  });
+
+  it('preserves an invalid work scope at the runtime-tool boundary for diagnosis', async () => {
+    const registry = new ToolRegistry();
+    registerRuntimeWorkTools(registry);
+    const snapshot = JSON.parse(await registry.execute('runtime_work_status', {}, {
+      userId: `runtime-tool-invalid-scope-${Date.now()}-${Math.random()}`,
+      domain: 'work',
+    }));
+
+    expect(snapshot).toMatchObject({
+      ok: false,
+      status: 'degraded',
+      scope: { domain: 'work' },
+      diagnostics: [{ source: 'scope', code: 'runtime_work_invalid_scope' }],
+      items: [],
+    });
+  });
+
+  it('keeps bounded delivered and cancelled takeover history in the snapshot', () => {
+    const userId = `runtime-takeover-history-${Date.now()}-${Math.random()}`;
+    const active = createWorkTakeoverTask({
+      userId,
+      category: 'general_work',
+      title: 'active takeover',
+    });
+    const delivered = createWorkTakeoverTask({
+      userId,
+      category: 'general_work',
+      title: 'delivered takeover',
+      status: 'delivered',
+      metadata: {
+        workTakeoverVerification: {
+          passed: true,
+          status: 'verified',
+          checks: [{ passed: true }],
+        },
+      },
+    });
+    const cancelled = createWorkTakeoverTask({
+      userId,
+      category: 'general_work',
+      title: 'cancelled takeover',
+      status: 'cancelled',
+    });
+
+    const snapshot = getRuntimeWorkSnapshot(userId, ['takeover'], { domain: 'personal' });
+    expect(snapshot.items.map(item => item.id)).toEqual(expect.arrayContaining([
+      active.id,
+      delivered.id,
+      cancelled.id,
+    ]));
+    expect(snapshot.items.find(item => item.id === delivered.id)).toMatchObject({
+      phase: 'completed',
+      nextAction: '',
+      controls: { canPause: false, canResume: false, canCancel: false },
+    });
+    expect(snapshot.items.find(item => item.id === cancelled.id)).toMatchObject({
+      phase: 'cancelled',
+      nextAction: '',
+      controls: { canPause: false, canResume: false, canCancel: false },
+    });
+    expect(snapshot.items).toHaveLength(3);
+  });
+
+  it('projects an unverified delivered takeover as blocked attention, never completed idle', () => {
+    const userId = `runtime-takeover-unverified-${Date.now()}-${Math.random()}`;
+    const delivered = createWorkTakeoverTask({
+      userId,
+      category: 'general_work',
+      title: 'unverified delivered takeover',
+      status: 'delivered',
+      metadata: {
+        workTakeoverVerification: {
+          passed: false,
+          status: 'blocked',
+          checks: [{ passed: false }],
+        },
+      },
+    });
+
+    const snapshot = getRuntimeWorkSnapshot(userId, ['takeover'], { domain: 'personal' });
+    expect(snapshot).toMatchObject({ status: 'attention', activeCount: 0, blockedCount: 1 });
+    expect(snapshot.items.find(item => item.id === delivered.id)).toMatchObject({
+      phase: 'blocked',
+      blocker: expect.stringContaining('no verified terminal result'),
+      evidence: {
+        terminal: true,
+        verification: 'failed',
+        reasonCode: 'missing_verified_takeover_result',
+      },
+      completionFeedback: {
+        status: 'unknown',
+        incomplete: [expect.stringContaining('not verified complete')],
+      },
+    });
+  });
+
+  it('keeps blocked terminal work visible for diagnosis without making it active', () => {
+    resetBackgroundTasksForTest({ markHydrated: true });
+    const userId = 'runtime-work-blocked-test';
+    const task = registerBackgroundTask({ userId, title: 'blocked task', prompt: 'test' });
+    const claimed = claimBackgroundTask(task.id)!;
+    recordBackgroundTaskFailure(claimed.id, { error: 'permanent unrecoverable failure' }, claimed.leaseId);
+
+    const snapshot = getRuntimeWorkSnapshot(userId, ['delegation'], { domain: 'personal' });
+    expect(snapshot).toMatchObject({ status: 'attention', activeCount: 0, blockedCount: 1 });
+    expect(snapshot.items.find(item => item.id === task.id)).toMatchObject({
+      phase: 'failed',
+      nextAction: '',
+      controls: { canPause: false, canResume: false, canCancel: false },
+      evidence: { terminal: true, verification: 'failed' },
+    });
+    resetBackgroundTasksForTest({ markHydrated: true });
+  });
+
+  it('filters delegation scope before applying the bounded history window', () => {
+    resetBackgroundTasksForTest({ markHydrated: true });
+    const userId = `runtime-work-scope-window-${Date.now()}-${Math.random()}`;
+    const scoped = registerBackgroundTask({
+      userId,
+      title: 'older organization task',
+      prompt: 'test',
+      context: { domain: 'work', orgId: 'org-window' },
+    });
+    for (let index = 0; index < 55; index += 1) {
+      registerBackgroundTask({
+        userId,
+        title: `newer personal task ${index}`,
+        prompt: 'test',
+        context: { domain: 'personal' },
+      });
+    }
+
+    const snapshot = getRuntimeWorkSnapshot(
+      userId,
+      ['delegation'],
+      { domain: 'work', orgId: 'org-window' },
+    );
+    expect(snapshot.items.map(item => item.id)).toEqual([scoped.id]);
+    resetBackgroundTasksForTest({ markHydrated: true });
+  });
+
+  it('projects one scoped lifecycle with controls, progress, lineage, and evidence', () => {
+    resetBackgroundTasksForTest({ markHydrated: true });
+    const userId = 'runtime-work-lifecycle-test';
+    registerBackgroundTask({
+      userId,
+      title: 'personal task',
+      prompt: 'private payload must not be projected',
+      context: {
+        domain: 'personal',
+        conversationId: 'conversation-personal',
+        actionTaskId: 'action-personal',
+      },
+    });
+    registerBackgroundTask({
+      userId,
+      title: 'work task',
+      prompt: 'organization payload must not cross scope',
+      context: {
+        domain: 'work',
+        orgId: 'org-a',
+        conversationId: 'conversation-work',
+        actionTaskId: 'action-work',
+      },
+    });
+
+    const personal = getRuntimeWorkSnapshot(userId, ['delegation'], { domain: 'personal' });
+    expect(personal).toMatchObject({
+      ok: true,
+      status: 'active',
+      activeCount: 1,
+      pausedCount: 0,
+      blockedCount: 0,
+      scope: { domain: 'personal' },
+    });
+    expect(personal.items).toHaveLength(1);
+    expect(personal.items[0]).toMatchObject({
+      phase: 'queued',
+      conversationId: 'conversation-personal',
+      parentTaskId: 'action-personal',
+      controls: { canPause: true, canResume: false, canCancel: true },
+      evidence: { terminal: false, verification: 'pending' },
+      progress: { checkpoint: '', receiptCount: 0, toolCallCount: 0 },
+    });
+    expect(personal.items[0]).not.toHaveProperty('prompt');
+
+    const secretTask = registerBackgroundTask({
+      userId,
+      title: 'secret failure api_key=sk-title-secret-value',
+      prompt: 'test',
+      context: { domain: 'personal' },
+    });
+    const claimedSecretTask = claimBackgroundTask(secretTask.id)!;
+    recordBackgroundTaskFailure(claimedSecretTask.id, {
+      error: 'service unavailable; authorization: Bearer abcdefghijklmnop api_key=sk-super-secret-value',
+      toolRecords: [],
+    }, claimedSecretTask.leaseId);
+    const redacted = getRuntimeWorkSnapshot(userId, ['delegation'], { domain: 'personal' })
+      .items.find(item => item.id === secretTask.id);
+    expect(redacted?.blocker).not.toContain('abcdefghijklmnop');
+    expect(redacted?.blocker).not.toContain('sk-super-secret-value');
+    expect(redacted?.title).not.toContain('sk-title-secret-value');
+    expect(redacted?.blocker).toBe(
+      'Background task is blocked or failed. Inspect the local runtime logs before retrying.',
+    );
+    const publicPayload = JSON.stringify(redacted?.completionFeedback);
+    expect(publicPayload).not.toContain('sk-title-secret-value');
+    expect(publicPayload).not.toContain('sk-super-secret-value');
+    expect(publicPayload).toContain('[redacted]');
+
+    const work = getRuntimeWorkSnapshot(userId, ['delegation'], { domain: 'work', orgId: 'org-a' });
+    expect(work.items.map(item => item.title)).toEqual(['work task']);
+    expect(getRuntimeWorkSnapshot(userId, ['delegation'], { domain: 'work', orgId: 'org-b' }).items).toEqual([]);
     resetBackgroundTasksForTest({ markHydrated: true });
   });
 

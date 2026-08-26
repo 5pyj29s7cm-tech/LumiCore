@@ -220,7 +220,7 @@ function buildRequest(language?: string): Record<string, unknown> {
     user: {
       uid: 'lumi_user',
       platform: process.platform,
-      app_version: process.env.npm_package_version || '3.0.0',
+      app_version: process.env.npm_package_version || '3.1.0',
     },
     audio: {
       format: 'pcm',

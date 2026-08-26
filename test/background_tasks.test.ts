@@ -11,6 +11,7 @@ import {
   listBackgroundTasks,
   markBackgroundTaskRunning,
   recoverPersistedBackgroundTask,
+  recordBackgroundTaskFailure,
   registerBackgroundTask,
   requestCancelBackgroundTask,
   requestPauseBackgroundTask,
@@ -79,6 +80,28 @@ describe('background task registry', () => {
     const completed = completeBackgroundTask(created.id, 'Late success', verifiedReceipt(created.id));
     expect(completed?.status).toBe('cancelled');
     expect(getBackgroundTask(created.id, 'u1')?.resultPreview).toBeUndefined();
+  });
+
+  it('lets completion and failure finalizers honor pause/cancel after the lease state changes', () => {
+    for (const requested of ['paused', 'cancelled'] as const) {
+      for (const finalizer of ['complete', 'failure'] as const) {
+        const created = registerBackgroundTask({
+          id: `critical-${requested}-${finalizer}`,
+          userId: 'u1',
+          title: 'Critical settlement race',
+          prompt: 'Respect the latest user state',
+        });
+        const running = claimBackgroundTask(created.id, { leaseId: `lease-${requested}-${finalizer}` })!;
+        if (requested === 'paused') requestPauseBackgroundTask(created.id, 'u1');
+        else requestCancelBackgroundTask(created.id, 'u1');
+
+        const settled = finalizer === 'complete'
+          ? completeBackgroundTask(created.id, 'Late success', verifiedReceipt(created.id), running.leaseId)
+          : recordBackgroundTaskFailure(created.id, { error: 'Late worker failure' }, running.leaseId);
+
+        expect(settled?.status).toBe(requested);
+      }
+    }
   });
 
   it('rejects completion without a verified terminal receipt', () => {

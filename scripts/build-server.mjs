@@ -15,7 +15,7 @@ function git(args, fallback = 'development') {
 const sourceIdentity = computeSourceIdentity(process.cwd());
 const runtimeMeta = {
   schemaVersion: 1,
-  name: packageMeta.name || 'lumi-os',
+  name: packageMeta.name || 'lumi-core',
   version: packageMeta.version,
   buildId: process.env.LUMI_BUILD_ID || process.env.GIT_COMMIT || git(['rev-parse', 'HEAD']),
   sourceFingerprint: sourceIdentity.fingerprint,
@@ -25,7 +25,10 @@ const runtimeMeta = {
 };
 
 await build({
-  entryPoints: ['server.ts'],
+  // This entry migrates the legacy product data root before dynamically
+  // importing the application graph. Building server.ts directly would let
+  // top-level provider path resolution create the new root too early.
+  entryPoints: ['server/runtime/server_entry.ts'],
   bundle: true,
   platform: 'node',
   format: 'esm',
@@ -105,7 +108,7 @@ if (process.platform === 'win32') {
 }
 
 import('./server.mjs').catch(err => {
-  console.error('Failed to start Lumi OS server:', err);
+  console.error('Failed to start LumiCore server:', err);
   process.exit(1);
 });
 `);

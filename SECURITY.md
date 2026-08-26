@@ -8,7 +8,7 @@
 
 请不要在公开 Issue、Discussion、Pull Request 或聊天截图中披露漏洞细节、API Key、访问令牌、客户数据或可识别个人的信息。
 
-请发送邮件至 `3565286431@qq.com`，标题以 `[LumiOS Security]` 开头，并包含：
+请发送邮件至 `3565286431@qq.com`，标题以 `[LumiCore Security]` 开头，并包含：
 
 - 受影响版本或提交；
 - 影响范围和攻击前提；

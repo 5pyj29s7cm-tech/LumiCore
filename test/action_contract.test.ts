@@ -44,7 +44,7 @@ describe('Lumi action contract', () => {
   });
 
   it('keeps the field TXT creation request on the artifact contract despite a negated software clause', () => {
-    const contract = buildActionContract('在 C:\\Users\\Administrator\\Documents 创建 Lumi现场验收_晨星716.txt，写三行，重读核验，不外发，不开其他软件');
+    const contract = buildActionContract('在 C:\\Users\\test-user\\Documents 创建 Lumi现场验收_晨星716.txt，写三行，重读核验，不外发，不开其他软件');
     expect(contract.kind).toBe('artifact_work');
     expect(contract.preferredTools).toContain('write_file');
     expect(contract.verificationTools).toEqual(expect.arrayContaining([
@@ -59,9 +59,9 @@ describe('Lumi action contract', () => {
   });
 
   it('accepts a requested artifact readback only when it follows the write', () => {
-    const task = '在 C:\\Users\\Administrator\\Documents 创建 Lumi现场验收_晨星716.txt，写入后重读核验';
+    const task = '在 C:\\Users\\test-user\\Documents 创建 Lumi现场验收_晨星716.txt，写入后重读核验';
     const contract = buildActionContract(task);
-    const target = 'C:\\Users\\Administrator\\Documents\\Lumi现场验收_晨星716.txt';
+    const target = 'C:\\Users\\test-user\\Documents\\Lumi现场验收_晨星716.txt';
     const read = { name: 'extract_document_text', arguments: { filePath: target }, result: '三行内容' };
     const write = { name: 'write_file', arguments: { path: target }, result: `File written: ${target}` };
     expect(hasCoreActionEvidence(contract, [read, write], task)).toBe(false);
@@ -125,7 +125,7 @@ describe('Lumi action contract', () => {
   });
 
   it('does not treat the letters ai inside a local main path as an external AI surface', () => {
-    const text = '读取 D:\\lumiOS\\.codex-run\\acceptance-main\\customer-brief.txt，然后根据文件里的事实，在 D:\\lumiOS\\.codex-run\\acceptance-main\\customer-followup.md 创建中文跟进方案。这是本地文件任务，直接执行并验证文件。';
+    const text = '读取 D:\\LumiCore\\.codex-run\\acceptance-main\\customer-brief.txt，然后根据文件里的事实，在 D:\\LumiCore\\.codex-run\\acceptance-main\\customer-followup.md 创建中文跟进方案。这是本地文件任务，直接执行并验证文件。';
 
     expect(buildActionContract(text).kind).toBe('artifact_work');
   });
@@ -213,8 +213,8 @@ describe('Lumi action contract', () => {
       result: 'Pressed: ctrl+n',
     }, {
       name: 'write_file',
-      arguments: { path: 'D:\\lumiOS\\Lumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5.txt' },
-      result: 'File written: D:\\lumiOS\\Lumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5.txt',
+      arguments: { path: 'D:\\LumiCore\\Lumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5.txt' },
+      result: 'File written: D:\\LumiCore\\Lumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5.txt',
     }];
 
     const contract = buildActionContract(task);
@@ -297,7 +297,7 @@ describe('Lumi action contract', () => {
     const contract = buildActionContract(task);
     const failed = [{
       name: 'floorplan_extract_geometry',
-      arguments: { imagePath: 'C:\\Users\\Administrator\\Desktop\\\u8bbe\u8ba1\u8349\u7a3f.jpg' },
+      arguments: { imagePath: 'C:\\Users\\test-user\\Desktop\\\u8bbe\u8ba1\u8349\u7a3f.jpg' },
       result: JSON.stringify({
         parsed: false,
         failedStage: 'topology',
@@ -308,13 +308,13 @@ describe('Lumi action contract', () => {
     }];
     const verified = [{
       name: 'floorplan_extract_geometry',
-      arguments: { imagePath: 'C:\\Users\\Administrator\\Desktop\\\u8bbe\u8ba1\u8349\u7a3f.jpg' },
+      arguments: { imagePath: 'C:\\Users\\test-user\\Desktop\\\u8bbe\u8ba1\u8349\u7a3f.jpg' },
       result: JSON.stringify({
         parsed: true,
         geometryReady: true,
         geometryVerified: true,
         executableGeometryAvailable: true,
-        geometryReceiptPath: 'C:\\Users\\Administrator\\LumiOS\\data\\cad\\geometry_receipts\\verified.json',
+        geometryReceiptPath: 'C:\\Users\\test-user\\LumiCore\\data\\cad\\geometry_receipts\\verified.json',
       }),
     }];
 
@@ -491,7 +491,7 @@ describe('Lumi action contract', () => {
       '把这幅图画成cad图',
       '## Current Turn Attachments',
       'The user attached these files to the current message. Treat them as part of the user request.',
-      'Local path: C:\\Users\\me\\LumiOS\\data\\knowledge\\plan.jpg',
+      'Local path: C:\\Users\\me\\LumiCore\\data\\knowledge\\plan.jpg',
     ].join('\n\n');
     const contract = buildActionContract(text);
 

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { closeDatabase, ensureDatabaseInitialized, querySQL, runSQL } from '../db_layer';
 import {
   beginChatExecution,
+  beginChatExecutionDurably,
   beginQueuedChatExecution,
   beginChatSidecarExecution,
   getChatExecution,
@@ -10,6 +11,8 @@ import {
   markChatExecutionCancelling,
   persistChatSidecarCancellationIntent,
   recordChatExecutionEvent,
+  recordChatExecutionPersistenceUnknownDurably,
+  recordChatExecutionTerminalEventDurably,
   resetChatExecutionRegistryForTests,
   waitForChatExecutionPersistence,
   waitForChatSidecarCancellationIntent,
@@ -89,9 +92,13 @@ describe('chat execution registry', () => {
     expect(getChatExecution(scope, 'queued-B')).toMatchObject({ queued: false, terminal: false });
   });
 
-  it('commits cancellation and rejects late events from a superseded execution', () => {
+  it('durably commits cancellation before replacing a superseded execution', async () => {
+    const persistence = memoryPersistence();
+    await initializeChatExecutionRegistryPersistence(persistence.adapter, Date.now());
     beginChatExecution(scope, 'request-1');
-    const superseded = beginChatExecution(scope, 'request-2');
+    const superseded = await beginChatExecutionDurably(scope, 'request-2', {
+      text: 'Previous request persistence is unknown.',
+    });
 
     expect(superseded).toMatchObject({
       requestId: 'request-1',
@@ -99,8 +106,71 @@ describe('chat execution registry', () => {
       terminal: true,
       terminalEvent: { event: 'agent:response' },
     });
+    expect(persistence.upsertCount).toBe(1);
     expect(recordChatExecutionEvent(scope, 'request-1', 'agent:error', { message: 'late failure' })).toBe(false);
     expect(getChatExecution(scope)).toMatchObject({ requestId: 'request-2', status: 'acknowledged' });
+  });
+
+  it('does not activate or expose a superseding request before the old cancellation receipt settles', async () => {
+    let releaseWrite!: () => void;
+    const writeGate = new Promise<void>(resolve => { releaseWrite = resolve; });
+    const adapter: ChatExecutionPersistenceAdapter = {
+      async loadRecoverable() { return []; },
+      async purgeExpired() {},
+      async upsert() { await writeGate; },
+    };
+    await initializeChatExecutionRegistryPersistence(adapter, Date.now());
+    beginChatExecution(scope, 'old-request');
+
+    const replacement = beginChatExecutionDurably(scope, 'new-request', {
+      text: 'Previous request persistence is unknown.',
+    });
+    await Promise.resolve();
+    expect(getChatExecution(scope)).toMatchObject({ requestId: 'old-request', terminal: false });
+    expect(getChatExecution(scope, 'old-request')?.terminalEvent).toBeUndefined();
+    expect(getChatExecution(scope, 'new-request')).toBeNull();
+
+    releaseWrite();
+    await expect(replacement).resolves.toMatchObject({
+      requestId: 'old-request',
+      status: 'cancelled',
+      terminal: true,
+    });
+    expect(getChatExecution(scope)).toMatchObject({ requestId: 'new-request', terminal: false });
+  });
+
+  it('fails closed on a supersede receipt error and recovers only persistence_unknown for the old request', async () => {
+    const rows: PersistedChatExecutionReceipt[] = [];
+    let attempts = 0;
+    const adapter: ChatExecutionPersistenceAdapter = {
+      async loadRecoverable() { return []; },
+      async purgeExpired() {},
+      async upsert(receipt) {
+        attempts += 1;
+        if (attempts === 1) throw new Error('cancel receipt failed');
+        rows.push(structuredClone(receipt));
+      },
+    };
+    await initializeChatExecutionRegistryPersistence(adapter, Date.now());
+    beginChatExecution(scope, 'old-failed-request');
+
+    await expect(beginChatExecutionDurably(scope, 'new-blocked-request', {
+      text: 'The previous request outcome is unknown.',
+    })).rejects.toThrow(/cancel receipt failed/i);
+
+    expect(getChatExecution(scope)).toMatchObject({
+      requestId: 'old-failed-request',
+      terminal: true,
+      status: 'failed',
+      terminalEvent: { payload: { reason: 'persistence_unknown' } },
+    });
+    expect(getChatExecution(scope, 'new-blocked-request')).toBeNull();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      requestId: 'old-failed-request',
+      status: 'failed',
+      payload: { reason: 'persistence_unknown' },
+    });
   });
 
   it('exposes cancelling before a terminal cancellation response', () => {
@@ -123,6 +193,136 @@ describe('chat execution registry', () => {
     expect(recordChatExecutionEvent(scope, 'request-terminal-once', 'agent:response', payload)).toBe(true);
     expect(recordChatExecutionEvent(scope, 'request-terminal-once', 'agent:response', payload)).toBe(false);
     expect(getChatExecution(scope, 'request-terminal-once')?.terminalEvent?.payload.text).toBe('complete');
+  });
+
+  it('keeps a strict terminal private until its receipt settles and gives one caller publication ownership', async () => {
+    let releaseWrite!: () => void;
+    const writeGate = new Promise<void>(resolve => { releaseWrite = resolve; });
+    let writes = 0;
+    const adapter: ChatExecutionPersistenceAdapter = {
+      async loadRecoverable() { return []; },
+      async purgeExpired() {},
+      async upsert() {
+        writes += 1;
+        await writeGate;
+      },
+    };
+    await initializeChatExecutionRegistryPersistence(adapter, Date.now());
+    beginChatExecution(scope, 'strict-terminal');
+    const payload = { text: 'durable success', finalized: true, blocked: false };
+
+    const owner = recordChatExecutionTerminalEventDurably(
+      scope,
+      'strict-terminal',
+      'agent:response',
+      payload,
+      { text: 'please retry safely' },
+    );
+    const duplicate = recordChatExecutionTerminalEventDurably(
+      scope,
+      'strict-terminal',
+      'agent:response',
+      payload,
+      { text: 'please retry safely' },
+    );
+
+    await vi.waitFor(() => expect(writes).toBe(1));
+    expect(getChatExecution(scope, 'strict-terminal')).toMatchObject({
+      terminal: false,
+      status: 'acknowledged',
+    });
+    expect(getChatExecution(scope, 'strict-terminal')?.terminalEvent).toBeUndefined();
+
+    releaseWrite();
+    await expect(Promise.all([owner, duplicate])).resolves.toEqual([true, false]);
+    expect(writes).toBe(1);
+    expect(getChatExecution(scope, 'strict-terminal')).toMatchObject({
+      terminal: true,
+      status: 'completed',
+      terminalEvent: { payload: { text: 'durable success' } },
+    });
+  });
+
+  it('quarantines a failed strict terminal as persistence_unknown and never exposes or rebinds its success', async () => {
+    const adapter: ChatExecutionPersistenceAdapter = {
+      async loadRecoverable() { return []; },
+      async purgeExpired() {},
+      async upsert() { throw new Error('disk failed token=private'); },
+    };
+    await initializeChatExecutionRegistryPersistence(adapter, Date.now());
+    beginChatExecution(scope, 'strict-terminal-failure');
+
+    await expect(recordChatExecutionTerminalEventDurably(
+      scope,
+      'strict-terminal-failure',
+      'agent:response',
+      { text: 'must never be replayed', finalized: true, blocked: false },
+      { text: 'The result could not be recorded. Please retry.', private: 'must-not-leak' },
+    )).rejects.toThrow(/disk failed/i);
+
+    expect(getChatExecution(scope, 'strict-terminal-failure')).toMatchObject({
+      terminal: true,
+      status: 'failed',
+      terminalEvent: {
+        event: 'agent:response',
+        payload: {
+          text: 'The result could not be recorded. Please retry.',
+          finalized: true,
+          blocked: true,
+          reason: 'persistence_unknown',
+        },
+      },
+    });
+    expect(JSON.stringify(getChatExecution(scope, 'strict-terminal-failure'))).not.toContain('must never be replayed');
+    expect(JSON.stringify(getChatExecution(scope, 'strict-terminal-failure'))).not.toContain('must-not-leak');
+
+    await expect(recordChatExecutionTerminalEventDurably(
+      scope,
+      'strict-terminal-failure',
+      'agent:response',
+      { text: 'second success', finalized: true, blocked: false },
+    )).rejects.toThrow(/not durably committed/i);
+  });
+
+  it('durably terminalizes persistence_unknown after a primary flush failure and blocks a later success', async () => {
+    const persistence = memoryPersistence();
+    await initializeChatExecutionRegistryPersistence(persistence.adapter, Date.now());
+    beginChatExecution(scope, 'primary-flush-failure');
+
+    await expect(recordChatExecutionPersistenceUnknownDurably(
+      scope,
+      'primary-flush-failure',
+      { text: 'The result was not safely recorded.', private: 'do-not-store' },
+    )).resolves.toBe(true);
+
+    expect(getChatExecution(scope, 'primary-flush-failure')).toMatchObject({
+      terminal: true,
+      status: 'failed',
+      terminalEvent: {
+        event: 'agent:response',
+        payload: {
+          text: 'The result was not safely recorded.',
+          finalized: true,
+          blocked: true,
+          reason: 'persistence_unknown',
+        },
+      },
+    });
+    expect(persistence.rows).toHaveLength(1);
+    expect(persistence.rows[0]).toMatchObject({
+      status: 'failed',
+      event: 'agent:response',
+      payload: { reason: 'persistence_unknown', blocked: true },
+    });
+    expect(JSON.stringify(persistence.rows[0])).not.toContain('do-not-store');
+    await expect(recordChatExecutionTerminalEventDurably(
+      scope,
+      'primary-flush-failure',
+      'agent:response',
+      { text: 'late success', finalized: true, blocked: false },
+    )).resolves.toBe(false);
+    expect(getChatExecution(scope, 'primary-flush-failure')?.terminalEvent?.payload.text)
+      .toBe('The result was not safely recorded.');
   });
 
   it('isolates personal and work executions for the same user', () => {

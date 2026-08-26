@@ -7,6 +7,7 @@ use std::time::Duration;
 
 const MAX_PROOF_FILE_BYTES: u64 = 4096;
 const MAX_HTTP_RESPONSE_BYTES: usize = 1024 * 1024;
+const PRODUCT_DATA_DIRECTORY: &str = "LumiCore";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -19,16 +20,30 @@ struct BootstrapProofFile {
     _expires_at: String,
 }
 
+fn configured_data_root(value: &str) -> Result<Option<PathBuf>, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let configured = PathBuf::from(trimmed);
+    if !configured.is_absolute() {
+        return Err(
+            "LUMI_DATA_DIR must be absolute so native and Node runtimes share one data root"
+                .to_string(),
+        );
+    }
+    Ok(Some(configured))
+}
+
 fn desktop_data_root() -> Result<PathBuf, String> {
     if let Ok(configured) = std::env::var("LUMI_DATA_DIR") {
-        let trimmed = configured.trim();
-        if !trimmed.is_empty() {
-            return Ok(PathBuf::from(trimmed));
+        if let Some(configured) = configured_data_root(&configured)? {
+            return Ok(configured);
         }
     }
     dirs_next::home_dir()
-        .map(|home| home.join("LumiOS"))
-        .ok_or_else(|| "Unable to resolve the Lumi data root".to_string())
+        .map(|home| home.join(PRODUCT_DATA_DIRECTORY))
+        .ok_or_else(|| "Unable to resolve the LumiCore data root".to_string())
 }
 
 fn desktop_bootstrap_proof_path() -> Result<PathBuf, String> {
@@ -46,6 +61,17 @@ fn is_base64url_secret(value: &str) -> bool {
 
 fn read_bootstrap_proof() -> Result<String, String> {
     let data_root = desktop_data_root()?;
+    let root_metadata = std::fs::symlink_metadata(&data_root)
+        .map_err(|error| format!("Native Lumi data root is not ready: {error}"))?;
+    if !root_metadata.is_dir() || root_metadata.file_type().is_symlink() {
+        return Err("Native Lumi data root must be a real directory".to_string());
+    }
+    let runtime_path = data_root.join("runtime");
+    let runtime_metadata = std::fs::symlink_metadata(&runtime_path)
+        .map_err(|error| format!("Native Lumi runtime directory is not ready: {error}"))?;
+    if !runtime_metadata.is_dir() || runtime_metadata.file_type().is_symlink() {
+        return Err("Native Lumi runtime path must be a real directory".to_string());
+    }
     let proof_path = desktop_bootstrap_proof_path()?;
     let metadata = std::fs::symlink_metadata(&proof_path)
         .map_err(|error| format!("Native bootstrap handoff is not ready: {error}"))?;
@@ -62,8 +88,12 @@ fn read_bootstrap_proof() -> Result<String, String> {
     let canonical_proof = proof_path
         .canonicalize()
         .map_err(|error| format!("Unable to verify the native bootstrap handoff: {error}"))?;
-    let expected_parent = canonical_root.join("runtime");
-    if canonical_proof.parent() != Some(expected_parent.as_path()) {
+    let canonical_runtime = runtime_path
+        .canonicalize()
+        .map_err(|error| format!("Unable to verify the Lumi runtime directory: {error}"))?;
+    if canonical_runtime.parent() != Some(canonical_root.as_path())
+        || canonical_proof.parent() != Some(canonical_runtime.as_path())
+    {
         return Err("Native bootstrap handoff escaped the Lumi runtime directory".to_string());
     }
 
@@ -222,7 +252,29 @@ pub fn bootstrap_local_identity(existing_token: Option<String>) -> Result<Value,
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_chunked_body, is_base64url_secret, parse_http_response};
+    use super::{
+        configured_data_root, decode_chunked_body, is_base64url_secret, parse_http_response,
+    };
+    use std::path::PathBuf;
+
+    #[test]
+    fn configured_root_matches_node_whitespace_and_absolute_path_rules() {
+        assert_eq!(
+            configured_data_root("   ").expect("blank uses default"),
+            None
+        );
+        assert!(configured_data_root("relative/root").is_err());
+        let absolute = if cfg!(windows) {
+            PathBuf::from(r"C:\LumiCore-test")
+        } else {
+            PathBuf::from("/tmp/lumi-core-test")
+        };
+        assert_eq!(
+            configured_data_root(&format!("  {}  ", absolute.display()))
+                .expect("absolute configured root"),
+            Some(absolute),
+        );
+    }
 
     #[test]
     fn validates_expected_proof_alphabet_and_length() {

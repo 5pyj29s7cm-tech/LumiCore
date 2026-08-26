@@ -216,6 +216,7 @@ export class MessagingConnectionManager {
       appId: feishu.appId,
       appSecret: feishu.appSecret,
       autoReconnect: true,
+      // Stable SDK source identifier retained for existing Feishu telemetry.
       source: 'lumios',
       loggerLevel: Lark.LoggerLevel.warn,
       handshakeTimeoutMs: 15_000,

@@ -43,6 +43,9 @@ function registerLegalStub(name: string): void {
     },
     handler: async (args, context) => {
       observedCalls.push({ name, args, context: { ...(context as any) } });
+      if (args?.securityFailureTest === true || String(args?.contract || '').includes('security-failure-test')) {
+        throw new Error('private legal runtime failed api_key=sk-legal-private-secret at C:\\private\\legal');
+      }
       return `${name}:ok`;
     },
   });
@@ -224,5 +227,37 @@ describe('direct legal tool route security', () => {
       name: 'legal_case_workspace',
       context: { orgRole: 'member', authenticated: true, authRole: 'user' },
     });
+  });
+
+  it('does not expose direct legal tool failures or contract fallback internals', async () => {
+    const direct = await fetch(`${url}/api/legal/tool/legal_case_workspace`, {
+      method: 'POST',
+      headers: bearer(userToken),
+      body: JSON.stringify({ caseName: 'failure probe', securityFailureTest: true }),
+      signal: AbortSignal.timeout(5000),
+    });
+    expect(direct.status).toBe(500);
+    const directPayload = await direct.json();
+    expect(directPayload).toEqual({
+      error: 'Legal tool execution failed',
+      code: 'LEGAL_TOOL_EXECUTION_FAILED',
+    });
+
+    const contract = await fetch(`${url}/api/legal/contract-review`, {
+      method: 'POST',
+      headers: bearer(userToken),
+      body: JSON.stringify({ contract: 'security-failure-test' }),
+      signal: AbortSignal.timeout(5000),
+    });
+    expect(contract.status).toBe(500);
+    const contractPayload = await contract.json();
+    expect(contractPayload).toEqual({
+      error: 'Contract review failed',
+      code: 'LEGAL_CONTRACT_REVIEW_FAILED',
+    });
+
+    const payload = JSON.stringify({ directPayload, contractPayload });
+    expect(payload).not.toContain('sk-legal-private-secret');
+    expect(payload).not.toContain('C:\\private\\legal');
   });
 });

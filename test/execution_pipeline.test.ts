@@ -87,7 +87,7 @@ describe('unified execution pipeline', () => {
 
   it('keeps the exact requested local write when the user forbids all other file and external mutations', () => {
     const registry = createRegistry();
-    const text = '请在 C:\\Users\\Administrator\\Documents\\Lumi主程序实机验收_20260817.txt 新建一个 TXT 文件，只写入以下三行：第一行“验收对象：Lumi 主程序”；第二行“验收项目：本地文件创建与回读”；第三行“验收代号：青穹-17”。写入后必须重新读取。除这个文件外不得修改其他文件，不要打开其他应用，不要发送、上传或发布任何内容。';
+    const text = '请在 C:\\Users\\test-user\\Documents\\Lumi主程序实机验收_20260817.txt 新建一个 TXT 文件，只写入以下三行：第一行“验收对象：Lumi 主程序”；第二行“验收项目：本地文件创建与回读”；第三行“验收代号：青穹-17”。写入后必须重新读取。除这个文件外不得修改其他文件，不要打开其他应用，不要发送、上传或发布任何内容。';
     const pipeline = buildLumiExecutionPipeline({
       dispatch: {
         userId: 'pipeline-user',

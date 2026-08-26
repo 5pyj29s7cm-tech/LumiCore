@@ -74,6 +74,7 @@ import {
 import { getDesktopControlRuntimeSnapshot } from "../desktop/control_lease";
 import { listRegisteredProviders } from '../extensions/registry';
 import { buildStructuredRuntimeStatus } from '../monitor/runtime_status';
+import { redactDiagnosticSecrets } from '../client/diagnostic_sanitizer';
 import {
   buildAcceptanceEvidenceSnapshot,
   buildPublicAcceptanceSummary,
@@ -94,6 +95,26 @@ function sanitizedProviderError(error: unknown): string {
     .replace(/(?:sk|key)-[A-Za-z0-9_-]{8,}/gi, '[redacted]')
     .replace(/Bearer\s+[^\s,;]+/gi, 'Bearer [redacted]')
     .slice(0, 400);
+}
+
+function publicModelRoutingFailure(error: unknown): Record<string, unknown> | null {
+  const routing = (error as any)?.routing;
+  if (!routing || !Array.isArray(routing.attempts)) return null;
+  return {
+    error: 'No configured model route is currently available.',
+    requestedProvider: String(routing.requestedProvider || ''),
+    requestedModel: String(routing.requestedModel || ''),
+    selectionMode: String(routing.selectionMode || ''),
+    fallbackReason: String(routing.fallbackReason || ''),
+    attempts: routing.attempts.slice(0, 12).map((attempt: any) => ({
+      provider: String(attempt?.provider || ''),
+      model: String(attempt?.model || ''),
+      status: String(attempt?.status || ''),
+      reason: String(attempt?.reason || ''),
+      errorCategory: String(attempt?.errorCategory || ''),
+      durationMs: Math.max(0, Math.trunc(Number(attempt?.durationMs) || 0)),
+    })),
+  };
 }
 
 const PROTECTED_ENDPOINT_KEY_RE = /(?:_BASE_URL|_MCP_URL|_WEBHOOK_URL)$/;
@@ -671,6 +692,22 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
     res.json({ id, enabled: result.enabled });
   });
 
+  router.post("/scheduler/tasks/:id/reconcile", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
+    const { id } = req.params;
+    const resolution = req.body?.resolution;
+    if (!['confirmed_no_side_effect', 'accepted_unknown_outcome'].includes(resolution)) {
+      return res.status(400).json({
+        error: 'resolution must be confirmed_no_side_effect or accepted_unknown_outcome',
+      });
+    }
+    const result = await scheduler.reconcileTask(id, resolution);
+    if (!result.found) return res.status(404).json({ error: `Task "${id}" not found` });
+    if (!result.reconciled) {
+      return res.status(409).json({ id, ...result });
+    }
+    return res.json({ id, ...result });
+  });
+
   // Token usage aggregation
   router.get("/llm/usage", (req, res) => {
     let token = req.cookies.token;
@@ -823,7 +860,11 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
     } catch (err: any) {
       const message = sanitizedProviderError(err);
       const configurationError = /not configured|not currently reachable|unsupported provider|valid model/i.test(message);
-      res.status(configurationError ? 400 : 502).json({ ok: false, error: message });
+      const routingFailure = publicModelRoutingFailure(err);
+      res.status(configurationError && !routingFailure ? 400 : 502).json({
+        ok: false,
+        ...(routingFailure || { error: message }),
+      });
     }
   });
 
@@ -1027,7 +1068,8 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
       }
       res.json(masked);
     } catch (err: any) {
-      res.status(500).json({ error: err?.message || 'Failed to load key status' });
+      logger.error(`Failed to load key status: ${redactDiagnosticSecrets(err?.message || err).slice(0, 500)}`);
+      res.status(500).json({ error: 'Failed to load key status' });
     }
   });
 
@@ -1078,7 +1120,8 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
         ignored,
       });
     } catch (err: any) {
-      res.status(500).json({ error: err?.message || 'Failed to save key settings' });
+      logger.error(`Failed to save key settings: ${redactDiagnosticSecrets(err?.message || err).slice(0, 500)}`);
+      res.status(500).json({ error: 'Failed to save key settings' });
     }
   });
 

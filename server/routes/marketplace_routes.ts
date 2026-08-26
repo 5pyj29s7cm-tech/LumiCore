@@ -471,7 +471,7 @@ export function mountMarketplaceRoutes(
       const resp = await fetch(url, {
         headers: {
           'Accept': 'application/vnd.github.v3+json',
-          'User-Agent': 'LumiOS/2.0',
+          'User-Agent': 'LumiCore/3.0',
         },
       });
       if (!resp.ok) throw new Error(`GitHub API returned ${resp.status}`);

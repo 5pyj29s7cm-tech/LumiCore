@@ -1,7 +1,7 @@
 /**
- * LumiOS Watchdog Launcher
+ * LumiCore Watchdog Launcher
  *
- * Spawns server.ts as a child process and manages lifecycle:
+ * Spawns the ordered runtime entry as a child process and manages lifecycle:
  * - Exit code 42 → restart (self-upgrade)
  * - Crash (non-zero, non-42) → restart with backoff, max 3 retries
  * - 3 consecutive crash failures → git reset --hard + abort
@@ -13,7 +13,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SERVER_SCRIPT = path.join(__dirname, 'server.ts');
+const SERVER_SCRIPT = path.join(__dirname, 'server', 'runtime', 'server_entry.ts');
 const TSX_CLI = path.join(__dirname, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 
 const UPGRADE_EXIT_CODE = 42;
@@ -94,7 +94,7 @@ function isCurrentProjectProcess(commandLine: string): boolean {
   const normalizedCommand = commandLine.replace(/\//g, '\\').toLowerCase();
   const normalizedRoot = __dirname.replace(/\//g, '\\').toLowerCase();
   return normalizedCommand.includes(normalizedRoot)
-    && (normalizedCommand.includes('server.ts') || normalizedCommand.includes('launcher.ts') || normalizedCommand.includes('tsx'));
+    && (normalizedCommand.includes('server_entry.ts') || normalizedCommand.includes('server.ts') || normalizedCommand.includes('launcher.ts') || normalizedCommand.includes('tsx'));
 }
 
 function killProcessTree(pid: number): void {
@@ -125,11 +125,11 @@ function clearStaleProjectPortOwners(): void {
       }
 
       if (!AUTO_KILL_OLD_PROCESS) {
-        console.warn(`[Launcher] Port ${port} is occupied by old LumiOS PID ${pid}; auto-kill disabled.`);
+        console.warn(`[Launcher] Port ${port} is occupied by a legacy Lumi desktop PID ${pid}; auto-kill disabled.`);
         continue;
       }
 
-      console.warn(`[Launcher] Port ${port} is occupied by old LumiOS PID ${pid}; terminating it before restart.`);
+      console.warn(`[Launcher] Port ${port} is occupied by a legacy Lumi desktop PID ${pid}; terminating it before restart.`);
       killProcessTree(pid);
     }
   }

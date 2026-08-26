@@ -122,7 +122,7 @@ async function createPptHandler(args: Record<string, any>): Promise<string> {
     const pptx = new PptxGenJS();
     pptx.layout = 'LAYOUT_WIDE';
     pptx.author = 'Lumi';
-    pptx.company = 'LumiOS';
+    pptx.company = 'LumiCore';
     pptx.subject = title;
     pptx.title = title;
     pptx.theme = {

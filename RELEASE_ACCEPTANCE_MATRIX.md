@@ -1,4 +1,4 @@
-# LumiOS 3.0.3 release acceptance matrix
+# LumiCore 3.1.0 release acceptance matrix
 
 Record the commit, machine image, operator, start/end time, and evidence path for every run. A row passes only when the observable result and the CapabilityManifest/TaskLedger receipt agree; do not add a second success rule in the test harness.
 

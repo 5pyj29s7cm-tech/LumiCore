@@ -1,6 +1,6 @@
 import { ParsedToolCall, NormalizedLLMResponse } from '../tools/types';
 import { withCloudResilience } from '../cloud/resilience';
-import { isStrictPrivacy, requireLocalProvider } from '../config/privacy';
+import { isProviderLocalOnly, isStrictPrivacy, requireLocalProvider } from '../config/privacy';
 import {
   getScopedPreferredLLM,
   type UserLLMFallbackCandidate,
@@ -24,6 +24,7 @@ import {
   isRegisteredOpenAICompatibleProvider,
   isRegisteredProviderLocal,
 } from '../extensions/registry';
+import { prepareModelRequestContext } from './request_context_budget';
 
 export type MessageContent =
   | string
@@ -49,10 +50,20 @@ export interface LLMCallConfig {
   signal?: AbortSignal;
   /** Provider-independent lifecycle deadlines for one model attempt. */
   attemptTimeouts?: Partial<ModelAttemptTimeouts>;
+  /** Total input budget across system, history, current input, and tool schemas. */
+  inputTokenBudget?: number;
   role?: 'reasoning' | 'vision' | 'world';
   selectionMode?: UserLLMSelectionMode;
   fallbackCandidates?: UserLLMFallbackCandidate[];
   allowCloudFallback?: boolean;
+  /** Per-request routing boundary. Unlike global strict mode, this survives graph recovery. */
+  dataRoutingPolicy?: 'policy_scoped' | 'local_only';
+  /**
+   * Execute exactly `provider`/`model` and never consult stored preferences,
+   * automatic routing, or fallbackCandidates. Model-graph execution sets this
+   * because the graph itself is the authoritative, budgeted failover plan.
+   */
+  noImplicitFailover?: boolean;
   /** True only for a candidate compiled from the user's stored route policy. */
   authorizedRoutingCandidate?: boolean;
 }
@@ -275,12 +286,15 @@ function extensionProviderFailure(provider: string, error: unknown): Error {
 }
 
 function assertProviderAllowedByPrivacy(config: LLMCallConfig): void {
-  if (!isStrictPrivacy()) return;
+  if (!isStrictPrivacy() && config.dataRoutingPolicy !== 'local_only') return;
   if (extensionProviderForCall(config)) {
     if (!isRegisteredProviderLocal(config.provider, config.userId)) {
-      throw new Error(`[Privacy] Strict mode active. Extension provider "${config.provider}" is not declared as a loopback-only local provider.`);
+      throw new Error(`[Privacy] Local-only routing active. Extension provider "${config.provider}" is not declared as a loopback-only local provider.`);
     }
     return;
+  }
+  if (config.dataRoutingPolicy === 'local_only' && !isProviderLocalOnly(config.provider)) {
+    throw new Error(`[Privacy] Local-only routing active. Cloud provider "${config.provider}" is blocked. Use ollama or lmstudio.`);
   }
   requireLocalProvider(config.provider);
 }
@@ -329,6 +343,7 @@ function autoDispatchPreference(config: LLMCallConfig) {
     orgId: config.orgId,
     signal: config.signal,
     attemptTimeouts: config.attemptTimeouts,
+    inputTokenBudget: config.inputTokenBudget,
     allowCloudFallback: config.allowCloudFallback !== false
       && preferred?.allowCloudFallback !== false
       && !isStrictPrivacy(),
@@ -349,6 +364,7 @@ export function resolveModelMaxTokens(model: string, requested?: number): number
 }
 
 function pinnedFailoverDispatchPreference(config: LLMCallConfig) {
+  if (config.noImplicitFailover === true) return null;
   if (config.role === 'vision' || config.role === 'world') return null;
   // A disabled/removed signed provider is an explicit trust-state change.
   // Preserve the selection and surface that state instead of routing around it.
@@ -932,6 +948,10 @@ function persistRoutingTrace(
 }
 
 function resolvedSelectionMode(config: LLMCallConfig): UserLLMSelectionMode {
+  // An exact candidate is deliberately reduced to the direct provider path.
+  // In particular, `auto` is not meaningful under this contract and will be
+  // rejected by the direct adapter instead of silently expanding into a route.
+  if (config.noImplicitFailover === true) return 'pinned';
   if (config.provider === 'auto') return 'auto';
   if (config.selectionMode === 'ordered_fallback') return 'ordered_fallback';
   return 'pinned';
@@ -1027,6 +1047,13 @@ export async function makeLLMCallDirect(
   getGlm?: () => any,
   getRelay?: () => any,
 ): Promise<NormalizedLLMResponse> {
+  const preparedContext = prepareModelRequestContext({
+    messages,
+    toolDeclarations,
+    inputTokenBudget: config.inputTokenBudget,
+  });
+  messages = preparedContext.messages;
+  toolDeclarations = preparedContext.toolDeclarations;
   assertQwenAllowedByUserPrefs(config);
 
   // ── Privacy gate: strict mode blocks cloud providers ──
@@ -1462,6 +1489,13 @@ export async function makeLLMCallStreamingDirect(
   getGlm?: () => any,
   getRelay?: () => any,
 ): Promise<NormalizedLLMResponse> {
+  const preparedContext = prepareModelRequestContext({
+    messages,
+    toolDeclarations,
+    inputTokenBudget: config.inputTokenBudget,
+  });
+  messages = preparedContext.messages;
+  toolDeclarations = preparedContext.toolDeclarations;
   assertQwenAllowedByUserPrefs(config);
 
   // ── Privacy gate ──

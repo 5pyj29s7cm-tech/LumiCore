@@ -1,6 +1,6 @@
-# LumiOS unified client/server image. Organization workspaces live inside the same deployment.
-# Build:  docker build -t lumios .
-# Run:    docker run -p 3000:3000 -e JWT_SECRET=xxx lumios
+# LumiCore unified client/server image. Organization workspaces live inside the same deployment.
+# Build:  docker build -t lumicore .
+# Run:    docker run -p 3000:3000 -e JWT_SECRET=xxx lumicore
 
 # ── Build stage ──────────────────────────────────────────────────────────
 FROM node:22-slim AS build

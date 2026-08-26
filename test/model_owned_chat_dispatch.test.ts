@@ -213,7 +213,12 @@ describe('model-owned main chat architecture', () => {
     expect(chatSource).not.toContain('const capabilityMetaResponse');
     expect(chatSource).not.toContain('const deterministicKnowledgeInspection');
     expect(chatSource).not.toContain("reason: 'conversation_execution_facts'");
-    expect(chatSource).not.toContain('prepareConversationActionExecution');
+    // Natural-language dispatch remains model-owned. Preparation is limited to
+    // an already-issued durable task/revision selected by structured feedback.
+    expect(chatSource).toContain('const bindsExistingAction = Boolean(');
+    expect(chatSource).toContain('prepareConversationActionExecution({');
+    expect(chatSource).toContain('userMessageId: acceptedUserMessageId');
+    expect(chatSource).not.toContain('forceTask: true');
     expect(chatSource).not.toContain('persistConversationExecutionPlan');
     expect(chatSource).not.toContain("setConversationActionExecutionStatus(conversationId, uid, 'executing'");
     // A cancellation is recorded as a terminal continuation boundary.  Normal

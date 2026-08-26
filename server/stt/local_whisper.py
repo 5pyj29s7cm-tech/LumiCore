@@ -1,4 +1,4 @@
-# local_whisper.py — faster-whisper STT for LumiOS
+# local_whisper.py — faster-whisper STT for LumiCore
 # Usage: python local_whisper.py <audio_file_path> [language]
 # Output: transcribed text to stdout
 #

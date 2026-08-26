@@ -2,9 +2,10 @@
  * agent:chat socket handler — the core conversational AI pipeline
  */
 import { Server, Socket } from "socket.io";
-import { readDB, writeDB } from "../../db_layer";
+import { flushDBOrThrow, readDB, writeDB } from "../../db_layer";
 import { pushNotification } from "../routes/notifications";
 import { NormalizedMessage, makeLLMCall, makeLLMCallStreaming, StreamCallback } from "../llm/providers";
+import { resolveModelRequestInputBudget } from "../llm/request_context_budget";
 import { LLMUsage, ToolExecutionRecord } from "../tools/types";
 import { toolRegistry } from "../tools/registry";
 import { executeToolCall } from "../tools/execution_engine";
@@ -55,7 +56,7 @@ import {
   shouldPersistPostTurnLearningSource,
 } from "../cognition/post_turn_learning";
 import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
-import { formatClientSelfPrompt } from "../client/self_model";
+import { formatClientSelfPromptForTurn } from "../client/self_model";
 import { canAutoApproveAction } from "../tools/action_constitution";
 import {
   buildConversationConfirmationChannelScope,
@@ -89,9 +90,11 @@ import {
   getConversationForScope,
   getOrCreateActiveConversation,
   getConversationActionStatus,
+  bindConversationActionExecutionTurn,
   persistConversationModelExecutionResult,
   getConversationModelExecutionRecovery,
   cancelConversationActionExecution,
+  prepareConversationActionExecution,
   setConversationActionExecutionStatus,
 } from "../conversation/manager";
 import { scheduleConversationSummary } from "../conversation/summary_scheduler";
@@ -134,6 +137,7 @@ import {
 import { buildDelegationAck, shouldDelegateWorkInBackground } from "../agents/background_delegation";
 import { markLatestUserTurn } from "../agents/background_delivery";
 import {
+  getBackgroundTask,
   requestCancelBackgroundTask,
   requestPauseBackgroundTask,
   resumeBackgroundTask,
@@ -153,7 +157,7 @@ import {
   scopedEmotionalStateKey,
 } from "./scope";
 import {
-  beginChatExecution,
+  beginChatExecutionDurably,
   beginQueuedChatExecution,
   beginChatSidecarExecution,
   getChatExecution,
@@ -161,10 +165,22 @@ import {
   markChatExecutionCancelling,
   persistChatSidecarCancellationIntent,
   recordChatExecutionEvent,
+  recordChatExecutionPersistenceUnknownDurably,
+  recordChatExecutionTerminalEventDurably,
   waitForChatSidecarCancellationIntent,
   type ChatExecutionScope,
 } from "./chat_execution_registry";
-import { classifyActiveTaskMessage } from "../cognition/task_concurrency";
+import { commitChatTerminalBoundary } from "./chat_terminal_boundary";
+import {
+  chatPublicErrorCodeForException,
+  sanitizeChatAgentErrorPayload,
+} from "./chat_public_error";
+import {
+  formatActiveTaskRelationContext,
+  resolveActiveTaskMessageRelation,
+  type ActiveTaskMessageResolution,
+} from "../cognition/task_concurrency";
+import { backgroundTaskMatchesScope, projectBackgroundTask } from "../agents/background_task_public";
 import { SerialExecutionQueue } from "../cognition/serial_execution_queue";
 import {
   isGuardGeneratedAssistantText,
@@ -196,6 +212,12 @@ function stripHistoricalAttachmentBlocks(value: string): string {
 
 const ASSISTANT_HISTORY_NOISE_RE =
   /我还没有真正开始读取或审查|我还没有真正操作客户端|我还不能说这件事已经完成|没有记录到成功的工具执行|真正读取时|I have not actually started|Completion claim|Maximum tool call iterations|Action Constitution|local_write action requires confirmation|已经落到(?:桌面|电脑|文件)|结果包已经|交付包已经|真实接管|WPS\s*表格|剪映已打开|微信已打开|文件生成也卡在权限确认|工具调用一直在跑/i;
+
+function chatDurabilityUnknownText(userText: string): string {
+  return /[\u3400-\u9fff]/u.test(userText)
+    ? CN_TASK_EXECUTION_MESSAGES.persistenceUnknown
+    : 'The final state of this turn could not be saved reliably, so I did not mark it complete. If an external action may have run, verify its actual result before retrying.';
+}
 
 function isNoisyAssistantHistory(value: string): boolean {
   return isGuardGeneratedAssistantText(value) || ASSISTANT_HISTORY_NOISE_RE.test(String(value || ''));
@@ -580,7 +602,7 @@ export function registerChatHandler(
 
   // Abort is request-scoped and acknowledged. The UI stays in "cancelling"
   // until this handler confirms that the server owns and cancelled the task.
-  socket.on("agent:abort_chat", (
+  socket.on("agent:abort_chat", async (
     data: { requestId?: string; source?: string; domain?: string; orgId?: string | null; conversationId?: string } = {},
     ack?: (payload: { ok: boolean; requestId?: string; status?: string; error?: string }) => void,
   ) => {
@@ -636,15 +658,55 @@ export function registerChatHandler(
       blocked: true,
       reason: 'cancelled',
     };
-    if (recordChatExecutionEvent(scope, snapshot.requestId, 'agent:response', responsePayload)) {
-      io.to(room).emit('agent:response', responsePayload);
+    const unknownPayload = {
+      text: chatDurabilityUnknownText('cancel the active chat task'),
+      agentName: 'Lumi',
+      source: scope.source,
+      requestId: snapshot.requestId,
+      conversationId: scope.conversationId,
+      finalized: true,
+      blocked: true,
+      reason: 'persistence_unknown',
+    };
+    try {
+      await flushDBOrThrow();
+      const ownsPublication = await recordChatExecutionTerminalEventDurably(
+        scope,
+        snapshot.requestId,
+        'agent:response',
+        responsePayload,
+        unknownPayload,
+      );
+      if (ownsPublication) io.to(room).emit('agent:response', responsePayload);
+      try { ack?.({ ok: true, requestId: snapshot.requestId, status: 'cancelled' }); } catch {}
+    } catch (error: any) {
+      console.error('[ChatHandler] Abort terminal persistence failed:', error);
+      try {
+        await recordChatExecutionPersistenceUnknownDurably(
+          scope,
+          snapshot.requestId,
+          unknownPayload,
+        );
+      } catch (unknownError) {
+        console.error('[ChatHandler] Abort unknown receipt persistence failed:', unknownError);
+      }
+      io.to(room).emit('agent:response', unknownPayload);
+      try {
+        ack?.({
+          ok: false,
+          requestId: snapshot.requestId,
+          status: 'persistence_unknown',
+          error: 'Terminal persistence outcome is unknown',
+        });
+      } catch {}
     }
-    try { ack?.({ ok: true, requestId: snapshot.requestId, status: 'cancelled' }); } catch {}
   });
 
   socket.on("agent:background_cancel", (data: { taskId?: string }) => {
     const uid = userIdFn(socket);
     const taskId = typeof data?.taskId === 'string' ? data.taskId : '';
+    const socketScope = resolveSocketScope(socket, uid);
+    const taskScope = { domain: socketScope.domain, orgId: socketScope.orgId || '' };
     if (!taskId) {
       socket.emit("agent:background_task_update", {
         taskId,
@@ -654,7 +716,10 @@ export function registerChatHandler(
       return;
     }
 
-    const task = requestCancelBackgroundTask(taskId, uid);
+    const existing = getBackgroundTask(taskId, uid);
+    const task = existing && backgroundTaskMatchesScope(existing, taskScope)
+      ? requestCancelBackgroundTask(taskId, uid)
+      : null;
     if (!task) {
       socket.emit("agent:background_task_update", {
         taskId,
@@ -666,7 +731,7 @@ export function registerChatHandler(
 
     socket.emit("agent:background_task_update", {
       taskId: task.id,
-      task,
+      task: projectBackgroundTask(task),
       source: 'background_delegation',
     });
   });
@@ -677,20 +742,23 @@ export function registerChatHandler(
   ) => {
     const uid = userIdFn(socket);
     const taskId = typeof data?.taskId === 'string' ? data.taskId : '';
-    const task = taskId
+    const socketScope = resolveSocketScope(socket, uid);
+    const taskScope = { domain: socketScope.domain, orgId: socketScope.orgId || '' };
+    const existing = taskId ? getBackgroundTask(taskId, uid) : null;
+    const task = existing && backgroundTaskMatchesScope(existing, taskScope)
       ? operation === 'pause'
         ? requestPauseBackgroundTask(taskId, uid)
         : resumeBackgroundTask(taskId, uid)
       : null;
     socket.emit("agent:background_task_update", task
-      ? { taskId: task.id, task, source: 'background_delegation' }
+      ? { taskId: task.id, task: projectBackgroundTask(task), source: 'background_delegation' }
       : { taskId, error: `Background task not found or not ${operation === 'pause' ? 'pausable' : 'resumable'}`, source: 'background_delegation' });
   };
   socket.on("agent:background_pause", (data: { taskId?: string }) => updateBackgroundTaskState(data, 'pause'));
   socket.on("agent:background_resume", (data: { taskId?: string }) => updateBackgroundTaskState(data, 'resume'));
 
   socket.on("agent:chat", async (
-    data: { text?: string; history?: any[]; attachments?: any[]; personalityId?: string; category?: string; agentId?: string; domain?: string; orgId?: string | null; mode?: string; operationMode?: string; source?: string; requestId?: string; conversationId?: string; controlTargetRequestId?: string },
+    data: { text?: string; history?: any[]; attachments?: any[]; personalityId?: string; category?: string; agentId?: string; domain?: string; orgId?: string | null; mode?: string; operationMode?: string; source?: string; requestId?: string; conversationId?: string; controlTargetRequestId?: string; controlTargetTaskId?: string; controlTargetRevision?: number },
     ack?: (payload: { ok: boolean; requestId?: string; receivedAt?: string; error?: string }) => void,
   ) => {
     console.log('[ChatHandler] agent:chat RECEIVED:', JSON.stringify(data).slice(0, 300));
@@ -811,20 +879,22 @@ export function registerChatHandler(
     };
     let executionRoom = chatExecutionRoom(executionScope);
     let sessionKey = `${uid}:${resolvedDomain}:${resolvedOrgId || ''}:${eventSource}:${selectedConversationId}`;
-    const emitAgent = (event: string, payload: Record<string, any> = {}) => {
-      const publicPayload = event === 'agent:response'
+    let resolvedTaskRelation: ActiveTaskMessageResolution | null = null;
+    const normalizeAgentPayload = (event: string, payload: Record<string, any> = {}) => {
+      const publicPayload: Record<string, any> = event === 'agent:response'
         ? sanitizeExecutionResponseForDelivery(payload, { task: visibleUserText })
-        : payload;
-      const normalizedPayload = {
+        : event === 'agent:error'
+          ? sanitizeChatAgentErrorPayload(payload)
+          : payload;
+      return {
         ...publicPayload,
         source: publicPayload.source || eventSource,
         requestId,
         conversationId: selectedConversationId,
+        ...(resolvedTaskRelation ? { taskRelation: resolvedTaskRelation } : {}),
       };
-      // A late duplicate from the same handler is not a reconnect replay. The
-      // explicit request/recovery entry points above own replay delivery; doing
-      // it here turns one committed terminal into a second UI terminal frame.
-      if (!recordChatExecutionEvent(executionScope, requestId, event, normalizedPayload)) return false;
+    };
+    const publishRecordedAgent = (event: string, normalizedPayload: Record<string, any>) => {
       if (event === 'agent:response') {
         // The originating native client must receive the terminal frame even
         // if its room membership changed during reconnect or conversation
@@ -832,10 +902,65 @@ export function registerChatHandler(
         // event through the user/workspace room without duplicating it here.
         socket.emit(event, normalizedPayload);
         socket.to(executionRoom).emit(event, normalizedPayload);
-        return true;
+        return;
       }
       io.to(executionRoom).emit(event, normalizedPayload);
+    };
+    const emitAgent = (event: string, payload: Record<string, any> = {}) => {
+      const normalizedPayload = normalizeAgentPayload(event, payload);
+      // A late duplicate from the same handler is not a reconnect replay. The
+      // explicit request/recovery entry points above own replay delivery; doing
+      // it here turns one committed terminal into a second UI terminal frame.
+      if (!recordChatExecutionEvent(executionScope, requestId, event, normalizedPayload)) return false;
+      publishRecordedAgent(event, normalizedPayload);
       return true;
+    };
+    const commitDeterministicTerminal = async (input: {
+      event?: 'agent:response' | 'agent:error';
+      payload: Record<string, any>;
+      persistAssistantMessage?: () => void;
+      publishAfter?: () => void;
+      errorContext?: string;
+    }): Promise<boolean> => {
+      const terminalEvent = input.event || 'agent:response';
+      const terminalPayload = normalizeAgentPayload(terminalEvent, input.payload);
+      const unknownPayload = normalizeAgentPayload('agent:response', {
+        text: chatDurabilityUnknownText(visibleUserText),
+        agentName: String(input.payload.agentName || 'Lumi'),
+        finalized: true,
+        blocked: true,
+        reason: 'persistence_unknown',
+      });
+      return commitChatTerminalBoundary({
+        persistTerminalState: () => undefined,
+        persistAssistantMessage: input.persistAssistantMessage || (() => undefined),
+        flush: flushDBOrThrow,
+        persistTerminalReceipt: () => recordChatExecutionTerminalEventDurably(
+          executionScope,
+          requestId,
+          terminalEvent,
+          terminalPayload,
+          unknownPayload,
+        ),
+        persistUnknownReceipt: () => recordChatExecutionPersistenceUnknownDurably(
+            executionScope,
+            requestId,
+            unknownPayload,
+          ),
+        publishCommitted: () => {
+          publishRecordedAgent(terminalEvent, terminalPayload);
+          input.publishAfter?.();
+        },
+        publishUnknown: () => {
+          // The success receipt failed its strict barrier. Publish only the
+          // sanitized unknown frame already installed in the in-memory
+          // quarantine; do not route it through the registry a second time.
+          publishRecordedAgent('agent:response', unknownPayload);
+        },
+        onPersistenceError: error => {
+          console.error(`[ChatHandler] ${input.errorContext || 'Deterministic terminal'} persistence failed:`, error);
+        },
+      });
     };
     const emitConversationUpdated = (payload: Record<string, any>) => {
       io.to(executionRoom).emit('chat:conversation_updated', {
@@ -855,7 +980,13 @@ export function registerChatHandler(
         try {
           await waitForChatSidecarCancellationIntent(executionScope, requestId);
         } catch (error: any) {
-          try { ack?.({ ok: false, requestId, error: String(error?.message || 'Control receipt is not durable') }); } catch {}
+          try {
+            ack?.({
+              ok: false,
+              requestId,
+              error: sanitizeChatAgentErrorPayload({ code: 'CHAT_CONTROL_RECEIPT_WRITE_FAILED' }).message,
+            });
+          } catch {}
           return;
         }
         existingExecution = getChatExecution(executionScope, requestId) || existingExecution;
@@ -865,7 +996,7 @@ export function registerChatHandler(
           // side effect/terminal write. With no matching lease, converge the
           // tombstone to a terminal no-op; never replay cancellation onto a
           // later task.
-          recordChatExecutionEvent(executionScope, requestId, 'agent:response', {
+          const staleControlPayload = normalizeAgentPayload('agent:response', {
             text: CN_TASK_EXECUTION_MESSAGES.staleControl,
             agentName: 'Lumi',
             source: eventSource,
@@ -876,6 +1007,38 @@ export function registerChatHandler(
             blocked: false,
             reason: 'stale_control',
           });
+          const unknownPayload = normalizeAgentPayload('agent:response', {
+            text: chatDurabilityUnknownText(visibleUserText),
+            agentName: 'Lumi',
+            sidecar: true,
+            finalized: true,
+            blocked: true,
+            reason: 'persistence_unknown',
+          });
+          try {
+            await flushDBOrThrow();
+            await recordChatExecutionTerminalEventDurably(
+              executionScope,
+              requestId,
+              'agent:response',
+              staleControlPayload,
+              unknownPayload,
+            );
+          } catch (error: any) {
+            console.error('[ChatHandler] Recovered control terminal persistence failed:', error);
+            try {
+              await recordChatExecutionPersistenceUnknownDurably(
+                executionScope,
+                requestId,
+                unknownPayload,
+              );
+            } catch (unknownError) {
+              console.error('[ChatHandler] Recovered control unknown receipt persistence failed:', unknownError);
+            }
+            publishRecordedAgent('agent:response', unknownPayload);
+            try { ack?.({ ok: false, requestId, error: 'Terminal persistence outcome is unknown' }); } catch {}
+            return;
+          }
           existingExecution = getChatExecution(executionScope, requestId) || existingExecution;
         }
       }
@@ -924,31 +1087,160 @@ export function registerChatHandler(
     // Answer it without aborting/superseding the foreground executor.
     const existingSession = chatExecutionQueue.getCurrent(sessionKey);
     const controlTargetRequestId = String(data.controlTargetRequestId || '').trim().slice(0, 120);
+    const controlTargetTaskId = String(data.controlTargetTaskId || '').trim().slice(0, 180);
+    const controlTargetRevision = typeof data.controlTargetRevision === 'number'
+      && Number.isFinite(data.controlTargetRevision)
+      ? Math.max(0, Math.trunc(data.controlTargetRevision))
+      : undefined;
     const activeConversationForStatus = existingSession ? getActiveConversation(
       uid,
       conversationAgentId,
       resolvedDomain,
       resolvedOrgId,
     ) : null;
+    resolvedTaskRelation = resolveActiveTaskMessageRelation(
+      visibleUserText,
+      activeConversationForStatus?.actionContinuationState || selectedConversation.actionContinuationState,
+      {
+        activeRequestId: existingSession?.requestId,
+        controlTargetRequestId,
+        controlTargetTaskId,
+        controlTargetRevision,
+      },
+    );
+    if (
+      resolvedTaskRelation.binding === 'stale'
+      && resolvedTaskRelation.relation !== 'queue'
+    ) {
+      if (!beginChatSidecarExecution(executionScope, requestId)) return;
+      addMessageIdempotent({
+        userId: uid,
+        agentId: conversationAgentId,
+        conversationId: selectedConversationId,
+        role: 'user',
+        content: storedUserContent,
+        domain: resolvedDomain,
+        orgId: resolvedOrgId,
+        source: eventSource,
+        channel: 'chat',
+        cognitiveIntent: 'stale_task_control',
+        requestId,
+        receivedAt: requestReceivedAt,
+        timestamp: requestReceivedAt,
+        skipActionContinuation: true,
+      });
+      try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
+      await commitDeterministicTerminal({
+        payload: {
+          text: CN_TASK_EXECUTION_MESSAGES.staleControl,
+          agentName: 'Lumi',
+          sidecar: true,
+          finalized: true,
+          blocked: false,
+          reason: resolvedTaskRelation.reason,
+        },
+        persistAssistantMessage: () => addMessageIdempotent({
+          userId: uid,
+          agentId: conversationAgentId,
+          conversationId: selectedConversationId,
+          role: 'assistant',
+          content: CN_TASK_EXECUTION_MESSAGES.staleControl,
+          domain: resolvedDomain,
+          orgId: resolvedOrgId,
+          source: eventSource,
+          channel: 'chat',
+          cognitiveIntent: 'stale_task_control',
+          llmWasCalled: false,
+          requestId,
+          skipActionContinuation: true,
+        }),
+        errorContext: 'Stale task control terminal',
+      });
+      return;
+    }
+    if (
+      !existingSession
+      && resolvedTaskRelation.feedback === 'cancel'
+      && resolvedTaskRelation.taskId
+      && selectedConversation.actionContinuationState?.unfinished
+    ) {
+      if (!beginChatSidecarExecution(executionScope, requestId)) return;
+      addMessageIdempotent({
+        userId: uid,
+        agentId: conversationAgentId,
+        conversationId: selectedConversationId,
+        role: 'user',
+        content: storedUserContent,
+        domain: resolvedDomain,
+        orgId: resolvedOrgId,
+        source: eventSource,
+        channel: 'chat',
+        cognitiveIntent: 'task_cancel',
+        requestId,
+        receivedAt: requestReceivedAt,
+        timestamp: requestReceivedAt,
+        skipActionContinuation: true,
+      });
+      const cancelled = cancelConversationActionExecution(
+        selectedConversationId,
+        uid,
+        'Cancelled by the user.',
+        selectedConversation.actionContinuationState?.activeRequestId
+          ? controlTargetRequestId || undefined
+          : undefined,
+      );
+      const cancelledCurrentTask = cancelled?.taskId === resolvedTaskRelation.taskId
+        && cancelled.status === 'cancelled';
+      const responseText = cancelledCurrentTask
+        ? CN_TASK_EXECUTION_MESSAGES.cancelled
+        : CN_TASK_EXECUTION_MESSAGES.staleControl;
+      if (cancelledCurrentTask) {
+        resolvedTaskRelation = { ...resolvedTaskRelation, revision: cancelled?.revision };
+      }
+      try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
+      await commitDeterministicTerminal({
+        payload: {
+          text: responseText,
+          agentName: 'Lumi',
+          sidecar: true,
+          finalized: true,
+          blocked: false,
+          reason: cancelledCurrentTask ? 'cancelled_by_user' : 'stale_control',
+        },
+        persistAssistantMessage: () => addMessageIdempotent({
+          userId: uid,
+          agentId: conversationAgentId,
+          conversationId: selectedConversationId,
+          role: 'assistant',
+          content: responseText,
+          domain: resolvedDomain,
+          orgId: resolvedOrgId,
+          source: eventSource,
+          channel: 'chat',
+          cognitiveIntent: 'task_cancel',
+          requestId,
+          skipActionContinuation: true,
+        }),
+        errorContext: 'Task cancellation terminal',
+      });
+      return;
+    }
     if (
       existingSession
       && !buildDeterministicWorkTaskStatusCommand(visibleUserText)
-      && classifyConversationActionFollowupIntent(
-        visibleUserText,
-        activeConversationForStatus?.actionContinuationState,
-      ) === 'status'
+      && resolvedTaskRelation.feedback === 'status'
     ) {
       if (!beginChatSidecarExecution(executionScope, requestId)) return;
       if (!controlTargetRequestId || controlTargetRequestId !== existingSession.requestId) {
         try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
-        emitAgent('agent:response', {
+        await commitDeterministicTerminal({ payload: {
           text: CN_TASK_EXECUTION_MESSAGES.staleControl,
           agentName: 'Lumi',
           sidecar: true,
           finalized: true,
           blocked: false,
           reason: 'stale_control',
-        });
+        }, errorContext: 'Stale status control terminal' });
         return;
       }
       const activeConversation = activeConversationForStatus || getActiveConversation(
@@ -975,23 +1267,26 @@ export function registerChatHandler(
           skipActionContinuation: true,
         });
       }
-      const statusText = activeConversation
+      const statusText = activeConversation && resolvedTaskRelation.taskId
         ? getConversationActionStatus(activeConversation.id, uid, visibleUserText, activeConversation.actionContinuationState)
         : CN_TASK_EXECUTION_MESSAGES.activeWithoutReceipt;
       try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
-      const statusCommitted = emitAgent('agent:response', {
-        text: statusText,
-        agentName: 'Lumi',
-        source: eventSource,
-        requestId,
-        sidecar: true,
-        finalized: true,
-        blocked: false,
-        reason: '',
+      await commitDeterministicTerminal({
+        payload: {
+          text: statusText,
+          agentName: 'Lumi',
+          source: eventSource,
+          requestId,
+          sidecar: true,
+          finalized: true,
+          blocked: false,
+          reason: '',
+        },
+        persistAssistantMessage: activeConversation
+          ? () => addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId: activeConversation.id, role: 'assistant', content: statusText, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', cognitiveIntent: 'task_status', requestId, skipActionContinuation: true })
+          : undefined,
+        errorContext: 'Active task status terminal',
       });
-      if (statusCommitted && activeConversation) {
-        addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId: activeConversation.id, role: 'assistant', content: statusText, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', cognitiveIntent: 'task_status', requestId, skipActionContinuation: true });
-      }
       return;
     }
 
@@ -999,24 +1294,31 @@ export function registerChatHandler(
     // independent work wait behind the current foreground lease; only an
     // explicit replacement aborts it.
     const previousSession = chatExecutionQueue.getTail(sessionKey);
-    const activeMessageRelation = previousSession
-      ? classifyActiveTaskMessage(
-          visibleUserText,
-          activeConversationForStatus?.actionContinuationState,
-        )
-      : null;
+    if (previousSession && previousSession.requestId !== existingSession?.requestId) {
+      resolvedTaskRelation = resolveActiveTaskMessageRelation(
+        visibleUserText,
+        activeConversationForStatus?.actionContinuationState || selectedConversation.actionContinuationState,
+        {
+          activeRequestId: previousSession.requestId,
+          controlTargetRequestId,
+          controlTargetTaskId,
+          controlTargetRevision,
+        },
+      );
+    }
+    const activeMessageRelation = previousSession ? resolvedTaskRelation.relation : null;
     let acknowledged = false;
     if (previousSession && activeMessageRelation === 'cancel') {
       if (!beginChatSidecarExecution(executionScope, requestId)) return;
       if (!controlTargetRequestId) {
-        emitAgent('agent:response', {
+        await commitDeterministicTerminal({ payload: {
           text: CN_TASK_EXECUTION_MESSAGES.staleControl,
           agentName: 'Lumi',
           sidecar: true,
           finalized: true,
           blocked: false,
           reason: 'missing_control_target',
-        });
+        }, errorContext: 'Missing cancellation target terminal' });
         try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
         return;
       }
@@ -1026,13 +1328,17 @@ export function registerChatHandler(
         // status lookup instead of a second cancellation of newer work.
         await persistChatSidecarCancellationIntent(executionScope, requestId, controlTargetRequestId);
       } catch (error: any) {
-        const message = String(error?.message || 'Unable to reserve cancellation request');
-        emitAgent('agent:error', {
-          message,
-          code: 'CHAT_CONTROL_RECEIPT_WRITE_FAILED',
-          sidecar: true,
+        const publicError = sanitizeChatAgentErrorPayload({ code: 'CHAT_CONTROL_RECEIPT_WRITE_FAILED' });
+        await commitDeterministicTerminal({
+          event: 'agent:error',
+          payload: {
+            message: publicError.message,
+            code: 'CHAT_CONTROL_RECEIPT_WRITE_FAILED',
+            sidecar: true,
+          },
+          errorContext: 'Cancellation reservation failure terminal',
         });
-        try { ack?.({ ok: false, requestId, error: message }); } catch {}
+        try { ack?.({ ok: false, requestId, error: publicError.message }); } catch {}
         return;
       }
       addMessageIdempotent({
@@ -1058,42 +1364,48 @@ export function registerChatHandler(
       emitAgent('agent:status', { status: 'cancelling', sidecar: true });
       const currentTarget = chatExecutionQueue.getByRequestId(sessionKey, controlTargetRequestId);
       if (!currentTarget) {
-        const staleCommitted = emitAgent('agent:response', {
-          text: CN_TASK_EXECUTION_MESSAGES.staleControl,
-          agentName: 'Lumi',
-          sidecar: true,
-          finalized: true,
-          blocked: false,
-          reason: 'stale_control',
+        await commitDeterministicTerminal({
+          payload: {
+            text: CN_TASK_EXECUTION_MESSAGES.staleControl,
+            agentName: 'Lumi',
+            sidecar: true,
+            finalized: true,
+            blocked: false,
+            reason: 'stale_control',
+          },
+          persistAssistantMessage: () => addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId: selectedConversationId, role: 'assistant', content: CN_TASK_EXECUTION_MESSAGES.staleControl, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', cognitiveIntent: 'task_cancel', requestId, skipActionContinuation: true }),
+          errorContext: 'Stale cancellation terminal',
         });
-        if (staleCommitted) {
-          addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId: selectedConversationId, role: 'assistant', content: CN_TASK_EXECUTION_MESSAGES.staleControl, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', cognitiveIntent: 'task_cancel', requestId, skipActionContinuation: true });
-        }
         return;
       }
       try {
         await chatExecutionQueue.cancelRequest(sessionKey, controlTargetRequestId);
       } catch (error: any) {
-        emitAgent('agent:error', {
-          message: String(error?.message || 'Cancellation did not settle'),
-          code: 'CHAT_CONTROL_CANCEL_FAILED',
-          sidecar: true,
+        await commitDeterministicTerminal({
+          event: 'agent:error',
+          payload: {
+            message: sanitizeChatAgentErrorPayload({ code: 'CHAT_CONTROL_CANCEL_FAILED' }).message,
+            code: 'CHAT_CONTROL_CANCEL_FAILED',
+            sidecar: true,
+          },
+          errorContext: 'Cancellation failure terminal',
         });
         return;
       }
-      const cancelCommitted = emitAgent('agent:response', {
-        text: CN_TASK_EXECUTION_MESSAGES.cancelled,
-        agentName: 'Lumi',
-        source: eventSource,
-        requestId,
-        sidecar: true,
-        finalized: true,
-        blocked: false,
-        reason: 'cancelled_by_user',
+      await commitDeterministicTerminal({
+        payload: {
+          text: CN_TASK_EXECUTION_MESSAGES.cancelled,
+          agentName: 'Lumi',
+          source: eventSource,
+          requestId,
+          sidecar: true,
+          finalized: true,
+          blocked: false,
+          reason: 'cancelled_by_user',
+        },
+        persistAssistantMessage: () => addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId: selectedConversationId, role: 'assistant', content: CN_TASK_EXECUTION_MESSAGES.cancelled, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', cognitiveIntent: 'task_cancel', requestId, skipActionContinuation: true }),
+        errorContext: 'Cancellation completion terminal',
       });
-      if (cancelCommitted) {
-        addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId: selectedConversationId, role: 'assistant', content: CN_TASK_EXECUTION_MESSAGES.cancelled, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', cognitiveIntent: 'task_cancel', requestId, skipActionContinuation: true });
-      }
       return;
     }
 
@@ -1107,7 +1419,7 @@ export function registerChatHandler(
       resolvedOrgId,
       { userText: visibleUserText, conversationId: selectedConversationId },
     );
-    const conversation = conversationTurn.conversation;
+    let conversation = conversationTurn.conversation;
     if (conversation.id !== selectedConversationId) {
       clearPendingConfirmation(uid, confirmationScope)
         || clearPendingConfirmation(uid, confirmationChannelScope);
@@ -1130,7 +1442,7 @@ export function registerChatHandler(
       pendingConfirmation = null;
       pendingConfirmationPrompt = '';
     }
-    addMessageIdempotent({
+    const acceptedUserMessageId = addMessageIdempotent({
       userId: uid,
       agentId: conversationAgentId,
       conversationId: conversation.id,
@@ -1140,7 +1452,11 @@ export function registerChatHandler(
       orgId: resolvedOrgId,
       source: eventSource,
       channel: 'chat',
-      cognitiveIntent: confirmationCancellationRequested ? 'task_cancel' : undefined,
+      cognitiveIntent: confirmationCancellationRequested
+        ? 'task_cancel'
+        : resolvedTaskRelation.binding === 'active_task' || resolvedTaskRelation.binding === 'previous_task'
+          ? `task_${resolvedTaskRelation.feedback}`
+          : undefined,
       requestId,
       receivedAt: requestReceivedAt,
       timestamp: requestReceivedAt,
@@ -1174,23 +1490,52 @@ export function registerChatHandler(
         source: eventSource,
         requestId,
         waitingForRequestId: previousSession.requestId,
+        taskRelation: resolvedTaskRelation,
       });
     }
     if (!await sessionLease.waitForTurn()) {
-      const cancelledCommitted = emitAgent('agent:response', {
-        text: CN_TASK_EXECUTION_MESSAGES.cancelled,
-        agentName: 'Lumi',
-        finalized: true,
-        blocked: true,
-        reason: 'cancelled',
+      await commitDeterministicTerminal({
+        payload: {
+          text: CN_TASK_EXECUTION_MESSAGES.cancelled,
+          agentName: 'Lumi',
+          finalized: true,
+          blocked: true,
+          reason: 'cancelled',
+        },
+        persistAssistantMessage: () => addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId: selectedConversationId, role: 'assistant', content: CN_TASK_EXECUTION_MESSAGES.cancelled, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', cognitiveIntent: 'task_cancel', requestId }),
+        errorContext: 'Queued cancellation terminal',
       });
-      if (cancelledCommitted) {
-        addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId: selectedConversationId, role: 'assistant', content: CN_TASK_EXECUTION_MESSAGES.cancelled, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', cognitiveIntent: 'task_cancel', requestId });
-      }
       releaseChatSession();
       return;
     }
-    const superseded = beginChatExecution(executionScope, requestId);
+    let superseded = null as Awaited<ReturnType<typeof beginChatExecutionDurably>>;
+    try {
+      superseded = await beginChatExecutionDurably(executionScope, requestId, {
+        text: chatDurabilityUnknownText(visibleUserText),
+        agentName: 'Lumi',
+      });
+    } catch (error) {
+      console.error('[ChatHandler] Superseded terminal persistence failed:', error);
+      const unknownPayload = normalizeAgentPayload('agent:response', {
+        text: chatDurabilityUnknownText(visibleUserText),
+        agentName: 'Lumi',
+        finalized: true,
+        blocked: true,
+        reason: 'persistence_unknown',
+      });
+      try {
+        await recordChatExecutionPersistenceUnknownDurably(
+          executionScope,
+          requestId,
+          unknownPayload,
+        );
+      } catch (unknownError) {
+        console.error('[ChatHandler] Replacement unknown receipt persistence failed:', unknownError);
+      }
+      publishRecordedAgent('agent:response', unknownPayload);
+      releaseChatSession();
+      return;
+    }
     if (superseded?.terminalEvent) {
       io.to(executionRoom).emit(superseded.terminalEvent.event, superseded.terminalEvent.payload);
     }
@@ -1200,13 +1545,87 @@ export function registerChatHandler(
     }
 
     try {
+      // The turn may have waited behind one or more executions. Re-read the
+      // durable conversation and resolve the user's feedback against that
+      // exact revision. Never merge a receive-time task id/revision over a
+      // newer state: explicit controls are optimistic-concurrency fences.
+      const refreshedConversation = getConversationForScope(
+        conversation.id,
+        uid,
+        resolvedDomain,
+        resolvedOrgId,
+      );
+      if (!refreshedConversation) {
+        await commitDeterministicTerminal({
+          event: 'agent:error',
+          payload: {
+            message: 'Conversation is unavailable for this user or workspace',
+            code: 'CHAT_CONVERSATION_REFRESH_FAILED',
+          },
+          errorContext: 'Conversation refresh failure terminal',
+        });
+        releaseChatSession();
+        return;
+      }
+      conversation = refreshedConversation;
+      resolvedTaskRelation = resolveActiveTaskMessageRelation(
+        visibleUserText,
+        conversation.actionContinuationState,
+        {
+          activeRequestId: conversation.actionContinuationState?.activeRequestId,
+          controlTargetRequestId,
+          controlTargetTaskId,
+          controlTargetRevision,
+        },
+      );
+      emitAgent('agent:task_relation', { relation: resolvedTaskRelation });
+      if (resolvedTaskRelation.binding === 'stale') {
+        await commitDeterministicTerminal({
+          payload: {
+            text: CN_TASK_EXECUTION_MESSAGES.staleControl,
+            agentName: 'Lumi',
+            finalized: true,
+            blocked: false,
+            reason: resolvedTaskRelation.reason || 'stale_control',
+          },
+          persistAssistantMessage: () => addMessageIdempotent({
+            userId: uid,
+            agentId: conversationAgentId,
+            conversationId: conversation.id,
+            role: 'assistant',
+            content: CN_TASK_EXECUTION_MESSAGES.staleControl,
+            domain: resolvedDomain,
+            orgId: resolvedOrgId,
+            source: eventSource,
+            channel: 'chat',
+            cognitiveIntent: 'stale_task_control',
+            llmWasCalled: false,
+            requestId,
+            skipActionContinuation: true,
+          }),
+          errorContext: 'Stale foreground task terminal',
+        });
+        releaseChatSession();
+        return;
+      }
+
       // Prior-turn receipt questions are deterministic ledger reads. Resolve
       // them before memory embeddings, RAG, personality assembly, or any model
       // client so a slow provider cannot block a local execution-status answer.
-      const acceptedFollowupIntent = classifyConversationActionFollowupIntent(
-        visibleUserText,
-        conversation.actionContinuationState,
-      );
+      const acceptedFollowupIntent = resolvedTaskRelation.binding === 'active_task'
+        || resolvedTaskRelation.binding === 'previous_task'
+        ? resolvedTaskRelation.feedback === 'status'
+          ? 'status' as const
+          : ['continue', 'correction', 'accept', 'retry'].includes(resolvedTaskRelation.feedback)
+            ? 'execute' as const
+            : classifyConversationActionFollowupIntent(
+                visibleUserText,
+                conversation.actionContinuationState,
+              )
+        : classifyConversationActionFollowupIntent(
+            visibleUserText,
+            conversation.actionContinuationState,
+          );
       const acceptedNormalizedIntent = normalizeActionIntent(visibleUserText);
       if (
         acceptedFollowupIntent === 'status'
@@ -1229,15 +1648,15 @@ export function registerChatHandler(
               conversation.actionContinuationState,
             );
         const responseIntent = priorToolReceiptQuestion ? 'execution_facts' : 'task_status';
-        const committed = emitAgent('agent:response', {
-          text: statusText,
-          agentName: 'Lumi',
-          finalized: true,
-          blocked: false,
-          reason: responseIntent,
-        });
-        if (committed) {
-          addMessageIdempotent({
+        await commitDeterministicTerminal({
+          payload: {
+            text: statusText,
+            agentName: 'Lumi',
+            finalized: true,
+            blocked: false,
+            reason: responseIntent,
+          },
+          persistAssistantMessage: () => addMessageIdempotent({
             userId: uid,
             agentId: conversationAgentId,
             conversationId: conversation.id,
@@ -1250,18 +1669,59 @@ export function registerChatHandler(
             cognitiveIntent: responseIntent,
             llmWasCalled: false,
             requestId,
-          });
-          emitConversationUpdated({
+          }),
+          publishAfter: () => {
+            emitConversationUpdated({
             conversationId: conversation.id,
             agentId: conversationAgentId,
             source: priorToolReceiptQuestion ? 'chat_conversation_execution_facts' : 'chat_task_status',
             rolledOver: conversationTurn.rolledOver,
-            previousConversationId: conversationTurn.previousConversationId,
-          });
-        }
-        emitAgent('agent:status', { status: 'idle', agentName: 'Lumi' });
+              previousConversationId: conversationTurn.previousConversationId,
+            });
+          },
+          errorContext: 'Deterministic task status terminal',
+        });
         releaseChatSession();
         return;
+      }
+
+      // `deferActionPreparation` persisted only the transcript while this
+      // request waited. Now that this request owns the serial lease, bind its
+      // exact user row. A different pending request is an integrity failure,
+      // not permission to overwrite the pointer and mis-attribute receipts.
+      if (resolvedTaskRelation.feedback !== 'status') {
+        const preserveExistingTask = (
+          ['active_task', 'previous_task'].includes(resolvedTaskRelation.binding)
+          && ['continue', 'correction', 'accept', 'retry', 'repeat'].includes(
+            resolvedTaskRelation.feedback,
+          )
+        );
+        const boundTurn = bindConversationActionExecutionTurn({
+          conversationId: conversation.id,
+          userId: uid,
+          userText: visibleUserText,
+          requestId,
+          userMessageId: acceptedUserMessageId,
+          preserveExistingTask,
+        });
+        if (!boundTurn) {
+          await commitDeterministicTerminal({
+            event: 'agent:error',
+            payload: {
+              message: 'Unable to bind this queued message to the action pipeline',
+              code: 'CHAT_ACTION_TURN_BIND_FAILED',
+            },
+            errorContext: 'Action turn binding failure terminal',
+          });
+          releaseChatSession();
+          return;
+        }
+        conversation = getConversationForScope(
+          conversation.id,
+          uid,
+          resolvedDomain,
+          resolvedOrgId,
+        ) || conversation;
       }
 
       // Look up agent record for memory/emotion isolation
@@ -1363,18 +1823,22 @@ export function registerChatHandler(
           const responseText = pendingConfirmationCleared
             ? '已取消刚才等待确认的操作；它没有执行，也不会继续发送。'
             : CN_TASK_EXECUTION_MESSAGES.cancelled;
-          emitAgent("agent:response", { text: responseText, agentName: "Lumi", finalized: true, blocked: false, reason: '' });
-          addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', cognitiveIntent: 'task_cancel', requestId, skipActionContinuation: true });
-          emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
-          emitAgent("agent:status", { status: "idle" });
+          await commitDeterministicTerminal({
+            payload: { text: responseText, agentName: "Lumi", finalized: true, blocked: false, reason: '' },
+            persistAssistantMessage: () => addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', cognitiveIntent: 'task_cancel', requestId, skipActionContinuation: true }),
+            publishAfter: () => emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId }),
+            errorContext: 'Pending confirmation cancellation terminal',
+          });
           releaseChatSession();
           return;
         }
         const responseText = '当前没有等待确认或正在执行的操作。';
-        emitAgent("agent:response", { text: responseText, agentName: "Lumi", finalized: true, blocked: false, reason: '' });
-        addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', cognitiveIntent: 'task_cancel', requestId, skipActionContinuation: true });
-        emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
-        emitAgent("agent:status", { status: "idle" });
+        await commitDeterministicTerminal({
+          payload: { text: responseText, agentName: "Lumi", finalized: true, blocked: false, reason: '' },
+          persistAssistantMessage: () => addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', cognitiveIntent: 'task_cancel', requestId, skipActionContinuation: true }),
+          publishAfter: () => emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId }),
+          errorContext: 'No pending confirmation terminal',
+        });
         releaseChatSession();
         return;
       }
@@ -1404,6 +1868,15 @@ export function registerChatHandler(
           : [...historyItems, ...persistedConversationHistory],
         conversation?.actionContinuationState,
       );
+      const taskRelationContext = formatActiveTaskRelationContext(
+        resolvedTaskRelation,
+        conversation?.actionContinuationState,
+      );
+      if (taskRelationContext) {
+        actionContinuationBridge = [actionContinuationBridge, taskRelationContext]
+          .filter(Boolean)
+          .join('\n\n');
+      }
       const operationMode = (() => {
         if (typeof data.operationMode === 'string') return normalizeOperationMode(data.operationMode);
         try {
@@ -1657,16 +2130,36 @@ export function registerChatHandler(
             ?? options.finalizationBlocked !== true,
           finalizationReason: options.finalizationReason,
         });
-        if (executionWriteback.recorded) {
-          emitAgent('agent:task_execution_writeback', executionWriteback);
-        }
         return executionWriteback;
       };
+      const publishDurableTaskRelation = () => {
+        if (!conversationId) return;
+        const durableConversation = getConversationForScope(
+          conversationId,
+          uid,
+          resolvedDomain,
+          resolvedOrgId,
+        );
+        const durableState = durableConversation?.actionContinuationState;
+        if (!durableState?.taskId) return;
+        resolvedTaskRelation = {
+          ...resolvedTaskRelation,
+          binding: durableState.unfinished ? 'active_task' : 'previous_task',
+          taskId: durableState.taskId,
+          revision: durableState.revision,
+          targetRequestId: durableState.activeRequestId,
+        };
+        io.to(executionRoom).emit('agent:task_relation', {
+          relation: resolvedTaskRelation,
+          taskRelation: resolvedTaskRelation,
+          source: eventSource,
+          requestId,
+          conversationId,
+          phase: 'terminal_persisted',
+        });
+      };
 
-      const actionFollowupIntent = classifyConversationActionFollowupIntent(
-        visibleUserText,
-        conversation?.actionContinuationState,
-      );
+      const actionFollowupIntent = acceptedFollowupIntent;
       const executionFactText = conversationId && isConversationExecutionFactQuestion(visibleUserText)
         ? formatConversationExecutionFactAnswer(getConversationExecutionFacts({
           conversationId,
@@ -1693,15 +2186,16 @@ export function registerChatHandler(
             }
           : null;
       if (deterministicConversationResponse) {
-        const committed = emitAgent('agent:response', {
-          text: deterministicConversationResponse.text,
-          agentName: personality.name,
-          finalized: true,
-          blocked: false,
-          reason: deterministicConversationResponse.intent,
-        });
-        if (committed && conversationId) {
-          addMessageIdempotent({
+        await commitDeterministicTerminal({
+          payload: {
+            text: deterministicConversationResponse.text,
+            agentName: personality.name,
+            finalized: true,
+            blocked: false,
+            reason: deterministicConversationResponse.intent,
+          },
+          persistAssistantMessage: conversationId
+            ? () => addMessageIdempotent({
             userId: uid,
             agentId: conversationAgentId,
             conversationId,
@@ -1715,16 +2209,21 @@ export function registerChatHandler(
             cognitiveIntent: deterministicConversationResponse.intent,
             llmWasCalled: false,
             requestId,
-          });
-          emitConversationUpdated({
+          })
+            : undefined,
+          publishAfter: conversationId
+            ? () => {
+            emitConversationUpdated({
             conversationId,
             agentId: conversationAgentId,
             source: deterministicConversationResponse.source,
             rolledOver: conversationTurn.rolledOver,
-            previousConversationId: conversationTurn.previousConversationId,
-          });
-        }
-        emitAgent('agent:status', { status: 'idle', agentName: personality.name });
+              previousConversationId: conversationTurn.previousConversationId,
+            });
+          }
+            : undefined,
+          errorContext: 'Deterministic conversation terminal',
+        });
         releaseChatSession();
         return;
       }
@@ -1851,15 +2350,49 @@ export function registerChatHandler(
         toolSecurityContext.executionBoundary,
       );
       const modelToolProjection = buildModelToolProjection(executionDecision);
-      // A natural-language turn must not create or freeze a durable task before
-      // the model has chosen to act. At this point we may only read an existing
-      // task pointer for an explicit continuation. Fresh task state is derived
-      // later from canonical tool receipts (or from a structured client event).
+      // Natural language still cannot create a durable task before canonical
+      // execution evidence. Explicit feedback may, however, advance an
+      // existing task revision now: this gives correction/retry receipts the
+      // same task identity instead of creating a disconnected replacement.
       const existingActionState = conversation?.actionContinuationState;
-      const actionTaskExecution = existingActionState?.taskId
-        && Boolean(pendingConfirmation || actionFollowupIntent === 'execute')
-        ? { state: existingActionState, kind: 'resume' as const }
+      const bindsExistingAction = Boolean(
+        existingActionState?.taskId
+        && ['active_task', 'previous_task'].includes(resolvedTaskRelation.binding)
+        && ['continue', 'correction', 'accept', 'retry'].includes(resolvedTaskRelation.feedback),
+      );
+      const actionTaskExecution = bindsExistingAction && conversationId
+        ? prepareConversationActionExecution({
+            conversationId,
+            userId: uid,
+            userText: visibleUserText,
+            requestId,
+            userMessageId: acceptedUserMessageId,
+            toolPolicy: modelCapabilityPolicy,
+            forceResume: true,
+            preserveExistingTask: true,
+          })
+        : existingActionState?.taskId && pendingConfirmation
+          ? prepareConversationActionExecution({
+              conversationId: conversationId || selectedConversationId,
+              userId: uid,
+              userText: visibleUserText,
+              requestId,
+              userMessageId: acceptedUserMessageId,
+              toolPolicy: modelCapabilityPolicy,
+              forceResume: true,
+              preserveExistingTask: true,
+            })
         : { state: null, kind: 'conversation' as const };
+      if (actionTaskExecution.state?.taskId) {
+        resolvedTaskRelation = {
+          ...resolvedTaskRelation,
+          binding: 'active_task',
+          taskId: actionTaskExecution.state.taskId,
+          revision: actionTaskExecution.state.revision,
+          targetRequestId: actionTaskExecution.state.activeRequestId || requestId,
+        };
+        emitAgent('agent:task_relation', { relation: resolvedTaskRelation, phase: 'prepared' });
+      }
       const priorTaskRecords = actionTaskExecution.kind === 'resume'
         ? taskReceiptsToRecords(actionTaskExecution.state?.receipts || [])
         : [];
@@ -1868,7 +2401,7 @@ export function registerChatHandler(
       );
       const exposeAgentWork = turnFlow.exposeAgentWork;
       if (toolSecurityContext.executionBoundary !== 'remote_restricted') {
-        effectiveSystemPrompt += '\n\n' + formatClientSelfPrompt(uid, { domain: resolvedDomain, orgId: resolvedOrgId });
+        effectiveSystemPrompt += '\n\n' + formatClientSelfPromptForTurn(uid, visibleUserText, { domain: resolvedDomain, orgId: resolvedOrgId });
       }
       console.log('[ChatHandler] tool gate:', executionDecision.allowToolUse ? 'enabled' : 'chat-only', 'operationMode:', operationMode, 'effective:', effectiveOperationMode, 'surface:', turnFlow.surface, 'clientActionOnly:', clientActionOnlyTurn, 'selfRepair:', selfRepairTurn, 'capabilityLane:', capabilitySelection.lane, 'trace:', intentTrace.summary, 'route:', toolRoute ? `${toolRoute.toolNames.length}/${toolRoute.totalAvailable} ${toolRoute.categories.join(',') || 'fallback'}` : 'none');
       socket.emit('agent:intent_trace', intentTrace);
@@ -1955,6 +2488,7 @@ export function registerChatHandler(
         requestId,
         interactionId,
         source: 'chat',
+        inputTokenBudget: resolveModelRequestInputBudget(),
       };
 
       // Hybrid dispatch is opt-in only; do not change providers unless the user chose auto.
@@ -2155,28 +2689,78 @@ export function registerChatHandler(
           source: 'chat_confirmation',
           flow: { ...turnFlow, routeText: confirmedTask },
         });
-        if (finalized.notification) emitAgent('agent:notification', finalized.notification);
-        emitAgent('agent:response', {
+        const confirmationTerminalPayload = normalizeAgentPayload('agent:response', {
           text: finalized.text,
           agentName: personality.name,
           finalized: true,
           blocked: finalized.blocked,
           reason: finalized.reason || '',
         });
-        if (conversationId) {
-          addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: finalized.text, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', toolCalls: confirmationRecords, cognitiveIntent: finalized.blocked ? 'work_product_guard' : 'confirmation', llmWasCalled: confirmationLlmWasCalled, requestId });
-          scheduleChatSummary(conversationId);
-          emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
-        }
-        persistChatTakeoverExecution(finalized.text, {
-          toolRecords: confirmationRecords,
-          source: 'chat_confirmation',
-          sourceInteractionId: `${interactionId}_confirmation`,
-          capabilitySelection,
-          finalizationBlocked: finalized.blocked,
-          assistantTextTrusted: !finalized.blocked,
-          finalizationReason: finalized.reason,
+        const confirmationUnknownPayload = normalizeAgentPayload('agent:response', {
+          text: chatDurabilityUnknownText(visibleUserText),
+          agentName: personality.name,
+          finalized: true,
+          blocked: true,
+          reason: 'persistence_unknown',
         });
+        const terminalCommitted = await commitChatTerminalBoundary({
+          persistTerminalState: () => persistChatTakeoverExecution(finalized.text, {
+            toolRecords: confirmationRecords,
+            source: 'chat_confirmation',
+            sourceInteractionId: `${interactionId}_confirmation`,
+            capabilitySelection,
+            finalizationBlocked: finalized.blocked,
+            assistantTextTrusted: !finalized.blocked,
+            finalizationReason: finalized.reason,
+          }),
+          persistAssistantMessage: () => {
+            if (!conversationId) return;
+            addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: finalized.text, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', toolCalls: confirmationRecords, cognitiveIntent: finalized.blocked ? 'work_product_guard' : 'confirmation', llmWasCalled: confirmationLlmWasCalled, requestId });
+          },
+          flush: flushDBOrThrow,
+          persistTerminalReceipt: () => recordChatExecutionTerminalEventDurably(
+            executionScope,
+            requestId,
+            'agent:response',
+            confirmationTerminalPayload,
+            confirmationUnknownPayload,
+          ),
+          persistUnknownReceipt: () => recordChatExecutionPersistenceUnknownDurably(
+              executionScope,
+              requestId,
+              confirmationUnknownPayload,
+            ),
+          publishCommitted: executionWriteback => {
+            if (finalized.notification) {
+              publishRecordedAgent(
+                'agent:notification',
+                normalizeAgentPayload('agent:notification', finalized.notification),
+              );
+            }
+            if (executionWriteback?.recorded) {
+              publishRecordedAgent(
+                'agent:task_execution_writeback',
+                normalizeAgentPayload('agent:task_execution_writeback', executionWriteback),
+              );
+            }
+            publishRecordedAgent('agent:response', confirmationTerminalPayload);
+            publishDurableTaskRelation();
+            if (conversationId) {
+              emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
+            }
+          },
+          publishUnknown: () => {
+            publishRecordedAgent('agent:response', confirmationUnknownPayload);
+          },
+          onPersistenceError: error => {
+            console.error('[ChatHandler] Confirmation terminal persistence failed:', error);
+          },
+        });
+        if (!terminalCommitted) {
+          releaseChatSession();
+          return;
+        }
+        if (conversationId) scheduleChatSummary(conversationId);
         if (!finalized.blocked) {
           persistChatLearning(finalized.text, {
             toolRecords: confirmationRecords,
@@ -2184,7 +2768,6 @@ export function registerChatHandler(
             logLabel: 'chat confirmation',
           });
         }
-        emitAgent('agent:status', { status: 'idle', agentName: personality.name });
         releaseChatSession();
         return;
       }
@@ -2770,7 +3353,6 @@ export function registerChatHandler(
       responseText = finalResponse.text;
       if (finalResponse.blocked) {
         console.warn('[ChatHandler] Completion claim blocked:', finalResponse.reason);
-        if (finalResponse.notification) emitAgent("agent:notification", finalResponse.notification);
         if (conversationId && actionTaskExecution.state?.taskId && executionDecision.allowToolUse) {
           setConversationActionExecutionStatus(conversationId, uid, 'blocked', {
             blocker: finalResponse.reason || 'The current work product did not pass final verification.',
@@ -2780,54 +3362,105 @@ export function registerChatHandler(
         }
       }
 
-      // A completed model turn must unlock the native chat surface before
-      // synchronous persistence, topic extraction, or summary scheduling.
-      // Those durability steps can be slower than the final Socket.IO frame;
-      // holding the terminal event behind them leaves the user staring at a
-      // stale streaming fragment with the send button disabled.
-      emitAgent("agent:response", {
+      // Completion is a durability claim. Keep the native terminal frame
+      // behind the task/message write and strict database flush.
+      const responseTerminalPayload = normalizeAgentPayload('agent:response', {
         text: responseText,
         agentName: personality.name,
         finalized: true,
         blocked: finalResponse.blocked,
         reason: finalResponse.reason || '',
       });
-
-      persistChatTakeoverExecution(responseText, {
-        toolRecords: allToolRecords,
-        source: 'chat',
-        sourceInteractionId: interactionId,
-        capabilitySelection,
-        finalizationBlocked: finalResponse.blocked,
-        assistantTextTrusted: !finalResponse.blocked,
-        finalizationReason: finalResponse.reason,
+      const responseUnknownPayload = normalizeAgentPayload('agent:response', {
+        text: chatDurabilityUnknownText(visibleUserText),
+        agentName: personality.name,
+        finalized: true,
+        blocked: true,
+        reason: 'persistence_unknown',
       });
+      const terminalCommitted = await commitChatTerminalBoundary({
+        persistTerminalState: () => persistChatTakeoverExecution(responseText, {
+          toolRecords: allToolRecords,
+          source: 'chat',
+          sourceInteractionId: interactionId,
+          capabilitySelection,
+          finalizationBlocked: finalResponse.blocked,
+          assistantTextTrusted: !finalResponse.blocked,
+          finalizationReason: finalResponse.reason,
+        }),
+        persistAssistantMessage: () => {
+          if (!conversationId) return;
+          // Keep terminal tool evidence immediately before the assistant row in
+          // the same strict durability boundary.
+          for (const tc of allToolRecords) {
+            if (!tc.error && !String(tc.result || '').trim()) continue;
+            const tcSummary = summarizeToolRecordForPersistence(tc);
+            addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'tool', content: tcSummary, domain: resolvedDomain, orgId: resolvedOrgId });
+          }
+          addMessageIdempotent({
+            userId: uid,
+            agentId: conversationAgentId,
+            conversationId,
+            role: 'assistant',
+            content: responseText,
+            personality: personality.id,
+            domain: resolvedDomain,
+            orgId: resolvedOrgId,
+            source: eventSource,
+            channel: 'chat',
+            toolCalls: allToolRecords.length ? allToolRecords : undefined,
+            cognitiveIntent: finalResponse.blocked ? 'work_product_guard' : cognition.intent.category,
+            llmWasCalled,
+            requestId,
+          });
+        },
+        flush: flushDBOrThrow,
+        persistTerminalReceipt: () => recordChatExecutionTerminalEventDurably(
+          executionScope,
+          requestId,
+          'agent:response',
+          responseTerminalPayload,
+          responseUnknownPayload,
+        ),
+        persistUnknownReceipt: () => recordChatExecutionPersistenceUnknownDurably(
+            executionScope,
+            requestId,
+            responseUnknownPayload,
+          ),
+        publishCommitted: executionWriteback => {
+          if (finalResponse.notification) {
+            publishRecordedAgent(
+              'agent:notification',
+              normalizeAgentPayload('agent:notification', finalResponse.notification),
+            );
+          }
+          if (executionWriteback?.recorded) {
+            publishRecordedAgent(
+              'agent:task_execution_writeback',
+              normalizeAgentPayload('agent:task_execution_writeback', executionWriteback),
+            );
+          }
+          publishRecordedAgent('agent:response', responseTerminalPayload);
+          publishDurableTaskRelation();
+          if (conversationId) {
+            emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
+          }
+        },
+        publishUnknown: () => {
+          publishRecordedAgent('agent:response', responseUnknownPayload);
+        },
+        onPersistenceError: error => {
+          console.error('[ChatHandler] Terminal persistence failed:', error);
+        },
+      });
+      if (!terminalCommitted) {
+        releaseChatSession();
+        return;
+      }
 
-      // Save to conversation via conversation manager (reuse conversationId from setup)
+      // Post-commit enrichment must never delay or precede the durable terminal.
 
       if (conversationId) {
-        // Persist tool calls interleaved before the assistant response
-        for (const tc of allToolRecords) {
-          if (!tc.error && !String(tc.result || '').trim()) continue;
-          const tcSummary = summarizeToolRecordForPersistence(tc);
-          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'tool', content: tcSummary, domain: resolvedDomain, orgId: resolvedOrgId });
-        }
-        addMessageIdempotent({
-          userId: uid,
-          agentId: conversationAgentId,
-          conversationId,
-          role: 'assistant',
-          content: responseText,
-          personality: personality.id,
-          domain: resolvedDomain,
-          orgId: resolvedOrgId,
-          source: eventSource,
-          channel: 'chat',
-          toolCalls: allToolRecords.length ? allToolRecords : undefined,
-          cognitiveIntent: finalResponse.blocked ? 'work_product_guard' : cognition.intent.category,
-          llmWasCalled,
-          requestId,
-        });
         // (conversation_updated NOW emitted AFTER agent:response — see below)
 
         // Topic tracking — extract and record topics for cross-session continuity
@@ -2842,12 +3475,6 @@ export function registerChatHandler(
         // filtering, and captured-count persistence.
         scheduleChatSummary(conversationId);
       }
-
-      // Re-emit conversation_updated AFTER response so the client syncs from API with complete data
-      if (conversationId) {
-        emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
-      }
-      emitAgent("agent:status", { status: "idle" });
 
       if (!finalResponse.blocked) {
         persistChatLearning(responseText, { toolRecords: allToolRecords, logLabel: 'chat' });
@@ -3024,8 +3651,11 @@ export function registerChatHandler(
 
     } catch (error: any) {
       console.error("[Socket Agent Error]:", error);
-      emitAgent("agent:error", { message: error.message });
-      emitAgent("agent:status", { status: "error" });
+      await commitDeterministicTerminal({
+        event: 'agent:error',
+        payload: sanitizeChatAgentErrorPayload({ code: chatPublicErrorCodeForException(error) }),
+        errorContext: 'Unhandled chat failure terminal',
+      });
     } finally {
       releaseChatSession();
     }

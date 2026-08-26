@@ -8,7 +8,10 @@ import {
   Command,
   Cpu,
   Loader2,
+  Pause,
+  Play,
   RefreshCw,
+  XCircle,
 } from 'lucide-react';
 import { useApp } from '@/contexts/AppContext';
 import { useLumiScene } from '@/hooks/useLumiScene';
@@ -21,15 +24,20 @@ import type { Locale } from '@/i18n/runtime';
 import { taskCompletionFeedbackCopy } from '@/i18n/locales/taskCompletionFeedback';
 import { LumiScenePanel } from './LumiScenePanel';
 import { RuntimeEvidencePanel } from './RuntimeEvidencePanel';
-import { AgentOfficeScene, type OfficeWorker } from './AgentOfficeScene';
+import {
+  LocalAgentSphere,
+  type LocalAgentCosmosAgent,
+  type LocalAgentCosmosTask,
+} from './LocalAgentSphere';
 import { TaskCompletionFeedbackDetails } from './TaskCompletionFeedbackDetails';
 import {
   normalizeTaskCompletionFeedback,
   type TaskCompletionFeedback,
 } from './workflowTypes';
 import type { CommandCenterView } from './commandCenterTypes';
+import { isCurrentScopeRequest } from './scopeRequestGuard';
 
-type CommandAgent = {
+export type CommandAgent = {
   id: string;
   name: string;
   category?: string;
@@ -40,14 +48,40 @@ type CommandAgent = {
   lastRunStatus?: string;
 };
 
-type BackgroundTask = {
+export type BackgroundTask = {
   id: string;
+  kind?: 'delegation' | 'autonomy' | 'takeover';
   title?: string;
   status?: string;
+  phase?: string;
   workerNames?: string[];
   toolCallsCount?: number;
   resultPreview?: string;
   error?: string;
+  blocker?: string;
+  nextAction?: string;
+  cancelRequested?: boolean;
+  pauseRequested?: boolean;
+  controls?: {
+    canPause: boolean;
+    canResume: boolean;
+    canCancel: boolean;
+  };
+  progress?: {
+    checkpoint: string;
+    completedUnits: number;
+    totalUnits: number;
+    receiptCount: number;
+    toolCallCount: number;
+  };
+  evidence?: {
+    terminal: boolean;
+    verification: string;
+    evidenceCount: number;
+    toolCount: number;
+    workerCount: number;
+    reasonCode: string;
+  };
   updatedAt?: string;
   completedAt?: string;
   completionFeedback?: TaskCompletionFeedback;
@@ -55,25 +89,75 @@ type BackgroundTask = {
 
 type DeskState = 'ready' | 'working' | 'paused' | 'attention';
 
-const ACTIVE_BACKGROUND_STATES = new Set(['queued', 'running', 'pausing', 'cancelling']);
+const ACTIVE_BACKGROUND_STATES = new Set(['pending', 'queued', 'running', 'working', 'pausing', 'cancelling', 'waiting_confirmation']);
 
-function normalizeBackgroundTask(value: unknown): BackgroundTask | null {
+function numeric(value: unknown): number {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? Math.max(0, number) : 0;
+}
+
+function hasOwn(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+export function normalizeCommandCenterTask(value: unknown): BackgroundTask | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const task = value as Record<string, unknown>;
   const id = String(task.id || '').trim();
   if (!id) return null;
-  return {
-    id,
-    title: String(task.title || id),
-    status: String(task.status || 'queued'),
-    workerNames: Array.isArray(task.workerNames) ? task.workerNames.map(String).filter(Boolean) : [],
-    toolCallsCount: Number(task.toolCallsCount || 0),
-    resultPreview: typeof task.resultPreview === 'string' ? task.resultPreview : undefined,
-    error: typeof task.error === 'string' ? task.error : undefined,
-    updatedAt: typeof task.updatedAt === 'string' ? task.updatedAt : undefined,
-    completedAt: typeof task.completedAt === 'string' ? task.completedAt : undefined,
-    completionFeedback: normalizeTaskCompletionFeedback(task.completionFeedback),
-  };
+  const normalized: BackgroundTask = { id };
+  if (hasOwn(task, 'kind')) normalized.kind = task.kind === 'autonomy' || task.kind === 'takeover' ? task.kind : 'delegation';
+  if (hasOwn(task, 'title')) normalized.title = String(task.title || id);
+  if (hasOwn(task, 'status')) normalized.status = String(task.status || 'queued');
+  if (typeof task.phase === 'string') normalized.phase = task.phase;
+  if (Array.isArray(task.workerNames)) normalized.workerNames = task.workerNames.map(String).filter(Boolean);
+  if (hasOwn(task, 'toolCallsCount')) normalized.toolCallsCount = numeric(task.toolCallsCount);
+  if (typeof task.resultPreview === 'string') normalized.resultPreview = task.resultPreview;
+  if (typeof task.error === 'string') normalized.error = task.error;
+  if (typeof task.blocker === 'string') normalized.blocker = task.blocker;
+  if (typeof task.nextAction === 'string') normalized.nextAction = task.nextAction;
+  if (hasOwn(task, 'cancellationRequested') || hasOwn(task, 'cancelRequested')) {
+    normalized.cancelRequested = task.cancellationRequested === true || task.cancelRequested === true;
+  }
+  if (hasOwn(task, 'pauseRequested')) normalized.pauseRequested = task.pauseRequested === true;
+  if (task.controls && typeof task.controls === 'object' && !Array.isArray(task.controls)) {
+    normalized.controls = {
+      canPause: (task.controls as Record<string, unknown>).canPause === true,
+      canResume: (task.controls as Record<string, unknown>).canResume === true,
+      canCancel: (task.controls as Record<string, unknown>).canCancel === true,
+    };
+  }
+  if (task.progress && typeof task.progress === 'object' && !Array.isArray(task.progress)) {
+    const progress = task.progress as Record<string, unknown>;
+    normalized.progress = {
+      checkpoint: String(progress.checkpoint || ''),
+      completedUnits: numeric(progress.completedUnits),
+      totalUnits: numeric(progress.totalUnits),
+      receiptCount: numeric(progress.receiptCount),
+      toolCallCount: numeric(progress.toolCallCount),
+    };
+    if (!hasOwn(task, 'toolCallsCount')) normalized.toolCallsCount = normalized.progress.toolCallCount;
+  }
+  if (task.evidence && typeof task.evidence === 'object' && !Array.isArray(task.evidence)) {
+    const evidence = task.evidence as Record<string, unknown>;
+    normalized.evidence = {
+      terminal: evidence.terminal === true,
+      verification: String(evidence.verification || 'pending'),
+      evidenceCount: numeric(evidence.evidenceCount),
+      toolCount: numeric(evidence.toolCount),
+      workerCount: numeric(evidence.workerCount),
+      reasonCode: String(evidence.reasonCode || ''),
+    };
+  }
+  if (typeof task.updatedAt === 'string') normalized.updatedAt = task.updatedAt;
+  if (typeof task.completedAt === 'string') normalized.completedAt = task.completedAt;
+  const completionFeedback = normalizeTaskCompletionFeedback(task.completionFeedback);
+  if (completionFeedback) normalized.completionFeedback = completionFeedback;
+  return normalized;
+}
+
+export function mergeCommandCenterTasks(previous: BackgroundTask | undefined, incoming: BackgroundTask): BackgroundTask {
+  return { ...(previous || {}), ...incoming };
 }
 
 function deskState(agent: CommandAgent, tasks: BackgroundTask[]): DeskState {
@@ -81,11 +165,57 @@ function deskState(agent: CommandAgent, tasks: BackgroundTask[]): DeskState {
   if (agent.runtime === 'external' && agent.healthStatus !== 'online') return 'attention';
   if (agent.lastRunStatus === 'failed') return 'attention';
   const normalizedName = String(agent.name || '').trim().toLowerCase();
-  const isWorking = tasks.some(task => (
-    ACTIVE_BACKGROUND_STATES.has(String(task.status || '').toLowerCase())
-    && (task.workerNames || []).some(name => String(name || '').trim().toLowerCase() === normalizedName)
+  const isWorking = tasks.some(task => commandCenterTaskIsActive(task) && (
+    (task.workerNames || []).some(name => {
+      const identity = String(name || '').trim().toLowerCase();
+      return identity === normalizedName || identity === String(agent.id || '').trim().toLowerCase();
+    })
   ));
   return isWorking ? 'working' : 'ready';
+}
+
+function taskClaimsAgent(task: BackgroundTask, agent: CommandAgent): boolean {
+  const identities = new Set([agent.id, agent.name].map(value => String(value || '').trim().toLowerCase()).filter(Boolean));
+  return (task.workerNames || []).some(name => identities.has(String(name || '').trim().toLowerCase()));
+}
+
+export function commandCenterTaskIsActive(task: BackgroundTask): boolean {
+  return ACTIVE_BACKGROUND_STATES.has(String(task.status || '').toLowerCase())
+    || ACTIVE_BACKGROUND_STATES.has(String(task.phase || '').toLowerCase());
+}
+
+export function buildCommandCenterCosmosAgents(agents: CommandAgent[], tasks: BackgroundTask[]): LocalAgentCosmosAgent[] {
+  return agents
+    .filter(agent => !['lumi', 'lumi_default'].includes(agent.id))
+    .map(agent => {
+      const state = deskState(agent, tasks);
+      const task = tasks.find(item => commandCenterTaskIsActive(item) && taskClaimsAgent(item, agent));
+      return {
+        id: agent.id,
+        name: agent.name,
+        category: agent.category || 'general',
+        runtime: agent.runtime === 'external' ? 'external' : 'internal',
+        state,
+        taskId: task?.id,
+        taskTitle: task?.title,
+      };
+    });
+}
+
+export function buildCommandCenterCosmosTasks(tasks: BackgroundTask[], agents: LocalAgentCosmosAgent[]): LocalAgentCosmosTask[] {
+  return tasks.map(task => ({
+    id: task.id,
+    title: task.title || task.id,
+    status: task.status || 'unknown',
+    phase: task.phase,
+    active: commandCenterTaskIsActive(task),
+    workerIds: agents
+      .filter(agent => {
+        const identities = new Set([agent.id, agent.name].map(value => String(value || '').trim().toLowerCase()));
+        return (task.workerNames || []).some(worker => identities.has(String(worker || '').trim().toLowerCase()));
+      })
+      .map(agent => agent.id),
+  }));
 }
 
 export function CommandCenterPanel({
@@ -114,9 +244,15 @@ export function CommandCenterPanel({
   const [agents, setAgents] = useState<CommandAgent[]>([]);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [expandedBackgroundTaskId, setExpandedBackgroundTaskId] = useState<string | null>(null);
+  const [taskControlInFlightIds, setTaskControlInFlightIds] = useState<string[]>([]);
+  const [taskControlError, setTaskControlError] = useState('');
+  const [taskLoadError, setTaskLoadError] = useState('');
   const [loading, setLoading] = useState(true);
   const hasLoadedOfficeRef = useRef(false);
-  const refreshInFlightRef = useRef<Promise<void> | null>(null);
+  const scopeGenerationRef = useRef(0);
+  const activeScopeKeyRef = useRef(scopeKey);
+  const refreshInFlightRef = useRef<{ scopeKey: string; generation: number; promise: Promise<void> } | null>(null);
+  const taskControlInFlightRef = useRef(new Set<string>());
   const officeActive = view === 'office' || view === 'team';
   const localRuntimeStatus = useRuntimeStatus({
     enabled: runtimeStatusOverride === undefined && (officeActive || view === 'core'),
@@ -134,31 +270,112 @@ export function CommandCenterPanel({
   });
 
   const refresh = useCallback(async () => {
-    if (refreshInFlightRef.current) return refreshInFlightRef.current;
+    const requestScopeKey = scopeKey;
+    const generation = scopeGenerationRef.current;
+    const requestToken = { scopeKey: requestScopeKey, generation };
+    if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
+    const inFlight = refreshInFlightRef.current;
+    if (inFlight && inFlight.scopeKey === requestScopeKey && inFlight.generation === generation) return inFlight.promise;
     const firstLoad = !hasLoadedOfficeRef.current;
     if (firstLoad) setLoading(true);
-    const request = (async () => {
-      const [agentResult, taskResult] = await Promise.allSettled([
+    let request: Promise<void>;
+    request = (async () => {
+      const [agentResult, taskResult, workResult] = await Promise.allSettled([
         apiFetch('/api/agents').then(async response => response.ok ? response.json() : []),
-        apiFetch('/api/autonomy/background-tasks').then(async response => response.ok ? response.json() : {}),
+        apiFetch('/api/autonomy/background-tasks').then(async response => {
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+          return payload;
+        }),
+        apiFetch('/api/autonomy/work').then(async response => {
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+          return payload;
+        }),
       ]);
+      if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
       if (agentResult.status === 'fulfilled') {
         const payload = agentResult.value;
         setAgents(Array.isArray(payload) ? payload : Array.isArray(payload?.agents) ? payload.agents : []);
       }
-      if (taskResult.status === 'fulfilled') {
-        setBackgroundTasks(Array.isArray(taskResult.value?.tasks)
-          ? taskResult.value.tasks.map(normalizeBackgroundTask).filter((task): task is BackgroundTask => Boolean(task))
-          : []);
+      const recentTasks: BackgroundTask[] = taskResult.status === 'fulfilled' && Array.isArray(taskResult.value?.tasks)
+        ? taskResult.value.tasks.map(normalizeCommandCenterTask).filter((task): task is BackgroundTask => Boolean(task))
+        : [];
+      const activeWork: BackgroundTask[] = workResult.status === 'fulfilled' && Array.isArray(workResult.value?.items)
+        ? workResult.value.items.map(normalizeCommandCenterTask).filter((task): task is BackgroundTask => Boolean(task))
+        : [];
+      const merged = new Map<string, BackgroundTask>(recentTasks.map(task => [task.id, task]));
+      for (const task of activeWork) merged.set(task.id, mergeCommandCenterTasks(merged.get(task.id), task));
+      setBackgroundTasks([...merged.values()]);
+      const taskLoadErrors = [taskResult, workResult]
+        .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+        .map(result => result.reason instanceof Error ? result.reason.message : String(result.reason));
+      if (workResult.status === 'fulfilled' && workResult.value?.ok === false) {
+        const diagnostics = Array.isArray(workResult.value?.diagnostics)
+          ? workResult.value.diagnostics.map((item: { source?: unknown; code?: unknown }) => `${String(item.source || 'runtime')}:${String(item.code || 'degraded')}`)
+          : [];
+        taskLoadErrors.push(diagnostics.join(', ') || String(workResult.value?.status || 'Runtime work snapshot is degraded.'));
       }
+      setTaskLoadError(taskLoadErrors.join(' · '));
       hasLoadedOfficeRef.current = true;
       if (firstLoad) setLoading(false);
     })().finally(() => {
-      refreshInFlightRef.current = null;
+      if (refreshInFlightRef.current?.promise === request) refreshInFlightRef.current = null;
     });
-    refreshInFlightRef.current = request;
+    refreshInFlightRef.current = { scopeKey: requestScopeKey, generation, promise: request };
     return request;
-  }, []);
+  }, [scopeKey]);
+
+  const controlTask = useCallback(async (task: BackgroundTask, action: 'pause' | 'resume' | 'cancel') => {
+    if (taskControlInFlightRef.current.has(task.id)) return;
+    const generation = scopeGenerationRef.current;
+    const requestScopeKey = scopeKey;
+    const requestToken = { scopeKey: requestScopeKey, generation };
+    taskControlInFlightRef.current.add(task.id);
+    setTaskControlInFlightIds([...taskControlInFlightRef.current]);
+    setTaskControlError('');
+    try {
+      const response = await apiFetch(`/api/autonomy/work/${encodeURIComponent(task.id)}/${action}`, { method: 'POST' });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.ok === false) {
+        const diagnostic = Array.isArray(payload.diagnostics) ? payload.diagnostics.join('; ') : '';
+        throw new Error(payload.error || diagnostic || `HTTP ${response.status}`);
+      }
+      if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
+      const rawTask = Array.isArray(payload.items)
+        ? payload.items.find((item: { id?: unknown }) => String(item?.id || '') === task.id)
+        : payload.task;
+      const updated = normalizeCommandCenterTask(rawTask);
+      if (updated) {
+        setBackgroundTasks(previous => previous.map(item => item.id === task.id ? mergeCommandCenterTasks(item, updated) : item));
+      }
+      await refresh();
+    } catch (cause) {
+      if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setTaskControlError(`${feedbackCopy.controlError}: ${message}`);
+    } finally {
+      taskControlInFlightRef.current.delete(task.id);
+      if (isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) {
+        setTaskControlInFlightIds([...taskControlInFlightRef.current]);
+      }
+    }
+  }, [feedbackCopy.controlError, refresh, scopeKey]);
+
+  useEffect(() => {
+    activeScopeKeyRef.current = scopeKey;
+    scopeGenerationRef.current += 1;
+    refreshInFlightRef.current = null;
+    hasLoadedOfficeRef.current = false;
+    taskControlInFlightRef.current.clear();
+    setAgents([]);
+    setBackgroundTasks([]);
+    setExpandedBackgroundTaskId(null);
+    setTaskControlInFlightIds([]);
+    setTaskControlError('');
+    setTaskLoadError('');
+    setLoading(true);
+  }, [scopeKey]);
 
   useEffect(() => {
     void refresh();
@@ -185,24 +402,9 @@ export function CommandCenterPanel({
     };
   }, [refresh, scopeKey]);
 
-  const agentDesks = useMemo(() => agents.filter(agent => !['lumi', 'lumi_default'].includes(agent.id)), [agents]);
-  const officeWorkers = useMemo<OfficeWorker[]>(() => agentDesks.map(agent => {
-    const state = deskState(agent, backgroundTasks);
-    const normalizedName = String(agent.name || '').trim().toLowerCase();
-    const task = backgroundTasks.find(item => (
-      ACTIVE_BACKGROUND_STATES.has(String(item.status || '').toLowerCase())
-      && (item.workerNames || []).some(name => String(name || '').trim().toLowerCase() === normalizedName)
-    ));
-    return {
-      id: agent.id,
-      name: agent.name,
-      category: agent.category || 'general',
-      runtime: agent.runtime === 'external' ? 'external' : 'internal',
-      state,
-      taskTitle: task?.title,
-    };
-  }), [agentDesks, backgroundTasks]);
-  const activeBackgroundCount = backgroundTasks.filter(task => ACTIVE_BACKGROUND_STATES.has(String(task.status || '').toLowerCase())).length;
+  const cosmosAgents = useMemo(() => buildCommandCenterCosmosAgents(agents, backgroundTasks), [agents, backgroundTasks]);
+  const cosmosTasks = useMemo(() => buildCommandCenterCosmosTasks(backgroundTasks, cosmosAgents), [backgroundTasks, cosmosAgents]);
+  const activeBackgroundCount = backgroundTasks.filter(commandCenterTaskIsActive).length;
   const recentBackgroundTasks = useMemo(() => [...backgroundTasks]
     .sort((left, right) => {
       const rightTime = Date.parse(right.updatedAt || right.completedAt || '') || 0;
@@ -257,29 +459,35 @@ export function CommandCenterPanel({
       <div className={`custom-scrollbar relative min-h-0 flex-1 ${officeActive ? 'overflow-hidden p-0' : 'overflow-y-auto p-4'}`}>
         {officeActive && (
           <div className="relative h-full min-h-0 overflow-hidden">
-            {loading ? (
-              <div className="absolute inset-0 flex items-center justify-center bg-[#050b13]"><Loader2 size={22} className="animate-spin text-cyan-200/50" /></div>
-            ) : (
-              <AgentOfficeScene
-                workers={officeWorkers}
-                lumiState={lumiAttention ? 'attention' : lumiWorking ? 'working' : 'ready'}
-                activeTasks={(status?.counts.activeTasks || 0) + activeBackgroundCount}
-                labels={{
-                  aria: uiMessage('command-center.office-scene-aria.657e86c3da'),
-                  liveState: uiMessage('command-center.real-state.33d73ad8c9'),
-                  currentFloor: uiMessage('command-center.office-floor.a59513a4eb'),
-                  previousFloor: uiMessage('command-center.previous-floor.d0a3f3e6d8'),
-                  nextFloor: uiMessage('command-center.next-floor.1caedfc76e'),
-                  noWorkers: uiMessage('command-center.no-workers.f27019b97a'),
-                  lumi: uiMessage('command-center.lumi-commander.32f6b27c0a'),
-                  active: uiMessage('command-center.active-tasks.e3c67ca0fe'),
-                  dispatching: uiMessage('command-center.dispatching.270bc5f426'),
-                  ready: uiMessage('command-center.ready.4a09f2582b'),
-                  working: uiMessage('command-center.working.90f16b23a5'),
-                  paused: uiMessage('command-center.paused.7848cd9af5'),
-                  attention: uiMessage('command-center.attention.c47451e86a'),
-                }}
-              />
+            <LocalAgentSphere
+              t={t}
+              variant="command-center"
+              sentiment={lumiAttention ? 'focused' : lumiWorking ? 'excited' : 'zen'}
+              callState={lumiWorking ? 'thinking' : 'idle'}
+              highPerformance={false}
+              cosmosAgents={cosmosAgents}
+              cosmosTasks={cosmosTasks}
+              cosmosState={lumiAttention ? 'attention' : lumiWorking ? 'working' : 'ready'}
+              cosmosLoading={loading}
+              cosmosLabels={{
+                aria: uiMessage('command-center.office-scene-aria.657e86c3da', locale),
+                liveState: uiMessage('command-center.receipt-driven.c10f9390d4', locale),
+                lumi: uiMessage('command-center.lumi-commander.32f6b27c0a', locale),
+                agents: uiMessage('system-explorer.agents.8039b1040e', locale),
+                active: uiMessage('command-center.active-tasks.e3c67ca0fe', locale),
+                ready: uiMessage('command-center.ready.4a09f2582b', locale),
+                working: uiMessage('command-center.working.90f16b23a5', locale),
+                paused: uiMessage('command-center.paused.7848cd9af5', locale),
+                attention: uiMessage('command-center.attention.c47451e86a', locale),
+                noWorkers: uiMessage('command-center.no-workers.f27019b97a', locale),
+                noTasks: feedbackCopy.noBackgroundWork,
+              }}
+            />
+            {loading && (
+              <div className="lumi-command-cosmos__loading" role="status">
+                <Loader2 size={14} className="animate-spin" />
+                <span>{t?.loading || 'Loading'}</span>
+              </div>
             )}
 
             <div className="absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2">
@@ -332,6 +540,16 @@ export function CommandCenterPanel({
                   {recentBackgroundTasks.length}
                 </span>
               </div>
+              {taskControlError && (
+                <div role="alert" className="mb-2 rounded-xl border border-rose-300/15 bg-rose-300/[0.05] px-3 py-2 text-[9px] leading-4 text-rose-100/70">
+                  {taskControlError}
+                </div>
+              )}
+              {taskLoadError && (
+                <div role="alert" className="mb-2 rounded-xl border border-amber-300/15 bg-amber-300/[0.045] px-3 py-2 text-[9px] leading-4 text-amber-100/70">
+                  {taskLoadError}
+                </div>
+              )}
               {recentBackgroundTasks.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-white/[0.07] px-3 py-5 text-center text-[10px] text-white/28">
                   {feedbackCopy.noBackgroundWork}
@@ -342,13 +560,18 @@ export function CommandCenterPanel({
                     const expanded = expandedBackgroundTaskId === task.id;
                     const feedbackStatus = task.completionFeedback?.status;
                     const taskStatus = String(task.status || 'unknown').toLowerCase();
-                    const statusLabel = feedbackStatus
-                      ? feedbackCopy.status[feedbackStatus]
-                      : ACTIVE_BACKGROUND_STATES.has(taskStatus)
-                        ? uiMessage('command-center.working.90f16b23a5', locale)
-                        : taskStatus === 'paused'
-                          ? uiMessage('command-center.paused.7848cd9af5', locale)
-                          : taskStatus;
+                    const taskPhase = String(task.phase || taskStatus).toLowerCase();
+                    const taskActive = commandCenterTaskIsActive(task);
+                    const controlInFlight = taskControlInFlightIds.includes(task.id);
+                    const statusLabel = taskPhase === 'paused'
+                      ? uiMessage('command-center.paused.7848cd9af5', locale)
+                      : taskPhase === 'cancelling'
+                        ? uiMessage('agent-chat-page.cancelling.7163e20e93', locale)
+                        : feedbackStatus
+                          ? feedbackCopy.status[feedbackStatus]
+                          : taskActive
+                            ? uiMessage('command-center.working.90f16b23a5', locale)
+                            : taskPhase;
                     return (
                       <article key={task.id} className="overflow-hidden rounded-xl border border-white/[0.065] bg-black/15">
                         <button
@@ -359,7 +582,7 @@ export function CommandCenterPanel({
                           className="flex w-full items-center gap-2 px-3 py-2.5 text-left hover:bg-white/[0.035]"
                         >
                           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                            ACTIVE_BACKGROUND_STATES.has(taskStatus)
+                            taskActive
                               ? 'bg-cyan-300 animate-pulse'
                               : feedbackStatus === 'completed'
                                 ? 'bg-emerald-300'
@@ -373,12 +596,47 @@ export function CommandCenterPanel({
                         </button>
                         {expanded && (
                           <div id={`command-center-background-task-${task.id}`} className="space-y-2 border-t border-white/[0.06] p-2.5">
+                            <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-2.5 py-2 text-[10px] leading-4 text-white/55">
+                              <span className="font-black text-white/38">{feedbackCopy.goal}: </span>{task.title || task.id}
+                            </div>
                             {(task.workerNames?.length || task.updatedAt || task.completedAt) && (
                               <div className="flex flex-wrap gap-x-3 gap-y-1 text-[9px] text-white/28">
                                 {task.workerNames?.length ? <span>{feedbackCopy.workers}: {task.workerNames.join(', ')}</span> : null}
                                 {(task.updatedAt || task.completedAt) && (
                                   <span>{feedbackCopy.updated}: {new Date(task.updatedAt || task.completedAt || '').toLocaleString(locale === 'zh' ? 'zh-CN' : 'en-US')}</span>
                                 )}
+                              </div>
+                            )}
+                            {(task.phase || task.progress) && (
+                              <div className="grid grid-cols-2 gap-2 text-[9px] text-white/38">
+                                <div className="rounded-lg border border-white/[0.055] bg-black/15 px-2.5 py-2">
+                                  <span className="block text-[8px] font-black uppercase text-white/24">{feedbackCopy.phase}</span>
+                                  <span className="mt-1 block text-white/55">
+                                    {task.phase || task.status}{task.progress?.checkpoint ? ` · ${task.progress.checkpoint}` : ''}
+                                  </span>
+                                </div>
+                                <div className="rounded-lg border border-white/[0.055] bg-black/15 px-2.5 py-2">
+                                  <span className="block text-[8px] font-black uppercase text-white/24">{feedbackCopy.progress}</span>
+                                  <span className="mt-1 block text-white/55">
+                                    {task.progress?.completedUnits || 0}/{task.progress?.totalUnits || 0} · {feedbackCopy.receipts} {task.progress?.receiptCount || 0}
+                                  </span>
+                                </div>
+                              </div>
+                            )}
+                            {task.evidence && (
+                              <div className="rounded-lg border border-cyan-300/10 bg-cyan-300/[0.025] px-2.5 py-2 text-[9px] leading-4 text-white/42">
+                                <span className="font-black text-cyan-100/55">{feedbackCopy.verification}: </span>
+                                {task.evidence.verification} · {feedbackCopy.receipts} {task.evidence.evidenceCount}
+                              </div>
+                            )}
+                            {task.blocker && (
+                              <div className="rounded-lg border border-rose-300/10 bg-rose-300/[0.035] px-2.5 py-2 text-[10px] leading-4 text-rose-100/65">
+                                <span className="font-black">{feedbackCopy.blocker}: </span>{task.blocker}
+                              </div>
+                            )}
+                            {task.nextAction && (
+                              <div className="rounded-lg border border-amber-300/10 bg-amber-300/[0.025] px-2.5 py-2 text-[10px] leading-4 text-white/52">
+                                <span className="font-black text-amber-100/55">{feedbackCopy.nextAction}: </span>{task.nextAction}
                               </div>
                             )}
                             {task.resultPreview && (
@@ -392,6 +650,30 @@ export function CommandCenterPanel({
                               </div>
                             )}
                             <TaskCompletionFeedbackDetails feedback={task.completionFeedback} locale={locale} compact />
+                            {task.cancelRequested && taskStatus !== 'cancelled' && (
+                              <div data-task-cancel-requested className="rounded-lg border border-amber-300/12 bg-amber-300/[0.035] px-2.5 py-2 text-[9px] leading-4 text-amber-100/65">
+                                {feedbackCopy.cancelRequested}
+                              </div>
+                            )}
+                            {task.controls && (task.controls.canPause || task.controls.canResume || task.controls.canCancel) && (
+                              <div data-command-center-task-controls className="flex items-center justify-end gap-1.5 border-t border-white/[0.05] pt-2">
+                                {task.controls.canPause && (
+                                  <button type="button" disabled={controlInFlight} onClick={() => void controlTask(task, 'pause')} className="flex h-7 items-center gap-1 rounded-lg border border-white/[0.07] px-2 text-[9px] text-white/42 hover:bg-white/[0.05] hover:text-white/70 disabled:cursor-wait disabled:opacity-35" title={feedbackCopy.pause}>
+                                    {controlInFlight ? <Loader2 size={11} className="animate-spin" /> : <Pause size={11} />}{feedbackCopy.pause}
+                                  </button>
+                                )}
+                                {task.controls.canResume && (
+                                  <button type="button" disabled={controlInFlight} onClick={() => void controlTask(task, 'resume')} className="flex h-7 items-center gap-1 rounded-lg border border-cyan-300/12 px-2 text-[9px] text-cyan-100/58 hover:bg-cyan-300/[0.06] hover:text-cyan-50 disabled:cursor-wait disabled:opacity-35" title={feedbackCopy.resume}>
+                                    {controlInFlight ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}{feedbackCopy.resume}
+                                  </button>
+                                )}
+                                {task.controls.canCancel && (
+                                  <button type="button" disabled={controlInFlight} onClick={() => void controlTask(task, 'cancel')} className="flex h-7 items-center gap-1 rounded-lg border border-rose-300/10 px-2 text-[9px] text-rose-100/48 hover:bg-rose-300/[0.06] hover:text-rose-100 disabled:cursor-wait disabled:opacity-35" title={feedbackCopy.cancel}>
+                                    {controlInFlight ? <Loader2 size={11} className="animate-spin" /> : <XCircle size={11} />}{feedbackCopy.cancel}
+                                  </button>
+                                )}
+                              </div>
+                            )}
                           </div>
                         )}
                       </article>

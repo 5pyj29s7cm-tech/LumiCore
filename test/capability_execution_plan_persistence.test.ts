@@ -126,6 +126,8 @@ describe('capability execution plan persistence', () => {
         nodeId: 'research',
         type: 'internal_agent',
         role: 'analysis',
+        taskDescription: 'Research the exact durable source',
+        executionMode: 'scholar',
         candidates: [{ provider: 'ollama', model: 'qwen3:8b', locality: 'local', priority: 0 }],
         dependsOn: [],
         inputRefs: [],
@@ -154,6 +156,10 @@ describe('capability execution plan persistence', () => {
     const context = JSON.parse(String(persisted?.context || '{}'));
 
     expect(context.modelExecutionGraph.graphId).toBe(compilation.graph.graphId);
+    expect(context.modelExecutionGraph.nodes[0]).toMatchObject({
+      taskDescription: 'Research the exact durable source',
+      executionMode: 'scholar',
+    });
     expect(context.modelNodeReceipts[0]).toMatchObject({
       nodeId: 'research',
       verified: true,
@@ -189,5 +195,68 @@ describe('capability execution plan persistence', () => {
       userId: 'other-user',
       taskId: 'task-durable',
     })).toBeNull();
+  });
+
+  it('recovers a digest-only validated model output receipt without persisting its handoff', () => {
+    const db = { conversationActionTasks: [task()], conversationActionReceipts: [] };
+    const compilation = compileModelExecutionGraph({
+      taskId: 'task-durable',
+      nodes: [{
+        nodeId: 'analysis-deliverable',
+        type: 'internal_agent',
+        role: 'analysis',
+        taskDescription: 'Analyze the supplied traces and explain the bottleneck',
+        executionMode: 'lumi',
+        candidates: [{ provider: 'ollama', model: 'qwen3:8b', locality: 'local', priority: 0 }],
+        dependsOn: [],
+        inputRefs: [],
+        outputSchema: { type: 'string', minLength: 8, maxLength: 2_000 },
+        sideEffectFree: true,
+        acceptanceMode: 'validated_model_output',
+        timeoutMs: 30_000,
+        maxRetries: 1,
+      }],
+    });
+    expect(compilation.ok).toBe(true);
+    const receipt = buildModelGraphNodeReceipt({
+      graph: compilation.graph,
+      node: compilation.graph.nodes[0],
+      status: 'succeeded',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      completedAt: '2026-01-01T00:00:01.000Z',
+      output: 'The lease timeout is the dominant bottleneck.',
+      evidenceKind: 'validated_model_output',
+    });
+    expect(receipt.verified).toBe(true);
+
+    const persisted = attachConversationModelExecutionGraph(db, {
+      conversationId: 'conversation-1',
+      userId: 'user-1',
+      taskId: 'task-durable',
+      graph: compilation.graph,
+      receipts: [receipt],
+    });
+    const context = JSON.parse(String(persisted?.context || '{}'));
+    expect(JSON.stringify(context)).not.toContain('lease timeout');
+    expect(context.modelNodeReceipts[0].outputSummary).toBeUndefined();
+    expect(loadConversationModelExecutionRecovery(db, {
+      conversationId: 'conversation-1',
+      userId: 'user-1',
+      taskId: 'task-durable',
+    })?.receipts[0]).toMatchObject({
+      nodeId: 'analysis-deliverable',
+      evidenceKind: 'validated_model_output',
+      evidenceRefs: [`model_output:${receipt.outputDigest}`],
+      verified: true,
+    });
+
+    const tampered = JSON.parse(String(persisted?.context || '{}'));
+    tampered.modelNodeReceipts[0].evidenceRefs = [`model_output:${'0'.repeat(64)}`];
+    persisted!.context = JSON.stringify(tampered);
+    expect(loadConversationModelExecutionRecovery(db, {
+      conversationId: 'conversation-1',
+      userId: 'user-1',
+      taskId: 'task-durable',
+    })?.receipts).toEqual([]);
   });
 });

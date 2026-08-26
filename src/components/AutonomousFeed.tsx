@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Zap, CheckCircle, XCircle, Clock, Monitor, Terminal, Search, ChevronDown, RefreshCw, X } from 'lucide-react';
 import { useSocket } from '@/hooks/useSocket';
@@ -6,17 +6,19 @@ import { toast } from 'sonner';
 import { useT } from '@/lib/useT';
 import { uiMessage } from '../i18n/uiMessages';
 import { useApp } from '@/contexts/AppContext';
+import { apiFetch } from '@/services/apiClient';
 import { TaskCompletionFeedbackDetails } from './TaskCompletionFeedbackDetails';
 import {
   normalizeTaskCompletionFeedback,
   type TaskCompletionFeedback,
 } from './workflowTypes';
+import { isCurrentScopeRequest, type ScopeRequestToken } from './scopeRequestGuard';
 
 interface AutoTask {
   id: string;
   title: string;
   description: string;
-  status: 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'blocked' | 'cancelled';
+  status: 'pending' | 'running' | 'pausing' | 'paused' | 'cancelling' | 'completed' | 'failed' | 'blocked' | 'cancelled';
   source: string;
   planId?: string;
   priority: number;
@@ -32,6 +34,7 @@ interface AutoTask {
   blocked?: boolean;
   verified?: boolean;
   verificationReason?: string;
+  cancelRequested?: boolean;
   completionFeedback?: TaskCompletionFeedback;
 }
 
@@ -86,7 +89,9 @@ type FilterMode = 'all' | 'running' | 'completed' | 'failed' | 'cancelled' | 'de
 
 export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boolean }) {
   const socket = useSocket();
-  const { addNotification } = useApp();
+  const { addNotification, workDomain, orgConnection } = useApp();
+  const isWork = workDomain === 'work' && Boolean(orgConnection?.connected && orgConnection?.orgId);
+  const scopeKey = `${isWork ? 'work' : 'personal'}:${isWork ? orgConnection?.orgId || '' : ''}`;
   const t = useT();
   const isZh = t.langCode !== 'en';
   const locale = isZh ? 'zh' : 'en';
@@ -100,36 +105,60 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [cancellingIds, setCancellingIds] = useState<string[]>([]);
+  const scopeGenerationRef = useRef(0);
+  const activeScopeKeyRef = useRef(scopeKey);
 
-  const loadTasks = async () => {
+  const loadTasks = useCallback(async (token?: ScopeRequestToken) => {
+    const requestToken = token || { scopeKey, generation: scopeGenerationRef.current };
+    if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
     setLoading(true);
     setLoadError('');
     try {
       const [queueRes, historyRes] = await Promise.all([
-        fetch('/api/autonomy/queue', { credentials: 'include' }),
-        fetch('/api/autonomy/history?limit=50', { credentials: 'include' }),
+        apiFetch('/api/autonomy/queue'),
+        apiFetch('/api/autonomy/history?limit=50'),
       ]);
       const queueData = await queueRes.json().catch(() => ({}));
       const historyData = await historyRes.json().catch(() => ({}));
       if (!queueRes.ok) throw new Error(queueData.error || 'Failed to load autonomous queue');
       if (!historyRes.ok) throw new Error(historyData.error || 'Failed to load autonomous history');
+      if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
       setQueue((queueData.queue || []).map(normalizeAutonomousTask));
       setHistory((historyData.tasks || []).map(normalizeAutonomousHistoryTask));
     } catch (err: any) {
+      if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
       const message = err?.message || 'Failed to load autonomous work';
       setLoadError(message);
       toast.error(message);
     } finally {
-      setLoading(false);
+      if (isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) setLoading(false);
     }
-  };
-
-  useEffect(() => { void loadTasks(); }, []);
+  }, [scopeKey]);
 
   useEffect(() => {
-    if (!socket) return;
+    activeScopeKeyRef.current = scopeKey;
+    scopeGenerationRef.current += 1;
+    const requestToken = { scopeKey, generation: scopeGenerationRef.current };
+    setTasks([]);
+    setQueue([]);
+    setHistory([]);
+    setExpandedTask(null);
+    setCancellingIds([]);
+    setLoadError('');
+    setLoading(true);
+    void loadTasks(requestToken);
+  }, [loadTasks, scopeKey]);
+
+  useEffect(() => {
+    // The autonomous executor is personal-only today. Work-domain data comes
+    // from scoped background delegation; accepting these unscoped legacy
+    // socket events here would leak personal task cards into an organization.
+    if (!socket || isWork) return;
+    const eventToken = { scopeKey, generation: scopeGenerationRef.current };
+    const eventIsCurrent = () => isCurrentScopeRequest(eventToken, activeScopeKeyRef.current, scopeGenerationRef.current);
 
     const onStarted = (data: { taskId: string; title: string; mode: string; timestamp: string }) => {
+      if (!eventIsCurrent()) return;
       const mode: AutoTask['mode'] = (data.mode === 'desktop' || data.mode === 'terminal' || data.mode === 'analysis') ? data.mode : 'analysis';
       const nextTask: AutoTask = {
         id: data.taskId, title: data.title, description: '',
@@ -150,6 +179,7 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
       tokensUsed?: number;
       completionFeedback?: TaskCompletionFeedback;
     }) => {
+      if (!eventIsCurrent()) return;
       const completionFeedback = normalizeTaskCompletionFeedback(data.completionFeedback);
       const terminalStatus: AutoTask['status'] = completionFeedback?.status === 'blocked' ? 'blocked' : 'failed';
       setTasks(prev => prev.map(t => t.id === data.taskId ? {
@@ -188,6 +218,7 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
     };
 
     const onCompleted = (data: AutonomousCompletionPayload) => {
+      if (!eventIsCurrent()) return;
       if (!isVerifiedAutonomousCompletionPayload(data)) {
         recordFailedTask({
           taskId: data.taskId,
@@ -246,6 +277,7 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
       timestamp: string;
       completionFeedback?: TaskCompletionFeedback;
     }) => {
+      if (!eventIsCurrent()) return;
       const completionFeedback = normalizeTaskCompletionFeedback(data.completionFeedback);
       const cancelledTask: AutoTask = {
         id: data.taskId,
@@ -275,26 +307,45 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
       socket.off('autonomous:task_failed', onFailed);
       socket.off('autonomous:task_cancelled', onCancelled);
     };
-  }, [socket, addNotification]);
+  }, [socket, addNotification, isWork, scopeKey]);
 
   const cancelTask = async (task: AutoTask) => {
+    const requestToken = { scopeKey, generation: scopeGenerationRef.current };
     setCancellingIds(prev => prev.includes(task.id) ? prev : [...prev, task.id]);
     try {
-      const res = await fetch(`/api/autonomy/tasks/${task.id}/cancel`, {
+      const res = await apiFetch(`/api/autonomy/tasks/${task.id}/cancel`, {
         method: 'POST',
-        credentials: 'include',
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Failed to cancel task');
-      const cancelledTask = { ...task, status: 'cancelled' as const, completedAt: new Date().toISOString() };
-      setQueue(prev => prev.filter(t => t.id !== task.id));
-      setTasks(prev => prev.filter(t => t.id !== task.id));
-      setHistory(prev => [cancelledTask, ...prev.filter(t => t.id !== task.id)].slice(0, 50));
-      toast.success(uiMessage('autonomous-feed.autonomous-task-cancelled.3452aa8efe'));
+      if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
+      const returnedStatus = String(data.status || data.task?.status || task.status) as AutoTask['status'];
+      const cancelRequested = data.cancelRequested === true || data.task?.cancelRequested === true;
+      const updatedTask: AutoTask = {
+        ...task,
+        ...(data.task || {}),
+        status: returnedStatus,
+        cancelRequested,
+        ...(returnedStatus === 'cancelled' ? { completedAt: data.task?.completedAt || new Date().toISOString() } : {}),
+        completionFeedback: normalizeTaskCompletionFeedback(data.task?.completionFeedback || task.completionFeedback),
+      };
+      if (returnedStatus === 'cancelled') {
+        setQueue(prev => prev.filter(t => t.id !== task.id));
+        setTasks(prev => prev.filter(t => t.id !== task.id));
+        setHistory(prev => [updatedTask, ...prev.filter(t => t.id !== task.id)].slice(0, 50));
+        toast.success(uiMessage('autonomous-feed.autonomous-task-cancelled.3452aa8efe'));
+      } else {
+        setQueue(prev => prev.map(item => item.id === task.id ? updatedTask : item));
+        setTasks(prev => prev.map(item => item.id === task.id ? updatedTask : item));
+        toast.info(uiMessage('agent-chat-page.cancelling-task.18c33c6327', locale));
+      }
     } catch (err: any) {
+      if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
       toast.error(err?.message || 'Failed to cancel task');
     } finally {
-      setCancellingIds(prev => prev.filter(id => id !== task.id));
+      if (isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) {
+        setCancellingIds(prev => prev.filter(id => id !== task.id));
+      }
     }
   };
 
@@ -434,7 +485,7 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
                       {task.toolCallsCount != null && (
                         <span className="text-xs text-white/30 font-mono">{task.toolCallsCount} tools</span>
                       )}
-                      {(task.status === 'pending' || task.status === 'running') && (
+                      {(task.status === 'pending' || task.status === 'running') && !task.cancelRequested && (
                         <button
                           onClick={(event) => { event.stopPropagation(); void cancelTask(task); }}
                           disabled={cancellingIds.includes(task.id)}
@@ -456,6 +507,11 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
                           <p className="text-white/60 leading-relaxed">{task.result.slice(0, 300)}</p>
                         )}
                         {task.error && <p className="text-red-400/70">{task.error}</p>}
+                        {task.cancelRequested && task.status !== 'cancelled' && (
+                          <p data-autonomous-cancel-requested className="text-amber-200/65">
+                            {uiMessage('agent-chat-page.cancelling-task.18c33c6327', locale)}
+                          </p>
+                        )}
                         <TaskCompletionFeedbackDetails
                           feedback={task.completionFeedback}
                           locale={locale}

@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { registerAllTools } from '../server/tools/definitions';
 import { toolRegistry } from '../server/tools/registry';
 import {
@@ -54,8 +54,12 @@ describe('live Lumi self model snapshot', () => {
   });
 
   it('builds verbal and visible-demo introductions from the same snapshot', () => {
+    const observedAt = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(observedAt);
     const verbal = buildSelfIntroductionPlan('self-snapshot-user');
+    clock.mockReturnValue(observedAt + 2_000);
     const visible = buildSelfIntroductionPlan('self-snapshot-user', {}, { visibleDemo: true });
+    clock.mockRestore();
 
     expect(verbal.mode).toBe('verbal');
     expect(verbal.demoCandidates.every(candidate => !candidate.enabled)).toBe(true);
@@ -75,7 +79,7 @@ describe('live Lumi self model snapshot', () => {
     ))).toBe(true);
     expect(visible.documentText).toContain('索引不等于完全吸收');
     expect(visible.statements.map(statement => statement.evidence)).toContain('live model role configuration');
-    expect(visible.statements[0].text).toContain(`${snapshotIdentityName(verbal)}，运行在 LumiOS 中`);
+    expect(visible.statements[0].text).toContain(`${snapshotIdentityName(verbal)}，运行在 LumiCore 中`);
     expect(visible.statements.every(statement => statement.observedAt === visible.snapshotGeneratedAt)).toBe(true);
     expect(visible.statements.map(statement => statement.source)).toEqual(expect.arrayContaining([
       'self_model.identity',

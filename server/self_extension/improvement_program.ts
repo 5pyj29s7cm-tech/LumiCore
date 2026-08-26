@@ -575,7 +575,7 @@ export async function createSelfImprovementProposal(
         authorized: false,
         reasons: unique([
           ...proposal.evaluation.reasons,
-          'No trusted LumiOS source repository identity is available; diagnosis may continue but staging is disabled.',
+          'No trusted LumiCore source repository identity is available; diagnosis may continue but staging is disabled.',
         ]),
         blockers: unique([...proposal.evaluation.blockers, 'repository_identity_unavailable']),
         requiredGates: unique([...proposal.evaluation.requiredGates, 'trusted_repository_identity']),

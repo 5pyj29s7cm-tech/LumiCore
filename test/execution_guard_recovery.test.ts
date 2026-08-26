@@ -307,8 +307,8 @@ describe('execution guard recovery', () => {
 
   it('turns raw directory JSON and tasklist tables into bounded human summaries', () => {
     const directoryResult = JSON.stringify([
-      { path: 'C:\\Users\\Administrator\\Desktop\\alpha.docx', type: 'file', modifiedMs: 1 },
-      { path: 'C:\\Users\\Administrator\\Desktop\\beta.xlsx', type: 'file', modifiedMs: 2 },
+      { path: 'C:\\Users\\test-user\\Desktop\\alpha.docx', type: 'file', modifiedMs: 1 },
+      { path: 'C:\\Users\\test-user\\Desktop\\beta.xlsx', type: 'file', modifiedMs: 2 },
     ]);
     const directory = sanitizeExecutionResponseForDelivery({
       text: directoryResult,

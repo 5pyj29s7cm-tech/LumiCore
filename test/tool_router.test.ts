@@ -177,13 +177,13 @@ const DECLARATIONS = [
 describe('tool router', () => {
   it('does not treat a repair keyword inside a file path as a self-repair request', () => {
     expect(isDiagnosticOrRepairRequest(
-      '请在 C:\\Users\\Administrator\\Documents\\Lumi现场验收_修复复测.txt 创建一个 TXT 文件并读取验证。',
+      '请在 C:\\Users\\test-user\\Documents\\Lumi现场验收_修复复测.txt 创建一个 TXT 文件并读取验证。',
     )).toBe(false);
   });
 
   it('routes the field TXT creation request to write and verification tools', () => {
     const route = routeToolsForTurn(
-      '在 C:\\Users\\Administrator\\Documents 创建 Lumi现场验收_晨星716.txt，写三行，重读核验，不外发，不开其他软件',
+      '在 C:\\Users\\test-user\\Documents 创建 Lumi现场验收_晨星716.txt，写三行，重读核验，不外发，不开其他软件',
       DECLARATIONS,
       { enableMcpHealthGate: false },
     );
@@ -200,7 +200,7 @@ describe('tool router', () => {
 
   it('keeps literal chat and status fields inside a TXT deliverable on the document route', () => {
     const route = routeToolsForTurn(
-      '请在 C:\\Users\\Administrator\\Documents\\Lumi主程序实机验收_20260816.txt 创建文件，内容为“渠道：指挥中心文字聊天”和“状态：待回读验证”，写入后必须重读。',
+      '请在 C:\\Users\\test-user\\Documents\\Lumi主程序实机验收_20260816.txt 创建文件，内容为“渠道：指挥中心文字聊天”和“状态：待回读验证”，写入后必须重读。',
       DECLARATIONS,
       { enableMcpHealthGate: false },
     );
@@ -811,7 +811,7 @@ describe('tool router', () => {
       '把这幅图画成cad图',
       '## Current Turn Attachments',
       'The user attached these files to the current message. Treat them as part of the user request.',
-      'Local path: C:\\Users\\me\\LumiOS\\data\\knowledge\\plan.jpg',
+      'Local path: C:\\Users\\me\\LumiCore\\data\\knowledge\\plan.jpg',
     ].join('\n\n'), DECLARATIONS);
 
     expect(route.categories).toContain('cad_design');

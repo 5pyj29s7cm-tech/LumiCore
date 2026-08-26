@@ -1,4 +1,4 @@
-# LumiOS unified deployment
+# LumiCore unified deployment
 #
 # Personal and organization work domains run in the same service:
 #   docker compose up -d

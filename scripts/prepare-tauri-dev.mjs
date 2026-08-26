@@ -4,20 +4,25 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(SCRIPT_DIR, '..');
-const DEBUG_EXE = path.join(PROJECT_ROOT, 'src-tauri', 'target', 'debug', 'lumi-os.exe');
+const DEBUG_EXES = [
+  path.join(PROJECT_ROOT, 'src-tauri', 'target', 'debug', 'lumi-core.exe'),
+  path.join(PROJECT_ROOT, 'src-tauri', 'target', 'debug', 'lumi-os.exe'),
+];
+const SUPPORTED_CLIENT_EXE_NAMES = new Set(['lumi-core.exe', 'lumi-os.exe']);
 const CLEAN_ENABLED = process.env.LUMI_TAURI_DEV_CLEAN_STALE_CLIENTS !== '0';
 
 export function normalizeWinPath(value) {
   return String(value || '').replace(/\//g, '\\').toLowerCase();
 }
 
-export function isProjectDebugClient(processInfo, debugExe = DEBUG_EXE) {
+/** @param {string | string[]} [debugExe] */
+export function isProjectDebugClient(processInfo, debugExe = DEBUG_EXES) {
   const name = String(processInfo?.Name || processInfo?.name || '').toLowerCase();
-  if (name !== 'lumi-os.exe') return false;
+  if (!SUPPORTED_CLIENT_EXE_NAMES.has(name)) return false;
 
   const exe = normalizeWinPath(processInfo?.ExecutablePath || processInfo?.executablePath || '');
-  const expected = normalizeWinPath(debugExe);
-  return exe === expected;
+  const expected = (Array.isArray(debugExe) ? debugExe : [debugExe]).map(normalizeWinPath);
+  return expected.includes(exe);
 }
 
 export function collectProcessTreePids(processes, rootPids) {
@@ -44,7 +49,8 @@ export function collectProcessTreePids(processes, rootPids) {
   return out;
 }
 
-export function collectStaleClientPids(processes, debugExe = DEBUG_EXE) {
+/** @param {string | string[]} [debugExe] */
+export function collectStaleClientPids(processes, debugExe = DEBUG_EXES) {
   const roots = processes
     .filter(proc => isProjectDebugClient(proc, debugExe))
     .map(proc => Number(proc.ProcessId ?? proc.processId))
@@ -91,7 +97,7 @@ export function main() {
   if (targets.length === 0) return;
 
   const rootTargets = processes
-    .filter(proc => isProjectDebugClient(proc))
+    .filter(proc => isProjectDebugClient(proc, DEBUG_EXES))
     .map(proc => Number(proc.ProcessId))
     .filter(pid => targets.includes(pid));
 

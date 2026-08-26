@@ -8,7 +8,7 @@ async function handler(args: any) {
   try {
     // Use is.gd API (no key required)
     const apiUrl = `https://is.gd/create.php?format=json&url=${encodeURIComponent(url)}`;
-    const res = await fetch(apiUrl, { headers: { 'User-Agent': 'LumiOS/2.0' } });
+    const res = await fetch(apiUrl, { headers: { 'User-Agent': 'LumiCore/3.0' } });
     if (!res.ok) throw new Error(`Shortener API returned ${res.status}`);
     const data: any = await res.json();
     if (data.errorcode) throw new Error(data.errormessage || 'Unknown error');

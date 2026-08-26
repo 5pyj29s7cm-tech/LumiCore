@@ -44,7 +44,7 @@ export function mountCommandCenterPlanRoutes(router: Router): void {
     const scope = resolveDomain(req.user!);
     const result = runCommandCenterPlan({ id: req.params.id, userId: req.user!.uid, ...scope, manual: true });
     if (!result) return res.status(404).json({ error: 'Plan not found.' });
-    res.status(202).json(result);
+    res.status(result.reused ? 200 : 202).json(result);
   });
 
   router.delete('/command-center/plans/:id', requireAuth, (req, res) => {

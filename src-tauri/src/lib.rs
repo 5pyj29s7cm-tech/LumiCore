@@ -1175,7 +1175,7 @@ fn run_command(
     match result {
         Ok((success, output)) => {
             eprintln!(
-                "[LumiOS Audit] ts={:?} ok={} cwd={} cmd={}",
+                "[LumiCore Audit] ts={:?} ok={} cwd={} cmd={}",
                 now,
                 success,
                 cwd_path
@@ -1188,7 +1188,7 @@ fn run_command(
         }
         Err(e) => {
             eprintln!(
-                "[LumiOS Audit] ts={:?} ok=false cmd={} err={}",
+                "[LumiCore Audit] ts={:?} ok=false cmd={} err={}",
                 now, truncated, e
             );
             CommandResult {
@@ -2148,15 +2148,23 @@ fn app_launch_history_path() -> Option<PathBuf> {
         .ok()?;
     Some(
         PathBuf::from(base)
-            .join("LumiOS")
+            .join("LumiCore")
             .join("app-launch-history.json"),
     )
 }
 
 #[cfg(target_os = "windows")]
 fn read_app_launch_history() -> Vec<AppLaunchHistoryEntry> {
-    let Some(path) = app_launch_history_path() else {
+    let Some(current_path) = app_launch_history_path() else {
         return Vec::new();
+    };
+    let path = if current_path.exists() {
+        current_path
+    } else {
+        let Some(base) = current_path.parent().and_then(Path::parent) else {
+            return Vec::new();
+        };
+        base.join("LumiOS").join("app-launch-history.json")
     };
     let Ok(raw) = std::fs::read_to_string(path) else {
         return Vec::new();
@@ -2852,7 +2860,7 @@ fn open_item(
             return result;
         }
         eprintln!(
-            "[LumiOS] indexed macOS app launch failed, keeping LaunchServices fallbacks: {}",
+            "[LumiCore] indexed macOS app launch failed, keeping LaunchServices fallbacks: {}",
             result.output
         );
     }
@@ -3036,21 +3044,21 @@ fn apply_wallpaper_mode(
         }
 
         match window.set_always_on_top(true) {
-            Ok(_) => println!("[LumiOS] set_always_on_top(true) succeeded"),
-            Err(e) => eprintln!("[LumiOS] set_always_on_top(true) FAILED: {}", e),
+            Ok(_) => println!("[LumiCore] set_always_on_top(true) succeeded"),
+            Err(e) => eprintln!("[LumiCore] set_always_on_top(true) FAILED: {}", e),
         }
         match window.set_ignore_cursor_events(true) {
-            Ok(_) => println!("[LumiOS] set_ignore_cursor_events(true) succeeded"),
-            Err(e) => eprintln!("[LumiOS] set_ignore_cursor_events(true) FAILED: {}", e),
+            Ok(_) => println!("[LumiCore] set_ignore_cursor_events(true) succeeded"),
+            Err(e) => eprintln!("[LumiCore] set_ignore_cursor_events(true) FAILED: {}", e),
         }
     } else {
         match window.set_ignore_cursor_events(false) {
-            Ok(_) => println!("[LumiOS] set_ignore_cursor_events(false) succeeded"),
-            Err(e) => eprintln!("[LumiOS] set_ignore_cursor_events(false) FAILED: {}", e),
+            Ok(_) => println!("[LumiCore] set_ignore_cursor_events(false) succeeded"),
+            Err(e) => eprintln!("[LumiCore] set_ignore_cursor_events(false) FAILED: {}", e),
         }
         match window.set_always_on_top(false) {
-            Ok(_) => println!("[LumiOS] set_always_on_top(false) succeeded"),
-            Err(e) => eprintln!("[LumiOS] set_always_on_top(false) FAILED: {}", e),
+            Ok(_) => println!("[LumiCore] set_always_on_top(false) succeeded"),
+            Err(e) => eprintln!("[LumiCore] set_always_on_top(false) FAILED: {}", e),
         }
         let _ = window.set_skip_taskbar(false);
         let _ = window.set_resizable(true);
@@ -3080,7 +3088,7 @@ fn apply_wallpaper_mode(
     }
 
     println!(
-        "[LumiOS] Wallpaper mode: {}",
+        "[LumiCore] Wallpaper mode: {}",
         if enabled {
             "ON (click-through fullscreen)"
         } else {
@@ -3137,21 +3145,24 @@ fn apply_desktop_widget_window(window: &tauri::WebviewWindow) -> Result<(), Stri
         )))
         .map_err(|e| e.to_string())?;
     if let Err(e) = window.set_resizable(false) {
-        eprintln!("[LumiOS] desktop widget set_resizable(false) failed: {}", e);
+        eprintln!(
+            "[LumiCore] desktop widget set_resizable(false) failed: {}",
+            e
+        );
     }
     if let Err(e) = window.set_decorations(false) {
         eprintln!(
-            "[LumiOS] desktop widget set_decorations(false) failed: {}",
+            "[LumiCore] desktop widget set_decorations(false) failed: {}",
             e
         );
     }
     if let Err(e) = window.set_shadow(false) {
-        eprintln!("[LumiOS] desktop widget set_shadow(false) failed: {}", e);
+        eprintln!("[LumiCore] desktop widget set_shadow(false) failed: {}", e);
     }
     let _ = window.set_skip_taskbar(true);
     if let Err(e) = window.set_always_on_top(true) {
         eprintln!(
-            "[LumiOS] desktop widget set_always_on_top(true) failed: {}",
+            "[LumiCore] desktop widget set_always_on_top(true) failed: {}",
             e
         );
     }
@@ -3205,10 +3216,13 @@ fn exit_desktop_widget_impl(
     let _ = window.set_skip_taskbar(false);
     let _ = window.set_shadow(false);
     if let Err(e) = window.set_decorations(false) {
-        eprintln!("[LumiOS] desktop widget restore decorations failed: {}", e);
+        eprintln!(
+            "[LumiCore] desktop widget restore decorations failed: {}",
+            e
+        );
     }
     if let Err(e) = window.set_resizable(true) {
-        eprintln!("[LumiOS] desktop widget restore resizable failed: {}", e);
+        eprintln!("[LumiCore] desktop widget restore resizable failed: {}", e);
     }
     window
         .set_min_size(Some(tauri::LogicalSize::new(
@@ -3627,7 +3641,9 @@ fn child_is_running(child: &mut Option<Child>) -> bool {
 #[cfg(target_os = "windows")]
 const WINDOWS_RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 #[cfg(target_os = "windows")]
-const AUTOSTART_VALUE_NAME: &str = "LumiOS";
+const AUTOSTART_VALUE_NAME: &str = "LumiCore";
+#[cfg(target_os = "windows")]
+const LEGACY_AUTOSTART_VALUE_NAME: &str = "LumiOS";
 
 #[cfg(target_os = "windows")]
 fn hidden_output(cmd: &mut Command) -> std::io::Result<std::process::Output> {
@@ -3638,10 +3654,17 @@ fn hidden_output(cmd: &mut Command) -> std::io::Result<std::process::Output> {
 
 #[cfg(target_os = "windows")]
 fn get_autostart_entry() -> Result<AutostartEntry, String> {
-    let mut cmd = Command::new("reg");
-    cmd.args(["query", WINDOWS_RUN_KEY, "/v", AUTOSTART_VALUE_NAME]);
-    let output = hidden_output(&mut cmd).map_err(|e| e.to_string())?;
-    if !output.status.success() {
+    let mut text = String::new();
+    for value_name in [AUTOSTART_VALUE_NAME, LEGACY_AUTOSTART_VALUE_NAME] {
+        let mut cmd = Command::new("reg");
+        cmd.args(["query", WINDOWS_RUN_KEY, "/v", value_name]);
+        let output = hidden_output(&mut cmd).map_err(|e| e.to_string())?;
+        if output.status.success() {
+            text = String::from_utf8_lossy(&output.stdout).to_string();
+            break;
+        }
+    }
+    if text.is_empty() {
         return Ok(AutostartEntry {
             supported: true,
             enabled: false,
@@ -3649,7 +3672,6 @@ fn get_autostart_entry() -> Result<AutostartEntry, String> {
         });
     }
 
-    let text = String::from_utf8_lossy(&output.stdout).to_string();
     let exe = std::env::current_exe()
         .ok()
         .map(|p| p.to_string_lossy().to_lowercase())
@@ -3690,23 +3712,33 @@ fn set_autostart_entry(enabled: bool) -> Result<(), String> {
         ]);
         let output = hidden_output(&mut cmd).map_err(|e| e.to_string())?;
         if output.status.success() {
+            let mut legacy = Command::new("reg");
+            legacy.args([
+                "delete",
+                WINDOWS_RUN_KEY,
+                "/v",
+                LEGACY_AUTOSTART_VALUE_NAME,
+                "/f",
+            ]);
+            let _ = hidden_output(&mut legacy);
             Ok(())
         } else {
             Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
         }
     } else {
-        let mut cmd = Command::new("reg");
-        cmd.args(["delete", WINDOWS_RUN_KEY, "/v", AUTOSTART_VALUE_NAME, "/f"]);
-        let output = hidden_output(&mut cmd).map_err(|e| e.to_string())?;
-        let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
-        if output.status.success()
-            || stderr.contains("unable to find")
-            || stderr.contains("not found")
-        {
-            Ok(())
-        } else {
-            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        for value_name in [AUTOSTART_VALUE_NAME, LEGACY_AUTOSTART_VALUE_NAME] {
+            let mut cmd = Command::new("reg");
+            cmd.args(["delete", WINDOWS_RUN_KEY, "/v", value_name, "/f"]);
+            let output = hidden_output(&mut cmd).map_err(|e| e.to_string())?;
+            let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
+            if !output.status.success()
+                && !stderr.contains("unable to find")
+                && !stderr.contains("not found")
+            {
+                return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+            }
         }
+        Ok(())
     }
 }
 
@@ -3815,7 +3847,7 @@ fn publish_window_activation_diagnostic(
             }
         }
         Err(error) => eprintln!(
-            "[LumiOS][window_activation] diagnostic_store_failed: {}",
+            "[LumiCore][window_activation] diagnostic_store_failed: {}",
             error
         ),
     }
@@ -3823,13 +3855,13 @@ fn publish_window_activation_diagnostic(
     let serialized = serde_json::to_string(diagnostic)
         .unwrap_or_else(|error| format!(r#"{{"ok":false,"serialization_error":"{}"}}"#, error));
     if diagnostic.ok {
-        println!("[LumiOS][window_activation] {}", serialized);
+        println!("[LumiCore][window_activation] {}", serialized);
     } else {
-        eprintln!("[LumiOS][window_activation] {}", serialized);
+        eprintln!("[LumiCore][window_activation] {}", serialized);
     }
     if let Err(error) = app.emit(WINDOW_ACTIVATION_DIAGNOSTIC_EVENT, diagnostic.clone()) {
         eprintln!(
-            "[LumiOS][window_activation] diagnostic_emit_failed: {}",
+            "[LumiCore][window_activation] diagnostic_emit_failed: {}",
             error
         );
     }
@@ -3897,7 +3929,7 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let menu = Menu::with_items(app, &[&show, &exit_wallpaper, &hide, &quit])?;
 
     let mut builder = TrayIconBuilder::with_id("main")
-        .tooltip("Lumi OS is ready")
+        .tooltip("LumiCore is ready")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
@@ -5465,7 +5497,7 @@ pub fn run() {
             }
 
             if let Err(e) = setup_tray(app) {
-                eprintln!("[LumiOS] Failed to create tray icon: {}", e);
+                eprintln!("[LumiCore] Failed to create tray icon: {}", e);
             }
 
             // Ensure WebView2Loader.dll is alongside the EXE (Windows only)
@@ -5478,7 +5510,7 @@ pub fn run() {
                             .join("desktop-resources")
                             .join("WebView2Loader.dll");
                         if dll_src.exists() {
-                            println!("[LumiOS] Copying WebView2Loader.dll to EXE directory");
+                            println!("[LumiCore] Copying WebView2Loader.dll to EXE directory");
                             let _ = std::fs::copy(&dll_src, &dll_dest);
                         }
                     }
@@ -5487,7 +5519,7 @@ pub fn run() {
 
             // In dev mode, the backend is started by beforeDevCommand; skip spawning Node.js
             if cfg!(debug_assertions) {
-                println!("[LumiOS] Dev mode — skipping bundled backend spawn");
+                println!("[LumiCore] Dev mode — skipping bundled backend spawn");
             } else {
                 // ... rest of spawn code unchanged
 
@@ -5505,7 +5537,7 @@ pub fn run() {
                     let normalized_entry = normalize_unc(&server_js);
                     let normalized_cwd = normalize_unc(&dist_server);
                     println!(
-                        "[LumiOS] Starting backend: {} {} (cwd: {})",
+                        "[LumiCore] Starting backend: {} {} (cwd: {})",
                         normalized_node.display(),
                         normalized_entry.display(),
                         normalized_cwd.display(),
@@ -5523,7 +5555,7 @@ pub fn run() {
                     }
                     match spawn_hidden(&mut node_cmd) {
                         Ok(child) => {
-                            println!("[LumiOS] Backend PID: {}", child.id());
+                            println!("[LumiCore] Backend PID: {}", child.id());
                             let app_state = app.state::<Mutex<BackendProcesses>>();
                             let mut state = app_state.lock().unwrap();
                             state.node_config = Some(SpawnConfig {
@@ -5534,12 +5566,12 @@ pub fn run() {
                             state.node = Some(child);
                         }
                         Err(e) => {
-                            eprintln!("[LumiOS] Failed to start backend: {}", e);
+                            eprintln!("[LumiCore] Failed to start backend: {}", e);
                         }
                     }
                 } else {
                     eprintln!(
-                        "[LumiOS] Backend not found. node.exe: {}, entry.cjs: {}, server.mjs: {}",
+                        "[LumiCore] Backend not found. node.exe: {}, entry.cjs: {}, server.mjs: {}",
                         node_bin.exists(),
                         server_js.exists(),
                         server_bundle.exists()
@@ -5567,14 +5599,14 @@ pub fn run() {
                             match child.try_wait() {
                                 Ok(Some(status)) => {
                                     eprintln!(
-                                        "[LumiOS] Node backend exited with status {:?}",
+                                        "[LumiCore] Node backend exited with status {:?}",
                                         status.code()
                                     );
                                     restart_node = true;
                                 }
                                 Ok(None) => { /* still running */ }
                                 Err(e) => {
-                                    eprintln!("[LumiOS] Node backend health check failed: {}", e);
+                                    eprintln!("[LumiCore] Node backend health check failed: {}", e);
                                     restart_node = true;
                                 }
                             }
@@ -5582,7 +5614,7 @@ pub fn run() {
                         if restart_node && state.node_restarts < max_restarts {
                             if let Some(ref cfg) = state.node_config {
                                 eprintln!(
-                                    "[LumiOS] Restarting Node backend (attempt {}/{})",
+                                    "[LumiCore] Restarting Node backend (attempt {}/{})",
                                     state.node_restarts + 1,
                                     max_restarts
                                 );
@@ -5598,18 +5630,18 @@ pub fn run() {
                                 }
                                 match spawn_hidden(&mut restart_cmd) {
                                     Ok(child) => {
-                                        println!("[LumiOS] Backend restarted, PID: {}", child.id());
+                                        println!("[LumiCore] Backend restarted, PID: {}", child.id());
                                         state.node = Some(child);
                                         state.node_restarts += 1;
                                     }
                                     Err(e) => {
-                                        eprintln!("[LumiOS] Failed to restart Node backend: {}", e);
+                                        eprintln!("[LumiCore] Failed to restart Node backend: {}", e);
                                     }
                                 }
                             }
                         } else if restart_node {
                             eprintln!(
-                                "[LumiOS] Node backend max restarts ({}) reached, giving up",
+                                "[LumiCore] Node backend max restarts ({}) reached, giving up",
                                 max_restarts
                             );
                             state.node = None;
@@ -5640,7 +5672,7 @@ pub fn run() {
                 })
             {
                 eprintln!(
-                    "[LumiOS] Failed to register {WINDOW_TOGGLE_SHORTCUT} global shortcut: {error}"
+                    "[LumiCore] Failed to register {WINDOW_TOGGLE_SHORTCUT} global shortcut: {error}"
                 );
             }
             if let Err(error) =
@@ -5653,14 +5685,14 @@ pub fn run() {
                 })
             {
                 eprintln!(
-                    "[LumiOS] Failed to register {COMMAND_CENTER_SHORTCUT} global shortcut: {error}"
+                    "[LumiCore] Failed to register {COMMAND_CENTER_SHORTCUT} global shortcut: {error}"
                 );
             }
 
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while building Lumi OS")
+        .expect("error while building LumiCore")
         .run(|app, event| match event {
             tauri::RunEvent::WindowEvent {
                 label,
@@ -5687,16 +5719,16 @@ pub fn run() {
             }
             tauri::RunEvent::Exit => {
                 if let Err(error) = app.global_shortcut().unregister_all() {
-                    eprintln!("[LumiOS] Failed to unregister global shortcuts: {error}");
+                    eprintln!("[LumiCore] Failed to unregister global shortcuts: {error}");
                 }
                 let state = app.state::<Mutex<BackendProcesses>>();
                 let mut procs = state.lock().unwrap();
                 if let Some(child) = procs.node.as_mut() {
-                    println!("[LumiOS] Stopping Node backend...");
+                    println!("[LumiCore] Stopping Node backend...");
                     let _ = child.kill();
                 }
                 if let Some(child) = procs.python.as_mut() {
-                    println!("[LumiOS] Stopping GPT-SoVITS API...");
+                    println!("[LumiCore] Stopping GPT-SoVITS API...");
                     let _ = child.kill();
                 }
             }

@@ -13,6 +13,7 @@ interface ManagedChild {
 
 const repositoryRoot = process.cwd();
 const fixture = path.join(repositoryRoot, 'test', 'fixtures', 'data_root_lease_child.ts');
+const migrationFixture = path.join(repositoryRoot, 'test', 'fixtures', 'data_root_migration_lease_child.ts');
 const tempBase = path.resolve(process.env.LUMI_TEST_TMPDIR || os.tmpdir());
 fs.mkdirSync(tempBase, { recursive: true });
 const tempRoot = fs.mkdtempSync(path.join(tempBase, 'data-root-lease-'));
@@ -56,6 +57,58 @@ function spawnBackend(dataRoot: string): ManagedChild {
   children.add(managed);
   child.once('exit', () => children.delete(managed));
   return managed;
+}
+
+function spawnMigrationCrashOwner(sourceRoot: string, targetRoot: string): ManagedChild {
+  let stdout = '';
+  let stderr = '';
+  const child = spawn(process.execPath, ['--import', 'tsx', migrationFixture], {
+    cwd: repositoryRoot,
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    env: {
+      ...process.env,
+      NODE_ENV: 'test',
+      VITEST: '',
+      LUMI_MIGRATION_SOURCE: sourceRoot,
+      LUMI_MIGRATION_TARGET: targetRoot,
+    },
+  });
+  child.stdout?.setEncoding('utf8');
+  child.stderr?.setEncoding('utf8');
+  child.stdout?.on('data', chunk => { stdout += String(chunk); });
+  child.stderr?.on('data', chunk => { stderr += String(chunk); });
+  const managed = { child, stdout: () => stdout, stderr: () => stderr };
+  children.add(managed);
+  child.once('exit', () => children.delete(managed));
+  return managed;
+}
+
+function waitForMigrationRename(managed: ManagedChild, timeoutMs = 30_000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`migration fixture did not rename its root: ${managed.stderr() || managed.stdout()}`));
+    }, timeoutMs);
+    const onMessage = (message: unknown) => {
+      if ((message as { type?: string } | null)?.type !== 'renamed') return;
+      cleanup();
+      resolve();
+    };
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      cleanup();
+      reject(new Error(
+        `migration fixture exited before rename (${code ?? signal}): ${managed.stderr() || managed.stdout()}`,
+      ));
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      managed.child.off('message', onMessage);
+      managed.child.off('exit', onExit);
+    };
+    managed.child.on('message', onMessage);
+    managed.child.on('exit', onExit);
+  });
 }
 
 function waitForReady(managed: ManagedChild, timeoutMs = 30_000): Promise<{ pid: number; dataRoot: string }> {
@@ -176,6 +229,37 @@ describe.sequential('cross-process Lumi data-root lease', () => {
     expect(fs.existsSync(leasePath)).toBe(false);
   }, 60_000);
 
+  it('blocks a live post-rename migration owner and recovers its target-bound lease after a crash', async () => {
+    const home = path.join(tempRoot, 'migration-crash-home');
+    const sourceRoot = path.join(home, 'LumiOS');
+    const targetRoot = path.join(home, 'LumiCore');
+    fs.mkdirSync(path.join(sourceRoot, 'data'), { recursive: true });
+    fs.writeFileSync(path.join(sourceRoot, 'data', '.migration_skip'), '', { flag: 'wx' });
+
+    const migrating = spawnMigrationCrashOwner(sourceRoot, targetRoot);
+    await waitForMigrationRename(migrating);
+    expect(fs.existsSync(sourceRoot)).toBe(false);
+    expect(fs.existsSync(path.join(targetRoot, 'runtime', 'backend-instance.lock'))).toBe(true);
+
+    const blocked = spawnBackend(targetRoot);
+    const blockedExit = await waitForExit(blocked);
+    expect(blockedExit.code).not.toBe(0);
+    expect(`${blocked.stderr()}\n${blocked.stdout()}`).toContain('DATA_ROOT_LEASE_HELD');
+
+    migrating.child.kill('SIGKILL');
+    await waitForExit(migrating);
+
+    const recovered = spawnBackend(targetRoot);
+    await waitForReady(recovered);
+    const recoveredLease = JSON.parse(fs.readFileSync(
+      path.join(targetRoot, 'runtime', 'backend-instance.lock'),
+      'utf8',
+    )) as { leasePurpose?: string; pid?: number };
+    expect(recoveredLease.leasePurpose).toBe('backend');
+    expect(recoveredLease.pid).toBe(recovered.child.pid);
+    await stopBackend(recovered);
+  }, 90_000);
+
   it('reclaims an old generation when its PID is alive but its process-start identity was reused', async () => {
     const dataRoot = prepareDataRoot('pid-reuse');
     const runtimeDir = path.join(dataRoot, 'runtime');
@@ -240,5 +324,21 @@ describe.sequential('cross-process Lumi data-root lease', () => {
     const blockedExit = await waitForExit(blocked);
     expect(blockedExit.code).not.toBe(0);
     expect(`${blocked.stderr()}\n${blocked.stdout()}`).toMatch(/DATA_ROOT_LEASE_(?:INVALID|UNREADABLE)/);
+  }, 30_000);
+
+  it('rejects a corrupt SQLite store before any schema migration can rewrite it', async () => {
+    const dataRoot = prepareDataRoot('corrupt-before-schema');
+    const databasePath = path.join(dataRoot, 'data', 'lumi.db');
+    const corruptBytes = crypto.randomBytes(4096);
+    fs.writeFileSync(databasePath, corruptBytes, { flag: 'wx' });
+    const beforeDigest = crypto.createHash('sha256').update(corruptBytes).digest('hex');
+
+    const blocked = spawnBackend(dataRoot);
+    const blockedExit = await waitForExit(blocked);
+    expect(blockedExit.code).not.toBe(0);
+    expect(`${blocked.stderr()}\n${blocked.stdout()}`).toMatch(/SQLITE_NOTADB|file is not a database|quick_check/i);
+    const afterBytes = fs.readFileSync(databasePath);
+    expect(afterBytes.length).toBe(corruptBytes.length);
+    expect(crypto.createHash('sha256').update(afterBytes).digest('hex')).toBe(beforeDigest);
   }, 30_000);
 });

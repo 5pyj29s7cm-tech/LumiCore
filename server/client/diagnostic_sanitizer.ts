@@ -1,12 +1,22 @@
-const SECRET_ASSIGNMENT_RE = /(["']?(?:(?:[a-z0-9][a-z0-9_-]*[_-])?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|token|secret|password|passwd|credential))["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}\]]+)/gi;
-const SECRET_FIELD_RE = /^(?:(?:[a-z0-9][a-z0-9_-]*[_-])?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|token|secret|password|passwd|credential)|authorization)$/i;
-const BASIC_AUTH_RE = /(\bauthorization["']?\s*[:=]\s*["']?basic\s+)[^\s,;'"}\]]+/gi;
+const SECRET_ASSIGNMENT_RE = /(["']?(?:(?:[a-z0-9][a-z0-9_-]*[_-])?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|token|secret|password|passwd|passcode|credential)|cookie)["']?\s*[:=]\s*)("[^"]*"|'[^']*'|\[redacted\]|[^\s,;}\]]+)/gi;
+const SECRET_FIELD_RE = /^(?:(?:[a-z0-9][a-z0-9_-]*[_-])?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|token|secret|password|passwd|passcode|credential)|authorization|cookie)$/i;
+const AUTHORIZATION_RE = /(\bauthorization["']?\s*[:=]\s*["']?)(?:(bearer|basic)\s+)?(?:\[redacted\]|[^\s,;'"}\]]+)/gi;
 
 /** Remove credentials from text exposed in model/frontend diagnostics. */
 export function redactDiagnosticSecrets(value: unknown): string {
   return String(value ?? '')
-    .replace(/Bearer\s+[^\s,;'"}\]]+/gi, 'Bearer [redacted]')
-    .replace(BASIC_AUTH_RE, '$1[redacted]')
+    .replace(
+      /-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z0-9]+)* PRIVATE KEY-----/gi,
+      '[redacted private key]',
+    )
+    .replace(
+      /([a-z][a-z0-9+.-]*:\/\/)([^\s/:@]+):([^\s/@]+)@/gi,
+      '$1[redacted]:[redacted]@',
+    )
+    .replace(AUTHORIZATION_RE, (_match, prefix: string, scheme: string | undefined) => (
+      `${prefix}${scheme ? `${scheme} ` : ''}[redacted]`
+    ))
+    .replace(/Bearer\s+(?:\[redacted\]|[^\s,;'"}\]]+)/gi, 'Bearer [redacted]')
     .replace(/(?:sk|key)-[A-Za-z0-9_-]{8,}/gi, '[redacted]')
     .replace(SECRET_ASSIGNMENT_RE, (_match, prefix: string, secretValue: string) => {
       const quote = secretValue.startsWith('"')

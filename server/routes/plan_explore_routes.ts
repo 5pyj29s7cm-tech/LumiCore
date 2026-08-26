@@ -4,8 +4,21 @@ import {
   createPlan, updatePlan, updatePlanStep, listPlans, getPlan, deletePlan, getTodayPlanSummary,
 } from "../autonomy/planner";
 import {
-  runFirstBootExploration, runDailyScan, getLatestExploration, getExplorationHistory, isFirstBootComplete,
+  getLatestExploration,
+  getExplorationHistory,
+  isFirstBootComplete,
+  getSystemExplorationConsent,
+  setSystemExplorationConsent,
+  isSystemExplorationAllowed,
+  getSystemInspectionPolicy,
+  persistDailyExploration,
+  persistFirstBootExploration,
 } from "../autonomy/system_explorer";
+import {
+  collectSystemSnapshotInWorker,
+  resolveSystemExplorationRuntimeDir,
+  SystemExplorationAlreadyRunningError,
+} from "../runtime/system_exploration_worker";
 import { getProfessionProfile, buildProfessionOverlay, detectProfession, saveProfessionProfile } from "../autonomy/professions";
 import { installProfessionAgents, getProfessionTemplates } from "../autonomy/profession_templates";
 import { readDB } from "../../db_layer";
@@ -29,6 +42,8 @@ function resolvePlanScope(req: any, res: any): PlanScope | null {
 }
 
 export function mountExploreRoutes(router: Router) {
+  const guard = (fn: (req: any, res: any) => Promise<any>) => (req: any, res: any, next: any) =>
+    Promise.resolve(fn(req, res)).catch(next);
   const requirePersonalSystemAdmin = (req: any, res: any, next: any) => {
     if (req.user?.orgId) {
       return res.status(403).json({ error: 'Computer exploration belongs to the personal local-admin surface, not the organization workspace.' });
@@ -40,13 +55,55 @@ export function mountExploreRoutes(router: Router) {
   router.get("/explore/status", ...systemAdmin, (_req, res) => {
     const explored = isFirstBootComplete();
     const latest = getLatestExploration();
-    res.json({ explored, computerScope: 'lumi_server_host', latest });
+    res.json({
+      explored,
+      authorized: isSystemExplorationAllowed(),
+      consent: getSystemExplorationConsent(),
+      computerScope: 'lumi_server_host',
+      inspectionPolicy: getSystemInspectionPolicy(),
+      latest,
+    });
   });
 
-  router.post("/explore/scan", ...systemAdmin, (_req, res) => {
-    const result = runDailyScan();
-    res.json({ scanned: !!result, snapshot: result });
+  router.post("/explore/consent", ...systemAdmin, (req, res) => {
+    if (typeof req.body?.granted !== 'boolean') {
+      return res.status(400).json({ error: 'granted must be a boolean' });
+    }
+    const consent = setSystemExplorationConsent(req.body.granted, req.user!.uid);
+    res.json({
+      authorized: isSystemExplorationAllowed(),
+      consent,
+      inspectionPolicy: getSystemInspectionPolicy(),
+    });
   });
+
+  router.post("/explore/scan", ...systemAdmin, guard(async (_req, res) => {
+    if (!isSystemExplorationAllowed()) {
+      return res.status(403).json({ error: 'Local computer exploration has not been authorized.' });
+    }
+    const firstBoot = !isFirstBootComplete();
+    let collected;
+    try {
+      collected = await collectSystemSnapshotInWorker(resolveSystemExplorationRuntimeDir());
+    } catch (error) {
+      if (error instanceof SystemExplorationAlreadyRunningError) {
+        return res.status(409).json({
+          error: error.message,
+          code: error.code,
+        });
+      }
+      throw error;
+    }
+    // A local admin may revoke consent while the isolated worker is running.
+    // In that case discard the temporary result instead of persisting it.
+    if (!isSystemExplorationAllowed()) {
+      return res.status(403).json({ error: 'Local computer exploration authorization was revoked before persistence.' });
+    }
+    const result = firstBoot && !isFirstBootComplete()
+      ? persistFirstBootExploration(collected)
+      : persistDailyExploration(collected);
+    res.json({ scanned: !!result, snapshot: result });
+  }));
 
   router.get("/explore/history", ...systemAdmin, (_req, res) => {
     const history = getExplorationHistory(30);

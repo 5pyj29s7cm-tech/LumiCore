@@ -17,7 +17,7 @@ import type { KlineBar, PaperPortfolio, QuoteLike } from './logic';
 
 // ── East Money public API helpers (no API key needed) ──────────────────────
 
-const UA = 'LumiOS/2.0';
+const UA = 'LumiCore/3.0';
 const PAPER_DIR = path.join(os.homedir(), '.lumi_stockbot');
 const PAPER_FILE = path.join(PAPER_DIR, 'paper_portfolios.json');
 

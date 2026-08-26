@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SpeechBrain speaker embedding sidecar for LumiOS.
+"""SpeechBrain speaker embedding sidecar for LumiCore.
 
 Protocol: JSON lines over stdin/stdout.
 Request:

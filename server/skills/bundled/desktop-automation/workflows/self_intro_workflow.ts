@@ -273,7 +273,7 @@ function buildOfficeDemoRtf(text: string): string {
 
 function createOfficeDemoFile(text = OFFICE_DEMO_TEXT): string {
   const desktopDir = path.join(os.homedir(), 'Desktop');
-  const fallbackDir = path.join(os.tmpdir(), 'LumiOS-Demo');
+  const fallbackDir = path.join(os.tmpdir(), 'LumiCore-Demo');
   const dir = fs.existsSync(desktopDir) ? desktopDir : fallbackDir;
   fs.mkdirSync(dir, { recursive: true });
   const filePath = path.join(dir, 'Lumi-自我介绍-演示.rtf');

@@ -4,6 +4,7 @@ import {
   pauseRuntimeWork,
   resumeRuntimeWork,
   type RuntimeWorkKind,
+  type RuntimeWorkScope,
 } from '../../runtime/work_control';
 import { ToolRegistry } from '../registry';
 
@@ -12,6 +13,14 @@ function kindsFromArgs(value: unknown): RuntimeWorkKind[] | undefined {
   return value.filter((kind): kind is RuntimeWorkKind => (
     kind === 'delegation' || kind === 'autonomy' || kind === 'takeover'
   ));
+}
+
+function scopeFromContext(context: { domain?: string; orgId?: string } | undefined): RuntimeWorkScope {
+  if (context?.domain === 'work') {
+    const orgId = String(context.orgId || '').trim();
+    return orgId ? { domain: 'work', orgId } : { domain: 'work' };
+  }
+  return { domain: 'personal' };
 }
 
 export function registerRuntimeWorkTools(registry: ToolRegistry): void {
@@ -32,7 +41,11 @@ export function registerRuntimeWorkTools(registry: ToolRegistry): void {
       required: [],
     },
     handler: async (args, context) => JSON.stringify(
-      getRuntimeWorkSnapshot(context?.userId || 'anonymous', kindsFromArgs(args.kinds)),
+      getRuntimeWorkSnapshot(
+        context?.userId || 'anonymous',
+        kindsFromArgs(args.kinds),
+        scopeFromContext(context),
+      ),
       null,
       2,
     ),
@@ -67,6 +80,7 @@ export function registerRuntimeWorkTools(registry: ToolRegistry): void {
       userId: context?.userId || 'anonymous',
       taskId: args.taskId ? String(args.taskId) : undefined,
       kinds: kindsFromArgs(args.kinds),
+      scope: scopeFromContext(context),
     }), null, 2),
     permission: 'user',
     securityLevel: 'safe',
@@ -112,6 +126,7 @@ export function registerRuntimeWorkTools(registry: ToolRegistry): void {
       userId: context?.userId || 'anonymous',
       taskId: args.taskId ? String(args.taskId) : undefined,
       kinds: kindsFromArgs(args.kinds),
+      scope: scopeFromContext(context),
     }), null, 2),
     permission: 'user',
     securityLevel: 'safe',
@@ -157,6 +172,7 @@ export function registerRuntimeWorkTools(registry: ToolRegistry): void {
       userId: context?.userId || 'anonymous',
       taskId: args.taskId ? String(args.taskId) : undefined,
       kinds: kindsFromArgs(args.kinds),
+      scope: scopeFromContext(context),
     }), null, 2),
     permission: 'user',
     securityLevel: 'safe',

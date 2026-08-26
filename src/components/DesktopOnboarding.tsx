@@ -1,354 +1,301 @@
-import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
-  Sparkles,
-  Search,
-  Zap,
-  Mic,
+  ArrowRight,
+  Check,
   ChevronRight,
-  MessageSquare,
-  MousePointer2,
-  Keyboard,
-  CheckCircle2,
+  CircleAlert,
+  Cpu,
+  HardDrive,
+  Loader2,
+  MessageCircleQuestion,
+  ScanSearch,
+  ShieldCheck,
+  Sparkles,
 } from 'lucide-react';
-import { uiMessage } from '../i18n/uiMessages';
+import {
+  systemExplorerCopy,
+  systemExplorerFallbackQuestions,
+} from '../i18n/locales/systemExplorer';
 
 interface OnboardingProps {
   isOpen: boolean;
   onFinish: () => void;
+  onAsk?: (prompt: string) => void;
   t: any;
 }
 
-type PreviewType = 'desktop' | 'chat' | 'mode' | 'search';
+type LocalizedText = { zh: string; en: string };
 
-interface TutorialStep {
-  eyebrow: string;
-  title: string;
-  description: string;
-  action: string;
-  bullets: string[];
-  icon: React.ReactNode;
-  accent: string;
-  preview: PreviewType;
-}
+type CapabilityOpportunity = {
+  id: string;
+  label: string;
+  ready: boolean;
+  confidence: number;
+  evidence: string[];
+  suggestedPrompts: LocalizedText[];
+};
 
-export function DesktopOnboarding({ isOpen, onFinish, t }: OnboardingProps) {
-  const [currentStep, setCurrentStep] = useState(0);
+type ExplorationSnapshot = {
+  timestamp?: string;
+  hardware?: {
+    cpus?: { model?: string; cores?: number; threads?: number };
+    totalMemoryGB?: number;
+    gpus?: string[];
+    disks?: Array<{ name?: string; totalGB?: number; freeGB?: number }>;
+  };
+  software?: { installedApps?: string[] };
+  peripherals?: {
+    displays?: Array<{ name?: string }>;
+    audioDevices?: string[];
+    cameras?: string[];
+  };
+  capabilityProfile?: {
+    opportunities?: CapabilityOpportunity[];
+    firstQuestions?: LocalizedText[];
+    evidenceGaps?: string[];
+  };
+};
+
+type ExplorationStatus = {
+  explored?: boolean;
+  authorized?: boolean;
+  consent?: { status?: string };
+  latest?: ExplorationSnapshot | null;
+};
+
+export function DesktopOnboarding({ isOpen, onFinish, onAsk, t }: OnboardingProps) {
   const isZh = t?.langCode !== 'en';
-  const ui = (zh: string, en: string) => isZh ? zh : en;
+  const reduceMotion = useReducedMotion();
+  const copy = systemExplorerCopy(isZh ? 'zh' : 'en').onboarding;
+  const [status, setStatus] = useState<ExplorationStatus | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [error, setError] = useState('');
 
-  const steps: TutorialStep[] = [
-    {
-      eyebrow: uiMessage('desktop-onboarding.01-desktop-entry.715d556b35'),
-      title: uiMessage('desktop-onboarding.start-from-the-desktop.5848cb636a'),
-      description: uiMessage('desktop-onboarding.lumi-keeps-the-main-abilities.6fae897ddc'),
-      action: uiMessage('desktop-onboarding.try-opening-chat-or-skill.3e4c2375e5'),
-      bullets: [
-        uiMessage('desktop-onboarding.double-click-desktop-icons-to.8167e08e4c'),
-        uiMessage('desktop-onboarding.the-dock-keeps-common-entries.3af5849d82'),
-        uiMessage('desktop-onboarding.open-windows-appear-in-the.c9d878bd33'),
-      ],
-      icon: <Sparkles size={34} className="text-celestial-saturn" />,
-      accent: 'bg-celestial-saturn',
-      preview: 'desktop',
-    },
-    {
-      eyebrow: uiMessage('desktop-onboarding.02-give-a-task.348efc58bf'),
-      title: uiMessage('desktop-onboarding.tell-lumi-what-to-do.572cff600b'),
-      description: uiMessage('desktop-onboarding.click-the-center-orb-open.66d5ce5682'),
-      action: uiMessage('desktop-onboarding.type-or-speak-a-clear.35c1b49684'),
-      bullets: [
-        uiMessage('desktop-onboarding.text-is-best-for-complex.690d0e029b'),
-        uiMessage('desktop-onboarding.voice-is-best-for-quick.d42ff25a77'),
-        uiMessage('desktop-onboarding.key-execution-states-stay-visible.75817d9bff'),
-      ],
-      icon: <MessageSquare size={34} className="text-blue-300" />,
-      accent: 'bg-blue-400',
-      preview: 'chat',
-    },
-    {
-      eyebrow: uiMessage('desktop-onboarding.03-execution-mode.11de7c150e'),
-      title: uiMessage('desktop-onboarding.check-the-mode-before-lumi.82fed22ee3'),
-      description: uiMessage('desktop-onboarding.modes-affect-how-lumi-acts.3ece03b3e6'),
-      action: uiMessage('desktop-onboarding.switch-between-meeting-chat-assistant.1ae153b19f'),
-      bullets: [
-        uiMessage('desktop-onboarding.chat-answer-only-no-proactive.fb6dff28d4'),
-        uiMessage('desktop-onboarding.assistant-use-tools-skills-and.365a60bd10'),
-        uiMessage('desktop-onboarding.autonomy-multi-step-work-sensitive.5120c0cf2b'),
-      ],
-      icon: <MousePointer2 size={34} className="text-cyan-300" />,
-      accent: 'bg-cyan-400',
-      preview: 'mode',
-    },
-    {
-      eyebrow: uiMessage('desktop-onboarding.04-quick-search.116b025c6a'),
-      title: uiMessage('desktop-onboarding.search-when-you-cannot-find.3ce097a4dd'),
-      description: uiMessage('desktop-onboarding.top-search-can-open-chat.212c36f151'),
-      action: uiMessage('desktop-onboarding.search-a-feature-name-and.7662c9b428'),
-      bullets: [
-        uiMessage('desktop-onboarding.type-a-feature-name-to.4b6e7f297a'),
-        uiMessage('desktop-onboarding.press-enter-to-open-the.30a6cec7d1'),
-        uiMessage('desktop-onboarding.useful-for-switching-common-tools.77cd93e6f7'),
-      ],
-      icon: <Search size={34} className="text-purple-300" />,
-      accent: 'bg-purple-400',
-      preview: 'search',
-    },
-  ];
+  useEffect(() => {
+    if (!isOpen) return;
+    const controller = new AbortController();
+    setLoading(true);
+    setError('');
+    void fetch('/api/explore/status', {
+      credentials: 'include',
+      signal: controller.signal,
+    }).then(async response => {
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      setStatus(payload);
+    }).catch(cause => {
+      if (!controller.signal.aborted) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
+    }).finally(() => {
+      if (!controller.signal.aborted) setLoading(false);
+    });
+    return () => controller.abort();
+  }, [isOpen]);
 
-  const step = steps[currentStep];
+  const latest = status?.latest || null;
+  const readyOpportunities = useMemo(() => (
+    (latest?.capabilityProfile?.opportunities || [])
+      .filter(item => item.ready)
+      .sort((left, right) => right.confidence - left.confidence)
+      .slice(0, 6)
+  ), [latest]);
+  const firstQuestions = useMemo(() => {
+    const questions = latest?.capabilityProfile?.firstQuestions || systemExplorerFallbackQuestions;
+    return questions.slice(0, 5);
+  }, [latest]);
+  const authorized = status?.authorized === true;
 
-  const renderPreview = () => {
-    if (step.preview === 'desktop') {
-      return (
-        <div className="relative h-full min-h-[280px] overflow-hidden rounded-2xl border border-white/10 bg-[#10131d] p-5">
-          <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-[0.22em] text-white/35">
-            <span>Lumi Desktop</span>
-            <span>09:41</span>
-          </div>
-          <div className="mt-7 grid grid-cols-3 gap-4">
-            {['Chat', 'Skills', 'Knowledge', 'Run Log', 'Settings', 'Tools'].map((label, index) => (
-              <motion.div
-                key={label}
-                initial={false}
-                animate={index === 0 ? { scale: [1, 1.04, 1] } : {}}
-                transition={{ repeat: Infinity, duration: 1.8 }}
-                className={`flex h-20 flex-col items-center justify-center gap-2 rounded-xl border ${
-                  index === 0
-                    ? 'border-celestial-saturn/70 bg-celestial-saturn/15 shadow-[0_0_28px_rgba(255,204,92,0.18)]'
-                    : 'border-white/10 bg-white/[0.04]'
-                }`}
-              >
-                <div className={`h-7 w-7 rounded-lg ${index === 0 ? 'bg-celestial-saturn' : 'bg-white/15'}`} />
-                <span className="text-xs font-semibold text-white/70">{label}</span>
-              </motion.div>
-            ))}
-          </div>
-          <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 gap-2 rounded-2xl border border-white/10 bg-black/35 px-4 py-3 backdrop-blur-xl">
-            {[0, 1, 2, 3].map(item => (
-              <div key={item} className="h-8 w-8 rounded-lg bg-white/12" />
-            ))}
-          </div>
-        </div>
-      );
+  const updateConsent = async (granted: boolean) => {
+    const response = await fetch('/api/explore/consent', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ granted }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    return payload;
+  };
+
+  const scanComputer = async () => {
+    setScanning(true);
+    setError('');
+    try {
+      const consent = await updateConsent(true);
+      const response = await fetch('/api/explore/scan', {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.snapshot) {
+        throw new Error(payload.error || copy.scanNoResult);
+      }
+      setStatus(previous => ({
+        ...(previous || {}),
+        explored: true,
+        authorized: true,
+        consent: consent.consent,
+        latest: payload.snapshot,
+      }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setScanning(false);
     }
+  };
 
-    if (step.preview === 'chat') {
-      return (
-        <div className="flex h-full min-h-[280px] flex-col justify-between rounded-2xl border border-white/10 bg-[#0d1220] p-5">
-          <div className="space-y-4">
-            <div className="max-w-[78%] rounded-2xl rounded-tl-sm bg-white/10 px-4 py-3 text-sm text-white/72">
-              {uiMessage('desktop-onboarding.open-the-browser-and-organize.f1531155e2')}
-            </div>
-            <div className="ml-auto max-w-[82%] rounded-2xl rounded-tr-sm border border-blue-300/25 bg-blue-400/12 px-4 py-3 text-sm text-blue-50">
-              {uiMessage('desktop-onboarding.i-will-confirm-the-execution.2dc75bdc77')}
-            </div>
-          </div>
-          <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-black/28 p-3">
-            <div className="flex-1 rounded-xl bg-white/8 px-4 py-3 text-sm text-white/35">{uiMessage('desktop-onboarding.type-a-task.a6c14c57f7')}</div>
-            <button className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-400 text-black">
-              <Mic size={18} />
-            </button>
-          </div>
-        </div>
-      );
+  const finishWithoutScan = async () => {
+    if (!authorized && status?.consent?.status !== 'legacy_local_scan') {
+      try { await updateConsent(false); } catch {}
     }
+    onFinish();
+  };
 
-    if (step.preview === 'mode') {
-      return (
-        <div className="h-full min-h-[280px] rounded-2xl border border-white/10 bg-[#0c1420] p-5">
-          <div className="grid grid-cols-3 gap-2 rounded-2xl border border-white/10 bg-black/25 p-2">
-            {[
-              [uiMessage('desktop-onboarding.chat.1594b2f45c'), uiMessage('desktop-onboarding.talk-only.a4314af6ff'), MessageSquare],
-              [uiMessage('desktop-onboarding.assistant.90c4ae600c'), uiMessage('desktop-onboarding.use-abilities.4dfa5370d7'), MousePointer2],
-              [uiMessage('desktop-onboarding.autonomy.6aea974e38'), uiMessage('desktop-onboarding.multi-step.931079ffc4'), Zap],
-            ].map(([label, hint, Icon], index) => {
-              const ActiveIcon = Icon as typeof MousePointer2;
-              return (
-                <div
-                  key={label as string}
-                  className={`rounded-xl border px-3 py-4 text-center ${
-                    index === 0 ? 'border-cyan-300/60 bg-cyan-300/15 text-cyan-50' : 'border-white/8 bg-white/[0.03] text-white/45'
-                  }`}
-                >
-                  <ActiveIcon size={20} className="mx-auto mb-2" />
-                  <div className="text-sm font-black">{label as string}</div>
-                  <div className="mt-1 text-[11px] font-semibold">{hint as string}</div>
-                </div>
-              );
-            })}
-          </div>
-          <div className="mt-5 rounded-2xl border border-cyan-300/20 bg-cyan-300/10 p-4">
-            <div className="text-sm font-black text-cyan-50">{uiMessage('desktop-onboarding.current-assistant-mode.ca5457dfcc')}</div>
-            <p className="mt-2 text-sm leading-relaxed text-cyan-50/68">
-              {uiMessage('desktop-onboarding.lumi-can-choose-tools-skills.2767803032')}
-            </p>
-          </div>
-          <div className="mt-4 space-y-2">
-            {[
-              uiMessage('desktop-onboarding.understand-the-task.324a5e7bc5'),
-              uiMessage('desktop-onboarding.choose-the-right-ability.b8026c5b2e'),
-              uiMessage('desktop-onboarding.show-execution-progress.549c05240e'),
-            ].map(label => (
-              <div key={label} className="flex items-center gap-3 rounded-xl bg-white/[0.04] px-3 py-2 text-sm text-white/55">
-                <CheckCircle2 size={16} className="text-cyan-300" />
-                {label}
-              </div>
-            ))}
-          </div>
-        </div>
-      );
-    }
-
-    return (
-      <div className="h-full min-h-[280px] rounded-2xl border border-white/10 bg-[#101020] p-5">
-        <div className="flex items-center gap-3 rounded-2xl border border-purple-300/30 bg-purple-300/12 px-4 py-3">
-          <Search size={18} className="text-purple-200" />
-          <span className="text-sm font-semibold text-white">settings</span>
-        </div>
-        <div className="mt-4 space-y-2">
-          {['Settings', 'Skill Center', 'Knowledge Base', 'Chat'].map((label, index) => (
-            <div
-              key={label}
-              className={`flex items-center justify-between rounded-xl border px-4 py-3 ${
-                index === 0 ? 'border-purple-300/45 bg-purple-300/14' : 'border-white/8 bg-white/[0.04]'
-              }`}
-            >
-              <div className="flex items-center gap-3">
-                <div className={`h-8 w-8 rounded-lg ${index === 0 ? 'bg-purple-300' : 'bg-white/12'}`} />
-                <span className="text-sm font-bold text-white/78">{label}</span>
-              </div>
-              <span className="text-[10px] font-black uppercase tracking-[0.18em] text-white/28">Open</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
+  const askLumi = (question: LocalizedText) => {
+    onAsk?.(isZh ? question.zh : question.en);
+    onFinish();
   };
 
   if (!isOpen) return null;
 
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-[200] flex items-center justify-center p-2 sm:p-4 pointer-events-auto">
+      <div className="fixed inset-0 z-[200] flex items-center justify-center p-2 pointer-events-auto sm:p-4">
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="absolute inset-0 bg-black/88 backdrop-blur-2xl"
+          className="absolute inset-0 bg-[#02040a]/92 backdrop-blur-2xl"
         />
 
         <motion.div
-          initial={{ opacity: 0, scale: 0.96, y: 18 }}
+          initial={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.97, y: 18 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.96, y: 18 }}
-          className="lumi-onboarding-dialog relative grid max-h-[calc(100dvh-1rem)] w-full max-w-5xl overflow-y-auto rounded-3xl border border-white/10 bg-[#080a10]/95 shadow-2xl md:min-h-[580px] md:grid-cols-[300px_1fr] sm:max-h-[calc(100dvh-2rem)]"
+          exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.98, y: 12 }}
+          transition={{ duration: reduceMotion ? 0.12 : 0.32, ease: [0.22, 1, 0.36, 1] }}
+          className="relative grid max-h-[calc(100dvh-1rem)] w-full max-w-6xl overflow-y-auto rounded-[2rem] border border-cyan-200/12 bg-[#050812]/96 shadow-[0_34px_120px_rgba(0,0,0,0.65)] lg:grid-cols-[0.88fr_1.12fr]"
         >
           <button
-            onClick={onFinish}
-            className="absolute right-5 top-5 z-10 text-xs font-black uppercase tracking-[0.2em] text-white/35 transition-colors hover:text-white/70"
+            type="button"
+            onClick={() => void finishWithoutScan()}
+            className="absolute right-5 top-5 z-20 text-xs font-black uppercase tracking-[0.18em] text-white/35 transition-colors hover:text-white/75"
           >
-            {t.skip || uiMessage('desktop-onboarding.skip.8ff170db92')}
+            {copy.enterNow}
           </button>
 
-          <aside className="border-b border-white/10 bg-white/[0.03] p-6 md:border-b-0 md:border-r">
-            <div className="text-xs font-black uppercase tracking-[0.28em] text-white/32">First Run</div>
-            <h2 className="mt-3 text-2xl font-black text-white">{uiMessage('desktop-onboarding.lumi-desktop-tutorial.85b3ea7a0c')}</h2>
-            <p className="mt-3 text-sm leading-relaxed text-white/50">
-              {uiMessage('desktop-onboarding.follow-four-steps-to-understand.f42473819c')}
-            </p>
+          <section className="relative min-h-[430px] overflow-hidden border-b border-white/[0.07] p-7 lg:min-h-[650px] lg:border-b-0 lg:border-r lg:p-10">
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_38%_38%,rgba(34,211,238,0.14),transparent_28%),radial-gradient(circle_at_70%_70%,rgba(139,92,246,0.12),transparent_34%)]" />
+            <div className="absolute inset-0 opacity-45 [background-image:radial-gradient(circle,rgba(255,255,255,.6)_0_1px,transparent_1.5px)] [background-size:41px_41px]" />
+            <div className="relative flex h-full flex-col">
+              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.26em] text-cyan-100/45">
+                <Sparkles size={15} />
+                {copy.eyebrow}
+              </div>
+              <h1 className="mt-5 max-w-xl text-4xl font-black leading-tight text-white sm:text-5xl">
+                {copy.title}
+              </h1>
+              <p className="mt-5 max-w-xl text-sm leading-7 text-white/55 sm:text-base">
+                {copy.description}
+              </p>
 
-            <div className="mt-7 space-y-2">
-              {steps.map((item, index) => (
-                <button
-                  key={item.title}
-                  onClick={() => setCurrentStep(index)}
-                  className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left transition-all ${
-                    index === currentStep
-                      ? 'border-white/18 bg-white/10 text-white'
-                      : 'border-transparent bg-transparent text-white/45 hover:bg-white/[0.04] hover:text-white/70'
-                  }`}
-                >
-                  <span className={`h-2.5 w-2.5 rounded-full ${index <= currentStep ? item.accent : 'bg-white/14'}`} />
-                  <span className="min-w-0">
-                    <span className="block text-[10px] font-black uppercase tracking-[0.18em] opacity-50">{item.eyebrow}</span>
-                    <span className="mt-1 block truncate text-sm font-bold">{item.title}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </aside>
-
-          <section className="lumi-onboarding-content p-5 pt-14 sm:p-6 sm:pt-14 md:p-8 md:pt-14">
-            <div className="grid gap-7 lg:grid-cols-[1fr_360px]">
-              <div className="lumi-onboarding-copy flex min-h-[420px] flex-col">
+              <div className="relative mx-auto my-10 flex h-48 w-48 items-center justify-center sm:h-56 sm:w-56">
                 <motion.div
-                  key={`copy-${currentStep}`}
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="flex-1"
-                >
-                  <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.05]">
-                    {step.icon}
-                  </div>
-                  <div className="mt-7 text-xs font-black uppercase tracking-[0.28em] text-white/35">{step.eyebrow}</div>
-                  <h1 className="mt-3 text-4xl font-black tracking-normal text-white">{step.title}</h1>
-                  <p className="mt-5 max-w-2xl text-base leading-8 text-white/62">{step.description}</p>
-
-                  <div className="mt-7 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-                    <div className="text-xs font-black uppercase tracking-[0.22em] text-white/35">{uiMessage('desktop-onboarding.do-now.ed7f46664e')}</div>
-                    <div className="mt-2 text-lg font-black text-white">{step.action}</div>
-                  </div>
-
-                  <div className="mt-5 grid gap-2">
-                    {step.bullets.map(item => (
-                      <div key={item} className="flex items-center gap-3 text-sm font-semibold text-white/58">
-                        <CheckCircle2 size={17} className="shrink-0 text-celestial-saturn" />
-                        {item}
-                      </div>
-                    ))}
-                  </div>
-                </motion.div>
-
-                <div className="mt-7 flex items-center gap-3">
-                  {currentStep > 0 && (
-                    <button
-                      onClick={() => setCurrentStep(prev => prev - 1)}
-                      className="h-12 rounded-2xl border border-white/10 px-5 text-sm font-black text-white/55 transition-colors hover:bg-white/8 hover:text-white"
-                    >
-                      {uiMessage('desktop-onboarding.previous.2c0f2a614c')}
-                    </button>
-                  )}
-                  {currentStep < steps.length - 1 ? (
-                    <button
-                      onClick={() => setCurrentStep(prev => prev + 1)}
-                      className="flex h-12 min-w-36 items-center justify-center gap-2 rounded-2xl bg-white px-6 text-sm font-black text-black transition-transform hover:scale-[1.02] active:scale-95"
-                    >
-                      {uiMessage('desktop-onboarding.next.b527069e7f')}
-                      <ChevronRight size={18} />
-                    </button>
-                  ) : (
-                    <button
-                      onClick={onFinish}
-                      className="flex h-12 min-w-40 items-center justify-center gap-2 rounded-2xl bg-celestial-saturn px-6 text-sm font-black text-black shadow-[0_0_34px_rgba(255,200,80,0.25)] transition-transform hover:scale-[1.02] active:scale-95"
-                    >
-                      {uiMessage('desktop-onboarding.enter-desktop.5bf6d1be68')}
-                      <Zap size={18} fill="currentColor" />
-                    </button>
-                  )}
+                  animate={reduceMotion ? undefined : { rotate: 360 }}
+                  transition={{ duration: 28, repeat: Infinity, ease: 'linear' }}
+                  className="absolute inset-0 rounded-full border border-cyan-200/12 border-t-cyan-200/55"
+                />
+                <motion.div
+                  animate={reduceMotion ? undefined : { scale: [0.96, 1.05, 0.96], opacity: [0.55, 0.9, 0.55] }}
+                  transition={{ duration: 3.4, repeat: Infinity, ease: 'easeInOut' }}
+                  className="absolute inset-7 rounded-full bg-[radial-gradient(circle_at_35%_30%,rgba(255,255,255,.85),rgba(34,211,238,.28)_18%,rgba(79,70,229,.16)_46%,transparent_72%)] shadow-[0_0_70px_rgba(34,211,238,.22)]"
+                />
+                <div className="relative flex h-24 w-24 items-center justify-center rounded-full border border-white/15 bg-black/35 text-cyan-100 shadow-[inset_0_0_34px_rgba(34,211,238,.12)] backdrop-blur-xl">
+                  {scanning ? <Loader2 size={30} className="animate-spin" /> : <MessageCircleQuestion size={30} />}
                 </div>
               </div>
 
-              <motion.div
-                key={`preview-${currentStep}`}
-                initial={{ opacity: 0, x: 18 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: 0.08 }}
-                className="lg:pt-2"
-              >
-                {renderPreview()}
-              </motion.div>
+              <div className="mt-auto rounded-2xl border border-white/[0.07] bg-black/25 p-4 text-xs leading-5 text-white/48 backdrop-blur-xl">
+                <div className="flex items-center gap-2 font-black text-white/74"><ShieldCheck size={15} className="text-emerald-300" />{copy.boundaryTitle}</div>
+                <p className="mt-2">
+                  {copy.boundaryText}
+                </p>
+              </div>
             </div>
+          </section>
+
+          <section className="flex min-h-[520px] flex-col p-6 pt-16 sm:p-8 sm:pt-16 lg:p-10 lg:pt-16">
+            {loading ? (
+              <div className="flex flex-1 items-center justify-center gap-3 text-sm text-white/45"><Loader2 size={20} className="animate-spin" />{copy.loading}</div>
+            ) : latest ? (
+              <>
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-xs font-black uppercase tracking-[0.2em] text-emerald-200/55">{copy.profileReady}</div>
+                    <h2 className="mt-2 text-2xl font-black text-white">{copy.profileTitle}</h2>
+                  </div>
+                  <span className="flex items-center gap-1.5 rounded-full border border-emerald-300/15 bg-emerald-300/[0.07] px-3 py-1.5 text-[10px] font-black text-emerald-100/70"><Check size={12} />{copy.localEvidence}</span>
+                </div>
+
+                <div className="mt-5 grid grid-cols-3 gap-2">
+                  <div className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-3"><Cpu size={15} className="text-cyan-200" /><div className="mt-2 truncate text-xs font-bold text-white/72">{latest.hardware?.cpus?.model || copy.unknownCpu}</div><div className="mt-1 text-[10px] text-white/32">{latest.hardware?.cpus?.cores || '?'} / {latest.hardware?.cpus?.threads || '?'} {copy.coresThreads}</div></div>
+                  <div className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-3"><HardDrive size={15} className="text-violet-200" /><div className="mt-2 text-xs font-bold text-white/72">{latest.hardware?.totalMemoryGB || '?'} GB</div><div className="mt-1 text-[10px] text-white/32">{copy.memory} · {latest.hardware?.disks?.length || 0} {copy.disks}</div></div>
+                  <div className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-3"><ScanSearch size={15} className="text-emerald-200" /><div className="mt-2 text-xs font-bold text-white/72">{latest.software?.installedApps?.length || 0}</div><div className="mt-1 text-[10px] text-white/32">{copy.knownApps}</div></div>
+                </div>
+
+                {readyOpportunities.length > 0 && (
+                  <div className="mt-6">
+                    <div className="text-[11px] font-black uppercase tracking-[0.2em] text-white/35">{copy.readyTitle}</div>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      {readyOpportunities.map(item => (
+                        <div key={item.id} className="rounded-2xl border border-cyan-200/[0.08] bg-cyan-200/[0.025] p-3">
+                          <div className="text-xs font-black text-white/72">{item.label}</div>
+                          <div className="mt-1 truncate text-[10px] text-white/32">{item.evidence.slice(0, 3).join(' · ') || copy.localEnvironment}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="mt-6 min-h-0 flex-1">
+                  <div className="text-[11px] font-black uppercase tracking-[0.2em] text-white/35">{copy.startQuestion}</div>
+                  <div className="mt-3 space-y-2">
+                    {firstQuestions.map((question, index) => (
+                      <button key={`${question.zh}-${index}`} type="button" onClick={() => askLumi(question)} className="group flex w-full items-center gap-3 rounded-2xl border border-white/[0.07] bg-white/[0.025] px-4 py-3 text-left text-sm leading-6 text-white/62 transition-colors hover:border-cyan-200/20 hover:bg-cyan-200/[0.055] hover:text-white">
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-white/[0.05] text-cyan-100/60">{index + 1}</span>
+                        <span className="min-w-0 flex-1">{isZh ? question.zh : question.en}</span>
+                        <ChevronRight size={15} className="shrink-0 text-white/20 transition-transform group-hover:translate-x-0.5 group-hover:text-cyan-100/65" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mt-6 flex flex-wrap items-center gap-3">
+                  <button type="button" onClick={onFinish} className="flex h-12 items-center gap-2 rounded-2xl bg-white px-6 text-sm font-black text-black transition-transform hover:scale-[1.015] active:scale-95">{copy.enter}<ArrowRight size={17} /></button>
+                  <button type="button" disabled={scanning} onClick={() => void scanComputer()} className="h-12 rounded-2xl border border-white/10 px-5 text-sm font-black text-white/45 transition-colors hover:bg-white/[0.05] hover:text-white/75 disabled:cursor-wait disabled:opacity-45">{scanning ? copy.refreshing : copy.refresh}</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-xs font-black uppercase tracking-[0.2em] text-cyan-100/45">{copy.startAdaptation}</div>
+                <h2 className="mt-3 text-3xl font-black text-white">{copy.adaptationTitle}</h2>
+                <p className="mt-4 text-sm leading-7 text-white/52">{copy.adaptationDescription}</p>
+
+                <div className="mt-7 space-y-3">
+                  {copy.scanItems.map(item => <div key={item} className="flex items-center gap-3 rounded-2xl border border-white/[0.07] bg-white/[0.025] px-4 py-3 text-sm text-white/58"><Check size={15} className="shrink-0 text-emerald-300" />{item}</div>)}
+                </div>
+
+                {error && <div role="alert" className="mt-5 flex items-start gap-2 rounded-2xl border border-rose-300/15 bg-rose-300/[0.05] p-4 text-xs leading-5 text-rose-100/70"><CircleAlert size={15} className="mt-0.5 shrink-0" />{error}</div>}
+
+                <div className="mt-auto flex flex-wrap items-center gap-3 pt-8">
+                  <button type="button" disabled={scanning} onClick={() => void scanComputer()} className="flex h-12 min-w-48 items-center justify-center gap-2 rounded-2xl bg-cyan-100 px-6 text-sm font-black text-[#061016] shadow-[0_0_38px_rgba(103,232,249,.16)] transition-transform hover:scale-[1.015] active:scale-95 disabled:cursor-wait disabled:opacity-55">{scanning ? <Loader2 size={17} className="animate-spin" /> : <ScanSearch size={17} />}{scanning ? copy.understanding : copy.allowScan}</button>
+                  <button type="button" disabled={scanning} onClick={() => void finishWithoutScan()} className="h-12 rounded-2xl border border-white/10 px-5 text-sm font-black text-white/42 transition-colors hover:bg-white/[0.05] hover:text-white/72 disabled:opacity-35">{copy.notNow}</button>
+                </div>
+              </>
+            )}
+            {error && latest && <div role="alert" className="mt-4 flex items-start gap-2 rounded-2xl border border-amber-300/15 bg-amber-300/[0.05] p-3 text-xs leading-5 text-amber-100/70"><CircleAlert size={14} className="mt-0.5 shrink-0" />{error}</div>}
           </section>
         </motion.div>
       </div>

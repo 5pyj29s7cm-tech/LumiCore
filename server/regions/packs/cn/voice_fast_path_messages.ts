@@ -143,6 +143,7 @@ export const CN_VOICE_WORK_MESSAGES = {
 } as const;
 
 export const CN_TASK_EXECUTION_MESSAGES = {
+  persistenceUnknown: '本轮最终状态未能可靠保存，我没有把它标记为完成。若刚才涉及外部操作，请先核对实际结果后再重试。',
   noResumableTask: '现在没有可续接的工作任务。',
   goalWithCurrentStep: (goal: string, step: string) => `${goal}；当前步骤：${step}`,
   completed: (goal: string, receiptCount: number) => `“${goal}”已完成${receiptCount ? `，已核对${receiptCount}个执行回执` : ''}。`,
@@ -153,6 +154,8 @@ export const CN_TASK_EXECUTION_MESSAGES = {
   activeWithoutReceipt: '当前任务仍在执行，暂时还没有终态回执。',
   cancelled: '已停止当前任务，未完成的步骤不会继续执行。',
   staleControl: '这条控制请求对应的任务已经变化，我没有停止后来开始的任务。',
+  actionTurnBusy: '上一条任务仍在收尾；这条新指令没有并入旧任务，也没有开始执行。请等上一条结束后再试。',
+  actionTurnStale: '这条指令对应的会话记录已经失效；我没有执行，也没有把它并入其他任务。请重新发送一次。',
   confirmationFailed: (detail: string) => `确认的操作执行失败：${detail}`,
   confirmationExecuted: '已执行刚才确认的操作。',
 } as const;

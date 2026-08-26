@@ -131,8 +131,14 @@ describe('desktop capability alignment', () => {
 
   it('keeps desktop awareness split across local machine, visible desktop, and background runtime', async () => {
     const { formatDesktopAwarenessForPrompt } = await import('../server/client/desktop_awareness');
+    const { setSystemExplorationConsent } = await import('../server/autonomy/system_explorer');
 
-    const prompt = formatDesktopAwarenessForPrompt();
+    const unauthorized = formatDesktopAwarenessForPrompt('desktop-awareness-other-user');
+    expect(unauthorized).toContain('Host exploration is not authorized for this user');
+    expect(unauthorized).not.toContain('Running processes:');
+
+    setSystemExplorationConsent(true, 'desktop-awareness-user');
+    const prompt = formatDesktopAwarenessForPrompt('desktop-awareness-user');
 
     expect(prompt).toContain('Local Machine, Desktop, And Background Runtime Awareness');
     expect(prompt).toContain('local machine identity');

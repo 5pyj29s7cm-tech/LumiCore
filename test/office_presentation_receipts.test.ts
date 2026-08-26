@@ -17,7 +17,7 @@ describe('cross-platform presentation generation', () => {
         theme: 'ocean',
         slides: [
           { title: 'Verified output', bullets: ['Shared schema', 'Cross-platform writer'] },
-          { title: 'One capability, one receipt', layout: 'quote', subtitle: 'LumiOS' },
+          { title: 'One capability, one receipt', layout: 'quote', subtitle: 'LumiCore' },
         ],
       },
       context: {

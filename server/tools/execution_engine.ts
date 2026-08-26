@@ -6,6 +6,7 @@ import { verifyCapabilityReceipt } from './capability_verification';
 import { decodeToolResult } from './result_envelope';
 import { buildToolExecutionEnvelope, toolRecordIdempotencyKey } from './execution_envelope';
 import { inspectExternalCommitAttempt, settleExternalCommitAttempt } from './external_commit_journal';
+import { isToolLifecyclePersistenceFailure } from './lifecycle_persistence_error';
 
 const CANONICAL_TOOL_EXECUTION_RECORD = Symbol('lumi.canonical_tool_execution_record');
 const CANONICAL_EXTERNAL_COMMIT_RECONCILIATION = Symbol('lumi.canonical_external_commit_reconciliation');
@@ -461,6 +462,10 @@ export async function executeToolCall(
           adapterStarted = true;
           record.adapterStarted = true;
         },
+        onAdapterSettlement: async settlement => {
+          record.adapterSettlements = [...(record.adapterSettlements || []), { ...settlement }];
+          await input.context?.onAdapterSettlement?.(settlement);
+        },
       },
     );
     record.adapterStarted = adapterStarted;
@@ -468,6 +473,10 @@ export async function executeToolCall(
     record.result = decoded.content;
     if (decoded.receipt !== undefined) record.receipt = decoded.receipt;
   } catch (error: any) {
+    // Durable lifecycle observers own the execution fence. Converting their
+    // branded failure into a normal record would let callers publish a false
+    // terminal state or retry an adapter whose start may already be durable.
+    if (isToolLifecyclePersistenceFailure(error)) throw error;
     // The registry callback distinguishes a denied/preflight call from an
     // adapter that may already have committed a side effect before failing.
     record.adapterStarted = adapterStarted;

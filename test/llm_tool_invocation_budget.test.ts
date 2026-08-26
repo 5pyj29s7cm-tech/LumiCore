@@ -12,6 +12,7 @@ vi.mock('../server/llm/providers', async () => {
 import {
   HARD_MAX_TOOL_INVOCATIONS_PER_MODEL_RESPONSE,
   HARD_MAX_TOOL_INVOCATIONS_PER_TURN,
+  ToolLifecyclePersistenceError,
   runWithTools,
 } from '../server/llm/adapter';
 import { ToolRegistry } from '../server/tools/registry';
@@ -96,6 +97,65 @@ describe('hard per-turn tool invocation budget', () => {
       appliesToOperations: expect.arrayContaining(['observe', 'mutate']),
     });
     expect(result.text).toContain('left unexecuted');
+  });
+
+  it('waits for an asynchronous terminal-receipt observer before returning', async () => {
+    const registry = new ToolRegistry();
+    registerSimpleTool(registry, 'budget_observe', async () => 'observed');
+    mocks.makeLLMCall.mockResolvedValueOnce({
+      text: 'oversized batch',
+      toolCalls: Array.from(
+        { length: HARD_MAX_TOOL_INVOCATIONS_PER_MODEL_RESPONSE + 1 },
+        (_, index) => ({ id: `durable-${index}`, name: 'budget_observe', arguments: { index } }),
+      ),
+    });
+    let releaseObserver!: () => void;
+    const observerBarrier = new Promise<void>(resolve => { releaseObserver = resolve; });
+    const observer = vi.fn(async () => observerBarrier);
+    let settled = false;
+
+    const execution = runWithTools(
+      [{ role: 'user', content: 'Run an oversized batch.' }],
+      registry,
+      { provider: 'deepseek', model: 'budget-test' },
+      observer,
+      80,
+      ...getters,
+    ).finally(() => { settled = true; });
+
+    await vi.waitFor(() => expect(observer).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    releaseObserver();
+    const result = await execution;
+    expect(budgetReceipt(result)).toBeDefined();
+    expect(settled).toBe(true);
+  });
+
+  it('propagates a durable lifecycle observer failure instead of claiming a checkpoint was preserved', async () => {
+    const registry = new ToolRegistry();
+    const handler = vi.fn(async () => 'must not run');
+    registerSimpleTool(registry, 'budget_observe', handler);
+    mocks.makeLLMCall.mockResolvedValueOnce({
+      text: 'oversized batch',
+      toolCalls: Array.from(
+        { length: HARD_MAX_TOOL_INVOCATIONS_PER_MODEL_RESPONSE + 1 },
+        (_, index) => ({ id: `persist-fail-${index}`, name: 'budget_observe', arguments: { index } }),
+      ),
+    });
+
+    const execution = runWithTools(
+      [{ role: 'user', content: 'Run an oversized batch.' }],
+      registry,
+      { provider: 'deepseek', model: 'budget-test' },
+      async () => { throw new Error('durable store unavailable'); },
+      80,
+      ...getters,
+    );
+
+    await expect(execution).rejects.toBeInstanceOf(ToolLifecyclePersistenceError);
+    await expect(execution).rejects.toThrow('durable store unavailable');
+    expect(handler).not.toHaveBeenCalled();
   });
 
   it('enforces one cumulative invocation ceiling across model iterations', async () => {

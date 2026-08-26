@@ -113,8 +113,8 @@ export function resolveTrustedSelfImprovementRepository(
     throw new Error('Trusted self-improvement repository is missing package.json.');
   }
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-  if (packageJson?.name !== 'lumi-os') {
-    throw new Error('Trusted self-improvement repository marker does not identify LumiOS.');
+  if (packageJson?.name !== 'lumi-core') {
+    throw new Error('Trusted self-improvement repository marker does not identify LumiCore.');
   }
   const gitCommonDirRaw = git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
   const gitCommonDir = canonical(gitCommonDirRaw);

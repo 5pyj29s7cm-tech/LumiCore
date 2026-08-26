@@ -139,8 +139,8 @@ function falseSuccessRecord() {
   return {
     id: 'write-1',
     name: 'write_file',
-    arguments: { path: 'D:\\lumiOS\\mcp-false-success.txt' },
-    result: 'File written: D:\\lumiOS\\mcp-false-success.txt',
+    arguments: { path: 'D:\\LumiCore\\mcp-false-success.txt' },
+    result: 'File written: D:\\LumiCore\\mcp-false-success.txt',
   };
 }
 

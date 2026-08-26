@@ -42,7 +42,24 @@ import {
   syncConversationActionTaskLedger,
 } from './action_ledger';
 import type { CapabilityExecutionPlan } from '../cognition/capability_execution_plan';
-import type { WorkflowResult } from '../agents/orchestrator';
+import type { OrchestrationPrivateNodeHandoff, WorkflowResult } from '../agents/orchestrator';
+import {
+  hasVerifiedModelGraphNodeEvidence,
+  reuseVerifiedModelGraphNodeReceipt,
+  type ModelGraphNodeEvidenceKind,
+} from '../agents/model_execution_graph';
+import type {
+  ModelExecutionGraph,
+  ModelGraphArbitrationReceipt,
+  ModelGraphNodeReceipt,
+} from '../agents/model_execution_graph';
+import {
+  loadPrivateModelHandoff,
+  persistPrivateModelHandoffs,
+  PRIVATE_MODEL_HANDOFF_MAX_BATCH,
+  PRIVATE_MODEL_HANDOFF_MAX_CHARS,
+  type PrivateModelHandoffInput,
+} from './private_model_handoff_store';
 import {
   listConversationFocusThreads,
   updateConversationFocusThread,
@@ -652,22 +669,156 @@ export function activateConversation(
   return target;
 }
 
+export interface BindConversationActionExecutionTurnInput {
+  conversationId: string;
+  userId: string;
+  userText: string;
+  requestId: string;
+  /** Exact persisted user transcript row that owns this request. */
+  userMessageId: string;
+  preserveExistingTask?: boolean;
+}
+
+export interface BoundConversationActionExecutionTurn {
+  conversationId: string;
+  messageId: string;
+  requestId: string;
+  updatedAt: string;
+}
+
+function bindConversationActionExecutionTurnInDb(
+  db: any,
+  conversation: Conversation,
+  input: BindConversationActionExecutionTurnInput,
+): BoundConversationActionExecutionTurn | null {
+  const requestId = String(input.requestId || '').trim();
+  const userMessageId = String(input.userMessageId || '').trim();
+  if (!requestId || !userMessageId) return null;
+  const row = (db.interactions || []).find((item: any) => (
+    item.userId === input.userId
+    && item.conversationId === input.conversationId
+    && item.role === 'user'
+    && item.id === userMessageId
+    && (
+      String(item.requestId || '') === requestId
+      || String(item.externalMessageId || '') === requestId
+    )
+  ));
+  if (!row) return null;
+  const pending = conversation.pendingActionContinuation;
+  if (pending?.requestId && pending.requestId !== requestId) return null;
+
+  if (!input.preserveExistingTask) {
+    detachUnrelatedConversationActionState(db, conversation, input.userText, new Date().toISOString());
+  }
+  const updatedAt = String(row.receivedAt || row.timestamp || new Date().toISOString());
+  conversation.pendingActionContinuation = {
+    userText: input.userText,
+    messageId: row.id,
+    requestId,
+    updatedAt,
+  };
+  return {
+    conversationId: conversation.id,
+    messageId: row.id,
+    requestId,
+    updatedAt,
+  };
+}
+
+type PreparedConversationActionExecution = ReturnType<typeof prepareConversationActionTaskState>;
+
+export type RejectedConversationActionExecution = {
+  state: null;
+  kind: 'conversation';
+  bindingFailure: 'stale' | 'busy';
+  diagnosticCode:
+    | 'conversation_action_conversation_missing'
+    | 'conversation_action_turn_not_persisted'
+    | 'conversation_action_turn_busy';
+};
+
+export type ConversationActionExecutionPreparation =
+  | PreparedConversationActionExecution
+  | RejectedConversationActionExecution;
+
+function rejectedConversationActionExecution(
+  bindingFailure: RejectedConversationActionExecution['bindingFailure'],
+  diagnosticCode: RejectedConversationActionExecution['diagnosticCode'],
+): RejectedConversationActionExecution {
+  return { state: null, kind: 'conversation', bindingFailure, diagnosticCode };
+}
+
+/**
+ * Bind one already-persisted user transcript to the action pipeline only after
+ * that request owns the serial execution lease. A different pending request is
+ * never overwritten; the caller must wait for its terminal writeback first.
+ */
+export function bindConversationActionExecutionTurn(
+  input: BindConversationActionExecutionTurnInput,
+): BoundConversationActionExecutionTurn | null {
+  const db = readDB();
+  const conversation = (db.conversations || []).find((item: Conversation) => (
+    item.id === input.conversationId && item.userId === input.userId
+  ));
+  if (!conversation) return null;
+  hydrateConversationActionState(db, conversation, input.userText);
+  const bound = bindConversationActionExecutionTurnInDb(db, conversation, input);
+  if (!bound) return null;
+  conversation.lastActiveAt = new Date().toISOString();
+  writeDB(db);
+  return bound;
+}
+
 export function prepareConversationActionExecution(input: {
   conversationId: string;
   userId: string;
   userText: string;
   requestId: string;
+  /** Exact already-persisted user transcript row owning this serial turn. */
+  userMessageId: string;
   toolPolicy: ToolPolicy;
   forceResume?: boolean;
   forceNewTask?: boolean;
   forceTask?: boolean;
-}): ReturnType<typeof prepareConversationActionTaskState> {
+  /** Preserve the current task while binding corrective/continuation feedback. */
+  preserveExistingTask?: boolean;
+}): ConversationActionExecutionPreparation {
   const db = readDB();
   const conversation = (db.conversations || []).find((item: Conversation) => (
     item.id === input.conversationId && item.userId === input.userId
   ));
-  if (!conversation) return { state: null, kind: 'conversation' };
+  if (!conversation) {
+    return rejectedConversationActionExecution(
+      'stale',
+      'conversation_action_conversation_missing',
+    );
+  }
   hydrateConversationActionState(db, conversation, input.userText);
+  const boundTurn = bindConversationActionExecutionTurnInDb(db, conversation, {
+    userId: input.userId,
+    conversationId: input.conversationId,
+    userText: input.userText,
+    requestId: input.requestId,
+    userMessageId: input.userMessageId,
+    preserveExistingTask: input.preserveExistingTask ?? input.forceResume === true,
+  });
+  // The durable transcript identity is the ownership fence for every channel.
+  // A different pending request is busy; a missing/mismatched transcript is
+  // stale. Neither case may fall through and mutate the prior task.
+  if (!boundTurn) {
+    const pendingRequestId = String(conversation.pendingActionContinuation?.requestId || '').trim();
+    const competingRequestId = pendingRequestId
+      && pendingRequestId !== String(input.requestId || '').trim()
+      ? pendingRequestId
+      : '';
+    return rejectedConversationActionExecution(
+      competingRequestId ? 'busy' : 'stale',
+      competingRequestId
+        ? 'conversation_action_turn_busy'
+        : 'conversation_action_turn_not_persisted',
+    );
+  }
   const prepared = prepareConversationActionTaskState(conversation.actionContinuationState, input);
   if (prepared.kind === 'conversation') {
     const detached = detachUnrelatedConversationActionState(
@@ -676,8 +827,17 @@ export function prepareConversationActionExecution(input: {
       input.userText,
       new Date().toISOString(),
     );
-    if (detached) {
+    if (detached || boundTurn) {
       delete conversation.pendingActionContinuation;
+      if (boundTurn && !detached) {
+        // Keep the exact pending row until its assistant terminal arrives.
+        conversation.pendingActionContinuation = {
+          userText: input.userText,
+          messageId: boundTurn.messageId,
+          requestId: input.requestId,
+          updatedAt: boundTurn.updatedAt,
+        };
+      }
       conversation.lastActiveAt = new Date().toISOString();
       writeDB(db);
     }
@@ -729,14 +889,124 @@ export function persistConversationModelExecutionResult(input: {
   workflowResult: WorkflowResult;
 }): boolean {
   if (!input.workflowResult.executionGraph) return false;
+  return persistConversationModelExecutionCheckpoint({
+    conversationId: input.conversationId,
+    userId: input.userId,
+    taskId: input.taskId,
+    executionGraph: input.workflowResult.executionGraph,
+    nodeReceipts: input.workflowResult.nodeReceipts || [],
+    privateNodeHandoffs: input.workflowResult.privateNodeHandoffs,
+    arbitrationReceipt: input.workflowResult.arbitrationReceipt,
+  });
+}
+
+function compactPrivateModelHandoff(value: unknown): string {
+  return String(value || '')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ')
+    .trim()
+    .slice(0, PRIVATE_MODEL_HANDOFF_MAX_CHARS);
+}
+
+function collectPrivateModelHandoffs(input: {
+  conversationId: string;
+  userId: string;
+  taskId: string;
+  executionGraph: ModelExecutionGraph;
+  nodeReceipts: ModelGraphNodeReceipt[];
+  privateNodeHandoffs?: OrchestrationPrivateNodeHandoff[];
+}): PrivateModelHandoffInput[] | null {
+  const graphNodeIds = new Set(input.executionGraph.nodes.map(node => node.nodeId));
+  if ((input.privateNodeHandoffs?.length || 0) > PRIVATE_MODEL_HANDOFF_MAX_BATCH) return null;
+  const supplied = input.privateNodeHandoffs === undefined
+    ? null
+    : new Map(input.privateNodeHandoffs.map(handoff => [
+        `${handoff.graphId}:${handoff.taskId}:${handoff.nodeId}`,
+        handoff,
+      ]));
+  if (supplied && supplied.size !== input.privateNodeHandoffs!.length) return null;
+  const consumedSupplied = new Set<string>();
+  const handoffs = new Map<string, PrivateModelHandoffInput>();
+  for (const receipt of input.nodeReceipts) {
+    const graphNode = input.executionGraph.nodes.find(node => node.nodeId === receipt.nodeId);
+    if (
+      receipt.graphId !== input.executionGraph.graphId
+      || receipt.taskId !== input.taskId
+      || input.executionGraph.taskId !== input.taskId
+      || !graphNodeIds.has(receipt.nodeId)
+      || !graphNode
+      || !hasVerifiedModelGraphNodeEvidence(receipt)
+      || (receipt.evidenceKind !== 'tool_terminal_verification'
+        && receipt.evidenceKind !== 'validated_model_output')
+    ) continue;
+    if (!reuseVerifiedModelGraphNodeReceipt({
+      graph: input.executionGraph,
+      node: graphNode,
+      prior: receipt,
+      recoveredAt: receipt.completedAt,
+    })) continue;
+    const key = `${receipt.graphId}:${receipt.taskId}:${receipt.nodeId}`;
+    const suppliedHandoff = supplied?.get(key);
+    const receiptSummary = compactPrivateModelHandoff(receipt.outputSummary);
+    if (!receiptSummary) {
+      if (suppliedHandoff) return null;
+      continue;
+    }
+    if (supplied && !suppliedHandoff) return null;
+    if (suppliedHandoff && (
+      suppliedHandoff.outputDigest !== receipt.outputDigest
+      || suppliedHandoff.evidenceKind !== receipt.evidenceKind
+    )) return null;
+    const outputSummary = compactPrivateModelHandoff(
+      suppliedHandoff?.outputSummary ?? receipt.outputSummary,
+    );
+    // The private copy must be the same bounded value that produced the verified
+    // in-memory receipt. A caller cannot attach unrelated plaintext to a digest.
+    if (!outputSummary || receiptSummary !== outputSummary) return null;
+    const handoff: PrivateModelHandoffInput = {
+      userId: input.userId,
+      conversationId: input.conversationId,
+      taskId: input.taskId,
+      graphId: receipt.graphId,
+      nodeId: receipt.nodeId,
+      outputDigest: receipt.outputDigest,
+      outputSummary,
+      evidenceKind: receipt.evidenceKind as ModelGraphNodeEvidenceKind,
+    };
+    handoffs.delete(key);
+    handoffs.set(key, handoff);
+    if (suppliedHandoff) consumedSupplied.add(key);
+  }
+  if (supplied && consumedSupplied.size !== supplied.size) return null;
+  return [...handoffs.values()].slice(-PRIVATE_MODEL_HANDOFF_MAX_BATCH);
+}
+
+export function persistConversationModelExecutionCheckpoint(input: {
+  conversationId: string;
+  userId: string;
+  taskId: string;
+  executionGraph: ModelExecutionGraph;
+  nodeReceipts: ModelGraphNodeReceipt[];
+  privateNodeHandoffs?: OrchestrationPrivateNodeHandoff[];
+  arbitrationReceipt?: ModelGraphArbitrationReceipt;
+}): boolean {
   const db = readDB();
+  const ownsTask = (Array.isArray(db.conversationActionTasks) ? db.conversationActionTasks : [])
+    .some((candidate: any) => (
+      candidate?.id === input.taskId
+      && candidate?.conversationId === input.conversationId
+      && candidate?.userId === input.userId
+    ));
+  if (!ownsTask || input.executionGraph.taskId !== input.taskId) return false;
+  const privateHandoffs = collectPrivateModelHandoffs(input);
+  if (!privateHandoffs) return false;
+  if (privateHandoffs.length > 0 && !persistPrivateModelHandoffs(privateHandoffs)) return false;
   const task = attachConversationModelExecutionGraph(db, {
     conversationId: input.conversationId,
     userId: input.userId,
     taskId: input.taskId,
-    graph: input.workflowResult.executionGraph,
-    receipts: input.workflowResult.nodeReceipts || [],
-    arbitrationReceipt: input.workflowResult.arbitrationReceipt,
+    graph: input.executionGraph,
+    receipts: input.nodeReceipts,
+    arbitrationReceipt: input.arbitrationReceipt,
   });
   if (!task) return false;
   writeDB(db);
@@ -749,11 +1019,27 @@ export function getConversationModelExecutionRecovery(input: {
   taskId?: string;
 }) {
   if (!input.taskId) return null;
-  return loadConversationModelExecutionRecovery(readDB(), {
+  const recovery = loadConversationModelExecutionRecovery(readDB(), {
     conversationId: input.conversationId,
     userId: input.userId,
     taskId: input.taskId,
   });
+  if (!recovery) return null;
+  return {
+    ...recovery,
+    receipts: recovery.receipts.map(receipt => {
+      const outputSummary = loadPrivateModelHandoff({
+        userId: input.userId,
+        conversationId: input.conversationId,
+        taskId: input.taskId!,
+        graphId: receipt.graphId,
+        nodeId: receipt.nodeId,
+        outputDigest: receipt.outputDigest,
+        evidenceKind: receipt.evidenceKind,
+      });
+      return outputSummary ? { ...receipt, outputSummary } : receipt;
+    }),
+  };
 }
 
 export function cancelConversationActionExecution(
@@ -860,6 +1146,9 @@ export function settleConversationActionExecutionRequest(
     revision: (previous.revision || 0) + 1,
     updatedAt: new Date().toISOString(),
   };
+  if (conversation.pendingActionContinuation?.requestId === requestId) {
+    delete conversation.pendingActionContinuation;
+  }
   syncConversationActionTaskLedger(db, {
     conversation,
     state: conversation.actionContinuationState,
@@ -1040,7 +1329,7 @@ export function addMessage(msg: {
         conv.title = msg.content.trim().slice(0, 80);
       }
 
-      if (!msg.skipActionContinuation && msg.role === 'user') {
+      if (!msg.skipActionContinuation && msg.role === 'user' && !msg.deferActionPreparation) {
         const userText = String(msg.content || '').trim();
         if (userText) {
           currentUserMessageIdForLedger = id;

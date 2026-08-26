@@ -136,7 +136,7 @@ export function SetupWizard({ onFinish }: Props) {
 
   const handleVoiceTest = () => {
     setVoiceStatus('testing');
-    synthesizeSpeech('Hello. Your Lumi OS is ready.', 'default')
+    synthesizeSpeech('Hello. Your LumiCore is ready.', 'default')
       .then(() => setVoiceStatus('ok'))
       .catch(() => setVoiceStatus('failed'));
   };

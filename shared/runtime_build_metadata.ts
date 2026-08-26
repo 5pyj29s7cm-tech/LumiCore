@@ -93,7 +93,7 @@ export function loadRuntimeBuildMetadata(options: {
     || 'development';
   return {
     schemaVersion: 1,
-    name: compact(packageMeta.name) || 'lumi-os',
+    name: compact(packageMeta.name) || 'lumi-core',
     version: version === '0.0.0' ? 'development' : version,
     buildId: compact(env.LUMI_BUILD_ID)
       || compact(env.GIT_COMMIT)

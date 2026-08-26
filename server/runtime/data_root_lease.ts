@@ -20,6 +20,9 @@ export interface DataRootLeaseRecord {
   dataRootDigest: string;
   processStartIdentity: string;
   acquiredAt: string;
+  leasePurpose?: 'backend' | 'product_data_migration';
+  migrationTarget?: string;
+  migrationTargetDigest?: string;
 }
 
 interface ReclaimClaimRecord {
@@ -36,6 +39,11 @@ interface HeldLease {
   record: DataRootLeaseRecord;
   leasePath: string;
   runtimeDir: string;
+}
+
+export interface DataRootMigrationLease {
+  record: DataRootLeaseRecord;
+  releaseAt(dataRoot: string): boolean;
 }
 
 type ProcessProbe =
@@ -67,6 +75,10 @@ function normalizeCanonicalPath(value: string): string {
 
 function digestDataRoot(canonicalRoot: string): string {
   return crypto.createHash('sha256').update(normalizeCanonicalPath(canonicalRoot), 'utf8').digest('hex');
+}
+
+function normalizedParent(value: string): string {
+  return normalizeCanonicalPath(path.dirname(path.resolve(value)));
 }
 
 function randomOwnerToken(): string {
@@ -232,6 +244,17 @@ function isIsoTimestamp(value: unknown): value is string {
 
 function readLeaseRecord(leasePath: string): DataRootLeaseRecord {
   const value = readCoordinationJson(leasePath, 'backend data-root lease') as Partial<DataRootLeaseRecord> | null;
+  const leasePurpose = value?.leasePurpose || 'backend';
+  const hasValidMigrationTarget = leasePurpose === 'product_data_migration'
+    && typeof value?.migrationTarget === 'string'
+    && value.migrationTarget.length > 0
+    && value.migrationTarget.length <= 4096
+    && path.isAbsolute(value.migrationTarget)
+    && /^[a-f0-9]{64}$/.test(String(value.migrationTargetDigest || ''))
+    && digestDataRoot(path.resolve(value.migrationTarget)) === value.migrationTargetDigest
+    && typeof value.dataRoot === 'string'
+    && normalizedParent(value.dataRoot) === normalizedParent(value.migrationTarget)
+    && normalizeCanonicalPath(value.dataRoot) !== normalizeCanonicalPath(value.migrationTarget);
   if (
     !value
     || value.version !== LEASE_VERSION
@@ -242,11 +265,16 @@ function readLeaseRecord(leasePath: string): DataRootLeaseRecord {
     || !value.hostname.trim()
     || typeof value.dataRoot !== 'string'
     || !value.dataRoot
+    || value.dataRoot.length > 4096
+    || !path.isAbsolute(value.dataRoot)
     || !/^[a-f0-9]{64}$/.test(String(value.dataRootDigest || ''))
     || typeof value.processStartIdentity !== 'string'
     || value.processStartIdentity.length < 8
     || value.processStartIdentity.length > 512
     || !isIsoTimestamp(value.acquiredAt)
+    || !['backend', 'product_data_migration'].includes(leasePurpose)
+    || (leasePurpose === 'product_data_migration' && !hasValidMigrationTarget)
+    || (leasePurpose === 'backend' && (value.migrationTarget !== undefined || value.migrationTargetDigest !== undefined))
   ) {
     throw leaseError('DATA_ROOT_LEASE_INVALID', 'Backend data-root lease has an invalid schema');
   }
@@ -279,7 +307,10 @@ function recordsHaveSameOwner(left: DataRootLeaseRecord, right: DataRootLeaseRec
     && left.pid === right.pid
     && left.hostname === right.hostname
     && left.dataRootDigest === right.dataRootDigest
-    && left.processStartIdentity === right.processStartIdentity;
+    && left.processStartIdentity === right.processStartIdentity
+    && (left.leasePurpose || 'backend') === (right.leasePurpose || 'backend')
+    && (left.migrationTarget || '') === (right.migrationTarget || '')
+    && (left.migrationTargetDigest || '') === (right.migrationTargetDigest || '');
 }
 
 function claimsHaveSameOwner(left: ReclaimClaimRecord, right: ReclaimClaimRecord): boolean {
@@ -327,10 +358,14 @@ function publishExclusive(runtimeDir: string, targetPath: string, value: unknown
 }
 
 function assertRecordMatchesRoot(record: DataRootLeaseRecord, canonicalRoot: string, rootDigest: string): void {
+  const matchesOriginalRoot = normalizeCanonicalPath(record.dataRoot) === normalizeCanonicalPath(canonicalRoot)
+    && record.dataRootDigest === rootDigest;
+  const matchesMigrationTarget = record.leasePurpose === 'product_data_migration'
+    && normalizeCanonicalPath(record.migrationTarget || '') === normalizeCanonicalPath(canonicalRoot)
+    && record.migrationTargetDigest === rootDigest;
   if (
     record.hostname.toLocaleLowerCase('en-US') !== currentHostname()
-    || normalizeCanonicalPath(record.dataRoot) !== normalizeCanonicalPath(canonicalRoot)
-    || record.dataRootDigest !== rootDigest
+    || (!matchesOriginalRoot && !matchesMigrationTarget)
   ) {
     throw leaseError(
       'DATA_ROOT_LEASE_SCOPE_MISMATCH',
@@ -445,29 +480,57 @@ function installExitHook(): void {
   });
 }
 
-/**
- * Acquire the sole backend lease for the canonical Lumi data root. This is
- * intentionally synchronous so importing db_layer cannot migrate or open the
- * database before ownership has been established.
- */
-export function acquireDataRootLease(): DataRootLeaseRecord {
-  const requestedRoot = path.resolve(getDataRoot());
-  fs.mkdirSync(requestedRoot, { recursive: true, mode: 0o700 });
+function acquireDataRootLeaseAt(
+  requestedRootValue: string,
+  options: { migrationTargetRoot?: string } = {},
+): HeldLease {
+  const requestedRoot = path.resolve(requestedRootValue);
+  try {
+    const existing = fs.lstatSync(requestedRoot);
+    if (!existing.isDirectory() || existing.isSymbolicLink()) {
+      throw leaseError('DATA_ROOT_LEASE_INVALID_ROOT', 'Lumi data root must be a real directory');
+    }
+  } catch (error) {
+    if (!isMissingError(error)) throw error;
+    fs.mkdirSync(requestedRoot, { recursive: true, mode: 0o700 });
+  }
   const requestedMetadata = fs.lstatSync(requestedRoot);
-  if (!requestedMetadata.isDirectory()) {
-    throw leaseError('DATA_ROOT_LEASE_INVALID_ROOT', 'Lumi data root must resolve to a directory');
+  if (!requestedMetadata.isDirectory() || requestedMetadata.isSymbolicLink()) {
+    throw leaseError('DATA_ROOT_LEASE_INVALID_ROOT', 'Lumi data root must resolve to a real directory');
   }
 
   const runtimeDir = ensurePrivateRuntimeDirectory(path.join(requestedRoot, 'runtime'));
   const canonicalRoot = fs.realpathSync.native(path.dirname(runtimeDir));
   const rootDigest = digestDataRoot(canonicalRoot);
+  let migrationTarget = '';
+  let migrationTargetDigest = '';
+  if (options.migrationTargetRoot) {
+    const requestedTarget = path.resolve(options.migrationTargetRoot);
+    if (normalizedParent(requestedRoot) !== normalizedParent(requestedTarget)) {
+      throw leaseError(
+        'DATA_ROOT_LEASE_INVALID_MIGRATION_TARGET',
+        'Product data migration source and target must be sibling directories on one local volume',
+      );
+    }
+    try {
+      const targetMetadata = fs.lstatSync(requestedTarget);
+      if (!targetMetadata.isDirectory() || targetMetadata.isSymbolicLink()) {
+        throw leaseError('DATA_ROOT_LEASE_INVALID_MIGRATION_TARGET', 'Migration target must be a real directory');
+      }
+    } catch (error) {
+      if (!isMissingError(error)) throw error;
+    }
+    // Resolve the target through the already-canonical source parent. This
+    // keeps the record stable when the home path itself is an alias while still
+    // rejecting a reparse point at either product-root leaf.
+    migrationTarget = path.join(path.dirname(canonicalRoot), path.basename(requestedTarget));
+    if (normalizeCanonicalPath(migrationTarget) === normalizeCanonicalPath(canonicalRoot)) {
+      throw leaseError('DATA_ROOT_LEASE_INVALID_MIGRATION_TARGET', 'Migration target must differ from its source');
+    }
+    migrationTargetDigest = digestDataRoot(migrationTarget);
+  }
   const leasePath = path.join(runtimeDir, 'backend-instance.lock');
   const processStartIdentity = requireCurrentProcessStartIdentity();
-
-  if (heldLease) {
-    if (heldLease.record.dataRootDigest === rootDigest) return heldLease.record;
-    throw leaseError('DATA_ROOT_LEASE_ALREADY_OWNED', 'This process already owns a different Lumi data root');
-  }
 
   for (let attempt = 0; attempt < MAX_ACQUIRE_ATTEMPTS; attempt += 1) {
     const candidate: DataRootLeaseRecord = {
@@ -479,11 +542,11 @@ export function acquireDataRootLease(): DataRootLeaseRecord {
       dataRootDigest: rootDigest,
       processStartIdentity,
       acquiredAt: new Date().toISOString(),
+      leasePurpose: migrationTarget ? 'product_data_migration' : 'backend',
+      ...(migrationTarget ? { migrationTarget, migrationTargetDigest } : {}),
     };
     if (publishExclusive(runtimeDir, leasePath, candidate)) {
-      heldLease = { record: candidate, leasePath, runtimeDir };
-      installExitHook();
-      return candidate;
+      return { record: candidate, leasePath, runtimeDir };
     }
 
     let existing: DataRootLeaseRecord;
@@ -552,38 +615,87 @@ export function acquireDataRootLease(): DataRootLeaseRecord {
   throw leaseError('DATA_ROOT_LEASE_CONTENTION', 'Could not acquire the Lumi data-root lease after bounded retries');
 }
 
-/** Release only the exact generation created and still owned by this process. */
-export function releaseDataRootLease(): boolean {
-  const owned = heldLease;
-  if (!owned) return false;
-
+function releaseExactLease(owned: HeldLease, runtimeDir = owned.runtimeDir): boolean {
+  const leasePath = path.join(runtimeDir, 'backend-instance.lock');
   let current: DataRootLeaseRecord;
   try {
-    current = readLeaseRecord(owned.leasePath);
+    current = readLeaseRecord(leasePath);
   } catch {
-    heldLease = null;
     return false;
   }
-  if (!recordsHaveSameOwner(current, owned.record)) {
-    heldLease = null;
-    return false;
-  }
+  if (!recordsHaveSameOwner(current, owned.record)) return false;
 
   const releasePath = path.join(
-    owned.runtimeDir,
+    runtimeDir,
     `.backend-instance-release-${owned.record.ownerToken}-${crypto.randomBytes(6).toString('hex')}`,
   );
   try {
-    fs.renameSync(owned.leasePath, releasePath);
+    fs.renameSync(leasePath, releasePath);
     const moved = readLeaseRecord(releasePath);
     if (!recordsHaveSameOwner(moved, owned.record)) {
-      try { fs.linkSync(releasePath, owned.leasePath); } catch {}
+      try { fs.linkSync(releasePath, leasePath); } catch {}
       return false;
     }
     fs.rmSync(releasePath);
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Acquire an untracked lease on the legacy root while it is moved. Carrying a
+ * normal live backend lease through the rename prevents an older LumiOS
+ * process from opening the database during the upgrade race window.
+ */
+export function claimDataRootForMigration(dataRoot: string, targetDataRoot: string): DataRootMigrationLease {
+  if (heldLease) {
+    throw leaseError('DATA_ROOT_LEASE_ALREADY_OWNED', 'Cannot migrate while this process owns a Lumi data root');
+  }
+  const sourceRoot = path.resolve(dataRoot);
+  const targetRoot = path.resolve(targetDataRoot);
+  const claimed = acquireDataRootLeaseAt(sourceRoot, { migrationTargetRoot: targetRoot });
+  let released = false;
+  return {
+    record: claimed.record,
+    releaseAt(migratedDataRoot: string): boolean {
+      if (released) return false;
+      const releaseRoot = path.resolve(migratedDataRoot);
+      if (
+        normalizeCanonicalPath(releaseRoot) !== normalizeCanonicalPath(sourceRoot)
+        && normalizeCanonicalPath(releaseRoot) !== normalizeCanonicalPath(targetRoot)
+      ) return false;
+      const runtimeDir = path.join(releaseRoot, 'runtime');
+      released = releaseExactLease(claimed, runtimeDir);
+      return released;
+    },
+  };
+}
+
+/**
+ * Acquire the sole backend lease for the canonical Lumi data root. This is
+ * intentionally synchronous so importing db_layer cannot inspect/copy data or
+ * open SQLite before ownership has been established.
+ */
+export function acquireDataRootLease(): DataRootLeaseRecord {
+  const requestedRoot = path.resolve(getDataRoot());
+  if (heldLease) {
+    const canonicalRoot = fs.realpathSync.native(requestedRoot);
+    const rootDigest = digestDataRoot(canonicalRoot);
+    if (heldLease.record.dataRootDigest === rootDigest) return heldLease.record;
+    throw leaseError('DATA_ROOT_LEASE_ALREADY_OWNED', 'This process already owns a different Lumi data root');
+  }
+  heldLease = acquireDataRootLeaseAt(requestedRoot);
+  installExitHook();
+  return heldLease.record;
+}
+
+/** Release only the exact generation created and still owned by this process. */
+export function releaseDataRootLease(): boolean {
+  const owned = heldLease;
+  if (!owned) return false;
+  try {
+    return releaseExactLease(owned);
   } finally {
     heldLease = null;
   }

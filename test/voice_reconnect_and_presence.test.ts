@@ -37,15 +37,17 @@ describe('voice reconnect and perception continuity', () => {
     expect(shouldAcceptVoiceStatus({ status: 'thinking', requestId: 'next' }, 'current')).toBe(true);
   });
 
-  it('delivers finalized text before waiting for speech playback', () => {
+  it('durably delivers finalized text before queueing speech playback', () => {
     const root = process.cwd();
     const server = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
     const client = readFileSync(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
-    const responseLog = server.indexOf('logger.info(`[Audio] Response:');
-    const speechQueue = server.indexOf('if (responseText) queueFinalizedSpeech(responseText)', responseLog);
+    const terminalBoundary = server.indexOf('return commitChatTerminalBoundary<T | undefined>({');
+    const finalizedText = server.indexOf("publishRecordedAgent('agent:response', terminalPayload)", terminalBoundary);
+    const speechQueue = server.indexOf('queueFinalizedSpeech(input.speechText!)', terminalBoundary);
 
-    expect(responseLog).toBeGreaterThan(0);
-    expect(speechQueue).toBeGreaterThan(responseLog);
+    expect(terminalBoundary).toBeGreaterThan(0);
+    expect(finalizedText).toBeGreaterThan(terminalBoundary);
+    expect(speechQueue).toBeGreaterThan(finalizedText);
     expect(client).not.toContain("if (data.finalized === true) activeVoiceRequestIdRef.current = null");
   });
 

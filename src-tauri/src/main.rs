@@ -24,5 +24,5 @@ fn main() {
         }
     }
 
-    lumi_os_lib::run()
+    lumi_core_lib::run()
 }

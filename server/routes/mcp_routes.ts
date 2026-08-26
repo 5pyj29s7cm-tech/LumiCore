@@ -1,6 +1,14 @@
 import { Router } from "express";
 import { requireAdmin, requireAuth, requireLocalRequest } from "../middleware/auth";
 import { mcpManager, getMCPConfig, updateMCPConfig, recoverServerTools } from "../mcp";
+import { logger } from "../../logger";
+import {
+  normalizeRemoteDeviceConfig,
+  projectMcpServerHealth,
+  projectRemoteDeviceConfig,
+  sanitizeMcpEndpoint,
+  sanitizeMcpLogValue,
+} from "../mcp/public_security";
 
 function redactMcpArgumentList(value: unknown): string[] {
   const args = Array.isArray(value) ? value.map(item => String(item || '')) : [];
@@ -15,24 +23,6 @@ function redactMcpArgumentList(value: unknown): string[] {
   });
 }
 
-function sanitizeMcpUrl(value: unknown): string | undefined {
-  const raw = String(value || '').trim();
-  if (!raw) return undefined;
-  try {
-    const parsed = new URL(raw);
-    parsed.username = '';
-    parsed.password = '';
-    for (const key of [...parsed.searchParams.keys()]) {
-      if (/(?:api[-_]?key|token|secret|password|authorization)/i.test(key)) {
-        parsed.searchParams.set(key, '[configured]');
-      }
-    }
-    return parsed.toString();
-  } catch {
-    return '[configured endpoint]';
-  }
-}
-
 function publicMcpConfig(name: string, cfg: any, connected: boolean) {
   const {
     env: _env,
@@ -44,11 +34,15 @@ function publicMcpConfig(name: string, cfg: any, connected: boolean) {
     name,
     ...safe,
     args: redactMcpArgumentList(cfg?.args),
-    ...(cfg?.url ? { url: sanitizeMcpUrl(cfg.url) } : {}),
+    ...(cfg?.url ? { url: sanitizeMcpEndpoint(cfg.url) } : {}),
     envConfigured: Boolean(cfg?.env && Object.keys(cfg.env).length),
     headersConfigured: Boolean(cfg?.headers && Object.keys(cfg.headers).length),
     connected,
   };
+}
+
+function reportMcpRouteFailure(operation: string, error: unknown): void {
+  logger.error(`[MCP Routes] ${operation} failed: ${sanitizeMcpLogValue((error as any)?.message || error)}`);
 }
 
 export function mountMcpRoutes(router: Router) {
@@ -70,12 +64,13 @@ export function mountMcpRoutes(router: Router) {
       const registered = await updateMCPConfig({ ...getMCPConfig(), ...servers });
       res.json({ registered, count: registered.length });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      reportMcpRouteFailure('configuration update', err);
+      res.status(500).json({ error: 'MCP configuration update failed' });
     }
   });
 
   router.get("/mcp/health", requireAuth, requireAdmin, requireLocalRequest, (_req, res) => {
-    res.json({ servers: mcpManager.getServerHealth() });
+    res.json({ servers: projectMcpServerHealth(mcpManager.getServerHealth()) });
   });
 
   router.post("/mcp/restart/:name", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
@@ -84,28 +79,32 @@ export function mountMcpRoutes(router: Router) {
       const registered = await recoverServerTools(req.params.name, tools);
       res.json({ tools, registered });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      reportMcpRouteFailure('server restart', err);
+      res.status(500).json({ error: 'MCP server restart failed' });
     }
   });
 
   router.get("/remote-devices", requireAuth, requireAdmin, requireLocalRequest, (_req, res) => {
     try {
-      res.json({ devices: mcpManager.getRemoteDevices() });
+      res.json({ devices: projectRemoteDeviceConfig(mcpManager.getRemoteDevices()) });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      reportMcpRouteFailure('remote device read', err);
+      res.status(500).json({ error: 'Remote device configuration could not be loaded' });
     }
   });
 
   router.put("/remote-devices", requireAuth, requireAdmin, requireLocalRequest, (req, res) => {
     try {
       const { devices } = req.body;
-      if (!devices || typeof devices !== 'object') {
+      const normalized = normalizeRemoteDeviceConfig(devices);
+      if (!normalized) {
         return res.status(400).json({ error: 'Invalid devices config' });
       }
-      mcpManager.saveRemoteDevices(devices);
-      res.json({ success: true, devices });
+      mcpManager.saveRemoteDevices(normalized);
+      res.json({ success: true, devices: projectRemoteDeviceConfig(normalized) });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      reportMcpRouteFailure('remote device update', err);
+      res.status(500).json({ error: 'Remote device configuration could not be saved' });
     }
   });
 
@@ -117,7 +116,7 @@ export function mountMcpRoutes(router: Router) {
         {
           headers: {
             'Accept': 'application/vnd.github.v3+json',
-            'User-Agent': 'LumiOS-MCP-Browser',
+            'User-Agent': 'LumiCore-MCP-Browser',
             ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}),
           },
         }
@@ -138,7 +137,8 @@ export function mountMcpRoutes(router: Router) {
       }));
       res.json({ results, total: data.total_count || 0 });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      reportMcpRouteFailure('GitHub search', err);
+      res.status(500).json({ error: 'GitHub MCP search failed' });
     }
   });
 
@@ -150,7 +150,7 @@ export function mountMcpRoutes(router: Router) {
         {
           headers: {
             'Accept': 'application/json',
-            'User-Agent': 'LumiOS-MCP-Browser',
+            'User-Agent': 'LumiCore-MCP-Browser',
           },
         }
       );
@@ -173,7 +173,8 @@ export function mountMcpRoutes(router: Router) {
       });
       res.json({ results, total: data.total || 0 });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      reportMcpRouteFailure('npm search', err);
+      res.status(500).json({ error: 'npm MCP search failed' });
     }
   });
 }

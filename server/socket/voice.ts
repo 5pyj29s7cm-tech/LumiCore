@@ -6,7 +6,7 @@ import { Server, Socket } from "socket.io";
 import fs from "fs";
 import path from "path";
 import { randomUUID } from "node:crypto";
-import { readDB, writeDB } from "../../db_layer";
+import { flushDBOrThrow, readDB, writeDB } from "../../db_layer";
 import { logger } from "../../logger";
 import { NormalizedMessage, makeLLMCallStreaming, makeLLMCall } from "../llm/providers";
 import { compactToolResultForModel, runWithTools } from "../llm/adapter";
@@ -66,6 +66,7 @@ import {
   isTerminalOrchestrationToolEvent,
   shouldAttemptOrchestration,
   type LlmGetters,
+  type OrchestrationWorkflowCheckpoint,
 } from "../agents/orchestrator";
 import { retrieveChunks } from "../agents/rag";
 import { markLatestUserTurn } from "../agents/background_delivery";
@@ -135,6 +136,21 @@ import { getIdleState } from "../context/activity_stream";
 import { formatProactiveSuggestionForPrompt, getRecentProactiveSuggestion } from "../context/proactive_triggers";
 import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { createDesktopRelay } from "./desktop_relay";
+import { commitChatTerminalBoundary } from './chat_terminal_boundary';
+import {
+  beginChatExecutionDurably,
+  getChatExecution,
+  recordChatExecutionEvent,
+  recordChatExecutionPersistenceUnknownDurably,
+  recordChatExecutionTerminalEventDurably,
+  type ChatExecutionScope,
+} from './chat_execution_registry';
+import {
+  persistVoiceWorkflowCheckpointDurably,
+  sanitizeVoiceAgentErrorPayload,
+  VoiceWorkflowCheckpointError,
+  voiceDurabilityUnknownText,
+} from './voice_durability';
 import {
   buildSocketToolSecurityContext,
   resolveSocketScope,
@@ -613,7 +629,7 @@ function buildVoiceReplyStyleOverlay(): string {
   // i18n-allow: Chinese examples constrain model output; not direct user-visible copy.
   return [
     '\n\n## Spoken Reply Style',
-    '- Never speak hidden reasoning, chain-of-thought, private deliberation, or phrases like “我得想想 / 我需要分析 / 好的，毛先生这是在…”.',
+    '- Never speak hidden reasoning, chain-of-thought, private deliberation, performative analysis, or generic filler acknowledgements.',
     '- Say the final answer only.',
     '- Default to one short sentence. For simple confirmations, use 2-6 Chinese characters.',
     '- If the user interrupts or says you are verbose, stop immediately and do not explain.',
@@ -921,14 +937,19 @@ function blockUnverifiedVoice(socket: Socket, session: AudioSession, reason: str
   socket.emit('audio:voice_rejected', { reason: 'voiceprint_unverified' });
 }
 
-function handlePriorityVoiceStop(socket: Socket, session: AudioSession): void {
+async function handlePriorityVoiceStop(
+  socket: Socket,
+  session: AudioSession,
+  persistCancellation?: () => Promise<void>,
+): Promise<void> {
   const workContinues = session.isBackgroundWork && session.activeWorkStatus !== 'completed';
   const requestId = session.activeTurnRequestId;
   if (workContinues && requestId) session.suppressedSpeechRequestIds.add(requestId);
   if (workContinues) {
     interruptVoiceSpeech(session);
   } else {
-    cancelActiveVoiceTurn(session);
+    if (persistCancellation) await persistCancellation();
+    else cancelActiveVoiceTurn(session);
   }
   socket.emit('audio:status', { status: 'interrupted', requestId });
   socket.emit('audio:interrupt-ack', { workContinues, requestId });
@@ -1217,6 +1238,7 @@ async function respondAlongsideActiveVoiceWork(
           orgId: session.orgId,
           skipActionContinuation: true,
         });
+        await flushDBOrThrow();
         socket.emit('chat:conversation_updated', {
           conversationId: conversation.id,
           agentId: session.agentId,
@@ -1224,6 +1246,16 @@ async function respondAlongsideActiveVoiceWork(
         });
       } catch (persistError: any) {
         logger.warn(`[Audio] Failed to persist active-work sidecar: ${persistError?.message || String(persistError)}`);
+        socket.emit('audio:sidecar_response', {
+          text: voiceDurabilityUnknownText(),
+          source: 'voice',
+          channel: 'voice',
+          requestId: workRequestId,
+          workRequestId,
+          blocked: true,
+          reason: 'persistence_unknown',
+        });
+        return;
       }
     }
     socket.emit('audio:sidecar_response', {
@@ -1387,38 +1419,88 @@ async function processVoiceInput(
   session.activeRoutingText = actionIntentText;
   const isCurrentTurn = () => session.pipelineAbortController === pipelineAbort && !pipelineAbort.signal.aborted;
   let finalAgentResponseDelivered = false;
-  const emitAgent = (event: string, payload: any = {}) => {
-    if (session.activeTurnRequestId !== requestId) return;
-    const publicPayload = event === 'agent:response'
+  const voiceScope = {
+    domain: session.domain,
+    orgId: session.orgId,
+    orgRole: String(socket.data?.authenticatedOrgRole || '') || undefined,
+  };
+  const executionScope: ChatExecutionScope = {
+    userId: session.userId,
+    domain: voiceScope.domain,
+    orgId: voiceScope.orgId,
+    source: 'voice',
+    conversationId: conversationTurn.conversation.id,
+  };
+  const normalizeAgentPayload = (
+    event: string,
+    payload: Record<string, any> = {},
+  ): Record<string, any> => {
+    const publicPayload: Record<string, any> = event === 'agent:response'
       ? sanitizeExecutionResponseForDelivery(payload, { task: actionIntentText })
-      : payload;
-    socket.emit(event, {
+      : event === 'agent:error'
+        ? sanitizeVoiceAgentErrorPayload()
+        : payload;
+    return {
       ...publicPayload,
       source: publicPayload.source || 'voice',
       channel: publicPayload.channel || 'voice',
       requestId,
-    });
-    if (event === 'agent:response' && publicPayload.finalized === true) {
+      conversationId: conversationTurn.conversation.id,
+    };
+  };
+  const publishRecordedAgent = (event: string, payload: Record<string, any>) => {
+    socket.emit(event, payload);
+    if (event === 'agent:response' && payload.finalized === true) {
       finalAgentResponseDelivered = true;
     }
-    if (
-      session.pipelineAbortController !== pipelineAbort
-      && (event === 'agent:error' || (event === 'agent:response' && publicPayload.finalized === true))
-    ) {
-      session.activeTurnRequestId = null;
-    }
   };
+  const emitAgent = (event: string, payload: any = {}) => {
+    if (session.activeTurnRequestId !== requestId) return;
+    const normalizedPayload = normalizeAgentPayload(event, payload);
+    if (
+      event === 'agent:error'
+      || (event === 'agent:response' && normalizedPayload.finalized === true)
+    ) {
+      logger.error('[Audio] Rejected a terminal event outside the strict voice durability boundary');
+      return false;
+    }
+    if (!recordChatExecutionEvent(executionScope, requestId, event, normalizedPayload)) return false;
+    publishRecordedAgent(event, normalizedPayload);
+    return true;
+  };
+  const executionUnknownPayload = normalizeAgentPayload('agent:response', {
+    text: voiceDurabilityUnknownText(),
+    agentName: 'Lumi',
+    finalized: true,
+    blocked: true,
+    reason: 'persistence_unknown',
+  });
+  try {
+    const superseded = await beginChatExecutionDurably(
+      executionScope,
+      requestId,
+      executionUnknownPayload,
+    );
+    if (superseded?.terminalEvent) {
+      publishRecordedAgent(superseded.terminalEvent.event, superseded.terminalEvent.payload);
+    }
+  } catch (error) {
+    logger.error('[Audio] Voice execution reservation could not be durably established:', error);
+    publishRecordedAgent('agent:response', executionUnknownPayload);
+    session.isProcessing = false;
+    session.isBackgroundWork = false;
+    session.activeWorkStatus = 'idle';
+    session.pipelineAbortController = null;
+    session.activeTurnRequestId = null;
+    if (session.isActive) socket.emit('audio:status', { status: 'listening', requestId });
+    return;
+  }
   emitAgent("agent:status", { status: "thinking", agentName: "Lumi" });
   socket.emit("audio:status", { status: "thinking", requestId });
   if (session.isBackgroundWork) {
     emitVoiceWorkProgress(socket, session, requestId, 'planning', CN_VOICE_WORK_MESSAGES.workAccepted);
     startVoiceWorkHeartbeat(socket, session, requestId);
   }
-  const voiceScope = {
-    domain: session.domain,
-    orgId: session.orgId,
-    orgRole: String(socket.data?.authenticatedOrgRole || '') || undefined,
-  };
   const toolSecurityContext = buildSocketToolSecurityContext(socket, voiceScope);
   const confirmationScope = buildVoiceConfirmationChannelScope({
     domain: voiceScope.domain,
@@ -1461,9 +1543,10 @@ async function processVoiceInput(
     );
   } catch {}
   let voiceUserMessagePersisted = false;
+  let voiceUserMessageId = '';
   const persistVoiceUserMessage = (cognitiveIntent = 'voice_received') => {
-    if (voiceUserMessagePersisted) return;
-    addMessageIdempotent({
+    if (voiceUserMessagePersisted) return voiceUserMessageId;
+    voiceUserMessageId = addMessageIdempotent({
       userId: session.userId,
       agentId: session.agentId,
       conversationId: conversationTurn.conversation.id,
@@ -1483,12 +1566,7 @@ async function processVoiceInput(
       deferActionPreparation: true,
     });
     voiceUserMessagePersisted = true;
-    socket.emit('chat:conversation_updated', {
-      conversationId: conversationTurn.conversation.id,
-      agentId: session.agentId,
-      source: 'voice_received',
-      requestId,
-    });
+    return voiceUserMessageId;
   };
   // Once a verified final transcript is admitted to the execution lane it is
   // durable. Routing, model, tool, TTS, cancellation, or disconnect failures
@@ -1793,9 +1871,124 @@ async function processVoiceInput(
         userId: session.userId,
         userText: actionIntentText,
         requestId,
+        userMessageId: voiceUserMessageId,
         toolPolicy: routedToolPolicy,
         forceResume: Boolean(pendingConfirmation || actionFollowupIntent === 'execute'),
       });
+  if ('bindingFailure' in actionTaskExecution) {
+    const staleText = actionTaskExecution.bindingFailure === 'busy'
+      ? CN_TASK_EXECUTION_MESSAGES.actionTurnBusy
+      : CN_TASK_EXECUTION_MESSAGES.actionTurnStale;
+    stopVoiceWorkHeartbeat(session);
+    session.isBackgroundWork = false;
+    session.activeWorkStatus = 'idle';
+    session.activeWorkStep = '';
+    const bindingTerminalPayload = normalizeAgentPayload('agent:response', {
+      text: staleText,
+      agentName: 'Lumi',
+      source: 'voice_turn_binding',
+      finalized: true,
+      blocked: true,
+      reason: actionTaskExecution.diagnosticCode,
+    });
+    const bindingCommitted = await commitChatTerminalBoundary({
+      persistTerminalState: () => undefined,
+      persistAssistantMessage: () => addMessageIdempotent({
+        userId: session.userId,
+        agentId: session.agentId,
+        conversationId: conversationTurn.conversation.id,
+        role: 'assistant',
+        content: staleText,
+        personality: session.personalityId,
+        mode: 'voice',
+        source: 'voice_turn_binding',
+        channel: 'voice',
+        cognitiveIntent: actionTaskExecution.diagnosticCode,
+        llmWasCalled: false,
+        domain: voiceScope.domain,
+        orgId: voiceScope.orgId,
+        requestId,
+        taskIntent: 'conversation',
+        skipActionContinuation: true,
+      }),
+      flush: flushDBOrThrow,
+      persistTerminalReceipt: () => recordChatExecutionTerminalEventDurably(
+        executionScope,
+        requestId,
+        'agent:response',
+        bindingTerminalPayload,
+        executionUnknownPayload,
+      ),
+      persistUnknownReceipt: () => recordChatExecutionPersistenceUnknownDurably(
+        executionScope,
+        requestId,
+        executionUnknownPayload,
+      ),
+      publishCommitted: () => {
+        publishRecordedAgent('agent:response', bindingTerminalPayload);
+        socket.emit('chat:conversation_updated', {
+          conversationId: conversationTurn.conversation.id,
+          agentId: session.agentId,
+          source: 'voice_turn_binding',
+          requestId,
+        });
+      },
+      publishUnknown: () => publishRecordedAgent('agent:response', executionUnknownPayload),
+      onPersistenceError: error => {
+        logger.error('[Audio] Voice binding terminal persistence failed:', error);
+      },
+    });
+    let bindingSpeechCounted = false;
+    try {
+      const ttsProvider = getTTSProvider();
+      if (bindingCommitted && ttsProvider && session.currentVoiceId && session.isActive) {
+        session.isSpeaking = true;
+        ttsSpeakingCount++;
+        bindingSpeechCounted = true;
+        const ttsResult = await synthesizeSpeech(staleText, {
+          provider: ttsProvider,
+          voiceId: session.currentVoiceId,
+          signal: pipelineAbort.signal,
+          allowFallback: false,
+        });
+        if (isCurrentTurn()) {
+          socket.emit('audio:status', { status: 'speaking', requestId });
+          addEchoText(staleText, voiceEchoScope(session));
+          socket.emit('audio:response', {
+            buffer: ttsResult.audioBuffer,
+            volumeGain: computeVolumeGain(),
+            requestId,
+          });
+        }
+      }
+    } catch (bindingSpeechError: any) {
+      if (bindingSpeechError?.name !== 'AbortError') {
+        logger.warn(`[Audio] Failed to speak stale/busy turn response: ${bindingSpeechError?.message || String(bindingSpeechError)}`);
+      }
+    } finally {
+      if (bindingSpeechCounted) {
+        const decay = () => { ttsSpeakingCount = Math.max(0, ttsSpeakingCount - 1); };
+        const timer = setTimeout(decay, 3000);
+        session.ttsDecayTimers.push(timer);
+      }
+      if (session.pipelineAbortController === pipelineAbort) {
+        session.isSpeaking = false;
+        session.isProcessing = false;
+        session.activeWorkToolCalls = 0;
+        session.activeTurnText = '';
+        session.activeRoutingText = '';
+        if (session.isActive) {
+          resetSilenceTimer(session, socket);
+          socket.emit('audio:status', { status: 'listening', requestId });
+          emitAgent('agent:status', { status: 'idle' });
+        }
+        session.pipelineAbortController = null;
+        session.activeTurnRequestId = null;
+        session.suppressedSpeechRequestIds.delete(requestId);
+      }
+    }
+    return;
+  }
   if (actionTaskExecution.state?.taskId) {
     executionPipeline.executionPlan = bindCapabilityExecutionPlanTask(
       executionPipeline.executionPlan,
@@ -1999,13 +2192,6 @@ async function processVoiceInput(
       taskIntent: executionDecision.allowToolUse ? 'task' : 'conversation',
     });
     voiceAssistantMessagePersisted = true;
-    scheduleVoiceSummary(conversationId);
-    socket.emit('chat:conversation_updated', {
-      conversationId,
-      agentId: session.agentId,
-      source: options.source || 'voice',
-      requestId,
-    });
   };
   const persistSidecarConversation = (conversationId: string) => {
     const history = session.sidecarHistory.splice(0);
@@ -2051,6 +2237,101 @@ async function processVoiceInput(
         skipActionContinuation: true,
       });
     }
+  };
+
+  const commitVoiceTerminal = async <T = unknown>(input: {
+    text: string;
+    source: string;
+    blocked: boolean;
+    reason?: string;
+    cognitiveIntent: string;
+    llmWasCalled: boolean;
+    toolCalls?: ToolExecutionRecord[];
+    speechText?: string;
+    notification?: Record<string, any>;
+    persistTerminalState?: () => T;
+    publishAfter?: (terminalState: T | undefined) => void;
+  }): Promise<boolean> => {
+    const terminalPayload = normalizeAgentPayload('agent:response', {
+      text: input.text,
+      agentName: 'Lumi',
+      source: input.source,
+      finalized: true,
+      blocked: input.blocked,
+      reason: input.reason || '',
+    });
+    return commitChatTerminalBoundary<T | undefined>({
+      persistTerminalState: () => {
+        persistVoiceUserMessage(input.cognitiveIntent);
+        persistSidecarConversation(conversationTurn.conversation.id);
+        const terminalState = input.persistTerminalState?.();
+        if (
+          session.activeTaskConversationId
+          && session.activeTaskRequestId === requestId
+        ) {
+          settleConversationActionExecutionRequest(
+            session.activeTaskConversationId,
+            session.userId,
+            requestId,
+          );
+        }
+        return terminalState;
+      },
+      persistAssistantMessage: () => persistVoiceAssistantMessage(
+        conversationTurn.conversation.id,
+        input.text,
+        {
+          toolCalls: input.toolCalls,
+          cognitiveIntent: input.cognitiveIntent,
+          llmWasCalled: input.llmWasCalled,
+          source: input.source,
+        },
+      ),
+      flush: flushDBOrThrow,
+      persistTerminalReceipt: () => recordChatExecutionTerminalEventDurably(
+        executionScope,
+        requestId,
+        'agent:response',
+        terminalPayload,
+        executionUnknownPayload,
+      ),
+      persistUnknownReceipt: () => recordChatExecutionPersistenceUnknownDurably(
+        executionScope,
+        requestId,
+        executionUnknownPayload,
+      ),
+      publishCommitted: terminalState => {
+        if (input.notification) {
+          publishRecordedAgent(
+            'agent:notification',
+            normalizeAgentPayload('agent:notification', input.notification),
+          );
+        }
+        const executionWriteback = terminalState as any;
+        if (executionWriteback?.recorded) {
+          publishRecordedAgent(
+            'agent:task_execution_writeback',
+            normalizeAgentPayload('agent:task_execution_writeback', executionWriteback),
+          );
+        }
+        publishRecordedAgent('agent:response', terminalPayload);
+        socket.emit('chat:conversation_updated', {
+          conversationId: conversationTurn.conversation.id,
+          agentId: session.agentId,
+          source: input.source,
+          requestId,
+        });
+        scheduleVoiceSummary(conversationTurn.conversation.id);
+        if (String(input.speechText || '').trim()) queueFinalizedSpeech(input.speechText!);
+        input.publishAfter?.(terminalState);
+      },
+      publishUnknown: () => {
+        publishRecordedAgent('agent:response', executionUnknownPayload);
+      },
+      onPersistenceError: error => {
+        logger.error(`[Audio] ${input.source} terminal persistence failed:`, error);
+      },
+    });
   };
 
   const maxIterations = executionDecision.allowToolUse
@@ -2282,12 +2563,6 @@ async function processVoiceInput(
         ?? options.finalizationBlocked !== true,
       finalizationReason: options.finalizationReason,
     });
-    if (executionWriteback.recorded) {
-      emitAgent('agent:task_execution_writeback', {
-        ...executionWriteback,
-        source: options.source || 'voice',
-      });
-    }
     return executionWriteback;
   };
   let sentenceIdx = 0;
@@ -2497,23 +2772,17 @@ async function processVoiceInput(
   })();
   if (deterministicConversationResponse) {
     responseText = deterministicConversationResponse.text;
-    emitAgent('agent:response', {
+    await commitVoiceTerminal({
       text: responseText,
-      agentName: 'Lumi',
       source: deterministicConversationResponse.source,
-      finalized: true,
       blocked: false,
       reason: deterministicConversationResponse.intent,
-    });
-    persistVoiceAssistantMessage(conversationTurn.conversation.id, responseText, {
       cognitiveIntent: deterministicConversationResponse.intent,
       llmWasCalled: false,
-      source: deterministicConversationResponse.source,
+      speechText: responseText,
     });
-    queueFinalizedSpeech(responseText);
     await Promise.allSettled(ttsPromises);
     if (!isCurrentTurn()) return;
-    persistSidecarConversation(conversationTurn.conversation.id);
     session.isProcessing = false;
     session.isSpeaking = false;
     session.activeWorkStatus = 'idle';
@@ -2524,7 +2793,6 @@ async function processVoiceInput(
 
   if (userObservedCompletion) {
     const conversation = conversationTurn.conversation;
-    persistVoiceUserMessage('task_user_observation');
     const updatedConversation = getOrCreateActiveConversation(
       session.userId,
       session.agentId,
@@ -2537,26 +2805,20 @@ async function processVoiceInput(
       actionIntentText,
       updatedConversation.actionContinuationState,
     );
-    emitAgent('agent:response', {
+    await commitVoiceTerminal({
       text: responseText,
-      agentName: 'Lumi',
       source: 'voice_task_user_observation',
-      finalized: true,
       blocked: false,
       reason: '',
-    });
-    persistVoiceAssistantMessage(conversation.id, responseText, {
       cognitiveIntent: 'task_user_observation',
       llmWasCalled: false,
-      source: 'voice_task_user_observation',
+      speechText: responseText,
     });
-    queueFinalizedSpeech(responseText);
     await Promise.allSettled(ttsPromises);
     if (!isCurrentTurn()) return;
     session.activeWorkStatus = pendingConfirmationCreatedThisTurn
       ? 'waiting_confirmation'
       : 'completed';
-    socket.emit('chat:conversation_updated', { conversationId: conversation.id, agentId: session.agentId, source: 'voice' });
     return;
   }
 
@@ -2567,29 +2829,21 @@ async function processVoiceInput(
       actionIntentText,
       conversationTurn.conversation.actionContinuationState,
     );
-    emitAgent('agent:response', {
+    await commitVoiceTerminal({
       text: responseText,
-      agentName: 'Lumi',
       source: 'voice_task_status',
-      finalized: true,
       blocked: false,
       reason: '',
-    });
-    persistVoiceAssistantMessage(conversationTurn.conversation.id, responseText, {
       cognitiveIntent: 'task_status',
       llmWasCalled: false,
-      source: 'voice_task_status',
+      speechText: responseText,
     });
-    queueFinalizedSpeech(responseText);
     await Promise.allSettled(ttsPromises);
     if (!isCurrentTurn()) return;
     const conversation = conversationTurn.conversation;
-    persistVoiceUserMessage('task_status');
-    persistSidecarConversation(conversation.id);
     session.isProcessing = false;
     session.isSpeaking = false;
     session.activeWorkStatus = 'idle';
-    socket.emit('chat:conversation_updated', { conversationId: conversation.id, agentId: session.agentId, source: 'voice' });
     socket.emit('audio:status', { status: 'listening', requestId });
     emitAgent('agent:status', { status: 'idle' });
     return;
@@ -2748,37 +3002,29 @@ async function processVoiceInput(
       flow: { ...turnFlow, routeText: confirmedTask },
     });
     responseText = confirmedFinal.text;
-    if (confirmedFinal.notification) emitAgent('agent:notification', confirmedFinal.notification);
-    emitAgent('agent:response', {
+    const confirmationCommitted = await commitVoiceTerminal({
       text: responseText,
-      agentName: 'Lumi',
       source: 'voice_confirmation',
-      finalized: true,
       blocked: confirmedFinal.blocked,
       reason: confirmedFinal.reason || '',
-    });
-    persistVoiceAssistantMessage(conversationTurn.conversation.id, responseText, {
-      toolCalls: confirmationRecords,
       cognitiveIntent: confirmedFinal.blocked ? 'work_product_guard' : 'confirmation',
       llmWasCalled: confirmationRecords.length > 1,
-      source: 'voice_confirmation',
+      toolCalls: confirmationRecords,
+      speechText: responseText,
+      notification: confirmedFinal.notification,
     });
-    queueFinalizedSpeech(responseText);
     await Promise.allSettled(ttsPromises);
     if (!isCurrentTurn()) return;
 
     const conversation = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-    persistVoiceUserMessage('confirmation');
-    persistSidecarConversation(conversation.id);
     session.isProcessing = false;
     session.isSpeaking = false;
     session.activeWorkStatus = pendingConfirmationCreatedThisTurn
       ? 'waiting_confirmation'
       : 'completed';
-    socket.emit('chat:conversation_updated', { conversationId: conversation.id, agentId: session.agentId, source: 'voice' });
     socket.emit('audio:status', { status: 'listening', requestId });
     emitAgent('agent:status', { status: 'idle' });
-    if (!confirmedFinal.blocked) {
+    if (confirmationCommitted && !confirmedFinal.blocked) {
       persistVoiceLearning(responseText, {
           toolRecords: confirmationRecords,
         sourceInteractionId: `voice_confirmation_${Date.now()}`,
@@ -2809,37 +3055,27 @@ async function processVoiceInput(
       flow: turnFlow,
     });
     responseText = finalizedRecentAction.text;
-    if (finalizedRecentAction.notification) {
-      emitAgent('agent:notification', finalizedRecentAction.notification);
-    }
-    emitAgent('agent:response', {
+    const recentActionCommitted = await commitVoiceTerminal({
       text: responseText,
-      agentName: 'Lumi',
       source: 'voice_action_history',
-      finalized: true,
       blocked: finalizedRecentAction.blocked,
       reason: finalizedRecentAction.reason || '',
-    });
-    persistVoiceAssistantMessage(conversationTurn.conversation.id, responseText, {
       cognitiveIntent: finalizedRecentAction.blocked ? 'work_product_guard' : 'action_history',
       llmWasCalled: false,
-      source: 'voice_action_history',
+      speechText: responseText,
+      notification: finalizedRecentAction.notification,
     });
-    queueFinalizedSpeech(responseText);
     await Promise.allSettled(ttsPromises);
     if (!isCurrentTurn()) return;
     const conversation = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-    persistVoiceUserMessage(turnDispatch.boundary);
-    persistSidecarConversation(conversation.id);
     session.isProcessing = false;
     session.isSpeaking = false;
     if (session.ttsAbortController === turnSpeechAbort) session.ttsAbortController = null;
     session.activeTurnText = '';
     session.activeRoutingText = '';
-    socket.emit('chat:conversation_updated', { conversationId: conversation.id, agentId: session.agentId, source: 'voice' });
     socket.emit('audio:status', { status: 'listening', requestId });
     emitAgent('agent:status', { status: 'idle' });
-    if (!finalizedRecentAction.blocked) {
+    if (recentActionCommitted && !finalizedRecentAction.blocked) {
       persistVoiceLearning(responseText, {
         sourceInteractionId: `voice_action_history_${Date.now()}`,
         logLabel: 'voice action history explanation',
@@ -2887,17 +3123,6 @@ async function processVoiceInput(
       flow: turnFlow,
     });
     responseText = finalizedWorkflow.text;
-    if (finalizedWorkflow.notification) {
-      emitAgent('agent:notification', finalizedWorkflow.notification);
-    }
-    persistVoiceTakeoverExecution(responseText, {
-      toolRecords: toolResults,
-      source: specialWorkflow.source,
-      sourceInteractionId: `voice_workflow_${Date.now()}`,
-      finalizationBlocked: finalizedWorkflow.blocked,
-      assistantTextTrusted: !finalizedWorkflow.blocked,
-      finalizationReason: finalizedWorkflow.reason,
-    });
     const finalizedWorkflowSpeech = finalizedWorkflow.blocked || !workflowSpeechSummary
       ? finalizedWorkflow
       : finalizeLumiResponse({
@@ -2912,32 +3137,33 @@ async function processVoiceInput(
     const workflowSpeechText = finalizedWorkflowSpeech.blocked
       ? responseText
       : finalizedWorkflowSpeech.text;
-    emitAgent("agent:response", {
+    const workflowCommitted = await commitVoiceTerminal({
       text: responseText,
-      agentName: "Lumi",
       source: specialWorkflow.source,
-      finalized: true,
       blocked: finalizedWorkflow.blocked,
       reason: finalizedWorkflow.reason || '',
-    });
-    persistVoiceAssistantMessage(conversationTurn.conversation.id, responseText, {
-      toolCalls: toolResults,
       cognitiveIntent: finalizedWorkflow.blocked ? 'work_product_guard' : (specialWorkflow.id || 'skill_workflow'),
       llmWasCalled: false,
-      source: specialWorkflow.source,
+      toolCalls: toolResults,
+      speechText: workflowSpeechText,
+      notification: finalizedWorkflow.notification,
+      persistTerminalState: () => persistVoiceTakeoverExecution(responseText, {
+        toolRecords: toolResults,
+        source: specialWorkflow.source,
+        sourceInteractionId: `voice_workflow_${Date.now()}`,
+        finalizationBlocked: finalizedWorkflow.blocked,
+        assistantTextTrusted: !finalizedWorkflow.blocked,
+        finalizationReason: finalizedWorkflow.reason,
+      }),
     });
-    queueFinalizedSpeech(workflowSpeechText);
     await Promise.allSettled(ttsPromises);
     if (!isCurrentTurn()) return;
     const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-    persistVoiceUserMessage(turnDispatch.boundary);
-    persistSidecarConversation(conv.id);
     session.isProcessing = false;
     session.isSpeaking = false;
-    socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
     socket.emit("audio:status", { status: "listening", requestId });
     emitAgent("agent:status", { status: "idle" });
-    if (!finalizedWorkflow.blocked) {
+    if (workflowCommitted && !finalizedWorkflow.blocked) {
       persistVoiceLearning(responseText, {
         channel: 'workflow',
         toolRecords: toolResults,
@@ -2992,43 +3218,33 @@ async function processVoiceInput(
         flow: turnFlow,
       });
       responseText = finalizedMode.text;
-      if (finalizedMode.notification) {
-        emitAgent('agent:notification', finalizedMode.notification);
-      }
-      persistVoiceTakeoverExecution(responseText, {
-        toolRecords: [modeToolRecord],
-        source: 'voice_mode',
-        sourceInteractionId: `voice_mode_${Date.now()}`,
-        finalizationBlocked: finalizedMode.blocked,
-        assistantTextTrusted: !finalizedMode.blocked,
-        finalizationReason: finalizedMode.reason,
-      });
-      emitAgent("agent:response", {
+      const modeCommitted = await commitVoiceTerminal({
         text: responseText,
-        agentName: "Lumi",
         source: "voice_mode",
-        finalized: true,
         blocked: finalizedMode.blocked,
         reason: finalizedMode.reason || '',
-      });
-      persistVoiceAssistantMessage(conversationTurn.conversation.id, responseText, {
-        toolCalls: [modeToolRecord],
         cognitiveIntent: finalizedMode.blocked ? 'work_product_guard' : 'operation_mode',
         llmWasCalled: false,
-        source: 'voice_mode',
+        toolCalls: [modeToolRecord],
+        speechText: responseText,
+        notification: finalizedMode.notification,
+        persistTerminalState: () => persistVoiceTakeoverExecution(responseText, {
+          toolRecords: [modeToolRecord],
+          source: 'voice_mode',
+          sourceInteractionId: `voice_mode_${Date.now()}`,
+          finalizationBlocked: finalizedMode.blocked,
+          assistantTextTrusted: !finalizedMode.blocked,
+          finalizationReason: finalizedMode.reason,
+        }),
       });
-      queueFinalizedSpeech(responseText);
       await Promise.allSettled(ttsPromises);
       if (!isCurrentTurn()) return;
       const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-      persistVoiceUserMessage(turnDispatch.boundary);
-      persistSidecarConversation(conv.id);
       session.isProcessing = false;
       session.isSpeaking = false;
-      socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
       socket.emit("audio:status", { status: "listening", requestId });
       emitAgent("agent:status", { status: "idle" });
-      if (!finalizedMode.blocked) {
+      if (modeCommitted && !finalizedMode.blocked) {
         persistVoiceLearning(responseText, {
           toolRecords: [modeToolRecord],
           sourceInteractionId: `voice_mode_${Date.now()}`,
@@ -3123,42 +3339,34 @@ async function processVoiceInput(
         flow: turnFlow,
       });
       quickResponseText = quickFinalized.text;
-      if (quickFinalized.notification) emitAgent('agent:notification', quickFinalized.notification);
-      persistVoiceTakeoverExecution(quickResponseText, {
-        toolRecords: quickToolRecords,
-        source: 'voice_quick_command',
-        sourceInteractionId: `voice_quick_${Date.now()}`,
-        finalizationBlocked: quickFinalized.blocked,
-        assistantTextTrusted: !quickFinalized.blocked,
-        finalizationReason: quickFinalized.reason,
-      });
-      emitAgent("agent:response", {
+      const quickCommitted = await commitVoiceTerminal({
         text: quickResponseText,
-        agentName: "Lumi",
         source: "quick_command",
-        finalized: true,
         blocked: quickFinalized.blocked,
         reason: quickFinalized.reason || '',
-      });
-      persistVoiceAssistantMessage(conversationTurn.conversation.id, quickResponseText, {
-        toolCalls: quickToolRecords.length ? quickToolRecords : undefined,
         cognitiveIntent: quickFinalized.blocked ? 'work_product_guard' : 'quick_command',
         llmWasCalled: false,
-        source: 'quick_command',
+        toolCalls: quickToolRecords.length ? quickToolRecords : undefined,
+        speechText: quickResponseText,
+        notification: quickFinalized.notification,
+        persistTerminalState: () => persistVoiceTakeoverExecution(quickResponseText, {
+          toolRecords: quickToolRecords,
+          source: 'voice_quick_command',
+          sourceInteractionId: `voice_quick_${Date.now()}`,
+          finalizationBlocked: quickFinalized.blocked,
+          assistantTextTrusted: !quickFinalized.blocked,
+          finalizationReason: quickFinalized.reason,
+        }),
       });
-      queueFinalizedSpeech(quickResponseText);
       await Promise.allSettled(ttsPromises);
       if (!isCurrentTurn()) return;
       responseText = quickResponseText;
       const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-      persistVoiceUserMessage(turnDispatch.boundary);
-      persistSidecarConversation(conv.id);
       session.isProcessing = false;
       session.isSpeaking = false;
-      socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
       socket.emit("audio:status", { status: "listening", requestId });
       emitAgent("agent:status", { status: "idle" });
-      if (!quickFinalized.blocked) {
+      if (quickCommitted && !quickFinalized.blocked) {
         persistVoiceLearning(responseText, {
           toolRecords: quickToolRecords,
           sourceInteractionId: `voice_quick_${Date.now()}`,
@@ -3227,44 +3435,36 @@ async function processVoiceInput(
       flow: turnFlow,
     });
     responseText = directFinal.text;
-    if (directFinal.notification) emitAgent('agent:notification', directFinal.notification);
-    persistVoiceTakeoverExecution(responseText, {
-      toolRecords: [toolRecord],
-      source: 'voice_foreground_messaging_read',
-      sourceInteractionId: `voice_wechat_read_${Date.now()}`,
-      finalizationBlocked: directFinal.blocked,
-      assistantTextTrusted: !directFinal.blocked,
-      finalizationReason: directFinal.reason,
-    });
-    emitAgent('agent:response', {
+    const messagingReadCommitted = await commitVoiceTerminal({
       text: responseText,
-      agentName: 'Lumi',
       source: 'voice_foreground_messaging_read',
-      finalized: true,
       blocked: directFinal.blocked,
       reason: directFinal.reason || '',
-    });
-    persistVoiceAssistantMessage(conversationTurn.conversation.id, responseText, {
-      toolCalls: [toolRecord],
       cognitiveIntent: directFinal.blocked ? 'work_product_guard' : 'messaging_read',
       llmWasCalled: false,
-      source: 'voice_foreground_messaging_read',
+      toolCalls: [toolRecord],
+      speechText: responseText,
+      notification: directFinal.notification,
+      persistTerminalState: () => persistVoiceTakeoverExecution(responseText, {
+        toolRecords: [toolRecord],
+        source: 'voice_foreground_messaging_read',
+        sourceInteractionId: `voice_wechat_read_${Date.now()}`,
+        finalizationBlocked: directFinal.blocked,
+        assistantTextTrusted: !directFinal.blocked,
+        finalizationReason: directFinal.reason,
+      }),
     });
-    queueFinalizedSpeech(responseText);
     await Promise.allSettled(ttsPromises);
     if (!isCurrentTurn()) return;
     const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-    persistVoiceUserMessage(turnDispatch.boundary);
-    persistSidecarConversation(conv.id);
     session.isProcessing = false;
     session.isSpeaking = false;
     if (session.ttsAbortController === turnSpeechAbort) session.ttsAbortController = null;
     session.activeTurnText = '';
     session.activeRoutingText = '';
-    socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
     socket.emit('audio:status', { status: 'listening', requestId });
     emitAgent('agent:status', { status: 'idle' });
-    if (!directFinal.blocked) {
+    if (messagingReadCommitted && !directFinal.blocked) {
       persistVoiceLearning(responseText, {
         toolRecords: [toolRecord],
         sourceInteractionId: `voice_wechat_read_${Date.now()}`,
@@ -3329,46 +3529,36 @@ async function processVoiceInput(
       flow: turnFlow,
     });
     responseText = directFinal.text;
-    if (directFinal.notification) {
-      emitAgent('agent:notification', directFinal.notification);
-    }
-    persistVoiceTakeoverExecution(responseText, {
-      toolRecords: [toolRecord],
-      source: 'voice_foreground_messaging',
-      sourceInteractionId: `voice_wechat_send_${Date.now()}`,
-      finalizationBlocked: directFinal.blocked,
-      assistantTextTrusted: !directFinal.blocked,
-      finalizationReason: directFinal.reason,
-    });
-    emitAgent('agent:response', {
+    const messagingSendCommitted = await commitVoiceTerminal({
       text: responseText,
-      agentName: 'Lumi',
       source: 'voice_foreground_messaging',
-      finalized: true,
       blocked: directFinal.blocked,
       reason: directFinal.reason || '',
-    });
-    persistVoiceAssistantMessage(conversationTurn.conversation.id, responseText, {
-      toolCalls: [toolRecord],
       cognitiveIntent: directFinal.blocked ? 'work_product_guard' : 'messaging',
       llmWasCalled: false,
-      source: 'voice_foreground_messaging',
+      toolCalls: [toolRecord],
+      speechText: responseText,
+      notification: directFinal.notification,
+      persistTerminalState: () => persistVoiceTakeoverExecution(responseText, {
+        toolRecords: [toolRecord],
+        source: 'voice_foreground_messaging',
+        sourceInteractionId: `voice_wechat_send_${Date.now()}`,
+        finalizationBlocked: directFinal.blocked,
+        assistantTextTrusted: !directFinal.blocked,
+        finalizationReason: directFinal.reason,
+      }),
     });
-    queueFinalizedSpeech(responseText);
     await Promise.allSettled(ttsPromises);
     if (!isCurrentTurn()) return;
     const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-    persistVoiceUserMessage(turnDispatch.boundary);
-    persistSidecarConversation(conv.id);
     session.isProcessing = false;
     session.isSpeaking = false;
     if (session.ttsAbortController === turnSpeechAbort) session.ttsAbortController = null;
     session.activeTurnText = '';
     session.activeRoutingText = '';
-    socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
     socket.emit('audio:status', { status: 'listening', requestId });
     emitAgent('agent:status', { status: 'idle' });
-    if (!directFinal.blocked) {
+    if (messagingSendCommitted && !directFinal.blocked) {
       persistVoiceLearning(responseText, {
         toolRecords: [toolRecord],
         sourceInteractionId: `voice_wechat_send_${Date.now()}`,
@@ -3410,41 +3600,34 @@ async function processVoiceInput(
         flow: turnFlow,
       });
       responseText = directFinal.text;
-      persistVoiceTakeoverExecution(responseText, {
-        toolRecords: directRecords,
-        source: 'voice_cognition_direct',
-        sourceInteractionId: `voice_cognition_direct_${Date.now()}`,
-        finalizationBlocked: directFinal.blocked,
-        assistantTextTrusted: !directFinal.blocked,
-        finalizationReason: directFinal.reason,
-      });
-      emitAgent("agent:response", {
+      const cognitionCommitted = await commitVoiceTerminal({
         text: responseText,
-        agentName: "Lumi",
         source: "voice_cognition_direct",
-        finalized: true,
         blocked: directFinal.blocked,
         reason: directFinal.reason || '',
-      });
-      persistVoiceAssistantMessage(conversationTurn.conversation.id, responseText, {
-        toolCalls: directRecords,
         cognitiveIntent: directFinal.blocked ? 'work_product_guard' : cognition.intent.category,
         llmWasCalled: cognition.llmWasCalled,
-        source: 'voice_cognition_direct',
+        toolCalls: directRecords,
+        speechText: responseText,
+        notification: directFinal.notification,
+        persistTerminalState: () => persistVoiceTakeoverExecution(responseText, {
+          toolRecords: directRecords,
+          source: 'voice_cognition_direct',
+          sourceInteractionId: `voice_cognition_direct_${Date.now()}`,
+          finalizationBlocked: directFinal.blocked,
+          assistantTextTrusted: !directFinal.blocked,
+          finalizationReason: directFinal.reason,
+        }),
       });
-      queueFinalizedSpeech(responseText);
       await Promise.allSettled(ttsPromises);
       if (!isCurrentTurn()) return;
       // Persist
       const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-      persistVoiceUserMessage(cognition.intent.category);
-      persistSidecarConversation(conv.id);
       session.isProcessing = false;
       session.isSpeaking = false;
-      socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
       socket.emit("audio:status", { status: "listening", requestId });
       emitAgent("agent:status", { status: "idle" });
-      if (!directFinal.blocked) {
+      if (cognitionCommitted && !directFinal.blocked) {
         persistVoiceLearning(responseText, {
           toolRecords: directRecords,
           sourceInteractionId: `voice_cognition_direct_${Date.now()}`,
@@ -3476,14 +3659,9 @@ async function processVoiceInput(
       directDesktop: workSurfaceRoute.directDesktop,
     });
     if (shouldOrchestrate) {
+      let voiceWorkflowCheckpointed = false;
       try {
         emitAgent("agent:status", { status: "thinking", agentName: "Lumi", phase: exposeAgentWork ? 'orchestrator' : 'background' });
-        // This is a fixed acknowledgement, not model-generated result text.
-        // Keep it explicitly non-terminal if low-latency spoken feedback is allowed.
-        const voiceLeadIn = "\u6536\u5230\u3002"; // i18n-allow: reviewed neutral pre-finalization voice acknowledgement.
-        if (!deferCompletionSpeech && shouldForwardPreFinalizationProgress(voiceLeadIn)) {
-          flushSentence(voiceLeadIn);
-        }
         session.isOrchestrating = true;
         session.activeWorkStatus = 'orchestrating';
         session.activeWorkStep = 'Coordinating worker agents';
@@ -3508,6 +3686,7 @@ async function processVoiceInput(
             taskId: actionTaskExecution.state?.taskId,
             desktopExecutionTracker,
             resumeNodeReceipts: voiceModelRecovery?.receipts,
+            resumeExecutionGraph: voiceModelRecovery?.graph,
             isCancelled: () => pipelineAbort?.signal.aborted ?? false,
           },
           { provider, model: effectiveModel, ...reasoningRoutePolicy },
@@ -3546,16 +3725,34 @@ async function processVoiceInput(
               error: record.error,
             });
           },
+          async (checkpoint: OrchestrationWorkflowCheckpoint) => {
+            const taskId = actionTaskExecution.state?.taskId;
+            if (!taskId) {
+              throw new Error('Voice orchestration has no durable task identity');
+            }
+            await persistVoiceWorkflowCheckpointDurably({
+              conversationId: conversationTurn.conversation.id,
+              userId: session.userId,
+              taskId,
+              checkpoint,
+              resumeNodeReceipts: voiceModelRecovery?.receipts,
+            });
+            voiceWorkflowCheckpointed = true;
+          },
         );
         if (!isCurrentTurn()) return;
         if (orchResult) {
           if (actionTaskExecution.state?.taskId) {
-            persistConversationModelExecutionResult({
+            const persistedModelResult = persistConversationModelExecutionResult({
               conversationId: conversationTurn.conversation.id,
               userId: session.userId,
               taskId: actionTaskExecution.state.taskId,
               workflowResult: orchResult.workflowResult,
             });
+            if (!persistedModelResult) {
+              throw new Error('Voice orchestration final model result was rejected');
+            }
+            await flushDBOrThrow();
           }
           usedOrchestrator = true;
           responseText = orchResult.responseText;
@@ -3567,6 +3764,7 @@ async function processVoiceInput(
         session.isOrchestrating = false;
       } catch (e) {
         session.isOrchestrating = false;
+        if (e instanceof VoiceWorkflowCheckpointError || voiceWorkflowCheckpointed) throw e;
         logger.warn('[Audio] Orchestrator failed, falling back to LLM:', (e as Error).message);
       }
     }
@@ -3863,57 +4061,59 @@ async function processVoiceInput(
     responseText = finalResponse.text;
     if (finalResponse.blocked) {
       logger.warn(`[Audio] Completion claim blocked: ${finalResponse.reason}`);
-      if (finalResponse.notification) emitAgent("agent:notification", finalResponse.notification);
-      if (actionTaskExecution.state?.taskId && turnFlow.allowToolUseForTurn) {
-        setConversationActionExecutionStatus(conversationTurn.conversation.id, session.userId, 'blocked', {
-          blocker: finalResponse.reason || 'The current work product did not pass final verification.',
-          assistantState: responseText,
-          requestId: '',
-        });
-      }
     }
 
-    persistVoiceTakeoverExecution(responseText, {
-      toolRecords: toolResults,
-      source: 'voice',
-      sourceInteractionId: `voice_main_${Date.now()}`,
-      finalizationBlocked: finalResponse.blocked,
-      assistantTextTrusted: !finalResponse.blocked,
-      finalizationReason: finalResponse.reason,
-    });
-
+    let mainTerminalCommitted = false;
     if (responseText) {
       logger.info(`[Audio] Response: "${responseText.slice(0, 80)}" (${toolResults.length} tool calls)`);
-      emitAgent("agent:response", {
+      mainTerminalCommitted = await commitVoiceTerminal({
         text: responseText,
-        agentName: "Lumi",
         source: "voice",
-        finalized: true,
         blocked: finalResponse.blocked,
         reason: finalResponse.reason || '',
-      });
-      persistVoiceAssistantMessage(conversationTurn.conversation.id, responseText, {
-        toolCalls: toolResults,
         cognitiveIntent: finalResponse.blocked ? 'work_product_guard' : cognition.intent.category,
         llmWasCalled: true,
+        toolCalls: toolResults,
+        speechText: responseText,
+        notification: finalResponse.notification,
+        persistTerminalState: () => {
+          if (finalResponse.blocked && actionTaskExecution.state?.taskId && turnFlow.allowToolUseForTurn) {
+            setConversationActionExecutionStatus(conversationTurn.conversation.id, session.userId, 'blocked', {
+              blocker: finalResponse.reason || 'The current work product did not pass final verification.',
+              assistantState: responseText,
+              requestId,
+            });
+          }
+          const terminalConversation = getOrCreateActiveConversation(
+            session.userId,
+            session.agentId,
+            voiceScope.domain,
+            voiceScope.orgId,
+          );
+          if (!terminalConversation.title) {
+            terminalConversation.title = userText.slice(0, 50);
+            writeDB(readDB());
+          }
+          return persistVoiceTakeoverExecution(responseText, {
+            toolRecords: toolResults,
+            source: 'voice',
+            sourceInteractionId: `voice_main_${Date.now()}`,
+            finalizationBlocked: finalResponse.blocked,
+            assistantTextTrusted: !finalResponse.blocked,
+            finalizationReason: finalResponse.reason,
+          });
+        },
       });
     }
 
-    // Candidate model/orchestrator text is never spoken before this point, so
-    // TTS always receives the complete shared-finalizer result exactly once.
-    if (responseText) queueFinalizedSpeech(responseText);
+    // Candidate model/orchestrator text is never spoken before the strict
+    // database and terminal-receipt fences have both committed.
     await Promise.allSettled(ttsPromises);
     if (!isCurrentTurn()) return;
 
-    // Persist
     const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-    if (!conv.title) {
-      conv.title = userText.slice(0, 50);
-      writeDB(readDB());
-    }
-    persistVoiceUserMessage(cognition.intent.category);
-    persistSidecarConversation(conv.id);
-    // The assistant terminal record was committed before TTS. Playback or
+    // The user, assistant, task writeback, and terminal receipt committed
+    // before TTS. Playback or
     // disconnect failures must never make a completed/blocked task disappear.
     // Topic tracking — extract and record topics for cross-session continuity
     if (!finalResponse.blocked) {
@@ -3943,9 +4143,7 @@ async function processVoiceInput(
         try { const hm = loadHIMState(voiceStateKey); const { him: nh } = himTick(updated, hm); saveHIMState(voiceStateKey, nh); } catch {}
       } catch { /* best-effort */ }
     }
-    socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
-
-    if (!finalResponse.blocked) {
+    if (mainTerminalCommitted && !finalResponse.blocked) {
       persistVoiceLearning(responseText, { toolRecords: toolResults, logLabel: 'voice' });
     }
 
@@ -3959,33 +4157,31 @@ async function processVoiceInput(
       } else {
         const failureText = CN_VOICE_WORK_MESSAGES.processingFailed;
         const failureDetail = formatCnToolFailureDetail(err?.message || String(err));
-        try {
-          setConversationActionExecutionStatus(
-            conversationTurn.conversation.id,
-            session.userId,
-            'blocked',
-            {
-              blocker: failureDetail,
-              assistantState: failureText,
-              requestId,
-            },
-          );
-        } catch {}
-        emitAgent("agent:response", {
+        await commitVoiceTerminal({
           text: failureText,
-          agentName: 'Lumi',
           source: 'voice_error',
-          finalized: true,
           blocked: true,
           reason: 'voice_processing_failed',
-        });
-        persistVoiceAssistantMessage(conversationTurn.conversation.id, failureText, {
-          toolCalls: toolResults,
           cognitiveIntent: 'voice_processing_failed',
           llmWasCalled: false,
-          source: 'voice_error',
+          toolCalls: toolResults,
+          speechText: failureText,
+          persistTerminalState: () => {
+            try {
+              setConversationActionExecutionStatus(
+                conversationTurn.conversation.id,
+                session.userId,
+                'blocked',
+                {
+                  blocker: failureDetail,
+                  assistantState: failureText,
+                  requestId,
+                },
+              );
+            } catch {}
+            return undefined;
+          },
         });
-        queueFinalizedSpeech(failureText);
         await Promise.allSettled(ttsPromises);
       }
     }
@@ -4068,57 +4264,101 @@ async function runVoiceInputPipeline(
           session.orgId,
         ).id;
       }
-      const receivedAtMs = new Date(userReceivedAt).getTime();
       terminalResponseAlreadyPersisted = getMessages(conversationId, 4).some((message: any) => (
         message?.role === 'assistant'
-        && Number.isFinite(receivedAtMs)
-        && new Date(message?.timestamp || 0).getTime() >= receivedAtMs
+        && Boolean(failedRequestId)
+        && (
+          message?.requestId === failedRequestId
+          || message?.externalMessageId === failedRequestId
+        )
       ));
-      if (!terminalResponseAlreadyPersisted) {
+      if (!terminalResponseAlreadyPersisted && failedRequestId) {
         const failureText = CN_VOICE_WORK_MESSAGES.processingFailed;
-        addMessage({
-          userId: session.userId,
-          agentId: session.agentId,
-          conversationId,
-          role: 'assistant',
-          content: failureText,
-          personality: session.personalityId,
-          mode: 'voice',
-          source: 'voice_error',
-          channel: 'voice',
-          cognitiveIntent: 'voice_processing_failed',
-          llmWasCalled: false,
-          domain: session.domain,
-          orgId: session.orgId,
-        });
-        setConversationActionExecutionStatus(
-          conversationId,
-          session.userId,
-          'blocked',
-          {
-            blocker: formatCnToolFailureDetail(err?.message || String(err)),
-            assistantState: failureText,
-            requestId: failedRequestId || undefined,
-          },
-        );
-        socket.emit('agent:response', {
+        const failurePayload = {
           text: failureText,
           source: 'voice_error',
           channel: 'voice',
           requestId: failedRequestId,
+          conversationId,
           finalized: true,
           blocked: true,
           reason: 'voice_processing_failed',
-        });
-        socket.emit('audio:work_progress', {
+        };
+        const unknownPayload = {
+          text: voiceDurabilityUnknownText(),
+          agentName: 'Lumi',
+          source: 'voice',
+          channel: 'voice',
           requestId: failedRequestId,
-          text: failureText,
-          phase: 'blocked',
-        });
-        socket.emit('chat:conversation_updated', {
           conversationId,
-          agentId: session.agentId,
-          source: 'voice_error',
+          finalized: true,
+          blocked: true,
+          reason: 'persistence_unknown',
+        };
+        const failureScope: ChatExecutionScope = {
+          userId: session.userId,
+          domain: session.domain,
+          orgId: session.orgId,
+          source: 'voice',
+          conversationId,
+        };
+        await commitChatTerminalBoundary({
+          persistTerminalState: () => setConversationActionExecutionStatus(
+            conversationId,
+            session.userId,
+            'blocked',
+            {
+              blocker: formatCnToolFailureDetail(err?.message || String(err)),
+              assistantState: failureText,
+              requestId: failedRequestId,
+            },
+          ),
+          persistAssistantMessage: () => addMessageIdempotent({
+            userId: session.userId,
+            agentId: session.agentId,
+            conversationId,
+            role: 'assistant',
+            content: failureText,
+            personality: session.personalityId,
+            mode: 'voice',
+            source: 'voice_error',
+            channel: 'voice',
+            cognitiveIntent: 'voice_processing_failed',
+            llmWasCalled: false,
+            domain: session.domain,
+            orgId: session.orgId,
+            requestId: failedRequestId,
+          }),
+          flush: flushDBOrThrow,
+          persistTerminalReceipt: () => recordChatExecutionTerminalEventDurably(
+            failureScope,
+            failedRequestId,
+            'agent:response',
+            failurePayload,
+            unknownPayload,
+          ),
+          persistUnknownReceipt: () => recordChatExecutionPersistenceUnknownDurably(
+            failureScope,
+            failedRequestId,
+            unknownPayload,
+          ),
+          publishCommitted: () => {
+            socket.emit('agent:response', failurePayload);
+            socket.emit('audio:work_progress', {
+              requestId: failedRequestId,
+              text: failureText,
+              phase: 'blocked',
+            });
+            socket.emit('chat:conversation_updated', {
+              conversationId,
+              agentId: session.agentId,
+              source: 'voice_error',
+            });
+          },
+          publishUnknown: () => socket.emit('agent:response', unknownPayload),
+          onPersistenceError: persistenceError => {
+            logger.warn('[Audio] Outer failure terminal persistence failed:', persistenceError);
+          },
         });
       }
     } catch (persistError: any) {
@@ -4179,12 +4419,117 @@ export function registerVoiceHandlers(
   getUserId: (s: Socket) => string,
   io: Server,
 ) {
+  const commitActiveVoiceCancellation = async (
+    session: AudioSession,
+    options: {
+      text?: string;
+      source?: string;
+      publish?: boolean;
+      preserveInterruptedTurn?: boolean;
+    } = {},
+  ): Promise<boolean> => {
+    const requestId = session.activeTurnRequestId;
+    if (!requestId || !session.userId) {
+      cancelActiveVoiceTurn(session, options.preserveInterruptedTurn === true);
+      return false;
+    }
+    const conversationId = session.activeTaskConversationId || getOrCreateActiveConversation(
+      session.userId,
+      session.agentId,
+      session.domain,
+      session.orgId,
+    ).id;
+    const source = options.source || 'voice_cancelled';
+    const text = options.text || CN_TASK_EXECUTION_MESSAGES.cancelled;
+    const scope: ChatExecutionScope = {
+      userId: session.userId,
+      domain: session.domain,
+      orgId: session.orgId,
+      source: 'voice',
+      conversationId,
+    };
+    const terminalPayload = {
+      text,
+      source,
+      channel: 'voice',
+      requestId,
+      conversationId,
+      finalized: true,
+      blocked: true,
+      reason: 'cancelled',
+    };
+    const unknownPayload = {
+      text: voiceDurabilityUnknownText(),
+      agentName: 'Lumi',
+      source: 'voice',
+      channel: 'voice',
+      requestId,
+      conversationId,
+      finalized: true,
+      blocked: true,
+      reason: 'persistence_unknown',
+    };
+    const shouldPublish = options.publish !== false;
+    return commitChatTerminalBoundary({
+      persistTerminalState: () => cancelActiveVoiceTurn(
+        session,
+        options.preserveInterruptedTurn === true,
+      ),
+      persistAssistantMessage: () => addMessageIdempotent({
+        userId: session.userId,
+        agentId: session.agentId,
+        conversationId,
+        role: 'assistant',
+        content: text,
+        personality: session.personalityId,
+        mode: 'voice',
+        channel: 'voice',
+        cognitiveIntent: 'voice_turn_cancelled',
+        llmWasCalled: false,
+        domain: session.domain,
+        orgId: session.orgId,
+        requestId,
+      }),
+      flush: flushDBOrThrow,
+      persistTerminalReceipt: () => recordChatExecutionTerminalEventDurably(
+        scope,
+        requestId,
+        'agent:response',
+        terminalPayload,
+        unknownPayload,
+      ),
+      persistUnknownReceipt: () => recordChatExecutionPersistenceUnknownDurably(
+        scope,
+        requestId,
+        unknownPayload,
+      ),
+      publishCommitted: () => {
+        if (!shouldPublish || !socket.connected) return;
+        socket.emit('agent:response', terminalPayload);
+        socket.emit('chat:conversation_updated', {
+          conversationId,
+          agentId: session.agentId,
+          source,
+          requestId,
+        });
+      },
+      publishUnknown: () => {
+        if (shouldPublish && socket.connected) socket.emit('agent:response', unknownPayload);
+      },
+      onPersistenceError: error => logger.warn('[Audio] Voice cancellation persistence failed:', error),
+    });
+  };
+
   socket.on("audio:start", async (data: { voiceId?: string; personalityId?: string; agentId?: string; transcriptionOnly?: boolean; domain?: 'personal' | 'work'; orgId?: string; sessionId?: string }) => {
     logger.info(`[Audio] Voice call started by ${socket.id}`);
     const session = getAudioSession(socket);
     if (session.isActive && session.userId) {
       setRealtimeVoiceSessionActive(session.userId, socket.id, false);
-      cancelActiveVoiceTurn(session);
+      if (session.activeTurnRequestId) {
+        await commitActiveVoiceCancellation(session, { source: 'voice_restarted' });
+      } else {
+        cancelActiveVoiceTurn(session);
+      }
     }
     session.isActive = true;
     session.voiceSwitchGeneration += 1;
@@ -4328,7 +4673,7 @@ export function registerVoiceHandlers(
           ) {
             logger.info(`[Audio] Voice-call end command recognized (${result.isFinal ? 'final' : 'interim'})`);
             session.accumulatedText = '';
-            cancelActiveVoiceTurn(session);
+            await commitActiveVoiceCancellation(session, { source: 'voice_end_command' });
             resetUtteranceVoiceprint(session);
             socket.emit('audio:end-call-request');
             return;
@@ -4340,7 +4685,11 @@ export function registerVoiceHandlers(
           ) {
             logger.info(`[Audio] Priority stop recognized (${result.isFinal ? 'final' : 'interim'})`);
             session.accumulatedText = '';
-            handlePriorityVoiceStop(socket, session);
+            await handlePriorityVoiceStop(
+              socket,
+              session,
+              () => commitActiveVoiceCancellation(session).then(() => undefined),
+            );
             return;
           }
           if (result.text && result.isFinal) {
@@ -4473,16 +4822,7 @@ export function registerVoiceHandlers(
                 const interruptionKind = activeWorkDecision.kind;
                 logger.info(`[Audio] Work-lane interruption=${interruptionKind} source=semantic_transcript request=${session.activeTurnRequestId || 'none'} (${text.length} chars)`);
                 if (interruptionKind === 'cancel_work') {
-                  try {
-                    const activeConversation = getOrCreateActiveConversation(
-                      session.userId,
-                      session.agentId,
-                      session.domain,
-                      session.orgId,
-                    );
-                    cancelConversationActionExecution(activeConversation.id, session.userId);
-                  } catch {}
-                  cancelActiveVoiceTurn(session);
+                  await commitActiveVoiceCancellation(session, { source: 'voice_cancel_command' });
                   socket.emit("audio:status", { status: "interrupted" });
                   socket.emit("audio:interrupt-ack", { workContinues: false });
                   socket.emit("audio:status", { status: "listening" });
@@ -4535,7 +4875,11 @@ export function registerVoiceHandlers(
                 }
               } else if (session.isSpeaking) {
                 logger.info(`[Audio] Barge-in during speech source=semantic_transcript request=${session.activeTurnRequestId || 'none'} (${text.length} chars)`);
-                cancelActiveVoiceTurn(session, !isPureInterruptCommand(text));
+                if (isPureInterruptCommand(text)) {
+                  await commitActiveVoiceCancellation(session, { source: 'voice_interrupt_command' });
+                } else {
+                  cancelActiveVoiceTurn(session, true);
+                }
                 socket.emit("audio:status", { status: "interrupted" });
                 socket.emit("audio:interrupt-ack", {});
                 if (isPureInterruptCommand(text)) {
@@ -4545,7 +4889,11 @@ export function registerVoiceHandlers(
                 }
               } else {
                 logger.info(`[Audio] Barge-in during processing source=semantic_transcript request=${session.activeTurnRequestId || 'none'} (${text.length} chars)`);
-                cancelActiveVoiceTurn(session, !isPureInterruptCommand(text));
+                if (isPureInterruptCommand(text)) {
+                  await commitActiveVoiceCancellation(session, { source: 'voice_interrupt_command' });
+                } else {
+                  cancelActiveVoiceTurn(session, true);
+                }
                 socket.emit("audio:status", { status: "interrupted" });
                 socket.emit("audio:interrupt-ack", {});
                 if (isPureInterruptCommand(text)) {
@@ -4607,18 +4955,25 @@ export function registerVoiceHandlers(
             callbackSttSession,
           })) return;
           logger.error("[Audio STT Error]:", err);
-          socket.emit("audio:error", { message: err.message });
+          socket.emit("audio:error", {
+            code: 'STT_RUNTIME_FAILED',
+            message: 'Speech recognition temporarily failed. Please try again.',
+          });
         });
 
         socket.emit("audio:status", { status: "listening" });
       } catch (err: any) {
         logger.error("[Audio Start Error]:", err);
-        socket.emit("audio:error", { message: err.message });
+        socket.emit("audio:error", {
+          code: 'VOICE_START_FAILED',
+          message: 'Voice input could not be started. Check the voice settings and try again.',
+        });
       }
     } else {
       socket.emit("audio:status", { status: "idle" });
       socket.emit("audio:error", {
-        message: "Realtime speech recognition is not configured. Set DOUBAO_SPEECH_KEY to a new-console API Key value, or configure DASHSCOPE_API_KEY/QWEN_API_KEY. Local/OpenAI Whisper can still transcribe uploaded audio files.",
+        code: 'STT_NOT_CONFIGURED',
+        message: 'Realtime speech recognition is not configured. Choose an available speech-recognition service in Voice settings.',
       });
     }
   });
@@ -4765,7 +5120,7 @@ export function registerVoiceHandlers(
     logger.info(`[Audio] Interrupt candidate source=${String(data?.source || 'unknown')} rms=${Number(data?.rms || 0).toFixed(4)} threshold=${Number(data?.threshold || 0).toFixed(4)} frames=${Math.max(0, Number(data?.frames || 0))} ttsAgeMs=${Math.max(0, Number(data?.ttsAgeMs || 0))} speaking=${session.isSpeaking} processing=${session.isProcessing} request=${session.activeTurnRequestId || 'none'}`);
   });
 
-  socket.on("audio:interrupt", (data?: { source?: string }) => {
+  socket.on("audio:interrupt", async (data?: { source?: string }) => {
     logger.info(`[Audio] Interrupt source=${String(data?.source || 'legacy')} socket=${socket.id}`);
     const session = getAudioSession(socket);
     if (session.isBackgroundWork && session.isProcessing && session.pipelineAbortController) {
@@ -4776,12 +5131,12 @@ export function registerVoiceHandlers(
       socket.emit("audio:interrupt-ack", { workContinues: true, requestId: workRequestId });
       return;
     }
-    cancelActiveVoiceTurn(session);
+    await commitActiveVoiceCancellation(session, { source: 'voice_interrupt' });
     socket.emit("audio:status", { status: "interrupted" });
     socket.emit("audio:interrupt-ack", { workContinues: false });
   });
 
-  socket.on('audio:cancel_turn', (data?: { requestId?: string; reason?: string }) => {
+  socket.on('audio:cancel_turn', async (data?: { requestId?: string; reason?: string }) => {
     const session = getAudioSession(socket);
     const requestId = session.activeTurnRequestId;
     if (!requestId || (data?.requestId && data.requestId !== requestId)) return;
@@ -4802,15 +5157,9 @@ export function registerVoiceHandlers(
       return;
     }
     logger.warn(`[Audio] Cancelling stuck voice turn ${requestId} (${data?.reason || 'client_request'})`);
-    cancelActiveVoiceTurn(session);
-    socket.emit('agent:response', {
+    await commitActiveVoiceCancellation(session, {
       text: CN_VOICE_WORK_MESSAGES.processingTimedOut,
-      source: 'voice',
-      channel: 'voice',
-      requestId,
-      finalized: true,
-      blocked: true,
-      reason: 'voice_turn_timeout',
+      source: 'voice_turn_timeout',
     });
     socket.emit('audio:interrupt-ack', { workContinues: false, requestId });
     socket.emit('audio:status', { status: 'listening', requestId });
@@ -4820,6 +5169,28 @@ export function registerVoiceHandlers(
   socket.on('audio:work_status_probe', (data?: { requestId?: string; lane?: string }) => {
     const session = getAudioSession(socket);
     const requestId = session.activeTurnRequestId;
+    const requestedRequestId = String(data?.requestId || '').trim();
+    if (requestedRequestId) {
+      const recovered = getChatExecution({
+        userId: session.userId,
+        domain: session.domain,
+        orgId: session.orgId,
+        source: 'voice',
+      }, requestedRequestId);
+      if (recovered?.terminalEvent) {
+        socket.emit(recovered.terminalEvent.event, recovered.terminalEvent.payload);
+        socket.emit('audio:status', { status: 'listening', requestId: requestedRequestId });
+        return;
+      }
+      if (recovered && !recovered.terminal && !requestId) {
+        socket.emit('audio:status', {
+          status: recovered.status === 'waiting_confirmation' ? 'listening' : 'thinking',
+          requestId: requestedRequestId,
+          lane: data?.lane || 'work',
+        });
+        return;
+      }
+    }
     if (!requestId || (data?.requestId && data.requestId !== requestId)) {
       socket.emit('audio:status', { status: 'listening', requestId: data?.requestId });
       return;
@@ -4842,17 +5213,20 @@ export function registerVoiceHandlers(
     });
   });
 
-  socket.on("audio:stop", (data?: { refineTranscript?: boolean; sessionId?: string }) => {
+  socket.on("audio:stop", async (data?: { refineTranscript?: boolean; sessionId?: string }) => {
     logger.info(`[Audio] Voice call ended by ${socket.id}`);
     const session = getAudioSession(socket);
     if (data?.sessionId && session.sessionId && data.sessionId !== session.sessionId) return;
     const shouldRefineMeeting = session.transcriptionOnly && data?.refineTranscript === true;
     const meetingPcmPath = session.meetingPcmPath;
     const meetingPcmBytes = session.meetingPcmBytes;
+    await commitActiveVoiceCancellation(session, {
+      source: 'voice_call_stopped',
+      publish: false,
+    });
     session.isActive = false;
     setRealtimeVoiceSessionActive(session.userId, socket.id, false);
     session.transcriptionOnly = false;
-    cancelActiveVoiceTurn(session);
     if (session.silenceTimer) { clearTimeout(session.silenceTimer); session.silenceTimer = null; }
     if (session.sttSession) {
       session.sttSession.end();
@@ -5132,12 +5506,15 @@ export function registerVoiceHandlers(
     }
   });
 
-  socket.on("disconnect", () => {
+  socket.on("disconnect", async () => {
     const session = socket.data.audioSession as AudioSession | undefined;
     if (session) {
+      await commitActiveVoiceCancellation(session, {
+        source: 'voice_disconnected',
+        publish: false,
+      });
       session.isActive = false;
       setRealtimeVoiceSessionActive(session.userId, socket.id, false);
-      cancelActiveVoiceTurn(session);
       if (session.silenceTimer) { clearTimeout(session.silenceTimer); session.silenceTimer = null; }
       if (session.bargeinTimer) { clearTimeout(session.bargeinTimer); session.bargeinTimer = null; }
       for (const t of session.ttsDecayTimers) { clearTimeout(t); }

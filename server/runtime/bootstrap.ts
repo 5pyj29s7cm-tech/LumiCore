@@ -1,20 +1,33 @@
-import { readDB, writeDB, flushDB, ensureDatabaseInitialized, isDbDirty, pruneOldData } from "../../db_layer";
-import fs from "fs";
-import path from "path";
-import { spawn, type ChildProcess } from "child_process";
+import {
+  readDB,
+  writeDB,
+  flushDB,
+  ensureDatabaseInitialized,
+  isDbDirty,
+  pruneOldData,
+  requireDatabaseStartupQuickCheck,
+} from "../../db_layer";
 import { toolRegistry } from "../tools/registry";
 import { registerAllTools } from "../tools/definitions/index";
 import { mcpManager, registerMCPTools } from "../mcp";
 import { scheduler, registerScheduledTasks } from "../scheduler";
-import { isFirstBootComplete, persistFirstBootExploration, type SystemSnapshot } from "../autonomy/system_explorer";
+import {
+  isFirstBootComplete,
+  isSystemExplorationAllowed,
+  persistFirstBootExploration,
+} from "../autonomy/system_explorer";
 import { installProfessionAgents } from "../autonomy/profession_templates";
 import { initializeDesktopBootstrapProof } from "../config/desktop_bootstrap";
+import { markLegacyProductDataMigrationVerified } from "../config/data_path";
 import { repairCorruptedOrganizationNames } from "../org/db";
 import { startMessagingConnections, stopMessagingConnections } from "./messaging";
 import { recoverOrphanedConversationActionExecutions } from "../conversation/manager";
 import { stopGptSovitsRuntime } from "../tts/gptsovits_runtime";
 import { stopVoiceprintRuntime } from "../biometrics/voiceprint_provider";
-import { resolveSystemExplorationWorker } from "./system_exploration_worker";
+import {
+  collectSystemSnapshotInWorker,
+  stopSystemExplorationWorker,
+} from "./system_exploration_worker";
 import { hydrateBackgroundTasksFromDb } from "../agents/background_tasks";
 import { hydrateAutonomousTasksFromDb } from "../autonomy/task_queue";
 import {
@@ -53,80 +66,25 @@ interface BootstrapContext {
   __dirname: string;
 }
 
-let firstBootExplorationWorker: ChildProcess | null = null;
 let backgroundTaskSupervisor: ReturnType<typeof startDurableBackgroundTaskSupervisor> | null = null;
 let backgroundTaskSupervisorStartupTimer: ReturnType<typeof setTimeout> | null = null;
 let unifiedRuntimeSupervisor: UnifiedRuntimeSupervisor | null = null;
 
-function isValidSystemSnapshot(value: unknown): value is SystemSnapshot {
-  const snapshot = value as Partial<SystemSnapshot> | null;
-  return Boolean(
-    snapshot
-    && snapshot.type === 'first_boot'
-    && snapshot.hardware?.hostname
-    && Array.isArray(snapshot.software?.installedApps)
-    && snapshot.filesystem
-    && snapshot.network,
-  );
-}
-
-async function collectFirstBootSnapshotInWorker(runtimeDir: string): Promise<SystemSnapshot> {
-  const worker = resolveSystemExplorationWorker(runtimeDir);
-
-  const outputDir = path.join(process.env.LUMI_DATA_DIR || runtimeDir, 'runtime');
-  await fs.promises.mkdir(outputDir, { recursive: true });
-  const outputPath = path.join(outputDir, `first-boot-exploration-${process.pid}-${Date.now()}.json`);
-  let stderr = '';
-
-  try {
-    console.log(`[Bootstrap] Starting ${worker.kind} system exploration worker`);
-    const child = spawn(worker.executable, [...worker.args, outputPath], {
-      cwd: worker.cwd,
-      windowsHide: true,
-      stdio: ['ignore', 'ignore', 'pipe'],
-      env: { ...process.env, LUMI_SYSTEM_EXPLORATION_WORKER: '1' },
-    });
-    firstBootExplorationWorker = child;
-    child.stderr?.setEncoding('utf8');
-    child.stderr?.on('data', chunk => {
-      if (stderr.length < 16_384) stderr += String(chunk).slice(0, 16_384 - stderr.length);
-    });
-
-    const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        child.kill('SIGKILL');
-        reject(new Error('system exploration worker timed out after 120 seconds'));
-      }, 120_000);
-      if (typeof (timeout as any).unref === 'function') (timeout as any).unref();
-      child.once('error', error => {
-        clearTimeout(timeout);
-        reject(error);
-      });
-      child.once('exit', (code, signal) => {
-        clearTimeout(timeout);
-        resolve({ code, signal });
-      });
-    });
-    if (exit.code !== 0) {
-      throw new Error(`system exploration worker exited with ${exit.code ?? exit.signal}: ${stderr.trim() || 'no diagnostics'}`);
-    }
-
-    const parsed = JSON.parse(await fs.promises.readFile(outputPath, 'utf8')) as unknown;
-    if (!isValidSystemSnapshot(parsed)) throw new Error('system exploration worker returned an invalid snapshot');
-    return parsed;
-  } finally {
-    firstBootExplorationWorker = null;
-    await fs.promises.rm(outputPath, { force: true }).catch(() => undefined);
-  }
-}
-
 function scheduleFirstBootExploration(runtimeDir: string, delayMs = 30000) {
   const timer = setTimeout(() => {
     if (isFirstBootComplete()) return;
+    if (!isSystemExplorationAllowed()) {
+      console.log('[Bootstrap] First-boot exploration is waiting for local-admin authorization.');
+      return;
+    }
     console.log('[Bootstrap] First boot detected - running system exploration in an isolated worker...');
-    void collectFirstBootSnapshotInWorker(runtimeDir)
+    void collectSystemSnapshotInWorker(runtimeDir)
       .then(snapshot => {
         if (isFirstBootComplete()) return;
+        if (!isSystemExplorationAllowed()) {
+          console.log('[Bootstrap] Discarded first-boot exploration because authorization was revoked.');
+          return;
+        }
         persistFirstBootExploration(snapshot);
         console.log(`[Bootstrap] Exploration complete: ${snapshot.hardware.cpus.model}, ${snapshot.hardware.totalMemoryGB}GB RAM, ${snapshot.software.installedApps.length} apps, ${snapshot.filesystem.totalUserFiles} user files`);
         const installed = installProfessionAgents();
@@ -164,6 +122,21 @@ export async function bootstrap(ctx: BootstrapContext) {
     // bootstrap route remains fail-closed until this succeeds.
     initializeDesktopBootstrapProof();
     await ensureDatabaseInitialized();
+    const initializedDb = readDB();
+    const migrationCounts = {
+      quickCheck: requireDatabaseStartupQuickCheck(),
+      // A migrated database must expose all three durable collections. Using
+      // -1 makes a missing collection fail closed instead of recording a
+      // misleading zero count; non-migrated roots return before validation.
+      userCount: Array.isArray(initializedDb.users) ? initializedDb.users.length : -1,
+      conversationCount: Array.isArray(initializedDb.conversations) ? initializedDb.conversations.length : -1,
+      interactionCount: Array.isArray(initializedDb.interactions) ? initializedDb.interactions.length : -1,
+    } as const;
+    if (markLegacyProductDataMigrationVerified(migrationCounts)) {
+      console.log(
+        `[Data] LumiCore product data migration passed SQLite quick_check; recorded post-startup rows users=${migrationCounts.userCount}, conversations=${migrationCounts.conversationCount}, interactions=${migrationCounts.interactionCount}.`,
+      );
+    }
     const recoveredChatReceipts = await initializeChatExecutionRegistryPersistence();
     console.log('Database initialized successfully');
     if (recoveredChatReceipts > 0) {
@@ -357,10 +330,7 @@ export async function bootstrap(ctx: BootstrapContext) {
     if (cleaningUp) return;
     cleaningUp = true;
     console.log('[Shutdown] Cleaning up...');
-    if (firstBootExplorationWorker && firstBootExplorationWorker.exitCode === null) {
-      firstBootExplorationWorker.kill('SIGTERM');
-      firstBootExplorationWorker = null;
-    }
+    stopSystemExplorationWorker();
     scheduler.stop();
     if (backgroundTaskSupervisorStartupTimer) {
       clearTimeout(backgroundTaskSupervisorStartupTimer);

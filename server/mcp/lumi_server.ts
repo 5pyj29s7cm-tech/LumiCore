@@ -35,6 +35,10 @@ import {
   restrictSystemPromptForExecutionBoundary,
   restrictToolPolicyForExecutionBoundary,
 } from '../tools/remote_policy';
+import {
+  publicMcpToolFailure,
+  sanitizeMcpLogValue,
+} from './public_security';
 
 // Track active transports per session
 const transports: Map<string, { transport: SSEServerTransport; scope: McpCallerScope }> = new Map();
@@ -58,6 +62,14 @@ function upsertCompletedToolRecord(records: ToolExecutionRecord[], record: ToolR
   } else {
     records.push(completed);
   }
+}
+
+function mcpToolFailure(operation: string, error: unknown) {
+  logger.error(`[MCP Tool] ${operation} failed: ${sanitizeMcpLogValue((error as any)?.message || error)}`);
+  return {
+    content: [{ type: 'text' as const, text: publicMcpToolFailure() }],
+    isError: true,
+  };
 }
 
 export function createLumiMcpServer(llmGetters?: {
@@ -157,7 +169,7 @@ export function createLumiMcpServer(llmGetters?: {
     async ({ message, personalityId }) => {
       try {
         const chatLLM = resolveMcpLLM();
-        bc('mcp:activity', { device: 'xiaozhi', action: 'chat', status: 'received', message: message.slice(0, 200) });
+        bc('mcp:activity', { device: 'xiaozhi', action: 'chat', status: 'received' });
         bc('agent:status', { status: 'thinking', agentName: 'Lumi' });
         const pid = personalityId || 'lumi';
         const personality = personalityRegistry.get(pid) || personalityRegistry.get('lumi')!;
@@ -206,11 +218,12 @@ export function createLumiMcpServer(llmGetters?: {
           (record) => {
             upsertCompletedToolRecord(mcpToolRecords, record);
             const cid = `${record.name}-${Date.now()}`;
-            bc('agent:tool_call', { correlationId: cid, name: record.name, arguments: record.arguments });
+            bc('agent:tool_call', { correlationId: cid, name: record.name, status: 'started' });
             if (record.error) {
-              bc('agent:tool_call', { correlationId: cid, name: record.name, arguments: record.arguments, error: record.error });
+              logger.warn(`[MCP Tool] ${record.name} returned an error: ${sanitizeMcpLogValue(record.error)}`);
+              bc('agent:tool_call', { correlationId: cid, name: record.name, status: 'failed', error: 'Tool execution failed.' });
             } else {
-              bc('agent:tool_call', { correlationId: cid, name: record.name, arguments: record.arguments, result: (record.result || '').slice(0, 300) });
+              bc('agent:tool_call', { correlationId: cid, name: record.name, status: 'completed', result: 'completed' });
             }
           },
           Math.min(4, personality.toolPolicy.maxIterations),
@@ -360,14 +373,15 @@ export function createLumiMcpServer(llmGetters?: {
             void responsePromise
               .then(backgroundResponse => deliverFinalizedChatResponse(backgroundResponse, true))
               .catch((backgroundErr: any) => {
-                const reason = backgroundErr?.message || String(backgroundErr);
-                bc('mcp:activity', { device: 'xiaozhi', action: 'chat', status: 'failed', error: reason });
+                logger.error(`[MCP Tool] background chat failed: ${sanitizeMcpLogValue(backgroundErr?.message || backgroundErr)}`);
+                const publicFailure = publicMcpToolFailure();
+                bc('mcp:activity', { device: 'xiaozhi', action: 'chat', status: 'failed', reason: 'mcp_operation_failed' });
                 bc('agent:response', {
-                  text: `[Lumi error]: ${reason}`,
+                  text: publicFailure,
                   agentName: 'Lumi',
                   finalized: true,
                   blocked: true,
-                  reason,
+                  reason: 'mcp_operation_failed',
                 });
                 bc('agent:status', { status: 'error', agentName: 'Lumi' });
               });
@@ -393,15 +407,17 @@ export function createLumiMcpServer(llmGetters?: {
           reason: delivered.finalized.reason || '',
         };
       } catch (err: any) {
-        bc('mcp:activity', { device: 'xiaozhi', action: 'chat', status: 'failed', error: err.message });
-        bc('agent:error', { message: err.message });
+        logger.error(`[MCP Tool] chat failed: ${sanitizeMcpLogValue(err?.message || err)}`);
+        const publicFailure = publicMcpToolFailure();
+        bc('mcp:activity', { device: 'xiaozhi', action: 'chat', status: 'failed', reason: 'mcp_operation_failed' });
+        bc('agent:error', { message: publicFailure, reason: 'mcp_operation_failed' });
         bc('agent:status', { status: 'error', agentName: 'Lumi' });
         return {
-          content: [{ type: 'text' as const, text: `[Lumi error]: ${err.message}` }],
+          content: [{ type: 'text' as const, text: publicFailure }],
           isError: true,
           finalized: true,
           blocked: true,
-          reason: err.message,
+          reason: 'mcp_operation_failed',
         };
       }
     },
@@ -435,7 +451,7 @@ export function createLumiMcpServer(llmGetters?: {
           }],
         };
       } catch (err: any) {
-        return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
+        return mcpToolFailure('memory search', err);
       }
     },
   );
@@ -473,7 +489,7 @@ export function createLumiMcpServer(llmGetters?: {
           }],
         };
       } catch (err: any) {
-        return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
+        return mcpToolFailure('memory add', err);
       }
     },
   );
@@ -502,7 +518,7 @@ export function createLumiMcpServer(llmGetters?: {
           }],
         };
       } catch (err: any) {
-        return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
+        return mcpToolFailure('reminder list', err);
       }
     },
   );
@@ -551,7 +567,6 @@ export function createLumiMcpServer(llmGetters?: {
         bc('mcp:activity', {
           device: 'xiaozhi',
           action: 'speak',
-          text: finalized.text.slice(0, 100),
           bytes: ttsResult.audioBuffer.length,
           finalized: true,
           blocked: false,
@@ -574,12 +589,13 @@ export function createLumiMcpServer(llmGetters?: {
           reason: '',
         };
       } catch (err: any) {
+        logger.error(`[MCP Tool] speech synthesis failed: ${sanitizeMcpLogValue(err?.message || err)}`);
         return {
-          content: [{ type: 'text' as const, text: `Speech synthesis failed: ${err.message}` }],
+          content: [{ type: 'text' as const, text: publicMcpToolFailure() }],
           isError: true,
           finalized: true,
           blocked: true,
-          reason: err.message,
+          reason: 'mcp_operation_failed',
         };
       }
     },
@@ -627,7 +643,7 @@ export function createLumiMcpServer(llmGetters?: {
           }],
         };
       } catch (err: any) {
-        return { content: [{ type: 'text' as const, text: `Narrative generation failed: ${err.message}` }], isError: true };
+        return mcpToolFailure('memory narrative', err);
       }
     },
   );
@@ -669,7 +685,7 @@ export function createLumiMcpServer(llmGetters?: {
           }],
         };
       } catch (err: any) {
-        return { content: [{ type: 'text' as const, text: `Agent share failed: ${err.message}` }], isError: true };
+        return mcpToolFailure('agent memory share', err);
       }
     },
   );
@@ -726,7 +742,7 @@ export function createLumiMcpServer(llmGetters?: {
           }],
         };
       } catch (err: any) {
-        return { content: [{ type: 'text' as const, text: `Worker list failed: ${err.message}` }], isError: true };
+        return mcpToolFailure('worker list', err);
       }
     },
   );
@@ -805,7 +821,7 @@ export function createLumiMcpServer(llmGetters?: {
           }],
         };
       } catch (err: any) {
-        return { content: [{ type: 'text' as const, text: `Worker status failed: ${err.message}` }], isError: true };
+        return mcpToolFailure('worker status', err);
       }
     },
   );
@@ -824,7 +840,7 @@ export function createLumiMcpServer(llmGetters?: {
       try {
         if (isWorkViewer) return viewerMutationDenied();
         const routeLLM = resolveMcpLLM();
-        bc('mcp:activity', { device: 'xiaozhi', action: 'route_task', status: 'received', task: task.slice(0, 200) });
+        bc('mcp:activity', { device: 'xiaozhi', action: 'route_task', status: 'received' });
 
         const complexity = classifyComplexity(task, { userId: scope.userId, personalityId: 'lumi' });
 
@@ -992,8 +1008,8 @@ export function createLumiMcpServer(llmGetters?: {
           }],
         };
       } catch (err: any) {
-        bc('mcp:activity', { device: 'xiaozhi', action: 'route_task', status: 'failed', error: err.message });
-        return { content: [{ type: 'text' as const, text: `Task routing failed: ${err.message}` }], isError: true };
+        bc('mcp:activity', { device: 'xiaozhi', action: 'route_task', status: 'failed', reason: 'mcp_operation_failed' });
+        return mcpToolFailure('task routing', err);
       }
     },
   );
@@ -1025,7 +1041,7 @@ export async function handleMcpSSE(
 
     await mcpServer.connect(transport);
   } catch (err: any) {
-    logger.error('[MCP Server] SSE connection error:', err.message);
+    logger.error(`[MCP Server] SSE connection error: ${sanitizeMcpLogValue(err?.message || err)}`);
     if (!res.headersSent) {
       res.status(500).json({ error: 'MCP SSE connection failed' });
     }
@@ -1065,7 +1081,7 @@ export async function handleMcpMessage(req: Request, res: Response) {
 
     await session.transport.handlePostMessage(req, res);
   } catch (err: any) {
-    logger.error('[MCP Server] Message error:', err.message);
+    logger.error(`[MCP Server] Message error: ${sanitizeMcpLogValue(err?.message || err)}`);
     res.status(500).json({ error: 'MCP message handling failed' });
   }
 }

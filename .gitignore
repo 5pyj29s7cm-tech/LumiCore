@@ -24,6 +24,7 @@ gpt-sovits-src/
 local-tts/
 src-tauri/target/
 src-tauri/target-codex-check/
+src-tauri/target-codex-*/
 .claude/
 docs/
 gen_landing.py
@@ -31,5 +32,5 @@ gen_landing.py
 $null
 artifacts/runtime-reliability/*.json
 agent_shutdown_snapshot_*
-LumiOS_个人版_部署服务方案.pdf
+Lumi*_个人版_部署服务方案.pdf
 lumi_output/

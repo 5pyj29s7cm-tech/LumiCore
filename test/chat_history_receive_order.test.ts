@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase, readDB } from '../db_layer';
 import {
   addMessageIdempotent,
+  bindConversationActionExecutionTurn,
   getMessageByRequestId,
   getMessages,
   getOrCreateActiveConversation,
@@ -13,7 +14,7 @@ describe('native chat receive-order persistence', () => {
     await initDatabase();
   });
 
-  it('keeps an in-flight foreground turn ahead of its status sidecar', () => {
+  it('persists queued A/B/C transcripts without letting them overwrite the active pending turn', () => {
     const userId = `chat-order-${Date.now()}-${Math.random()}`;
     const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
     const common = {
@@ -26,23 +27,38 @@ describe('native chat receive-order persistence', () => {
       channel: 'chat',
     } as const;
 
-    addMessageIdempotent({ ...common, role: 'user', content: 'A user', requestId: 'request-A', receivedAt: '2026-08-22T00:00:00.000Z', timestamp: '2026-08-22T00:00:00.000Z', deferActionPreparation: true });
-    addMessageIdempotent({ ...common, role: 'user', content: 'S user', requestId: 'request-S', receivedAt: '2026-08-22T00:00:00.000Z', timestamp: '2026-08-22T00:00:00.000Z', cognitiveIntent: 'task_status', skipActionContinuation: true });
-    addMessageIdempotent({ ...common, role: 'assistant', content: 'S assistant', requestId: 'request-S', timestamp: '2026-08-22T00:00:00.000Z', cognitiveIntent: 'task_status', skipActionContinuation: true });
+    const aId = addMessageIdempotent({ ...common, role: 'user', content: 'A user', requestId: 'request-A', receivedAt: '2026-08-22T00:00:00.000Z', timestamp: '2026-08-22T00:00:00.000Z', deferActionPreparation: true });
+    const bId = addMessageIdempotent({ ...common, role: 'user', content: 'B user', requestId: 'request-B', receivedAt: '2026-08-22T00:00:01.000Z', timestamp: '2026-08-22T00:00:01.000Z', deferActionPreparation: true });
+    const cId = addMessageIdempotent({ ...common, role: 'user', content: 'C user', requestId: 'request-C', receivedAt: '2026-08-22T00:00:02.000Z', timestamp: '2026-08-22T00:00:02.000Z', deferActionPreparation: true });
 
-    const duringA = readDB().conversations.find((item: any) => item.id === conversation.id);
-    expect(duringA?.pendingActionContinuation?.requestId).toBe('request-A');
+    let persisted = readDB().conversations.find((item: any) => item.id === conversation.id);
+    expect(persisted?.pendingActionContinuation).toBeUndefined();
 
-    addMessageIdempotent({ ...common, role: 'assistant', content: 'A assistant', requestId: 'request-A', timestamp: '2026-08-22T00:00:00.000Z' });
+    expect(bindConversationActionExecutionTurn({ conversationId: conversation.id, userId, userText: 'A user', requestId: 'request-A', userMessageId: aId })).toMatchObject({ messageId: aId, requestId: 'request-A' });
+    expect(bindConversationActionExecutionTurn({ conversationId: conversation.id, userId, userText: 'B user', requestId: 'request-B', userMessageId: bId })).toBeNull();
+    persisted = readDB().conversations.find((item: any) => item.id === conversation.id);
+    expect(persisted?.pendingActionContinuation).toMatchObject({ messageId: aId, requestId: 'request-A' });
+
+    addMessageIdempotent({ ...common, role: 'assistant', content: 'A assistant', requestId: 'request-A', timestamp: '2026-08-22T00:00:03.000Z' });
+    expect(bindConversationActionExecutionTurn({ conversationId: conversation.id, userId, userText: 'B user', requestId: 'request-B', userMessageId: bId })).toMatchObject({ messageId: bId, requestId: 'request-B' });
+    expect(bindConversationActionExecutionTurn({ conversationId: conversation.id, userId, userText: 'C user', requestId: 'request-C', userMessageId: cId })).toBeNull();
+    addMessageIdempotent({ ...common, role: 'assistant', content: 'B assistant', requestId: 'request-B', timestamp: '2026-08-22T00:00:04.000Z' });
+    expect(bindConversationActionExecutionTurn({ conversationId: conversation.id, userId, userText: 'C user', requestId: 'request-C', userMessageId: cId })).toMatchObject({ messageId: cId, requestId: 'request-C' });
+    addMessageIdempotent({ ...common, role: 'assistant', content: 'C assistant', requestId: 'request-C', timestamp: '2026-08-22T00:00:05.000Z' });
+
+    persisted = readDB().conversations.find((item: any) => item.id === conversation.id);
+    expect(persisted?.pendingActionContinuation).toBeUndefined();
 
     const history = getMessages(conversation.id);
     expect(history.map(item => item.message)).toEqual([
       'A user',
-      'S user',
-      'S assistant',
+      'B user',
+      'C user',
       'A assistant',
+      'B assistant',
+      'C assistant',
     ]);
-    expect(history.map(item => item.routeSequence)).toEqual([1, 2, 3, 4]);
+    expect(history.map(item => item.routeSequence)).toEqual([1, 2, 3, 4, 5, 6]);
     expect(history[0].receivedAt).toBe('2026-08-22T00:00:00.000Z');
   });
 

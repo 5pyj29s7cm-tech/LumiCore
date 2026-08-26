@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import http from 'node:http';
 import { makeApp } from './helpers';
 
@@ -62,6 +62,28 @@ afterAll(async () => {
 });
 
 describe('reasoning model switching stability', () => {
+  it('enforces a task-scoped local-only boundary even when global strict privacy is off', async () => {
+    const providers = await import('../server/llm/providers');
+    const cloudCall = vi.fn(async () => ({
+      choices: [{ message: { role: 'assistant', content: 'must not run' } }],
+    }));
+
+    await expect(providers.makeLLMCall(
+      [{ role: 'user', content: 'private graph payload' }],
+      [],
+      {
+        provider: 'deepseek',
+        model: 'cloud-model',
+        userId: 'local-only-graph-user',
+        dataRoutingPolicy: 'local_only',
+        noImplicitFailover: true,
+      },
+      () => ({ chat: { completions: { create: cloudCall } } }),
+      () => null,
+    )).rejects.toThrow('Local-only routing active');
+    expect(cloudCall).not.toHaveBeenCalled();
+  });
+
   it('migrates legacy aliases once while preserving literal schema-v2 model ids', async () => {
     const { readDB, writeDB } = await import('../db_layer');
     const prefs = await import('../server/llm/user_preferences');
@@ -191,6 +213,111 @@ describe('reasoning model switching stability', () => {
       lastObservation: { status: 'succeeded' },
     });
     circuits.resetCircuit('deepseek', 'pinned-billing-primary');
+  });
+
+  it('keeps an exact graph candidate inside its provider boundary even when it is the stored primary', async () => {
+    const providers = await import('../server/llm/providers');
+    const receipts = await import('../server/llm/model_routing_receipts');
+    const prefs = await import('../server/llm/user_preferences');
+    const circuits = await import('../server/cloud/circuit_breaker');
+    const userId = 'exact-graph-provider-user';
+    prefs.upsertUserPreferredLLM(userId, {
+      provider: 'deepseek',
+      model: 'exact-primary',
+      selectionMode: 'pinned',
+      fallbackCandidates: [{ provider: 'qwen', model: 'global-fallback-must-not-run' }],
+      allowCloudFallback: true,
+    });
+    const deepSeekClient = {
+      chat: { completions: { create: async () => {
+        throw new Error('402 exact candidate unavailable');
+      } } },
+    };
+    const qwenGetter = vi.fn(() => ({
+      chat: { completions: { create: async () => ({
+        choices: [{ message: { role: 'assistant', content: 'escaped graph boundary' } }],
+      }) } },
+    }));
+
+    try {
+      await expect(providers.makeLLMCall(
+        [{ role: 'user', content: 'execute only the compiled graph candidate' }],
+        [],
+        {
+          ...prefs.getUserPreferredLLMConfig(userId),
+          conversationId: 'exact-graph-provider-conversation',
+          requestId: 'exact-graph-provider-request',
+          noImplicitFailover: true,
+          authorizedRoutingCandidate: true,
+        },
+        () => deepSeekClient,
+        () => null,
+        () => null,
+        () => null,
+        qwenGetter,
+      )).rejects.toThrow('402 exact candidate unavailable');
+
+      expect(qwenGetter).not.toHaveBeenCalled();
+      const receipt = receipts.listModelRoutingReceipts(userId, 1)[0];
+      expect(receipt).toMatchObject({
+        status: 'failed',
+        requestedProvider: 'deepseek',
+        requestedModel: 'exact-primary',
+        selectedProvider: '',
+        selectedModel: '',
+      });
+      expect(receipt.attempts).toHaveLength(1);
+      expect(receipt.attempts[0]).toMatchObject({
+        provider: 'deepseek', model: 'exact-primary', status: 'failed',
+      });
+    } finally {
+      circuits.resetCircuit('deepseek', 'exact-primary');
+    }
+  });
+
+  it('does not leave a local-only exact Ollama candidate for a cloud fallback', async () => {
+    const providers = await import('../server/llm/providers');
+    const local = await import('../server/llm/local_models');
+    const previous = local.getLocalModelConfig('ollama');
+    const cloudGetter = vi.fn(() => ({
+      chat: { completions: { create: async () => ({
+        choices: [{ message: { role: 'assistant', content: 'cloud must not run' } }],
+      }) } },
+    }));
+    local.saveLocalModelConfig('ollama', {
+      ...previous,
+      detected: false,
+      serviceReachable: false,
+      inferenceHealthy: false,
+      healthStatus: 'backoff',
+      nextRetryAt: new Date(Date.now() + 60_000).toISOString(),
+      lastError: 'local-only candidate unavailable',
+    });
+
+    try {
+      await expect(providers.makeLLMCall(
+        [{ role: 'user', content: 'stay local' }],
+        [],
+        {
+          provider: 'ollama',
+          model: 'exact-local-model',
+          selectionMode: 'ordered_fallback',
+          fallbackCandidates: [{ provider: 'qwen', model: 'forbidden-cloud-model' }],
+          allowCloudFallback: true,
+          noImplicitFailover: true,
+          authorizedRoutingCandidate: true,
+        },
+        () => null,
+        () => null,
+        () => null,
+        () => null,
+        cloudGetter,
+        () => ({ chat: { completions: { create: vi.fn() } } }),
+      )).rejects.toThrow(/local-only candidate unavailable|backing off/i);
+      expect(cloudGetter).not.toHaveBeenCalled();
+    } finally {
+      local.saveLocalModelConfig('ollama', previous);
+    }
   });
 
   it('uses ordered fallbacks exactly and records the model that actually answered', async () => {

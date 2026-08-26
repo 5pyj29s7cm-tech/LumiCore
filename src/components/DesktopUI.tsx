@@ -639,7 +639,7 @@ function ControlCenter({ isOpen, onClose, t, brightness, setBrightness, volume, 
         </div>
       </div>
       <div className="mt-6 pt-6 border-t border-white/5 flex items-center justify-between font-sans">
-        <span className="text-xs font-bold text-white/45 tracking-widest uppercase">{t.desktopVersion || 'Lumi OS v3.0.2'}</span>
+        <span className="text-xs font-bold text-white/45 tracking-widest uppercase">{t.desktopVersion || 'LumiCore v3.1.0'}</span>
         <button onClick={onClose} className="text-xs font-black text-celestial-saturn hover:underline uppercase tracking-widest">{t.closeNexus || 'Close Nexus'}</button>
       </div>
     </motion.div>
@@ -1102,7 +1102,7 @@ function DesktopWidgetPanel({
   );
 }
 
-function KernelMonitorApp({ t }: { t: any }) {
+function KernelMonitorApp({ t, onAsk }: { t: any; onAsk?: (prompt: string) => void }) {
   const [data, setData] = useState<number[]>([]);
   const overviewRef = useRef<any>(null);
   const [stats, setStats] = useState({
@@ -1234,7 +1234,7 @@ function KernelMonitorApp({ t }: { t: any }) {
           </div>
         </div>
         <Suspense fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
-          <SystemExplorer t={t} />
+          <SystemExplorer t={t} onAsk={onAsk} />
         </Suspense>
       </div>
 
@@ -1741,6 +1741,16 @@ export function DesktopUI({
       })();
     }, 80);
   }, [isTauri, setActiveTab]);
+
+  const askComputerProfileQuestion = useCallback((prompt: string) => {
+    const text = String(prompt || '').trim();
+    if (!text) return;
+    openCommandCenter('office');
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('lumi:replace-command-input', { detail: { text } }));
+      window.dispatchEvent(new CustomEvent('lumi:submit-command-input'));
+    }, 120);
+  }, [openCommandCenter]);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -4864,7 +4874,7 @@ export function DesktopUI({
                <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-celestial-mars to-celestial-saturn flex items-center justify-center p-1 group-hover:rotate-12 transition-transform shadow-lg shadow-celestial-saturn/20">
                  <Rocket size={14} className="text-white" />
                </div>
-               <span className="lumi-shell-brand-label text-xs font-black tracking-widest uppercase text-white/60">{t.lumiOS || 'Lumi OS'}</span>
+               <span className="lumi-shell-brand-label text-xs font-black tracking-widest uppercase text-white/60">{t.lumiCore || 'LumiCore'}</span>
             </button>
             <div className="lumi-shell-optional h-4 w-px bg-white/10" />
             <div className="flex items-center gap-2">
@@ -5729,6 +5739,7 @@ export function DesktopUI({
           <Suspense fallback={null}>
             <DesktopOnboarding
               isOpen
+              onAsk={askComputerProfileQuestion}
               onFinish={() => {
                 setShowOnboarding(false);
                 localStorage.setItem('lumi_onboarding_seen', 'true');
@@ -5777,7 +5788,7 @@ export function DesktopUI({
                 <div className="os-window-body custom-scrollbar">
                   <Suspense fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
                   {windowId === 'kernel' ? (
-                    <KernelMonitorApp t={t} />
+                    <KernelMonitorApp t={t} onAsk={askComputerProfileQuestion} />
                   ) : windowId === 'settings' ? (
                     <Settings t={t} lang={lang} setLang={setLang} activeSection={settingsSection} onSectionChange={setSettingsSection} />
                   ) : windowId === 'personality' ? (

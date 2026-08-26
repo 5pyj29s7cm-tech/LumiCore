@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import jwt from 'jsonwebtoken';
 import { makeApp, JWT_SECRET } from './helpers';
 import { mountMcpRoutes } from '../server/routes/mcp_routes';
+import { mcpManager } from '../server/mcp';
 import { requireLocalRequest } from '../server/middleware/auth';
 import { authenticateMcpUpgradeRequest } from '../server/mcp/auth';
 import { setupMcpServer } from '../server/runtime/mcp_server';
@@ -91,6 +92,23 @@ describe('MCP management route security', () => {
     expect(nonAdmin.status).toBe(403);
   });
 
+  it('does not expose restart internals to the local administrator response', async () => {
+    const restart = vi.spyOn(mcpManager, 'restartServer').mockRejectedValueOnce(
+      new Error('spawn failed api_key=sk-private-restart-secret at C:\\private\\mcp'),
+    );
+    const response = await fetch(`${url}/api/mcp/restart/not-configured-security-probe`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` },
+      signal: AbortSignal.timeout(5000),
+    });
+    expect(response.status).toBe(500);
+    const payload = await response.json();
+    expect(payload).toEqual({ error: 'MCP server restart failed' });
+    expect(JSON.stringify(payload)).not.toContain('not-configured-security-probe');
+    expect(JSON.stringify(payload)).not.toContain('sk-private-restart-secret');
+    restart.mockRestore();
+  });
+
   it('keeps remote-device configuration local and administrator-only', async () => {
     const anonymous = await fetch(`${url}/api/remote-devices`, {
       signal: AbortSignal.timeout(5000),
@@ -109,6 +127,20 @@ describe('MCP management route security', () => {
     });
     expect(localAdmin.status).toBe(200);
     expect(await localAdmin.json()).toHaveProperty('devices');
+  });
+
+  it('rejects non-WebSocket remote-device endpoints before persisting them', async () => {
+    const response = await fetch(`${url}/api/remote-devices`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminToken}`,
+      },
+      body: JSON.stringify({ devices: { unsafe: 'https://example.test/not-a-websocket' } }),
+      signal: AbortSignal.timeout(5000),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'Invalid devices config' });
   });
 
   it('rejects a non-loopback request at the shared local boundary', () => {

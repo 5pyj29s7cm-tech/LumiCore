@@ -12,6 +12,7 @@ import {
   recordBackgroundTaskFailure,
   type BackgroundDelegationTask,
 } from './background_tasks';
+import { projectBackgroundTask } from './background_task_public';
 import {
   formatBackgroundDelegationFailure,
 } from './background_delegation';
@@ -19,6 +20,7 @@ import {
   isTerminalOrchestrationToolEvent,
   runOrchestratedTask,
   type LlmGetters,
+  type OrchestrationToolEvent,
 } from './orchestrator';
 import type { ToolExecutionRecord } from '../tools/types';
 import { finalizeLumiResponse } from '../cognition/result_finalizer';
@@ -26,6 +28,7 @@ import { sanitizeExecutionResponseForDelivery } from '../cognition/execution_gua
 import {
   addMessage,
   getConversationModelExecutionRecovery,
+  persistConversationModelExecutionCheckpoint,
   persistConversationModelExecutionResult,
 } from '../conversation/manager';
 import { pushNotification } from '../routes/notifications';
@@ -38,12 +41,30 @@ import {
 } from '../cognition/acceptance_evidence';
 import type { TaskCompletionFeedback, TaskTerminalReceipt } from '../cognition/acceptance_evidence';
 import { settleBackgroundConversationActionTask } from '../conversation/action_ledger';
-import { readDB, writeDB } from '../../db_layer';
+import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
 import { formatCnTaskCompletionFeedback } from '../regions/packs/cn/task_completion_feedback_messages';
+import { redactDiagnosticSecrets } from '../client/diagnostic_sanitizer';
 
 const DEFAULT_POLL_MS = 1_000;
 const DEFAULT_CONCURRENCY = 2;
 const CLAIM_AGE_MS = 250;
+
+class BackgroundTaskPersistenceBoundaryError extends Error {
+  constructor(boundary: string, error: unknown) {
+    super(`${boundary}: ${redactDiagnosticSecrets(
+      error instanceof Error ? error.message : String(error || 'unknown persistence error'),
+    )}`);
+    this.name = 'BackgroundTaskPersistenceBoundaryError';
+  }
+}
+
+async function flushBackgroundTaskBoundary(boundary: string): Promise<void> {
+  try {
+    await flushDBOrThrow();
+  } catch (error) {
+    throw new BackgroundTaskPersistenceBoundaryError(boundary, error);
+  }
+}
 
 export interface DurableBackgroundTaskSupervisorOptions {
   io: SocketIOServer;
@@ -62,16 +83,65 @@ export interface DurableBackgroundTaskSupervisor {
   activeTaskIds(): string[];
 }
 
-function roomFor(task: BackgroundDelegationTask): string {
-  return task.context?.domain === 'work' && task.context.orgId
-    ? `org:${task.context.orgId}`
-    : `user:${task.userId}:personal`;
+type BackgroundTaskScope =
+  | { valid: true; domain: 'personal' | 'work'; orgId: string; room: string }
+  | { valid: false; reason: string };
+
+function resolveBackgroundTaskScope(task: BackgroundDelegationTask): BackgroundTaskScope {
+  const rawDomain = task.context?.domain;
+  if (rawDomain === 'work') {
+    const orgId = String(task.context?.orgId || '').trim();
+    return orgId
+      ? {
+          valid: true,
+          domain: 'work',
+          orgId,
+          // A background delegation belongs to one authenticated member even
+          // when its data scope is an organization. Organization rooms are for
+          // explicitly shared organization events, not private task output.
+          room: `user:${task.userId}:org:${orgId}`,
+        }
+      : {
+          valid: false,
+          reason: 'Background task scope policy denied execution: work domain requires a non-empty orgId.',
+        };
+  }
+  if (rawDomain !== undefined && rawDomain !== 'personal') {
+    return {
+      valid: false,
+      reason: 'Background task scope policy denied execution: domain is malformed.',
+    };
+  }
+  return {
+    valid: true,
+    domain: 'personal',
+    orgId: '',
+    room: `user:${task.userId}:personal`,
+  };
 }
 
-function emitTask(io: SocketIOServer, task: BackgroundDelegationTask): void {
-  io.to(roomFor(task)).emit('agent:background_task_update', {
+function roomFor(task: BackgroundDelegationTask): string | null {
+  const scope = resolveBackgroundTaskScope(task);
+  return scope.valid ? scope.room : null;
+}
+
+function pushBackgroundNotification(
+  task: BackgroundDelegationTask,
+  notification: Parameters<typeof pushNotification>[1],
+): void {
+  const scope = resolveBackgroundTaskScope(task);
+  // The notification store is currently user-personal and has no org scope.
+  // Never copy work-domain content into it until it can enforce org isolation.
+  if (scope.valid === false || scope.domain === 'work') return;
+  pushNotification(task.userId, notification);
+}
+
+export function emitBackgroundTaskUpdate(io: SocketIOServer, task: BackgroundDelegationTask): void {
+  const room = roomFor(task);
+  if (!room) return;
+  io.to(room).emit('agent:background_task_update', {
     taskId: task.id,
-    task,
+    task: projectBackgroundTask(task),
     source: 'background_delegation',
     requestId: task.id,
     conversationId: task.context?.conversationId || '',
@@ -87,9 +157,88 @@ function mergeReceiptSnapshots<T extends { id: string }>(...groups: Array<T[] | 
   return Array.from(byId.values()).slice(-80);
 }
 
+function upsertObservedToolRecord(
+  records: ToolExecutionRecord[],
+  incoming: OrchestrationToolEvent | ToolExecutionRecord,
+): ToolExecutionRecord {
+  const incomingId = String(incoming.id || incoming.idempotencyKey || '').trim();
+  let index = incomingId
+    ? records.findIndex(candidate => candidate.id === incomingId || candidate.idempotencyKey === incomingId)
+    : -1;
+  if (index < 0 && incoming.adapterStarted !== true) {
+    // Canonical events normally carry a stable id. This fallback only pairs a
+    // legacy terminal event with the most recent same-tool uncertainty fence.
+    for (let candidateIndex = records.length - 1; candidateIndex >= 0; candidateIndex -= 1) {
+      const candidate = records[candidateIndex];
+      if (candidate.adapterStarted === true && candidate.name === incoming.name) {
+        index = candidateIndex;
+        break;
+      }
+    }
+  }
+  const previous = index >= 0 ? records[index] : undefined;
+  const { lifecycle: _lifecycle, ...record } = incoming as OrchestrationToolEvent;
+  const normalized: ToolExecutionRecord = {
+    ...record,
+    id: incomingId || previous?.id,
+    arguments: { ...(record.arguments || previous?.arguments || {}) },
+    result: record.result || '',
+  };
+  if (index >= 0) records[index] = normalized;
+  else records.push(normalized);
+  return normalized;
+}
+
+function buildAdapterStartedFence(
+  task: BackgroundDelegationTask,
+  record: OrchestrationToolEvent,
+  sequence: number,
+): ToolExecutionRecord {
+  const startedAt = new Date().toISOString();
+  const id = String(record.id || record.idempotencyKey || `background_adapter_${task.id}_${sequence}`);
+  const taskId = String(record.taskId || task.context?.actionTaskId || task.id);
+  const turnId = String(record.turnId || task.context?.sourceRequestId || task.id);
+  const requestId = String(record.requestId || task.id);
+  const idempotencyKey = String(record.idempotencyKey || id);
+  const reason = 'The tool adapter started, but no terminal receipt has been observed; side-effect outcome is unknown.';
+  return {
+    ...record,
+    id,
+    taskId,
+    turnId,
+    requestId,
+    idempotencyKey,
+    arguments: { ...(record.arguments || {}) },
+    result: '',
+    adapterStarted: true,
+    error: reason,
+    terminalVerification: {
+      status: 'unverified',
+      strategy: record.capability?.verification.strategy || 'terminal_receipt',
+      reason,
+    },
+    envelope: {
+      version: 1,
+      status: 'unknown_outcome',
+      toolName: record.name,
+      taskId,
+      turnId,
+      requestId,
+      idempotencyKey,
+      targetIdentity: '',
+      startedAt,
+      completedAt: startedAt,
+      error: reason,
+      verification: { status: 'unverified', reason },
+    },
+  };
+}
+
 function persistResult(task: BackgroundDelegationTask, content: string, toolCalls: ToolExecutionRecord[], blocked: boolean): boolean {
   const context = task.context;
   if (!context?.conversationId) return false;
+  const scope = resolveBackgroundTaskScope(task);
+  if (scope.valid === false) return false;
   addMessage({
     userId: task.userId,
     agentId: context.conversationAgentId || '',
@@ -97,8 +246,8 @@ function persistResult(task: BackgroundDelegationTask, content: string, toolCall
     role: 'assistant',
     content,
     personality: context.personalityId || 'lumi',
-    domain: context.domain || 'personal',
-    orgId: context.orgId || '',
+    domain: scope.domain,
+    orgId: scope.orgId,
     toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     cognitiveIntent: blocked ? 'work_product_guard' : undefined,
     source: 'background_delegation_recovery',
@@ -141,8 +290,9 @@ function formatTaskResult(
 
 function emitConversationResultUpdated(io: SocketIOServer, task: BackgroundDelegationTask): void {
   const conversationId = task.context?.conversationId;
-  if (!conversationId) return;
-  io.to(roomFor(task)).emit('chat:conversation_updated', {
+  const room = roomFor(task);
+  if (!conversationId || !room) return;
+  io.to(room).emit('chat:conversation_updated', {
     conversationId,
     agentId: task.context?.conversationAgentId || '',
     source: 'background_delegation',
@@ -191,15 +341,45 @@ function settlePlanLedger(
   writeDB(db);
 }
 
-async function executeRecoveredTask(
+export async function executeRecoveredTask(
   task: BackgroundDelegationTask,
   io: SocketIOServer,
   llmGetters: LlmGetters,
 ): Promise<void> {
   const claimed = claimBackgroundTask(task.id, { owner: 'durable-background-supervisor', durationMs: 45_000 });
   if (!claimed || claimed.status !== 'running' || !claimed.leaseId) return;
-  emitTask(io, claimed);
-
+  const scope = resolveBackgroundTaskScope(claimed);
+  if (scope.valid === false) {
+    const blocked = recordBackgroundTaskFailure(claimed.id, {
+      error: scope.reason,
+      verificationFailure: false,
+      toolRecords: [],
+    }, claimed.leaseId);
+    if (!blocked || blocked.status !== 'blocked') {
+      throw new Error('Malformed background task scope could not be durably blocked.');
+    }
+    settlePlanLedger(claimed, [], 'blocked', scope.reason);
+    await flushBackgroundTaskBoundary('Malformed work-scope block was not durably persisted');
+    // There is intentionally no personal fallback room or notification for a
+    // malformed work scope. Its contents remain quarantined in durable state.
+    return;
+  }
+  const actionTaskId = String(claimed.context?.actionTaskId || '').trim();
+  if (actionTaskId && actionTaskId !== claimed.id) {
+    const reason = 'Background task identity policy denied execution: actionTaskId must equal the claimed durable task id.';
+    const blocked = recordBackgroundTaskFailure(claimed.id, {
+      error: reason,
+      verificationFailure: false,
+      toolRecords: [],
+    }, claimed.leaseId);
+    if (!blocked || blocked.status !== 'blocked') {
+      throw new Error('Mismatched background/action task identity could not be durably blocked.');
+    }
+    settlePlanLedger(claimed, [], 'blocked', reason);
+    await flushBackgroundTaskBoundary('Background task identity block was not durably persisted');
+    emitBackgroundTaskUpdate(io, blocked);
+    return;
+  }
   const leaseId = claimed.leaseId;
   let leaseLost = false;
   const heartbeat = setInterval(() => {
@@ -222,27 +402,39 @@ async function executeRecoveredTask(
           taskId: context.actionTaskId,
         })
       : null;
-    checkpointBackgroundTask(claimed.id, {
+    let completedModelNodeIds = Array.from(new Set([
+      ...(claimed.checkpoint?.completedNodeIds || []),
+      ...(modelRecovery?.receipts?.map(receipt => receipt.nodeId) || []),
+    ]));
+    let modelReceiptIds = Array.from(new Set([
+      ...(claimed.checkpoint?.receiptIds || []),
+      ...(modelRecovery?.receipts?.map(receipt => `${receipt.graphId}:${receipt.nodeId}`) || []),
+    ])).slice(-80);
+    const initialCheckpoint = checkpointBackgroundTask(claimed.id, {
       phase: 'orchestrating',
-      completedNodeIds: claimed.checkpoint?.completedNodeIds,
-      receiptIds: Array.from(new Set([
-        ...(claimed.checkpoint?.receiptIds || []),
-        ...(modelRecovery?.receipts?.map(receipt => `${receipt.graphId}:${receipt.nodeId}`) || []),
-      ])).slice(-80),
+      completedNodeIds: completedModelNodeIds,
+      receiptIds: modelReceiptIds,
       receipts: claimed.checkpoint?.receipts,
       detail: `Recovered attempt ${claimed.attempt}`,
     }, leaseId);
+    if (!initialCheckpoint) {
+      throw new Error('Background delegation could not persist its initial execution checkpoint.');
+    }
+    await flushBackgroundTaskBoundary('Initial background execution checkpoint was not durably persisted');
+    emitBackgroundTaskUpdate(io, initialCheckpoint);
 
     const result = await runOrchestratedTask(
       claimed.prompt,
       {
         userId: claimed.userId,
         personalityId: context.personalityId,
-        domain: context.domain || 'personal',
-        orgId: context.orgId || '',
+        domain: scope.domain,
+        orgId: scope.orgId,
         toolPolicy: context.toolPolicy,
         taskId: context.actionTaskId || claimed.id,
+        dataRoutingPolicy: context.dataRoutingPolicy,
         resumeNodeReceipts: modelRecovery?.receipts,
+        resumeExecutionGraph: modelRecovery?.graph,
         recoveryDirective,
         availableAgentIds: claimed.workers.map(worker => worker.id).filter((id): id is string => Boolean(id)),
         forceOrchestration: context.forceOrchestration !== false,
@@ -254,8 +446,8 @@ async function executeRecoveredTask(
         provider: (context.provider || 'auto') as any,
         model: context.model || '',
         userId: claimed.userId,
-        domain: context.domain || 'personal',
-        orgId: context.orgId || '',
+        domain: scope.domain,
+        orgId: scope.orgId,
         selectionMode: context.selectionMode,
         fallbackCandidates: context.fallbackCandidates,
         allowCloudFallback: context.allowCloudFallback,
@@ -266,18 +458,40 @@ async function executeRecoveredTask(
       },
       llmGetters,
       undefined,
-      (record) => {
+      async (record) => {
+        if (record.lifecycle === 'adapter_started') {
+          const fence = buildAdapterStartedFence(claimed, record, toolRecords.length + 1);
+          upsertObservedToolRecord(toolRecords, fence);
+          const durableStartCheckpoint = checkpointBackgroundTask(claimed.id, {
+            phase: 'tool_adapter_started',
+            completedNodeIds: completedModelNodeIds,
+            receiptIds: Array.from(new Set([
+              ...modelReceiptIds,
+              ...toolRecords.map(item => item.id),
+            ])).slice(-80),
+            receipts: mergeReceiptSnapshots(
+              claimed.checkpoint?.receipts,
+              snapshotDurableToolRecords(toolRecords),
+            ),
+            detail: `${record.name} adapter started; awaiting a terminal tool receipt`,
+          }, leaseId);
+          if (!durableStartCheckpoint) {
+            throw new Error('Background delegation lost its execution lease before the adapter-start fence was persisted.');
+          }
+          await flushBackgroundTaskBoundary('Adapter-start uncertainty fence was not durably persisted');
+          return;
+        }
         if (!isTerminalOrchestrationToolEvent(record)) return;
-        toolRecords.push({
+        upsertObservedToolRecord(toolRecords, {
           ...record,
           arguments: { ...(record.arguments || {}) },
           result: record.result || '',
         });
-        checkpointBackgroundTask(claimed.id, {
+        const durableToolCheckpoint = checkpointBackgroundTask(claimed.id, {
           phase: 'tool_execution',
-          completedNodeIds: claimed.checkpoint?.completedNodeIds,
+          completedNodeIds: completedModelNodeIds,
           receiptIds: Array.from(new Set([
-            ...(claimed.checkpoint?.receiptIds || []),
+            ...modelReceiptIds,
             ...toolRecords.map(item => item.id),
           ])).slice(-80),
           receipts: mergeReceiptSnapshots(
@@ -286,26 +500,73 @@ async function executeRecoveredTask(
           ),
           detail: `${toolRecords.length} terminal tool call(s) observed`,
         }, leaseId);
+        if (!durableToolCheckpoint) {
+          throw new Error('Background delegation lost its execution lease before the tool receipt was persisted.');
+        }
+        await flushBackgroundTaskBoundary('Terminal tool checkpoint was not durably persisted');
+      },
+      async (workflowCheckpoint) => {
+        completedModelNodeIds = [...workflowCheckpoint.completedNodeIds];
+        modelReceiptIds = Array.from(new Set([
+          ...modelReceiptIds,
+          ...workflowCheckpoint.nodeReceipts.map(receipt => `${receipt.graphId}:${receipt.nodeId}`),
+        ])).slice(-80);
+        const durableCheckpoint = checkpointBackgroundTask(claimed.id, {
+          phase: `model_${workflowCheckpoint.phase}`,
+          completedNodeIds: completedModelNodeIds,
+          receiptIds: Array.from(new Set([
+            ...modelReceiptIds,
+            ...toolRecords.map(item => item.id),
+          ])).slice(-80),
+          receipts: mergeReceiptSnapshots(
+            claimed.checkpoint?.receipts,
+            snapshotDurableToolRecords(toolRecords),
+          ),
+          detail: `${workflowCheckpoint.nodeReceipts.length}/${workflowCheckpoint.executionGraph.nodes.length} model node receipt(s) persisted`,
+        }, leaseId);
+        if (!durableCheckpoint) {
+          throw new Error('Background delegation lost its execution lease before the model checkpoint was persisted.');
+        }
+        if (context.conversationId && context.actionTaskId) {
+          const persisted = persistConversationModelExecutionCheckpoint({
+            conversationId: context.conversationId,
+            userId: claimed.userId,
+            taskId: context.actionTaskId,
+            executionGraph: workflowCheckpoint.executionGraph,
+            nodeReceipts: workflowCheckpoint.nodeReceipts,
+            privateNodeHandoffs: workflowCheckpoint.privateNodeHandoffs,
+            arbitrationReceipt: workflowCheckpoint.arbitrationReceipt,
+          });
+          if (!persisted) {
+            throw new Error('Background delegation could not persist its conversation model checkpoint.');
+          }
+        }
+        await flushBackgroundTaskBoundary('Model execution checkpoint was not durably persisted');
       },
     );
 
-    if (isBackgroundTaskPauseRequested(claimed.id)) {
-      const paused = pauseBackgroundTask(claimed.id);
-      if (paused) emitTask(io, paused);
-      return;
-    }
     if (isBackgroundTaskCancellationRequested(claimed.id)) {
       throw new Error('Workflow cancelled');
+    }
+    if (isBackgroundTaskPauseRequested(claimed.id)) {
+      const paused = pauseBackgroundTask(claimed.id);
+      if (paused) await flushBackgroundTaskBoundary('Paused background state was not durably persisted');
+      if (paused) emitBackgroundTaskUpdate(io, paused);
+      return;
     }
     if (!result) throw new Error('No worker agent accepted the recovered delegated task.');
 
     if (context.conversationId && context.actionTaskId) {
-      persistConversationModelExecutionResult({
+      const persisted = persistConversationModelExecutionResult({
         conversationId: context.conversationId,
         userId: claimed.userId,
         taskId: context.actionTaskId,
         workflowResult: result.workflowResult,
       });
+      if (!persisted) {
+        throw new Error('Background delegation could not persist its final conversation model execution result.');
+      }
+      await flushBackgroundTaskBoundary('Final conversation model result was not durably persisted');
     }
     const candidate = CN_BACKGROUND_DELEGATION_MESSAGES.recoveredResult(claimed.title, result.responseText);
     const finalized = finalizeLumiResponse({
@@ -330,12 +591,23 @@ async function executeRecoveredTask(
           taskId: claimed.id,
           runtime: 'background',
         });
-    checkpointBackgroundTask(claimed.id, {
+    const finalCheckpoint = checkpointBackgroundTask(claimed.id, {
       phase: acceptance.accepted ? 'verified' : 'failed_verification',
-      receiptIds: toolRecords.map(item => item.id),
-      receipts: snapshotDurableToolRecords(toolRecords),
+      completedNodeIds: completedModelNodeIds,
+      receiptIds: Array.from(new Set([
+        ...modelReceiptIds,
+        ...toolRecords.map(item => item.id),
+      ])).slice(-80),
+      receipts: mergeReceiptSnapshots(
+        claimed.checkpoint?.receipts,
+        snapshotDurableToolRecords(toolRecords),
+      ),
       detail: acceptance.reason || finalized.reason || 'Final response verified',
     }, leaseId);
+    if (!finalCheckpoint) {
+      throw new Error('Background delegation could not persist its final verification checkpoint.');
+    }
+    await flushBackgroundTaskBoundary('Final verification checkpoint was not durably persisted');
     const settled = finalized.blocked || !acceptance.accepted
       ? recordBackgroundTaskFailure(claimed.id, {
           error: acceptance.reason || finalized.reason || 'Missing verified completion evidence.',
@@ -345,26 +617,61 @@ async function executeRecoveredTask(
         }, leaseId)
       : completeBackgroundTask(claimed.id, finalized.text, terminalReceipt, leaseId);
     if (!settled) throw new Error('Recovered task state could not be settled.');
+
+    if (settled.status === 'completed') {
+      settlePlanLedger(claimed, toolRecords, 'completed', finalized.text);
+    } else if (settled.status === 'blocked' || settled.status === 'failed') {
+      settlePlanLedger(
+        claimed,
+        toolRecords,
+        'blocked',
+        settled.terminalReceipt?.reason || acceptance.reason || finalized.reason || 'Background execution failed.',
+      );
+    } else if (settled.status === 'cancelled') {
+      settlePlanLedger(claimed, toolRecords, 'cancelled', 'Background task cancelled.');
+    }
+    await flushBackgroundTaskBoundary('Terminal background settlement was not durably persisted');
+
+    if (settled.status === 'paused') {
+      emitBackgroundTaskUpdate(io, settled);
+      return;
+    }
+    if (settled.status === 'cancelled') {
+      // Cancellation is a terminal user decision, not a blocked execution and
+      // must never be projected as a blocked final assistant response.
+      emitBackgroundTaskUpdate(io, settled);
+      return;
+    }
     if (settled.status === 'queued') {
-      emitTask(io, settled);
-      pushNotification(claimed.userId, {
+      emitBackgroundTaskUpdate(io, settled);
+      pushBackgroundNotification(claimed, {
         type: 'background_result',
         title: 'Background task recovery scheduled',
         message: `Verification did not pass; Lumi will retry safely after ${settled.nextAttemptAt || 'the backoff window'}.`.slice(0, 180),
       });
       return;
     }
-    const blocked = settled.status !== 'completed';
-    settlePlanLedger(claimed, toolRecords, blocked ? 'blocked' : 'completed', acceptance.reason || finalized.reason || finalized.text);
+    if (!['completed', 'blocked', 'failed'].includes(settled.status)) {
+      throw new Error(`Recovered task returned an unexpected settlement status: ${settled.status}`);
+    }
+    const blocked = settled.status === 'blocked';
+    const failed = settled.status === 'failed';
+    const incomplete = blocked || failed;
+    const completionReason = settled.terminalReceipt?.reason || acceptance.reason || finalized.reason || '';
     const completionFeedback = buildTaskCompletionFeedback(
       settled.terminalReceipt,
       claimed.title,
-      { status: settled.status, reason: acceptance.reason || finalized.reason },
+      { status: settled.status, reason: completionReason },
     );
     const resultText = formatTaskResult(finalized.text, claimed, completionFeedback, settled.terminalReceipt);
-    if (persistResult(claimed, resultText, toolRecords, blocked)) emitConversationResultUpdated(io, claimed);
-    emitTask(io, settled);
-    io.to(roomFor(claimed)).emit('agent:response', sanitizeExecutionResponseForDelivery({
+    const conversationResultPersisted = persistResult(claimed, resultText, toolRecords, incomplete);
+    // The terminal task row, plan ledger and assistant result form one public
+    // completion boundary. Do not tell clients the task finished until all
+    // three projections are durable.
+    await flushBackgroundTaskBoundary('Public background completion projection was not durably persisted');
+    if (conversationResultPersisted) emitConversationResultUpdated(io, claimed);
+    emitBackgroundTaskUpdate(io, settled);
+    io.to(scope.room).emit('agent:response', sanitizeExecutionResponseForDelivery({
       text: resultText,
       agentName: 'Lumi',
       source: 'background_delegation',
@@ -372,28 +679,32 @@ async function executeRecoveredTask(
       taskId: claimed.id,
       conversationId: context.conversationId || '',
       finalized: true,
-      blocked,
-      reason: acceptance.reason || finalized.reason || '',
+      blocked: incomplete,
+      reason: completionReason,
       completionFeedback,
       recovered: true,
     }, { task: claimed.prompt, toolRecords }));
-    pushNotification(claimed.userId, {
-      type: blocked ? 'background_error' : 'background_result',
-      title: blocked
+    pushBackgroundNotification(claimed, {
+      type: blocked || failed ? 'background_error' : 'background_result',
+      title: blocked || failed
         ? CN_BACKGROUND_DELEGATION_MESSAGES.recoveredBlockedTitle
         : CN_BACKGROUND_DELEGATION_MESSAGES.recoveredCompletedTitle,
       message: resultText.slice(0, 180),
     });
   } catch (error) {
-    if (isBackgroundTaskPauseRequested(claimed.id)) {
-      const paused = pauseBackgroundTask(claimed.id);
-      if (paused) emitTask(io, paused);
-      return;
-    }
     if (isBackgroundTaskCancellationRequested(claimed.id)) {
       const cancelled = cancelBackgroundTask(claimed.id);
-      if (cancelled) emitTask(io, cancelled);
-      settlePlanLedger(claimed, toolRecords, 'cancelled', 'Background task cancelled.');
+      if (cancelled) {
+        settlePlanLedger(claimed, toolRecords, 'cancelled', 'Background task cancelled.');
+        await flushBackgroundTaskBoundary('Cancelled background state was not durably persisted');
+        emitBackgroundTaskUpdate(io, cancelled);
+      }
+      return;
+    }
+    if (isBackgroundTaskPauseRequested(claimed.id)) {
+      const paused = pauseBackgroundTask(claimed.id);
+      if (paused) await flushBackgroundTaskBoundary('Paused background state was not durably persisted');
+      if (paused) emitBackgroundTaskUpdate(io, paused);
       return;
     }
     const message = error instanceof Error ? error.message : String(error || 'Unknown error');
@@ -403,25 +714,51 @@ async function executeRecoveredTask(
       toolRecords,
       leaseLost,
     }, leaseId);
-    if (!failed) return;
-    emitTask(io, failed);
+    if (!failed) {
+      // A terminal mutation may already exist in memory when its strict flush
+      // fails. Never swallow that durability failure or emit a public result.
+      if (error instanceof BackgroundTaskPersistenceBoundaryError) throw error;
+      return;
+    }
+
+    if (failed.status === 'cancelled') {
+      settlePlanLedger(claimed, toolRecords, 'cancelled', 'Background task cancelled.');
+    } else if (failed.status === 'blocked' || failed.status === 'failed') {
+      settlePlanLedger(claimed, toolRecords, 'blocked', failed.terminalReceipt?.reason || message);
+    }
+    await flushBackgroundTaskBoundary('Background failure settlement was not durably persisted');
+
+    if (failed.status === 'paused') {
+      emitBackgroundTaskUpdate(io, failed);
+      return;
+    }
+    if (failed.status === 'cancelled') {
+      emitBackgroundTaskUpdate(io, failed);
+      return;
+    }
     if (failed.status === 'queued') {
-      pushNotification(claimed.userId, {
+      emitBackgroundTaskUpdate(io, failed);
+      pushBackgroundNotification(claimed, {
         type: 'background_result',
         title: 'Background task retry scheduled',
         message: `${failureText} Retry after ${failed.nextAttemptAt || 'backoff'}.`.slice(0, 180),
       });
       return;
     }
-    settlePlanLedger(claimed, toolRecords, 'blocked', message);
+    if (failed.status !== 'blocked' && failed.status !== 'failed') {
+      throw new Error(`Background failure returned an unexpected settlement status: ${failed.status}`);
+    }
     const completionFeedback = buildTaskCompletionFeedback(
       failed.terminalReceipt,
       claimed.title,
       { status: failed.status, reason: message },
     );
     const resultText = formatTaskResult(failureText, claimed, completionFeedback, failed.terminalReceipt);
-    if (persistResult(claimed, resultText, toolRecords, true)) emitConversationResultUpdated(io, claimed);
-    io.to(roomFor(claimed)).emit('agent:response', sanitizeExecutionResponseForDelivery({
+    const conversationResultPersisted = persistResult(claimed, resultText, toolRecords, true);
+    await flushBackgroundTaskBoundary('Public background failure projection was not durably persisted');
+    if (conversationResultPersisted) emitConversationResultUpdated(io, claimed);
+    emitBackgroundTaskUpdate(io, failed);
+    io.to(scope.room).emit('agent:response', sanitizeExecutionResponseForDelivery({
       text: resultText,
       agentName: 'Lumi',
       source: 'background_delegation',
@@ -434,7 +771,7 @@ async function executeRecoveredTask(
       completionFeedback,
       recovered: true,
     }, { task: claimed.prompt, toolRecords }));
-    pushNotification(claimed.userId, {
+    pushBackgroundNotification(claimed, {
       type: 'background_error',
       title: CN_BACKGROUND_DELEGATION_MESSAGES.recoveryFailedTitle,
       message: `${failureText} (${message})`.slice(0, 180),

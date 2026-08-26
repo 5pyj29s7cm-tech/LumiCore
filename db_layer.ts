@@ -3,8 +3,13 @@ import fs from 'fs';
 import path from 'path';
 import { createHash } from 'node:crypto';
 import bcrypt from 'bcryptjs';
-import { getDataPath, getDataRoot } from './server/config/data_path';
-import { acquireDataRootLease } from './server/runtime/data_root_lease';
+import {
+  assertSafeSqliteDataPath,
+  getDataPath,
+  getDataRoot,
+  hasExplicitDataRoot,
+} from './server/config/data_path';
+import { prepareRuntimeDataRoot } from './server/runtime/data_root_preflight';
 import { isolateLegacyGuardSummaryState } from './server/conversation/guard_history';
 import {
   configureExternalCommitJournal,
@@ -17,9 +22,7 @@ import { sanitizeToolRecordsForPersistence } from './server/cognition/user_outpu
 // Acquire synchronously before even the legacy migration can inspect/copy data.
 // Vitest isolates intentionally share/reload modules; subprocess lease tests
 // opt back in explicitly through LUMI_ENFORCE_DATA_ROOT_LEASE.
-if (process.env.VITEST !== 'true' || process.env.LUMI_ENFORCE_DATA_ROOT_LEASE === '1') {
-  acquireDataRootLease();
-}
+prepareRuntimeDataRoot();
 
 // Auto-migrate data from old location (project directory) to user directory on first run
 function migrateDataFromOldLocation() {
@@ -47,11 +50,15 @@ function migrateDataFromOldLocation() {
     console.warn('[Data] Migration failed (non-fatal):', (err as Error).message);
   }
 }
-migrateDataFromOldLocation();
+// An explicit data root is an isolation boundary (tests, containers, managed
+// deployments). Never import cwd data into it implicitly.
+if (!hasExplicitDataRoot()) migrateDataFromOldLocation();
 
 const DB_PATH = getDataPath('lumi.db');
+assertSafeSqliteDataPath(DB_PATH);
 
 let db: sqlite3.Database | null = null;
+let startupQuickCheckPassed = false;
 
 const PERFORMANCE_INDEX_SQL = [
   `CREATE INDEX IF NOT EXISTS idx_interactions_user_conv ON interactions(userId, conversationId)`,
@@ -409,28 +416,50 @@ export function persistLegacySummaryRepairsBestEffort(
 
 let initPromise: Promise<void> | null = null;
 
+async function requireSqliteQuickCheck(phase: 'before' | 'after'): Promise<void> {
+  const integrityRows = await query<Record<string, unknown>>('PRAGMA quick_check');
+  const integrityValues = integrityRows.flatMap(row => Object.values(row));
+  if (integrityValues.length !== 1 || String(integrityValues[0]).toLowerCase() !== 'ok') {
+    throw new Error(`SQLite quick_check rejected the LumiCore data store ${phase} startup schema writes.`);
+  }
+}
+
 export function initDatabase(): Promise<void> {
   if (db && memoryDB) return Promise.resolve();
   if (initPromise) return initPromise;
   const pending = new Promise<void>((resolve, reject) => {
+    const rejectAndClose = (error: unknown) => {
+      startupQuickCheckPassed = false;
+      memoryDB = null;
+      const failedDatabase = db;
+      db = null;
+      if (!failedDatabase) {
+        reject(error);
+        return;
+      }
+      failedDatabase.close(() => reject(error));
+    };
     db = new sqlite3.Database(DB_PATH, (err) => {
-      if (err) { reject(err); return; }
+      if (err) { rejectAndClose(err); return; }
       // Runtime services and parallel diagnostics can briefly overlap on the
       // same local database. Wait for the active writer instead of surfacing a
       // transient SQLITE_BUSY failure to the client or test harness.
       db!.configure('busyTimeout', 5000);
       db!.run('PRAGMA foreign_keys = ON', async (err) => {
-        if (err) { reject(err); return; }
+        if (err) { rejectAndClose(err); return; }
         try {
+          await requireSqliteQuickCheck('before');
           await createTables();
           await migrateSchema();
+          await requireSqliteQuickCheck('after');
           await loadMemoryDB();
+          startupQuickCheckPassed = true;
           resolve();
         } catch (error) {
           // sqlite callbacks do not observe rejected async callback promises.
           // Always settle the outer initialization promise instead of leaving
           // callers hanging until their own timeout with an unhandled rejection.
-          reject(error);
+          rejectAndClose(error);
         }
       });
     });
@@ -1629,6 +1658,13 @@ export function readDB(): any {
   return memoryDB;
 }
 
+export function requireDatabaseStartupQuickCheck(): 'ok' {
+  if (!startupQuickCheckPassed || !memoryDB) {
+    throw new Error('SQLite startup integrity verification is not available.');
+  }
+  return 'ok';
+}
+
 // Prune high-volume telemetry from memory + SQLite to prevent unbounded
 // growth. Durable memories are deliberately excluded: count-based deletion
 // would silently erase knowledge and identity without considering tier,
@@ -1906,6 +1942,7 @@ export async function closeDatabase(): Promise<void> {
   const closingDb = db;
   db = null;
   memoryDB = null;
+  startupQuickCheckPassed = false;
   initPromise = null;
   writeLock = Promise.resolve();
   writeRevision = 0;

@@ -85,7 +85,55 @@ interface SystemSnapshot {
     interfaces?: string[];
     ipAddresses?: string[];
   };
+  peripherals?: {
+    displays?: Array<{ name?: string; width?: number; height?: number; refreshHz?: number }>;
+    audioDevices?: string[];
+    cameras?: string[];
+    printers?: string[];
+    usbDevices?: string[];
+    battery?: { present?: boolean; chargePercent?: number; status?: string };
+    computer?: { manufacturer?: string; model?: string; chassis?: string };
+  };
+  runtimes?: {
+    git?: string;
+    node?: string;
+    python?: string;
+    powershell?: string;
+    docker?: string;
+    wslDistributions?: string[];
+    localAiRuntimes?: string[];
+  };
+  capabilityProfile?: {
+    version?: number;
+    generatedAt?: string;
+    opportunities?: Array<{
+      id: string;
+      label: string;
+      ready: boolean;
+      confidence: number;
+      evidence: string[];
+    }>;
+    firstQuestions?: Array<{ zh: string; en: string }>;
+    evidenceGaps?: string[];
+  };
+  inspectionPolicy?: SystemInspectionPolicy;
   changeSummary?: string;
+}
+
+interface SystemInspectionPolicy {
+  version?: number;
+  fileContentsRead?: boolean;
+  fileNamesPersisted?: boolean;
+  browserHistoryRead?: boolean;
+  credentialsRead?: boolean;
+  uniqueHardwareIdsPersisted?: boolean;
+  collectedCategories?: string[];
+}
+
+interface ExplorationAccess {
+  authorized: boolean;
+  consentStatus: 'granted' | 'declined' | 'legacy_local_scan' | 'not_decided';
+  inspectionPolicy: SystemInspectionPolicy | null;
 }
 
 interface ProfessionProfile {
@@ -153,10 +201,6 @@ interface SetupSuggestion {
 
 function percent(value: number) {
   return `${Math.round(value * 100)}%`;
-}
-
-function ui(isZh: boolean, zh: string, en: string) {
-  return isZh ? zh : en;
 }
 
 function formatTime(value?: string, isZh = false) {
@@ -404,10 +448,17 @@ export function buildReport(
   return { status, readyCount, totalCount, capabilities, suggestions };
 }
 
-export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChange?: (section: string) => void }) {
+export function SystemExplorer({ t, onSectionChange, onAsk }: {
+  t?: any;
+  onSectionChange?: (section: string) => void;
+  onAsk?: (prompt: string) => void;
+}) {
   const { isDesktop, isTauri } = usePlatform();
   const { workDomain, orgConnection } = useApp();
   const isZh = t?.langCode !== 'en';
+  const localizedCopy = systemExplorerCopy(isZh ? 'zh' : 'en');
+  const consentCopy = localizedCopy.consent;
+  const evidenceCopy = localizedCopy.evidence;
   const runtimeScopeKey = workDomain === 'work' && orgConnection?.connected && orgConnection?.orgId
     ? `work:${orgConnection.orgId}`
     : 'personal';
@@ -429,8 +480,14 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
   const [permissions, setPermissions] = useState<Record<string, PermissionStateValue>>({});
   const [desktopCapabilities, setDesktopCapabilities] = useState<DesktopCapabilitySnapshot | null>(null);
   const [knowledgeHealth, setKnowledgeHealth] = useState<KnowledgeHealthSnapshot | null>(null);
+  const [explorationAccess, setExplorationAccess] = useState<ExplorationAccess>({
+    authorized: false,
+    consentStatus: 'not_decided',
+    inspectionPolicy: null,
+  });
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
+  const [updatingConsent, setUpdatingConsent] = useState(false);
 
   const loadPermissions = useCallback(async () => {
     const snapshot = await getSensorPermissionSnapshot();
@@ -472,6 +529,11 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
       const knowledgeData = await knowledgeRes.json().catch(() => ({}));
       const knowledgeFiles = Array.isArray(knowledgeData.files) ? knowledgeData.files : [];
       setLatest(status.latest || null);
+      setExplorationAccess({
+        authorized: status.authorized === true,
+        consentStatus: status.consent?.status || 'not_decided',
+        inspectionPolicy: status.inspectionPolicy || status.latest?.inspectionPolicy || null,
+      });
       setHistory(historyData.snapshots || []);
       setProfiles(professionData.profiles || []);
       setEcosystem(ecosystemData || null);
@@ -509,12 +571,35 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
   const runScan = async () => {
     setScanning(true);
     try {
+      if (!explorationAccess.authorized) {
+        const consentRes = await fetch('/api/explore/consent', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ granted: true }),
+        });
+        const consentData = await consentRes.json().catch(() => ({}));
+        if (!consentRes.ok) {
+          throw new Error(consentData.error || consentCopy.saveAuthorizationError);
+        }
+        setExplorationAccess({
+          authorized: true,
+          consentStatus: consentData.consent?.status || 'granted',
+          inspectionPolicy: consentData.inspectionPolicy || explorationAccess.inspectionPolicy,
+        });
+      }
       const res = await fetch('/api/explore/scan', { method: 'POST', credentials: 'include' });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || uiMessage('system-explorer.computer-scan-failed.fa6815bf84', (isZh) ? 'zh' : 'en'));
       if (data.snapshot) {
         setLatest(data.snapshot);
         setHistory(prev => [data.snapshot, ...prev.filter(item => item.id !== data.snapshot.id)]);
+        setExplorationAccess(previous => ({
+          ...previous,
+          authorized: true,
+          consentStatus: previous.consentStatus === 'legacy_local_scan' ? 'legacy_local_scan' : 'granted',
+          inspectionPolicy: data.snapshot.inspectionPolicy || previous.inspectionPolicy,
+        }));
       }
       toast.success(uiMessage('system-explorer.computer-adaptation-report-refreshed.afbd63dcf6', (isZh) ? 'zh' : 'en'));
     } catch (err: any) {
@@ -523,6 +608,35 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
       setScanning(false);
     }
   };
+
+  const declineScan = async () => {
+    setUpdatingConsent(true);
+    try {
+      const response = await fetch('/api/explore/consent', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ granted: false }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || consentCopy.saveChoiceError);
+      setExplorationAccess(previous => ({
+        authorized: false,
+        consentStatus: 'declined',
+        inspectionPolicy: payload.inspectionPolicy || previous.inspectionPolicy,
+      }));
+      toast.success(consentCopy.declinedSaved);
+    } catch (error: any) {
+      toast.error(error?.message || consentCopy.saveChoiceError);
+    } finally {
+      setUpdatingConsent(false);
+    }
+  };
+
+  const inspectionPolicy = explorationAccess.inspectionPolicy || latest?.inspectionPolicy || null;
+  const readyMachineOpportunities = (latest?.capabilityProfile?.opportunities || [])
+    .filter(item => item.ready)
+    .sort((left, right) => right.confidence - left.confidence);
 
   const installProfessionAgents = async () => {
     try {
@@ -610,14 +724,61 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
           </button>
           <button
             onClick={runScan}
-            disabled={scanning}
+            disabled={scanning || updatingConsent}
             className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-cyan-300/25 bg-cyan-300/10 px-4 text-xs font-black uppercase tracking-widest text-cyan-100 transition-colors hover:bg-cyan-300/16 disabled:opacity-40"
           >
             <RefreshCw size={14} className={scanning ? 'animate-spin' : ''} />
-            {scanning ? uiMessage('system-explorer.scanning.2f595960f6', (isZh) ? 'zh' : 'en') : uiMessage('system-explorer.refresh-report.5e25a812a7', (isZh) ? 'zh' : 'en')}
+            {scanning
+              ? uiMessage('system-explorer.scanning.2f595960f6', (isZh) ? 'zh' : 'en')
+              : explorationAccess.authorized
+                ? uiMessage('system-explorer.refresh-report.5e25a812a7', (isZh) ? 'zh' : 'en')
+                : consentCopy.allowAndScan}
           </button>
         </div>
       </div>
+
+      {!explorationAccess.authorized && (
+        <section className="rounded-2xl border border-cyan-300/20 bg-cyan-300/[0.055] p-5" data-testid="exploration-authorization">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+            <div className="max-w-3xl">
+              <div className="flex items-center gap-2 text-sm font-black text-cyan-100">
+                <Shield size={17} />
+                {consentCopy.title}
+              </div>
+              <p className="mt-2 text-sm leading-6 text-white/52">
+                {consentCopy.description}
+              </p>
+              <p className="mt-2 text-xs leading-5 text-white/38">
+                {consentCopy.boundary}
+              </p>
+              <div className="mt-3 text-[11px] font-bold uppercase tracking-widest text-cyan-100/45">
+                {explorationAccess.consentStatus === 'declined'
+                  ? consentCopy.declinedStatus
+                  : consentCopy.pendingStatus}
+              </div>
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={runScan}
+                disabled={scanning || updatingConsent}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-cyan-100 px-5 text-xs font-black text-[#061016] transition-transform hover:scale-[1.015] disabled:cursor-wait disabled:opacity-55"
+              >
+                {scanning ? <Loader2 size={15} className="animate-spin" /> : <Shield size={15} />}
+                {scanning ? consentCopy.scanning : consentCopy.allowLocalScan}
+              </button>
+              <button
+                type="button"
+                onClick={() => void declineScan()}
+                disabled={scanning || updatingConsent}
+                className="h-11 rounded-xl border border-white/10 px-4 text-xs font-black text-white/52 transition-colors hover:bg-white/[0.06] hover:text-white disabled:opacity-45"
+              >
+                {updatingConsent ? consentCopy.saving : consentCopy.notNow}
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
 
       <section className={`rounded-2xl border p-5 ${statusColor(report.status)}`}>
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -683,6 +844,108 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
           ]}
         />
       </div>
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3" data-testid="machine-evidence-profile">
+        <InfoPanel
+          icon={<Monitor size={17} />}
+          title={evidenceCopy.peripheralTitle}
+          rows={[
+            [evidenceCopy.displays, latest?.peripherals?.displays?.map(item => item.name).filter(Boolean).join(' · ') || evidenceCopy.notDetected],
+            [evidenceCopy.audio, latest?.peripherals?.audioDevices?.join(' · ') || evidenceCopy.notDetected],
+            [evidenceCopy.cameras, latest?.peripherals?.cameras?.join(' · ') || evidenceCopy.notDetected],
+            [evidenceCopy.printers, latest?.peripherals?.printers?.join(' · ') || evidenceCopy.notDetected],
+            ['USB', String(latest?.peripherals?.usbDevices?.length ?? 0)],
+          ]}
+        />
+        <InfoPanel
+          icon={<Wrench size={17} />}
+          title={evidenceCopy.runtimesTitle}
+          rows={[
+            ['Git', latest?.runtimes?.git || evidenceCopy.notDetected],
+            ['Node.js', latest?.runtimes?.node || latest?.software?.nodeVersion || evidenceCopy.notDetected],
+            ['Python', latest?.runtimes?.python || latest?.software?.pythonVersion || evidenceCopy.notDetected],
+            ['Docker', latest?.runtimes?.docker || evidenceCopy.notDetected],
+            ['WSL', latest?.runtimes?.wslDistributions?.join(' · ') || evidenceCopy.notDetected],
+            [evidenceCopy.localAi, latest?.runtimes?.localAiRuntimes?.join(' · ') || evidenceCopy.notDetected],
+          ]}
+        />
+        <section className="rounded-2xl border border-white/8 bg-white/[0.03] p-5">
+          <div className="mb-4 flex items-center gap-2">
+            <Shield size={17} className="text-emerald-200/75" />
+            <h4 className="text-sm font-black uppercase tracking-widest text-white/70">{evidenceCopy.policyTitle}</h4>
+          </div>
+          <div className="space-y-2 text-xs leading-5 text-white/48">
+            <div className="rounded-xl bg-emerald-300/[0.055] px-3 py-2 text-emerald-100/72">
+              {evidenceCopy.policySummary}
+            </div>
+            {(inspectionPolicy?.collectedCategories || []).map(category => (
+              <div key={category} className="rounded-xl bg-black/18 px-3 py-2 font-mono text-[11px] text-white/42">
+                {category.replaceAll('_', ' ')}
+              </div>
+            ))}
+            {!inspectionPolicy && (
+              <div className="rounded-xl bg-black/18 px-3 py-2">{evidenceCopy.policyUnavailable}</div>
+            )}
+          </div>
+        </section>
+      </div>
+
+      {latest?.capabilityProfile && (
+        <section className="rounded-2xl border border-cyan-300/12 bg-cyan-300/[0.025] p-5" data-testid="computer-capability-profile">
+          <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <Sparkles size={17} className="text-cyan-200" />
+                <h4 className="text-sm font-black uppercase tracking-widest text-white/75">{evidenceCopy.capabilityTitle}</h4>
+              </div>
+              <p className="mt-2 text-xs leading-5 text-white/38">
+                {evidenceCopy.capabilityDescription}
+              </p>
+            </div>
+            <span className="text-xs text-white/32">
+              {readyMachineOpportunities.length}/{latest.capabilityProfile.opportunities?.length || 0} {evidenceCopy.readySuffix}
+            </span>
+          </div>
+          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {(latest.capabilityProfile.opportunities || []).map(item => (
+              <div key={item.id} className="rounded-xl border border-white/8 bg-black/20 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-sm font-bold text-white/78">{item.label}</div>
+                  <span className={`rounded-full px-2 py-1 text-[10px] font-black ${item.ready ? 'bg-emerald-300/10 text-emerald-100/70' : 'bg-amber-300/10 text-amber-100/65'}`}>
+                    {item.ready ? evidenceCopy.ready : evidenceCopy.setup}
+                  </span>
+                </div>
+                <div className="mt-2 text-[11px] leading-5 text-white/38">
+                  {item.evidence?.slice(0, 4).join(' · ') || evidenceCopy.noEvidence}
+                </div>
+              </div>
+            ))}
+          </div>
+          {(latest.capabilityProfile.firstQuestions || []).length > 0 && (
+            <div className="mt-5 border-t border-white/[0.07] pt-5">
+              <div className="text-[11px] font-black uppercase tracking-[0.18em] text-white/38">
+                {evidenceCopy.questionsTitle}
+              </div>
+              <div className="mt-3 grid gap-2 md:grid-cols-2">
+                {(latest.capabilityProfile.firstQuestions || []).slice(0, 6).map((question, index) => {
+                  const prompt = isZh ? question.zh : question.en;
+                  return (
+                    <button
+                      key={`${question.zh}-${index}`}
+                      type="button"
+                      onClick={() => onAsk?.(prompt)}
+                      disabled={!onAsk}
+                      className="rounded-xl border border-white/8 bg-black/20 px-4 py-3 text-left text-xs leading-5 text-white/58 transition-colors hover:border-cyan-200/20 hover:bg-cyan-200/[0.045] hover:text-white disabled:cursor-default disabled:opacity-60"
+                    >
+                      {prompt}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </section>
+      )}
 
       <section className="rounded-2xl border border-white/8 bg-white/[0.03] p-5">
         <div className="mb-4 flex items-center gap-2">

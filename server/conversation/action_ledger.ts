@@ -1289,16 +1289,20 @@ export function loadConversationModelExecutionRecovery(
       && receipt.taskId === task.id
       && receipt.graphId === graph.graphId
       && typeof receipt.nodeId === 'string'
-      && typeof receipt.nodeFingerprint === 'string'
-      && receipt.nodeFingerprint.length === 64
-      && typeof receipt.outputDigest === 'string'
-      && receipt.outputDigest.length === 64
+      && /^[a-f0-9]{64}$/.test(String(receipt.nodeFingerprint || ''))
+      && /^[a-f0-9]{64}$/.test(String(receipt.outputDigest || ''))
       && receipt.status === 'succeeded'
       && receipt.verified === true
-      && receipt.evidenceKind === 'tool_terminal_verification'
       && Array.isArray(receipt.evidenceRefs)
       && receipt.evidenceRefs.length > 0
-      && receipt.evidenceRefs.every((value: unknown) => /^tool:[A-Za-z0-9._:-]{1,240}$/.test(String(value || '')))
+      && (
+        (receipt.evidenceKind === 'tool_terminal_verification'
+          && receipt.evidenceRefs.every((value: unknown) => /^tool:[A-Za-z0-9._:-]{1,240}$/.test(String(value || ''))))
+        || (receipt.evidenceKind === 'validated_model_output'
+          && receipt.evidenceRefs.length === 1
+          && receipt.evidenceRefs[0] === `model_output:${receipt.outputDigest}`
+          && /^model_output:[a-f0-9]{64}$/.test(String(receipt.evidenceRefs[0] || '')))
+      )
     ))
     .map((receipt: any): ModelGraphNodeReceipt => ({
       graphId: receipt.graphId,
@@ -1315,7 +1319,7 @@ export function loadConversationModelExecutionRecovery(
       durationMs: Math.max(0, Number(receipt.durationMs) || 0),
       nodeFingerprint: receipt.nodeFingerprint,
       outputDigest: receipt.outputDigest,
-      evidenceKind: 'tool_terminal_verification',
+      evidenceKind: receipt.evidenceKind,
       evidenceRefs: receipt.evidenceRefs.map(String),
       verified: true,
       ...(receipt.estimatedInputTokens !== undefined

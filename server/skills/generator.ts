@@ -64,7 +64,7 @@ export interface GeneratedSkillDraftReview {
   requiresUserApproval: true;
 }
 
-const GENERATE_PROMPT = `You are a Skill SDK generator for LumiOS. Your job is to create an MCP (Model Context Protocol) server tool with a fully implemented, executable handler function.
+const GENERATE_PROMPT = `You are a Skill SDK generator for LumiCore. Your job is to create an MCP (Model Context Protocol) server tool with a fully implemented, executable handler function.
 
 ## Context
 Lumi has learned a repeatable workflow by observing tool execution patterns. You need to encode this knowledge as a standalone MCP tool with REAL, EXECUTABLE code.

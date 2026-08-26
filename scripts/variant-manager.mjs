@@ -677,7 +677,7 @@ async function verifyGitHubChildRepository(parsedRepository, keepActions) {
     Authorization: `Bearer ${token}`,
     Accept: 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'LumiOS-Variant-Manager',
+    'User-Agent': 'LumiCore-Variant-Manager',
   };
   const response = await fetch(apiUrl, { headers });
   if (response.status === 404) throw new Error(`Create the empty private GitHub repository ${owner}/${repo} first.`);

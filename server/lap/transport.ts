@@ -27,7 +27,7 @@ import type {
 } from './types';
 import { consumePairingTicket, inspectPairingTicket } from './pairing';
 
-// Local agent identity — configurable per LumiOS instance
+// Local agent identity — configurable per LumiCore instance
 let localAgent: LAPAgentIdentity = loadOrCreateLAPIdentity();
 
 export function setLocalAgent(identity: Partial<LAPAgentIdentity>): void {

@@ -263,7 +263,7 @@ async function fetchText(url: string, maxChars: number): Promise<ScoredSource['f
     const response = await fetch(url, {
       signal: controller.signal,
       headers: {
-        'User-Agent': 'LumiOS-AuthorityResearch/1.0',
+        'User-Agent': 'LumiCore-AuthorityResearch/1.0',
         Accept: 'text/html,application/xhtml+xml,application/xml,text/plain,application/json;q=0.8,*/*;q=0.5',
       },
     });

@@ -119,25 +119,37 @@ describe('external commit unknown-outcome safety', () => {
     expect(externalCommitInputDigest(name, args)).not.toBe(publicDigest);
   });
 
-  it('marks a timed-out commit unknown and never invokes it again with the same key', async () => {
+  it('marks a timed-out commit unknown but keeps both callers behind the same live handler fence', async () => {
     vi.useFakeTimers();
     const registry = new ToolRegistry();
-    const handler = vi.fn(() => new Promise<string>(() => {}));
+    let rejectHandler!: (error: Error) => void;
+    const handler = vi.fn(() => new Promise<string>((_resolve, reject) => {
+      rejectHandler = reject;
+    }));
     registerExternalCommit(registry, 'external_commit_timeout_test', handler);
     const args = { target: 'Alice', payload: 'Only once' };
     const context = confirmedContext('timeout-no-resend-key');
 
     const first = registry.execute('external_commit_timeout_test', args, context);
-    const firstRejection = expect(first).rejects.toThrow(/timed out after 30s/i);
+    let firstSettled = false;
+    void first.finally(() => { firstSettled = true; }).catch(() => {});
     await vi.advanceTimersByTimeAsync(30_000);
-    await firstRejection;
+    expect(firstSettled).toBe(false);
 
-    await expect(registry.execute('external_commit_timeout_test', args, context))
-      .rejects.toThrow(/unknown prior outcome.*automatic resend was stopped/i);
+    const duplicate = registry.execute('external_commit_timeout_test', args, context);
+    let duplicateSettled = false;
+    void duplicate.finally(() => { duplicateSettled = true; }).catch(() => {});
+    await Promise.resolve();
+    expect(duplicateSettled).toBe(false);
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    rejectHandler(new Error('adapter acknowledged cancellation'));
+    await expect(first).rejects.toThrow(/outcome is unknown.*timed out after 30s.*settled as rejected/i);
+    await expect(duplicate).rejects.toThrow(/outcome is unknown.*timed out after 30s.*settled as rejected/i);
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('does not let a late handler result turn an unknown commit into an implicit resend', async () => {
+  it('accepts the exact late handler settlement without resending the commit', async () => {
     vi.useFakeTimers();
     const registry = new ToolRegistry();
     let resolveHandler!: (result: string) => void;
@@ -149,39 +161,44 @@ describe('external commit unknown-outcome safety', () => {
     const context = confirmedContext('late-result-no-resend-key');
 
     const first = registry.execute('external_commit_late_result_test', args, context);
-    const firstRejection = expect(first).rejects.toThrow(/timed out after 30s/i);
     await vi.advanceTimersByTimeAsync(30_000);
-    await firstRejection;
+    const duplicate = registry.execute('external_commit_late_result_test', args, context);
+    const receipt = JSON.stringify({ verified: true, providerReceipt: 'late-receipt' });
+    resolveHandler(receipt);
 
-    resolveHandler(JSON.stringify({ verified: true, providerReceipt: 'late-receipt' }));
-    await Promise.resolve();
-
-    await expect(registry.execute('external_commit_late_result_test', args, context))
-      .rejects.toThrow(/unknown prior outcome.*automatic resend was stopped/i);
+    await expect(first).resolves.toBe(receipt);
+    await expect(duplicate).resolves.toBe(receipt);
+    await expect(registry.execute('external_commit_late_result_test', args, context)).resolves.toBe(receipt);
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
   it('accepts a verified read-only reconciliation and deduplicates later retries', async () => {
     vi.useFakeTimers();
-    const registry = new ToolRegistry();
-    const handler = vi.fn(() => new Promise<string>(() => {}));
     const reconciled = JSON.stringify({
       verified: true,
       providerReceipt: 'provider-42',
       status: 'sent',
     });
     const reconcile = vi.fn(async () => reconciled);
-    registerExternalCommit(registry, 'external_commit_reconcile_test', handler, reconcile);
     const args = { target: 'Carol', payload: 'Reconcile me' };
     const context = confirmedContext('verified-reconciliation-key');
 
-    const first = registry.execute('external_commit_reconcile_test', args, context);
+    let rejectHandler!: (error: Error) => void;
+    const waitingHandler = vi.fn(() => new Promise<string>((_resolve, reject) => {
+      rejectHandler = reject;
+    }));
+    const reconciledRegistry = new ToolRegistry();
+    registerExternalCommit(reconciledRegistry, 'external_commit_reconcile_test', waitingHandler, reconcile);
+
+    const first = reconciledRegistry.execute('external_commit_reconcile_test', args, context);
     await vi.advanceTimersByTimeAsync(30_000);
+    expect(reconcile).not.toHaveBeenCalled();
+    rejectHandler(new Error('adapter cancelled after timeout'));
     await expect(first).resolves.toBe(reconciled);
-    await expect(registry.execute('external_commit_reconcile_test', args, context))
+    await expect(reconciledRegistry.execute('external_commit_reconcile_test', args, context))
       .resolves.toBe(reconciled);
 
-    expect(handler).toHaveBeenCalledTimes(1);
+    expect(waitingHandler).toHaveBeenCalledTimes(1);
     expect(reconcile).toHaveBeenCalledTimes(1);
     expect(reconcile).toHaveBeenCalledWith(args, context, 'verified-reconciliation-key');
   });
@@ -226,16 +243,20 @@ describe('external commit unknown-outcome safety', () => {
     vi.useFakeTimers();
     const durable = durableJournalAdapter();
     configureExternalCommitJournal(durable.adapter);
-    const handler = vi.fn(() => new Promise<string>(() => {}));
+    let rejectHandler!: (error: Error) => void;
+    const handler = vi.fn(() => new Promise<string>((_resolve, reject) => {
+      rejectHandler = reject;
+    }));
     const args = { target: 'Restart Recipient', payload: 'Unknown across restart' };
     const context = confirmedContext('unknown-across-restart-key');
 
     const firstRegistry = new ToolRegistry();
     registerExternalCommit(firstRegistry, 'external_commit_restart_unknown_test', handler);
     const first = firstRegistry.execute('external_commit_restart_unknown_test', args, context);
-    const firstRejection = expect(first).rejects.toThrow(/outcome is unknown.*timed out after 30s/i);
     await vi.advanceTimersByTimeAsync(30_000);
-    await firstRejection;
+    expect(durable.rows.get('unknown-across-restart-key')?.state).toBe('unknown');
+    rejectHandler(new Error('adapter cancelled after timeout'));
+    await expect(first).rejects.toThrow(/outcome is unknown.*timed out after 30s/i);
 
     resetExternalCommitRuntimeCacheForTests();
     const restartedRegistry = new ToolRegistry();
@@ -250,10 +271,13 @@ describe('external commit unknown-outcome safety', () => {
   it('projects an uncertain external failure as unknown_outcome in the canonical envelope', async () => {
     vi.useFakeTimers();
     const registry = new ToolRegistry();
+    let rejectHandler!: (error: Error) => void;
     registerExternalCommit(
       registry,
       'external_commit_envelope_unknown_test',
-      () => new Promise<string>(() => {}),
+      () => new Promise<string>((_resolve, reject) => {
+        rejectHandler = reject;
+      }),
     );
     const recordPromise = executeToolCall({
       registry,
@@ -262,6 +286,7 @@ describe('external commit unknown-outcome safety', () => {
       context: confirmedContext('envelope-unknown-key'),
     });
     await vi.advanceTimersByTimeAsync(30_000);
+    rejectHandler(new Error('adapter cancelled after timeout'));
     const record = await recordPromise;
 
     expect(record.error).toMatch(/outcome is unknown.*timed out after 30s/i);

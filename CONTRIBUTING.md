@@ -1,6 +1,6 @@
-# Contributing to LumiOS
+# Contributing to LumiCore
 
-感谢你参与 LumiOS。项目优先接受能够提升稳定性、隐私边界、跨平台一致性、可验证执行和行业工作流复用度的改动。
+感谢你参与 LumiCore。项目优先接受能够提升稳定性、隐私边界、跨平台一致性、可验证执行和行业工作流复用度的改动。
 
 ## 开始之前
 

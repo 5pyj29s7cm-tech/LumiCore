@@ -176,11 +176,11 @@ describe('desktop observation routing', () => {
     const records = [{
       name: 'desktop_active_window',
       arguments: {},
-      result: '{"title":"Lumi OS","process_name":"lumi-os.exe","pid":3928,"width":1920,"height":1080}',
+      result: '{"title":"LumiCore","process_name":"lumi-core.exe","pid":3928,"width":1920,"height":1080}',
     }, {
       name: 'desktop_running_processes',
       arguments: { top: 20 },
-      result: '[{"name":"lumi-os.exe"},{"name":"msedge.exe"}]',
+      result: '[{"name":"lumi-core.exe"},{"name":"msedge.exe"}]',
     }, {
       name: 'desktop_idle_time',
       arguments: {},
@@ -189,8 +189,8 @@ describe('desktop observation routing', () => {
     const taskText = '\u53ea\u8bfb\u53d6\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\u548c\u684c\u9762\u8fd0\u884c\u72b6\u6001';
     const text = formatDesktopObservationResult(records, taskText);
 
-    expect(text).toContain('\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\uff1aLumi OS');
-    expect(text).toContain('lumi-os.exe');
+    expect(text).toContain('\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\uff1aLumiCore');
+    expect(text).toContain('lumi-core.exe');
     expect(text).toContain('\u5df2\u8bfb\u53d6 2 \u6761\u6d3b\u8dc3\u8fdb\u7a0b\u8bb0\u5f55');
     expect(text).toContain('\u7ea6 160 \u79d2');
     expect(text).toContain('\u6ca1\u6709\u6267\u884c\u70b9\u51fb');

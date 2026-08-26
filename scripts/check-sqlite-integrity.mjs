@@ -4,7 +4,7 @@ import path from 'node:path';
 import sqlite3 from 'sqlite3';
 
 const configuredRoot = String(process.env.LUMI_DATA_DIR || '').trim();
-const defaultDatabasePath = path.join(configuredRoot || path.join(os.homedir(), 'LumiOS'), 'data', 'lumi.db');
+const defaultDatabasePath = path.join(configuredRoot || path.join(os.homedir(), 'LumiCore'), 'data', 'lumi.db');
 const databasePath = path.resolve(process.argv[2] || defaultDatabasePath);
 if (!existsSync(databasePath)) {
   console.error(`[sqlite-check] database not found: ${databasePath}`);

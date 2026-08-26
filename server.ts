@@ -1,4 +1,4 @@
-// LumiOS unified server. Personal and organization work domains share one client.
+// LumiCore unified server. Personal and organization work domains share one client.
 import "dotenv/config";
 import fs from "fs";
 import os from "os";
@@ -7,7 +7,7 @@ import path from "path";
 const IS_DESKTOP_RUNTIME = process.env.LUMI_DESKTOP === '1';
 const DESKTOP_LOG_FILE = process.env.LUMI_LOG_FILE || (
   IS_DESKTOP_RUNTIME
-    ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'LumiOS', 'server.log')
+    ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'LumiCore', 'server.log')
     : ''
 );
 const MAX_DESKTOP_LOG_BYTES = 8 * 1024 * 1024;

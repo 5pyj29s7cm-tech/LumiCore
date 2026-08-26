@@ -289,7 +289,7 @@ try {
     platform: 'darwin',
     adapter: 'macos-accessibility',
     error: message,
-    note: 'Grant Lumi OS Accessibility permission in System Settings > Privacy & Security > Accessibility.'
+    note: 'Grant LumiCore Accessibility permission in System Settings > Privacy & Security > Accessibility.'
   });
 }
 `;

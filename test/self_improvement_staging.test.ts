@@ -44,7 +44,7 @@ function createRepository(): { root: string; repo: string; worktrees: string; pr
   fs.mkdirSync(path.join(repo, 'docs'), { recursive: true });
   fs.writeFileSync(path.join(repo, 'server', 'example.ts'), 'export const value = 1;\n', 'utf8');
   fs.writeFileSync(path.join(repo, 'docs', 'guide.md'), '# Guide\n', 'utf8');
-  fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ name: 'lumi-os' }), 'utf8');
+  fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ name: 'lumi-core' }), 'utf8');
   git(repo, 'init');
   git(repo, 'config', 'user.name', 'Lumi Test');
   git(repo, 'config', 'user.email', 'lumi-test@localhost');

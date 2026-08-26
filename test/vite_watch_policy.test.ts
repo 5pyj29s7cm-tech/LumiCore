@@ -16,7 +16,7 @@ import {
   VITE_WATCH_IGNORED_ROOTS,
 } from '../vite.watch-policy';
 
-const projectRoot = 'D:\\lumiOS';
+const projectRoot = 'D:\\LumiCore';
 
 describe('Vite development watcher policy', () => {
   beforeEach(() => {
@@ -24,16 +24,16 @@ describe('Vite development watcher policy', () => {
   });
 
   it.each([
-    'D:\\lumiOS\\src-tauri\\target',
-    'D:\\lumiOS\\src-tauri\\target\\debug\\build\\crate\\out',
-    'D:\\lumiOS\\src-tauri\\gen\\schemas',
-    'D:\\lumiOS\\local-tts\\cosyvoice\\models\\speaker',
-    'D:\\lumiOS\\.codex-run\\sessions\\active',
-    'D:\\lumiOS\\desktop-resources\\gpt-sovits-src',
-    'D:\\lumiOS\\gpt-sovits-src\\GPT_SoVITS\\pretrained_models',
-    'D:\\lumiOS\\data\\voice_training\\speaker',
-    'D:\\lumiOS\\dist-server\\chunks',
-    'D:\\lumiOS\\server\\runtime',
+    'D:\\LumiCore\\src-tauri\\target',
+    'D:\\LumiCore\\src-tauri\\target\\debug\\build\\crate\\out',
+    'D:\\LumiCore\\src-tauri\\gen\\schemas',
+    'D:\\LumiCore\\local-tts\\cosyvoice\\models\\speaker',
+    'D:\\LumiCore\\.codex-run\\sessions\\active',
+    'D:\\LumiCore\\desktop-resources\\gpt-sovits-src',
+    'D:\\LumiCore\\gpt-sovits-src\\GPT_SoVITS\\pretrained_models',
+    'D:\\LumiCore\\data\\voice_training\\speaker',
+    'D:\\LumiCore\\dist-server\\chunks',
+    'D:\\LumiCore\\server\\runtime',
     'src-tauri/target/debug',
     'local-tts/cosyvoice/models',
   ])('ignores non-HMR generated, model, runtime, and backend path %s', watchedPath => {
@@ -41,12 +41,12 @@ describe('Vite development watcher policy', () => {
   });
 
   it.each([
-    'D:\\lumiOS\\src\\components\\DesktopUI.tsx',
-    'D:\\lumiOS\\public\\icons\\icon.png',
-    'D:\\lumiOS\\index.html',
-    'D:\\lumiOS\\vite.config.ts',
-    'D:\\lumiOS\\vite.watch-policy.ts',
-    'D:\\lumiOS\\server.ts',
+    'D:\\LumiCore\\src\\components\\DesktopUI.tsx',
+    'D:\\LumiCore\\public\\icons\\icon.png',
+    'D:\\LumiCore\\index.html',
+    'D:\\LumiCore\\vite.config.ts',
+    'D:\\LumiCore\\vite.watch-policy.ts',
+    'D:\\LumiCore\\server.ts',
     'src/components/DesktopUI.tsx',
     'public/icons/icon.png',
   ])('keeps frontend HMR and root configuration path %s visible', watchedPath => {
@@ -55,8 +55,8 @@ describe('Vite development watcher policy', () => {
 
   it('does not ignore similarly named paths outside the project or frontend source', () => {
     expect(shouldIgnoreViteWatchPath('D:\\another-project\\local-tts\\model', projectRoot)).toBe(false);
-    expect(shouldIgnoreViteWatchPath('D:\\lumiOS\\src\\server\\client.ts', projectRoot)).toBe(false);
-    expect(shouldIgnoreViteWatchPath('D:\\lumiOS\\public\\data\\fixture.json', projectRoot)).toBe(false);
+    expect(shouldIgnoreViteWatchPath('D:\\LumiCore\\src\\server\\client.ts', projectRoot)).toBe(false);
+    expect(shouldIgnoreViteWatchPath('D:\\LumiCore\\public\\data\\fixture.json', projectRoot)).toBe(false);
   });
 
   it('covers every measured high-cardinality root without broad src/public exclusions', () => {
@@ -101,7 +101,7 @@ describe('Vite development watcher policy', () => {
 
   it('creates a reusable chokidar matcher', () => {
     const ignored = createViteWatchIgnored(projectRoot);
-    expect(ignored('D:\\lumiOS\\desktop-resources')).toBe(true);
-    expect(ignored('D:\\lumiOS\\public')).toBe(false);
+    expect(ignored('D:\\LumiCore\\desktop-resources')).toBe(true);
+    expect(ignored('D:\\LumiCore\\public')).toBe(false);
   });
 });

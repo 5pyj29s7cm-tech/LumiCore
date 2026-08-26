@@ -1,14 +1,14 @@
 {
-  "name": "lumi-os",
+  "name": "lumi-core",
   "private": true,
-  "version": "3.0.3",
+  "version": "3.1.0",
   "type": "module",
   "engines": {
     "node": ">=18.0.0"
   },
   "scripts": {
     "dev": "tsx launcher.ts",
-    "dev:direct": "tsx server.ts",
+    "dev:direct": "tsx server/runtime/server_entry.ts",
     "serve": "node dist-server/entry.cjs",
     "build": "npm run build:desktop-ui",
     "build:desktop-ui": "npm run check:website-boundary && npm run check:command-center-css && vite build --mode desktop",

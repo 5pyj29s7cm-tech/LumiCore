@@ -416,7 +416,7 @@ describe('Lumi result finalizer', () => {
   });
 
   it.each([
-    ['desktop_ui_snapshot', '{"window":"LumiOS","nodes":[]}'],
+    ['desktop_ui_snapshot', '{"window":"LumiCore","nodes":[]}'],
     ['desktop_capture_screen', '{"width":1280,"height":720}'],
     ['desktop_running_processes', '{"processes":[]}'],
   ])('does not treat supporting desktop evidence as a complete self-check: %s', async (name, receipt) => {
@@ -1085,8 +1085,8 @@ describe('Lumi result finalizer', () => {
         result: 'Pressed: ctrl+n',
       }, {
         name: 'write_file',
-        arguments: { path: 'D:\\lumiOS\\Lumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5.txt' },
-        result: 'File written: D:\\lumiOS\\Lumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5.txt',
+        arguments: { path: 'D:\\LumiCore\\Lumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5.txt' },
+        result: 'File written: D:\\LumiCore\\Lumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5.txt',
       }],
       source: 'chat',
     });
@@ -1114,8 +1114,8 @@ describe('Lumi result finalizer', () => {
       responseText: '\u5df2\u5b8c\u6210\uff0c\u6587\u6863\u5df2\u65b0\u5efa\u5e76\u5199\u597d\u3002',
       toolRecords: [{
         name: 'write_file',
-        arguments: { path: 'D:\\lumiOS\\Lumi-continuation.txt' },
-        result: 'File written: D:\\lumiOS\\Lumi-continuation.txt',
+        arguments: { path: 'D:\\LumiCore\\Lumi-continuation.txt' },
+        result: 'File written: D:\\LumiCore\\Lumi-continuation.txt',
       }],
       source,
       flow: { routeText } as any,
@@ -1429,11 +1429,11 @@ describe('Lumi result finalizer', () => {
       toolRecords: [{
         name: 'desktop_active_window',
         arguments: {},
-        result: '{"title":"Lumi OS","process_name":"lumi-os.exe","pid":3928,"width":1920,"height":1080}',
+        result: '{"title":"LumiCore","process_name":"lumi-core.exe","pid":3928,"width":1920,"height":1080}',
       }, {
         name: 'desktop_running_processes',
         arguments: { top: 20 },
-        result: '[{"pid":3928,"name":"lumi-os.exe"},{"pid":22920,"name":"msedge.exe"}]',
+        result: '[{"pid":3928,"name":"lumi-core.exe"},{"pid":22920,"name":"msedge.exe"}]',
       }, {
         name: 'desktop_idle_time',
         arguments: {},
@@ -1444,8 +1444,8 @@ describe('Lumi result finalizer', () => {
 
     expect(result.blocked).toBe(false);
     expect(result.reason).toContain('action-contract drift');
-    expect(result.text).toContain('\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\uff1aLumi OS');
-    expect(result.text).toContain('lumi-os.exe');
+    expect(result.text).toContain('\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\uff1aLumiCore');
+    expect(result.text).toContain('lumi-core.exe');
     expect(result.text).toContain('\u672c\u8f6e\u6ca1\u6709\u6267\u884c\u70b9\u51fb');
     expect(result.text).not.toContain('\u5fae\u4fe1');
     expect(result.text).not.toContain('wechat_read_recent_chat');
@@ -1459,7 +1459,7 @@ describe('Lumi result finalizer', () => {
       toolRecords: [{
         name: 'desktop_running_processes',
         arguments: { top: 20 },
-        result: '[{"pid":3928,"name":"lumi-os.exe"},{"pid":22920,"name":"msedgewebview2.exe"}]',
+        result: '[{"pid":3928,"name":"lumi-core.exe"},{"pid":22920,"name":"msedgewebview2.exe"}]',
       }, {
         name: 'write_file',
         arguments: {},
@@ -1471,7 +1471,7 @@ describe('Lumi result finalizer', () => {
 
     expect(result.blocked).toBe(false);
     expect(result.text).toContain('运行快照');
-    expect(result.text).toContain('lumi-os.exe');
+    expect(result.text).toContain('lumi-core.exe');
     expect(result.text).not.toContain('write_file');
   });
 
@@ -1665,14 +1665,14 @@ describe('Lumi result finalizer', () => {
     const taskText = '\u8bfb\u53d6\u684c\u9762\u4e0a\u7684\u8bbe\u8ba1\u8349\u7a3f.jpg\uff0c\u63d0\u53d6\u51e0\u4f55\u4fe1\u606f\uff0c\u5148\u4e0d\u8981\u7ed8\u5236\uff0c\u53ea\u544a\u8bc9\u6211\u63d0\u53d6\u662f\u5426\u6210\u529f\u3002';
     const toolRecord = {
       name: 'floorplan_extract_geometry',
-      arguments: { imagePath: 'C:\\Users\\Administrator\\Desktop\\\u8bbe\u8ba1\u8349\u7a3f.jpg' },
+      arguments: { imagePath: 'C:\\Users\\test-user\\Desktop\\\u8bbe\u8ba1\u8349\u7a3f.jpg' },
       result: JSON.stringify({
-        path: 'C:\\Users\\Administrator\\Desktop\\\u8bbe\u8ba1\u8349\u7a3f.jpg',
+        path: 'C:\\Users\\test-user\\Desktop\\\u8bbe\u8ba1\u8349\u7a3f.jpg',
         parsed: true,
         geometryReady: true,
         geometryVerified: true,
         executableGeometryAvailable: true,
-        geometryReceiptPath: 'C:\\Users\\Administrator\\LumiOS\\data\\cad\\geometry_receipts\\verified.json',
+        geometryReceiptPath: 'C:\\Users\\test-user\\LumiCore\\data\\cad\\geometry_receipts\\verified.json',
         geometryReview: {
           width: 9000,
           height: 7600,
@@ -1697,7 +1697,7 @@ describe('Lumi result finalizer', () => {
           geometryReady: true,
           geometryVerified: false,
           executableGeometryAvailable: false,
-          geometryReceiptPath: 'C:\\Users\\Administrator\\LumiOS\\data\\cad\\geometry_receipts\\unverified.json',
+          geometryReceiptPath: 'C:\\Users\\test-user\\LumiCore\\data\\cad\\geometry_receipts\\unverified.json',
         }),
       }],
       source: 'chat',
@@ -1820,7 +1820,7 @@ describe('Lumi result finalizer', () => {
       '把这幅图画成cad图',
       '## Current Turn Attachments',
       'The user attached these files to the current message. Treat them as part of the user request.',
-      'Local path: C:\\Users\\me\\LumiOS\\data\\knowledge\\plan.jpg',
+      'Local path: C:\\Users\\me\\LumiCore\\data\\knowledge\\plan.jpg',
     ].join('\n\n');
     const result = finalizeLumiResponse({
       taskText,
@@ -2180,13 +2180,13 @@ describe('Lumi result finalizer', () => {
 
   it('keeps a verified file open successful when later optional focus checks fail', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
-    const target = 'C:\\Users\\Administrator\\Desktop\\领航员计划_介绍手册_2026.docx';
+    const target = 'C:\\Users\\test-user\\Desktop\\领航员计划_介绍手册_2026.docx';
     const result = finalizeLumiResponse({
       taskText: '打开桌面上的领航员计划文件',
       responseText: '这次没有成功打开文件。',
       toolRecords: [{
         name: 'desktop_list_files',
-        arguments: { path: 'C:\\Users\\Administrator\\Desktop' },
+        arguments: { path: 'C:\\Users\\test-user\\Desktop' },
         result: JSON.stringify([{ path: target, type: 'file' }]),
       }, {
         name: 'desktop_open',

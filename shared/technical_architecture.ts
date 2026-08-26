@@ -35,7 +35,7 @@ export interface LumiTechnicalArchitecture {
  */
 export const LUMI_TECHNICAL_ARCHITECTURE: LumiTechnicalArchitecture = {
   schemaVersion: 1,
-  product: 'LumiOS',
+  product: 'LumiCore',
   topology: 'local-first-desktop-agent',
   invariants: [
     'CapabilityManifest is the single runtime source for tool identity, routing, permission, risk, evidence, verification, fallback, and provenance.',

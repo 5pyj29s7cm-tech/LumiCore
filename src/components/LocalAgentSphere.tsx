@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { Mic, MicOff, Sparkles, Volume2, Box, User as UserIcon, Pause, Wifi, WifiOff, Clock } from 'lucide-react';
 import { Button } from './ui/button';
 
@@ -11,6 +11,65 @@ const DAYLIGHT_CORE_PALETTE = {
   deepCopper: '#8f5a24',
   jadeInk: '#326f63',
 };
+
+export type LocalAgentCosmosState = 'ready' | 'working' | 'paused' | 'attention';
+
+export type LocalAgentCosmosAgent = {
+  id: string;
+  name: string;
+  category: string;
+  runtime: 'internal' | 'external';
+  state: LocalAgentCosmosState;
+  taskId?: string;
+  taskTitle?: string;
+};
+
+export type LocalAgentCosmosTask = {
+  id: string;
+  title: string;
+  status: string;
+  phase?: string;
+  workerIds: string[];
+  active?: boolean;
+};
+
+export type LocalAgentCosmosLabels = {
+  aria: string;
+  liveState: string;
+  lumi: string;
+  agents: string;
+  active: string;
+  ready: string;
+  working: string;
+  paused: string;
+  attention: string;
+  noWorkers: string;
+  noTasks: string;
+};
+
+type CosmosPosition = { x: number; y: number; depth: number; ring: number };
+
+/** Deterministic orbital placement: every visible body comes from a real agent record. */
+export function localAgentCosmosPosition(index: number): CosmosPosition {
+  const safeIndex = Math.max(0, Math.floor(index));
+  const capacities = [8, 12, 16, 20];
+  let ring = 0;
+  let offset = safeIndex;
+  while (ring < capacities.length - 1 && offset >= capacities[ring]) {
+    offset -= capacities[ring];
+    ring += 1;
+  }
+  const capacity = capacities[ring];
+  const angle = -Math.PI / 2 + ((Math.PI * 2 * offset) / capacity) + ring * 0.19;
+  const radiusX = Math.min(43, 25 + ring * 6);
+  const radiusY = Math.min(39, 18 + ring * 5.5);
+  return {
+    x: 50 + Math.cos(angle) * radiusX,
+    y: 50 + Math.sin(angle) * radiusY,
+    depth: (Math.sin(angle) + 1) / 2,
+    ring,
+  };
+}
 
 function daylightParticleColor(color: string) {
   if (color === '#ffffff') return DAYLIGHT_CORE_PALETTE.mineralBlue;
@@ -48,6 +107,12 @@ export function LocalAgentSphere({
   facePresent = false,
   gesturesDisabled = false,
   isLightMode = false,
+  variant = 'personal',
+  cosmosAgents = [],
+  cosmosTasks = [],
+  cosmosState = 'ready',
+  cosmosLabels,
+  cosmosLoading = false,
 }: {
   t: any;
   onMessage?: (text: string) => void;
@@ -67,7 +132,15 @@ export function LocalAgentSphere({
   facePresent?: boolean;
   gesturesDisabled?: boolean;
   isLightMode?: boolean;
+  variant?: 'personal' | 'command-center';
+  cosmosAgents?: LocalAgentCosmosAgent[];
+  cosmosTasks?: LocalAgentCosmosTask[];
+  cosmosState?: LocalAgentCosmosState;
+  cosmosLabels?: LocalAgentCosmosLabels;
+  cosmosLoading?: boolean;
 }) {
+  const reducedMotion = useReducedMotion();
+  const isCommandCenter = variant === 'command-center';
   const [interactionPulse, setInteractionPulse] = useState(0);
   const [reactionColor, setReactionColor] = useState('rgba(255,200,80,0.2)');
 
@@ -95,7 +168,18 @@ export function LocalAgentSphere({
   const containerRef = useRef<HTMLDivElement>(null);
   const mouseRef = useRef({ x: 0, y: 0, isDown: false });
   const rotationRef = useRef({ x: 0, y: 0 });
-  const particleCount = highPerformance ? 2200 : 800;
+  const particleCount = reducedMotion ? 320 : highPerformance ? 2200 : 800;
+  const cosmosBodies = useMemo(() => cosmosAgents.map((agent, index) => ({
+    agent,
+    position: localAgentCosmosPosition(index),
+  })), [cosmosAgents]);
+  const cosmosBodyById = useMemo(() => new Map(cosmosBodies.map(body => [body.agent.id, body])), [cosmosBodies]);
+  const activeCosmosTasks = useMemo(() => cosmosTasks.filter(task => {
+    if (typeof task.active === 'boolean') return task.active;
+    const activeStates = ['pending', 'queued', 'running', 'working', 'pausing', 'cancelling', 'waiting_confirmation'];
+    return activeStates.includes(String(task.status || '').toLowerCase())
+      || activeStates.includes(String(task.phase || '').toLowerCase());
+  }), [cosmosTasks]);
 
   // Shared particle array (both canvases read from it)
   const particlesRef = useRef<any[]>([]);
@@ -288,7 +372,7 @@ export function LocalAgentSphere({
     const mainCtx = mainCanvas.getContext('2d');
     if (!mainCtx) return;
 
-    let animId: number;
+    let animId: number | undefined;
     const sphereScaleRef = { current: 1 };
 
     const render = (time: number) => {
@@ -306,14 +390,17 @@ export function LocalAgentSphere({
         const sphereScale = sphereScaleRef.current;
 
         // Rotation: auto-rotate
-        if (!mouseRef.current.isDown) {
+        if (!reducedMotion && !mouseRef.current.isDown) {
           const speedFactor = currentCallState === 'thinking' ? 4 : sentimentRef.current === 'excited' ? 3 : sentimentRef.current === 'focused' ? 2 : sentimentRef.current === 'zen' ? 0.5 : 1;
           rotationRef.current.y += 0.005 * speedFactor;
           rotationRef.current.x += 0.002 * speedFactor;
         }
 
         const pts = particlesRef.current;
-        if (pts.length === 0) { animId = requestAnimationFrame(render); return; }
+        if (pts.length === 0) {
+          if (!reducedMotion) animId = requestAnimationFrame(render);
+          return;
+        }
 
         // Face present glow — warm breathing pulse around orb
         if (facePresentRef.current) {
@@ -334,7 +421,7 @@ export function LocalAgentSphere({
 
         // Update particles
         for (const p of pts) {
-          p.update(time, rotationRef.current.x, rotationRef.current.y, currentCallState, audioLevelRef.current, sphereScale);
+          p.update(reducedMotion ? 0 : time, rotationRef.current.x, rotationRef.current.y, currentCallState, reducedMotion ? 0 : audioLevelRef.current, sphereScale);
         }
 
         // Sort for proper z-ordering
@@ -349,12 +436,15 @@ export function LocalAgentSphere({
         // never let an exception kill the render loop
       }
 
-      animId = requestAnimationFrame(render);
+      if (!reducedMotion) animId = requestAnimationFrame(render);
     };
 
-    animId = requestAnimationFrame(render);
-    return () => cancelAnimationFrame(animId);
-  }, []);
+    if (reducedMotion) render(0);
+    else animId = requestAnimationFrame(render);
+    return () => {
+      if (animId !== undefined) cancelAnimationFrame(animId);
+    };
+  }, [reducedMotion]);
 
   // Mouse/touch handlers
   const handleMouseDown = (e: React.MouseEvent | React.TouchEvent) => {
@@ -374,15 +464,140 @@ export function LocalAgentSphere({
     mouseRef.current.y = pos.clientY;
   };
   const handleMouseUp = () => { mouseRef.current.isDown = false; };
+  const commandLabels: LocalAgentCosmosLabels = cosmosLabels || {
+    aria: 'Live agent cosmos',
+    liveState: 'Live state',
+    lumi: 'Lumi',
+    agents: 'Agents',
+    active: 'Active tasks',
+    ready: 'Ready',
+    working: 'Working',
+    paused: 'Paused',
+    attention: 'Attention',
+    noWorkers: 'No agents registered',
+    noTasks: 'No active tasks',
+  };
+  const stateLabel = commandLabels[cosmosState];
 
   return (
     <>
-      <div className={`relative w-full flex flex-col items-center justify-center py-20 transition-all duration-1000 ${isWallpaperMode ? 'opacity-40 scale-[0.8] blur-[1px]' : 'opacity-100 scale-100'}`}>
+      <div
+        data-local-agent-sphere
+        data-variant={variant}
+        data-performance={highPerformance ? 'high' : 'balanced'}
+        data-reduced-motion={reducedMotion ? 'true' : 'false'}
+        className={`relative w-full flex flex-col items-center justify-center transition-all duration-1000 ${
+          isCommandCenter ? 'lumi-local-agent-sphere--command-center h-full min-h-0 overflow-hidden py-0' : 'py-20'
+        } ${isWallpaperMode ? 'opacity-40 scale-[0.8] blur-[1px]' : 'opacity-100 scale-100'}`}
+        aria-label={isCommandCenter ? commandLabels.aria : undefined}
+      >
         <div className="absolute inset-0 pointer-events-none" />
+
+        {isCommandCenter && (
+          <div
+            className="lumi-command-cosmos pointer-events-none absolute inset-0 z-20"
+            data-agent-count={cosmosAgents.length}
+            data-active-task-count={activeCosmosTasks.length}
+            aria-busy={cosmosLoading}
+          >
+            <div className="lumi-command-cosmos__status" aria-live="polite">
+              <span className="lumi-command-cosmos__live-dot" data-state={cosmosState} />
+              <span>{commandLabels.liveState}</span>
+              <strong>{stateLabel}</strong>
+            </div>
+            <div className="lumi-command-cosmos__counts" aria-label={`${commandLabels.agents}: ${cosmosAgents.length}; ${commandLabels.active}: ${activeCosmosTasks.length}`}>
+              <span><b>{cosmosAgents.length}</b>{commandLabels.agents}</span>
+              <span><b>{activeCosmosTasks.length}</b>{commandLabels.active}</span>
+            </div>
+
+            <svg className="lumi-command-cosmos__routes" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+              {[0, 1, 2, 3].map(ring => (
+                <ellipse key={ring} className="lumi-command-cosmos__orbit" data-ring={ring} cx="50" cy="50" rx={25 + ring * 6} ry={18 + ring * 5.5} />
+              ))}
+              {activeCosmosTasks.flatMap(task => task.workerIds.map(workerId => {
+                const body = cosmosBodyById.get(workerId);
+                if (!body) return null;
+                return (
+                  <path
+                    key={`${task.id}:${workerId}`}
+                    data-task-route
+                    data-task-id={task.id}
+                    data-worker-id={workerId}
+                    className="lumi-command-cosmos__route"
+                    d={`M 50 50 L ${body.position.x.toFixed(2)} ${body.position.y.toFixed(2)}`}
+                  >
+                    <title>{task.title}</title>
+                  </path>
+                );
+              }))}
+            </svg>
+
+            <div className="lumi-command-cosmos__core-label" data-state={cosmosState}>
+              <strong>{commandLabels.lumi}</strong>
+              <span>{stateLabel}</span>
+            </div>
+
+            <div className="lumi-command-cosmos__agents" role="list" aria-label={commandLabels.agents}>
+              {cosmosBodies.map(({ agent: cosmosAgent, position }, index) => (
+                <div
+                  key={cosmosAgent.id}
+                  role="listitem"
+                  data-cosmos-agent-id={cosmosAgent.id}
+                  data-cosmos-agent-state={cosmosAgent.state}
+                  data-cosmos-agent-runtime={cosmosAgent.runtime}
+                  data-label-side={position.x > 64 ? 'left' : 'right'}
+                  data-task-id={cosmosAgent.taskId}
+                  className="lumi-command-cosmos__agent"
+                  style={{
+                    left: `${position.x}%`,
+                    top: `${position.y}%`,
+                    zIndex: 22 + Math.round(position.depth * 8),
+                    '--cosmos-depth': position.depth,
+                    '--cosmos-delay': `${(index % 11) * -0.19}s`,
+                  } as React.CSSProperties}
+                  title={cosmosAgent.taskTitle ? `${cosmosAgent.name} · ${cosmosAgent.taskTitle}` : cosmosAgent.name}
+                >
+                  <span className="lumi-command-cosmos__agent-halo" />
+                  <span className="lumi-command-cosmos__agent-body">
+                    <span className="lumi-command-cosmos__agent-core" />
+                  </span>
+                  <span className="lumi-command-cosmos__agent-copy">
+                    <strong>{cosmosAgent.name}</strong>
+                    <small>{cosmosAgent.taskTitle || cosmosAgent.category}</small>
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <div className="lumi-command-cosmos__tasks" aria-label={commandLabels.active}>
+              {activeCosmosTasks.filter(task => !task.workerIds.some(workerId => cosmosBodyById.has(workerId))).map((task, index) => {
+                const position = localAgentCosmosPosition(cosmosAgents.length + index);
+                return (
+                  <div
+                    key={task.id}
+                    data-cosmos-unassigned-task
+                    data-task-id={task.id}
+                    data-task-status={task.phase || task.status}
+                    className="lumi-command-cosmos__task-signal"
+                    style={{ left: `${position.x}%`, top: `${position.y}%`, '--cosmos-delay': `${index * -0.23}s` } as React.CSSProperties}
+                    title={task.title}
+                  />
+                );
+              })}
+            </div>
+
+            {!cosmosLoading && cosmosAgents.length === 0 && (
+              <div className="lumi-command-cosmos__empty" data-empty="agents">{commandLabels.noWorkers}</div>
+            )}
+            {!cosmosLoading && cosmosAgents.length > 0 && activeCosmosTasks.length === 0 && (
+              <div className="lumi-command-cosmos__empty" data-empty="tasks">{commandLabels.noTasks}</div>
+            )}
+          </div>
+        )}
 
         <div
           ref={containerRef}
-          className="relative w-80 h-80 md:w-[500px] md:h-[500px] flex items-center justify-center cursor-grab active:cursor-grabbing group"
+          className={`${isCommandCenter ? 'lumi-local-agent-sphere__orb' : 'relative w-80 h-80 md:w-[500px] md:h-[500px]'} flex items-center justify-center cursor-grab active:cursor-grabbing group`}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
@@ -409,7 +624,7 @@ export function LocalAgentSphere({
                 style={{ borderColor: reactionColor }}
                 initial={{ scale: 0.5, opacity: 0 }}
                 animate={{ scale: 1.5, opacity: 0 }}
-                transition={{ duration: 1.5, delay: i * 0.3 }}
+                transition={{ duration: reducedMotion ? 0 : 1.5, delay: reducedMotion ? 0 : i * 0.3 }}
               />
             ))}
           </AnimatePresence>
@@ -417,7 +632,7 @@ export function LocalAgentSphere({
         </div>
 
         {/* Controls */}
-        <div className="mt-12 flex flex-col items-center gap-6 z-10">
+        {!isCommandCenter && <div className="mt-12 flex flex-col items-center gap-6 z-10">
           <div className="flex items-center gap-3">
             {callState !== 'idle' && onToggleMute && (
               <Button
@@ -499,7 +714,7 @@ export function LocalAgentSphere({
               </motion.div>
             )}
           </AnimatePresence>
-        </div>
+        </div>}
       </div>
     </>
   );

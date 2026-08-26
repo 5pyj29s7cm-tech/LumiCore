@@ -234,7 +234,7 @@ function certificationPolicy(input: Partial<ApplicationCertificationPolicy> & {
 
 const CERTIFICATION_POLICIES = {
   lumi: certificationPolicy({
-    productNamePatterns: ['lumi', 'lumios'],
+    productNamePatterns: ['lumi', 'lumicore', 'lumios'],
     requireValidSignature: false,
   }),
   chrome: certificationPolicy({
@@ -315,9 +315,9 @@ export const DESKTOP_APPLICATION_REGISTRY: readonly ApplicationIdentity[] = [
     family: 'lumi',
     displayName: 'Lumi desktop client',
     // i18n-allow: Reviewed multilingual application aliases for exact target matching.
-    aliases: ['lumi', 'lumios', '聊天界面', '知识库', '设置'],
-    processPatterns: ['lumi', 'lumi-os'],
-    windowTitlePatterns: ['lumi', 'lumios'],
+    aliases: ['lumi', 'lumicore', 'lumios', '聊天界面', '知识库', '设置'],
+    processPatterns: ['lumi', 'lumi-core', 'lumi-os'],
+    windowTitlePatterns: ['lumi', 'lumicore', 'lumios'],
     executablePatterns: ['lumi*.exe'],
     certification: 'certified',
     certificationPolicy: CERTIFICATION_POLICIES.lumi,

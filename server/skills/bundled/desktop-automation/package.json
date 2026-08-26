@@ -1,7 +1,7 @@
 {
   "name": "lumi-skill-desktop-automation",
   "version": "1.0.0",
-  "description": "Full desktop automation — control mouse, keyboard, windows, OCR screen reading. LumiOS can see AND operate your desktop.",
+  "description": "Full desktop automation — control mouse, keyboard, windows, OCR screen reading. LumiCore can see AND operate your desktop.",
   "type": "module",
   "lumi": {
     "displayName": "Desktop Commander",

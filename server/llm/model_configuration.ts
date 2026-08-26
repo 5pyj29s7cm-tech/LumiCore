@@ -18,7 +18,7 @@ import {
   upsertUserPreferredGenerationModels,
 } from './generation_preferences';
 import { ensureLocalModelReady, getLocalModelConfig } from './local_models';
-import { makeLLMCall } from './providers';
+import { makeLLMCall, makeLLMCallDirect } from './providers';
 import { rerankConfiguredDocuments } from './rerank_provider';
 import {
   DEFAULT_EMBEDDING_MODELS,
@@ -351,11 +351,24 @@ export async function testLLMProviderConnection(
     const selection = await ensureLocalModelReady(provider, requestedModel, { force: true, timeoutMs: 8_000 });
     model = selection.model;
   }
-  if (extensionProvider) {
-    await withConnectionTestTimeout(makeLLMCall(
+  const controller = new AbortController();
+  try {
+    // Exercise the exact production adapter and request formatter. A raw SDK
+    // probe can look healthy while the real Lumi route fails because it omits
+    // provider-specific request fields, privacy gates, or local supervision.
+    await withConnectionTestTimeout(makeLLMCallDirect(
       [{ role: 'user', content: 'Reply with only OK.' }],
       [],
-      { provider, model, userId, selectionMode: 'pinned', maxTokens: 8 },
+      {
+        provider: provider as any,
+        model,
+        userId,
+        selectionMode: 'pinned',
+        maxTokens: 8,
+        noImplicitFailover: true,
+        authorizedRoutingCandidate: true,
+        signal: controller.signal,
+      },
       llm.getDeepSeek || (() => null),
       llm.getGemini || (() => null),
       llm.getOpenAI,
@@ -368,59 +381,9 @@ export async function testLLMProviderConnection(
       llm.getKimi,
       llm.getGlm,
       llm.getRelay,
-    ), 20_000);
-  } else if (provider === 'gemini') {
-    const client = llm.getGemini?.();
-    if (!client) throw new Error('Gemini is not configured');
-    const instance = client.getGenerativeModel({ model });
-    await withConnectionTestTimeout(instance.generateContent('Reply with only OK.'), 20_000);
-  } else if (provider === 'anthropic') {
-    const client = llm.getAnthropic?.();
-    if (!client) throw new Error('Anthropic is not configured');
-    const controller = new AbortController();
-    try {
-      await withConnectionTestTimeout(client.messages.create({
-        model,
-        max_tokens: 8,
-        messages: [{ role: 'user', content: 'Reply with only OK.' }],
-      }, { signal: controller.signal }), 20_000);
-    } finally {
-      controller.abort();
-    }
-  } else {
-    const getterByProvider: Record<string, (() => any) | undefined> = {
-      deepseek: llm.getDeepSeek,
-      openai: llm.getOpenAI,
-      qwen: llm.getQwen,
-      ark: llm.getArk,
-      ollama: llm.getOllama,
-      lmstudio: llm.getLmStudio,
-      xiaomi: llm.getXiaomi,
-      kimi: llm.getKimi,
-      glm: llm.getGlm,
-      relay: llm.getRelay,
-    };
-    const client = getterByProvider[provider]?.();
-    if (!client) throw new Error(`${provider} is not configured or not currently reachable`);
-    const request: Record<string, any> = {
-      model,
-      messages: [{ role: 'user', content: 'Reply with only OK.' }],
-      stream: false,
-    };
-    if (provider === 'xiaomi' || (provider === 'openai' && /^(?:o[134]|gpt-5)/i.test(model))) {
-      request.max_completion_tokens = 8;
-    } else {
-      request.max_tokens = 8;
-    }
-    const controller = new AbortController();
-    try {
-      await withConnectionTestTimeout(
-        client.chat.completions.create(request, { signal: controller.signal }),
-        provider === 'ollama' || provider === 'lmstudio' ? 45_000 : 20_000,
-      );
-    } finally {
-      controller.abort();
-    }
+    ), provider === 'ollama' || provider === 'lmstudio' ? 45_000 : 20_000);
+  } finally {
+    controller.abort();
   }
 
   return { ok: true, provider, model, latencyMs: Date.now() - startedAt };

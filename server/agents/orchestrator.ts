@@ -25,11 +25,11 @@ import { personalityRegistry } from "../personality";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { executeExternalAgent, validateExternalCommand } from "./external_runtime";
 import { CapabilityManifestEntry, ToolExecutionRecord } from "../tools/types";
-import { buildResponseLanguageInstruction } from "../utils/language";
 import { canAutoApproveAction } from "../tools/action_constitution";
 import type { ToolPolicy } from "../personality/types";
 import type { ToolContext } from "../tools/types";
 import type { DesktopExecutionTracker } from '../desktop/execution_runtime';
+import { redactDiagnosticSecrets } from '../client/diagnostic_sanitizer';
 import {
   recordModelArbitration,
   recordModelFallback,
@@ -40,6 +40,7 @@ import {
 import { isStrictPrivacy } from '../config/privacy';
 import { getScopedPreferredLLM } from '../llm/user_preferences';
 import type { UserLLMFallbackCandidate, UserLLMProvider, UserLLMSelectionMode } from '../llm/user_preferences';
+import { getLocalModelConfig } from '../llm/local_models';
 import { executeToolCall } from "../tools/execution_engine";
 import { routeToolsForTurn } from "../cognition/tool_router";
 import { hasExplicitTeamExecutionRequest } from "../cognition/tool_intent";
@@ -51,9 +52,14 @@ import {
   buildModelGraphNodeReceipt,
   arbitrateModelGraphResults,
   compileModelExecutionGraph,
+  hasVerifiedModelGraphNodeEvidence,
   reuseVerifiedModelGraphNodeReceipt,
+  modelGraphDigest,
+  modelExecutionGraphMatchesRootTask,
   modelCandidateLocality,
   resolveAgentModelCandidates,
+  canAcceptValidatedModelOutput,
+  validateModelGraphNodeOutput,
   type ModelExecutionBudget,
   type ModelExecutionGraph,
   type ModelCandidate,
@@ -174,6 +180,8 @@ export interface WorkflowResult {
   totalAgentsUsed: number;
   executionGraph?: ModelExecutionGraph;
   nodeReceipts?: ModelGraphNodeReceipt[];
+  /** Private, bounded worker outputs for encrypted local restart recovery only. */
+  privateNodeHandoffs?: OrchestrationPrivateNodeHandoff[];
   arbitrationReceipt?: ModelGraphArbitrationReceipt;
 }
 
@@ -187,6 +195,8 @@ type WorkerTaskResult = {
   selectedCandidate?: ModelCandidate;
   evidenceKind?: ModelGraphNodeEvidenceKind;
   evidenceRefs?: string[];
+  /** False when a recovered receipt proves completion but its private hand-off payload was not persisted. */
+  handoffAvailable?: boolean;
 };
 
 export interface OrchestrationContext {
@@ -236,12 +246,20 @@ export interface OrchestrationContext {
   modelSelectionMode?: 'pinned' | 'prefer_with_fallback';
   /** Verified node receipts restored from the durable task ledger after a restart. */
   resumeNodeReceipts?: ModelGraphNodeReceipt[];
+  /** Exact durable graph paired with resumeNodeReceipts. Recovery fails closed without it. */
+  resumeExecutionGraph?: ModelExecutionGraph;
   /** Persisted bounded recovery instruction. It may narrow/replan safe work but never expand policy. */
   recoveryDirective?: {
     revision: number;
     strategy: 'retry_same_plan' | 'resume_verified_receipts' | 'replan_safe_path';
     reason: string;
     preservedReceiptIds: string[];
+    preservedReceipts?: Array<{
+      id: string;
+      operation: string;
+      sideEffects: Array<{ type: string; reversible: boolean }>;
+      verificationStatus: 'verified' | 'unverified' | 'failed';
+    }>;
   };
   desktopExecutionTracker?: DesktopExecutionTracker;
   /** Result selection is enforced by the compiled graph, never by prose aggregation. */
@@ -257,16 +275,140 @@ export interface OrchestrationToolMeta {
 export type OrchestrationToolEvent = Omit<ToolExecutionRecord, 'result'> & {
   result?: string;
   error?: string;
+  /** Adapter-start is a durable uncertainty fence, not a terminal tool result. */
+  lifecycle?: 'adapter_started' | 'terminal';
 };
 
 export function isTerminalOrchestrationToolEvent(record: OrchestrationToolEvent): boolean {
-  return record.result !== undefined || record.error !== undefined;
+  return record.lifecycle !== 'adapter_started'
+    && (record.result !== undefined || record.error !== undefined);
 }
 
 export type OrchestrationToolCallback = (
   record: OrchestrationToolEvent,
   meta: OrchestrationToolMeta,
-) => void;
+) => unknown;
+
+export type OrchestrationWorkflowCheckpointPhase =
+  | 'compiled'
+  | 'wave_completed'
+  | 'arbitrated';
+
+/**
+ * A bounded, durable hand-off emitted by the coordinator before it advances
+ * the workflow. Background runtimes persist this snapshot so a restart can
+ * reuse verified worker receipts instead of repeating side effects.
+ */
+export interface OrchestrationWorkflowCheckpoint {
+  phase: OrchestrationWorkflowCheckpointPhase;
+  executionGraph: ModelExecutionGraph;
+  nodeReceipts: ModelGraphNodeReceipt[];
+  /** Never project this field into public background/task state or the ordinary action ledger. */
+  privateNodeHandoffs: OrchestrationPrivateNodeHandoff[];
+  completedNodeIds: string[];
+  arbitrationReceipt?: ModelGraphArbitrationReceipt;
+}
+
+export interface OrchestrationPrivateNodeHandoff {
+  graphId: string;
+  taskId: string;
+  nodeId: string;
+  outputDigest: string;
+  outputSummary: string;
+  evidenceKind: 'tool_terminal_verification' | 'validated_model_output';
+}
+
+const ORCHESTRATION_PRIVATE_HANDOFF_MAX_CHARS = 4_000;
+const ORCHESTRATION_PRIVATE_HANDOFF_MAX_RECORDS = 64;
+
+export function buildOrchestrationPrivateNodeHandoffs(
+  receipts: ModelGraphNodeReceipt[],
+): OrchestrationPrivateNodeHandoff[] {
+  const byNode = new Map<string, OrchestrationPrivateNodeHandoff>();
+  for (const receipt of receipts) {
+    if (
+      !hasVerifiedModelGraphNodeEvidence(receipt)
+      || (receipt.evidenceKind !== 'tool_terminal_verification'
+        && receipt.evidenceKind !== 'validated_model_output')
+    ) continue;
+    const outputSummary = String(receipt.outputSummary || '')
+      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ')
+      .trim()
+      .slice(0, ORCHESTRATION_PRIVATE_HANDOFF_MAX_CHARS);
+    if (!outputSummary || !/^[a-f0-9]{64}$/.test(receipt.outputDigest)) continue;
+    const handoff: OrchestrationPrivateNodeHandoff = {
+      graphId: receipt.graphId,
+      taskId: receipt.taskId,
+      nodeId: receipt.nodeId,
+      outputDigest: receipt.outputDigest,
+      outputSummary,
+      evidenceKind: receipt.evidenceKind,
+    };
+    byNode.delete(`${receipt.graphId}:${receipt.taskId}:${receipt.nodeId}`);
+    byNode.set(`${receipt.graphId}:${receipt.taskId}:${receipt.nodeId}`, handoff);
+  }
+  return [...byNode.values()].slice(-ORCHESTRATION_PRIVATE_HANDOFF_MAX_RECORDS);
+}
+
+export type OrchestrationWorkflowCheckpointCallback = (
+  checkpoint: OrchestrationWorkflowCheckpoint,
+) => void | Promise<void>;
+
+function cloneWorkflowCheckpoint(input: {
+  phase: OrchestrationWorkflowCheckpointPhase;
+  graph: ModelExecutionGraph;
+  receipts: ModelGraphNodeReceipt[];
+  arbitrationReceipt?: ModelGraphArbitrationReceipt;
+}): OrchestrationWorkflowCheckpoint {
+  return {
+    phase: input.phase,
+    executionGraph: {
+      ...input.graph,
+      nodes: input.graph.nodes.map(node => ({
+        ...node,
+        candidates: node.candidates.map(candidate => ({ ...candidate })),
+        dependsOn: [...node.dependsOn],
+        inputRefs: [...node.inputRefs],
+        outputSchema: { ...node.outputSchema },
+      })),
+      edges: input.graph.edges.map(edge => ({ ...edge })),
+      budgets: { ...input.graph.budgets },
+    },
+    nodeReceipts: input.receipts.map(receipt => ({
+      ...receipt,
+      selectedCandidate: receipt.selectedCandidate
+        ? { ...receipt.selectedCandidate }
+        : undefined,
+      dependencyReceiptIds: [...receipt.dependencyReceiptIds],
+      evidenceRefs: [...receipt.evidenceRefs],
+    })),
+    privateNodeHandoffs: buildOrchestrationPrivateNodeHandoffs(input.receipts),
+    completedNodeIds: Array.from(new Set(input.receipts
+      .filter(receipt => receipt.status === 'succeeded')
+      .map(receipt => receipt.nodeId))),
+    arbitrationReceipt: input.arbitrationReceipt
+      ? {
+          ...input.arbitrationReceipt,
+          selectedNodeIds: [...input.arbitrationReceipt.selectedNodeIds],
+          verifiedNodeIds: [...input.arbitrationReceipt.verifiedNodeIds],
+          consideredNodeIds: [...input.arbitrationReceipt.consideredNodeIds],
+        }
+      : undefined,
+  };
+}
+
+async function emitWorkflowCheckpoint(
+  callback: OrchestrationWorkflowCheckpointCallback | undefined,
+  input: {
+    phase: OrchestrationWorkflowCheckpointPhase;
+    graph: ModelExecutionGraph;
+    receipts: ModelGraphNodeReceipt[];
+    arbitrationReceipt?: ModelGraphArbitrationReceipt;
+  },
+): Promise<void> {
+  if (!callback) return;
+  await callback(cloneWorkflowCheckpoint(input));
+}
 
 const UNSCOPED_ORCHESTRATOR_SAFE_TOOL_RE =
   /^(?:work_product_(?:plan|verify)|read_|list_|search_|grep_|extract_|ocr_|floorplan_extract_geometry|knowledge_|web_search|url_fetch|authority_research|capability_research|desktop_(?:list_|path_info|active_window|running_processes|capture_screen|ui_snapshot|system_info|idle_time|poll_activity)|get_|legal_search_|legal_external_source_status|legal_authority_source_status)/i;
@@ -643,7 +785,7 @@ async function runDeterministicDesktopObservation(
     // Forward the canonical terminal record, including its verification and
     // evidence envelope. Dropping those fields made a real multi-worker run
     // look merely exercised and prevented durable acceptance after restart.
-    onTool?.({
+    await onTool?.({
       ...record,
       arguments: { ...(record.arguments || {}) },
     }, meta);
@@ -1101,6 +1243,8 @@ export async function decomposeTask(
         selectionMode: config.selectionMode,
         fallbackCandidates: config.fallbackCandidates,
         allowCloudFallback: config.allowCloudFallback,
+        dataRoutingPolicy: context.dataRoutingPolicy
+          || (isStrictPrivacy() ? 'local_only' : 'policy_scoped'),
         conversationId: config.conversationId,
         requestId: config.requestId,
         interactionId: config.interactionId,
@@ -1405,9 +1549,58 @@ export function compileWorkerModelCandidates(
   fallbackAgents: AgentRecord[] = [],
 ): ModelCandidate[] {
   const privacyPolicy = context.dataRoutingPolicy || (isStrictPrivacy() ? 'local_only' : 'policy_scoped');
+  const preferences = getScopedPreferredLLM(context.userId, {
+    domain: context.domain,
+    orgId: context.orgId,
+  });
+  const materializeAutoCandidates = (raw: ModelCandidate[]): ModelCandidate[] => raw.flatMap((candidate) => {
+    if (candidate.provider !== 'auto') return [candidate];
+
+    // `auto` is a route request, not an executable provider identity. A
+    // durable graph must contain only exact provider/model candidates because
+    // its retry budget and receipts are bound to those identities. Materialize
+    // the same local-first policy here without probing or executing anything;
+    // runtime readiness is checked by the exact candidate adapter later.
+    const preferredLocalModel = String(candidate.model || preferences.model || '').trim();
+    const localCandidates: ModelCandidate[] = (['ollama', 'lmstudio'] as const).flatMap((provider, providerIndex) => {
+      const cached = getLocalModelConfig(provider);
+      const configuredModel = String(preferences.models?.[provider] || '').trim();
+      const models = Array.from(new Set([
+        preferredLocalModel,
+        configuredModel,
+        ...(cached.detected && cached.inferenceHealthy !== false ? cached.models : []),
+      ].map(value => String(value || '').trim()).filter(Boolean)));
+      return models.slice(0, 3).map((model, modelIndex) => ({
+        provider,
+        model,
+        locality: 'local' as const,
+        priority: candidate.priority + providerIndex * 20 + modelIndex,
+        agentId: candidate.agentId,
+      }));
+    });
+    const cloudFallbacks = privacyPolicy === 'local_only'
+      || llmConfig.allowCloudFallback === false
+      || preferences.allowCloudFallback === false
+      ? []
+      : [
+          ...(llmConfig.fallbackCandidates || []),
+          ...(preferences.fallbackCandidates || []),
+          {
+            provider: preferences.autoFallbackProvider,
+            model: preferences.autoFallbackModel,
+          },
+        ].map((fallback, index): ModelCandidate => ({
+          provider: String(fallback.provider || '').trim().toLowerCase(),
+          model: String(fallback.model || '').trim(),
+          locality: modelCandidateLocality(fallback.provider),
+          priority: candidate.priority + 100 + index,
+          agentId: candidate.agentId,
+        })).filter(fallback => fallback.provider && fallback.provider !== 'auto' && fallback.model);
+    return [...localCandidates, ...cloudFallbacks];
+  });
   if (context.modelSelectionMode === 'pinned' && context.modelCandidates?.length) {
     if (assignment.agent.runtime === 'external') return [];
-    const pinned = context.modelCandidates.map((candidate, index): ModelCandidate => ({
+    const pinned = materializeAutoCandidates(context.modelCandidates.map((candidate, index): ModelCandidate => ({
       provider: String(candidate.provider || '').trim().toLowerCase(),
       model: String(candidate.model || '').trim(),
       locality: modelCandidateLocality(candidate.provider),
@@ -1416,7 +1609,7 @@ export function compileWorkerModelCandidates(
       ...(Number.isFinite(candidate.estimatedCostPer1kTokensUsd)
         ? { estimatedCostPer1kTokensUsd: Math.max(0, Number(candidate.estimatedCostPer1kTokensUsd)) }
         : {}),
-    })).filter(candidate => candidate.provider && candidate.model);
+    })).filter(candidate => candidate.provider && candidate.model));
     return (privacyPolicy === 'local_only'
       ? pinned.filter(candidate => candidate.locality === 'local')
       : pinned).sort((left, right) => left.priority - right.priority);
@@ -1427,12 +1620,7 @@ export function compileWorkerModelCandidates(
   ]
     .filter(agent => agent.runtime !== 'external' || canUseExternalWorkerForContext(context))
     .slice(0, 3);
-  const preferences = getScopedPreferredLLM(context.userId, {
-    domain: context.domain,
-    orgId: context.orgId,
-  });
-
-  const candidates = agents.flatMap((agent, agentIndex) => resolveAgentModelCandidates({
+  const candidates = agents.flatMap((agent, agentIndex) => materializeAutoCandidates(resolveAgentModelCandidates({
     agentId: agent.id,
     agentName: agent.name,
     runtime: agent.runtime,
@@ -1446,7 +1634,7 @@ export function compileWorkerModelCandidates(
     ...candidate,
     // Preserve worker priority before comparing that worker's model priority.
     priority: agentIndex * 2_000 + candidate.priority,
-  })));
+  }))));
 
   const privacyScoped = privacyPolicy === 'local_only'
     ? candidates.filter(candidate => candidate.locality === 'local')
@@ -1516,6 +1704,7 @@ async function executeWorkerTask(
   fallbackAgents: AgentRecord[],
   onTool?: OrchestrationToolCallback,
   dependencyResults: ReadonlyArray<WorkerTaskResult> = [],
+  privacyPolicy: ModelGraphPrivacy = 'policy_scoped',
 ): Promise<WorkerTaskResult> {
   const { subTask, agent } = assignment;
   throwIfCancelled(context);
@@ -1547,6 +1736,19 @@ async function executeWorkerTask(
     if (isRetry) recordModelFallback();
     if (!currentAgent) {
       attemptErrors.push(`candidate ${selectedCandidate.provider}/${selectedCandidate.model} references an unavailable agent`);
+      continue;
+    }
+    const trustedCandidateLocality = modelCandidateLocality(selectedCandidate.provider, context.userId);
+    if (selectedCandidate.locality !== trustedCandidateLocality) {
+      attemptErrors.push(
+        `candidate ${selectedCandidate.provider}/${selectedCandidate.model} has stale or untrusted locality metadata`,
+      );
+      continue;
+    }
+    if (privacyPolicy === 'local_only' && trustedCandidateLocality !== 'local') {
+      attemptErrors.push(
+        `candidate ${selectedCandidate.provider}/${selectedCandidate.model} is not a trusted local provider`,
+      );
       continue;
     }
 
@@ -1613,6 +1815,7 @@ async function executeWorkerTask(
     ].filter(Boolean).join('\n\n');
 
     let toolExecutionStarted = false;
+    let activeToolStart: { id?: string; name: string; arguments: Record<string, any> } | undefined;
     try {
       const messages: NormalizedMessage[] = [{ role: 'user', content: workerPrompt }];
       // Workers inherit the task intent: ordinary tool use stays low-friction, while
@@ -1653,17 +1856,32 @@ async function executeWorkerTask(
         llmGetters,
         toolPolicy: workerToolPolicy,
         desktopExecutionTracker: context.desktopExecutionTracker,
-        onToolStart: (record: { id: string; name: string; arguments: Record<string, any> }) => {
-          toolExecutionStarted = true;
-          onTool?.({
+        onToolStart: (record) => {
+          activeToolStart = {
             id: record.id,
             name: record.name,
-            arguments: record.arguments,
+            arguments: { ...(record.arguments || {}) },
+          };
+        },
+        onAdapterStart: async (call) => {
+          const started = activeToolStart?.name === call.name
+            ? activeToolStart
+            : { name: call.name, arguments: {} };
+          // This callback is awaited by the canonical executor before the
+          // adapter handler begins. Durable runtimes use it as an uncertainty
+          // fence, so a crash/timeout can never replay an unreceipted commit.
+          await onTool?.({
+            id: started.id,
+            name: started.name,
+            arguments: { ...started.arguments },
+            adapterStarted: true,
+            lifecycle: 'adapter_started',
           }, {
             subTaskId: subTask.id,
             agentId: currentAgent.id,
             agentName: currentAgent.name,
           });
+          toolExecutionStarted = true;
         },
       };
       let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
@@ -1672,11 +1890,13 @@ async function executeWorkerTask(
           () => {
             attemptTimedOut = true;
             const timeoutError = new Error(`Worker timed out after ${node.timeoutMs}ms`);
-            // Reject the graph attempt first, then abort the underlying model.
-            // Providers that ignore AbortSignal are still stopped by the
-            // cancellation checks inside runWithTools before any late tool call.
-            reject(timeoutError);
             attemptAbort.abort(timeoutError);
+            if (!toolExecutionStarted) {
+              reject(timeoutError);
+            }
+            // Once an adapter has started, keep this race pending until the
+            // original execution settles. Releasing the node/lease early would
+            // allow a retry to overlap a late real-world side effect.
           },
           node.timeoutMs,
         );
@@ -1692,10 +1912,20 @@ async function executeWorkerTask(
             domain: llmConfig.domain || context.domain,
             orgId: llmConfig.orgId || context.orgId,
             signal: attemptAbort.signal,
+            // The durable graph is the sole owner of candidate ordering and
+            // retry budget. Letting the adapter re-expand the user's stored
+            // primary/fallback policy here could execute an uncompiled model,
+            // cross a local-only boundary, and undercount node attempts.
+            selectionMode: 'pinned',
+            fallbackCandidates: [],
+            allowCloudFallback: false,
+            dataRoutingPolicy: privacyPolicy,
+            noImplicitFailover: true,
+            authorizedRoutingCandidate: true,
           },
-          (record) => {
-            toolExecutionStarted = true;
-            onTool?.(record, {
+          async (record) => {
+            toolExecutionStarted = toolExecutionStarted || record.adapterStarted === true;
+            await onTool?.({ ...record, lifecycle: 'terminal' }, {
               subTaskId: subTask.id,
               agentId: currentAgent.id,
               agentName: currentAgent.name,
@@ -1723,6 +1953,9 @@ async function executeWorkerTask(
       } finally {
         if (timeoutHandle) clearTimeout(timeoutHandle);
       }
+      if (attemptTimedOut) {
+        throw new Error(`Worker exceeded its ${node.timeoutMs}ms deadline after adapter execution started; the original execution was fenced until settlement.`);
+      }
       throwIfCancelled(context);
 
       // Record token usage for each LLM call within this worker
@@ -1736,11 +1969,39 @@ async function executeWorkerTask(
         ? {
           provider: actualUsage.provider,
           model: actualUsage.model,
-          locality: modelCandidateLocality(actualUsage.provider),
+          locality: modelCandidateLocality(actualUsage.provider, context.userId),
           priority: selectedCandidate.priority,
           agentId: currentAgent.id,
         }
         : selectedCandidate;
+
+      const exactCandidateIdentity = actualCandidate.provider === selectedCandidate.provider
+        && actualCandidate.model === selectedCandidate.model
+        && actualCandidate.agentId === selectedCandidate.agentId;
+      if (!exactCandidateIdentity) {
+        const reason = `executor reported ${actualCandidate.provider}/${actualCandidate.model}, outside the exact candidate attempted as ${selectedCandidate.provider}/${selectedCandidate.model}`;
+        attemptErrors.push(reason);
+        const adapterStarted = toolExecutionStarted
+          || (result.toolCalls || []).some(call => call.adapterStarted === true);
+        if (adapterStarted) {
+          recordModelFallbackSuppressedAfterSideEffect();
+          return {
+            subTaskId: subTask.id,
+            output: `[Worker result unknown after tool execution started; automatic model fallback stopped because ${reason}.]`,
+            agentId: currentAgent.id,
+            status: 'failed',
+            selectedCandidate,
+          };
+        }
+        if (attempt < candidatesToTry.length - 1) continue;
+        return {
+          subTaskId: subTask.id,
+          output: `[Worker failed: ${reason}.]`,
+          agentId: currentAgent.id,
+          status: 'failed',
+          selectedCandidate,
+        };
+      }
 
       if (isRetry) {
         console.log(`[Orchestrator] Worker '${agent.name}' succeeded with '${currentAgent.name}' via ${actualCandidate.provider}/${actualCandidate.model}`);
@@ -1749,16 +2010,54 @@ async function executeWorkerTask(
       const workerOutput = buildWorkerOutput(result.text.trim(), result.toolCalls);
       const failureReason = workerExecutionFailureReason(result.text, result.toolCalls);
       const evidenceRefs = failureReason ? [] : verifiedWorkerToolEvidence(result.toolCalls);
+      const modelOutputAccepted = !failureReason
+        && evidenceRefs.length === 0
+        && result.toolCalls.length === 0
+        && validateModelGraphNodeOutput(node, workerOutput);
+      const acceptedEvidence = evidenceRefs.length > 0 || modelOutputAccepted;
+      if (!acceptedEvidence) {
+        const reason = failureReason || 'the candidate produced no admissible completion evidence';
+        attemptErrors.push(`${selectedCandidate.provider}/${selectedCandidate.model}: ${reason}`);
+        const adapterStarted = toolExecutionStarted
+          || result.toolCalls.some(call => call.adapterStarted === true);
+        if (adapterStarted) {
+          recordModelFallbackSuppressedAfterSideEffect();
+          return {
+            subTaskId: subTask.id,
+            output: `[Worker result unknown after tool execution started; automatic model fallback stopped to prevent duplicate side effects: ${reason}]`,
+            agentId: currentAgent.id,
+            status: 'failed',
+            selectedCandidate,
+          };
+        }
+        if (attempt < candidatesToTry.length - 1) {
+          console.warn(`[Orchestrator] Model candidate '${selectedCandidate.provider}/${selectedCandidate.model}' returned no admissible completion evidence; trying the next compiled candidate.`);
+          continue;
+        }
+        return {
+          subTaskId: subTask.id,
+          output: `[Worker failed after ${candidatesToTry.length} model candidate(s): ${attemptErrors.join('; ').slice(0, 700)}]`,
+          agentId: currentAgent.id,
+          status: 'failed',
+          selectedCandidate,
+        };
+      }
       return {
         subTaskId: subTask.id,
         output: failureReason
           ? `[Worker failed: ${failureReason}]\n${workerOutput}`
           : workerOutput,
         agentId: currentAgent.id,
-        status: failureReason ? 'failed' : 'succeeded',
+        status: 'succeeded',
         selectedCandidate: actualCandidate,
-        evidenceKind: evidenceRefs.length > 0 ? 'tool_terminal_verification' : 'reasoning_only',
-        evidenceRefs,
+        evidenceKind: evidenceRefs.length > 0
+          ? 'tool_terminal_verification'
+          : modelOutputAccepted
+            ? 'validated_model_output'
+            : 'reasoning_only',
+        evidenceRefs: modelOutputAccepted
+          ? [`model_output:${modelGraphDigest(workerOutput)}`]
+          : evidenceRefs,
       };
     } catch (err) {
       throwIfCancelled(context);
@@ -1802,6 +2101,51 @@ async function executeWorkerTask(
  * Execute the full workflow: topological sort → parallel groups → aggregate.
  * Workers that fail are automatically retried with fallback agents.
  */
+function narrowRecoveredExecutionBudget(
+  persisted: ModelExecutionBudget,
+  requested?: Partial<ModelExecutionBudget>,
+): ModelExecutionBudget {
+  const minRequested = (key: keyof ModelExecutionBudget) => {
+    const requestedValue = requested?.[key];
+    return Number.isFinite(requestedValue)
+      ? Math.min(persisted[key], Number(requestedValue))
+      : persisted[key];
+  };
+  return {
+    maxNodes: minRequested('maxNodes'),
+    maxParallel: minRequested('maxParallel'),
+    maxRetriesPerNode: minRequested('maxRetriesPerNode'),
+    maxWallTimeMs: minRequested('maxWallTimeMs'),
+    maxInputTokens: minRequested('maxInputTokens'),
+    maxEstimatedCostUsd: minRequested('maxEstimatedCostUsd'),
+  };
+}
+
+function recoveryReceiptIdsRequiringNodeBinding(
+  directive: OrchestrationContext['recoveryDirective'],
+): string[] {
+  if (!directive) return [];
+  const declaredIds = new Set((directive.preservedReceiptIds || [])
+    .map(value => String(value || '').trim())
+    .filter(value => /^[A-Za-z0-9._:-]{1,240}$/.test(value)));
+  const structuredById = new Map((directive.preservedReceipts || [])
+    .filter(receipt => (
+      receipt?.verificationStatus === 'verified'
+      && declaredIds.has(String(receipt.id || '').trim())
+    ))
+    .map(receipt => [String(receipt.id).trim(), receipt]));
+  return Array.from(declaredIds).filter((id) => {
+    const receipt = structuredById.get(id);
+    // Legacy ID-only revisions are conservatively treated as side-effecting.
+    if (!receipt) return true;
+    const operationIsReadOnly = receipt.operation === 'observe' || receipt.operation === 'test';
+    const sideEffectsAreReadOnly = receipt.sideEffects.every(effect => (
+      ['none', 'local_read', 'network_read'].includes(String(effect.type || ''))
+    ));
+    return !operationIsReadOnly || !sideEffectsAreReadOnly;
+  });
+}
+
 export async function executeWorkflow(
   assignments: WorkerAssignment[],
   context: OrchestrationContext,
@@ -1809,8 +2153,12 @@ export async function executeWorkflow(
   llmGetters: LlmGetters,
   fallbackAgents: AgentRecord[] = [],
   onTool?: OrchestrationToolCallback,
+  onCheckpoint?: OrchestrationWorkflowCheckpointCallback,
 ): Promise<WorkflowResult> {
-  const graphNodes: ModelGraphNode[] = assignments.map(assignment => {
+  const recoveredGraph = context.resumeExecutionGraph?.taskId === context.taskId
+    ? context.resumeExecutionGraph
+    : undefined;
+  const freshGraphNodes: ModelGraphNode[] = assignments.map(assignment => {
     const candidates = compileWorkerModelCandidates(
       assignment,
       context,
@@ -1821,16 +2169,20 @@ export async function executeWorkflow(
       context.executionBudget?.maxRetriesPerNode ?? 2,
       Math.max(0, candidates.length - 1),
     );
-    return {
+    const baseNode: ModelGraphNode = {
       nodeId: assignment.subTask.id,
       type: assignment.subTask.nodeType || (candidates[0]?.provider.startsWith('external:')
         ? 'external_agent'
         : 'internal_agent'),
       role: assignment.subTask.requiredSkill,
+      taskDescription: redactDiagnosticSecrets(
+        compactTaskForPlanning(assignment.subTask.description, 7_000),
+      ),
+      executionMode: assignment.subTask.executionMode,
       candidates,
       dependsOn: Array.from(new Set(assignment.subTask.dependsOn || [])),
       inputRefs: assignment.subTask.dependsOn?.map(id => `receipt:${id}`) || [],
-      outputSchema: { type: 'string', minLength: 1 },
+      outputSchema: { type: 'string', minLength: 12, maxLength: 24_000 },
       timeoutMs: Math.max(1_000, Math.min(
         240_000,
         context.executionBudget?.maxWallTimeMs || 10 * 60_000,
@@ -1843,28 +2195,143 @@ export async function executeWorkflow(
       ) / 4) + (assignment.subTask.dependsOn?.length || 0) * 2_500),
       estimatedOutputTokens: 4_000,
     };
+    if (assignment.subTask.requiredSkill === 'analysis' || assignment.subTask.requiredSkill === 'writing') {
+      const contentNode: ModelGraphNode = {
+        ...baseNode,
+        sideEffectFree: true,
+        acceptanceMode: 'validated_model_output',
+      };
+      if (canAcceptValidatedModelOutput(contentNode)) return contentNode;
+    }
+    return baseNode;
   });
+  const graphNodes: ModelGraphNode[] = recoveredGraph
+    ? recoveredGraph.nodes.map(node => ({
+        ...node,
+        candidates: node.candidates.map(candidate => ({ ...candidate })),
+        dependsOn: [...node.dependsOn],
+        inputRefs: [...node.inputRefs],
+        outputSchema: { ...node.outputSchema },
+      }))
+    : freshGraphNodes;
+  const rootTaskText = String(context.rootTaskText || '').trim();
+  const recoveredBudget = recoveredGraph
+    ? narrowRecoveredExecutionBudget(recoveredGraph.budgets, context.executionBudget)
+    : undefined;
   const compilation = compileModelExecutionGraph({
     taskId: context.taskId,
+    userId: context.userId,
     nodes: graphNodes,
-    privacyPolicy: context.dataRoutingPolicy || (isStrictPrivacy() ? 'local_only' : undefined),
-    budgets: context.executionBudget,
-    arbitration: context.arbitrationPolicy,
+    ...(rootTaskText ? { rootTaskText } : {}),
+    ...(recoveredGraph?.rootTaskDigest
+      ? { rootTaskDigest: recoveredGraph.rootTaskDigest }
+      : {}),
+    privacyPolicy: recoveredGraph?.privacyPolicy
+      || context.dataRoutingPolicy
+      || (isStrictPrivacy() ? 'local_only' : undefined),
+    budgets: recoveredGraph?.budgets || context.executionBudget,
+    arbitration: recoveredGraph?.arbitration || context.arbitrationPolicy,
   });
-  const graph = compilation.graph;
-  recordModelGraphCompilation(compilation.ok);
-  const workflowDeadline = Date.now() + graph.budgets.maxWallTimeMs;
+  // Recovery executes the exact durable graph. The compilation above is a
+  // validator and wave builder only; replacing the graph with its output would
+  // silently rebind verified receipts to a newly compiled identity.
+  const graph: ModelExecutionGraph = recoveredGraph
+    ? {
+        ...recoveredGraph,
+        nodes: graphNodes,
+        edges: recoveredGraph.edges.map(edge => ({ ...edge })),
+        budgets: { ...recoveredGraph.budgets },
+      }
+    : compilation.graph;
+  const recoveryErrors: string[] = [];
+  if (context.resumeNodeReceipts?.length && !context.resumeExecutionGraph) {
+    recoveryErrors.push('verified recovery receipts were supplied without their durable execution graph');
+  }
+  if (context.resumeExecutionGraph && context.resumeExecutionGraph.taskId !== context.taskId) {
+    recoveryErrors.push('the durable execution graph does not belong to the current task');
+  }
+  const recoveryAssignmentIds = new Set(assignments.map(assignment => assignment.subTask.id));
+  const graphNodeIds = new Set(graph.nodes.map(node => node.nodeId));
+  if (recoveredGraph) {
+    if (!rootTaskText || !modelExecutionGraphMatchesRootTask(recoveredGraph, rootTaskText)) {
+      recoveryErrors.push('the durable execution graph is not bound to the current root task');
+    }
+    if (compilation.graph.graphId !== recoveredGraph.graphId) {
+      recoveryErrors.push('the durable execution graph identity does not match its persisted contents');
+    }
+    if (
+      (context.dataRoutingPolicy === 'local_only' || isStrictPrivacy())
+      && recoveredGraph.privacyPolicy !== 'local_only'
+    ) {
+      recoveryErrors.push('the durable execution graph cannot satisfy the current local-only data-routing policy');
+    }
+    if (context.arbitrationPolicy && context.arbitrationPolicy !== recoveredGraph.arbitration) {
+      recoveryErrors.push('the requested arbitration policy does not match the durable execution graph');
+    }
+    const missingAssignments = graph.nodes
+      .filter(node => !recoveryAssignmentIds.has(node.nodeId))
+      .map(node => node.nodeId);
+    const unexpectedAssignments = assignments
+      .filter(assignment => !graphNodeIds.has(assignment.subTask.id))
+      .map(assignment => assignment.subTask.id);
+    if (missingAssignments.length > 0) {
+      recoveryErrors.push(`durable graph nodes have no executable assignment: ${missingAssignments.join(', ')}`);
+    }
+    if (unexpectedAssignments.length > 0) {
+      recoveryErrors.push(`recovered assignments are not present in the durable graph: ${unexpectedAssignments.join(', ')}`);
+    }
+    for (const assignment of assignments) {
+      const node = graph.nodes.find(candidate => candidate.nodeId === assignment.subTask.id);
+      if (!node) continue;
+      const recoveredDescription = redactDiagnosticSecrets(
+        compactTaskForPlanning(assignment.subTask.description, 7_000),
+      );
+      if (
+        !node.taskDescription
+        || node.taskDescription !== recoveredDescription
+        || node.executionMode !== assignment.subTask.executionMode
+        || node.role !== assignment.subTask.requiredSkill
+        || JSON.stringify([...node.dependsOn]) !== JSON.stringify([...(assignment.subTask.dependsOn || [])])
+      ) {
+        recoveryErrors.push(`assignment ${assignment.subTask.id} does not match its durable graph instruction`);
+      }
+    }
+  }
+  for (const receipt of context.resumeNodeReceipts || []) {
+    const node = graph.nodes.find(candidate => candidate.nodeId === receipt.nodeId);
+    if (!node || !reuseVerifiedModelGraphNodeReceipt({ graph, node, prior: receipt })) {
+      recoveryErrors.push(`verified receipt ${receipt.nodeId} does not match the durable execution graph`);
+    }
+  }
+  if (recoveredGraph && context.recoveryDirective) {
+    const nodeBoundToolReceiptIds = new Set((context.resumeNodeReceipts || [])
+      .flatMap(receipt => receipt.evidenceRefs || [])
+      .map(reference => String(reference || '').replace(/^tool:/, ''))
+      .filter(Boolean));
+    const unboundSideEffectReceipts = recoveryReceiptIdsRequiringNodeBinding(context.recoveryDirective)
+      .filter(receiptId => !nodeBoundToolReceiptIds.has(receiptId));
+    if (unboundSideEffectReceipts.length > 0) {
+      recoveryErrors.push(
+        `verified side-effect tool receipts have no matching durable model-node receipt: ${unboundSideEffectReceipts.slice(0, 20).join(', ')}`,
+      );
+    }
+  }
+  const compilationOk = compilation.ok && recoveryErrors.length === 0;
+  recordModelGraphCompilation(compilationOk);
+  const effectiveBudget = recoveredBudget || graph.budgets;
+  const workflowDeadline = Date.now() + effectiveBudget.maxWallTimeMs;
   const assignmentById = new Map(assignments.map(assignment => [assignment.subTask.id, assignment]));
   const groups = compilation.waves.map(wave => wave
     .map(nodeId => assignmentById.get(nodeId))
     .filter(Boolean) as WorkerAssignment[]);
 
-  if (!compilation.ok) {
-    const lacksPolicyCapableWorker = compilation.errors.some(error => error.includes('has no model/agent candidate'))
+  if (!compilationOk) {
+    const graphErrors = [...compilation.errors, ...recoveryErrors];
+    const lacksPolicyCapableWorker = graphErrors.some(error => error.includes('has no model/agent candidate'))
       && assignments.some(assignment => assignment.agent.runtime === 'external')
       && !canUseExternalWorkerForContext(context);
     const reason = [
-      ...compilation.errors,
+      ...graphErrors,
       ...(lacksPolicyCapableWorker
         ? ['the available external runtime cannot enforce the routed ToolPolicy, and no policy-capable worker was available']
         : []),
@@ -1876,30 +2343,54 @@ export async function executeWorkflow(
       agentId: assignment.agent.id,
       status: 'blocked',
     }));
-    const blockedReceipts = graph.nodes.map(node => buildModelGraphNodeReceipt({
-      graph,
-      node,
+    const rejectionGraph = context.resumeExecutionGraph || graph;
+    const blockedReceipts = context.resumeExecutionGraph
+      ? (context.resumeNodeReceipts || []).filter(receipt => (
+          receipt.graphId === context.resumeExecutionGraph!.graphId
+          && receipt.taskId === context.resumeExecutionGraph!.taskId
+        ))
+      : graph.nodes.map(node => buildModelGraphNodeReceipt({
+          graph,
+          node,
+          status: 'blocked',
+          startedAt: timestamp,
+          completedAt: timestamp,
+          error: reason,
+        }));
+    const arbitrationReceipt: ModelGraphArbitrationReceipt = {
+      graphId: rejectionGraph.graphId,
+      taskId: rejectionGraph.taskId,
+      policy: rejectionGraph.arbitration,
       status: 'blocked',
-      startedAt: timestamp,
+      verification: 'unverified',
+      selectedNodeIds: [],
+      verifiedNodeIds: blockedReceipts
+        .filter(receipt => receipt.verified === true && receipt.status === 'succeeded')
+        .map(receipt => receipt.nodeId),
+      consideredNodeIds: rejectionGraph.nodes.map(node => node.nodeId),
+      outputDigest: modelGraphDigest(''),
       completedAt: timestamp,
-      error: reason,
-    }));
-    const arbitrationReceipt = arbitrateModelGraphResults({
-      graph,
-      receipts: blockedReceipts,
-      outputByNodeId: new Map(),
-      completedAt: timestamp,
-    });
+      reason,
+    };
     recordModelArbitration(arbitrationReceipt);
     return {
       subTaskResults: blockedResults,
       aggregatedOutput: `[Workflow blocked: invalid execution graph: ${reason}]`,
       totalAgentsUsed: 0,
-      executionGraph: graph,
+      executionGraph: rejectionGraph,
       nodeReceipts: blockedReceipts,
       arbitrationReceipt,
     };
   }
+
+  // Only a fully validated fresh/recovered graph may replace the durable
+  // checkpoint. Recovery rejection is returned separately above so it cannot
+  // overwrite the original graph or verified receipts.
+  await emitWorkflowCheckpoint(onCheckpoint, {
+    phase: 'compiled',
+    graph,
+    receipts: [],
+  });
 
   const allResults: WorkerTaskResult[] = [];
   const nodeReceipts: ModelGraphNodeReceipt[] = [];
@@ -1922,12 +2413,14 @@ export async function executeWorkflow(
         if (reusedReceipt) {
           recordModelNodeRecovery();
           nodeReceipts.push(reusedReceipt);
+          const recoveredOutput = String(reusedReceipt.outputSummary || '').trim();
           return {
             subTaskId: a.subTask.id,
-            output: reusedReceipt.outputSummary || `[Recovered verified result ${reusedReceipt.outputDigest}]`,
+            output: recoveredOutput || `[Recovered verified completion ${reusedReceipt.outputDigest}; the private worker hand-off was not persisted, so dependent work cannot safely infer its contents.]`,
             agentId: reusedReceipt.agentId || a.agent.id,
             status: 'succeeded' as const,
             selectedCandidate: reusedReceipt.selectedCandidate,
+            handoffAvailable: Boolean(recoveredOutput),
           };
         }
         const dependencyResults: WorkerTaskResult[] = [];
@@ -1974,13 +2467,31 @@ export async function executeWorkflow(
             nodeReceipts.push(buildModelGraphNodeReceipt({ graph, node: graph.nodes.find(node => node.nodeId === a.subTask.id)!, status: result.status, startedAt, agentId: result.agentId, output: result.output, error: result.output }));
             return result;
           }
+          if (dependencyResult.handoffAvailable === false) {
+            const result: WorkerTaskResult = {
+              subTaskId: a.subTask.id,
+              output: `[Worker blocked: prerequisite "${dependencyId}" has verified completion evidence but no persisted private hand-off payload; automatic continuation was stopped to avoid inventing context or replaying prior side effects.]`,
+              agentId: a.agent.id,
+              status: 'blocked',
+            };
+            nodeReceipts.push(buildModelGraphNodeReceipt({
+              graph,
+              node: graphNode,
+              status: result.status,
+              startedAt,
+              agentId: result.agentId,
+              output: result.output,
+              error: result.output,
+            }));
+            return result;
+          }
           dependencyResults.push(dependencyResult);
         }
         const remainingWallTimeMs = workflowDeadline - Date.now();
         if (remainingWallTimeMs <= 0) {
           const result: WorkerTaskResult = {
             subTaskId: a.subTask.id,
-            output: `[Worker blocked: model execution graph exhausted its ${graph.budgets.maxWallTimeMs}ms wall-time budget before this node could start.]`,
+              output: `[Worker blocked: model execution graph exhausted its ${effectiveBudget.maxWallTimeMs}ms wall-time budget before this node could start.]`,
             agentId: a.agent.id,
             status: 'blocked',
           };
@@ -1995,9 +2506,11 @@ export async function executeWorkflow(
           }));
           return result;
         }
-        const runtimeNode = remainingWallTimeMs < graphNode.timeoutMs
-          ? { ...graphNode, timeoutMs: Math.max(1, remainingWallTimeMs) }
-          : graphNode;
+        const runtimeNode: ModelGraphNode = {
+          ...graphNode,
+          timeoutMs: Math.max(1, Math.min(graphNode.timeoutMs, remainingWallTimeMs)),
+          maxRetries: Math.min(graphNode.maxRetries, effectiveBudget.maxRetriesPerNode),
+        };
         const result = await executeWorkerTask(
           a,
           context,
@@ -2007,6 +2520,7 @@ export async function executeWorkflow(
           fallbackAgents,
           onTool,
           dependencyResults,
+          graph.privacyPolicy,
         );
         nodeReceipts.push(buildModelGraphNodeReceipt({
           graph,
@@ -2030,37 +2544,64 @@ export async function executeWorkflow(
       if (result.status !== 'blocked') usedAgentIds.add(result.agentId);
       if (
         result.status === 'succeeded'
-        && result.evidenceKind === 'tool_terminal_verification'
+        && (result.evidenceKind === 'tool_terminal_verification'
+          || result.evidenceKind === 'validated_model_output')
         && Boolean(result.evidenceRefs?.length)
       ) {
         recordRoutingSuccess(a.subTask.requiredSkill, a.agent.id);
       }
     }
     allResults.push(...groupResults);
+    await emitWorkflowCheckpoint(onCheckpoint, {
+      phase: 'wave_completed',
+      graph,
+      receipts: nodeReceipts,
+    });
     throwIfCancelled(context);
   }
 
   // Aggregate results
   throwIfCancelled(context);
-  const resultByNodeId = new Map(allResults.map(result => [result.subTaskId, result.output]));
+  const resultByNodeId = new Map(allResults
+    .filter(result => result.status === 'succeeded' && result.handoffAvailable !== false)
+    .map(result => [result.subTaskId, result.output]));
   const arbitrationReceipt = arbitrateModelGraphResults({
     graph,
     receipts: nodeReceipts,
     outputByNodeId: resultByNodeId,
   });
   recordModelArbitration(arbitrationReceipt);
-  const arbitratedResults = allResults.filter(result => (
-    arbitrationReceipt.selectedNodeIds.includes(result.subTaskId)
-  ));
-  const aggregatedOutput = arbitrationReceipt.status === 'succeeded'
-    ? aggregateResults(arbitratedResults, assignments)
-    : `[Workflow arbitration blocked: ${arbitrationReceipt.reason || 'no verified result'}]`;
+  await emitWorkflowCheckpoint(onCheckpoint, {
+    phase: 'arbitrated',
+    graph,
+    receipts: nodeReceipts,
+    arbitrationReceipt,
+  });
+  const graphDelivery = buildGraphBoundDelivery({
+    subTaskResults: allResults,
+    executionGraph: graph,
+    nodeReceipts,
+    arbitrationReceipt,
+  });
+  const aggregatedOutput = 'text' in graphDelivery
+    ? graphDelivery.text
+    : `[Workflow arbitration blocked: ${graphDelivery.reason}]`;
 
   // Read-only desktop observations are ephemeral state checks, not reusable
   // knowledge. Never crystallize their raw workflow/result into long-term memory.
-  if (!suppressOrchestrationLearning(context.rootTaskText || '')) {
+  if (
+    arbitrationReceipt.status === 'succeeded'
+    && arbitrationReceipt.verification === 'verified'
+    && !suppressOrchestrationLearning(context.rootTaskText || '')
+  ) {
     try {
-    const usedAgentIdsArr = Array.from(usedAgentIds);
+    const verifiedContributorNodeIds = new Set(arbitrationReceipt.verifiedNodeIds);
+    const verifiedContributorAgentIds = Array.from(new Set(allResults
+      .filter(result => (
+        result.status === 'succeeded'
+        && verifiedContributorNodeIds.has(result.subTaskId)
+      ))
+      .map(result => result.agentId)));
     const mem = addMemory({
       userId: context.userId,
       type: 'knowledge',
@@ -2075,9 +2616,11 @@ export async function executeWorkflow(
       domain: context.domain,
       orgId: context.orgId,
     });
-    // Mark for cross-agent sharing so other agents can learn from this workflow
-    mem.crossAgentShare = true;
-    mem.sharedToAgentIds = usedAgentIdsArr;
+    // Share only the agents whose verified receipts actually contributed to
+    // the accepted arbitration result. Failed or unselected workers cannot
+    // teach the system a workflow that their evidence did not establish.
+    mem.crossAgentShare = verifiedContributorAgentIds.length > 0;
+    mem.sharedToAgentIds = verifiedContributorAgentIds;
   } catch (err) {
     // Non-critical — workflow succeeded even if crystallization fails
     }
@@ -2089,107 +2632,98 @@ export async function executeWorkflow(
     totalAgentsUsed: usedAgentIds.size,
     executionGraph: graph,
     nodeReceipts,
+    privateNodeHandoffs: buildOrchestrationPrivateNodeHandoffs(nodeReceipts),
     arbitrationReceipt,
   };
 }
 
 // ── Result aggregation ──
 
-const AGGREGATE_PROMPT = `You are Lumi, the master orchestrator. Synthesize the following worker outputs into a single, coherent response for the user.
+type GraphBoundDelivery = { ok: true; text: string } | { ok: false; reason: string };
+type GraphBoundWorkflow = Pick<
+  WorkflowResult,
+  'subTaskResults' | 'executionGraph' | 'nodeReceipts' | 'arbitrationReceipt'
+>;
 
-Original task: {task}
-
-Worker outputs:
-{workerOutputs}
-
-Synthesize these results. Fill in gaps. Resolve contradictions. Output the final answer directly — no meta-commentary about workers or aggregation.`;
-
-function aggregateResults(
-  results: Array<{ subTaskId: string; output: string; agentId: string }>,
-  assignments: WorkerAssignment[],
-): string {
-  if (results.length === 0) return 'No results produced.';
-  if (results.length === 1) return results[0].output;
-
-  // For now, concatenate with clear separation. LLM aggregation happens in the chat pipeline.
-  return results
-    .map((r) => {
-      const subTask = assignments.find(a => a.subTask.id === r.subTaskId)?.subTask;
-      return `### ${subTask?.description?.slice(0, 60) || r.subTaskId}\n${compactTextBlock(r.output, 9000, 'worker output')}`;
-    })
-    .join('\n\n');
+function buildGraphBoundDelivery(workflowResult: GraphBoundWorkflow): GraphBoundDelivery {
+  const graph = workflowResult.executionGraph;
+  const arbitration = workflowResult.arbitrationReceipt;
+  if (!graph || !arbitration) {
+    return { ok: false, reason: 'the workflow has no execution graph/arbitration receipt' };
+  }
+  if (arbitration.graphId !== graph.graphId || arbitration.taskId !== graph.taskId) {
+    return { ok: false, reason: 'the arbitration receipt is not bound to this execution graph' };
+  }
+  if (arbitration.status !== 'succeeded' || arbitration.verification !== 'verified') {
+    return { ok: false, reason: arbitration.reason || 'the arbitration result is not verified' };
+  }
+  const resultByNodeId = new Map(workflowResult.subTaskResults.map(result => [result.subTaskId, result]));
+  const receiptByNodeId = new Map((workflowResult.nodeReceipts || []).map(receipt => [receipt.nodeId, receipt]));
+  const recomputedArbitration = arbitrateModelGraphResults({
+    graph,
+    receipts: workflowResult.nodeReceipts || [],
+    outputByNodeId: new Map(workflowResult.subTaskResults
+      .filter(result => (
+        result.status === 'succeeded'
+        && (result as WorkerTaskResult).handoffAvailable !== false
+      ))
+      .map(result => [result.subTaskId, result.output])),
+  });
+  if (
+    recomputedArbitration.status !== arbitration.status
+    || recomputedArbitration.verification !== arbitration.verification
+    || recomputedArbitration.outputDigest !== arbitration.outputDigest
+    || JSON.stringify(recomputedArbitration.selectedNodeIds) !== JSON.stringify(arbitration.selectedNodeIds)
+    || JSON.stringify(recomputedArbitration.verifiedNodeIds) !== JSON.stringify(arbitration.verifiedNodeIds)
+  ) {
+    return { ok: false, reason: 'the arbitration receipt does not match the graph results/receipts' };
+  }
+  const selectedOutputs: string[] = [];
+  const selected: Array<{ node: ModelGraphNode; output: string }> = [];
+  for (const nodeId of arbitration.selectedNodeIds) {
+    const node = graph.nodes.find(candidate => candidate.nodeId === nodeId);
+    const result = resultByNodeId.get(nodeId);
+    const receipt = receiptByNodeId.get(nodeId);
+    if (!node || !result || result.status !== 'succeeded' || !receipt) {
+      return { ok: false, reason: `selected graph node ${nodeId} has no successful result/receipt` };
+    }
+    if (!reuseVerifiedModelGraphNodeReceipt({ graph, node, prior: receipt })) {
+      return { ok: false, reason: `selected graph node ${nodeId} has no graph-bound verified receipt` };
+    }
+    if (receipt.outputDigest !== modelGraphDigest(result.output)) {
+      return { ok: false, reason: `selected graph node ${nodeId} output does not match its receipt digest` };
+    }
+    selectedOutputs.push(result.output);
+    selected.push({ node, output: result.output });
+  }
+  if (selected.length === 0 || modelGraphDigest(selectedOutputs) !== arbitration.outputDigest) {
+    return { ok: false, reason: 'selected outputs do not match the arbitration receipt digest' };
+  }
+  if (selected.length === 1) return { ok: true, text: selected[0].output };
+  return {
+    ok: true,
+    text: selected.map(({ node, output }) => (
+      `### ${node.taskDescription?.slice(0, 60) || node.nodeId}\n${compactTextBlock(output, 9000, 'worker output')}`
+    )).join('\n\n'),
+  };
 }
 
 /**
- * Full LLM aggregation — call this from the chat pipeline after executeWorkflow.
+ * Deliver only the deterministic result selected by the execution graph.
+ * The legacy name is retained for callers; no unreceipted model may rewrite it.
  */
 export async function aggregateWithLLM(
   workflowResult: WorkflowResult,
-  originalTask: string,
-  llmConfig: ScopedLLMConfig,
-  llmGetters: LlmGetters,
-  userId?: string,
-  scope?: { domain?: string; orgId?: string },
+  _originalTask: string,
+  _llmConfig: ScopedLLMConfig,
+  _llmGetters: LlmGetters,
+  _userId?: string,
+  _scope?: { domain?: string; orgId?: string },
 ): Promise<string> {
-  const workerOutputs = workflowResult.subTaskResults
-    .map(r => `[${r.subTaskId}] ${compactTextBlock(r.output, 3500, 'worker output')}`)
-    .join('\n\n---\n\n');
-
-  const prompt = AGGREGATE_PROMPT
-    .replace('{task}', compactTaskForPlanning(originalTask, 6000))
-    .replace('{workerOutputs}', workerOutputs);
-
-  try {
-    const messages: NormalizedMessage[] = [
-      { role: 'system', content: buildResponseLanguageInstruction(originalTask) },
-      { role: 'user', content: prompt },
-    ];
-    const result = await makeLLMCall(
-      messages,
-      [],
-      {
-        provider: llmConfig.provider,
-        model: llmConfig.model,
-        maxTokens: 4000,
-        userId,
-        domain: llmConfig.domain || scope?.domain,
-        orgId: llmConfig.orgId || scope?.orgId,
-        selectionMode: llmConfig.selectionMode,
-        fallbackCandidates: llmConfig.fallbackCandidates,
-        allowCloudFallback: llmConfig.allowCloudFallback,
-        conversationId: llmConfig.conversationId,
-        requestId: llmConfig.requestId,
-        interactionId: llmConfig.interactionId,
-        source: llmConfig.source || 'orchestrator_aggregate',
-      },
-      llmGetters.getDeepSeek,
-      llmGetters.getGemini,
-      llmGetters.getOpenAI,
-      llmGetters.getAnthropic,
-      llmGetters.getQwen,
-      llmGetters.getOllama,
-      llmGetters.getLmStudio,
-      llmGetters.getArk,
-      llmGetters.getXiaomi,
-      llmGetters.getKimi,
-      llmGetters.getGlm,
-      llmGetters.getRelay,
-    );
-    if (userId) {
-      recordTokenUsage(
-        userId,
-        result.routing?.selectedProvider || llmConfig.provider,
-        result.routing?.selectedModel || llmConfig.model,
-        result.usage,
-        `orch_aggregate_${Date.now()}`,
-        'orchestrator',
-      );
-    }
-    return result.text.trim();
-  } catch (err) {
-    console.error('[Orchestrator] LLM aggregation failed:', err);
-    return workflowResult.aggregatedOutput;
-  }
+  const graphDelivery = buildGraphBoundDelivery(workflowResult);
+  return 'text' in graphDelivery
+    ? graphDelivery.text
+    : `[Workflow aggregation blocked: ${graphDelivery.reason}]`;
 }
 
 // ── Skill distillation ──
@@ -2311,6 +2845,62 @@ export interface OrchestratedResult {
   llmWasCalled: boolean;
 }
 
+const RECOVERABLE_SKILLS = new Set<SubTask['requiredSkill']>([
+  'code',
+  'writing',
+  'analysis',
+  'search',
+  'general',
+]);
+
+function restoreSubTasksFromExecutionGraph(
+  graph: ModelExecutionGraph,
+  taskId: string | undefined,
+): SubTask[] | null {
+  if (!taskId || graph.taskId !== taskId || graph.nodes.length === 0) return null;
+  const restored: SubTask[] = [];
+  for (const node of graph.nodes) {
+    const description = String(node.taskDescription || '').trim();
+    const executionMode = node.executionMode;
+    if (
+      !description
+      || !executionMode
+      || !['lumi', 'scholar', 'founder'].includes(executionMode)
+      || !RECOVERABLE_SKILLS.has(node.role as SubTask['requiredSkill'])
+    ) {
+      return null;
+    }
+    restored.push({
+      id: node.nodeId,
+      description,
+      requiredSkill: node.role as SubTask['requiredSkill'],
+      executionMode,
+      dependsOn: [...node.dependsOn],
+      assignedAgentId: node.assignedAgentId,
+      nodeType: node.type,
+    });
+  }
+  return restored;
+}
+
+function restoreWorkerAssignments(
+  subTasks: SubTask[],
+  graph: ModelExecutionGraph,
+  availableAgents: AgentRecord[],
+): WorkerAssignment[] {
+  return subTasks.flatMap(subTask => {
+    const node = graph.nodes.find(candidate => candidate.nodeId === subTask.id);
+    const candidateAgentIds = [
+      node?.assignedAgentId,
+      ...(node?.candidates.map(candidate => candidate.agentId) || []),
+    ].filter((value): value is string => Boolean(value));
+    const agent = candidateAgentIds
+      .map(agentId => availableAgents.find(candidate => candidate.id === agentId))
+      .find((candidate): candidate is AgentRecord => Boolean(candidate));
+    return agent ? [{ subTask, agent }] : [];
+  });
+}
+
 /**
  * Run the full orchestrator pipeline: classify → decompose → match → execute → aggregate.
  * Returns null if the task is too simple or no agents are available (caller should fall
@@ -2323,6 +2913,7 @@ export async function runOrchestratedTask(
   llmGetters: LlmGetters,
   onProgress?: (message: string) => void,
   onTool?: OrchestrationToolCallback,
+  onCheckpoint?: OrchestrationWorkflowCheckpointCallback,
 ): Promise<OrchestratedResult | null> {
   const rootedContext: OrchestrationContext = {
     ...context,
@@ -2330,12 +2921,14 @@ export async function runOrchestratedTask(
   };
   throwIfCancelled(rootedContext);
   const classifiedComplexity = classifyComplexity(text, rootedContext);
-  const complexity = rootedContext.forceOrchestration && classifiedComplexity === 'simple'
+  const complexity = rootedContext.resumeExecutionGraph
+    ? 'complex'
+    : rootedContext.forceOrchestration && classifiedComplexity === 'simple'
     ? 'moderate'
     : classifiedComplexity;
   if (complexity !== 'complex' && complexity !== 'moderate') return null;
 
-  if (strictDesktopObservationRoute(text)) {
+  if (!rootedContext.resumeExecutionGraph && strictDesktopObservationRoute(text)) {
     return runDeterministicDesktopObservation(
       text,
       rootedContext,
@@ -2346,32 +2939,73 @@ export async function runOrchestratedTask(
   }
 
   const availableAgents = listAvailableOrchestrationAgents(rootedContext);
-  if (availableAgents.length < 1) return null;
+  if (availableAgents.length < 1 && !rootedContext.resumeExecutionGraph) return null;
 
   throwIfCancelled(rootedContext);
-  const subTasks = await decomposeTask(text, llmConfig, rootedContext, llmGetters);
+  const recoveredSubTasks = rootedContext.resumeExecutionGraph
+    ? restoreSubTasksFromExecutionGraph(rootedContext.resumeExecutionGraph, rootedContext.taskId)
+    : null;
+  const subTasks = rootedContext.resumeExecutionGraph
+    ? recoveredSubTasks || []
+    : await decomposeTask(text, llmConfig, rootedContext, llmGetters);
   throwIfCancelled(rootedContext);
-  const capped = complexity === 'moderate'
+  const capped = rootedContext.resumeExecutionGraph
+    ? subTasks
+    : complexity === 'moderate'
     ? subTasks.slice(0, Math.min(2, subTasks.length))
     : subTasks;
 
-  onProgress?.(`[Orchestrator] Decomposed into ${capped.length} sub-tasks\n`);
+  onProgress?.(rootedContext.resumeExecutionGraph
+    ? recoveredSubTasks
+      ? `[Orchestrator] Restored ${capped.length} durable sub-task(s)\n`
+      : '[Orchestrator] Durable graph cannot be restored safely; execution will fail closed\n'
+    : `[Orchestrator] Decomposed into ${capped.length} sub-tasks\n`);
 
-  const assignments = matchWorkers(capped, availableAgents);
+  const assignments = rootedContext.resumeExecutionGraph
+    ? restoreWorkerAssignments(capped, rootedContext.resumeExecutionGraph, availableAgents)
+    : matchWorkers(capped, availableAgents);
   onProgress?.(`[Orchestrator] Assigned to ${assignments.length} worker(s)\n`);
 
   throwIfCancelled(rootedContext);
-  const workflowResult = await executeWorkflow(assignments, rootedContext, llmConfig, llmGetters, availableAgents, onTool);
+  const workflowResult = await executeWorkflow(
+    assignments,
+    rootedContext,
+    llmConfig,
+    llmGetters,
+    availableAgents,
+    onTool,
+    onCheckpoint,
+  );
   throwIfCancelled(rootedContext);
 
-  const aggregated = complexity === 'moderate' && capped.length <= 2
-    ? workflowResult.aggregatedOutput
-    : await aggregateWithLLM(workflowResult, text, llmConfig, llmGetters, rootedContext.userId, { domain: rootedContext.domain, orgId: rootedContext.orgId });
+  const aggregated = await aggregateWithLLM(
+    workflowResult,
+    text,
+    llmConfig,
+    llmGetters,
+    rootedContext.userId,
+    { domain: rootedContext.domain, orgId: rootedContext.orgId },
+  );
   throwIfCancelled(rootedContext);
 
   // Record workflow pattern for future skill distillation
-  const skillTags = capped.map(s => s.requiredSkill);
-  recordWorkflowPattern(text, capped.length, skillTags, rootedContext.userId, rootedContext.domain || 'personal', rootedContext.orgId || '');
+  if (
+    workflowResult.arbitrationReceipt?.status === 'succeeded'
+    && workflowResult.arbitrationReceipt.verification === 'verified'
+    && !suppressOrchestrationLearning(rootedContext.rootTaskText || '')
+  ) {
+    const verifiedContributorNodeIds = new Set(workflowResult.arbitrationReceipt.verifiedNodeIds);
+    const verifiedSubTasks = capped.filter(subTask => verifiedContributorNodeIds.has(subTask.id));
+    const skillTags = verifiedSubTasks.map(subTask => subTask.requiredSkill);
+    recordWorkflowPattern(
+      text,
+      verifiedSubTasks.length,
+      skillTags,
+      rootedContext.userId,
+      rootedContext.domain || 'personal',
+      rootedContext.orgId || '',
+    );
+  }
 
   onProgress?.(`\n[Orchestrator] Workflow result ready for final validation — ${workflowResult.totalAgentsUsed} agent(s) used\n`);
 

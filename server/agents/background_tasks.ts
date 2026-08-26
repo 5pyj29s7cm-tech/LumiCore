@@ -54,6 +54,8 @@ export interface BackgroundDelegationContext {
   selectionMode?: 'pinned' | 'ordered_fallback' | 'auto';
   fallbackCandidates?: UserLLMFallbackCandidate[];
   allowCloudFallback?: boolean;
+  /** Durable privacy contract captured when the delegation was registered. */
+  dataRoutingPolicy?: 'policy_scoped' | 'local_only';
   forceOrchestration?: boolean;
   toolPolicy?: ToolPolicy;
 }
@@ -542,9 +544,11 @@ export function completeBackgroundTask(
   ensureHydrated();
   const task = tasks.get(id);
   if (!task) return null;
-  if (!hasLiveLease(task, leaseId)) return null;
+  if (task.status === 'cancelled') return cloneTask(task);
   if (task.cancelRequested) return cancelBackgroundTask(id);
+  if (task.status === 'paused') return cloneTask(task);
   if (task.pauseRequested) return pauseBackgroundTask(id);
+  if (!hasLiveLease(task, leaseId)) return null;
   const acceptance = validateCompletionTerminalReceipt(terminalReceipt, {
     taskId: task.id,
     runtime: 'background',
@@ -600,9 +604,11 @@ export function recordBackgroundTaskFailure(
   ensureHydrated();
   const task = tasks.get(id);
   if (!task) return null;
-  if (!hasLiveLease(task, leaseId)) return null;
+  if (task.status === 'cancelled') return cloneTask(task);
   if (task.cancelRequested) return cancelBackgroundTask(id);
+  if (task.status === 'paused') return cloneTask(task);
   if (task.pauseRequested) return pauseBackgroundTask(id);
+  if (!hasLiveLease(task, leaseId)) return null;
   const receipts = input.receiptSnapshots || snapshotDurableToolRecords(input.toolRecords || []);
   const diagnosis = diagnoseDurableTaskFailure({
     ...input,

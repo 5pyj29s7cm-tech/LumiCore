@@ -1,29 +1,29 @@
-# LumiOS
+# LumiCore
 
 面向个人与组织的私有化本地智能体系统。
 
 **浙江灵序科技有限公司 · [lumiai.asia](https://lumiai.asia)**
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-orange.svg)](./LICENSE)
-[![LumiOS CI](https://github.com/5pyj29s7cm-tech/LumiOS/actions/workflows/ci.yml/badge.svg)](https://github.com/5pyj29s7cm-tech/LumiOS/actions/workflows/ci.yml)
+[![LumiCore CI](https://github.com/5pyj29s7cm-tech/LumiCore/actions/workflows/ci.yml/badge.svg)](https://github.com/5pyj29s7cm-tech/LumiCore/actions/workflows/ci.yml)
 
-> LumiOS 不只是一个聊天助手。
+> LumiCore 不只是一个聊天助手。
 >
 > 它把模型、语音、记忆、知识、人格、技能、工具、桌面程序和外部智能体组织成一套可持续工作的个人 AI 系统。
 
 ## 当前状态
 
-当前版本：`3.0.3`
+当前版本：`3.1.0`
 
-本仓库是 LumiOS 的公开源码与社区协作仓库，目前仅提供源码，不提供公开安装包、Release 或构建产物。Windows 和 macOS 安装包只有通过签名、冒烟、生命周期与发布门禁后，才会作为独立发行物提供。
+本仓库是 LumiCore 的公开源码与社区协作仓库，目前仅提供源码，不提供公开安装包、Release 或构建产物。Windows 和 macOS 安装包只有通过签名、冒烟、生命周期与发布门禁后，才会作为独立发行物提供。
 
-LumiOS 仍在快速迭代。统一意图、风险决策、任务账本、工具回执和多模型配置已经形成底层主干；桌面控制、连续语音、外部平台协作和行业软件自动化仍会受到操作系统、模型能力、第三方界面、账号权限与网络环境影响。
+LumiCore 仍在快速迭代。统一意图、风险决策、任务账本、工具回执和多模型配置已经形成底层主干；桌面控制、连续语音、外部平台协作和行业软件自动化仍会受到操作系统、模型能力、第三方界面、账号权限与网络环境影响。
 
 任何“完成”结论都应来自真实工具回执或可核验结果。未经验证的自动化能力应视为开发者预览，而不是无条件交付承诺。
 
-## LumiOS 是什么
+## LumiCore 是什么
 
-LumiOS 是一款以用户行为为导向、以语音和自然语言交互为主要入口的本地智能体产品。它可以：
+LumiCore 是一款以用户行为为导向、以语音和自然语言交互为主要入口的本地智能体产品。它可以：
 
 - 使用云端模型、本地模型或自定义 OpenAI 兼容服务；
 - 保存用户自己的会话、记忆、知识库、任务和人格配置；
@@ -32,7 +32,7 @@ LumiOS 是一款以用户行为为导向、以语音和自然语言交互为主�
 - 在个人域和组织域之间保持清晰的数据与权限边界；
 - 通过行业定制版把通用能力收敛成更轻、更稳定的业务流程。
 
-LumiOS 不把能力锁死在某一个模型上。模型负责理解和推理，技能与工具负责执行，任务账本与回执负责证明发生了什么。
+LumiCore 不把能力锁死在某一个模型上。模型负责理解和推理，技能与工具负责执行，任务账本与回执负责证明发生了什么。
 
 ## 工作方式
 
@@ -69,7 +69,7 @@ LumiOS 不把能力锁死在某一个模型上。模型负责理解和推理，�
 
 ## 指挥中心
 
-指挥中心是 LumiOS 的持续工作空间，不是单独的演示页面。
+指挥中心是 LumiCore 的持续工作空间，不是单独的演示页面。
 
 - 文字对话与语音状态共享同一会话上下文；
 - 新建对话、历史会话和任务账本分别管理；
@@ -82,7 +82,7 @@ LumiOS 不把能力锁死在某一个模型上。模型负责理解和推理，�
 
 ### 模型编排
 
-LumiOS 支持以下模型来源，具体可用模型由用户账号、服务端接口和本地运行时决定：
+LumiCore 支持以下模型来源，具体可用模型由用户账号、服务端接口和本地运行时决定：
 
 | 类型 | 支持方式 |
 | --- | --- |
@@ -116,7 +116,7 @@ LumiOS 支持以下模型来源，具体可用模型由用户账号、服务端�
 
 ## 技能、工具与外部协作
 
-LumiOS 把行业能力放在技能层，把具体执行放在工具和适配器层，避免把业务全部写成不可解释的快捷脚本。
+LumiCore 把行业能力放在技能层，把具体执行放在工具和适配器层，避免把业务全部写成不可解释的快捷脚本。
 
 - 内置技能覆盖办公、法律、财税、电商、设计、数据、内容、采购、制造等方向；
 - 工具覆盖桌面、文件、Office、网页、消息、知识库、媒体、CAD 和系统操作；
@@ -131,7 +131,7 @@ LumiOS 把行业能力放在技能层，把具体执行放在工具和适配器�
 
 ## 行业定制版
 
-公开主仓库维护 LumiOS 的统一底层。行业版本从稳定主线派生，保留共同 Git 历史，并在各自仓库中进行表层适配和业务交付。
+公开主仓库维护 LumiCore 的统一底层。行业版本从稳定主线派生，保留共同 Git 历史，并在各自仓库中进行表层适配和业务交付。
 
 | 版本 | 主要工作区 |
 | --- | --- |
@@ -177,8 +177,8 @@ LumiOS 把行业能力放在技能层，把具体执行放在工具和适配器�
 ### 获取源码
 
 ```bash
-git clone https://github.com/5pyj29s7cm-tech/LumiOS.git
-cd LumiOS
+git clone https://github.com/5pyj29s7cm-tech/LumiCore.git
+cd LumiCore
 npm ci
 ```
 
@@ -235,14 +235,14 @@ DOUBAO_SPEECH_KEY=
 
 ## 数据与隐私
 
-默认用户数据目录为 `~/LumiOS/`，与源码仓库分离。
+默认用户数据目录为 `~/LumiCore/`，与源码仓库分离。升级时会在独占数据租约下将旧版 `~/LumiOS/` 原地迁移，不复制会话或凭据。
 
 | 路径 | 内容 |
 | --- | --- |
-| `~/LumiOS/data/lumi.db` | 会话、记忆、任务、回执与智能体数据 |
-| `~/LumiOS/data/keys.json` | 本地凭证存储 |
-| `~/LumiOS/data/knowledge/` | 知识库文件与索引 |
-| `~/LumiOS/data/voice_samples/` | 用户授权保存的语音样本 |
+| `~/LumiCore/data/lumi.db` | 会话、记忆、任务、回执与智能体数据 |
+| `~/LumiCore/data/keys.json` | 本地凭证存储 |
+| `~/LumiCore/data/knowledge/` | 知识库文件与索引 |
+| `~/LumiCore/data/voice_samples/` | 用户授权保存的语音样本 |
 | `~/lumi_skills/` | 用户安装的 MCP 技能包 |
 
 提交 Issue 或 Pull Request 时，不要上传 API Key、访问令牌、客户资料、个人数据库、语音样本或可识别真实账号的配置。发现安全问题请先阅读 [安全策略](./SECURITY.md)。
@@ -282,7 +282,7 @@ npm run release:check
 
 每个人都应该拥有一个真正属于自己的 AI。
 
-它的记忆、人格和知识由用户掌控；它可以使用不同模型、连接不同载体，并在真实工作中持续形成可追溯的结果。LumiOS 是这个愿景的软件核心，未来将连接个人电脑、智能硬件、行业程序、外部 AI 和分布式算力节点。
+它的记忆、人格和知识由用户掌控；它可以使用不同模型、连接不同载体，并在真实工作中持续形成可追溯的结果。LumiCore 是这个愿景的软件核心，未来将连接个人电脑、智能硬件、行业程序、外部 AI 和分布式算力节点。
 
 行业定制不是偏离主线，而是让通用智能进入真实业务、接受稳定性交付检验，再把可复用能力反哺到底层。
 
@@ -293,11 +293,11 @@ npm run release:check
 **使命：让人类本身得以延伸。**
 
 - 官网：[lumiai.asia](https://lumiai.asia)
-- GitHub：[5pyj29s7cm-tech/LumiOS](https://github.com/5pyj29s7cm-tech/LumiOS)
+- GitHub：[5pyj29s7cm-tech/LumiCore](https://github.com/5pyj29s7cm-tech/LumiCore)
 - 邮箱：3565286431@qq.com
 
 ## 许可证
 
 源码采用 [GNU Affero General Public License v3.0](./LICENSE)。个人使用、修改和分发需遵守该许可证；网络服务形式的修改版本同样受到 AGPL-3.0 的源码公开要求约束。闭源商业许可请联系版权方。
 
-Lumi、LumiOS、灵序科技及相关视觉标识不随开源许可证自动授权，详见 [商标说明](./TRADEMARKS.md)。
+Lumi、LumiCore、灵序科技及相关视觉标识不随开源许可证自动授权，详见 [商标说明](./TRADEMARKS.md)。

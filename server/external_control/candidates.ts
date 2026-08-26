@@ -56,7 +56,7 @@ const NATIVE_ACCESSIBILITY: ExternalControlCandidate = {
   setup: process.platform === 'win32'
     ? []
     : process.platform === 'darwin'
-      ? ['Grant Lumi OS Accessibility permission in System Settings > Privacy & Security > Accessibility.']
+      ? ['Grant LumiCore Accessibility permission in System Settings > Privacy & Security > Accessibility.']
       : ['Native semantic accessibility control is available on Windows and macOS desktop hosts.'],
 };
 

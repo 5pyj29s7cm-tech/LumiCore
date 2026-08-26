@@ -39,6 +39,41 @@ const deadlines = {
 afterEach(() => resetCircuit());
 
 describe('transactional streaming model routing', () => {
+  it('does not expand an exact streaming graph candidate into the global fallback route', async () => {
+    const primaryCreate = vi.fn(async () => {
+      throw new Error('exact stream candidate failed');
+    });
+    const fallbackGetter = vi.fn(() => ({
+      chat: { completions: { create: vi.fn(async function* () {
+        yield { choices: [{ delta: { content: 'must not stream' } }] };
+      }) } },
+    }));
+    const chunks: string[] = [];
+
+    await expect(makeLLMCallStreaming(
+      [{ role: 'user', content: 'use only this graph candidate' }],
+      [],
+      {
+        provider: 'deepseek',
+        model: 'exact-stream-model',
+        selectionMode: 'ordered_fallback',
+        fallbackCandidates: [{ provider: 'openai', model: 'global-stream-fallback' }],
+        allowCloudFallback: true,
+        noImplicitFailover: true,
+        authorizedRoutingCandidate: true,
+        attemptTimeouts: deadlines,
+      },
+      chunk => chunks.push(chunk),
+      () => ({ chat: { completions: { create: primaryCreate } } }),
+      () => null,
+      fallbackGetter,
+    )).rejects.toThrow('exact stream candidate failed');
+
+    expect(primaryCreate).toHaveBeenCalledTimes(1);
+    expect(fallbackGetter).not.toHaveBeenCalled();
+    expect(chunks).toEqual([]);
+  });
+
   it('uses the configured auto cloud chain without reverting to a non-streaming call', async () => {
     async function* unavailable() {
       yield { choices: [{ delta: { reasoning_content: 'not visible' } }] };

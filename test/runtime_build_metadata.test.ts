@@ -19,7 +19,7 @@ describe('runtime build metadata', () => {
   it('accepts only complete non-placeholder build records', () => {
     const valid = {
       schemaVersion: 1,
-      name: 'lumi-os',
+      name: 'lumi-core',
       version: '3.0.3',
       buildId: 'abcdef123456',
       sourceFingerprint: 'a'.repeat(64),
@@ -39,7 +39,7 @@ describe('runtime build metadata', () => {
     temporaryDirectories.push(directory);
     const metadata = {
       schemaVersion: 1,
-      name: 'lumi-os',
+      name: 'lumi-core',
       version: '3.0.3',
       buildId: 'packaged-commit',
       sourceFingerprint: 'b'.repeat(64),
@@ -59,10 +59,10 @@ describe('runtime build metadata', () => {
   it('uses source package metadata without returning empty build identity', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi-runtime-source-'));
     temporaryDirectories.push(directory);
-    fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({ name: 'lumi-os', version: '3.0.3' }));
+    fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({ name: 'lumi-core', version: '3.0.3' }));
     const metadata = loadRuntimeBuildMetadata({ cwd: directory, env: {}, now: '2026-07-26T00:00:00.000Z' });
     expect(metadata).toMatchObject({
-      name: 'lumi-os',
+      name: 'lumi-core',
       version: '3.0.3',
       buildId: 'development',
       channel: 'internal',

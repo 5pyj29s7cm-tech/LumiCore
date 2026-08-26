@@ -193,24 +193,24 @@ describe('Lumi real failure-chain replay', () => {
       }, {
         name: 'desktop_system_info',
         arguments: {},
-        result: JSON.stringify({ home_dir: 'C:\\Users\\Administrator' }),
+        result: JSON.stringify({ home_dir: 'C:\\Users\\test-user' }),
       }, {
         name: 'desktop_list_files',
-        arguments: { path: 'C:\\Users\\Administrator\\Desktop' },
+        arguments: { path: 'C:\\Users\\test-user\\Desktop' },
         result: JSON.stringify([{
           name: '\u8bbe\u8ba1\u8349\u7a3f.jpg',
-          path: 'C:\\Users\\Administrator\\Desktop\\\u8bbe\u8ba1\u8349\u7a3f.jpg',
+          path: 'C:\\Users\\test-user\\Desktop\\\u8bbe\u8ba1\u8349\u7a3f.jpg',
           type: 'file',
           size: 103202,
         }]),
       }, {
         name: 'floorplan_extract_geometry',
         arguments: {
-          imagePath: 'C:\\Users\\Administrator\\Desktop\\\u8bbe\u8ba1\u8349\u7a3f.jpg',
+          imagePath: 'C:\\Users\\test-user\\Desktop\\\u8bbe\u8ba1\u8349\u7a3f.jpg',
           projectName: '\u8bbe\u8ba1\u8349\u7a3f',
         },
         result: JSON.stringify({
-          path: 'C:\\Users\\Administrator\\Desktop\\\u8bbe\u8ba1\u8349\u7a3f.jpg',
+          path: 'C:\\Users\\test-user\\Desktop\\\u8bbe\u8ba1\u8349\u7a3f.jpg',
           image: {
             width: 1280,
             height: 911,

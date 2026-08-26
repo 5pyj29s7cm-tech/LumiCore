@@ -36,6 +36,7 @@ import {
 import type { UserLLMFallbackCandidate, UserLLMSelectionMode } from './user_preferences';
 import { CN_DURABLE_EXECUTION_MESSAGES } from '../i18n/durable_execution_messages';
 import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../regions/packs/cn/execution_evidence_messages';
+import { redactDiagnosticSecrets } from '../client/diagnostic_sanitizer';
 
 export { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
 
@@ -54,11 +55,28 @@ export interface LLMConfig {
   signal?: AbortSignal;
   /** Provider-independent lifecycle deadlines for each model candidate. */
   attemptTimeouts?: Partial<ModelAttemptTimeouts>;
+  /** Total provider-input budget including system, history, input and schemas. */
+  inputTokenBudget?: number;
   /** Cumulative budget spent waiting on model providers; tool runtime is excluded. */
   modelWaitBudgetMs?: number;
+  /**
+   * Maximum time allowed for one durable tool-lifecycle observer write. The
+   * observer is an execution boundary, not UI telemetry: timing it out leaves
+   * an already-started adapter quarantined instead of reporting completion.
+   */
+  toolLifecycleObserverTimeoutMs?: number;
   selectionMode?: UserLLMSelectionMode;
   fallbackCandidates?: UserLLMFallbackCandidate[];
   allowCloudFallback?: boolean;
+  /** Per-request routing boundary inherited from a durable execution graph. */
+  dataRoutingPolicy?: 'policy_scoped' | 'local_only';
+  /**
+   * Execute the configured provider/model as one exact candidate. The caller
+   * owns all candidate fallback and retry ordering outside this adapter.
+   */
+  noImplicitFailover?: boolean;
+  /** Candidate was compiled by a trusted routing/orchestration policy. */
+  authorizedRoutingCandidate?: boolean;
 }
 
 export interface LLMResult {
@@ -175,6 +193,109 @@ function parseDiscoveredModelToolNames(
     }
   }
   return names;
+}
+
+/**
+ * A lifecycle observer is part of the durable execution boundary, not model
+ * telemetry. Its failure must never be reclassified as a provider failure or
+ * converted into a misleading "checkpoint preserved" response.
+ */
+export type ToolLifecyclePersistencePhase = 'adapter_started' | 'terminal';
+
+export interface ToolLifecyclePersistenceErrorDetails {
+  phase?: ToolLifecyclePersistencePhase;
+  toolName?: string;
+  toolCallId?: string;
+  timeoutMs?: number;
+  quarantined?: boolean;
+}
+
+export class ToolLifecyclePersistenceError extends Error {
+  readonly cause: unknown;
+  readonly code: 'TOOL_LIFECYCLE_PERSISTENCE_FAILED' | 'TOOL_LIFECYCLE_OBSERVER_TIMEOUT';
+  readonly phase?: ToolLifecyclePersistencePhase;
+  readonly toolName?: string;
+  readonly toolCallId?: string;
+  readonly timeoutMs?: number;
+  /** True means an uncertainty fence must remain authoritative; never replay. */
+  readonly quarantined: boolean;
+
+  constructor(cause: unknown, details: ToolLifecyclePersistenceErrorDetails = {}) {
+    const timedOut = Number.isFinite(details.timeoutMs) && Number(details.timeoutMs) > 0;
+    const phase = details.phase ? ` during ${details.phase}` : '';
+    const quarantine = details.quarantined
+      ? ' The durable adapter-start uncertainty fence remains quarantined; automatic replay is forbidden.'
+      : '';
+    super(`Tool lifecycle persistence failed${phase}: ${redactDiagnosticSecrets(
+      cause instanceof Error ? cause.message : String(cause || 'unknown error'),
+    ).slice(0, 500)}${quarantine}`);
+    this.name = 'ToolLifecyclePersistenceError';
+    this.cause = cause;
+    this.code = timedOut
+      ? 'TOOL_LIFECYCLE_OBSERVER_TIMEOUT'
+      : 'TOOL_LIFECYCLE_PERSISTENCE_FAILED';
+    this.phase = details.phase;
+    this.toolName = details.toolName;
+    this.toolCallId = details.toolCallId;
+    this.timeoutMs = timedOut ? Math.max(1, Math.trunc(Number(details.timeoutMs))) : undefined;
+    this.quarantined = details.quarantined === true;
+  }
+}
+
+export function isToolLifecyclePersistenceError(error: unknown): error is ToolLifecyclePersistenceError {
+  return error instanceof ToolLifecyclePersistenceError;
+}
+
+export const DEFAULT_TOOL_LIFECYCLE_OBSERVER_TIMEOUT_MS = 15_000;
+
+interface ToolLifecycleObserverInput {
+  phase: ToolLifecyclePersistencePhase;
+  toolName?: string;
+  toolCallId?: string;
+  timeoutMs: number;
+  quarantined: boolean;
+  observe: () => unknown;
+}
+
+class ToolLifecycleObserverTimeoutError extends Error {
+  constructor(readonly timeoutMs: number, phase: ToolLifecyclePersistencePhase) {
+    super(`Durable ${phase} observer did not settle within ${timeoutMs}ms`);
+    this.name = 'ToolLifecycleObserverTimeoutError';
+  }
+}
+
+async function waitForToolLifecycleObserver(input: ToolLifecycleObserverInput): Promise<void> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const observerOperation = Promise.resolve().then(input.observe);
+  try {
+    await Promise.race([
+      observerOperation,
+      new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new ToolLifecycleObserverTimeoutError(input.timeoutMs, input.phase));
+        }, input.timeoutMs);
+      }),
+    ]);
+  } catch (error) {
+    if (isToolLifecyclePersistenceError(error)) throw error;
+    throw new ToolLifecyclePersistenceError(error, {
+      phase: input.phase,
+      toolName: input.toolName,
+      toolCallId: input.toolCallId,
+      timeoutMs: error instanceof ToolLifecycleObserverTimeoutError
+        ? error.timeoutMs
+        : undefined,
+      quarantined: input.quarantined,
+    });
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }
+}
+
+function toolLifecycleCallKey(call: { id?: string; name?: string }): string {
+  const id = String(call.id || '').trim();
+  if (id) return `id:${id}`;
+  return `name:${String(call.name || '').trim()}`;
 }
 
 /**
@@ -445,56 +566,22 @@ function buildMissingVerificationObligationPrompt(
   ].filter(Boolean).join('\n');
 }
 
-function messageContentLength(content: NormalizedMessage['content']): number {
-  if (typeof content === 'string') return content.length;
-  if (!content) return 0;
-  return content.reduce((sum, part) => sum + (part.type === 'text' ? part.text.length : 1200), 0);
-}
-
-function compactMessageContent(
-  content: NormalizedMessage['content'],
-  limit: number,
-  label: string,
-): NormalizedMessage['content'] {
-  if (typeof content === 'string') return compactStringForModel(content, limit, label);
-  if (!content) return content;
-  return content.map(part => {
-    if (part.type !== 'text') return part;
-    return { ...part, text: compactStringForModel(part.text, limit, label) };
-  });
-}
-
 function compactMessagesForModel(messages: NormalizedMessage[]): NormalizedMessage[] {
-  const compacted = messages.map((m) => {
-    const roleLimit =
-      m.role === 'system' ? 16_000 :
-      m.role === 'user' ? 10_000 :
-      m.role === 'tool' ? 4_000 :
-      6_000;
-    return {
-      ...m,
-      content: compactMessageContent(m.content, roleLimit, `${m.role} message`),
-      reasoningContent: m.reasoningContent ? compactStringForModel(m.reasoningContent, 2_000, 'reasoning') : m.reasoningContent,
-    };
-  });
-
-  let total = compacted.reduce((sum, m) => sum + messageContentLength(m.content), 0);
-  const maxTotal = 80_000;
-  if (total <= maxTotal) return compacted;
-
-  // Preserve the newest tool-call exchange, but squeeze old context aggressively.
-  const protectFrom = Math.max(0, compacted.length - 8);
-  for (let i = 0; i < protectFrom && total > maxTotal; i++) {
-    const before = messageContentLength(compacted[i].content);
-    if (before <= 900) continue;
-    compacted[i] = {
-      ...compacted[i],
-      content: compactMessageContent(compacted[i].content, 900, `${compacted[i].role} message`),
-    };
-    total += messageContentLength(compacted[i].content) - before;
-  }
-
-  return compacted;
+  // Do not independently clip system/history/current-input content here. The
+  // provider boundary applies one shared token budget after the exact dynamic
+  // tool schemas are known; a character-only pre-pass used to cut safety text
+  // out of the middle while still allowing a 43k-token assembled request.
+  return messages.map(message => ({
+    ...message,
+    content: Array.isArray(message.content)
+      ? message.content.map(part => part.type === 'text'
+        ? { ...part }
+        : { ...part, image_url: { ...part.image_url } })
+      : message.content,
+    reasoningContent: message.reasoningContent
+      ? compactStringForModel(message.reasoningContent, 2_000, 'reasoning')
+      : message.reasoningContent,
+  }));
 }
 
 function collectArtifactRefs(text: string): string[] {
@@ -773,7 +860,7 @@ function buildToolInvocationBudgetSummary(
   ].filter(Boolean).join('\n');
 }
 
-function stopForToolInvocationBudget(input: {
+async function stopForToolInvocationBudget(input: {
   boundary: ToolInvocationBudgetBoundary;
   rawPlannedCalls: number;
   normalizedPlannedCalls: number;
@@ -784,11 +871,11 @@ function stopForToolInvocationBudget(input: {
   config: LLMConfig;
   usageRecords: LLMUsageRecord[];
   context?: ToolContext;
-  onToolCall?: (record: ToolExecutionRecord) => void;
-}): LLMResult {
+  onToolCall?: (record: ToolExecutionRecord) => unknown;
+}): Promise<LLMResult> {
   const record = buildToolInvocationBudgetRecord(input);
   input.executionLog.push(record);
-  input.onToolCall?.(record);
+  await input.onToolCall?.(record);
   recordWorkflowIfToolsUsed(input.executionLog, input.messages, input.config);
   return {
     text: buildToolInvocationBudgetSummary(getPrimaryUserText(input.messages), record),
@@ -1192,7 +1279,7 @@ export async function runWithTools(
   messages: NormalizedMessage[],
   toolRegistry: ToolRegistry,
   config: LLMConfig,
-  onToolCall?: (record: ToolExecutionRecord) => void,
+  onToolCall?: (record: ToolExecutionRecord) => unknown,
   maxIterations: number = 5,
   getDeepSeek?: () => any,
   getGemini?: () => any,
@@ -1224,14 +1311,55 @@ export async function runWithTools(
     config.modelWaitBudgetMs ?? context?.toolPolicy?.modelWaitBudgetMs,
     DEFAULT_TOOL_LOOP_MODEL_WAIT_BUDGET_MS,
   );
+  const lifecycleObserverTimeoutMs = positiveBudget(
+    config.toolLifecycleObserverTimeoutMs,
+    DEFAULT_TOOL_LIFECYCLE_OBSERVER_TIMEOUT_MS,
+  );
   const supervisor = new ToolLoopModelBudget(modelWaitBudgetMs, config.signal, context?.isCancelled);
   const toolInvocationBudget = resolveToolInvocationBudget(context);
   const observedRecords: ToolExecutionRecord[] = [];
   const observedUsageRecords: LLMUsageRecord[] = [];
-  const guardedToolCall = (record: ToolExecutionRecord) => {
-    if (!supervisor.acceptsEvents) return;
+  let activeToolCall: { id?: string; name: string; arguments: Record<string, any> } | undefined;
+  const durablyStartedToolCalls = new Set<string>();
+  const adapterStartPersistenceErrors = new Map<string, ToolLifecyclePersistenceError>();
+  const claimedTerminalToolCalls = new Set<string>();
+  const guardedToolCall = async (record: ToolExecutionRecord) => {
+    const lifecycleKey = toolLifecycleCallKey(record);
+    const adapterStartError = adapterStartPersistenceErrors.get(lifecycleKey);
+    if (adapterStartError) {
+      adapterStartPersistenceErrors.delete(lifecycleKey);
+      throw adapterStartError;
+    }
+    const durablyStarted = durablyStartedToolCalls.has(lifecycleKey);
+    // UI/model events are quarantined after cancellation, but a terminal
+    // receipt is different: once adapter_started was durably acknowledged it
+    // must replace that uncertainty fence even when the caller has timed out.
+    if (!supervisor.acceptsEvents && !durablyStarted) return;
+    if (claimedTerminalToolCalls.has(lifecycleKey)) return;
+    claimedTerminalToolCalls.add(lifecycleKey);
     observedRecords.push(record);
-    onToolCall?.(record);
+    if (!onToolCall) {
+      if (durablyStarted) {
+        throw new ToolLifecyclePersistenceError(
+          new Error('No durable terminal lifecycle observer is installed'),
+          {
+            phase: 'terminal',
+            toolName: record.name,
+            toolCallId: record.id,
+            quarantined: true,
+          },
+        );
+      }
+      return;
+    }
+    await waitForToolLifecycleObserver({
+      phase: 'terminal',
+      toolName: record.name,
+      toolCallId: record.id,
+      timeoutMs: lifecycleObserverTimeoutMs,
+      quarantined: durablyStarted,
+      observe: () => onToolCall(record),
+    });
   };
   const guardedChunk: StreamCallback | undefined = onStreamChunk
     ? chunk => {
@@ -1245,9 +1373,14 @@ export async function runWithTools(
         onProgress: context.onProgress
           ? step => { if (supervisor.acceptsEvents) context.onProgress?.(step); }
           : undefined,
-        onToolStart: context.onToolStart
-          ? call => { if (supervisor.acceptsEvents) context.onToolStart?.(call); }
-          : undefined,
+        onToolStart: call => {
+          activeToolCall = {
+            id: call.id,
+            name: call.name,
+            arguments: { ...(call.arguments || {}) },
+          };
+          if (supervisor.acceptsEvents) context.onToolStart?.(call);
+        },
         requestConfirmation: context.requestConfirmation
           ? async (name, args) => {
               if (!supervisor.acceptsEvents) return false;
@@ -1258,8 +1391,36 @@ export async function runWithTools(
         onAdapterStart: context.onAdapterStart
           ? async call => {
               if (!supervisor.acceptsEvents) throw config.signal?.reason || new Error('Turn no longer active');
-              await context.onAdapterStart?.(call);
-              if (!supervisor.acceptsEvents) throw config.signal?.reason || new Error('Turn no longer active');
+              const lifecycleCall = activeToolCall || { name: call.name, arguments: {} };
+              const lifecycleKey = toolLifecycleCallKey(lifecycleCall);
+              try {
+                await waitForToolLifecycleObserver({
+                  phase: 'adapter_started',
+                  toolName: lifecycleCall.name,
+                  toolCallId: lifecycleCall.id,
+                  timeoutMs: lifecycleObserverTimeoutMs,
+                  // A timeout may mean the write committed but its acknowledgement
+                  // was lost. Refuse handler entry/replay and retain quarantine.
+                  quarantined: true,
+                  observe: () => context.onAdapterStart?.(call),
+                });
+              } catch (error) {
+                const persistenceError = isToolLifecyclePersistenceError(error)
+                  ? error
+                  : new ToolLifecyclePersistenceError(error, {
+                      phase: 'adapter_started',
+                      toolName: lifecycleCall.name,
+                      toolCallId: lifecycleCall.id,
+                      quarantined: true,
+                    });
+                adapterStartPersistenceErrors.set(lifecycleKey, persistenceError);
+                throw persistenceError;
+              }
+              // Do not re-check caller cancellation here. The durable fence now
+              // promises that this exact adapter entry will produce a terminal
+              // receipt; allowing the handler to enter is what makes the fence
+              // truthful. The handler still sees cancellation and may stop safely.
+              durablyStartedToolCalls.add(lifecycleKey);
             }
           : undefined,
       }
@@ -1296,6 +1457,7 @@ export async function runWithTools(
   try {
     return await operation;
   } catch (error) {
+    if (isToolLifecyclePersistenceError(error)) throw error;
     if (isCallerCancellation(config.signal, context?.isCancelled)) {
       return {
         text: 'Task was cancelled by the user.',
@@ -1369,7 +1531,10 @@ export async function runWithTools(
             toolInvocationBudget,
           );
         }
-      } catch {
+      } catch (continuationError) {
+        if (isToolLifecyclePersistenceError(continuationError)) {
+          throw continuationError;
+        }
         // The bounded provider/fallback continuation also failed. Fall through
         // to the immutable checkpoint response below; never replay the action.
       }
@@ -1392,7 +1557,7 @@ async function runWithToolsInternal(
   messages: NormalizedMessage[],
   toolRegistry: ToolRegistry,
   config: LLMConfig,
-  onToolCall?: (record: ToolExecutionRecord) => void,
+  onToolCall?: (record: ToolExecutionRecord) => unknown,
   maxIterations: number = 5,
   getDeepSeek?: () => any,
   getGemini?: () => any,
@@ -1842,7 +2007,7 @@ async function runWithToolsInternal(
         },
       });
       executionLog.push(record);
-      onToolCall?.(record);
+      await onToolCall?.(record);
 
       conversationHistory.push({
         role: 'tool',

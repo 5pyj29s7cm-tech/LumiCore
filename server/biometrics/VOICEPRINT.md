@@ -1,6 +1,6 @@
 # Voiceprint Provider
 
-LumiOS uses a provider chain for voiceprint verification:
+LumiCore uses a provider chain for voiceprint verification:
 
 1. `speechbrain-ecapa` when Python dependencies and the model are available.
 2. Local MFCC verification as a fallback for offline or uninstalled environments.

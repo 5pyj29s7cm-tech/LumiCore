@@ -8,7 +8,7 @@ describe('marketplace skill install helpers', () => {
     expect(resolveMarketplaceSkillDirName({
       skillId: 'skill-admin-assistant',
       skillName: '行政助理包',
-      installPath: 'D:\\lumiOS\\server\\skills\\bundled\\admin-assistant',
+      installPath: 'D:\\LumiCore\\server\\skills\\bundled\\admin-assistant',
     })).toBe('admin-assistant');
   });
 

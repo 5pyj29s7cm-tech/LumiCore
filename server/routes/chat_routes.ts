@@ -30,6 +30,11 @@ import {
   DESKTOP_SESSION_HEADER,
   verifyDesktopSessionProof,
 } from "../config/desktop_bootstrap";
+import { redactDiagnosticSecrets } from "../client/diagnostic_sanitizer";
+import {
+  chatPublicErrorCodeForException,
+  sanitizeChatAgentErrorPayload,
+} from "../socket/chat_public_error";
 
 const REST_CHAT_BASE_SYSTEM_INSTRUCTION =
   'You are Lumi, the local core intelligence. Be professional, thoughtful, forward-looking, concise, and useful. Follow the user-facing response-language instruction while keeping internal protocols, tool names, state fields, and execution policy in canonical English.';
@@ -501,7 +506,13 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       });
     } catch (error: any) {
       console.error("AI Proxy Error:", error);
-      res.status(500).json({ error: error.message });
+      const publicError = sanitizeChatAgentErrorPayload({
+        code: chatPublicErrorCodeForException(error),
+      });
+      res.status(publicError.code === 'CHAT_MODEL_ROUTES_UNAVAILABLE' ? 503 : 500).json({
+        error: publicError.message,
+        code: publicError.code,
+      });
     }
   });
 
@@ -546,23 +557,31 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       return res.status(404).json({ error: `Legal tool "${toolName}" is not registered` });
     }
 
-    const text = await executeToolCallOrThrow({
-      registry: toolRegistry,
-      name: toolName,
-      arguments: args,
-      context: {
-        userId,
-        domain,
-        orgId,
-        llmGetters: llm,
-        source: 'legal-direct-tool',
-        authenticated: true,
-        authRole: req.user!.role,
-        orgRole: req.user!.orgRole,
-        localExecution: false,
-      } as any,
-    });
-    return res.json({ text, toolName });
+    try {
+      const text = await executeToolCallOrThrow({
+        registry: toolRegistry,
+        name: toolName,
+        arguments: args,
+        context: {
+          userId,
+          domain,
+          orgId,
+          llmGetters: llm,
+          source: 'legal-direct-tool',
+          authenticated: true,
+          authRole: req.user!.role,
+          orgRole: req.user!.orgRole,
+          localExecution: false,
+        } as any,
+      });
+      return res.json({ text, toolName });
+    } catch (err: any) {
+      console.warn('[LegalDirectTool] Execution failed:', redactDiagnosticSecrets(err?.message || err).slice(0, 500));
+      return res.status(500).json({
+        error: 'Legal tool execution failed',
+        code: 'LEGAL_TOOL_EXECUTION_FAILED',
+      });
+    }
   }));
 
   router.post("/legal/contract-review", requireAuth, asyncHandler(async (req, res) => {
@@ -623,27 +642,36 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
 
       return res.json({ text, degraded: false });
     } catch (err: any) {
-      console.warn('[LegalContractReview] Deep review unavailable:', err?.message || err);
-      const fallback = await executeToolCallOrThrow({
-        registry: toolRegistry,
-        name: 'legal_review_contract',
-        arguments: args,
-        context: {
-          userId,
-          domain,
-          orgId,
-          source: 'legal-contract-review-fallback',
-          authenticated: true,
-          authRole: req.user!.role,
-          orgRole: req.user!.orgRole,
-          localExecution: false,
-        } as any,
-      });
-      return res.json({
-        text: `${fallback}\n\n*提示：深度 LLM 审查暂未及时完成，已先返回本地规则审查结果。*`,
-        degraded: true,
-        warning: err?.message || 'Contract review fallback used',
-      });
+      console.warn('[LegalContractReview] Deep review unavailable:', redactDiagnosticSecrets(err?.message || err).slice(0, 500));
+      try {
+        const fallback = await executeToolCallOrThrow({
+          registry: toolRegistry,
+          name: 'legal_review_contract',
+          arguments: args,
+          context: {
+            userId,
+            domain,
+            orgId,
+            source: 'legal-contract-review-fallback',
+            authenticated: true,
+            authRole: req.user!.role,
+            orgRole: req.user!.orgRole,
+            localExecution: false,
+          } as any,
+        });
+        return res.json({
+          text: `${fallback}\n\n*提示：深度 LLM 审查暂未及时完成，已先返回本地规则审查结果。*`,
+          degraded: true,
+          warning: 'Deep contract review unavailable; local rules fallback used.',
+          warningCode: 'LEGAL_REVIEW_FALLBACK_USED',
+        });
+      } catch (fallbackErr: any) {
+        console.warn('[LegalContractReview] Fallback failed:', redactDiagnosticSecrets(fallbackErr?.message || fallbackErr).slice(0, 500));
+        return res.status(500).json({
+          error: 'Contract review failed',
+          code: 'LEGAL_CONTRACT_REVIEW_FAILED',
+        });
+      }
     }
   }));
 

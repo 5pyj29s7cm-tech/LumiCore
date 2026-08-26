@@ -1,5 +1,5 @@
 name: Bug report
-description: 报告可复现的 LumiOS 问题
+description: 报告可复现的 LumiCore 问题
 title: "[Bug]: "
 labels: [bug, needs-triage]
 body:
@@ -10,7 +10,7 @@ body:
     id: version
     attributes:
       label: 版本或提交
-      placeholder: v3.0.3 / commit SHA
+      placeholder: v3.1.0 / commit SHA
     validations:
       required: true
   - type: dropdown

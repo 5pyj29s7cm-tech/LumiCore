@@ -199,7 +199,7 @@ async function fetchJson(
         'Accept-Language': 'zh-CN,zh;q=0.9',
         Origin: OFFICIAL_BASE_URL,
         Referer: `${OFFICIAL_BASE_URL}/search`,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/138 Safari/537.36 LumiOS/3.0',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/138 Safari/537.36 LumiCore/3.0',
         ...(cookie ? { Cookie: cookie } : {}),
         ...(init.headers || {}),
       },

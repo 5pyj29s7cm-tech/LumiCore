@@ -97,7 +97,7 @@ describe('desktop execution runtime', () => {
     });
     const tracker = new DesktopExecutionTracker(plan);
     tracker.record(verifiedRecord('desktop_active_window', JSON.stringify({
-      title: 'Lumi OS', process_name: 'lumi-os.exe', pid: 10,
+      title: 'LumiCore', process_name: 'lumi-core.exe', pid: 10,
     })));
     expect(tracker.authorize('desktop_open')).toMatchObject({ allowed: true });
     tracker.record(verifiedRecord('desktop_open', JSON.stringify({

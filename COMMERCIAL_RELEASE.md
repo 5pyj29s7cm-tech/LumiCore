@@ -1,6 +1,6 @@
-# Lumi OS Commercial Release
+# LumiCore Commercial Release
 
-This repository contains the public source track for Lumi OS 3.x. Source availability and signed binary distribution are separate release decisions.
+This repository contains the public source track for LumiCore 3.x. Source availability and signed binary distribution are separate release decisions.
 
 ## Positioning
 
@@ -10,7 +10,7 @@ This repository contains the public source track for Lumi OS 3.x. Source availab
 
 ## Current Channel
 
-- App version: `3.0.3`
+- App version: `3.1.0`
 - Release channel: `internal` until every strict public gate passes
 - Official site: `https://lumiai.asia`
 - Support contact: `3565286431@qq.com`
@@ -19,7 +19,7 @@ This repository contains the public source track for Lumi OS 3.x. Source availab
 These defaults are controlled by:
 
 ```env
-LUMI_APP_VERSION=3.0.3
+LUMI_APP_VERSION=3.1.0
 LUMI_RELEASE_CHANNEL=internal
 LUMI_OFFICIAL_URL=https://lumiai.asia
 LUMI_DOWNLOAD_URL=https://lumiai.asia/download
@@ -65,7 +65,7 @@ Run this gate before handing a desktop build to testers or users:
 
 `npm run release:check` validates version sync, manifest freshness, artifact hashes, release bundle contents, release notes, updater endpoint shape, and download URL shape. For a public or paid distribution build, build with `LUMI_RELEASE_CHANNEL=public` and run `npm run release:check -- --strict-publish`. Strict mode blocks placeholder updater keys, missing updater signing or Windows Authenticode configuration, missing current-commit 50-run/24-hour evidence, missing `LUMI_COMMERCIAL_LICENSE_APPROVED=1`, and missing `LUMI_DEPENDENCY_RISK_APPROVED=1` for the signed low/moderate dependency risk register. Only the responsible owners may provide those approvals.
 
-Every 3.0.3 installer, checksum, manifest, and `release-out` directory must be generated from the same commit. The historical 3.0.0 manifest is not a template or fallback artifact.
+Every 3.1.0 installer, checksum, manifest, and `release-out` directory must be generated from the same commit. Historical manifests are not templates or fallback artifacts.
 
 The automated packaged smoke test must prove:
 
@@ -80,27 +80,35 @@ The automated packaged smoke test must prove:
 The Windows installer smoke test must prove:
 
 - The NSIS installer can silently install to an isolated temporary directory.
-- The installed `lumi-os.exe` starts the bundled backend.
+- The installed `lumi-core.exe` starts the bundled backend.
 - A temporary new-user profile can install a bundled skill.
 - The installed bundled skill connects as an MCP server.
 - The silent uninstaller can remove the temporary install.
 
+## LumiCore Rename Upgrade Gate
+
+- Keep the bundle identifier `com.lumiai.os` stable so an upgrade retains the existing WebView profile and macOS privacy grants.
+- On Windows, the LumiCore NSIS pre-install hook never executes an uninstall command read from the registry. If a legacy `Lumi OS` registration exists, installation stops and asks the user to uninstall the old application through Windows Settings before retrying.
+- User data is never deleted by the installer. The backend moves the legacy `~/LumiOS/` root to `~/LumiCore/` under an exclusive data lease on first start.
+- On macOS, launch and verify `LumiCore.app` before manually removing the legacy `Lumi OS.app`; a DMG cannot safely delete another app bundle during drag-install.
+
 Manual clean Windows user gate:
 
-1. Install the NSIS setup file.
-2. Launch Lumi OS from the installed app shortcut.
-3. Confirm the main window appears without a console window.
-4. Confirm the local backend starts and the UI leaves loading state.
-5. Open Skill Center.
-6. Confirm official bundled skills are listed.
-7. Install Admin Assistant.
-8. Confirm the skill appears installed and usable.
-9. Open MCP or skills status.
-10. Confirm installed bundled skills connect or show clear setup requirements.
-11. Try a no-key skill action.
-12. Try a key-required skill and confirm the setup message is clear.
-13. Quit and relaunch Lumi OS.
-14. Confirm installed skills and user data persist.
+1. If Windows still lists the legacy application, uninstall that application through Windows Settings; user data remains outside the application directory.
+2. Install the NSIS setup file.
+3. Launch LumiCore from the installed app shortcut.
+4. Confirm the main window appears without a console window.
+5. Confirm the local backend starts and the UI leaves loading state.
+6. Open Skill Center.
+7. Confirm official bundled skills are listed.
+8. Install Admin Assistant.
+9. Confirm the skill appears installed and usable.
+10. Open MCP or skills status.
+11. Confirm installed bundled skills connect or show clear setup requirements.
+12. Try a no-key skill action.
+13. Try a key-required skill and confirm the setup message is clear.
+14. Quit and relaunch LumiCore.
+15. Confirm installed skills and user data persist.
 
 Conversation gate prompts:
 

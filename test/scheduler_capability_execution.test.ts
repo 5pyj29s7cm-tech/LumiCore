@@ -350,17 +350,22 @@ describe('scheduler capability execution protocol', () => {
   it('plans and persists before invoking a handler and requires policy on every built-in task', () => {
     const source = fs.readFileSync(path.join(process.cwd(), 'server', 'scheduler.ts'), 'utf8');
     const runStart = source.indexOf('private async runTask');
-    const runEnd = source.indexOf('private buildScheduledTaskRecord', runStart);
+    const runEnd = source.indexOf('private async executeTaskHandler', runStart);
     const run = source.slice(runStart, runEnd);
     expect(run.indexOf('buildScheduledTaskExecutionPlan(task, startedAt)'))
-      .toBeLessThan(run.indexOf('await task.handler()'));
+      .toBeLessThan(run.indexOf('await this.executeTaskHandler(task, plan, execution)'));
     expect(run.indexOf("status: authorization.allowed ? 'executing' : 'blocked'"))
-      .toBeLessThan(run.indexOf('await task.handler()'));
+      .toBeLessThan(run.indexOf('await this.executeTaskHandler(task, plan, execution)'));
     expect(run).toContain("authorizeCapabilityPlanTool(plan, 'scheduler_task_handler')");
     expect(run).toContain("previousStatus === 'executing'");
     expect(run).toContain("const compactAudit = task.auditMode !== 'full'");
     expect(run).toContain('compactAudit,');
     expect(run).toContain('automatic replay for this slot is disabled');
+    expect(run).toContain('durability');
+    expect(run.indexOf("lastStatus: 'completed'"))
+      .toBeLessThan(run.indexOf('this.persistDbWithRuntimeState(completedDb, completedTask, userDeliveryDeclared, execution)'));
+    expect(run.indexOf('this.persistDbWithRuntimeState(completedDb, completedTask, userDeliveryDeclared, execution)'))
+      .toBeLessThan(run.indexOf('task.lastStatus = completedTask.lastStatus'));
 
     const registrations = source.match(/scheduler\.register\(\{/g) || [];
     const declarations = source.match(/executionClass:\s*'(?:maintenance|proactive_delivery|client_probe|autonomous_orchestration)'/g) || [];

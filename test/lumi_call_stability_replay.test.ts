@@ -203,7 +203,7 @@ describe('Lumi field-call stability replay', () => {
   it('finds a completed named artifact through persistent receipts and reports the post-write readback', () => {
     const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
     const conversation = { id: 'conv_named_artifact', userId: 'user_named_artifact', domain: 'personal', orgId: '' };
-    const outputPath = 'C:\\Users\\Administrator\\Documents\\Lumi主程序实机验收_20260816.txt';
+    const outputPath = 'C:\\Users\\test-user\\Documents\\Lumi主程序实机验收_20260816.txt';
     syncConversationActionTaskLedger(db, {
       conversation,
       state: actionState({
@@ -279,8 +279,8 @@ describe('Lumi field-call stability replay', () => {
   it('separates source reading from target readback in a three-step artifact status', () => {
     const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
     const conversation = { id: 'conv_three_step_artifact', userId: 'user_three_step_artifact', domain: 'personal', orgId: '' };
-    const sourcePath = 'C:\\Users\\Administrator\\Documents\\source.txt';
-    const outputPath = 'C:\\Users\\Administrator\\Documents\\report.md';
+    const sourcePath = 'C:\\Users\\test-user\\Documents\\source.txt';
+    const outputPath = 'C:\\Users\\test-user\\Documents\\report.md';
     syncConversationActionTaskLedger(db, {
       conversation,
       state: actionState({

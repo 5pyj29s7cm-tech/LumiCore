@@ -2900,7 +2900,7 @@ body,
 .lumi-2d-node { transform: translate(-50%, -47%) scale(1.04); }
 .lumi-2d-node--seated { transform: translate(-50%, -36%) scale(.9); }
 
-/* Match the surrounding Lumi OS shell: obsidian, cyan runtime light, orange identity. */
+/* Match the surrounding LumiCore shell: obsidian, cyan runtime light, orange identity. */
 .lumi-office-live-chip,
 .lumi-office-floor-switch {
   border-color: rgba(92, 221, 215, .13);
@@ -3077,6 +3077,253 @@ body,
   content: "";
   pointer-events: none;
   background: linear-gradient(to bottom, transparent 2%, rgba(255, 255, 255, 0.09) 18%, rgba(255, 255, 255, 0.09) 82%, transparent 98%);
+}
+
+/* Command cosmos reuses the personal LocalAgentSphere and binds every satellite to live runtime data. */
+.lumi-local-agent-sphere--command-center {
+  isolation: isolate;
+  background:
+    radial-gradient(circle at 50% 48%, rgba(64, 225, 230, .10), transparent 27%),
+    radial-gradient(circle at 19% 21%, rgba(121, 92, 255, .10), transparent 24%),
+    radial-gradient(circle at 79% 74%, rgba(255, 133, 80, .075), transparent 22%),
+    radial-gradient(circle at 18% 82%, rgba(124, 247, 226, .055) 0 1px, transparent 1.8px),
+    radial-gradient(circle at 73% 22%, rgba(216, 229, 255, .06) 0 1px, transparent 1.7px),
+    linear-gradient(145deg, #050912 0%, #060c17 48%, #03070e 100%);
+  background-size: auto, auto, auto, 74px 74px, 103px 103px, auto;
+}
+
+.lumi-local-agent-sphere--command-center::before {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  content: "";
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 30%, rgba(2, 5, 12, .35) 72%, rgba(1, 3, 8, .82));
+}
+
+.lumi-local-agent-sphere__orb {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 12;
+  width: min(48vw, 58vh, 500px);
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+}
+
+.lumi-command-cosmos__status,
+.lumi-command-cosmos__counts,
+.lumi-command-cosmos__loading {
+  position: absolute;
+  z-index: 32;
+  display: flex;
+  align-items: center;
+  border: 1px solid rgba(151, 222, 239, .12);
+  background: rgba(5, 11, 22, .72);
+  box-shadow: 0 14px 38px rgba(0, 0, 0, .26), inset 0 1px rgba(255, 255, 255, .025);
+  color: rgba(221, 239, 247, .52);
+  backdrop-filter: blur(18px);
+}
+
+.lumi-command-cosmos__status {
+  left: 18px;
+  top: 18px;
+  gap: 8px;
+  padding: 8px 11px;
+  border-radius: 14px;
+  font-size: 9px;
+  letter-spacing: .08em;
+}
+
+.lumi-command-cosmos__status strong {
+  color: rgba(229, 251, 255, .86);
+  font-size: 10px;
+}
+
+.lumi-command-cosmos__live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #7dd3fc;
+  box-shadow: 0 0 12px rgba(125, 211, 252, .72);
+}
+
+.lumi-command-cosmos__live-dot[data-state="working"] { background: #67e8f9; animation: lumi-cosmos-live 1.8s ease-in-out infinite; }
+.lumi-command-cosmos__live-dot[data-state="attention"] { background: #fb7185; box-shadow: 0 0 14px rgba(251, 113, 133, .68); }
+.lumi-command-cosmos__live-dot[data-state="paused"] { background: #fbbf24; box-shadow: 0 0 12px rgba(251, 191, 36, .58); }
+
+.lumi-command-cosmos__counts {
+  right: 18px;
+  top: 18px;
+  gap: 2px;
+  padding: 5px;
+  border-radius: 16px;
+}
+
+.lumi-command-cosmos__counts span {
+  display: flex;
+  min-width: 70px;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 9px;
+  border-radius: 11px;
+  font-size: 8px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.lumi-command-cosmos__counts b { color: rgba(231, 251, 255, .92); font-size: 13px; line-height: 1; }
+
+.lumi-command-cosmos__routes {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.lumi-command-cosmos__orbit {
+  fill: none;
+  stroke: rgba(133, 220, 237, .105);
+  stroke-width: .15;
+  stroke-dasharray: 1.2 1.8;
+  vector-effect: non-scaling-stroke;
+}
+
+.lumi-command-cosmos__route {
+  fill: none;
+  stroke: rgba(111, 230, 239, .56);
+  stroke-width: .28;
+  stroke-dasharray: 1.3 2.7;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 2px rgba(91, 229, 239, .65));
+  animation: lumi-cosmos-route 2.2s linear infinite;
+}
+
+.lumi-command-cosmos__core-label {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + min(24vw, 29vh, 250px));
+  z-index: 31;
+  display: flex;
+  min-width: 132px;
+  transform: translate(-50%, -50%);
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  text-align: center;
+  text-shadow: 0 2px 14px #000;
+}
+
+.lumi-command-cosmos__core-label strong { color: rgba(235, 253, 255, .9); font-size: 11px; letter-spacing: .16em; text-transform: uppercase; }
+.lumi-command-cosmos__core-label span { color: rgba(189, 229, 237, .48); font-size: 9px; }
+
+.lumi-command-cosmos__agent {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  transform: translate(-50%, -50%) scale(calc(.76 + var(--cosmos-depth) * .28));
+  transform-origin: center;
+  gap: 7px;
+  opacity: calc(.62 + var(--cosmos-depth) * .34);
+}
+
+.lumi-command-cosmos__agent-body {
+  position: relative;
+  display: grid;
+  width: 23px;
+  height: 23px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgba(147, 226, 239, .30);
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 34%, #d9fbff 0 5%, #42b7c9 7% 20%, #0a2735 50%, #06111d 72%);
+  box-shadow: 0 0 0 5px rgba(72, 210, 225, .035), 0 0 20px rgba(64, 211, 225, .18);
+  animation: lumi-cosmos-float 3.8s ease-in-out var(--cosmos-delay) infinite;
+}
+
+.lumi-command-cosmos__agent-core { width: 4px; height: 4px; border-radius: 50%; background: #d9fbff; box-shadow: 0 0 9px #67e8f9; }
+.lumi-command-cosmos__agent-halo { position: absolute; left: 11px; width: 34px; height: 13px; border: 1px solid rgba(109, 224, 237, .16); border-radius: 50%; transform: translateX(-50%) rotate(-18deg); }
+.lumi-command-cosmos__agent[data-label-side="left"] { flex-direction: row-reverse; }
+.lumi-command-cosmos__agent[data-label-side="left"] .lumi-command-cosmos__agent-halo { right: 11px; left: auto; transform: translateX(50%) rotate(-18deg); }
+.lumi-command-cosmos__agent[data-label-side="left"] .lumi-command-cosmos__agent-copy { text-align: right; }
+.lumi-command-cosmos__agent[data-cosmos-agent-runtime="external"] .lumi-command-cosmos__agent-body { border-style: dashed; }
+.lumi-command-cosmos__agent[data-cosmos-agent-state="working"] .lumi-command-cosmos__agent-body { border-color: rgba(103, 232, 249, .72); box-shadow: 0 0 0 6px rgba(34, 211, 238, .055), 0 0 28px rgba(34, 211, 238, .42); }
+.lumi-command-cosmos__agent[data-cosmos-agent-state="paused"] .lumi-command-cosmos__agent-body { filter: saturate(.55); border-color: rgba(251, 191, 36, .38); }
+.lumi-command-cosmos__agent[data-cosmos-agent-state="attention"] .lumi-command-cosmos__agent-body { border-color: rgba(251, 113, 133, .68); box-shadow: 0 0 24px rgba(251, 113, 133, .28); }
+
+.lumi-command-cosmos__agent-copy {
+  display: flex;
+  max-width: 118px;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 7px;
+  border: 1px solid rgba(255, 255, 255, .055);
+  border-radius: 8px;
+  background: rgba(4, 9, 17, .58);
+  color: rgba(224, 244, 248, .7);
+  backdrop-filter: blur(8px);
+}
+
+.lumi-command-cosmos__agent-copy strong,
+.lumi-command-cosmos__agent-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lumi-command-cosmos__agent-copy strong { font-size: 9px; }
+.lumi-command-cosmos__agent-copy small { color: rgba(193, 220, 226, .36); font-size: 7px; }
+.lumi-command-cosmos__agent[data-cosmos-agent-state="ready"] .lumi-command-cosmos__agent-copy { opacity: .48; }
+
+.lumi-command-cosmos__task-signal {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(253, 186, 116, .65);
+  border-radius: 50%;
+  background: rgba(251, 146, 60, .34);
+  box-shadow: 0 0 16px rgba(251, 146, 60, .38);
+  animation: lumi-cosmos-signal 1.8s ease-in-out var(--cosmos-delay) infinite;
+}
+
+.lumi-command-cosmos__empty {
+  position: absolute;
+  left: 50%;
+  bottom: 72px;
+  z-index: 31;
+  transform: translateX(-50%);
+  border: 1px dashed rgba(173, 220, 231, .12);
+  border-radius: 12px;
+  background: rgba(3, 8, 15, .56);
+  padding: 7px 11px;
+  color: rgba(207, 232, 238, .38);
+  font-size: 9px;
+  white-space: nowrap;
+  backdrop-filter: blur(12px);
+}
+
+.lumi-command-cosmos__loading {
+  left: 50%;
+  top: 18px;
+  transform: translateX(-50%);
+  gap: 7px;
+  padding: 7px 11px;
+  border-radius: 13px;
+  color: rgba(203, 242, 249, .68);
+  font-size: 9px;
+}
+
+@keyframes lumi-cosmos-route { to { stroke-dashoffset: -16; } }
+@keyframes lumi-cosmos-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+@keyframes lumi-cosmos-signal { 0%, 100% { opacity: .52; transform: translate(-50%, -50%) scale(.82); } 50% { opacity: 1; transform: translate(-50%, -50%) scale(1.22); } }
+@keyframes lumi-cosmos-live { 0%, 100% { opacity: .55; transform: scale(.82); } 50% { opacity: 1; transform: scale(1.18); } }
+
+[data-performance="balanced"] .lumi-command-cosmos__route { filter: none; }
+[data-performance="balanced"] .lumi-command-cosmos__agent-copy { backdrop-filter: none; }
+[data-performance="balanced"] .lumi-command-cosmos__agent-copy small { display: none; }
+
+[data-reduced-motion="true"] .lumi-command-cosmos__route,
+[data-reduced-motion="true"] .lumi-command-cosmos__agent-body,
+[data-reduced-motion="true"] .lumi-command-cosmos__task-signal,
+[data-reduced-motion="true"] .lumi-command-cosmos__live-dot {
+  animation: none !important;
 }
 
 [data-compact-layout="true"] .lumi-dock {
@@ -3378,5 +3625,41 @@ body,
 
   .lumi-command-center-chat-rail::before {
     display: none;
+  }
+
+  [data-variant="command-center"] .lumi-local-agent-sphere__orb {
+    width: min(42vw, 26vh, 300px);
+  }
+
+  [data-variant="command-center"] .lumi-command-cosmos__status,
+  [data-variant="command-center"] .lumi-command-cosmos__counts {
+    top: 8px;
+  }
+
+  [data-variant="command-center"] .lumi-command-cosmos__status { left: 8px; }
+  [data-variant="command-center"] .lumi-command-cosmos__counts { right: 8px; }
+  [data-variant="command-center"] .lumi-command-cosmos__counts span { min-width: 54px; padding-inline: 6px; }
+  [data-variant="command-center"] .lumi-command-cosmos__agent-copy { display: none; }
+  [data-variant="command-center"] .lumi-command-cosmos__core-label { top: calc(50% + min(21vw, 13vh, 150px)); }
+  [data-variant="command-center"] .lumi-command-cosmos__empty { bottom: 54px; max-width: 75%; overflow: hidden; text-overflow: ellipsis; }
+}
+
+@media (max-width: 560px) {
+  [data-variant="command-center"] .lumi-command-cosmos__status span:not(.lumi-command-cosmos__live-dot),
+  [data-variant="command-center"] .lumi-command-cosmos__counts span:last-child {
+    display: none;
+  }
+
+  [data-variant="command-center"] .lumi-command-cosmos__counts span { min-width: 42px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-variant="command-center"] *,
+  .lumi-command-center-chat-rail,
+  .lumi-command-center-office {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
   }
 }

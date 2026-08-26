@@ -89,7 +89,7 @@ const SURFACE_PATTERNS: Record<WorkTakeoverExpectedSurface, RegExp[]> = {
   store_platform: [/抖店/i, /小店/i, /商家后台/i, /店铺/i, /fxg/i, /seller/i, /shop/i],
   creator_platform: [/creator/i, /创作者/i, /小红书/i, /抖音/i, /视频号/i],
   file_explorer: [/explorer/i, /文件资源管理器/i, /资源管理器/i],
-  lumi: [/lumi/i, /lumi-os/i],
+  lumi: [/lumi/i, /lumi-core/i, /lumi-os/i],
 };
 
 const CATEGORY_CONTENT_TERMS: Record<string, string[]> = {

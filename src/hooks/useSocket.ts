@@ -286,7 +286,7 @@ async function handleDesktopExec(socket: Socket, data: {
         const capture = await invoke('capture_screen');
         const pngBase64: string = (capture as any).image_base64 || '';
         if (!pngBase64) {
-          throw new Error('Screen capture returned no image. On macOS, grant Lumi OS Screen Recording access in System Settings > Privacy & Security.');
+          throw new Error('Screen capture returned no image. On macOS, grant LumiCore Screen Recording access in System Settings > Privacy & Security.');
         }
         const screenX: number = Number((capture as any).screen_x) || 0;
         const screenY: number = Number((capture as any).screen_y) || 0;

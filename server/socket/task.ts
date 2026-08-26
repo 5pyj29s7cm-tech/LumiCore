@@ -2,9 +2,10 @@
  * agent:task socket handler — multi-turn tool-augmented AI pipeline
  */
 import { Server, Socket } from "socket.io";
-import { readDB, writeDB } from "../../db_layer";
+import { flushDBOrThrow, readDB, writeDB } from "../../db_layer";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { NormalizedMessage } from "../llm/providers";
+import { resolveModelRequestInputBudget } from "../llm/request_context_budget";
 import { buildConfirmedStepContinuationMessages, runWithTools, LLMUsageRecord } from "../llm/adapter";
 import { toolRegistry } from "../tools/registry";
 import { executeToolCall } from "../tools/execution_engine";
@@ -16,7 +17,7 @@ import {
   getConversationForScope,
   getOrCreateActiveConversation,
   getMessagesByTokenBudget,
-  addMessage,
+  addMessageIdempotent,
   extractTopics,
   trackTopic,
   getTopicContext,
@@ -24,6 +25,7 @@ import {
   getConversationActionStatus,
   prepareConversationActionExecution,
   persistConversationExecutionPlan,
+  persistConversationModelExecutionCheckpoint,
   persistConversationModelExecutionResult,
   getConversationModelExecutionRecovery,
   cancelConversationActionExecution,
@@ -42,11 +44,12 @@ import {
   recordWorkflowPattern,
   shouldAttemptOrchestration,
   shouldDistillSkill,
+  type OrchestrationWorkflowCheckpoint,
 } from "../agents/orchestrator";
 import { markLatestUserTurn } from "../agents/background_delivery";
 import { loadHIMState, saveHIMState, updateEmotionalStateWithHIM } from "../personality/state";
 import { shouldExposeAgentWork } from "../cognition/tool_intent";
-import { formatClientSelfPrompt } from "../client/self_model";
+import { formatClientSelfPromptForTurn } from "../client/self_model";
 import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
 import { buildModelToolProjection } from "../cognition/capability_selection";
@@ -98,7 +101,7 @@ import {
 import { CN_TASK_EXECUTION_MESSAGES } from "../regions/packs/cn/voice_fast_path_messages";
 import { normalizeVoiceHistory as normalizeTaskHistory } from './voice_history';
 import {
-  beginChatExecution,
+  beginChatExecutionDurably,
   beginQueuedChatExecution,
   beginChatSidecarExecution,
   getChatExecution,
@@ -106,9 +109,16 @@ import {
   markChatExecutionCancelling,
   persistChatSidecarCancellationIntent,
   recordChatExecutionEvent,
+  recordChatExecutionPersistenceUnknownDurably,
+  recordChatExecutionTerminalEventDurably,
   waitForChatSidecarCancellationIntent,
   type ChatExecutionScope,
 } from "./chat_execution_registry";
+import { commitChatTerminalBoundary } from "./chat_terminal_boundary";
+import {
+  chatPublicErrorCodeForException,
+  sanitizeChatAgentErrorPayload,
+} from "./chat_public_error";
 import { classifyActiveTaskMessage } from "../cognition/task_concurrency";
 import { SerialExecutionQueue } from "../cognition/serial_execution_queue";
 import {
@@ -129,6 +139,62 @@ function taskExecutionRoom(scope: ChatExecutionScope): string {
 
 function taskExecutionKey(scope: ChatExecutionScope): string {
   return `${scope.userId}:${scope.domain}:${scope.orgId || ''}:${scope.source}`;
+}
+
+export function taskDurabilityUnknownText(): string {
+  return 'Lumi could not durably confirm this task result. Refresh the task state before retrying.';
+}
+
+export class TaskWorkflowCheckpointError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'TaskWorkflowCheckpointError';
+  }
+}
+
+export async function persistTaskWorkflowCheckpointDurably(
+  input: {
+    conversationId: string;
+    userId: string;
+    taskId: string;
+    checkpoint: OrchestrationWorkflowCheckpoint;
+    resumeNodeReceipts?: OrchestrationWorkflowCheckpoint['nodeReceipts'];
+  },
+  dependencies: {
+    persist?: typeof persistConversationModelExecutionCheckpoint;
+    flush?: typeof flushDBOrThrow;
+  } = {},
+): Promise<void> {
+  const persist = dependencies.persist || persistConversationModelExecutionCheckpoint;
+  const flush = dependencies.flush || flushDBOrThrow;
+  const preservingRecovery = input.checkpoint.phase === 'compiled'
+    && (input.resumeNodeReceipts?.length || 0) > 0;
+  const persisted = persist({
+    conversationId: input.conversationId,
+    userId: input.userId,
+    taskId: input.taskId,
+    executionGraph: input.checkpoint.executionGraph,
+    nodeReceipts: preservingRecovery
+      ? input.resumeNodeReceipts!
+      : input.checkpoint.nodeReceipts,
+    privateNodeHandoffs: preservingRecovery
+      ? undefined
+      : input.checkpoint.privateNodeHandoffs,
+    arbitrationReceipt: input.checkpoint.arbitrationReceipt,
+  });
+  if (!persisted) {
+    throw new TaskWorkflowCheckpointError(
+      `Task workflow ${input.checkpoint.phase} checkpoint was rejected`,
+    );
+  }
+  try {
+    await flush();
+  } catch (error) {
+    throw new TaskWorkflowCheckpointError(
+      `Task workflow ${input.checkpoint.phase} checkpoint could not be flushed`,
+      { cause: error },
+    );
+  }
 }
 
 export function registerTaskHandler(
@@ -226,19 +292,127 @@ export function registerTaskHandler(
     };
     const executionRoom = taskExecutionRoom(executionScope);
     const executionKey = taskExecutionKey(executionScope);
-    const emitAgent = (event: string, payload: Record<string, any> = {}) => {
-      const publicPayload = event === 'agent:response'
+    const normalizeAgentPayload = (
+      event: string,
+      payload: Record<string, any> = {},
+    ): Record<string, any> => {
+      const publicPayload: Record<string, any> = event === 'agent:response'
         ? sanitizeExecutionResponseForDelivery(payload, { task: data.text })
-        : payload;
-      const normalizedPayload = { ...publicPayload, source: publicPayload.source || 'task', requestId };
-      if (!recordChatExecutionEvent(executionScope, requestId, event, normalizedPayload)) return false;
+        : event === 'agent:error'
+          ? sanitizeChatAgentErrorPayload(payload)
+          : payload;
+      return { ...publicPayload, source: publicPayload.source || 'task', requestId };
+    };
+    const publishRecordedAgent = (event: string, normalizedPayload: Record<string, any>) => {
       io.to(executionRoom).emit(event, normalizedPayload);
+    };
+    const emitAgent = (event: string, payload: Record<string, any> = {}) => {
+      const normalizedPayload = normalizeAgentPayload(event, payload);
+      if (
+        event === 'agent:error'
+        || (event === 'agent:response' && normalizedPayload.finalized === true)
+      ) {
+        console.error('[TaskHandler] Rejected a terminal event outside the strict durability boundary.');
+        return false;
+      }
+      if (!recordChatExecutionEvent(executionScope, requestId, event, normalizedPayload)) return false;
+      publishRecordedAgent(event, normalizedPayload);
       return true;
     };
     const emitTask = (event: string, payload: Record<string, any> = {}) => {
       const normalizedPayload = { ...payload, source: payload.source || 'task', requestId };
       if (!recordChatExecutionEvent(executionScope, requestId, event, normalizedPayload)) return;
       io.to(executionRoom).emit(event, normalizedPayload);
+    };
+    const commitTaskTerminal = async (input: {
+      event?: 'agent:response' | 'agent:error';
+      payload: Record<string, any>;
+      persistTerminalState?: () => any;
+      persistAssistantMessage?: () => void;
+      publishAfter?: (terminalState: any) => void;
+      errorContext?: string;
+    }): Promise<boolean> => {
+      const event = input.event || 'agent:response';
+      const terminalPayload = normalizeAgentPayload(event, input.payload);
+      const unknownPayload = normalizeAgentPayload('agent:response', {
+        text: taskDurabilityUnknownText(),
+        agentName: String(input.payload.agentName || 'Lumi'),
+        sidecar: input.payload.sidecar === true,
+        finalized: true,
+        blocked: true,
+        reason: 'persistence_unknown',
+      });
+      return commitChatTerminalBoundary({
+        persistTerminalState: input.persistTerminalState || (() => undefined),
+        persistAssistantMessage: input.persistAssistantMessage || (() => undefined),
+        flush: flushDBOrThrow,
+        persistTerminalReceipt: () => recordChatExecutionTerminalEventDurably(
+          executionScope,
+          requestId,
+          event,
+          terminalPayload,
+          unknownPayload,
+        ),
+        persistUnknownReceipt: () => recordChatExecutionPersistenceUnknownDurably(
+          executionScope,
+          requestId,
+          unknownPayload,
+        ),
+        publishCommitted: terminalState => {
+          input.publishAfter?.(terminalState);
+          publishRecordedAgent(event, terminalPayload);
+        },
+        publishUnknown: () => {
+          publishRecordedAgent('agent:response', unknownPayload);
+        },
+        onPersistenceError: error => {
+          console.error(`[TaskHandler] ${input.errorContext || 'Terminal'} persistence failed:`, error);
+        },
+      });
+    };
+    const persistEarlyTerminalTranscript = (
+      assistantText: string,
+      cognitiveIntent: string,
+    ) => {
+      const conversation = getOrCreateActiveConversation(
+        uid,
+        '',
+        taskScope.domain,
+        taskScope.orgId,
+      );
+      addMessageIdempotent({
+        userId: uid,
+        agentId: '',
+        conversationId: conversation.id,
+        role: 'user',
+        content: data.text,
+        personality: data.personalityId || 'lumi',
+        mode: 'task',
+        source: 'task',
+        channel: 'task',
+        cognitiveIntent,
+        domain: taskScope.domain,
+        orgId: taskScope.orgId,
+        requestId,
+        skipActionContinuation: true,
+      });
+      addMessageIdempotent({
+        userId: uid,
+        agentId: '',
+        conversationId: conversation.id,
+        role: 'assistant',
+        content: assistantText,
+        personality: data.personalityId || 'lumi',
+        mode: 'task',
+        source: 'task',
+        channel: 'task',
+        cognitiveIntent,
+        domain: taskScope.domain,
+        orgId: taskScope.orgId,
+        requestId,
+        skipActionContinuation: true,
+      });
+      return conversation;
     };
 
     let existingExecution = getChatExecution(executionScope, requestId);
@@ -247,13 +421,22 @@ export function registerTaskHandler(
         try {
           await waitForChatSidecarCancellationIntent(executionScope, requestId);
         } catch (error: any) {
-          try { ack?.({ ok: false, requestId, error: String(error?.message || 'Control receipt is not durable') }); } catch {}
+          const publicError = sanitizeChatAgentErrorPayload({ code: 'CHAT_CONTROL_RECEIPT_WRITE_FAILED' });
+          await commitTaskTerminal({
+            event: 'agent:error',
+            payload: { code: 'CHAT_CONTROL_RECEIPT_WRITE_FAILED', sidecar: true },
+            persistAssistantMessage: () => {
+              persistEarlyTerminalTranscript(publicError.message, 'task_control_failed');
+            },
+            errorContext: 'Recovered control receipt failure terminal',
+          });
+          try { ack?.({ ok: false, requestId, error: publicError.message }); } catch {}
           return;
         }
         existingExecution = getChatExecution(executionScope, requestId) || existingExecution;
         const durableTarget = getChatSidecarCancellationTarget(executionScope, requestId);
         if (durableTarget && !taskExecutionQueue.getByRequestId(executionKey, durableTarget)) {
-          recordChatExecutionEvent(executionScope, requestId, 'agent:response', {
+          const staleControlPayload = {
             text: CN_TASK_EXECUTION_MESSAGES.staleControl,
             agentName: 'Lumi',
             source: 'task',
@@ -262,8 +445,26 @@ export function registerTaskHandler(
             finalized: true,
             blocked: false,
             reason: 'stale_control',
+          };
+          const committed = await commitTaskTerminal({
+            payload: staleControlPayload,
+            persistAssistantMessage: () => {
+              persistEarlyTerminalTranscript(
+                staleControlPayload.text,
+                'task_control_stale',
+              );
+            },
+            errorContext: 'Recovered stale control terminal',
           });
-          existingExecution = getChatExecution(executionScope, requestId) || existingExecution;
+          try {
+            ack?.({
+              ok: committed,
+              requestId,
+              receivedAt: existingExecution.createdAt,
+              error: committed ? undefined : 'Terminal persistence outcome is unknown',
+            });
+          } catch {}
+          return;
         }
       }
       try { ack?.({ ok: true, requestId, receivedAt: existingExecution.createdAt }); } catch {}
@@ -318,13 +519,20 @@ export function registerTaskHandler(
       if (!beginChatSidecarExecution(executionScope, requestId)) return;
       if (!controlTargetRequestId || controlTargetRequestId !== runningTask.requestId) {
         try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
-        emitAgent('agent:response', {
-          text: CN_TASK_EXECUTION_MESSAGES.staleControl,
-          agentName: 'Lumi',
-          sidecar: true,
-          finalized: true,
-          blocked: false,
-          reason: 'stale_control',
+        const staleText = CN_TASK_EXECUTION_MESSAGES.staleControl;
+        await commitTaskTerminal({
+          payload: {
+            text: staleText,
+            agentName: 'Lumi',
+            sidecar: true,
+            finalized: true,
+            blocked: false,
+            reason: 'stale_control',
+          },
+          persistAssistantMessage: () => {
+            persistEarlyTerminalTranscript(staleText, 'task_control_stale');
+          },
+          errorContext: 'Stale status control terminal',
         });
         return;
       }
@@ -336,20 +544,31 @@ export function registerTaskHandler(
         activeConversation.actionContinuationState,
       ) || CN_TASK_EXECUTION_MESSAGES.activeWithoutReceipt;
       try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
-      const statusCommitted = emitAgent('agent:response', {
-        text: statusText,
-        agentName: 'Lumi',
-        source: 'task',
-        requestId,
-        sidecar: true,
-        finalized: true,
-        blocked: false,
-        reason: '',
+      await commitTaskTerminal({
+        payload: {
+          text: statusText,
+          agentName: 'Lumi',
+          source: 'task',
+          requestId,
+          sidecar: true,
+          finalized: true,
+          blocked: false,
+          reason: '',
+        },
+        persistAssistantMessage: () => {
+          addMessageIdempotent({ userId: uid, agentId: '', conversationId: activeConversation.id, role: 'user', content: data.text, mode: 'task', source: 'task', channel: 'task', domain: taskScope.domain, orgId: taskScope.orgId, cognitiveIntent: 'task_status', requestId, skipActionContinuation: true });
+          addMessageIdempotent({ userId: uid, agentId: '', conversationId: activeConversation.id, role: 'assistant', content: statusText, mode: 'task', source: 'task', channel: 'task', domain: taskScope.domain, orgId: taskScope.orgId, cognitiveIntent: 'task_status', requestId, skipActionContinuation: true });
+        },
+        publishAfter: () => {
+          io.to(executionRoom).emit('chat:conversation_updated', {
+            conversationId: activeConversation.id,
+            agentId: '',
+            source: 'task',
+            requestId,
+          });
+        },
+        errorContext: 'Task status terminal',
       });
-      if (statusCommitted) {
-        addMessage({ userId: uid, agentId: '', conversationId: activeConversation.id, role: 'user', content: data.text, domain: taskScope.domain, orgId: taskScope.orgId, cognitiveIntent: 'task_status', requestId });
-        addMessage({ userId: uid, agentId: '', conversationId: activeConversation.id, role: 'assistant', content: statusText, domain: taskScope.domain, orgId: taskScope.orgId, cognitiveIntent: 'task_status', requestId });
-      }
       return;
     }
 
@@ -358,13 +577,20 @@ export function registerTaskHandler(
     if (previous && activeMessageRelation === 'cancel') {
       if (!beginChatSidecarExecution(executionScope, requestId)) return;
       if (!controlTargetRequestId) {
-        emitAgent('agent:response', {
-          text: CN_TASK_EXECUTION_MESSAGES.staleControl,
-          agentName: 'Lumi',
-          sidecar: true,
-          finalized: true,
-          blocked: false,
-          reason: 'missing_control_target',
+        const staleText = CN_TASK_EXECUTION_MESSAGES.staleControl;
+        await commitTaskTerminal({
+          payload: {
+            text: staleText,
+            agentName: 'Lumi',
+            sidecar: true,
+            finalized: true,
+            blocked: false,
+            reason: 'missing_control_target',
+          },
+          persistAssistantMessage: () => {
+            persistEarlyTerminalTranscript(staleText, 'task_control_stale');
+          },
+          errorContext: 'Missing cancellation target terminal',
         });
         try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
         return;
@@ -372,13 +598,27 @@ export function registerTaskHandler(
       try {
         await persistChatSidecarCancellationIntent(executionScope, requestId, controlTargetRequestId);
       } catch (error: any) {
-        const message = String(error?.message || 'Unable to reserve task cancellation request');
-        emitAgent('agent:error', {
-          message,
-          code: 'TASK_CONTROL_RECEIPT_WRITE_FAILED',
-          sidecar: true,
+        await commitTaskTerminal({
+          event: 'agent:error',
+          payload: {
+            code: 'CHAT_CONTROL_RECEIPT_WRITE_FAILED',
+            sidecar: true,
+          },
+          persistAssistantMessage: () => {
+            persistEarlyTerminalTranscript(
+              sanitizeChatAgentErrorPayload({ code: 'CHAT_CONTROL_RECEIPT_WRITE_FAILED' }).message,
+              'task_control_failed',
+            );
+          },
+          errorContext: 'Cancellation intent failure terminal',
         });
-        try { ack?.({ ok: false, requestId, error: message }); } catch {}
+        try {
+          ack?.({
+            ok: false,
+            requestId,
+            error: sanitizeChatAgentErrorPayload({ code: 'CHAT_CONTROL_RECEIPT_WRITE_FAILED' }).message,
+          });
+        } catch {}
         return;
       }
       try {
@@ -388,35 +628,58 @@ export function registerTaskHandler(
       emitAgent('agent:status', { status: 'cancelling', sidecar: true });
       const currentTarget = taskExecutionQueue.getByRequestId(executionKey, controlTargetRequestId);
       if (!currentTarget) {
-        emitAgent('agent:response', {
-          text: CN_TASK_EXECUTION_MESSAGES.staleControl,
-          agentName: 'Lumi',
-          sidecar: true,
-          finalized: true,
-          blocked: false,
-          reason: 'stale_control',
+        const staleText = CN_TASK_EXECUTION_MESSAGES.staleControl;
+        await commitTaskTerminal({
+          payload: {
+            text: staleText,
+            agentName: 'Lumi',
+            sidecar: true,
+            finalized: true,
+            blocked: false,
+            reason: 'stale_control',
+          },
+          persistAssistantMessage: () => {
+            persistEarlyTerminalTranscript(staleText, 'task_control_stale');
+          },
+          errorContext: 'Stale cancellation terminal',
         });
         return;
       }
       try {
         await taskExecutionQueue.cancelRequest(executionKey, controlTargetRequestId);
       } catch (error: any) {
-        emitAgent('agent:error', {
-          message: String(error?.message || 'Task cancellation did not settle'),
-          code: 'TASK_CONTROL_CANCEL_FAILED',
-          sidecar: true,
+        await commitTaskTerminal({
+          event: 'agent:error',
+          payload: {
+            code: 'CHAT_CONTROL_CANCEL_FAILED',
+            sidecar: true,
+          },
+          persistAssistantMessage: () => {
+            persistEarlyTerminalTranscript(
+              sanitizeChatAgentErrorPayload({ code: 'CHAT_CONTROL_CANCEL_FAILED' }).message,
+              'task_control_failed',
+            );
+          },
+          errorContext: 'Cancellation settlement failure terminal',
         });
         return;
       }
-      emitAgent('agent:response', {
-        text: CN_TASK_EXECUTION_MESSAGES.cancelled,
-        agentName: 'Lumi',
-        source: 'task',
-        requestId,
-        sidecar: true,
-        finalized: true,
-        blocked: false,
-        reason: 'cancelled_by_user',
+      const cancelledText = CN_TASK_EXECUTION_MESSAGES.cancelled;
+      await commitTaskTerminal({
+        payload: {
+          text: cancelledText,
+          agentName: 'Lumi',
+          source: 'task',
+          requestId,
+          sidecar: true,
+          finalized: true,
+          blocked: false,
+          reason: 'cancelled_by_user',
+        },
+        persistAssistantMessage: () => {
+          persistEarlyTerminalTranscript(cancelledText, 'task_cancelled');
+        },
+        errorContext: 'Cancellation terminal',
       });
       return;
     }
@@ -447,17 +710,64 @@ export function registerTaskHandler(
       });
     }
     if (!await taskLease.waitForTurn()) {
-      emitAgent('agent:response', {
-        text: CN_TASK_EXECUTION_MESSAGES.cancelled,
-        agentName: 'Lumi',
-        finalized: true,
-        blocked: true,
-        reason: 'cancelled',
+      const cancelledText = CN_TASK_EXECUTION_MESSAGES.cancelled;
+      await commitTaskTerminal({
+        payload: {
+          text: cancelledText,
+          agentName: 'Lumi',
+          finalized: true,
+          blocked: true,
+          reason: 'cancelled',
+        },
+        persistAssistantMessage: () => {
+          persistEarlyTerminalTranscript(cancelledText, 'task_cancelled');
+        },
+        errorContext: 'Queued cancellation terminal',
       });
       releaseTask();
       return;
     }
-    const superseded = beginChatExecution(executionScope, requestId);
+    const replacementUnknownPayload = {
+      text: 'The task transition could not be durably recorded. Please verify before retrying.',
+      agentName: 'Lumi',
+      source: 'task',
+      requestId,
+      conversationId: data.conversationId,
+      finalized: true,
+      blocked: true,
+      reason: 'persistence_unknown',
+    };
+    let superseded = null as Awaited<ReturnType<typeof beginChatExecutionDurably>>;
+    try {
+      superseded = await beginChatExecutionDurably(
+        executionScope,
+        requestId,
+        replacementUnknownPayload,
+      );
+    } catch (error) {
+      console.error('[TaskHandler] Superseded terminal persistence failed:', error);
+      try {
+        persistEarlyTerminalTranscript(taskDurabilityUnknownText(), 'task_persistence_unknown');
+        await flushDBOrThrow();
+      } catch (transcriptError) {
+        console.error('[TaskHandler] Replacement transcript persistence failed:', transcriptError);
+      }
+      try {
+        await recordChatExecutionPersistenceUnknownDurably(
+          executionScope,
+          requestId,
+          replacementUnknownPayload,
+        );
+      } catch (unknownError) {
+        console.error('[TaskHandler] Replacement unknown receipt persistence failed:', unknownError);
+      }
+      publishRecordedAgent(
+        'agent:response',
+        normalizeAgentPayload('agent:response', replacementUnknownPayload),
+      );
+      releaseTask();
+      return;
+    }
     if (superseded?.terminalEvent) {
       io.to(executionRoom).emit(superseded.terminalEvent.event, superseded.terminalEvent.payload);
     }
@@ -484,9 +794,27 @@ export function registerTaskHandler(
       ? getConversationForScope(data.conversationId, uid, taskScope.domain, taskScope.orgId)
       : null;
     const convForHistory = selectedConversation || getOrCreateActiveConversation(uid, '', taskScope.domain, taskScope.orgId);
+    const taskUserMessageId = addMessageIdempotent({
+      userId: uid,
+      agentId: '',
+      conversationId: convForHistory.id,
+      role: 'user',
+      content: data.text,
+      personality: data.personalityId || 'lumi',
+      mode: 'task',
+      source: 'task',
+      channel: 'task',
+      cognitiveIntent: 'task_received',
+      domain: taskScope.domain,
+      orgId: taskScope.orgId,
+      requestId,
+      deferActionPreparation: true,
+    });
     const taskActionBridge = buildRecentActionContinuationBridge(
       data.text,
-      getMessagesByTokenBudget(convForHistory.id).slice(-24),
+      getMessagesByTokenBudget(convForHistory.id)
+        .filter(message => message.id !== taskUserMessageId)
+        .slice(-24),
       convForHistory.actionContinuationState,
     );
     const routedTaskText = [data.text, taskActionBridge, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
@@ -539,6 +867,7 @@ export function registerTaskHandler(
       requestId,
       interactionId,
       source: 'task',
+      inputTokenBudget: resolveModelRequestInputBudget(),
     };
 
     // ── Load persisted conversation history (survives page reload) ──
@@ -583,9 +912,54 @@ export function registerTaskHandler(
       userId: uid,
       userText: data.text,
       requestId,
+      userMessageId: taskUserMessageId,
       toolPolicy: executionDecision.toolPolicy,
       forceResume: Boolean(pendingConfirmation || actionFollowupIntent === 'execute'),
     });
+    if ('bindingFailure' in actionTaskExecution) {
+      const staleText = actionTaskExecution.bindingFailure === 'busy'
+        ? CN_TASK_EXECUTION_MESSAGES.actionTurnBusy
+        : CN_TASK_EXECUTION_MESSAGES.actionTurnStale;
+      await commitTaskTerminal({
+        payload: {
+          text: staleText,
+          agentName: personality.name,
+          source: 'task_turn_binding',
+          finalized: true,
+          blocked: true,
+          reason: actionTaskExecution.diagnosticCode,
+        },
+        persistAssistantMessage: () => {
+          addMessageIdempotent({
+            userId: uid,
+            agentId: '',
+            conversationId: convForHistory.id,
+            role: 'assistant',
+            content: staleText,
+            personality: personality.id,
+            mode: 'task',
+            source: 'task',
+            channel: 'task',
+            cognitiveIntent: actionTaskExecution.diagnosticCode,
+            domain: taskScope.domain,
+            orgId: taskScope.orgId,
+            requestId,
+            skipActionContinuation: true,
+          });
+        },
+        publishAfter: () => {
+          io.to(executionRoom).emit('chat:conversation_updated', {
+            conversationId: convForHistory.id,
+            agentId: '',
+            source: 'task',
+            requestId,
+          });
+        },
+        errorContext: 'Action turn binding terminal',
+      });
+      releaseTask();
+      return;
+    }
     if (actionTaskExecution.state?.taskId) {
       executionPipeline.executionPlan = bindCapabilityExecutionPlanTask(
         executionPipeline.executionPlan,
@@ -684,7 +1058,7 @@ export function registerTaskHandler(
       toolSecurityContext.executionBoundary,
     );
     if (toolSecurityContext.executionBoundary !== 'remote_restricted') {
-      effectiveSystemPrompt += '\n\n' + formatClientSelfPrompt(uid, taskScope);
+      effectiveSystemPrompt += '\n\n' + formatClientSelfPromptForTurn(uid, routedTaskText, taskScope);
     }
     if (!remoteRestricted) {
       effectiveSystemPrompt += '\n\n' + turnDispatch.promptOverlay;
@@ -724,7 +1098,8 @@ export function registerTaskHandler(
       if (summaryContext) {
         effectiveSystemPrompt += `\n\n## Conversation Context\n${summaryContext}`;
       }
-      const recentMsgs = getMessagesByTokenBudget(convForHistory.id);
+      const recentMsgs = getMessagesByTokenBudget(convForHistory.id)
+        .filter(message => message.id !== taskUserMessageId);
       // Persisted assistant rows store their text in `message`. Treating every
       // `message` as a user turn inverted assistant replies after reload and
       // made task-mode continuations lose the actual dialogue contract.
@@ -786,6 +1161,7 @@ export function registerTaskHandler(
       assistantText: string,
       toolRecords: ToolExecutionRecord[] = [],
       sourceInteractionId: string = interactionId,
+      finalization?: { blocked?: boolean; reason?: string },
     ) => {
       const executionWriteback = persistWorkTakeoverTurnExecution({
         userId: uid,
@@ -798,14 +1174,21 @@ export function registerTaskHandler(
         flow: turnFlow,
         capabilitySelection,
         toolRecords,
+        finalizationBlocked: finalization?.blocked === true,
+        assistantTextTrusted: finalization?.blocked !== true,
+        finalizationReason: finalization?.reason,
       });
-      if (executionWriteback.recorded) {
-        emitAgent('agent:task_execution_writeback', {
+      return executionWriteback;
+    };
+    const publishTaskExecutionWriteback = (executionWriteback: any) => {
+      if (!executionWriteback?.recorded) return;
+      publishRecordedAgent(
+        'agent:task_execution_writeback',
+        normalizeAgentPayload('agent:task_execution_writeback', {
           ...executionWriteback,
           source: 'task',
-        });
-      }
-      return executionWriteback;
+        }),
+      );
     };
     let pendingConfirmationCreatedThisTurn: ReturnType<typeof recordPendingConfirmation> | null = null;
     const requestConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
@@ -846,18 +1229,23 @@ export function registerTaskHandler(
         data.text,
         convForHistory.actionContinuationState,
       );
-      emitAgent('agent:response', {
-        text: statusText,
-        agentName: personality.name,
-        source: 'task_status',
-        finalized: true,
-        blocked: false,
-        reason: '',
+      await commitTaskTerminal({
+        payload: {
+          text: statusText,
+          agentName: personality.name,
+          source: 'task_status',
+          finalized: true,
+          blocked: false,
+          reason: '',
+        },
+        persistAssistantMessage: () => {
+          addMessageIdempotent({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: statusText, personality: personality.id, mode: 'task', source: 'task', channel: 'task', domain: taskScope.domain, orgId: taskScope.orgId, cognitiveIntent: 'task_status', requestId, skipActionContinuation: true });
+        },
+        publishAfter: () => {
+          io.to(executionRoom).emit('chat:conversation_updated', { conversationId: convForHistory.id, agentId: '', source: 'task', requestId });
+        },
+        errorContext: 'Conversation task status terminal',
       });
-      addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'user', content: data.text, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId, cognitiveIntent: 'task_status' });
-      addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: statusText, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId, cognitiveIntent: 'task_status' });
-      io.to(executionRoom).emit('chat:conversation_updated', { conversationId: convForHistory.id, agentId: '', source: 'task', requestId });
-      emitAgent('agent:status', { status: 'idle' });
       releaseTask();
       return;
     }
@@ -997,19 +1385,39 @@ export function registerTaskHandler(
         source: 'task_confirmation',
         flow: { ...turnFlow, routeText: confirmedTask },
       });
-      emitAgent('agent:response', {
-        text: finalConfirmation.text,
-        agentName: personality.name,
-        source: 'task_confirmation',
-        finalized: true,
-        blocked: finalConfirmation.blocked,
-        reason: finalConfirmation.reason || '',
+      const terminalCommitted = await commitTaskTerminal({
+        payload: {
+          text: finalConfirmation.text,
+          agentName: personality.name,
+          source: 'task_confirmation',
+          finalized: true,
+          blocked: finalConfirmation.blocked,
+          reason: finalConfirmation.reason || '',
+        },
+        persistTerminalState: () => persistTaskExecutionWriteback(
+          finalConfirmation.text,
+          confirmationRecords,
+          `${interactionId}_confirmation`,
+          { blocked: finalConfirmation.blocked, reason: finalConfirmation.reason },
+        ),
+        persistAssistantMessage: () => {
+          addMessageIdempotent({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: finalConfirmation.text, personality: personality.id, mode: 'task', source: 'task', channel: 'task', domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: confirmationRecords, cognitiveIntent: finalConfirmation.blocked ? 'work_product_guard' : 'confirmation', requestId });
+        },
+        publishAfter: executionWriteback => {
+          if (finalConfirmation.notification) {
+            publishRecordedAgent(
+              'agent:notification',
+              normalizeAgentPayload('agent:notification', finalConfirmation.notification),
+            );
+          }
+          publishTaskExecutionWriteback(executionWriteback);
+          io.to(executionRoom).emit('chat:conversation_updated', { conversationId: convForHistory.id, agentId: '', source: 'task', requestId });
+        },
+        errorContext: 'Confirmation terminal',
       });
-      addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'user', content: data.text, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId, cognitiveIntent: 'confirmation' });
-      addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: finalConfirmation.text, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: confirmationRecords, cognitiveIntent: finalConfirmation.blocked ? 'work_product_guard' : 'confirmation' });
-      persistTaskExecutionWriteback(finalConfirmation.text, confirmationRecords, `${interactionId}_confirmation`);
-      if (!finalConfirmation.blocked) persistTaskLearning(finalConfirmation.text, { toolRecords: confirmationRecords, logLabel: 'task confirmation' });
-      emitAgent('agent:status', { status: 'idle' });
+      if (terminalCommitted && !finalConfirmation.blocked) {
+        persistTaskLearning(finalConfirmation.text, { toolRecords: confirmationRecords, logLabel: 'task confirmation' });
+      }
       releaseTask();
       return;
     }
@@ -1052,42 +1460,61 @@ export function registerTaskHandler(
           flow: turnFlow,
         });
         const directResponseText = finalDirect.text;
-        if (finalDirect.blocked && finalDirect.notification) emitAgent("agent:notification", finalDirect.notification);
-        emitAgent("agent:response", {
-          text: directResponseText,
-          agentName: personality.name,
-          source: 'task',
-          finalized: true,
-          blocked: finalDirect.blocked,
-          reason: finalDirect.reason,
+        const terminalCommitted = await commitTaskTerminal({
+          payload: {
+            text: directResponseText,
+            agentName: personality.name,
+            source: 'task',
+            finalized: true,
+            blocked: finalDirect.blocked,
+            reason: finalDirect.reason,
+          },
+          persistTerminalState: () => {
+            const db = readDB();
+            db.interactions.push({
+              id: interactionId,
+              content: data.text,
+              response: directResponseText,
+              role: "user",
+              personality: personality.id,
+              timestamp: new Date().toISOString(),
+              mode: 'task',
+              cognitiveIntent: cognition!.intent.category,
+              llmWasCalled: false,
+              userId: uid,
+              conversationId: convForHistory.id,
+              domain: taskScope.domain,
+              orgId: taskScope.orgId,
+            } as any);
+            writeDB(db);
+            return persistTaskExecutionWriteback(
+              directResponseText,
+              directToolRecords,
+              `${interactionId}_direct`,
+              { blocked: finalDirect.blocked, reason: finalDirect.reason },
+            );
+          },
+          persistAssistantMessage: () => {
+            addMessageIdempotent({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: directResponseText, personality: personality.id, mode: 'task', source: 'task', channel: 'task', domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: directToolRecords.length ? directToolRecords : undefined, cognitiveIntent: finalDirect.blocked ? 'work_product_guard' : cognition!.intent.category, llmWasCalled: false, requestId });
+          },
+          publishAfter: executionWriteback => {
+            if (finalDirect.notification) {
+              publishRecordedAgent(
+                'agent:notification',
+                normalizeAgentPayload('agent:notification', finalDirect.notification),
+              );
+            }
+            publishTaskExecutionWriteback(executionWriteback);
+            io.to(executionRoom).emit('chat:conversation_updated', { conversationId: convForHistory.id, agentId: '', source: 'task', requestId });
+          },
+          errorContext: 'Direct cognition terminal',
         });
-        emitAgent("agent:status", { status: "idle" });
-
-        // Still log the interaction
-        const db = readDB();
-        db.interactions.push({
-          id: interactionId,
-          content: data.text,
-          response: directResponseText,
-          role: "user",
-          personality: personality.id,
-          timestamp: new Date().toISOString(),
-          mode: 'task',
-          cognitiveIntent: cognition.intent.category,
-          llmWasCalled: false,
-          userId: uid,
-          conversationId: convForHistory.id,
-          domain: taskScope.domain,
-          orgId: taskScope.orgId,
-        } as any);
-        writeDB(db);
-        addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'user', content: data.text, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId });
-        addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: directResponseText, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: directToolRecords.length ? directToolRecords : undefined });
-        persistTaskExecutionWriteback(directResponseText, directToolRecords, `${interactionId}_direct`);
-        persistTaskLearning(directResponseText, {
-          toolRecords: directToolRecords,
-          logLabel: 'task direct cognition',
-        });
+        if (terminalCommitted) {
+          persistTaskLearning(directResponseText, {
+            toolRecords: directToolRecords,
+            logLabel: 'task direct cognition',
+          });
+        }
         releaseTask();
         return;
       }
@@ -1120,7 +1547,7 @@ export function registerTaskHandler(
           capabilityLane: capabilitySelection.lane,
           cognitionCategory: cognition.intent.category,
         });
-        if (shouldOrchestrate) {
+        if (shouldOrchestrate && actionTaskExecution.state?.taskId) {
           const db = readDB();
           const availableAgents = (db.agents || []).filter((a: any) => {
             if (a.status === 'offline' || a.status === 'terminated') return false;
@@ -1130,6 +1557,7 @@ export function registerTaskHandler(
             return a.domain !== 'work' && !a.orgId && (!a.ownerUid || a.ownerUid === uid);
           });
           if (availableAgents.length >= 1) {
+            let workflowCheckpointed = false;
             try {
               emitAgent("agent:status", { status: "thinking", agentName: exposeAgentWork ? "Lumi Orchestrator" : personality.name, phase: exposeAgentWork ? 'orchestrator' : 'background' });
               const scopedLlmConfig = { provider: activeProvider, model: activeModel, userId: uid, domain: taskScope.domain, orgId: taskScope.orgId, signal: taskAbortController.signal, ...reasoningRoutePolicy };
@@ -1153,6 +1581,7 @@ export function registerTaskHandler(
                   desktopRelay,
                   desktopExecutionTracker,
                   resumeNodeReceipts: taskModelRecovery?.receipts,
+                  resumeExecutionGraph: taskModelRecovery?.graph,
                 },
                 scopedLlmConfig,
                 llmGetters,
@@ -1171,14 +1600,28 @@ export function registerTaskHandler(
                     orchestratedToolRecords.push({ ...record, result: record.result || '' });
                   }
                 },
+                async checkpoint => {
+                  await persistTaskWorkflowCheckpointDurably({
+                    conversationId: convForHistory.id,
+                    userId: uid,
+                    taskId: actionTaskExecution.state!.taskId,
+                    checkpoint,
+                    resumeNodeReceipts: taskModelRecovery?.receipts,
+                  });
+                  workflowCheckpointed = true;
+                },
               );
               if (actionTaskExecution.state?.taskId) {
-                persistConversationModelExecutionResult({
+                const finalCheckpointPersisted = persistConversationModelExecutionResult({
                   conversationId: convForHistory.id,
                   userId: uid,
                   taskId: actionTaskExecution.state.taskId,
                   workflowResult,
                 });
+                if (!finalCheckpointPersisted) {
+                  throw new TaskWorkflowCheckpointError('Task workflow final checkpoint was rejected');
+                }
+                await flushDBOrThrow();
               }
               const aggregated = await aggregateWithLLM(workflowResult, data.text, scopedLlmConfig, llmGetters, uid, taskScope);
               orchestratedText = aggregated;
@@ -1199,6 +1642,7 @@ export function registerTaskHandler(
               emitTask("task:chunk", { text: `\n[Orchestrator] Workflow result ready for final validation — ${workflowResult.totalAgentsUsed} agent(s) used\n`, agentName: "Lumi" });
               }
             } catch (orchErr: any) {
+              if (orchErr instanceof TaskWorkflowCheckpointError || workflowCheckpointed) throw orchErr;
               console.error('[Orchestrator] Task workflow failed, falling back to normal execution:', orchErr.message);
             }
           }
@@ -1215,21 +1659,15 @@ export function registerTaskHandler(
           flow: turnFlow,
         });
         orchestratedText = finalOrchestrated.text;
-        if (finalOrchestrated.blocked) {
-          if (finalOrchestrated.notification) emitAgent("agent:notification", finalOrchestrated.notification);
-        }
-        // Orchestrator handled the task — emit result and skip normal LLM path
-        emitAgent("agent:response", {
+        const orchestratedTerminalPayload = {
           text: orchestratedText,
           agentName: personality.name,
           source: 'task',
           finalized: true,
           blocked: finalOrchestrated.blocked,
           reason: finalOrchestrated.reason,
-        });
-        emitAgent("agent:status", { status: "idle" });
-        releaseTask();
-
+        };
+        // Orchestrator handled the task — emit result and skip normal LLM path
         const db = readDB();
         const conv = convForHistory;
         db.interactions.push({
@@ -1239,20 +1677,42 @@ export function registerTaskHandler(
           userId: uid, conversationId: conv.id, domain: taskScope.domain, orgId: taskScope.orgId,
         } as any);
         writeDB(db);
-        addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'user', content: data.text, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId });
-        addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: orchestratedText, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: finalOrchestratedToolRecords.length ? finalOrchestratedToolRecords : undefined });
-
-        // Update emotional state
-        let updatedState = updateEmotionalState(emotionalState, { type: 'interaction', userId: uid, timestamp: new Date().toISOString() });
-        if (isNovelTask) {
-          updatedState = updateEmotionalState(updatedState, { type: 'novel_topic', userId: uid, timestamp: new Date().toISOString() });
-        }
-        saveEmotionalState(taskStateKey, updatedState);
-        persistTaskExecutionWriteback(orchestratedText, finalOrchestratedToolRecords, `${interactionId}_orchestrated`);
-        persistTaskLearning(orchestratedText, {
-          toolRecords: finalOrchestratedToolRecords,
-          logLabel: 'task orchestrated',
+        const executionWriteback = persistTaskExecutionWriteback(
+          orchestratedText,
+          finalOrchestratedToolRecords,
+          `${interactionId}_orchestrated`,
+          { blocked: finalOrchestrated.blocked, reason: finalOrchestrated.reason },
+        );
+        const terminalCommitted = await commitTaskTerminal({
+          payload: orchestratedTerminalPayload,
+          persistTerminalState: () => executionWriteback,
+          persistAssistantMessage: () => {
+            addMessageIdempotent({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: orchestratedText, personality: personality.id, mode: 'task', source: 'task', channel: 'task', domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: finalOrchestratedToolRecords.length ? finalOrchestratedToolRecords : undefined, cognitiveIntent: finalOrchestrated.blocked ? 'work_product_guard' : cognition!.intent.category, llmWasCalled: true, requestId });
+          },
+          publishAfter: () => {
+            if (finalOrchestrated.notification) {
+              publishRecordedAgent(
+                'agent:notification',
+                normalizeAgentPayload('agent:notification', finalOrchestrated.notification),
+              );
+            }
+            publishTaskExecutionWriteback(executionWriteback);
+            io.to(executionRoom).emit('chat:conversation_updated', { conversationId: convForHistory.id, agentId: '', source: 'task', requestId });
+          },
+          errorContext: 'Orchestrated task terminal',
         });
+        if (terminalCommitted) {
+          let updatedState = updateEmotionalState(emotionalState, { type: 'interaction', userId: uid, timestamp: new Date().toISOString() });
+          if (isNovelTask) {
+            updatedState = updateEmotionalState(updatedState, { type: 'novel_topic', userId: uid, timestamp: new Date().toISOString() });
+          }
+          saveEmotionalState(taskStateKey, updatedState);
+          persistTaskLearning(orchestratedText, {
+            toolRecords: finalOrchestratedToolRecords,
+            logLabel: 'task orchestrated',
+          });
+        }
+        releaseTask();
         return;
       }
 
@@ -1299,26 +1759,50 @@ export function registerTaskHandler(
       if (taskLease.signal.aborted) {
         const cancelledResponse = finalizeLumiResponse({
           taskText: data.text,
-          responseText: '任务已取消。',
+          responseText: 'Task cancelled.',
           toolRecords: finalTaskToolRecords,
           source: 'task',
           flow: turnFlow,
         });
-        emitAgent("agent:response", {
-          text: cancelledResponse.text,
-          agentName: personality.name,
-          source: 'task',
-          finalized: true,
-          blocked: true,
-          reason: 'cancelled',
+        const terminalCommitted = await commitTaskTerminal({
+          payload: {
+            text: cancelledResponse.text,
+            agentName: personality.name,
+            source: 'task',
+            finalized: true,
+            blocked: true,
+            reason: 'cancelled',
+          },
+          persistTerminalState: () => {
+            cancelConversationActionExecution(
+              convForHistory.id,
+              uid,
+              'Task cancelled.',
+              requestId,
+            );
+            return persistTaskExecutionWriteback(
+              cancelledResponse.text,
+              finalTaskToolRecords,
+              `${interactionId}_cancelled`,
+              { blocked: true, reason: 'cancelled' },
+            );
+          },
+          persistAssistantMessage: () => {
+            addMessageIdempotent({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: cancelledResponse.text, personality: personality.id, mode: 'task', source: 'task', channel: 'task', domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: finalTaskToolRecords.length ? finalTaskToolRecords : undefined, cognitiveIntent: 'task_cancelled', requestId });
+          },
+          publishAfter: executionWriteback => {
+            publishTaskExecutionWriteback(executionWriteback);
+            io.to(executionRoom).emit('chat:conversation_updated', { conversationId: convForHistory.id, agentId: '', source: 'task', requestId });
+          },
+          errorContext: 'Cancelled task terminal',
         });
-        emitAgent("agent:status", { status: "idle" });
-        persistTaskExecutionWriteback(cancelledResponse.text, finalTaskToolRecords, `${interactionId}_cancelled`);
-        persistTaskLearning(cancelledResponse.text, {
-          toolRecords: finalTaskToolRecords,
-          sourceInteractionId: `${interactionId}_cancelled`,
-          logLabel: 'task cancelled',
-        });
+        if (terminalCommitted) {
+          persistTaskLearning(cancelledResponse.text, {
+            toolRecords: finalTaskToolRecords,
+            sourceInteractionId: `${interactionId}_cancelled`,
+            logLabel: 'task cancelled',
+          });
+        }
         return;
       }
 
@@ -1439,13 +1923,10 @@ export function registerTaskHandler(
       finalTaskResponse = guardRecovery.finalization;
       finalTaskToolRecords = attachDesktopReceipt(guardRecovery.toolRecords);
       finalTaskText = finalTaskResponse.text;
-      if (finalTaskResponse.blocked) {
-        if (finalTaskResponse.notification) emitAgent("agent:notification", finalTaskResponse.notification);
-      }
       const holoTask = canOutputHolographic(sensory)
         ? textToHolographicOutput(finalTaskText)
         : undefined;
-      emitAgent("agent:response", {
+      const taskTerminalPayload = {
         text: finalTaskText,
         agentName: personality.name,
         holographic: holoTask,
@@ -1453,8 +1934,7 @@ export function registerTaskHandler(
         finalized: true,
         blocked: finalTaskResponse.blocked,
         reason: finalTaskResponse.reason,
-      });
-      emitAgent("agent:status", { status: "idle" });
+      };
 
       // Log with conversation linkage
       const db = readDB();
@@ -1479,7 +1959,32 @@ export function registerTaskHandler(
       } as any);
       writeDB(db);
 
-      persistTaskExecutionWriteback(finalTaskText, finalTaskToolRecords);
+      const executionWriteback = persistTaskExecutionWriteback(
+        finalTaskText,
+        finalTaskToolRecords,
+        interactionId,
+        { blocked: finalTaskResponse.blocked, reason: finalTaskResponse.reason },
+      );
+      const terminalCommitted = await commitTaskTerminal({
+        payload: taskTerminalPayload,
+        persistTerminalState: () => executionWriteback,
+        persistAssistantMessage: () => {
+          if (!finalTaskText) return;
+          addMessageIdempotent({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: finalTaskText, personality: personality.id, mode: 'task', source: 'task', channel: 'task', domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: finalTaskToolRecords.length ? finalTaskToolRecords : undefined, cognitiveIntent: finalTaskResponse.blocked ? 'work_product_guard' : cognition!.intent.category, llmWasCalled: true, requestId });
+        },
+        publishAfter: () => {
+          if (finalTaskResponse.notification) {
+            publishRecordedAgent(
+              'agent:notification',
+              normalizeAgentPayload('agent:notification', finalTaskResponse.notification),
+            );
+          }
+          publishTaskExecutionWriteback(executionWriteback);
+          io.to(executionRoom).emit('chat:conversation_updated', { conversationId: convForHistory.id, agentId: '', source: 'task', requestId });
+        },
+        errorContext: 'Task terminal',
+      });
+      if (!terminalCommitted) return;
       persistTaskLearning(finalTaskText, { toolRecords: finalTaskToolRecords, logLabel: 'task' });
 
       // Async memory extraction
@@ -1551,49 +2056,85 @@ export function registerTaskHandler(
       saveEmotionalState(taskStateKey, himUpdated);
       saveHIMState(taskStateKey, newHim);
 
-      // ── Persist messages via conversation manager for cross-session continuity ──
+      // Post-commit conversation enrichment never gates or precedes the terminal receipt.
       if (convForHistory) {
-        addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'user', content: data.text, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId });
-        if (finalTaskText) {
-          addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: finalTaskText, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: finalTaskToolRecords.length ? finalTaskToolRecords : undefined });
-        }
         try {
           const topics = extractTopics(data.text + ' ' + finalTaskText);
           for (const topic of topics) trackTopic(convForHistory.id, topic);
         } catch {}
-        io.to(executionRoom).emit('chat:conversation_updated', { conversationId: convForHistory.id, agentId: '', source: 'task', requestId });
       }
 
     } catch (err: any) {
       if (taskLease.signal.aborted || err?.name === 'AbortError') {
-        emitAgent('agent:response', {
-          text: 'Task cancelled.',
-          agentName: personality.name,
-          finalized: true,
-          blocked: true,
-          reason: 'cancelled',
+        const cancelledText = 'Task cancelled.';
+        const cancellationRecords = cognition?.toolRecords
+          || (cognition?.toolRecord ? [cognition.toolRecord] : []);
+        await commitTaskTerminal({
+          payload: {
+            text: cancelledText,
+            agentName: personality.name,
+            finalized: true,
+            blocked: true,
+            reason: 'cancelled',
+          },
+          persistTerminalState: () => {
+            cancelConversationActionExecution(
+              convForHistory.id,
+              uid,
+              cancelledText,
+              requestId,
+            );
+            return persistTaskExecutionWriteback(
+              cancelledText,
+              cancellationRecords,
+              `${interactionId}_cancelled`,
+              { blocked: true, reason: 'cancelled' },
+            );
+          },
+          persistAssistantMessage: () => {
+            addMessageIdempotent({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: cancelledText, personality: personality.id, mode: 'task', source: 'task', channel: 'task', domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: cancellationRecords.length ? cancellationRecords : undefined, cognitiveIntent: 'task_cancelled', requestId });
+          },
+          publishAfter: executionWriteback => {
+            publishTaskExecutionWriteback(executionWriteback);
+            io.to(executionRoom).emit('chat:conversation_updated', { conversationId: convForHistory.id, agentId: '', source: 'task', requestId });
+          },
+          errorContext: 'Caught cancellation terminal',
         });
         return;
       }
       console.error("[Agent Task Error]:", err);
-      const cf = handleLLMFailure(cognition?.intent || { category: 'unknown', confidence: 0, entities: {}, needsLLM: true }, err);
-      const finalFailure = finalizeLumiResponse({
-        taskText: data.text,
-        responseText: cf.responseText,
-        toolRecords: cognition?.toolRecords
-          || (cognition?.toolRecord ? [cognition.toolRecord] : []),
-        source: 'task',
-        flow: turnFlow,
+      handleLLMFailure(
+        cognition?.intent || { category: 'unknown', confidence: 0, entities: {}, needsLLM: true },
+        err,
+      );
+      const publicError = sanitizeChatAgentErrorPayload({ code: chatPublicErrorCodeForException(err) });
+      const failureRecords = cognition?.toolRecords
+        || (cognition?.toolRecord ? [cognition.toolRecord] : []);
+      await commitTaskTerminal({
+        event: 'agent:error',
+        payload: { code: publicError.code },
+        persistTerminalState: () => {
+          setConversationActionExecutionStatus(convForHistory.id, uid, 'blocked', {
+            blocker: publicError.message,
+            assistantState: publicError.message,
+            requestId: '',
+          });
+          return persistTaskExecutionWriteback(
+            publicError.message,
+            failureRecords,
+            `${interactionId}_failed`,
+            { blocked: true, reason: publicError.reason },
+          );
+        },
+        persistAssistantMessage: () => {
+          addMessageIdempotent({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: publicError.message, personality: personality.id, mode: 'task', source: 'task', channel: 'task', domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: failureRecords.length ? failureRecords : undefined, cognitiveIntent: 'task_execution_failed', requestId });
+        },
+        publishAfter: executionWriteback => {
+          publishTaskExecutionWriteback(executionWriteback);
+          io.to(executionRoom).emit('chat:conversation_updated', { conversationId: convForHistory.id, agentId: '', source: 'task', requestId });
+        },
+        errorContext: 'Failed task terminal',
       });
-      emitAgent("agent:response", {
-        text: finalFailure.text,
-        agentName: personality.name,
-        source: 'task',
-        finalized: true,
-        blocked: finalFailure.blocked,
-        reason: finalFailure.reason,
-      });
-      emitAgent("agent:status", { status: "error" });
     } finally {
       releaseTask();
     }

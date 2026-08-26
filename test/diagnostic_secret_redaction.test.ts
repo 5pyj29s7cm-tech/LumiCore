@@ -119,4 +119,18 @@ describe('public client diagnostics secret redaction', () => {
       nested: { deepseek_access_token: '[redacted]' },
     });
   });
+
+  it('is idempotent and redacts credential URLs and PEM private keys', () => {
+    const raw = [
+      'Authorization: Basic TOPSECRET',
+      'postgres://admin:TOPSECRET@db.internal:5432/app',
+      '-----BEGIN PRIVATE KEY-----\nTOPSECRET\n-----END PRIVATE KEY-----',
+    ].join('\n');
+    const once = redactDiagnosticSecrets(raw);
+    const twice = redactDiagnosticSecrets(once);
+
+    expect(twice).toBe(once);
+    expect(once).not.toContain('TOPSECRET');
+    expect(once).toContain('postgres://[redacted]:[redacted]@db.internal:5432/app');
+  });
 });

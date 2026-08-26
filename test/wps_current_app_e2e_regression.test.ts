@@ -542,10 +542,10 @@ describe('WPS current-app end-to-end regression', () => {
     const repositoryWrite = [{
       name: 'write_file',
       arguments: {
-        path: 'D:\\lumiOS\\Lumi-e2e-regression.txt',
+        path: 'D:\\LumiCore\\Lumi-e2e-regression.txt',
         content: CONTENT,
       },
-      result: 'File written: D:\\lumiOS\\Lumi-e2e-regression.txt',
+      result: 'File written: D:\\LumiCore\\Lumi-e2e-regression.txt',
     }];
 
     expect(contract.kind).toBe('desktop_operation');

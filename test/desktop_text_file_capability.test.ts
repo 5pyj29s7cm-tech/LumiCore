@@ -1,4 +1,6 @@
 import crypto from 'node:crypto';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { buildActionContract } from '../server/cognition/action_contract';
 import { routeToolsForTurn } from '../server/cognition/tool_router';
@@ -124,7 +126,7 @@ describe('native desktop text-file capability', () => {
     registerFileOpsTools(registry);
     const desktopRelay = vi.fn(async (name: string, args: Record<string, any>) => {
       expect(name).toBe('desktop_read_text_file');
-      expect(args.path).toMatch(/Desktop\\relay-only\.txt$/);
+      expect(args.path).toMatch(/Desktop[\\/]relay-only\.txt$/);
       return JSON.stringify({
         success: true,
         path: args.path,
@@ -135,7 +137,7 @@ describe('native desktop text-file capability', () => {
     });
 
     const result = await registry.execute('read_file', {
-      path: 'C:\\Users\\Administrator\\Desktop\\relay-only.txt',
+      path: path.join(os.homedir(), 'Desktop', 'relay-only.txt'),
     }, { desktopRelay });
     expect(result).toBe('native read-back');
     expect(desktopRelay).toHaveBeenCalledOnce();

@@ -43,7 +43,7 @@ describe('chat local action preflight', () => {
 
   it('does not pre-read an explicit artifact output path before creating it', () => {
     expect(shouldRunVisibleActionPreflight(
-      '请在 C:\\Users\\Administrator\\Documents\\Lumi主程序实机验收_20260816.txt 创建文件，写入后必须重读核验。',
+      '请在 C:\\Users\\test-user\\Documents\\Lumi主程序实机验收_20260816.txt 创建文件，写入后必须重读核验。',
       [],
     )).toBe(false);
   });

@@ -11,7 +11,7 @@ import { makeLLMCall } from './llm/providers';
 import { getWeatherBrief, getTimeGreeting } from './services/weather';
 import { autoGenerateWorkflows } from './agents/workflows';
 import { runHealthAudit, HealthReport } from './agents/health_audit';
-import { readDB, writeDB } from '../db_layer';
+import { flushDBOrThrow, readDB, writeDB } from '../db_layer';
 import { AgentRuntime, AgentRecord } from './agents/runtime';
 import { personalityRegistry } from './personality';
 import { evolvePersonality, generateReviewPrompt } from './personality/evolution';
@@ -20,7 +20,16 @@ import { getSameMonthDayPast, getMonthDayFromISO } from './time/utils';
 import { detectSpatiotemporalPatterns } from './time/spatiotemporal';
 import { cleanupEphemeralAgents } from './agents/orchestrator';
 import { getRecentActivity } from './context/activity_stream';
-import { runDailyScan, isFirstBootComplete } from './autonomy/system_explorer';
+import {
+  isFirstBootComplete,
+  isSystemExplorationAllowed,
+  persistDailyExploration,
+} from './autonomy/system_explorer';
+import {
+  collectSystemSnapshotInWorker,
+  resolveSystemExplorationRuntimeDir,
+  SystemExplorationAlreadyRunningError,
+} from './runtime/system_exploration_worker';
 import { getGateConfig, isAutonomousWorkAllowed } from './autonomy/safety_gate';
 import { createRealtimeVoicePrioritySignal } from './autonomy/foreground_activity';
 import { parseStoredOperationMode } from './cognition/operation_modes';
@@ -43,6 +52,7 @@ import type {
   ToolExecutionRecord,
 } from './tools/types';
 import { dispatchDueCommandCenterPlans } from './command_center/plans';
+import { redactDiagnosticSecrets } from './client/diagnostic_sanitizer';
 
 export interface ScheduledDelivery {
   userId: string;
@@ -106,23 +116,171 @@ export type ScheduledExecutionClass =
   | 'client_probe'
   | 'autonomous_orchestration';
 
-interface ScheduledTask {
+export type ScheduledTaskRunStatus =
+  | 'idle'
+  | 'executing'
+  | 'cancelling'
+  | 'completed'
+  | 'blocked'
+  | 'failed'
+  | 'timed_out'
+  | 'cancelled'
+  | 'unknown';
+
+export interface ScheduledTaskExecutionContract {
+  timeoutMs: number;
+  outcome: 'durable_terminal_receipt' | 'coalesced_probe_receipt';
+  successCriteria: string[];
+  evidence: string[];
+  stopping: string[];
+  retry: {
+    maxRetriesPerSlot: 0;
+    onUnknownOutcome: 'reconcile_then_stop';
+  };
+  concurrency: {
+    maxConcurrentRuns: 1;
+    policy: 'skip_while_running';
+  };
+  finalAcceptance:
+    | 'scheduler_persisted_verified_terminal_receipt'
+    | 'scheduler_coalesced_verified_probe_receipt';
+}
+
+export interface ScheduledTaskExecutionContext {
+  signal: AbortSignal;
+  taskId: string;
+  executionId: string;
+  startedAt: string;
+  deadline: string;
+  contract: ScheduledTaskExecutionContract;
+}
+
+export interface ScheduledTask {
   id: string;
   cron: string;
   lastRun: string | null;
   /** Explicit semantic boundary compiled before the handler may run. */
   executionClass: ScheduledExecutionClass;
-  handler: () => Promise<ScheduledTaskResult>;
+  handler: (context?: ScheduledTaskExecutionContext) => Promise<ScheduledTaskResult>;
+  /** Per-task wall-clock bound. Defaults are selected from executionClass. */
+  timeoutMs?: number;
   /** If true, result is stored internally but NOT broadcast as a proactive notification */
   quiet?: boolean;
   /** If false, task is paused and will not fire */
   enabled?: boolean;
+  /** Client probes that may return user-visible deliveries must opt in before admission. */
+  deliveryPolicy?: 'none' | 'scoped';
   /**
    * Collapse successful runs into a bounded audit summary. Compact is the
    * safe default; use full only when every successful slot is itself a
    * business record. Failures and unknown outcomes are always preserved.
    */
   auditMode?: 'full' | 'compact';
+  lastStatus?: ScheduledTaskRunStatus;
+  lastError?: string | null;
+  lastDurationMs?: number | null;
+  lastStartedAt?: string | null;
+  nextRun?: string | null;
+  persistenceStatus?: 'ok' | 'coalesced' | 'failed';
+  lastPersistenceError?: string | null;
+  /** Durable unknown-outcome fence. Cleared only by explicit reconciliation. */
+  requiresReconciliation?: boolean;
+  quarantinedExecutionId?: string | null;
+  quarantineReason?: string | null;
+  reconciledAt?: string | null;
+  reconciliationResolution?: 'confirmed_no_side_effect' | 'accepted_unknown_outcome' | null;
+}
+
+const SCHEDULER_RUNTIME_STATE_SETTING = 'scheduler_task_runtime_state_v1';
+
+const DEFAULT_TASK_TIMEOUT_MS: Record<ScheduledExecutionClass, number> = {
+  client_probe: 30_000,
+  proactive_delivery: 2 * 60_000,
+  maintenance: 5 * 60_000,
+  autonomous_orchestration: 15 * 60_000,
+};
+
+const TASK_TIMEOUT_ENV: Record<ScheduledExecutionClass, string> = {
+  client_probe: 'LUMI_SCHEDULER_CLIENT_PROBE_TIMEOUT_MS',
+  proactive_delivery: 'LUMI_SCHEDULER_PROACTIVE_DELIVERY_TIMEOUT_MS',
+  maintenance: 'LUMI_SCHEDULER_MAINTENANCE_TIMEOUT_MS',
+  autonomous_orchestration: 'LUMI_SCHEDULER_AUTONOMOUS_ORCHESTRATION_TIMEOUT_MS',
+};
+
+function normalizedTimeout(value: unknown): number | null {
+  const timeout = Number(value);
+  return Number.isFinite(timeout) && timeout >= 10 && timeout <= 60 * 60_000
+    ? Math.round(timeout)
+    : null;
+}
+
+/** Keep scheduler state and logs diagnostic without retaining credentials. */
+export function redactSchedulerDiagnostic(value: unknown): string {
+  return redactDiagnosticSecrets(value instanceof Error ? value.message : value)
+    .replace(/\[redacted(?: private key)?\]/giu, '[REDACTED]')
+    .slice(0, 2_000);
+}
+
+/** High-frequency client probes use the DB layer's coalesced flush budget. */
+export function requiresStrictScheduledPersistence(
+  executionClass: ScheduledExecutionClass,
+  hasUserDelivery = false,
+): boolean {
+  return hasUserDelivery || executionClass !== 'client_probe';
+}
+
+/** Resolve a bounded wall-clock timeout with task override > class env > safe class default. */
+export function getScheduledTaskTimeoutMs(
+  executionClass: ScheduledExecutionClass,
+  override?: number,
+): number {
+  return normalizedTimeout(override)
+    ?? normalizedTimeout(process.env[TASK_TIMEOUT_ENV[executionClass]])
+    ?? DEFAULT_TASK_TIMEOUT_MS[executionClass];
+}
+
+export function getScheduledTaskExecutionContract(
+  task: Pick<ScheduledTask, 'executionClass' | 'timeoutMs' | 'deliveryPolicy'>,
+  hasUserDelivery = false,
+): ScheduledTaskExecutionContract {
+  const strictPersistence = requiresStrictScheduledPersistence(
+    task.executionClass,
+    hasUserDelivery || task.deliveryPolicy === 'scoped',
+  );
+  return {
+    timeoutMs: getScheduledTaskTimeoutMs(task.executionClass, task.timeoutMs),
+    outcome: strictPersistence ? 'durable_terminal_receipt' : 'coalesced_probe_receipt',
+    successCriteria: [
+      'handler_settled_before_deadline',
+      'declared_deliveries_persisted_before_emission',
+      strictPersistence
+        ? 'verified_terminal_receipt_persisted'
+        : 'verified_probe_receipt_accepted_for_coalesced_persistence',
+    ],
+    evidence: [
+      'capability_execution_plan',
+      'scheduler_task_handler_terminal_receipt',
+      'scoped_delivery_receipt_when_applicable',
+    ],
+    stopping: [
+      'success_criteria_met',
+      'wall_clock_timeout',
+      'abort_signal',
+      'capability_policy_block',
+      'previous_slot_outcome_unknown',
+    ],
+    retry: {
+      maxRetriesPerSlot: 0,
+      onUnknownOutcome: 'reconcile_then_stop',
+    },
+    concurrency: {
+      maxConcurrentRuns: 1,
+      policy: 'skip_while_running',
+    },
+    finalAcceptance: strictPersistence
+      ? 'scheduler_persisted_verified_terminal_receipt'
+      : 'scheduler_coalesced_verified_probe_receipt',
+  };
 }
 
 export type ParsedSchedule =
@@ -315,13 +473,64 @@ type LLMGetters = {
   getRelay?: () => any;
 };
 
+class ScheduledTaskExecutionError extends Error {
+  constructor(
+    message: string,
+    readonly code:
+      | 'scheduler_handler_timed_out'
+      | 'scheduler_execution_timed_out'
+      | 'scheduler_handler_aborted'
+      | 'scheduler_delivery_withheld'
+      | 'scheduler_delivery_invalid',
+  ) {
+    super(message);
+    this.name = 'ScheduledTaskExecutionError';
+  }
+}
+
+interface ScheduledInFlightHandler {
+  controller: AbortController;
+  task: ScheduledTask;
+  plan: CapabilityExecutionPlan | null;
+  contract: ScheduledTaskExecutionContract;
+  startedAt: Date;
+  deadline: Date;
+  deadlineTimer: NodeJS.Timeout;
+  phase: 'planning' | 'admission_persistence' | 'handler' | 'delivery' | 'terminal_persistence';
+  handlerStarted: boolean;
+  handlerSettled: boolean;
+  handlerOutcome?: 'fulfilled' | 'rejected';
+  schedulerFinished: boolean;
+  pendingLateSettlement: boolean;
+  lateSettlementFinalizing: boolean;
+  pendingDurableOperations: Set<Promise<unknown>>;
+  durableOperationRejected: boolean;
+  lateSettlementPendingHandler: boolean;
+  lateSettlementPendingDurability: boolean;
+  compactAudit: boolean;
+}
+
 export class Scheduler {
   private tasks: ScheduledTask[] = [];
   private timers: Map<string, NodeJS.Timeout> = new Map();
   private runningTasks: Set<string> = new Set();
+  private runningControllers: Map<string, AbortController> = new Map();
+  private inFlightHandlers: Map<string, ScheduledInFlightHandler> = new Map();
+  /**
+   * A lifecycle generation stops every closure. A per-task generation also
+   * invalidates an already-running cron closure when the same task is
+   * re-registered, disabled and enabled, or quarantined pending settlement.
+   */
+  private scheduleGenerations: Map<string, number> = new Map();
+  private lifecycleGeneration = 0;
   io: SocketIOServer | null = null;
   private llmGetters: LLMGetters | null = null;
   private disabledTasks: Set<string> = new Set();
+
+  constructor(
+    private readonly strictFlush: () => Promise<void> = flushDBOrThrow,
+    private readonly writeDatabase: (data: any) => void = writeDB,
+  ) {}
 
   setIO(io: SocketIOServer) {
     this.io = io;
@@ -332,6 +541,7 @@ export class Scheduler {
   }
 
   register(task: ScheduledTask) {
+    this.hydrateRuntimeState(task);
     // Restore enable/disable state from persistence
     const storedDisabled = this.loadDisabledState();
     if (storedDisabled.has(task.id)) {
@@ -340,7 +550,19 @@ export class Scheduler {
     }
     const existingIndex = this.tasks.findIndex(existing => existing.id === task.id);
     if (existingIndex >= 0) {
+      const replacedTask = this.tasks[existingIndex];
       this.clearTimer(task.id);
+      this.abortRunningTask(task.id, 'Scheduled task registration was replaced.');
+      if (replacedTask !== task) {
+        replacedTask.enabled = false;
+        task.lastRun = replacedTask.lastRun;
+        task.lastStatus = replacedTask.lastStatus;
+        task.lastError = replacedTask.lastError;
+        task.lastDurationMs = replacedTask.lastDurationMs;
+        task.lastStartedAt = replacedTask.lastStartedAt;
+        task.persistenceStatus = replacedTask.persistenceStatus;
+        task.lastPersistenceError = replacedTask.lastPersistenceError;
+      }
       this.tasks[existingIndex] = task;
     } else {
       this.tasks.push(task);
@@ -356,7 +578,9 @@ export class Scheduler {
       if (setting?.value) {
         return new Set(JSON.parse(setting.value));
       }
-    } catch {}
+    } catch (error: any) {
+      console.error('[Scheduler] Failed to load disabled task state:', redactSchedulerDiagnostic(error));
+    }
     return new Set();
   }
 
@@ -372,8 +596,324 @@ export class Scheduler {
         if (!db.settings) db.settings = [];
         db.settings.push({ key: 'scheduler_disabled_tasks', value });
       }
-      writeDB(db);
-    } catch {}
+      this.writeDatabase(db);
+    } catch (error: any) {
+      console.error('[Scheduler] Failed to persist disabled task state:', redactSchedulerDiagnostic(error));
+    }
+  }
+
+  private hydrateRuntimeState(task: ScheduledTask) {
+    task.lastStatus = task.lastStatus || (task.lastRun ? 'completed' : 'idle');
+    task.lastError = task.lastError ? redactSchedulerDiagnostic(task.lastError) : null;
+    task.lastDurationMs = task.lastDurationMs ?? null;
+    task.lastStartedAt = task.lastStartedAt ?? null;
+    task.nextRun = task.nextRun ?? null;
+    task.persistenceStatus = task.persistenceStatus || 'ok';
+    task.lastPersistenceError = task.lastPersistenceError
+      ? redactSchedulerDiagnostic(task.lastPersistenceError)
+      : null;
+    task.requiresReconciliation = task.requiresReconciliation === true;
+    task.quarantinedExecutionId = task.quarantinedExecutionId || null;
+    task.quarantineReason = task.quarantineReason
+      ? redactSchedulerDiagnostic(task.quarantineReason)
+      : null;
+    task.reconciledAt = task.reconciledAt || null;
+    task.reconciliationResolution = task.reconciliationResolution || null;
+    try {
+      const db = readDB();
+      const setting = (db.settings || []).find((candidate: any) => (
+        candidate.key === SCHEDULER_RUNTIME_STATE_SETTING
+      ));
+      if (!setting?.value) return;
+      const stored = typeof setting.value === 'string' ? JSON.parse(setting.value) : setting.value;
+      const snapshot = stored && typeof stored === 'object' ? stored[task.id] : null;
+      if (!snapshot || typeof snapshot !== 'object') return;
+      if (typeof snapshot.lastRun === 'string' || snapshot.lastRun === null) task.lastRun = snapshot.lastRun;
+      if (typeof snapshot.lastStatus === 'string') task.lastStatus = snapshot.lastStatus;
+      if (typeof snapshot.lastError === 'string' || snapshot.lastError === null) {
+        task.lastError = snapshot.lastError ? redactSchedulerDiagnostic(snapshot.lastError) : null;
+      }
+      if (Number.isFinite(snapshot.lastDurationMs) || snapshot.lastDurationMs === null) {
+        task.lastDurationMs = snapshot.lastDurationMs;
+      }
+      if (typeof snapshot.lastStartedAt === 'string' || snapshot.lastStartedAt === null) {
+        task.lastStartedAt = snapshot.lastStartedAt;
+      }
+      if (typeof snapshot.nextRun === 'string' || snapshot.nextRun === null) task.nextRun = snapshot.nextRun;
+      if (['ok', 'coalesced', 'failed'].includes(snapshot.persistenceStatus)) {
+        task.persistenceStatus = snapshot.persistenceStatus;
+      }
+      if (typeof snapshot.lastPersistenceError === 'string' || snapshot.lastPersistenceError === null) {
+        task.lastPersistenceError = snapshot.lastPersistenceError
+          ? redactSchedulerDiagnostic(snapshot.lastPersistenceError)
+          : null;
+      }
+      task.requiresReconciliation = snapshot.requiresReconciliation === true;
+      task.quarantinedExecutionId = typeof snapshot.quarantinedExecutionId === 'string'
+        ? snapshot.quarantinedExecutionId
+        : null;
+      task.quarantineReason = typeof snapshot.quarantineReason === 'string'
+        ? redactSchedulerDiagnostic(snapshot.quarantineReason)
+        : null;
+      task.reconciledAt = typeof snapshot.reconciledAt === 'string' ? snapshot.reconciledAt : null;
+      task.reconciliationResolution = [
+        'confirmed_no_side_effect',
+        'accepted_unknown_outcome',
+      ].includes(snapshot.reconciliationResolution)
+        ? snapshot.reconciliationResolution
+        : null;
+      if (snapshot.lastStatus === 'executing' || snapshot.lastStatus === 'cancelling') {
+        task.lastStatus = 'unknown';
+        task.lastError = 'The previous scheduler process stopped before handler settlement and a terminal receipt; side-effect outcome remains unknown.';
+        task.requiresReconciliation = true;
+        task.quarantineReason = task.lastError;
+      }
+    } catch (error: any) {
+      task.persistenceStatus = 'failed';
+      task.lastPersistenceError = redactSchedulerDiagnostic(error);
+      console.error(`[Scheduler] Failed to restore runtime state for "${redactSchedulerDiagnostic(task.id)}":`, task.lastPersistenceError);
+    }
+  }
+
+  private stageRuntimeState(db: any, task: ScheduledTask) {
+    if (!db.settings) db.settings = [];
+    let setting = db.settings.find((candidate: any) => candidate.key === SCHEDULER_RUNTIME_STATE_SETTING);
+    let stored: Record<string, any> = {};
+    if (setting?.value) {
+      try {
+        const parsed = typeof setting.value === 'string' ? JSON.parse(setting.value) : setting.value;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) stored = parsed;
+      } catch (error: any) {
+        console.error('[Scheduler] Invalid persisted runtime state was replaced:', redactSchedulerDiagnostic(error));
+      }
+    }
+    stored[task.id] = {
+      lastRun: task.lastRun ?? null,
+      lastStatus: task.lastStatus || 'idle',
+      lastError: task.lastError ? redactSchedulerDiagnostic(task.lastError) : null,
+      lastDurationMs: task.lastDurationMs ?? null,
+      lastStartedAt: task.lastStartedAt ?? null,
+      nextRun: task.nextRun ?? null,
+      persistenceStatus: task.persistenceStatus || 'ok',
+      lastPersistenceError: task.lastPersistenceError
+        ? redactSchedulerDiagnostic(task.lastPersistenceError)
+        : null,
+      requiresReconciliation: task.requiresReconciliation === true,
+      quarantinedExecutionId: task.quarantinedExecutionId || null,
+      quarantineReason: task.quarantineReason
+        ? redactSchedulerDiagnostic(task.quarantineReason)
+        : null,
+      reconciledAt: task.reconciledAt || null,
+      reconciliationResolution: task.reconciliationResolution || null,
+    };
+    const value = JSON.stringify(stored);
+    if (setting) setting.value = value;
+    else db.settings.push({ key: SCHEDULER_RUNTIME_STATE_SETTING, value });
+  }
+
+  private async persistDbWithRuntimeState(
+    db: any,
+    task: ScheduledTask,
+    hasUserDelivery = false,
+    execution?: ScheduledInFlightHandler,
+  ) {
+    const strict = requiresStrictScheduledPersistence(
+      task.executionClass,
+      hasUserDelivery || task.deliveryPolicy === 'scoped',
+    );
+    task.persistenceStatus = strict ? 'ok' : 'coalesced';
+    task.lastPersistenceError = null;
+    if (task.lastError) task.lastError = redactSchedulerDiagnostic(task.lastError);
+    this.stageRuntimeState(db, task);
+    try {
+      this.writeDatabase(db);
+      if (strict) {
+        const flush = execution
+          ? this.trackDurableOperation(this.strictFlush(), execution)
+          : this.strictFlush();
+        await (execution
+          ? this.awaitExecutionPhase(flush, execution, execution.phase)
+          : flush);
+      }
+    } catch (error: any) {
+      task.persistenceStatus = 'failed';
+      task.lastPersistenceError = redactSchedulerDiagnostic(error);
+      console.error(`[Scheduler] Failed to persist runtime state for "${redactSchedulerDiagnostic(task.id)}":`, task.lastPersistenceError);
+      throw error;
+    }
+  }
+
+  private persistRuntimeState(task: ScheduledTask) {
+    const preservePersistenceFailure = task.persistenceStatus === 'failed';
+    const priorPersistenceError = task.lastPersistenceError;
+    try {
+      if (!preservePersistenceFailure) {
+        task.persistenceStatus = task.executionClass === 'client_probe' ? 'coalesced' : 'ok';
+        task.lastPersistenceError = null;
+      }
+      if (task.lastError) task.lastError = redactSchedulerDiagnostic(task.lastError);
+      const db = readDB();
+      this.stageRuntimeState(db, task);
+      this.writeDatabase(db);
+      if (preservePersistenceFailure) {
+        task.persistenceStatus = 'failed';
+        task.lastPersistenceError = priorPersistenceError;
+      }
+    } catch (error: any) {
+      task.persistenceStatus = 'failed';
+      task.lastPersistenceError = redactSchedulerDiagnostic(error);
+      console.error(`[Scheduler] Failed to persist runtime state for "${redactSchedulerDiagnostic(task.id)}":`, task.lastPersistenceError);
+    }
+  }
+
+  private persistRecoveryDbWithRuntimeState(
+    db: any,
+    task: ScheduledTask,
+    preservePersistenceFailure = false,
+  ) {
+    const priorPersistenceError = task.lastPersistenceError;
+    if (!preservePersistenceFailure) {
+      task.persistenceStatus = 'coalesced';
+      task.lastPersistenceError = null;
+    }
+    if (task.lastError) task.lastError = redactSchedulerDiagnostic(task.lastError);
+    this.stageRuntimeState(db, task);
+    try {
+      this.writeDatabase(db);
+      if (preservePersistenceFailure) {
+        task.persistenceStatus = 'failed';
+        task.lastPersistenceError = priorPersistenceError;
+      }
+    } catch (error: any) {
+      task.persistenceStatus = 'failed';
+      task.lastPersistenceError = redactSchedulerDiagnostic(error);
+      console.error(
+        `[Scheduler] Failed to persist recovery state for "${redactSchedulerDiagnostic(task.id)}":`,
+        task.lastPersistenceError,
+      );
+    }
+  }
+
+  private abortRunningTask(id: string, reason: string) {
+    const controller = this.runningControllers.get(id);
+    if (controller && !controller.signal.aborted) {
+      const execution = this.inFlightHandlers.get(id);
+      if (execution) {
+        clearTimeout(execution.deadlineTimer);
+        if (execution.handlerStarted) {
+          const visibleTask = this.tasks.find(candidate => candidate.id === id) || execution.task;
+          const handlerPending = !execution.handlerSettled;
+          const durabilityPending = execution.pendingDurableOperations.size > 0;
+          const message = handlerPending
+            ? 'Cancellation was requested, but the handler is still settling; side-effect outcome remains unknown.'
+            : durabilityPending
+              ? 'Cancellation was requested, but durable persistence is still settling; side-effect outcome remains unknown.'
+            : 'Cancellation was requested while execution finalization was still pending; side-effect outcome remains unknown.';
+          for (const target of new Set([execution.task, visibleTask])) {
+            target.lastStatus = handlerPending ? 'cancelling' : 'unknown';
+            target.lastError = message;
+          }
+          try {
+            this.persistRecoveryDbWithRuntimeState(
+              readDB(),
+              visibleTask,
+              visibleTask.persistenceStatus === 'failed' || execution.task.persistenceStatus === 'failed',
+            );
+          } catch {
+            // persistRecoveryDbWithRuntimeState already records and logs the failure.
+          }
+        }
+      }
+      controller.abort(new ScheduledTaskExecutionError(reason, 'scheduler_handler_aborted'));
+    }
+  }
+
+  private beginExecution(
+    task: ScheduledTask,
+    startedAt: Date,
+    contract: ScheduledTaskExecutionContract,
+    compactAudit: boolean,
+  ): ScheduledInFlightHandler {
+    const controller = new AbortController();
+    const deadline = new Date(startedAt.getTime() + contract.timeoutMs);
+    let execution!: ScheduledInFlightHandler;
+    const deadlineTimer = setTimeout(() => {
+      if (controller.signal.aborted) return;
+      controller.abort(new ScheduledTaskExecutionError(
+        `Scheduled execution exceeded its ${contract.timeoutMs}ms end-to-end deadline during ${execution.phase}; the active operation may still be settling.`,
+        'scheduler_execution_timed_out',
+      ));
+    }, contract.timeoutMs);
+    execution = {
+      controller,
+      task,
+      plan: null,
+      contract,
+      startedAt,
+      deadline,
+      deadlineTimer,
+      phase: 'planning',
+      handlerStarted: false,
+      handlerSettled: true,
+      handlerOutcome: undefined,
+      schedulerFinished: false,
+      pendingLateSettlement: false,
+      lateSettlementFinalizing: false,
+      pendingDurableOperations: new Set(),
+      durableOperationRejected: false,
+      lateSettlementPendingHandler: false,
+      lateSettlementPendingDurability: false,
+      compactAudit,
+    };
+    this.runningControllers.set(task.id, controller);
+    this.inFlightHandlers.set(task.id, execution);
+    return execution;
+  }
+
+  private async awaitExecutionPhase<T>(
+    operation: Promise<T>,
+    execution: ScheduledInFlightHandler,
+    phase: ScheduledInFlightHandler['phase'],
+  ): Promise<T> {
+    execution.phase = phase;
+    if (execution.controller.signal.aborted) {
+      throw execution.controller.signal.reason;
+    }
+    let removeAbortListener = () => {};
+    const interrupted = new Promise<never>((_resolve, reject) => {
+      const onAbort = () => reject(
+        execution.controller.signal.reason instanceof Error
+          ? execution.controller.signal.reason
+          : new ScheduledTaskExecutionError(
+            'Scheduled execution was aborted while an operation was still settling.',
+            'scheduler_handler_aborted',
+          ),
+      );
+      execution.controller.signal.addEventListener('abort', onAbort, { once: true });
+      removeAbortListener = () => execution.controller.signal.removeEventListener('abort', onAbort);
+    });
+    try {
+      return await Promise.race([operation, interrupted]);
+    } finally {
+      removeAbortListener();
+    }
+  }
+
+  private trackDurableOperation<T>(
+    operation: Promise<T>,
+    execution: ScheduledInFlightHandler,
+  ): Promise<T> {
+    const tracked = Promise.resolve(operation);
+    execution.pendingDurableOperations.add(tracked);
+    void tracked.then(
+      () => this.markDurableOperationSettled(execution.task.id, execution, tracked, 'fulfilled'),
+      () => this.markDurableOperationSettled(execution.task.id, execution, tracked, 'rejected'),
+    );
+    return tracked;
+  }
+
+  private executionOperationsSettled(execution: ScheduledInFlightHandler): boolean {
+    return execution.handlerSettled && execution.pendingDurableOperations.size === 0;
   }
 
   disableTask(id: string): boolean {
@@ -382,8 +922,11 @@ export class Scheduler {
     task.enabled = false;
     this.disabledTasks.add(id);
     this.clearTimer(id);
+    this.abortRunningTask(id, 'Scheduled task was disabled.');
+    task.nextRun = null;
+    this.persistRuntimeState(task);
     this.persistDisabledState();
-    console.log(`[Scheduler] Task "${id}" disabled`);
+    console.log(`[Scheduler] Task "${redactSchedulerDiagnostic(id)}" disabled`);
     return true;
   }
 
@@ -392,13 +935,24 @@ export class Scheduler {
     if (!task) return false;
     task.enabled = true;
     this.disabledTasks.delete(id);
-    this.scheduleTask(task);
+    const pendingSettlement = this.inFlightHandlers.get(id);
+    if (
+      (!pendingSettlement?.pendingLateSettlement
+        || this.executionOperationsSettled(pendingSettlement))
+      && !task.requiresReconciliation
+    ) {
+      this.scheduleTask(task);
+    } else {
+      task.nextRun = null;
+      this.persistRuntimeState(task);
+    }
     this.persistDisabledState();
-    console.log(`[Scheduler] Task "${id}" enabled`);
+    console.log(`[Scheduler] Task "${redactSchedulerDiagnostic(id)}" enabled`);
     return true;
   }
 
   private clearTimer(id: string) {
+    this.scheduleGenerations.set(id, (this.scheduleGenerations.get(id) || 0) + 1);
     const timer = this.timers.get(id);
     if (timer) {
       clearInterval(timer);
@@ -424,143 +978,404 @@ export class Scheduler {
       id: task.id,
       cron: task.cron,
       lastRun: task.lastRun,
+      lastStatus: task.lastStatus || 'idle',
+      lastError: task.lastError ? redactSchedulerDiagnostic(task.lastError) : null,
+      lastDurationMs: task.lastDurationMs ?? null,
+      lastStartedAt: task.lastStartedAt ?? null,
+      nextRun: task.nextRun ?? null,
+      running: this.runningTasks.has(task.id),
+      settlementPending: Boolean(
+        this.inFlightHandlers.get(task.id)?.pendingLateSettlement
+        && !this.executionOperationsSettled(this.inFlightHandlers.get(task.id)!)
+      ),
+      executionClass: task.executionClass,
+      timeoutMs: getScheduledTaskTimeoutMs(task.executionClass, task.timeoutMs),
+      executionContract: getScheduledTaskExecutionContract(task),
+      persistenceStatus: task.persistenceStatus || 'ok',
+      lastPersistenceError: task.lastPersistenceError
+        ? redactSchedulerDiagnostic(task.lastPersistenceError)
+        : null,
       active: this.timers.has(task.id),
       enabled: task.enabled !== false,
+      requiresReconciliation: task.requiresReconciliation === true,
+      quarantinedExecutionId: task.quarantinedExecutionId || null,
+      quarantineReason: task.quarantineReason
+        ? redactSchedulerDiagnostic(task.quarantineReason)
+        : null,
+      reconciledAt: task.reconciledAt || null,
+      reconciliationResolution: task.reconciliationResolution || null,
     }));
   }
 
-  /** Persist once before enqueueing; retries never emit the same delivery twice. */
-  private saveProactiveMessage(
-    taskId: string,
-    executionId: string,
-    deliveryIndex: number,
-    delivery: ScheduledDelivery,
-    timestamp: string,
-  ): { id: string; created: boolean } {
-    const db = readDB();
-    if (!db.interactions) db.interactions = [];
-    const id = buildScheduledProactiveInteractionId(executionId, deliveryIndex, delivery);
-    if (db.interactions.some((candidate: any) => candidate.id === id)) return { id, created: false };
-    db.interactions.push({
-      id,
-      userId: delivery.userId,
-      agentId: 'lumi',
-      conversationId: '',
-      module: 'lumi',
-      message: `[${taskId}] ${delivery.message}`,
-      response: '',
-      role: 'assistant',
-      personality: 'lumi',
-      mode: 'proactive',
-      toolCalls: JSON.stringify({ executionId }),
-      domain: delivery.domain || 'personal',
-      orgId: delivery.domain === 'work' ? delivery.orgId || '' : '',
-      timestamp,
-    });
-    writeDB(db);
-    return { id, created: true };
+  async reconcileTask(
+    id: string,
+    resolution: 'confirmed_no_side_effect' | 'accepted_unknown_outcome',
+  ): Promise<{ reconciled: boolean; found: boolean; reason: string }> {
+    const task = this.tasks.find(candidate => candidate.id === id);
+    if (!task) return { reconciled: false, found: false, reason: 'task_not_found' };
+    const inFlight = this.inFlightHandlers.get(id);
+    if (inFlight) {
+      if (!inFlight.handlerSettled) {
+        return { reconciled: false, found: true, reason: 'handler_still_settling' };
+      }
+      if (inFlight.pendingDurableOperations.size > 0 || inFlight.lateSettlementFinalizing) {
+        return { reconciled: false, found: true, reason: 'durable_operation_still_settling' };
+      }
+      if (!inFlight.schedulerFinished) {
+        return { reconciled: false, found: true, reason: 'execution_still_active' };
+      }
+    }
+    if (!task.requiresReconciliation) {
+      return { reconciled: false, found: true, reason: 'reconciliation_not_required' };
+    }
+
+    const reconciledAt = new Date().toISOString();
+    const reconciledTask: ScheduledTask = {
+      ...task,
+      requiresReconciliation: false,
+      quarantinedExecutionId: null,
+      quarantineReason: null,
+      reconciledAt,
+      reconciliationResolution: resolution,
+      persistenceStatus: 'ok',
+      lastPersistenceError: null,
+    };
+    const currentDb = readDB();
+    const candidateDb = {
+      ...currentDb,
+      settings: (currentDb.settings || []).map((setting: any) => ({ ...setting })),
+    };
+    this.stageRuntimeState(candidateDb, reconciledTask);
+    try {
+      this.writeDatabase(candidateDb);
+      await this.strictFlush();
+    } catch (error: any) {
+      // Never authorize re-entry if the reconciliation decision was not
+      // durable. Restore the previous in-memory projection best-effort.
+      this.writeDatabase(currentDb);
+      task.persistenceStatus = 'failed';
+      task.lastPersistenceError = redactSchedulerDiagnostic(error);
+      return { reconciled: false, found: true, reason: 'reconciliation_persistence_failed' };
+    }
+
+    task.requiresReconciliation = false;
+    task.quarantinedExecutionId = null;
+    task.quarantineReason = null;
+    task.reconciledAt = reconciledAt;
+    task.reconciliationResolution = resolution;
+    task.persistenceStatus = 'ok';
+    task.lastPersistenceError = null;
+    if (task.enabled !== false) this.scheduleTask(task);
+    return { reconciled: true, found: true, reason: 'reconciled' };
   }
 
-  private deliverTaskResult(
+  /**
+   * Stage the complete candidate batch and swap it into the in-memory database
+   * with one write. No delivery row becomes visible before every row has been
+   * materialized, so a later item cannot strand an earlier silent message.
+   */
+  private persistProactiveMessageBatch(
+    taskId: string,
+    executionId: string,
+    deliveries: Array<{ deliveryIndex: number; delivery: ScheduledDelivery }>,
+    timestamp: string,
+  ): { createdInteractionIds: string[]; createdDeliveryIndexes: Set<number> } {
+    const currentDb = readDB();
+    const originalInteractions = Array.isArray(currentDb.interactions)
+      ? currentDb.interactions
+      : [];
+    const candidateDb = {
+      ...currentDb,
+      interactions: [...originalInteractions],
+    };
+    const existingIds = new Set(originalInteractions.map((candidate: any) => candidate.id));
+    const createdInteractionIds: string[] = [];
+    const createdDeliveryIndexes = new Set<number>();
+    for (const { deliveryIndex, delivery } of deliveries) {
+      const id = buildScheduledProactiveInteractionId(executionId, deliveryIndex, delivery);
+      if (existingIds.has(id)) continue;
+      existingIds.add(id);
+      candidateDb.interactions.push({
+        id,
+        userId: delivery.userId,
+        agentId: 'lumi',
+        conversationId: '',
+        module: 'lumi',
+        message: `[${taskId}] ${delivery.message}`,
+        response: '',
+        role: 'assistant',
+        personality: 'lumi',
+        mode: 'proactive',
+        toolCalls: JSON.stringify({ executionId }),
+        domain: delivery.domain || 'personal',
+        orgId: delivery.domain === 'work' ? delivery.orgId || '' : '',
+        timestamp,
+      });
+      createdInteractionIds.push(id);
+      createdDeliveryIndexes.add(deliveryIndex);
+    }
+    if (createdInteractionIds.length === 0) {
+      return { createdInteractionIds, createdDeliveryIndexes };
+    }
+    try {
+      this.writeDatabase(candidateDb);
+    } catch (error) {
+      try {
+        this.rollbackProactiveMessageBatch(createdInteractionIds);
+      } catch (rollbackError) {
+        throw new Error(
+          'Atomic proactive delivery persistence failed and its in-memory rollback could not be confirmed.',
+          { cause: rollbackError },
+        );
+      }
+      throw error;
+    }
+    return { createdInteractionIds, createdDeliveryIndexes };
+  }
+
+  private rollbackProactiveMessageBatch(createdInteractionIds: string[]): void {
+    if (createdInteractionIds.length === 0) return;
+    const rollbackDb = readDB();
+    const created = new Set(createdInteractionIds);
+    // Mutate the live projection before calling the writer as well: even a
+    // writer that throws after swapping its candidate cannot leave these rows
+    // available to a retry as created=false.
+    rollbackDb.interactions = (rollbackDb.interactions || [])
+      .filter((candidate: any) => !created.has(candidate.id));
+    this.writeDatabase(rollbackDb);
+  }
+
+  private async deliverTaskResult(
     task: ScheduledTask,
     plan: CapabilityExecutionPlan,
     result: ScheduledTaskResult,
     timestamp: string,
-  ): { deliveryCount: number; persistedCount: number; emittedCount: number; withheldCount: number } {
+    execution: ScheduledInFlightHandler,
+  ): Promise<{ deliveryCount: number; persistedCount: number; emittedCount: number; withheldCount: number }> {
     const summary = { deliveryCount: 0, persistedCount: 0, emittedCount: 0, withheldCount: 0 };
     if (!result) return summary;
     if (!Array.isArray(result)) {
       if (!task.quiet) {
-        console.warn(`[Scheduler] Dropped unscoped proactive result from "${task.id}". Return ScheduledDelivery[] instead.`);
+        console.warn(`[Scheduler] Dropped unscoped proactive result from "${redactSchedulerDiagnostic(task.id)}". Return ScheduledDelivery[] instead.`);
       }
       return summary;
     }
 
+    // Validate the complete delivery envelope before creating any durable row
+    // or emitting anything. In particular, a work-scoped delivery without an
+    // organization must never silently fall back to a personal user room.
+    const invalidDeliveryIndex = result.findIndex((delivery: any) => (
+      !delivery
+      || typeof delivery !== 'object'
+      || typeof delivery.userId !== 'string'
+      || !delivery.userId.trim()
+      || typeof delivery.message !== 'string'
+      || !delivery.message.trim()
+      || (delivery.domain !== undefined && delivery.domain !== 'personal' && delivery.domain !== 'work')
+      || (delivery.domain === 'work' && (
+        typeof delivery.orgId !== 'string' || !delivery.orgId.trim()
+      ))
+    ));
+    if (invalidDeliveryIndex >= 0) {
+      throw new ScheduledTaskExecutionError(
+        `Scheduled delivery ${invalidDeliveryIndex} was rejected because its recipient, message, or scope was invalid.`,
+        'scheduler_delivery_invalid',
+      );
+    }
+
+    const preparedDeliveries: Array<{
+      deliveryIndex: number;
+      normalized: ScheduledDelivery;
+      finalized: boolean;
+      reason: string;
+    }> = [];
     result.forEach((delivery, deliveryIndex) => {
-      if (!delivery?.userId || !delivery.message?.trim()) return;
       summary.deliveryCount += 1;
       const deliveryFinalization = finalizeScheduledDelivery(task.id, delivery);
       if (!deliveryFinalization.delivery) {
         summary.withheldCount += 1;
         console.warn(
-          `[Scheduler] Withheld unverified model-authored proactive message from "${task.id}": `
-          + deliveryFinalization.reason,
+          `[Scheduler] Withheld unverified model-authored proactive message from "${redactSchedulerDiagnostic(task.id)}": `
+          + redactSchedulerDiagnostic(deliveryFinalization.reason),
         );
         return;
       }
       const safeDelivery = deliveryFinalization.delivery;
       const normalized: ScheduledDelivery = {
-        userId: safeDelivery.userId,
+        userId: safeDelivery.userId.trim(),
         message: safeDelivery.message.trim(),
-        domain: safeDelivery.domain === 'work' && safeDelivery.orgId ? 'work' : 'personal',
-        orgId: safeDelivery.domain === 'work' ? safeDelivery.orgId || '' : '',
+        domain: safeDelivery.domain === 'work' ? 'work' : 'personal',
+        orgId: safeDelivery.domain === 'work' ? safeDelivery.orgId!.trim() : '',
       };
-      const persistence = this.saveProactiveMessage(
-        task.id,
-        plan.taskId,
+      preparedDeliveries.push({
         deliveryIndex,
         normalized,
+        finalized: deliveryFinalization.finalized,
+        reason: deliveryFinalization.reason,
+      });
+    });
+    let batch: ReturnType<Scheduler['persistProactiveMessageBatch']>;
+    try {
+      batch = this.persistProactiveMessageBatch(
+        task.id,
+        plan.taskId,
+        preparedDeliveries.map(item => ({
+          deliveryIndex: item.deliveryIndex,
+          delivery: item.normalized,
+        })),
         timestamp,
       );
-      summary.persistedCount += 1;
-      if (persistence.created && !task.quiet && this.io) {
-        const room = normalized.domain === 'work' && normalized.orgId
-          ? `org:${normalized.orgId}`
-          : `user:${normalized.userId}:personal`;
-        this.io.to(room).emit('agent:proactive', {
+    } catch (error) {
+      task.persistenceStatus = 'failed';
+      task.lastPersistenceError = redactSchedulerDiagnostic(error);
+      throw error;
+    }
+    summary.persistedCount = preparedDeliveries.length;
+    const pendingEmissions = preparedDeliveries.filter(item => (
+      batch.createdDeliveryIndexes.has(item.deliveryIndex) && !task.quiet && this.io
+    ));
+    if (pendingEmissions.length > 0) {
+      // Never tell the client about a proactive result that exists only in
+      // process memory. The strict flush is the delivery evidence boundary.
+      const deliveryFlush = this.trackDurableOperation(this.strictFlush(), execution);
+      try {
+        await this.awaitExecutionPhase(deliveryFlush, execution, 'delivery');
+      } catch (error) {
+        task.persistenceStatus = 'failed';
+        task.lastPersistenceError = redactSchedulerDiagnostic(error);
+        try {
+          this.rollbackProactiveMessageBatch(batch.createdInteractionIds);
+        } catch (rollbackError: any) {
+          task.lastPersistenceError = redactSchedulerDiagnostic(
+            `${task.lastPersistenceError || 'Delivery persistence failed'}; rollback failed: ${rollbackError}`,
+          );
+        }
+        // A timed-out flush may still commit its captured candidate. Chain a
+        // strict rollback boundary behind its real settlement and keep both
+        // promises inside the execution fence.
+        const rollbackFlush = this.trackDurableOperation(
+          deliveryFlush.catch(() => undefined).then(() => this.strictFlush()),
+          execution,
+        );
+        if (!execution.controller.signal.aborted) {
+          try {
+            await this.awaitExecutionPhase(rollbackFlush, execution, 'delivery');
+          } catch (rollbackError: any) {
+            task.lastPersistenceError = redactSchedulerDiagnostic(
+              `${task.lastPersistenceError || 'Delivery persistence failed'}; durable rollback failed: ${rollbackError}`,
+            );
+            if (execution.controller.signal.aborted) {
+              throw execution.controller.signal.reason;
+            }
+          }
+        }
+        throw error;
+      }
+      for (const emission of pendingEmissions) {
+        const room = emission.normalized.domain === 'work' && emission.normalized.orgId
+          ? `user:${emission.normalized.userId}:org:${emission.normalized.orgId}`
+          : `user:${emission.normalized.userId}:personal`;
+        this.io!.to(room).emit('agent:proactive', {
           taskId: task.id,
-          message: normalized.message,
-          domain: normalized.domain,
-          orgId: normalized.orgId,
+          message: emission.normalized.message,
+          domain: emission.normalized.domain,
+          orgId: emission.normalized.orgId,
           timestamp,
-          finalized: deliveryFinalization.finalized,
+          finalized: emission.finalized,
           blocked: false,
-          reason: deliveryFinalization.reason,
+          reason: emission.reason,
         });
         summary.emittedCount += 1;
       }
-    });
+    }
     return summary;
   }
 
   private scheduleTask(task: ScheduledTask) {
     this.clearTimer(task.id);
+    const taskScheduleGeneration = this.scheduleGenerations.get(task.id) || 0;
+    const scheduleGeneration = this.lifecycleGeneration;
     if (task.enabled === false) {
-      console.log(`[Scheduler] Task "${task.id}" is disabled — skipping schedule`);
+      task.nextRun = null;
+      this.persistRuntimeState(task);
+      console.log(`[Scheduler] Task "${redactSchedulerDiagnostic(task.id)}" is disabled — skipping schedule`);
+      return;
+    }
+    if (task.requiresReconciliation) {
+      task.nextRun = null;
+      this.persistRuntimeState(task);
+      console.warn(
+        `[Scheduler] Task "${redactSchedulerDiagnostic(task.id)}" remains quarantined until its unknown outcome is explicitly reconciled.`,
+      );
       return;
     }
     const parsed = parseSchedule(task.cron);
 
     if (parsed.type === 'interval') {
       // Simple fixed interval — use setInterval (backward compat)
-      const timer = setInterval(() => { void this.runTask(task); }, parsed.intervalMs);
+      task.nextRun = new Date(Date.now() + parsed.intervalMs).toISOString();
+      this.persistRuntimeState(task);
+      const timer = setInterval(() => {
+        if (
+          scheduleGeneration !== this.lifecycleGeneration
+          || taskScheduleGeneration !== this.scheduleGenerations.get(task.id)
+        ) return;
+        task.nextRun = new Date(Date.now() + parsed.intervalMs).toISOString();
+        this.persistRuntimeState(task);
+        void this.runTask(task);
+      }, parsed.intervalMs);
       this.timers.set(task.id, timer);
-      console.log(`[Scheduler] Registered task "${task.id}" every ${parsed.intervalMs / 1000}s${task.quiet ? ' (quiet)' : ''}`);
+      console.log(`[Scheduler] Registered task "${redactSchedulerDiagnostic(task.id)}" every ${parsed.intervalMs / 1000}s${task.quiet ? ' (quiet)' : ''}`);
     } else {
       // Real cron expression — use recursive setTimeout to hit exact times
       const runAndReschedule = async () => {
+        if (
+          scheduleGeneration !== this.lifecycleGeneration
+          || taskScheduleGeneration !== this.scheduleGenerations.get(task.id)
+        ) return;
         await this.runTask(task);
-        if (task.enabled === false || !this.tasks.some(item => item === task)) return;
+        if (
+          scheduleGeneration !== this.lifecycleGeneration
+          || taskScheduleGeneration !== this.scheduleGenerations.get(task.id)
+          || task.enabled === false
+          || !this.tasks.some(item => item === task)
+        ) return;
         // Schedule next run
         const nextMs = this.nextCronTime(parsed.fields!);
-        this.setTaskTimeout(task.id, runAndReschedule, nextMs);
+        task.nextRun = new Date(Date.now() + nextMs).toISOString();
+        this.persistRuntimeState(task);
+        this.setTaskTimeout(task.id, runAndReschedule, nextMs, taskScheduleGeneration);
       };
       const firstMs = this.nextCronTime(parsed.fields!);
-      this.setTaskTimeout(task.id, runAndReschedule, firstMs);
+      task.nextRun = new Date(Date.now() + firstMs).toISOString();
+      this.persistRuntimeState(task);
+      this.setTaskTimeout(task.id, runAndReschedule, firstMs, taskScheduleGeneration);
       const [m, h, dom, mon, dow] = parsed.fields!;
-      console.log(`[Scheduler] Registered cron task "${task.id}" — ${m} ${h} ${dom} ${mon} ${dow} (next in ${Math.round(firstMs / 1000)}s)`);
+      console.log(`[Scheduler] Registered cron task "${redactSchedulerDiagnostic(task.id)}" — ${m} ${h} ${dom} ${mon} ${dow} (next in ${Math.round(firstMs / 1000)}s)`);
     }
   }
 
   private async runTask(task: ScheduledTask): Promise<void> {
-    if (task.enabled === false || this.runningTasks.has(task.id)) return;
+    if (
+      task.enabled === false
+      || task.requiresReconciliation
+      || this.runningTasks.has(task.id)
+    ) return;
     this.runningTasks.add(task.id);
+    const lifecycleGeneration = this.lifecycleGeneration;
     const startedAt = new Date();
+    const contract = getScheduledTaskExecutionContract(task);
     const compactAudit = task.auditMode !== 'full';
+    const execution = this.beginExecution(task, startedAt, contract, compactAudit);
     let plan: CapabilityExecutionPlan | null = null;
     let handlerStarted = false;
+    let handlerSettled = false;
+    let userDeliveryDeclared = false;
+    let rollbackTerminalLedger: (() => void) | null = null;
+    let phase: 'planning' | 'handler' | 'delivery' | 'terminal_persistence' = 'planning';
     try {
       plan = buildScheduledTaskExecutionPlan(task, startedAt);
+      execution.plan = plan;
       const authorization = authorizeCapabilityPlanTool(plan, 'scheduler_task_handler');
       const db = readDB();
       const previousStatus = compactAudit
@@ -571,10 +1386,14 @@ export class Scheduler {
         : (db.conversationActionTasks || []).find((candidate: any) => candidate.id === plan.taskId)?.status;
       if (previousStatus) {
         if (previousStatus === 'executing') {
+          const unknownAt = new Date();
           const record = this.buildScheduledTaskRecord(plan, {
             verified: false,
             status: 'unknown',
             error: 'scheduler_previous_outcome_unknown',
+            durationMs: Math.max(0, unknownAt.getTime() - startedAt.getTime()),
+            contract,
+            stoppingReason: 'previous_slot_outcome_unknown',
           });
           persistScheduledCapabilityExecution(db, {
             scheduledTaskId: task.id,
@@ -582,36 +1401,100 @@ export class Scheduler {
             status: 'blocked',
             blocker: 'A previous execution in this exact schedule slot has an unknown outcome; replay was stopped.',
             records: [record],
-            now: startedAt.toISOString(),
+            now: unknownAt.toISOString(),
             compactAudit,
           });
-          writeDB(db);
+          task.lastRun = unknownAt.toISOString();
+          task.lastStatus = 'unknown';
+          task.lastError = 'A previous execution in this exact schedule slot has an unknown outcome; replay was stopped.';
+          task.lastDurationMs = Math.max(0, unknownAt.getTime() - startedAt.getTime());
+          execution.phase = 'terminal_persistence';
+          await this.persistDbWithRuntimeState(db, task, true, execution);
         }
         return;
       }
+      task.lastStartedAt = startedAt.toISOString();
+      task.lastStatus = authorization.allowed ? 'executing' : 'blocked';
+      task.lastError = authorization.allowed ? null : redactSchedulerDiagnostic(authorization.reason);
+      task.lastDurationMs = null;
+      if (!authorization.allowed) task.lastRun = startedAt.toISOString();
       persistScheduledCapabilityExecution(db, {
         scheduledTaskId: task.id,
         plan,
         status: authorization.allowed ? 'executing' : 'blocked',
-        blocker: authorization.allowed ? '' : authorization.reason,
+        blocker: authorization.allowed ? '' : redactSchedulerDiagnostic(authorization.reason),
         records: authorization.allowed ? [] : [this.buildScheduledTaskRecord(plan, {
           verified: false,
           status: 'blocked',
-          error: authorization.reason,
+          error: redactSchedulerDiagnostic(authorization.reason),
+          durationMs: 0,
+          contract,
+          stoppingReason: 'capability_policy_block',
         })],
         now: startedAt.toISOString(),
         compactAudit,
       });
-      writeDB(db);
+      execution.phase = 'admission_persistence';
+      await this.persistDbWithRuntimeState(db, task, !authorization.allowed, execution);
       if (!authorization.allowed) {
-        console.warn(`[Scheduler] Task "${task.id}" blocked by capability policy: ${authorization.reason}`);
+        console.warn(
+          `[Scheduler] Task "${redactSchedulerDiagnostic(task.id)}" blocked by capability policy: ${redactSchedulerDiagnostic(authorization.reason)}`,
+        );
         return;
       }
+      const registeredTask = this.tasks.find(candidate => candidate === task);
+      if (
+        lifecycleGeneration !== this.lifecycleGeneration
+        || !registeredTask
+        || registeredTask.enabled === false
+      ) {
+        throw new ScheduledTaskExecutionError(
+          'Scheduled execution was cancelled before its handler started.',
+          'scheduler_handler_aborted',
+        );
+      }
       handlerStarted = true;
-      const result = await task.handler();
-      task.lastRun = new Date().toISOString();
-      const delivery = this.deliverTaskResult(task, plan, result, task.lastRun);
+      execution.handlerStarted = true;
+      execution.handlerSettled = false;
+      phase = 'handler';
+      const result = await this.executeTaskHandler(task, plan, execution);
+      handlerSettled = true;
+      phase = 'delivery';
+      if (
+        task.executionClass === 'client_probe'
+        && task.deliveryPolicy !== 'scoped'
+        && Array.isArray(result)
+        && result.length > 0
+      ) {
+        throw new ScheduledTaskExecutionError(
+          'A client_probe returned user-visible deliveries without declaring deliveryPolicy="scoped" before admission.',
+          'scheduler_delivery_invalid',
+        );
+      }
+      const deliveryTimestamp = new Date().toISOString();
+      const delivery = await this.deliverTaskResult(task, plan, result, deliveryTimestamp, execution);
+      userDeliveryDeclared = delivery.deliveryCount > 0;
+      if (
+        delivery.deliveryCount > 0
+        && delivery.persistedCount === 0
+        && delivery.withheldCount === delivery.deliveryCount
+      ) {
+        throw new ScheduledTaskExecutionError(
+          'Every declared proactive delivery was withheld by terminal output verification.',
+          'scheduler_delivery_withheld',
+        );
+      }
+      const completedAt = new Date();
+      const completedTask: ScheduledTask = {
+        ...task,
+        lastRun: completedAt.toISOString(),
+        lastStatus: 'completed',
+        lastError: null,
+        lastDurationMs: Math.max(0, completedAt.getTime() - startedAt.getTime()),
+      };
+      phase = 'terminal_persistence';
       const completedDb = readDB();
+      rollbackTerminalLedger = this.captureScheduledLedgerCheckpoint(completedDb, task.id, plan.taskId);
       persistScheduledCapabilityExecution(completedDb, {
         scheduledTaskId: task.id,
         plan,
@@ -620,38 +1503,411 @@ export class Scheduler {
           verified: true,
           status: 'verified',
           delivery,
+          durationMs: completedTask.lastDurationMs!,
+          contract,
+          stoppingReason: 'success_criteria_met',
         })],
-        now: task.lastRun,
+        now: completedTask.lastRun,
         compactAudit,
       });
-      writeDB(completedDb);
+      // The handler returning is not completion. The scheduler accepts success
+      // only after the verified receipt and runtime state cross the durability
+      // boundary declared by the execution class and actual side effects.
+      execution.phase = 'terminal_persistence';
+      try {
+        await this.persistDbWithRuntimeState(completedDb, completedTask, userDeliveryDeclared, execution);
+      } catch (error) {
+        task.persistenceStatus = completedTask.persistenceStatus;
+        task.lastPersistenceError = completedTask.lastPersistenceError;
+        throw error;
+      }
+      task.lastRun = completedTask.lastRun;
+      task.lastStatus = completedTask.lastStatus;
+      task.lastError = completedTask.lastError;
+      task.lastDurationMs = completedTask.lastDurationMs;
+      task.persistenceStatus = completedTask.persistenceStatus;
+      task.lastPersistenceError = completedTask.lastPersistenceError;
+      rollbackTerminalLedger = null;
     } catch (err: any) {
-      if (handlerStarted && plan) {
+      if (rollbackTerminalLedger) {
         try {
-          const failedAt = new Date().toISOString();
+          rollbackTerminalLedger();
+        } catch (rollbackError: any) {
+          task.persistenceStatus = 'failed';
+          task.lastPersistenceError = redactSchedulerDiagnostic(rollbackError);
+          console.error(
+            `[Scheduler] Failed to roll back terminal ledger for "${redactSchedulerDiagnostic(task.id)}":`,
+            task.lastPersistenceError,
+          );
+        }
+        rollbackTerminalLedger = null;
+      }
+      const failedAt = new Date();
+      const typedError = err instanceof ScheduledTaskExecutionError ? err : null;
+      handlerSettled = handlerSettled || execution.handlerSettled;
+      const deadlineExpired = typedError?.code === 'scheduler_execution_timed_out'
+        || typedError?.code === 'scheduler_handler_timed_out';
+      const abortRequested = typedError?.code === 'scheduler_handler_aborted';
+      const persistenceFailed = task.persistenceStatus === 'failed'
+        || execution.phase === 'admission_persistence'
+        || phase === 'terminal_persistence'
+        || (handlerSettled && phase === 'delivery');
+      const errorCode = typedError?.code
+        || (!handlerStarted && execution.phase === 'admission_persistence'
+          ? 'scheduler_admission_persistence_failed'
+          : persistenceFailed
+            ? 'scheduler_terminal_persistence_failed'
+            : 'scheduler_handler_failed');
+      const errorMessage = redactSchedulerDiagnostic(err?.message || err || errorCode);
+      task.lastDurationMs = Math.max(0, failedAt.getTime() - startedAt.getTime());
+      const handlerStillSettling = !execution.handlerSettled;
+      const durabilityStillSettling = execution.pendingDurableOperations.size > 0;
+
+      if (
+        (handlerStillSettling || durabilityStillSettling)
+        && (deadlineExpired || abortRequested)
+        && plan
+      ) {
+        execution.pendingLateSettlement = true;
+        execution.lateSettlementPendingHandler ||= handlerStillSettling;
+        execution.lateSettlementPendingDurability ||= durabilityStillSettling;
+        // A handler or durability boundary that ignored abort is quarantined:
+        // no future timer may enter until every operation truly settles.
+        this.clearTimer(task.id);
+        task.nextRun = null;
+        task.lastStatus = abortRequested && handlerStillSettling ? 'cancelling' : 'unknown';
+        const durablePhaseLabel = execution.phase === 'delivery'
+          ? 'delivery persistence'
+          : execution.phase.replaceAll('_', ' ');
+        const pendingSubject = handlerStillSettling && durabilityStillSettling
+          ? 'the handler and durable persistence are still settling'
+          : handlerStillSettling
+            ? 'the handler is still settling'
+            : `durable ${durablePhaseLabel} is still settling`;
+        task.lastError = abortRequested
+          ? `Cancellation was requested, but ${pendingSubject}; side-effect outcome remains unknown.`
+          : `The end-to-end wall-clock deadline expired, but ${pendingSubject}; side-effect outcome remains unknown.`;
+        task.requiresReconciliation = true;
+        task.quarantinedExecutionId = plan.taskId;
+        task.quarantineReason = task.lastError;
+        try {
+          const db = readDB();
+          persistScheduledCapabilityExecution(db, {
+            scheduledTaskId: task.id,
+            plan,
+            status: 'executing',
+            blocker: task.lastError,
+            records: [],
+            now: failedAt.toISOString(),
+            compactAudit,
+          });
+          this.persistRecoveryDbWithRuntimeState(db, task, task.persistenceStatus === 'failed');
+        } catch (pendingError: any) {
+          task.persistenceStatus = 'failed';
+          task.lastPersistenceError = redactSchedulerDiagnostic(pendingError);
+          console.error(
+            `[Scheduler] Failed to persist pending settlement for "${redactSchedulerDiagnostic(task.id)}":`,
+            task.lastPersistenceError,
+          );
+        }
+        console.warn(
+          `[Scheduler] Task "${redactSchedulerDiagnostic(task.id)}" ${task.lastStatus}:`,
+          task.lastError,
+        );
+        return;
+      }
+
+      let runtimeStatus: ScheduledTaskRunStatus;
+      let blocker: string;
+      let receiptStatus: 'blocked' | 'failed' | 'unknown';
+      let stoppingReason: string;
+      if (!handlerStarted) {
+        runtimeStatus = abortRequested ? 'cancelled' : 'blocked';
+        blocker = abortRequested
+          ? 'Execution was cancelled before the handler started; no handler side effects occurred.'
+          : deadlineExpired
+            ? 'The end-to-end deadline expired before the handler started; no handler side effects occurred.'
+            : `Pre-handler durability failed and the handler was not started: ${errorMessage}`;
+        receiptStatus = 'blocked';
+        stoppingReason = abortRequested
+          ? 'cancelled_before_handler'
+          : deadlineExpired
+            ? 'deadline_before_handler'
+            : 'admission_persistence_failed';
+      } else if (
+        typedError?.code === 'scheduler_delivery_withheld'
+        || typedError?.code === 'scheduler_delivery_invalid'
+      ) {
+        runtimeStatus = 'blocked';
+        blocker = typedError.code === 'scheduler_delivery_invalid'
+          ? errorMessage
+          : 'Every declared proactive delivery was withheld by terminal output verification.';
+        receiptStatus = 'blocked';
+        stoppingReason = typedError.code === 'scheduler_delivery_invalid'
+          ? 'delivery_scope_or_shape_invalid'
+          : 'delivery_verification_blocked';
+      } else if (deadlineExpired || abortRequested || persistenceFailed) {
+        runtimeStatus = 'unknown';
+        blocker = deadlineExpired
+          ? `The end-to-end execution deadline expired during ${execution.phase}; the late result was not accepted, side-effect outcome remains unknown, and this slot will not be replayed.`
+          : abortRequested
+            ? 'The handler settled after cancellation was requested; its result was not accepted, side-effect outcome remains unknown, and this slot will not be replayed.'
+            : 'The handler returned, but terminal evidence could not be durably accepted; side-effect outcome remains unknown and replay is disabled.';
+        receiptStatus = 'unknown';
+        stoppingReason = deadlineExpired
+          ? `deadline_during_${execution.phase}`
+          : abortRequested
+            ? 'settled_after_cancellation'
+            : 'terminal_persistence_failed';
+      } else {
+        runtimeStatus = 'failed';
+        blocker = `Scheduled handler failed; automatic replay for this slot is disabled. Detail: ${errorMessage}`;
+        receiptStatus = 'failed';
+        stoppingReason = 'handler_failed';
+      }
+
+      task.lastRun = failedAt.toISOString();
+      task.lastStatus = runtimeStatus;
+      task.lastError = blocker;
+      if (runtimeStatus === 'unknown') {
+        task.requiresReconciliation = true;
+        task.quarantinedExecutionId = plan?.taskId || task.quarantinedExecutionId || null;
+        task.quarantineReason = blocker;
+        task.nextRun = null;
+        this.clearTimer(task.id);
+      }
+      if (plan) {
+        try {
           const db = readDB();
           persistScheduledCapabilityExecution(db, {
             scheduledTaskId: task.id,
             plan,
             status: 'blocked',
-            blocker: 'Scheduled handler failed; automatic replay for this slot is disabled.',
+            blocker,
             records: [this.buildScheduledTaskRecord(plan, {
               verified: false,
-              status: 'failed',
-              error: 'scheduler_handler_failed',
+              status: receiptStatus,
+              error: errorCode,
+              durationMs: task.lastDurationMs,
+              contract,
+              stoppingReason,
             })],
-            now: failedAt,
+            now: failedAt.toISOString(),
             compactAudit,
           });
-          writeDB(db);
+          this.persistRecoveryDbWithRuntimeState(
+            db,
+            task,
+            task.persistenceStatus === 'failed',
+          );
         } catch (ledgerError: any) {
-          console.warn(`[Scheduler] Failed to persist task failure for "${task.id}":`, ledgerError.message);
+          task.persistenceStatus = 'failed';
+          task.lastPersistenceError = redactSchedulerDiagnostic(ledgerError);
+          console.error(`[Scheduler] Failed to persist task failure for "${redactSchedulerDiagnostic(task.id)}":`, task.lastPersistenceError);
+        }
+      } else {
+        try {
+          this.persistRecoveryDbWithRuntimeState(
+            readDB(),
+            task,
+            task.persistenceStatus === 'failed',
+          );
+        } catch {
+          // persistRecoveryDbWithRuntimeState already records and logs the failure.
         }
       }
-      console.warn(`[Scheduler] Task "${task.id}" failed:`, err.message);
+      console.warn(`[Scheduler] Task "${redactSchedulerDiagnostic(task.id)}" ${runtimeStatus}:`, blocker);
     } finally {
-      this.runningTasks.delete(task.id);
+      this.finishSchedulerExecution(task.id);
     }
+  }
+
+  private finishSchedulerExecution(taskId: string) {
+    const inFlight = this.inFlightHandlers.get(taskId);
+    if (!inFlight) {
+      this.runningTasks.delete(taskId);
+      return;
+    }
+    inFlight.schedulerFinished = true;
+    this.maybeReleaseExecutionFence(taskId, inFlight);
+  }
+
+  private markHandlerSettled(
+    taskId: string,
+    inFlight: ScheduledInFlightHandler,
+    outcome: 'fulfilled' | 'rejected',
+  ) {
+    inFlight.handlerSettled = true;
+    inFlight.handlerOutcome = outcome;
+    this.maybeReleaseExecutionFence(taskId, inFlight);
+  }
+
+  private markDurableOperationSettled(
+    taskId: string,
+    inFlight: ScheduledInFlightHandler,
+    operation: Promise<unknown>,
+    outcome: 'fulfilled' | 'rejected',
+  ) {
+    inFlight.pendingDurableOperations.delete(operation);
+    if (outcome === 'rejected') inFlight.durableOperationRejected = true;
+    this.maybeReleaseExecutionFence(taskId, inFlight);
+  }
+
+  private maybeReleaseExecutionFence(taskId: string, inFlight: ScheduledInFlightHandler) {
+    if (
+      !inFlight.schedulerFinished
+      || !this.executionOperationsSettled(inFlight)
+      || this.inFlightHandlers.get(taskId) !== inFlight
+    ) return;
+    if (inFlight.pendingLateSettlement) {
+      void this.finalizeLateHandlerSettlement(
+        taskId,
+        inFlight,
+        inFlight.handlerOutcome || 'rejected',
+      );
+    } else {
+      this.releaseHandlerFence(taskId, inFlight);
+    }
+  }
+
+  private async finalizeLateHandlerSettlement(
+    taskId: string,
+    inFlight: ScheduledInFlightHandler,
+    outcome: 'fulfilled' | 'rejected',
+  ) {
+    if (inFlight.lateSettlementFinalizing || this.inFlightHandlers.get(taskId) !== inFlight) return;
+    inFlight.lateSettlementFinalizing = true;
+    const settledAt = new Date();
+    const timeout = inFlight.controller.signal.reason instanceof ScheduledTaskExecutionError
+      && ['scheduler_execution_timed_out', 'scheduler_handler_timed_out']
+        .includes(inFlight.controller.signal.reason.code);
+    const settlementSubject = inFlight.lateSettlementPendingHandler
+      ? inFlight.lateSettlementPendingDurability
+        ? `handler ${outcome} and all durable operations settled${inFlight.durableOperationRejected ? ' with a persistence failure' : ''}`
+        : `handler ${outcome}`
+      : `durable operation${inFlight.durableOperationRejected ? ' rejected' : ' settled'}`;
+    const message = timeout
+      ? `The ${settlementSubject} after the end-to-end deadline; its late result was discarded, side-effect outcome remains unknown, and this slot will not be replayed.`
+      : `The ${settlementSubject} after cancellation was requested; its late result was discarded, side-effect outcome remains unknown, and this slot will not be replayed.`;
+    const visibleTask = this.tasks.find(candidate => candidate.id === taskId) || inFlight.task;
+    for (const target of new Set([inFlight.task, visibleTask])) {
+      target.lastRun = settledAt.toISOString();
+      target.lastStatus = 'unknown';
+      target.lastError = message;
+      target.lastDurationMs = Math.max(0, settledAt.getTime() - inFlight.startedAt.getTime());
+      target.requiresReconciliation = true;
+      target.quarantinedExecutionId = inFlight.plan?.taskId || target.quarantinedExecutionId || null;
+      target.quarantineReason = message;
+      target.nextRun = null;
+    }
+    try {
+      const db = readDB();
+      if (inFlight.plan) {
+        persistScheduledCapabilityExecution(db, {
+          scheduledTaskId: taskId,
+          plan: inFlight.plan,
+          status: 'blocked',
+          blocker: message,
+          records: [this.buildScheduledTaskRecord(inFlight.plan, {
+            verified: false,
+            status: 'unknown',
+            error: timeout
+              ? 'scheduler_late_settlement_after_timeout'
+              : 'scheduler_late_settlement_after_cancellation',
+            durationMs: visibleTask.lastDurationMs || 0,
+            contract: inFlight.contract,
+            stoppingReason: timeout
+              ? 'late_settle_after_deadline'
+              : 'late_settle_after_cancellation',
+          })],
+          now: settledAt.toISOString(),
+          compactAudit: inFlight.compactAudit,
+        });
+      }
+      this.persistRecoveryDbWithRuntimeState(
+        db,
+        visibleTask,
+        visibleTask.persistenceStatus === 'failed',
+      );
+      inFlight.pendingLateSettlement = false;
+      console.warn(`[Scheduler] Task "${redactSchedulerDiagnostic(taskId)}" unknown:`, message);
+    } catch (error: any) {
+      visibleTask.persistenceStatus = 'failed';
+      visibleTask.lastPersistenceError = redactSchedulerDiagnostic(error);
+      console.error(
+        `[Scheduler] Failed to persist late settlement for "${redactSchedulerDiagnostic(taskId)}":`,
+        visibleTask.lastPersistenceError,
+      );
+    } finally {
+      this.releaseHandlerFence(taskId, inFlight);
+    }
+  }
+
+  private releaseHandlerFence(taskId: string, inFlight: ScheduledInFlightHandler) {
+    if (this.inFlightHandlers.get(taskId) !== inFlight) return;
+    clearTimeout(inFlight.deadlineTimer);
+    this.inFlightHandlers.delete(taskId);
+    if (this.runningControllers.get(taskId) === inFlight.controller) {
+      this.runningControllers.delete(taskId);
+    }
+    this.runningTasks.delete(taskId);
+  }
+
+  private async executeTaskHandler(
+    task: ScheduledTask,
+    plan: CapabilityExecutionPlan,
+    execution: ScheduledInFlightHandler,
+  ): Promise<ScheduledTaskResult> {
+    const handler = Promise.resolve().then(() => task.handler({
+      signal: execution.controller.signal,
+      taskId: task.id,
+      executionId: plan.taskId,
+      startedAt: execution.startedAt.toISOString(),
+      deadline: execution.deadline.toISOString(),
+      contract: execution.contract,
+    }));
+    void handler.then(
+      () => this.markHandlerSettled(task.id, execution, 'fulfilled'),
+      () => this.markHandlerSettled(task.id, execution, 'rejected'),
+    );
+    return this.awaitExecutionPhase(handler, execution, 'handler');
+  }
+
+  private captureScheduledLedgerCheckpoint(
+    db: any,
+    scheduledTaskId: string,
+    executionId: string,
+  ): () => void {
+    const conversationId = `scheduler:${scheduledTaskId}`;
+    const snapshots = new Map<string, any>();
+    for (const candidate of db.conversationActionTasks || []) {
+      if (candidate?.conversationId === conversationId && candidate?.target === scheduledTaskId) {
+        snapshots.set(candidate.id, JSON.parse(JSON.stringify(candidate)));
+      }
+    }
+    const receiptIds = new Set((db.conversationActionReceipts || [])
+      .filter((candidate: any) => (
+        candidate?.turnId === executionId || candidate?.requestId === executionId
+      ))
+      .map((candidate: any) => candidate.id));
+    return () => {
+      const currentDb = readDB();
+      currentDb.conversationActionTasks = (currentDb.conversationActionTasks || []).filter((candidate: any) => {
+        if (candidate?.conversationId !== conversationId || candidate?.target !== scheduledTaskId) return true;
+        return snapshots.has(candidate.id);
+      });
+      for (const [id, snapshot] of snapshots) {
+        const current = currentDb.conversationActionTasks.find((candidate: any) => candidate.id === id);
+        if (current) Object.assign(current, JSON.parse(JSON.stringify(snapshot)));
+        else currentDb.conversationActionTasks.push(JSON.parse(JSON.stringify(snapshot)));
+      }
+      currentDb.conversationActionReceipts = (currentDb.conversationActionReceipts || [])
+        .filter((candidate: any) => (
+          candidate?.turnId !== executionId
+          && candidate?.requestId !== executionId
+        ) || receiptIds.has(candidate.id));
+      this.writeDatabase(currentDb);
+    };
   }
 
   private buildScheduledTaskRecord(
@@ -661,6 +1917,9 @@ export class Scheduler {
       status: 'verified' | 'blocked' | 'failed' | 'unknown';
       error?: string;
       delivery?: { deliveryCount: number; persistedCount: number; emittedCount: number; withheldCount: number };
+      durationMs: number;
+      contract: ScheduledTaskExecutionContract;
+      stoppingReason: string;
     },
   ): ToolExecutionRecord {
     const node = plan.nodes.find(candidate => candidate.toolName === 'scheduler_task_handler');
@@ -669,6 +1928,15 @@ export class Scheduler {
       status: input.status,
       verified: input.verified,
       scheduledTaskId: plan.intent.target,
+      durationMs: input.durationMs,
+      outcome: input.verified ? 'accepted' : input.status,
+      successCriteria: input.contract.successCriteria,
+      successCriteriaMet: input.verified ? input.contract.successCriteria : [],
+      evidence: input.contract.evidence,
+      stoppingReason: input.stoppingReason,
+      retry: input.contract.retry,
+      concurrency: input.contract.concurrency,
+      finalAcceptance: input.contract.finalAcceptance,
       ...(input.delivery || {}),
     };
     return {
@@ -681,7 +1949,7 @@ export class Scheduler {
       arguments: { scheduledTaskId: plan.intent.target, executionId: plan.taskId },
       result: JSON.stringify(receipt),
       receipt,
-      ...(input.error ? { error: input.error } : {}),
+      ...(input.error ? { error: redactSchedulerDiagnostic(input.error) } : {}),
       capability: {
         capabilityId: node.capabilityId,
         lane: node.lane,
@@ -703,19 +1971,27 @@ export class Scheduler {
       terminalVerification: {
         status: input.verified ? 'verified' : input.status === 'failed' ? 'failed' : 'unverified',
         strategy: 'terminal_receipt',
-        reason: input.verified ? 'Declared scheduler handler completed with a persisted terminal receipt.' : input.error || input.status,
+        reason: input.verified
+          ? 'Main scheduler accepted the outcome after persisting its verified terminal receipt.'
+          : input.error ? redactSchedulerDiagnostic(input.error) : input.status,
       },
     };
   }
 
-  private setTaskTimeout(id: string, callback: () => void | Promise<void>, delayMs: number): NodeJS.Timeout {
+  private setTaskTimeout(
+    id: string,
+    callback: () => void | Promise<void>,
+    delayMs: number,
+    scheduleGeneration = this.scheduleGenerations.get(id) || 0,
+  ): NodeJS.Timeout {
     const maxDelay = 2_147_483_647; // Node timers are signed 32-bit milliseconds.
     const safeDelay = Math.max(1000, Math.min(delayMs, maxDelay));
     const remainingAfterThisChunk = Math.max(0, delayMs - safeDelay);
 
     const timer = setTimeout(() => {
+      if (scheduleGeneration !== this.scheduleGenerations.get(id)) return;
       if (remainingAfterThisChunk > 0) {
-        this.setTaskTimeout(id, callback, remainingAfterThisChunk);
+        this.setTaskTimeout(id, callback, remainingAfterThisChunk, scheduleGeneration);
         return;
       }
       void callback();
@@ -757,12 +2033,19 @@ export class Scheduler {
   }
 
   stop() {
+    this.lifecycleGeneration += 1;
     for (const timer of this.timers.values()) {
       clearInterval(timer);
       clearTimeout(timer); // Also clear cron timeouts
     }
     this.timers.clear();
-    this.runningTasks.clear();
+    for (const task of this.tasks) {
+      task.nextRun = null;
+      this.persistRuntimeState(task);
+    }
+    for (const taskId of this.runningControllers.keys()) {
+      this.abortRunningTask(taskId, 'Scheduler stopped before the handler reached a terminal outcome.');
+    }
   }
 }
 
@@ -964,7 +2247,7 @@ export function registerScheduledTasks(
             messages.push(`[${userId}] 记忆叙事已生成: "${title}"`);
           }
         } catch (err: any) {
-          console.warn(`[NarrativeConsolidation] Failed for ${userId}:`, err.message);
+          console.warn(`[NarrativeConsolidation] Failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(err));
         }
       }
 
@@ -1015,7 +2298,7 @@ export function registerScheduledTasks(
             }
           }
         } catch (err: any) {
-          console.warn(`[SleepDreamCycle] Failed for ${userId}:`, err.message);
+          console.warn(`[SleepDreamCycle] Failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(err));
         }
       }
 
@@ -1078,7 +2361,7 @@ Output ONLY the greeting — no preamble, no labels.`;
             messages.push({ userId, message: parts.join(' - '), domain: 'personal' });
           }
         } catch (err: any) {
-          console.warn(`[DailySummary] Failed for ${userId}:`, err.message);
+          console.warn(`[DailySummary] Failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(err));
         }
       }
 
@@ -1133,7 +2416,7 @@ Output ONLY the reflection — no preamble, no labels.`;
             messages.push({ userId, message: `晚间回顾 — ${contextParts.join(' - ')}`, domain: 'personal' });
           }
         } catch (err: any) {
-          console.warn(`[EveningWrapup] Failed for ${userId}:`, err.message);
+          console.warn(`[EveningWrapup] Failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(err));
         }
       }
 
@@ -1231,7 +2514,7 @@ Rules:
             const json = (llmResult.text || '').replace(/```json|```/g, '').trim();
             plan = JSON.parse(json);
           } catch {
-            console.warn(`[Scheduler] Auto-organize: LLM returned invalid JSON for ${userId}`);
+            console.warn(`[Scheduler] Auto-organize: LLM returned invalid JSON for ${redactSchedulerDiagnostic(userId)}`);
             continue;
           }
 
@@ -1247,12 +2530,12 @@ Rules:
 
           if (plan.branches.length > 0) {
             console.log(
-              `[Scheduler] Auto-organized ${userId}: ${plan.branches.length} branches, ` +
+              `[Scheduler] Auto-organized ${redactSchedulerDiagnostic(userId)}: ${plan.branches.length} branches, ` +
               `${plan.branches.reduce((s, b) => s + b.memoryIds.length, 0)} memories`,
             );
           }
         } catch (err: any) {
-          console.warn(`[Scheduler] Auto-organize failed for ${userId}:`, err.message);
+          console.warn(`[Scheduler] Auto-organize failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(err));
         }
       }
 
@@ -1318,10 +2601,10 @@ Rules:
             messages.push(
               `I've grown closer to understanding you. ${step.narrative}`
             );
-            console.log(`[Scheduler] Personality evolution complete for ${userId}: ${step.version}`);
+            console.log(`[Scheduler] Personality evolution complete for ${redactSchedulerDiagnostic(userId)}: ${redactSchedulerDiagnostic(step.version)}`);
           }
         } catch (err: any) {
-          console.error(`[Scheduler] Personality evolution failed for ${userId}:`, err.message);
+          console.error(`[Scheduler] Personality evolution failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(err));
         }
       }
       return messages.length > 0 ? messages.join('\n') : null;
@@ -1386,11 +2669,11 @@ Rules:
               confidence: 1.0,
               sourceInteractionId: 'weekly_review_scheduler',
             } as any, { tier: 'growth', perspective: 'lumi_self', importance: 0.95, domain: 'personal', orgId: '', source: 'system', privacyClass: 'private' });
-            console.log(`[WeeklyReview] Generated for ${userId}: ${narrative.slice(0, 100)}`);
+            console.log(`[WeeklyReview] Generated for ${redactSchedulerDiagnostic(userId)}: ${redactSchedulerDiagnostic(narrative).slice(0, 100)}`);
             messages.push(`[${userId}] ${narrative.slice(0, 200)}`);
           }
         } catch (err: any) {
-          console.error(`[WeeklyReview] Failed for ${userId}:`, err.message);
+          console.error(`[WeeklyReview] Failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(err));
         }
       }
       return messages.length > 0 ? messages.join('\n') : null;
@@ -1454,11 +2737,11 @@ Rules:
               confidence: 1.0,
               sourceInteractionId: 'monthly_review_scheduler',
             } as any, { tier: 'growth', perspective: 'lumi_self', importance: 0.97, domain: 'personal', orgId: '', source: 'system', privacyClass: 'private' });
-            console.log(`[MonthlyReview] Generated for ${userId}: ${narrative.slice(0, 100)}`);
+            console.log(`[MonthlyReview] Generated for ${redactSchedulerDiagnostic(userId)}: ${redactSchedulerDiagnostic(narrative).slice(0, 100)}`);
             messages.push(`[${userId}] ${narrative.slice(0, 200)}`);
           }
         } catch (err: any) {
-          console.error(`[MonthlyReview] Failed for ${userId}:`, err.message);
+          console.error(`[MonthlyReview] Failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(err));
         }
       }
       return messages.length > 0 ? messages.join('\n') : null;
@@ -1522,11 +2805,11 @@ Rules:
               confidence: 1.0,
               sourceInteractionId: 'yearly_review_scheduler',
             } as any, { tier: 'growth', perspective: 'lumi_self', importance: 1.0, domain: 'personal', orgId: '', source: 'system', privacyClass: 'private' });
-            console.log(`[YearlyReview] Generated for ${userId}: ${narrative.slice(0, 100)}`);
+            console.log(`[YearlyReview] Generated for ${redactSchedulerDiagnostic(userId)}: ${redactSchedulerDiagnostic(narrative).slice(0, 100)}`);
             messages.push(`[${userId}] ${narrative.slice(0, 200)}`);
           }
         } catch (err: any) {
-          console.error(`[YearlyReview] Failed for ${userId}:`, err.message);
+          console.error(`[YearlyReview] Failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(err));
         }
       }
       return messages.length > 0 ? messages.join('\n') : null;
@@ -1559,7 +2842,7 @@ Rules:
           }
         }
       } catch (err) {
-        console.error('[Scheduler] auto_workflow_gen failed:', err);
+        console.error('[Scheduler] auto_workflow_gen failed:', redactSchedulerDiagnostic(err));
       }
       return null;
     },
@@ -1590,7 +2873,7 @@ Rules:
           }
         }
       } catch (err) {
-        console.error('[Scheduler] health_audit failed:', err);
+        console.error('[Scheduler] health_audit failed:', redactSchedulerDiagnostic(err));
       }
       return null;
     },
@@ -1714,7 +2997,7 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
               agentId: undefined,
             } as any, { tier: 'episodic', perspective: 'lumi_self', importance: 0.5, domain: 'personal', orgId: '', source: 'system' });
 
-            console.log(`[GrowthJournal] Generated for ${userId}: ${narrative.slice(0, 100)}`);
+            console.log(`[GrowthJournal] Generated for ${redactSchedulerDiagnostic(userId)}: ${redactSchedulerDiagnostic(narrative).slice(0, 100)}`);
             messages.push({
               userId,
               message: narrative.slice(0, 200),
@@ -1722,7 +3005,7 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
               modelGenerated: Boolean(generatedNarrative),
             });
           } catch (llmErr: any) {
-            console.warn(`[GrowthJournal] LLM generation failed for ${userId}:`, llmErr.message);
+            console.warn(`[GrowthJournal] LLM generation failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(llmErr));
             // Fallback: simple stats summary
             const fallback = `${summaryData.date}: ${summaryData.newMemories} 条新记忆, ${summaryData.newInteractions} 次互动, ${summaryData.activeConversations} 个活跃对话。`;
             const { addMemory } = await import('./memory');
@@ -1738,7 +3021,7 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
             messages.push({ userId, message: fallback, domain: 'personal' });
           }
         } catch (err: any) {
-          console.warn(`[GrowthJournal] Failed for ${userId}:`, err.message);
+          console.warn(`[GrowthJournal] Failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(err));
         }
       }
 
@@ -2034,10 +3317,10 @@ Output ONLY the prediction message — no preamble, no labels.`;
             }
           } catch (predErr: any) {
             // Predictive assistant failure is non-critical
-            console.warn(`[PredictiveAssistant] Failed for ${userId}:`, predErr.message);
+            console.warn(`[PredictiveAssistant] Failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(predErr));
           }
         } catch (err: any) {
-          console.warn(`[ProactiveScan] Failed for ${userId}:`, err.message);
+          console.warn(`[ProactiveScan] Failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(err));
         }
       }
 
@@ -2105,7 +3388,7 @@ Output ONLY the prediction message — no preamble, no labels.`;
             } as any, { tier: 'episodic', perspective: 'lumi_self', importance: 0.4, domain: 'personal', orgId: '', source: 'system', privacyClass: 'private' });
           }
         } catch (err: any) {
-          console.warn(`[MemoryThisDay] Failed for ${userId}:`, err.message);
+          console.warn(`[MemoryThisDay] Failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(err));
         }
       }
 
@@ -2149,7 +3432,7 @@ Output ONLY the prediction message — no preamble, no labels.`;
             );
           }
         } catch (err: any) {
-          console.warn(`[SpatiotemporalAnalysis] Failed for ${userId}:`, err.message);
+          console.warn(`[SpatiotemporalAnalysis] Failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(err));
         }
       }
 
@@ -2256,7 +3539,7 @@ Output ONLY the prediction message — no preamble, no labels.`;
             totalExecuted++;
           }
         } catch (err: any) {
-          console.warn(`[AutoWorkCycle] Failed for ${userId}:`, err.message);
+          console.warn(`[AutoWorkCycle] Failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(err));
         }
       }
 
@@ -2275,9 +3558,21 @@ Output ONLY the prediction message — no preamble, no labels.`;
     lastRun: null,
     executionClass: 'maintenance',
     handler: async () => {
-      if (!isFirstBootComplete()) return null;
-      const snapshot = runDailyScan();
-      if (!snapshot) return null;
+      if (!isFirstBootComplete() || !isSystemExplorationAllowed()) return null;
+      let collected;
+      try {
+        collected = await collectSystemSnapshotInWorker(resolveSystemExplorationRuntimeDir());
+      } catch (error) {
+        // Bootstrap, an explicit user refresh, and the daily refresh share one
+        // isolated worker. A concurrent scan is already producing the same
+        // bounded snapshot, so the maintenance tick can safely yield.
+        if (error instanceof SystemExplorationAlreadyRunningError) return null;
+        throw error;
+      }
+      // Consent can be withdrawn while the worker is inspecting the host.
+      // Never persist or broadcast a result collected after that boundary.
+      if (!isSystemExplorationAllowed()) return null;
+      const snapshot = persistDailyExploration(collected);
 
       // Host diagnostics belong to the local/system administration surface,
       // never to organization members as organization knowledge.

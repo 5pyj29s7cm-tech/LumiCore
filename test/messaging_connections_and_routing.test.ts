@@ -345,6 +345,7 @@ describe('messaging long connections and organization routing', () => {
     let emitted: any = null;
     const update = routes.persistBoundMessagingExchange(personal, '收到', value => { emitted = value; });
     expect(update).toMatchObject({ agentId: 'lumi', domain: 'personal', orgId: '', source: 'wechat_bot' });
+    expect(update?.messageId).toMatch(/^msg_/);
     expect(emitted).toEqual(update);
 
     const conversations = await import('../server/conversation/manager');
@@ -353,6 +354,58 @@ describe('messaging long connections and organization routing', () => {
       { source: 'wechat_bot', channel: 'wechat' },
       { source: 'wechat_bot', channel: 'wechat' },
     ]);
+    expect(messages.slice(-2).map((item: any) => item.requestId)).toEqual([
+      `wechat_bot:${personal.messageId}`,
+      `wechat_bot:${personal.messageId}`,
+    ]);
+    expect(messages.at(-1)?.id).toBe(update?.messageId);
+  });
+
+  it('rejects a remote action turn while an earlier exact transcript owns the task pointer', async () => {
+    const userId = `wechat-turn-owner-${Date.now()}-${Math.random()}`;
+    const first = incoming({
+      platform: 'wechat',
+      userId: `wx-${userId}`,
+      chatId: `wx-${userId}`,
+      boundUserId: userId,
+      messageId: `first-${Date.now()}`,
+      text: 'Open the browser.',
+    });
+    const firstUpdate = routes.persistBoundMessagingMessage(first, 'user', first.text)!;
+    const conversations = await import('../server/conversation/manager');
+    const firstRequestId = `wechat_bot:${first.messageId}`;
+    const firstPreparation = conversations.prepareConversationActionExecution({
+      conversationId: firstUpdate.conversationId,
+      userId,
+      userText: first.text,
+      requestId: firstRequestId,
+      userMessageId: firstUpdate.messageId,
+      toolPolicy: {
+        allowedTools: ['desktop_open'],
+        requireConfirmation: [],
+        forbiddenTools: [],
+        maxIterations: 4,
+      },
+      forceTask: true,
+    });
+    expect(firstPreparation.kind).toBe('new');
+
+    const second = incoming({
+      ...first,
+      messageId: `second-${Date.now()}`,
+      text: 'Open the calculator.',
+    });
+    const reply = await routes.processWithPersonality(second);
+    const { CN_TASK_EXECUTION_MESSAGES } = await import('../server/regions/packs/cn/voice_fast_path_messages');
+
+    expect(reply).toBe(CN_TASK_EXECUTION_MESSAGES.actionTurnBusy);
+    expect(conversations.getOrCreateActiveConversation(userId, 'lumi', 'personal', '')).toMatchObject({
+      pendingActionContinuation: { requestId: firstRequestId },
+      actionContinuationState: {
+        taskId: firstPreparation.state?.taskId,
+        activeRequestId: firstRequestId,
+      },
+    });
   });
 
   it('persists remote provenance and structured tool evidence through SQLite', async () => {

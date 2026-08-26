@@ -9,7 +9,7 @@ const sqlite3 = sqlite3Package.verbose();
 const apply = process.argv.includes('--apply');
 
 function dataRoot() {
-  return process.env.LUMI_DATA_DIR || path.join(os.homedir(), 'LumiOS');
+  return process.env.LUMI_DATA_DIR || path.join(os.homedir(), 'LumiCore');
 }
 
 function stamp() {

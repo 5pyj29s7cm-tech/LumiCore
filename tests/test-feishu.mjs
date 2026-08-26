@@ -94,7 +94,7 @@ async function main() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       chatId: 'oc_testchat001',
-      text: '测试消息 — from LumiOS test suite',
+      text: '测试消息 — from LumiCore test suite',
     }),
   });
   const sendData = await sendRes.json();
@@ -115,9 +115,9 @@ async function main() {
     body: JSON.stringify({
       chatId: 'oc_testchat001',
       card: {
-        title: 'LumiOS Test Card',
+        title: 'LumiCore Test Card',
         subtitle: 'Integration Test',
-        body: 'This card was sent from the LumiOS Feishu test suite.',
+        body: 'This card was sent from the LumiCore Feishu test suite.',
         color: 'blue',
         linkUrl: 'https://lumiai.asia',
       },

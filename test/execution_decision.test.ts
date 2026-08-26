@@ -165,7 +165,7 @@ describe('Lumi execution decision', () => {
   it('prioritizes direct file write and verification for the field TXT request', async () => {
     const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
     const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
-    const text = '在 C:\\Users\\Administrator\\Documents 创建 Lumi现场验收_晨星716.txt，写三行，重读核验，不外发，不开其他软件';
+    const text = '在 C:\\Users\\test-user\\Documents 创建 Lumi现场验收_晨星716.txt，写三行，重读核验，不外发，不开其他软件';
     const dispatch = buildLumiTurnDispatch({
       userId: 'execution_decision_field_txt',
       text,

@@ -13,7 +13,8 @@ describe('chat and voice finalized delivery paths', () => {
     expect(chat).not.toContain('estimateSkillWorkflowChatSpeechMs');
 
     expect(voice).toContain('speak: async () => 0');
-    expect(voice).toContain('queueFinalizedSpeech(responseText)');
+    expect(voice).toContain('speechText: workflowSpeechText');
+    expect(voice).toContain('queueFinalizedSpeech(input.speechText!)');
     expect(voice).toContain('source: specialWorkflow.source');
   });
 
@@ -41,7 +42,7 @@ describe('chat and voice finalized delivery paths', () => {
       expect(source).not.toContain('searchAndPlay');
       expect(source).not.toContain('musicFinalized');
     }
-    expect(voice).toContain('queueFinalizedSpeech(responseText)');
+    expect(voice).toContain('queueFinalizedSpeech(input.speechText!)');
   });
 
   it('marks every agent response as finalized and exposes guard state', () => {

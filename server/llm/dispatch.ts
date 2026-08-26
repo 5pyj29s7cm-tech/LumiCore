@@ -35,6 +35,7 @@ export interface DispatchConfig {
   orgId?: string;
   signal?: AbortSignal;
   attemptTimeouts?: Partial<ModelAttemptTimeouts>;
+  inputTokenBudget?: number;
   allowCloudFallback?: boolean;
   selectionMode?: UserLLMSelectionMode;
   fallbackCandidates?: UserLLMFallbackCandidate[];
@@ -74,6 +75,7 @@ function callArguments(config: DispatchConfig, provider: string, model: string) 
     orgId: config.orgId,
     signal: config.signal,
     attemptTimeouts: config.attemptTimeouts,
+    inputTokenBudget: config.inputTokenBudget,
     selectionMode: 'pinned' as const,
     fallbackCandidates: [],
     allowCloudFallback: false,

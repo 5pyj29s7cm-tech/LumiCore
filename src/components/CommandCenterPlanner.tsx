@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BarChart3,
   CalendarClock,
@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '@/services/apiClient';
 import { socketService } from '@/services/socketService';
+import { useApp } from '@/contexts/AppContext';
 import { commandCenterPlannerCopy } from '@/i18n/locales/commandCenterPlanner';
 import { taskCompletionFeedbackCopy } from '@/i18n/locales/taskCompletionFeedback';
 import { TaskCompletionFeedbackDetails } from './TaskCompletionFeedbackDetails';
@@ -20,6 +21,7 @@ import {
   normalizeTaskCompletionFeedback,
   type TaskCompletionFeedback,
 } from './workflowTypes';
+import { isCurrentScopeRequest } from './scopeRequestGuard';
 
 type PlanKind = 'daily_task' | 'long_term_goal' | 'periodic_report';
 type PlanCadence = 'none' | 'daily' | 'weekly' | 'monthly';
@@ -36,6 +38,7 @@ type CommandCenterPlan = {
   status: 'active' | 'paused' | 'completed';
   nextRunAt: string;
   lastRuntimeTaskId: string;
+  lastRunAt?: string;
   updatedAt: string;
 };
 
@@ -62,11 +65,16 @@ export function CommandCenterPlanner({
   conversationId: string;
   onDiscuss: (prompt: string) => void;
 }) {
+  const { workDomain, orgConnection } = useApp();
+  const isWork = workDomain === 'work' && Boolean(orgConnection?.connected && orgConnection?.orgId);
+  const scopeKey = `${isWork ? 'work' : 'personal'}:${isWork ? orgConnection?.orgId || '' : ''}`;
   const [plans, setPlans] = useState<CommandCenterPlan[]>([]);
   const [runtimeTasks, setRuntimeTasks] = useState<RuntimeTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [runningPlanIds, setRunningPlanIds] = useState<string[]>([]);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [kind, setKind] = useState<PlanKind>('daily_task');
   const [title, setTitle] = useState('');
@@ -75,10 +83,15 @@ export function CommandCenterPlanner({
   const [timeOfDay, setTimeOfDay] = useState('09:00');
   const [dayOfWeek, setDayOfWeek] = useState(1);
   const [dayOfMonth, setDayOfMonth] = useState(1);
+  const runningPlanIdsRef = useRef(new Set<string>());
+  const scopeGenerationRef = useRef(0);
+  const activeScopeKeyRef = useRef(scopeKey);
 
   const copy = commandCenterPlannerCopy(isZh ? 'zh' : 'en');
   const feedbackCopy = taskCompletionFeedbackCopy(isZh ? 'zh' : 'en');
   const refresh = useCallback(async (quiet = false) => {
+    const requestToken = { scopeKey, generation: scopeGenerationRef.current };
+    if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
     if (!quiet) setLoading(true);
     const [planResult, taskResult] = await Promise.allSettled([
       apiFetch('/api/command-center/plans').then(async response => {
@@ -86,13 +99,15 @@ export function CommandCenterPlanner({
         if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
         return payload;
       }),
-      apiFetch('/api/autonomy/background-tasks').then(async response => response.ok ? response.json() : {}),
+      apiFetch('/api/autonomy/background-tasks').then(async response => {
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+        return payload;
+      }),
     ]);
+    if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
     if (planResult.status === 'fulfilled') {
       setPlans(Array.isArray(planResult.value?.plans) ? planResult.value.plans : []);
-      setError('');
-    } else {
-      setError(planResult.reason instanceof Error ? planResult.reason.message : String(planResult.reason));
     }
     if (taskResult.status === 'fulfilled') {
       setRuntimeTasks(Array.isArray(taskResult.value?.tasks)
@@ -102,8 +117,28 @@ export function CommandCenterPlanner({
           }))
         : []);
     }
+    const failures = [planResult, taskResult]
+      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+      .map(result => result.reason instanceof Error ? result.reason.message : String(result.reason));
+    setError(failures.join(' · '));
     setLoading(false);
-  }, []);
+  }, [scopeKey]);
+
+  useEffect(() => {
+    activeScopeKeyRef.current = scopeKey;
+    scopeGenerationRef.current += 1;
+    runningPlanIdsRef.current.clear();
+    setPlans([]);
+    setRuntimeTasks([]);
+    setRunningPlanIds([]);
+    setSaving(false);
+    setError('');
+    setNotice('');
+    setShowCreate(false);
+    setTitle('');
+    setInstruction('');
+    setLoading(true);
+  }, [scopeKey]);
 
   useEffect(() => {
     void refresh();
@@ -115,7 +150,7 @@ export function CommandCenterPlanner({
       window.clearInterval(timer);
       socket.off('agent:background_task_update', update);
     };
-  }, [refresh]);
+  }, [refresh, scopeKey]);
 
   useEffect(() => {
     if (kind === 'daily_task') setCadence('daily');
@@ -127,8 +162,10 @@ export function CommandCenterPlanner({
 
   const createPlan = async () => {
     if (!title.trim() || !instruction.trim()) return;
+    const requestToken = { scopeKey, generation: scopeGenerationRef.current };
     setSaving(true);
     setError('');
+    setNotice('');
     try {
       const response = await apiFetch('/api/command-center/plans', {
         method: 'POST',
@@ -137,49 +174,89 @@ export function CommandCenterPlanner({
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
       setTitle('');
       setInstruction('');
       setShowCreate(false);
       await refresh(true);
     } catch (cause) {
+      if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setSaving(false);
+      if (isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) setSaving(false);
     }
   };
 
   const updatePlan = async (plan: CommandCenterPlan, patch: Record<string, unknown>) => {
+    const requestToken = { scopeKey, generation: scopeGenerationRef.current };
     setError('');
-    const response = await apiFetch(`/api/command-center/plans/${encodeURIComponent(plan.id)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-    await refresh(true);
+    setNotice('');
+    try {
+      const response = await apiFetch(`/api/command-center/plans/${encodeURIComponent(plan.id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
+      await refresh(true);
+    } catch (cause) {
+      if (isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) throw cause;
+    }
   };
 
   const runPlan = async (plan: CommandCenterPlan) => {
+    if (runningPlanIdsRef.current.has(plan.id)) return;
+    const requestToken = { scopeKey, generation: scopeGenerationRef.current };
+    runningPlanIdsRef.current.add(plan.id);
+    setRunningPlanIds([...runningPlanIdsRef.current]);
     setError('');
+    setNotice('');
     try {
       const response = await apiFetch(`/api/command-center/plans/${encodeURIComponent(plan.id)}/run`, { method: 'POST' });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
+      if (payload.reused === true) setNotice(copy.existingRun);
+      if (payload.task?.id) {
+        setRuntimeTasks(previous => [
+          {
+            ...payload.task,
+            completionFeedback: normalizeTaskCompletionFeedback(payload.task.completionFeedback),
+          },
+          ...previous.filter(task => task.id !== payload.task.id),
+        ]);
+      }
       await refresh(true);
     } catch (cause) {
+      if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
       setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      runningPlanIdsRef.current.delete(plan.id);
+      if (isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) {
+        setRunningPlanIds([...runningPlanIdsRef.current]);
+      }
     }
   };
 
   const removePlan = async (plan: CommandCenterPlan) => {
-    const response = await apiFetch(`/api/command-center/plans/${encodeURIComponent(plan.id)}`, { method: 'DELETE' });
-    if (!response.ok) {
-      const payload = await response.json().catch(() => ({}));
-      setError(payload.error || `HTTP ${response.status}`);
-      return;
+    const requestToken = { scopeKey, generation: scopeGenerationRef.current };
+    setNotice('');
+    try {
+      const response = await apiFetch(`/api/command-center/plans/${encodeURIComponent(plan.id)}`, { method: 'DELETE' });
+      if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        setError(payload.error || `HTTP ${response.status}`);
+        return;
+      }
+      await refresh(true);
+    } catch (cause) {
+      if (isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
     }
-    await refresh(true);
   };
 
   const kindLabel = (value: PlanKind) => ({
@@ -245,6 +322,7 @@ export function CommandCenterPlanner({
     </div>}
 
     {error && <div className="mb-3 rounded-xl border border-rose-300/15 bg-rose-400/[0.06] px-3 py-2 text-[10px] text-rose-100/70">{error}</div>}
+    {notice && <div className="mb-3 rounded-xl border border-cyan-300/15 bg-cyan-300/[0.05] px-3 py-2 text-[10px] text-cyan-100/70">{notice}</div>}
     {loading ? <div className="flex flex-1 items-center justify-center text-cyan-100/35"><Loader2 size={18} className="animate-spin" /></div> : plans.length === 0 ? (
       <button type="button" onClick={() => setShowCreate(true)} className="flex flex-1 flex-col items-center justify-center rounded-2xl border border-dashed border-white/[0.08] text-center text-white/30 hover:border-cyan-300/18 hover:text-white/45">
         <Target size={28} className="mb-3 text-cyan-200/25" />
@@ -255,7 +333,10 @@ export function CommandCenterPlanner({
       {plans.map(plan => {
         const Icon = KIND_ICONS[plan.kind];
         const task = plan.lastRuntimeTaskId ? taskById.get(plan.lastRuntimeTaskId) : undefined;
-        const status = task?.status || plan.status;
+        const lastRunStatus = task?.status || (plan.lastRuntimeTaskId ? 'unknown' : copy.neverRun);
+        const runInFlight = runningPlanIds.includes(plan.id);
+        const activeRun = Boolean(task && ['queued', 'running', 'pausing', 'paused', 'cancelling'].includes(task.status));
+        const runDisabled = runInFlight || activeRun || plan.status === 'completed';
         return <article key={plan.id} className="rounded-2xl border border-white/[0.075] bg-[#09111a]/82 p-3 transition-colors hover:border-cyan-300/16">
           <div className="flex items-start gap-3">
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-cyan-300/14 bg-cyan-300/[0.07] text-cyan-100/65"><Icon size={15} /></div>
@@ -265,11 +346,15 @@ export function CommandCenterPlanner({
                   <div className="truncate text-xs font-bold text-white/82">{plan.title}</div>
                   <div className="mt-1 line-clamp-2 text-[10px] leading-4 text-white/36">{plan.instruction}</div>
                 </div>
-                <span className={`shrink-0 rounded-full px-2 py-1 text-[8px] font-black uppercase ${['queued', 'running'].includes(status) ? 'bg-cyan-300/[0.11] text-cyan-100/80' : status === 'failed' || status === 'blocked' ? 'bg-rose-300/[0.10] text-rose-100/75' : status === 'completed' ? 'bg-emerald-300/[0.10] text-emerald-100/75' : 'bg-white/[0.05] text-white/35'}`}>{status}</span>
+                <span className={`shrink-0 rounded-full px-2 py-1 text-[8px] font-black uppercase ${plan.status === 'active' ? 'bg-cyan-300/[0.11] text-cyan-100/80' : plan.status === 'completed' ? 'bg-emerald-300/[0.10] text-emerald-100/75' : 'bg-white/[0.05] text-white/35'}`}>{copy.planStatus}: {plan.status}</span>
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-2 text-[9px] text-white/28">
                 <span>{kindLabel(plan.kind)}</span><span>·</span><span>{planScheduleLabel(plan)}</span>
                 {plan.nextRunAt && <><span>·</span><span>{copy.next} {new Date(plan.nextRunAt).toLocaleString(isZh ? 'zh-CN' : 'en-US', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span></>}
+              </div>
+              <div data-command-center-plan-run-status className="mt-1.5 text-[9px] text-white/35">
+                <span className="font-black text-white/28">{copy.lastRun}: </span>
+                <span className={lastRunStatus === 'failed' || lastRunStatus === 'blocked' ? 'text-rose-100/65' : ['queued', 'running', 'pausing', 'cancelling'].includes(lastRunStatus) ? 'text-cyan-100/65' : 'text-white/42'}>{lastRunStatus}</span>
               </div>
             </div>
           </div>
@@ -299,7 +384,7 @@ export function CommandCenterPlanner({
           )}
           <div className="mt-3 flex items-center justify-end gap-1.5 border-t border-white/[0.05] pt-2.5">
             <button type="button" onClick={() => onDiscuss(copy.discussPrompt(plan.title, plan.instruction))} className="flex h-7 items-center gap-1 rounded-lg px-2 text-[9px] text-white/38 hover:bg-white/[0.05] hover:text-white/65"><MessageSquareText size={11} />{copy.discuss}</button>
-            <button type="button" onClick={() => void runPlan(plan)} className="flex h-7 items-center gap-1 rounded-lg px-2 text-[9px] text-cyan-100/55 hover:bg-cyan-300/[0.08] hover:text-cyan-50"><Play size={11} />{copy.run}</button>
+            <button type="button" disabled={runDisabled} aria-busy={runInFlight} onClick={() => void runPlan(plan)} className="flex h-7 items-center gap-1 rounded-lg px-2 text-[9px] text-cyan-100/55 hover:bg-cyan-300/[0.08] hover:text-cyan-50 disabled:cursor-not-allowed disabled:opacity-35">{runInFlight ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}{runInFlight ? copy.running : copy.run}</button>
             <button type="button" onClick={() => void updatePlan(plan, { status: plan.status === 'paused' ? 'active' : 'paused' }).catch(cause => setError(String(cause)))} className="flex h-7 w-7 items-center justify-center rounded-lg text-white/30 hover:bg-white/[0.05] hover:text-white/60" title={plan.status === 'paused' ? copy.resume : copy.pause}>{plan.status === 'paused' ? <Play size={11} /> : <Pause size={11} />}</button>
             <button type="button" onClick={() => void updatePlan(plan, { status: 'completed' }).catch(cause => setError(String(cause)))} className="flex h-7 w-7 items-center justify-center rounded-lg text-emerald-100/35 hover:bg-emerald-300/[0.08] hover:text-emerald-100" title={copy.complete}><Check size={11} /></button>
             <button type="button" onClick={() => void removePlan(plan)} className="flex h-7 w-7 items-center justify-center rounded-lg text-white/24 hover:bg-rose-300/[0.08] hover:text-rose-100/70" title={copy.remove}><Trash2 size={11} /></button>

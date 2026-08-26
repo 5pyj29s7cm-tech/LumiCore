@@ -10,6 +10,7 @@ import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 import { randomUUID } from 'crypto';
 import { authenticateMcpUpgradeRequest } from './auth';
 import type { AuthUser } from '../middleware/auth';
+import { sanitizeMcpEndpoint, sanitizeMcpLogValue } from './public_security';
 
 export class WebSocketServerTransport implements Transport {
   private _socket: WebSocket;
@@ -71,8 +72,11 @@ export function connectMcpServerToRemote(
   onConnect?: (sessionId: string) => void,
   onDisconnect?: () => void,
 ): void {
-  const name = deviceName || new URL(url).hostname;
-  console.log(`[MCP Server] Connecting to remote device "${name}": ${url}`);
+  const name = String(deviceName || new URL(url).hostname)
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .trim()
+    .slice(0, 120) || 'remote-device';
+  console.log(`[MCP Server] Connecting to remote device "${name}": ${sanitizeMcpEndpoint(url) || '[configured endpoint]'}`);
 
   const ws = new WebSocket(url, 'mcp');
 
@@ -82,12 +86,12 @@ export function connectMcpServerToRemote(
       console.log(`[MCP Server] Remote device "${name}" connected: ${transport.sessionId}`);
       onConnect?.(transport.sessionId);
     }).catch((err) => {
-      console.error(`[MCP Server] Remote connect error for "${name}":`, err.message);
+      console.error(`[MCP Server] Remote connect error for "${name}":`, sanitizeMcpLogValue(err?.message || err));
     });
   });
 
   ws.on('error', (err) => {
-    console.error(`[MCP Server] Remote WebSocket error for "${name}":`, err.message);
+    console.error(`[MCP Server] Remote WebSocket error for "${name}":`, sanitizeMcpLogValue(err?.message || err));
   });
 
   ws.on('close', () => {

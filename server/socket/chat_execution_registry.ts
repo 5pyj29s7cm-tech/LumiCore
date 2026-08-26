@@ -44,6 +44,18 @@ type StoredExecution = ChatExecutionSnapshot & {
   controlIntentTarget?: string;
   controlIntentDurable?: boolean;
   controlIntentBarrier?: Promise<void>;
+  /**
+   * A strict terminal is kept private until its durable receipt settles. This
+   * prevents reconnect/retry readers from replaying a success that only exists
+   * in memory while the database write is still in flight.
+   */
+  terminalReceiptPending?: {
+    status: 'completed' | 'cancelled' | 'failed';
+    event: ChatExecutionEvent;
+    updatedAt: string;
+  };
+  terminalReceiptDurable?: boolean;
+  terminalReceiptBarrier?: Promise<void>;
 };
 
 export type PersistedChatExecutionReceipt = {
@@ -202,11 +214,14 @@ function enqueuePersistence(operation: (adapter: ChatExecutionPersistenceAdapter
 function enqueueStrictPersistence(
   operation: (adapter: ChatExecutionPersistenceAdapter) => Promise<void>,
 ): Promise<void> {
-  const adapter = persistenceAdapter;
-  if (!adapter) return Promise.reject(new Error('Chat execution persistence is unavailable'));
+  // Strict terminal writes may be reached by isolated Socket handlers in tests
+  // or during a narrow startup race before recovery hydration completes. The
+  // built-in SQLite adapter remains a valid durable sink in that window; never
+  // downgrade a strict write to the legacy fire-and-forget/no-op behavior.
+  const adapter = persistenceAdapter || sqlitePersistenceAdapter;
   const attempt = persistenceQueue.then(() => operation(adapter));
   persistenceQueue = attempt.catch(error => {
-    console.warn('[ChatExecution] Durable control receipt write failed:', error);
+    console.warn('[ChatExecution] Strict durable receipt write failed:', error);
   });
   return attempt;
 }
@@ -271,6 +286,9 @@ function copySnapshot(record?: StoredExecution): ChatExecutionSnapshot | null {
     controlIntentTarget: _controlIntentTarget,
     controlIntentDurable: _controlIntentDurable,
     controlIntentBarrier: _controlIntentBarrier,
+    terminalReceiptPending: _terminalReceiptPending,
+    terminalReceiptDurable: _terminalReceiptDurable,
+    terminalReceiptBarrier: _terminalReceiptBarrier,
     ...snapshot
   } = record;
   return {
@@ -300,7 +318,10 @@ function purgeExpiredExecutions(now = Date.now()): void {
   }
 }
 
-function terminalStatusForEvent(event: string, payload: Record<string, any>): ChatExecutionStatus | null {
+function terminalStatusForEvent(
+  event: string,
+  payload: Record<string, any>,
+): 'completed' | 'cancelled' | 'failed' | null {
   if (event === 'agent:error') return 'failed';
   if (event !== 'agent:response') return null;
   const reason = String(payload.reason || '').trim().toLowerCase();
@@ -337,26 +358,8 @@ export function beginChatExecution(
   const scopeKey = normalizedScopeKey(scope);
   const previousKey = activeByScope.get(scopeKey);
   const previous = previousKey ? executions.get(previousKey) : undefined;
-  let superseded: ChatExecutionSnapshot | null = null;
   if (previous && !previous.terminal && previous.requestId !== requestId) {
-    const now = new Date().toISOString();
-    const payload = {
-      text: '[Cancelled]',
-      agentName: 'Lumi',
-      source: previous.source,
-      requestId: previous.requestId,
-      conversationId: scope.conversationId,
-      finalized: true,
-      blocked: true,
-      reason: 'cancelled',
-    };
-    previous.status = 'cancelled';
-    previous.terminal = true;
-    previous.updatedAt = now;
-    previous.lastEvent = { event: 'agent:response', payload };
-    previous.terminalEvent = previous.lastEvent;
-    superseded = copySnapshot(previous);
-    persistTerminal(scope, previous);
+    throw new Error('Active chat execution must be durably superseded before replacement');
   }
 
   const now = new Date().toISOString();
@@ -367,7 +370,7 @@ export function beginChatExecution(
     reserved.status = 'acknowledged';
     reserved.updatedAt = now;
     activeByScope.set(scopeKey, key);
-    return superseded;
+    return null;
   }
   executions.set(key, {
     scopeKey,
@@ -380,6 +383,70 @@ export function beginChatExecution(
     terminal: false,
   });
   activeByScope.set(scopeKey, key);
+  return null;
+}
+
+/**
+ * Strict replacement entry point. The previous foreground cancellation receipt
+ * must settle before the replacement becomes active or its cancellation frame
+ * can be published by the caller.
+ */
+export async function beginChatExecutionDurably(
+  scope: ChatExecutionScope,
+  requestId: string,
+  persistenceUnknownPayload: Record<string, any> = {},
+): Promise<ChatExecutionSnapshot | null> {
+  purgeExpiredExecutions();
+  const scopeKey = normalizedScopeKey(scope);
+  const previousKey = activeByScope.get(scopeKey);
+  const previous = previousKey ? executions.get(previousKey) : undefined;
+  let superseded: ChatExecutionSnapshot | null = null;
+
+  if (previous?.requestId === requestId) {
+    if (previous.terminalReceiptPending) {
+      const barrier = previous.terminalReceiptBarrier;
+      if (!barrier) throw new Error('Previous chat terminal receipt barrier is missing');
+      await barrier;
+    }
+    return null;
+  }
+  if (previous && !previous.terminal) {
+    const payload = {
+      text: '[Cancelled]',
+      agentName: 'Lumi',
+      source: previous.source,
+      requestId: previous.requestId,
+      conversationId: scope.conversationId,
+      finalized: true,
+      blocked: true,
+      reason: 'cancelled',
+    };
+    let ownsPublication = false;
+    try {
+      ownsPublication = await recordChatExecutionTerminalEventDurably(
+        scope,
+        previous.requestId,
+        'agent:response',
+        payload,
+        persistenceUnknownPayload,
+      );
+    } catch (error) {
+      try {
+        await recordChatExecutionPersistenceUnknownDurably(
+          scope,
+          previous.requestId,
+          persistenceUnknownPayload,
+        );
+      } catch {
+        // The in-memory unknown quarantine installed by the failed strict
+        // terminal must survive even when its own durable write also fails.
+      }
+      throw error;
+    }
+    if (ownsPublication) superseded = copySnapshot(previous);
+  }
+
+  beginChatExecution(scope, requestId);
   return superseded;
 }
 
@@ -544,7 +611,7 @@ export function recordChatExecutionEvent(
 
   // Once a terminal event has been committed, late errors from an aborted async
   // branch must not overwrite or duplicate the user-visible result.
-  if (record.terminal) return false;
+  if (record.terminal || record.terminalReceiptPending) return false;
 
   const normalizedPayload = {
     ...payload,
@@ -561,6 +628,189 @@ export function recordChatExecutionEvent(
   if (terminal) {
     record.terminalEvent = nextEvent;
     persistTerminal(scope, record);
+  }
+  return true;
+}
+
+/**
+ * Stage one terminal event, durably persist its bounded recovery receipt, and
+ * only then make the terminal observable to reconnect/retry readers.
+ *
+ * The returned boolean is publication ownership: `true` means this caller
+ * wrote the receipt and may publish the terminal frame; `false` means an
+ * identical request already owns (or durably completed) the terminal. A
+ * failed write rejects and quarantines the in-memory execution as a sanitized
+ * `persistence_unknown`, so neither a concurrent duplicate nor a reconnect can
+ * replay the uncommitted success.
+ */
+export async function recordChatExecutionTerminalEventDurably(
+  scope: ChatExecutionScope,
+  requestId: string,
+  event: 'agent:response' | 'agent:error',
+  payload: Record<string, any>,
+  persistenceUnknownPayload: Record<string, any> = {},
+): Promise<boolean> {
+  const key = executionKey(scope, requestId);
+  const record = executions.get(key);
+  if (!record) throw new Error('Chat execution is not reserved');
+
+  if (record.terminalReceiptPending) {
+    const barrier = record.terminalReceiptBarrier;
+    if (!barrier) throw new Error('Chat terminal receipt barrier is missing');
+    await barrier;
+    return false;
+  }
+  if (record.terminal) {
+    if (record.terminalReceiptDurable === true) return false;
+    throw new Error('Chat terminal receipt is not durably committed');
+  }
+
+  const normalizedPayload = {
+    ...payload,
+    source: payload.source || record.source,
+    requestId,
+  };
+  const status = terminalStatusForEvent(event, normalizedPayload);
+  if (!status) throw new Error('Strict chat terminal receipt requires a terminal event');
+  const updatedAt = new Date().toISOString();
+  const nextEvent: ChatExecutionEvent = { event, payload: normalizedPayload };
+  const pending: NonNullable<StoredExecution['terminalReceiptPending']> = {
+    status,
+    event: nextEvent,
+    updatedAt,
+  };
+  const candidate: StoredExecution = {
+    ...record,
+    status,
+    updatedAt,
+    terminal: true,
+    lastEvent: nextEvent,
+    terminalEvent: nextEvent,
+  };
+  const receipt = persistedReceipt(scope, candidate);
+  if (!receipt) throw new Error('Chat terminal event cannot produce a durable receipt');
+
+  // Install the private pending marker synchronously, before the first await,
+  // so another handler cannot append a late event or observe a success frame.
+  record.terminalReceiptPending = pending;
+  const barrier = enqueueStrictPersistence(adapter => adapter.upsert(receipt))
+    .then(() => {
+      if (record.terminalReceiptPending !== pending) {
+        throw new Error('Chat terminal receipt ownership changed before commit');
+      }
+      record.status = pending.status;
+      record.updatedAt = pending.updatedAt;
+      record.terminal = true;
+      record.lastEvent = pending.event;
+      record.terminalEvent = pending.event;
+      record.terminalReceiptDurable = true;
+      record.terminalReceiptPending = undefined;
+      record.terminalReceiptBarrier = undefined;
+    })
+    .catch(error => {
+      if (record.terminalReceiptPending === pending) {
+        const unknownEvent: ChatExecutionEvent = {
+          event: 'agent:response',
+          payload: {
+            text: compactString(persistenceUnknownPayload.text, MAX_TERMINAL_TEXT_CHARS),
+            agentName: compactString(persistenceUnknownPayload.agentName, 120) || 'Lumi',
+            source: record.source,
+            requestId,
+            conversationId: compactString(scope.conversationId, 180),
+            sidecar: record.sidecar === true,
+            finalized: true,
+            blocked: true,
+            reason: 'persistence_unknown',
+          },
+        };
+        record.status = 'failed';
+        record.updatedAt = new Date().toISOString();
+        record.terminal = true;
+        record.lastEvent = unknownEvent;
+        record.terminalEvent = unknownEvent;
+        record.terminalReceiptDurable = false;
+        record.terminalReceiptPending = undefined;
+      }
+      record.terminalReceiptBarrier = undefined;
+      throw error;
+    });
+  record.terminalReceiptBarrier = barrier;
+  await barrier;
+  return true;
+}
+
+/**
+ * Fail-closed companion for a primary persistence failure. The unknown frame
+ * is safe to expose immediately, but this function still attempts to make that
+ * quarantine recoverable across a process restart. If the write also fails,
+ * the in-memory execution remains terminal `persistence_unknown`.
+ */
+export async function recordChatExecutionPersistenceUnknownDurably(
+  scope: ChatExecutionScope,
+  requestId: string,
+  payload: Record<string, any> = {},
+): Promise<boolean> {
+  const record = executions.get(executionKey(scope, requestId));
+  if (!record) throw new Error('Chat execution is not reserved');
+
+  if (record.terminalReceiptPending) {
+    const pendingBarrier = record.terminalReceiptBarrier;
+    if (!pendingBarrier) throw new Error('Chat terminal receipt barrier is missing');
+    try {
+      await pendingBarrier;
+    } catch {
+      // The failed success attempt already installed the safe in-memory
+      // quarantine. Continue by trying to persist that unknown receipt.
+    }
+  }
+  if (record.terminalReceiptDurable === true) return false;
+  if (record.terminalReceiptBarrier) {
+    await record.terminalReceiptBarrier;
+    return false;
+  }
+
+  const now = new Date().toISOString();
+  const unknownEvent: ChatExecutionEvent = {
+    event: 'agent:response',
+    payload: {
+      text: compactString(payload.text, MAX_TERMINAL_TEXT_CHARS),
+      agentName: compactString(payload.agentName, 120) || 'Lumi',
+      source: record.source,
+      requestId,
+      conversationId: compactString(scope.conversationId, 180),
+      sidecar: record.sidecar === true,
+      finalized: true,
+      blocked: true,
+      reason: 'persistence_unknown',
+    },
+  };
+  // Quarantine synchronously before the durable attempt so a reconnect in the
+  // same tick can never observe the prior active state or an uncommitted
+  // success.
+  record.status = 'failed';
+  record.updatedAt = now;
+  record.terminal = true;
+  record.lastEvent = unknownEvent;
+  record.terminalEvent = unknownEvent;
+  record.terminalReceiptDurable = false;
+  record.terminalReceiptPending = undefined;
+
+  const receipt = persistedReceipt(scope, record);
+  if (!receipt) throw new Error('Persistence-unknown terminal cannot produce a durable receipt');
+  const barrier = enqueueStrictPersistence(adapter => adapter.upsert(receipt)).then(
+    () => {
+      record.terminalReceiptDurable = true;
+    },
+    error => {
+      record.terminalReceiptDurable = false;
+      throw error;
+    },
+  );
+  record.terminalReceiptBarrier = barrier;
+  try {
+    await barrier;
+  } finally {
+    if (record.terminalReceiptBarrier === barrier) record.terminalReceiptBarrier = undefined;
   }
   return true;
 }
@@ -677,6 +927,7 @@ export async function initializeChatExecutionRegistryPersistence(
       terminal: isTerminalReceipt,
       lastEvent: recoveredEvent,
       terminalEvent: isTerminalReceipt ? recoveredEvent : undefined,
+      terminalReceiptDurable: isTerminalReceipt,
     });
 
     if (recoveredEvent.payload.sidecar !== true) {

@@ -512,7 +512,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       setup: !nativeUiSupported
         ? ['Run Lumi on Windows or macOS to use native semantic accessibility control.']
         : process.platform === 'darwin' && macAccessibility !== 'granted'
-          ? ['Grant Lumi OS Accessibility permission in System Settings > Privacy & Security > Accessibility.']
+          ? ['Grant LumiCore Accessibility permission in System Settings > Privacy & Security > Accessibility.']
           : [],
       safety: 'Snapshot inspection plus low- and medium-risk focus/click/invoke/type can run under the active desktop mode. Foreground user-requested ordinary messages/comments/replies/posts and saved/authorized session reuse can proceed; payments, purchases, first-time login, security verification, credential storage, account switching, legal filings/signatures, ambiguous submits, and destructive actions remain confirmation-gated.',
       notes: 'The capability definition is platform-independent. Windows uses UIA and macOS uses Accessibility behind the same desktop_ui_* tools, schemas, risk, evidence, and verification contracts.',

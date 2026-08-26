@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 if ([string]::IsNullOrWhiteSpace($Installer)) {
   $PackageJson = Get-Content (Join-Path $ProjectRoot "package.json") -Raw | ConvertFrom-Json
-  $Installer = Join-Path $ProjectRoot "src-tauri\target\release\bundle\nsis\Lumi OS_$($PackageJson.version)_x64-setup.exe"
+  $Installer = Join-Path $ProjectRoot "src-tauri\target\release\bundle\nsis\LumiCore_$($PackageJson.version)_x64-setup.exe"
 }
 $Installer = [System.IO.Path]::GetFullPath($Installer)
 if (!(Test-Path $Installer)) {
@@ -275,15 +275,15 @@ try {
     throw "Installer failed with exit code $($InstallerProcess.ExitCode)"
   }
 
-  $InstalledExe = Join-Path $InstallDir "lumi-os.exe"
+  $InstalledExe = Join-Path $InstallDir "lumi-core.exe"
   if (!(Test-Path $InstalledExe)) {
-    $Found = Get-ChildItem -Path $InstallDir -Recurse -Filter "lumi-os.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    $Found = Get-ChildItem -Path $InstallDir -Recurse -Filter "lumi-core.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($Found) {
       $InstalledExe = $Found.FullName
     }
   }
   if (!(Test-Path $InstalledExe)) {
-    throw "Installed lumi-os.exe not found under $InstallDir"
+    throw "Installed lumi-core.exe not found under $InstallDir"
   }
 
   $InstalledRuntimeMetaFile = Get-ChildItem -LiteralPath $InstallDir -Filter "runtime-meta.json" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1

@@ -81,7 +81,7 @@ function readmeText(manifest, copiedFiles) {
     ].filter(Boolean).join('\n');
   }).join('\n\n');
 
-  return `Lumi OS Release Bundle
+  return `LumiCore Release Bundle
 
 Product: ${manifest.productName}
 Version: ${manifest.version}
@@ -99,7 +99,7 @@ Install Smoke Gate
 On a Windows validation machine:
 
 1. Install the setup EXE.
-2. Launch Lumi OS.
+2. Launch LumiCore.
 3. Open Skill Center.
 4. Install Admin Assistant.
 5. Confirm the skill connects and remains installed after relaunch.

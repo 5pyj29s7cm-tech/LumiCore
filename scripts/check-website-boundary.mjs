@@ -22,7 +22,7 @@ const failures = [];
 for (const relativePath of forbiddenPaths) {
   try {
     await access(new URL(`../${relativePath}`, import.meta.url));
-    failures.push(`website-only path must stay outside LumiOS: ${relativePath}`);
+    failures.push(`website-only path must stay outside LumiCore: ${relativePath}`);
   } catch {
     // Missing is the expected state.
   }

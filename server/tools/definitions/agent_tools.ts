@@ -5,6 +5,7 @@ import { validateExternalCommand } from '../../agents/external_runtime';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 import { getScopedPreferredLLM } from '../../llm/user_preferences';
 import { registerBackgroundTask } from '../../agents/background_tasks';
+import { isStrictPrivacy } from '../../config/privacy';
 
 function normalizeStringList(value: unknown, max = 20): string[] {
   const raw = Array.isArray(value)
@@ -244,6 +245,7 @@ async function agentDelegateBackground(args: Record<string, any>, context?: Tool
   }
   const domain = context.domain === 'work' && context.orgId ? 'work' : 'personal';
   const task = registerBackgroundTask({
+    ...(context.taskId ? { id: context.taskId } : {}),
     userId: context.userId,
     title: String(args.title || taskText).trim().slice(0, 160) || 'Background task',
     prompt: taskText,
@@ -264,6 +266,7 @@ async function agentDelegateBackground(args: Record<string, any>, context?: Tool
       selectionMode: context.modelRouting?.selectionMode,
       fallbackCandidates: context.modelRouting?.fallbackCandidates,
       allowCloudFallback: context.modelRouting?.allowCloudFallback,
+      dataRoutingPolicy: isStrictPrivacy() ? 'local_only' : 'policy_scoped',
       forceOrchestration: args.forceOrchestration !== false,
       toolPolicy: context.toolPolicy,
     },

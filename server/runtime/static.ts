@@ -50,8 +50,17 @@ export async function setupStatic(app: express.Express, __filename: string, __di
       path.join(process.cwd(), "..", "dist"),
     ].filter(Boolean) as string[];
     const distPath = candidates.find((candidate) => fs.existsSync(candidate)) || candidates[candidates.length - 1];
+    const indexPath = path.join(distPath, defaultFile);
     app.use(express.static(distPath));
     app.use("/api/*", (_req, res) => { res.status(404).json({ error: "API route not found" }); });
-    app.get("*", (_req, res) => { res.sendFile(path.join(distPath, defaultFile)); });
+    app.get("*", (_req, res) => {
+      // The native release embeds its frontend in the Tauri executable. The
+      // bundled Node process may therefore have no on-disk frontend fallback;
+      // do not turn harmless root probes into repeated ENOENT runtime errors.
+      if (!fs.existsSync(indexPath)) {
+        return res.status(404).json({ error: "Frontend is embedded in the native desktop shell" });
+      }
+      return res.sendFile(indexPath);
+    });
   }
 }

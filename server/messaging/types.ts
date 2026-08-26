@@ -28,6 +28,8 @@ export interface IncomingMessage {
   routeSequence?: number;
   /** Internal marker used when ingress persistence happened before queued execution. */
   userMessagePersisted?: boolean;
+  /** Exact durable Lumi transcript row that owns this routed request. */
+  userMessageId?: string;
 }
 
 export interface IncomingAttachment {

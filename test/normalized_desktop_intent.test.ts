@@ -193,18 +193,18 @@ describe('normalized desktop intent priority', () => {
   });
 
   it('builds an exact write then readback chain for enumerated local text lines', () => {
-    const text = '请在 C:\\Users\\Administrator\\Documents\\Lumi主程序实机验收_20260817.txt 新建一个 TXT 文件，只写入以下三行：第一行“验收对象：Lumi 主程序”；第二行“验收项目：本地文件创建与回读”；第三行“验收代号：青穹-17”。写入后必须重新读取。';
+    const text = '请在 C:\\Users\\test-user\\Documents\\Lumi主程序实机验收_20260817.txt 新建一个 TXT 文件，只写入以下三行：第一行“验收对象：Lumi 主程序”；第二行“验收项目：本地文件创建与回读”；第三行“验收代号：青穹-17”。写入后必须重新读取。';
     const command = buildDeterministicTextArtifactCommand(text);
     expect(command?.toolCall).toEqual({
       name: 'write_file',
       arguments: {
-        path: 'C:\\Users\\Administrator\\Documents\\Lumi主程序实机验收_20260817.txt',
+        path: 'C:\\Users\\test-user\\Documents\\Lumi主程序实机验收_20260817.txt',
         content: '验收对象：Lumi 主程序\n验收项目：本地文件创建与回读\n验收代号：青穹-17',
       },
     });
     expect(command?.followUpToolCalls).toEqual([{
       name: 'read_file',
-      arguments: { path: 'C:\\Users\\Administrator\\Documents\\Lumi主程序实机验收_20260817.txt' },
+      arguments: { path: 'C:\\Users\\test-user\\Documents\\Lumi主程序实机验收_20260817.txt' },
     }]);
     const response = command?.formatToolRecords?.([
       { name: 'write_file', arguments: command?.toolCall?.arguments, result: 'File written' },
@@ -670,7 +670,7 @@ describe('normalized desktop intent priority', () => {
   });
 
   it('does not turn a new artifact task containing status and client-surface text into a status lookup', () => {
-    const text = '请在 C:\\Users\\Administrator\\Documents\\Lumi主程序实机验收_20260816.txt 创建文件，内容包含“渠道：指挥中心文字聊天”和“状态：待回读验证”。';
+    const text = '请在 C:\\Users\\test-user\\Documents\\Lumi主程序实机验收_20260816.txt 创建文件，内容包含“渠道：指挥中心文字聊天”和“状态：待回读验证”。';
     expect(normalizeActionIntent(text).kind).toBe('none');
   });
 

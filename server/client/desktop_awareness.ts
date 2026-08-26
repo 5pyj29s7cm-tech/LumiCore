@@ -1,7 +1,11 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { getLatestExploration } from '../autonomy/system_explorer';
+import {
+  getLatestExploration,
+  getSystemExplorationConsent,
+  type ComputerCapabilityOpportunity,
+} from '../autonomy/system_explorer';
 import { runWindowsPowerShellJson } from '../adapters/host_probe';
 
 interface DesktopEntry {
@@ -49,6 +53,17 @@ function getSystemProfile(): ReturnType<typeof getLatestExploration> {
     return getLatestExploration();
   } catch {
     return null;
+  }
+}
+
+function explorationAuthorizedForUser(userId: string): boolean {
+  try {
+    const consent = getSystemExplorationConsent();
+    if (consent.status !== 'granted') return false;
+    const grantedBy = String(consent.grantedByUserId || '').trim();
+    return Boolean(grantedBy && grantedBy === String(userId || '').trim());
+  } catch {
+    return false;
   }
 }
 
@@ -235,7 +250,44 @@ function summarizeApps(apps: string[] | undefined): string {
   return `${apps.length} known; examples: ${apps.slice(0, 24).join(', ')}`;
 }
 
-export function formatDesktopAwarenessForPrompt(): string {
+export function formatComputerCapabilityProfileForPrompt(userId: string): string {
+  if (!explorationAuthorizedForUser(userId)) {
+    return [
+      '### Authorized Computer Capability Profile',
+      '- Local computer exploration has not been authorized for this user. Do not infer installed software, hardware, files, peripherals, or personalized workflows.',
+      '- Explain what Lumi can do generically, and offer the transparent local-computer scan from onboarding/System Explorer if the user wants personalized suggestions.',
+    ].join('\n');
+  }
+  const profile = getSystemProfile();
+  if (!profile?.capabilityProfile) {
+    return [
+      '### Authorized Computer Capability Profile',
+      '- Exploration is authorized, but no verified capability profile is available yet. Offer to run or refresh the local scan; do not guess machine facts.',
+    ].join('\n');
+  }
+  const ready = profile.capabilityProfile.opportunities.filter(item => item.ready);
+  const needsSetup = profile.capabilityProfile.opportunities.filter(item => !item.ready);
+  const line = (item: ComputerCapabilityOpportunity) => (
+    `${item.label} [${item.ready ? 'verified-ready' : 'needs-setup'}, confidence=${item.confidence.toFixed(2)}]${item.evidence.length ? ` evidence=${item.evidence.slice(0, 5).join(', ')}` : ' evidence=none'}`
+  );
+  return [
+    '### Authorized Computer Capability Profile',
+    `- Snapshot: ${profile.timestamp}; scope=${profile.computerScope}; OS=${profile.software.osVersion}; CPU=${profile.hardware.cpus.model}; memory=${profile.hardware.totalMemoryGB}GB; GPUs=${profile.hardware.gpus.slice(0, 4).join(', ') || 'none reported'}`,
+    `- Verified-ready: ${ready.length ? ready.map(line).join(' | ') : 'none'}`,
+    `- Needs setup or more evidence: ${needsSetup.length ? needsSetup.map(line).join(' | ') : 'none'}`,
+    `- Evidence gaps: ${profile.capabilityProfile.evidenceGaps.join(', ') || 'none reported'}`,
+    '- Answer “what can you do here?” from these verified facts. Separate ready, needs setup, and unavailable/unknown; never infer the user profession from app names alone.',
+  ].join('\n');
+}
+
+export function formatDesktopAwarenessForPrompt(userId: string): string {
+  if (!explorationAuthorizedForUser(userId)) {
+    return [
+      '### Local Machine And Desktop Awareness Boundary',
+      '- Host exploration is not authorized for this user. No host desktop listing, foreground-window probe, process inventory, or persisted system profile was read for this prompt.',
+      '- Use user-scoped live client state and explicit relay tools only when the current request and execution policy permit them. Offer the transparent local scan if personalized computer guidance would help.',
+    ].join('\n');
+  }
   const snapshot = getDesktopAwarenessSnapshot();
   const profile = snapshot.systemProfile;
   const profileAge = profile?.timestamp ? formatAge(Date.now() - new Date(profile.timestamp).getTime()) : 'not available';
@@ -263,5 +315,7 @@ export function formatDesktopAwarenessForPrompt(): string {
     profile?.filesystem
       ? `- File overview: desktop=${profile.filesystem.desktopFiles}, documents=${profile.filesystem.documentsFiles}, downloads=${profile.filesystem.downloadsFiles}, userFiles=${profile.filesystem.totalUserFiles}`
       : '- File overview: not scanned yet',
+    '',
+    formatComputerCapabilityProfileForPrompt(userId),
   ].join('\n');
 }

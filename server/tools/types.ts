@@ -310,6 +310,14 @@ export interface ToolContext {
   onToolStart?: (call: { id?: string; name: string; arguments: Record<string, any> }) => void;
   /** Fired only after policy/confirmation checks, immediately before an adapter handler starts. */
   onAdapterStart?: (call: { name: string; attempt: number }) => void | Promise<void>;
+  /**
+   * Fired only after the exact adapter handler promise has genuinely settled.
+   * A timeout requests cooperative cancellation but does not synthesize this
+   * event or release the execution fence while the handler is still pending.
+   */
+  onAdapterSettlement?: (settlement: ToolAdapterSettlement) => void | Promise<void>;
+  /** Cooperative cancellation signal owned by the registry for this attempt. */
+  executionSignal?: AbortSignal;
   /** LLM provider getters for tools that need to call vision/text models internally */
   llmGetters?: {
     getDeepSeek: () => any;
@@ -409,6 +417,8 @@ export interface ToolExecutionRecord {
   receipt?: unknown;
   /** True only when the canonical registry crossed the adapter invocation boundary. */
   adapterStarted?: boolean;
+  /** Exact settlements observed from the pinned handler, including retries. */
+  adapterSettlements?: ToolAdapterSettlement[];
   error?: string;
   /** Evidence metadata copied from the invoked tool definition. */
   evidence?: {
@@ -436,6 +446,15 @@ export interface ToolExecutionRecord {
   };
   /** Uniform terminal projection attached by the canonical executor. */
   envelope?: ToolExecutionEnvelope;
+}
+
+export interface ToolAdapterSettlement {
+  name: string;
+  attempt: number;
+  status: 'fulfilled' | 'rejected';
+  /** True when the timeout fired before the original handler settled. */
+  timedOut: boolean;
+  settledAt: string;
 }
 
 export type ToolExecutionEnvelopeStatus =

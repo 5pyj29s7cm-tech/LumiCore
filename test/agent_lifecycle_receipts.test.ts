@@ -100,7 +100,7 @@ describe('agent lifecycle terminal receipts', () => {
       task: { status: 'queued', workerNames: ['Delegation Worker'] },
     });
     expect(getBackgroundTask(payload.task.id, userId)).toMatchObject({
-      id: payload.task.id,
+      id: 'conversation-task-1',
       prompt: 'Run a controlled multi-agent acceptance task.',
       context: {
         conversationId: 'conversation-1',

@@ -6,7 +6,7 @@ async function handler(args: any) {
   const city = String(args.city || 'Beijing');
   try {
     const url = `https://wttr.in/${encodeURIComponent(city)}?format=j1`;
-    const res = await fetch(url, { headers: { 'User-Agent': 'LumiOS/2.0' } });
+    const res = await fetch(url, { headers: { 'User-Agent': 'LumiCore/3.0' } });
     if (!res.ok) throw new Error(`Weather API returned ${res.status}`);
     const data: any = await res.json();
     const current = data.current_condition?.[0];
