@@ -21,7 +21,8 @@ import type { ToolExecutionRecord } from '../server/tools/types';
 
 const NOW = '2026-08-27T04:00:00.000Z';
 const FILE_NAME = 'Lumia_路演资料.ppt';
-const FILE_PATH = `C:\\Users\\Administrator\\Desktop\\${FILE_NAME}`;
+const USER_DESKTOP = path.join(os.homedir(), 'Desktop');
+const FILE_PATH = path.join(USER_DESKTOP, FILE_NAME);
 
 function record(input: Partial<ToolExecutionRecord> & Pick<ToolExecutionRecord, 'name'>): ToolExecutionRecord {
   return {
@@ -49,7 +50,7 @@ const activeWps = record({
 
 const desktopSearch = record({
   name: 'search_files',
-  arguments: { directory: 'C:\\Users\\Administrator\\Desktop', pattern: '*.ppt*' },
+  arguments: { directory: USER_DESKTOP, pattern: '*.ppt*' },
   result: JSON.stringify([{ name: FILE_NAME, path: FILE_PATH }]),
   terminalVerification: {
     status: 'verified',
@@ -151,7 +152,7 @@ describe('real file/desktop target anchoring', () => {
     expect(guardCurrentAppToolCall({
       taskText,
       toolName: 'search_files',
-      arguments: { directory: path.join(os.homedir(), 'Desktop'), pattern: '*.ppt*' },
+      arguments: { directory: USER_DESKTOP, pattern: '*.ppt*' },
       toolRecords: [activeWps],
     })).toMatchObject({ allowed: true });
 
