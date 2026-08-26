@@ -341,6 +341,22 @@ try {
     throw "Installed health identity does not match runtime-meta.json"
   }
   if ($Health.database.dirty -ne $false) {
+    $CleanDeadline = (Get-Date).AddSeconds([Math]::Min($TimeoutSeconds, 15))
+    while ((Get-Date) -lt $CleanDeadline) {
+      Start-Sleep -Milliseconds 250
+      if ($App.HasExited) {
+        throw "Installed app exited before startup persistence completed"
+      }
+      try {
+        $CandidateHealth = Invoke-JsonRequest -Uri "$BaseUrl/health" -TimeoutSec 2
+        if ($CandidateHealth.database.dirty -eq $false) {
+          $Health = $CandidateHealth
+          break
+        }
+      } catch {}
+    }
+  }
+  if ($Health.database.dirty -ne $false) {
     throw "Installed database reports a dirty state"
   }
 
@@ -430,6 +446,20 @@ try {
       $Restarted = $true
       break
     } catch {}
+  }
+  if ($Restarted -and $RestartHealth.database.dirty -ne $false) {
+    $CleanDeadline = (Get-Date).AddSeconds([Math]::Min($TimeoutSeconds, 15))
+    while ((Get-Date) -lt $CleanDeadline) {
+      Start-Sleep -Milliseconds 250
+      if ($App.HasExited) { throw "Installed app exited before restart persistence completed" }
+      try {
+        $CandidateHealth = Invoke-JsonRequest -Uri "$BaseUrl/health" -TimeoutSec 2
+        if ($CandidateHealth.database.dirty -eq $false) {
+          $RestartHealth = $CandidateHealth
+          break
+        }
+      } catch {}
+    }
   }
   if (-not $Restarted -or $RestartHealth.database.dirty -ne $false) {
     throw "Installed app did not restart with a clean database"
