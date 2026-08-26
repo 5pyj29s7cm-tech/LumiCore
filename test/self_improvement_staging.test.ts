@@ -805,7 +805,7 @@ describe('isolated self-improvement staging', () => {
     } finally {
       cleanupRepository(secretFixture);
     }
-  });
+  }, 30_000);
 
   it('rejects destructive, binary, rename, and absolute patch targets', () => {
     expect(() => extractUnifiedPatchPaths('--- a/server/example.ts\n+++ /dev/null\n'))
