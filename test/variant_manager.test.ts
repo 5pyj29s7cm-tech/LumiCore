@@ -139,6 +139,13 @@ describe('Lumi variant release train', () => {
     expect(manager).toContain("['worktree', 'add', '-b'");
     expect(manager).toContain("['merge', '--no-edit'");
     expect(manager).toContain("['cherry-pick', ...resolved]");
+    const mergePreviewSource = manager.slice(
+      manager.indexOf('function mergePreview('),
+      manager.indexOf('function worktreeSnapshot('),
+    );
+    expect(mergePreviewSource).toContain("'merge-tree',");
+    expect(mergePreviewSource).toContain("'--write-tree',");
+    expect(mergePreviewSource).not.toContain("'--quiet',");
     expect(manager).toContain('default_branch_not_fast_forwardable');
     expect(manager).toContain('remote_state_unknown');
     expect(manager).not.toContain('--force');

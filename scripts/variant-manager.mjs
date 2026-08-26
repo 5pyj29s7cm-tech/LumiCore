@@ -420,7 +420,6 @@ function mergePreview(coreRoot, record) {
     const result = git(record.worktree, [
       'merge-tree',
       '--write-tree',
-      '--quiet',
       '--merge-base', baseResult.stdout,
       ours,
       theirs,
