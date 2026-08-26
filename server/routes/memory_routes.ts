@@ -495,6 +495,8 @@ Rules:
         [],
         getUserPreferredLLMConfig(userId, { domain: scope.domain, orgId: scope.orgId }),
         llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
+        llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi,
+        llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
       );
 
       let plan: { branches: { title: string; memoryIds: string[] }[] };

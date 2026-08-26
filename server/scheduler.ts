@@ -2594,6 +2594,15 @@ Rules:
             getAnthropic || (() => null),
             getQwen || (() => null),
             evolutionConfig,
+            undefined,
+            undefined,
+            getOllama,
+            getLmStudio,
+            getArk,
+            getXiaomi,
+            getKimi,
+            getGlm,
+            getRelay,
           );
 
           if (step) {

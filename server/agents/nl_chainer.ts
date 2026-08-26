@@ -643,6 +643,8 @@ async function synthesizeResponse(
       [],
       { provider: provider as any, model, userId, maxTokens: 1000 },
       llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
+      llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi,
+      llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
     );
     return result.text || buildSimpleSummary(stepResults);
   } catch {

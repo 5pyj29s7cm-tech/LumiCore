@@ -212,6 +212,13 @@ export async function synthesizeOwnerProfile(
   getQwen: () => any,
   scope: PersonalityLearningScope = { domain: 'personal', orgId: '' },
   options: EvolutionSynthesisOptions = {},
+  getOllama?: () => any,
+  getLmStudio?: () => any,
+  getArk?: () => any,
+  getXiaomi?: () => any,
+  getKimi?: () => any,
+  getGlm?: () => any,
+  getRelay?: () => any,
 ): Promise<OwnerProfile | null> {
   const normalizedScope = normalizedEvolutionScope(userId, scope);
   const memories = queryMemories({
@@ -250,6 +257,13 @@ export async function synthesizeOwnerProfile(
         getOpenAI,
         getAnthropic,
         getQwen,
+        getOllama,
+        getLmStudio,
+        getArk,
+        getXiaomi,
+        getKimi,
+        getGlm,
+        getRelay,
         normalizedScope,
         memories,
       );
@@ -283,6 +297,13 @@ async function synthesizeOwnerProfileAttempt(
   getOpenAI: () => any,
   getAnthropic: () => any,
   getQwen: () => any,
+  getOllama: (() => any) | undefined,
+  getLmStudio: (() => any) | undefined,
+  getArk: (() => any) | undefined,
+  getXiaomi: (() => any) | undefined,
+  getKimi: (() => any) | undefined,
+  getGlm: (() => any) | undefined,
+  getRelay: (() => any) | undefined,
   scope: EvolutionScope,
   memories: Memory[],
 ): Promise<OwnerProfile | null> {
@@ -338,6 +359,13 @@ ${memoryTexts}`;
       getOpenAI,
       getAnthropic,
       getQwen,
+      getOllama,
+      getLmStudio,
+      getArk,
+      getXiaomi,
+      getKimi,
+      getGlm,
+      getRelay,
     );
 
     let text = result.text || '';
@@ -616,6 +644,13 @@ export async function evolvePersonality(
   evolutionConfig: EvolutionConfig = DEFAULT_EVOLUTION_CONFIG,
   scope: PersonalityLearningScope = { domain: 'personal', orgId: '' },
   options: EvolutionExecutionOptions = {},
+  getOllama?: () => any,
+  getLmStudio?: () => any,
+  getArk?: () => any,
+  getXiaomi?: () => any,
+  getKimi?: () => any,
+  getGlm?: () => any,
+  getRelay?: () => any,
 ): Promise<EvolutionStep | null> {
   // Gate: connection score
   if (connectionScore < evolutionConfig.minConnectionForEvolution) {
@@ -637,6 +672,13 @@ export async function evolvePersonality(
       force: options.forceSynthesis,
       minimumMemoryCount: evolutionConfig.minMemoriesForEvolution,
     },
+    getOllama,
+    getLmStudio,
+    getArk,
+    getXiaomi,
+    getKimi,
+    getGlm,
+    getRelay,
   );
   if (!profile) {
     console.log(`[Evolution] Insufficient owner_trait memories for ${userId}`);
@@ -701,6 +743,13 @@ export async function lightweightEvolve(
   getAnthropic?: () => any,
   getQwen?: () => any,
   scope: PersonalityLearningScope = { domain: 'personal', orgId: '' },
+  getOllama?: () => any,
+  getLmStudio?: () => any,
+  getArk?: () => any,
+  getXiaomi?: () => any,
+  getKimi?: () => any,
+  getGlm?: () => any,
+  getRelay?: () => any,
 ): Promise<EvolutionStep | null> {
   const effConfig = existingEvolutionConfig || DEFAULT_EVOLUTION_CONFIG;
 
@@ -718,6 +767,7 @@ export async function lightweightEvolve(
     userId,
     getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen, scope,
     { minimumMemoryCount: effConfig.minMemoriesForEvolution },
+    getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay,
   );
   if (!profile) return null; // Not enough owner_trait memories
 

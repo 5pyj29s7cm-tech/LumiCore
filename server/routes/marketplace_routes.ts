@@ -59,6 +59,13 @@ export function mountMarketplaceRoutes(
     getOpenAI?: () => any;
     getAnthropic?: () => any;
     getQwen?: () => any;
+    getOllama?: () => any;
+    getLmStudio?: () => any;
+    getArk?: () => any;
+    getXiaomi?: () => any;
+    getKimi?: () => any;
+    getGlm?: () => any;
+    getRelay?: () => any;
   },
 ) {
   // Discoverable marketplace skills (dynamic from registry)
@@ -415,6 +422,13 @@ export function mountMarketplaceRoutes(
           llmGetters.getOpenAI,
           llmGetters.getAnthropic,
           llmGetters.getQwen,
+          llmGetters.getOllama,
+          llmGetters.getLmStudio,
+          llmGetters.getArk,
+          llmGetters.getXiaomi,
+          llmGetters.getKimi,
+          llmGetters.getGlm,
+          llmGetters.getRelay,
         );
         return response.text || "";
       });

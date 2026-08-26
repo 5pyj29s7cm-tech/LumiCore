@@ -34,7 +34,20 @@ interface RouteContext {
 }
 
 export function mountAllRoutes({ apiRouter, jwtSecret, llm, getCookieOptions, io }: RouteContext) {
-  const llmGetters = { getDeepSeek: llm.getDeepSeek, getGemini: llm.getGemini, getOpenAI: llm.getOpenAI, getAnthropic: llm.getAnthropic, getQwen: llm.getQwen, getArk: llm.getArk, getGlm: llm.getGlm };
+  const llmGetters = {
+    getDeepSeek: llm.getDeepSeek,
+    getGemini: llm.getGemini,
+    getOpenAI: llm.getOpenAI,
+    getAnthropic: llm.getAnthropic,
+    getQwen: llm.getQwen,
+    getOllama: llm.getOllama,
+    getLmStudio: llm.getLmStudio,
+    getArk: llm.getArk,
+    getXiaomi: llm.getXiaomi,
+    getKimi: llm.getKimi,
+    getGlm: llm.getGlm,
+    getRelay: llm.getRelay,
+  };
 
   // Personality, MCP, Device management
   mountPersonalityRoutes(apiRouter, jwtSecret, llmGetters);

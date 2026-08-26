@@ -466,7 +466,23 @@ Match species to description clues: 猫→cat, 狐狸/狐→fox, 兔→rabbit, �
 Choose pattern/eyeShape/mouthStyle that fits the described personality.
 If the description doesn't specify, use reasonable defaults. Be creative!`;
         const userId = (req as any).user?.uid || 'anonymous';
-        const result = await makeLLMCall([{ role: 'user', content: llmPrompt }], [], getUserPreferredLLMConfig(userId, { maxTokens: 500 }), llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen);
+        const result = await makeLLMCall(
+          [{ role: 'user', content: llmPrompt }],
+          [],
+          getUserPreferredLLMConfig(userId, { maxTokens: 500 }),
+          llmGetters.getDeepSeek,
+          llmGetters.getGemini,
+          llmGetters.getOpenAI,
+          llmGetters.getAnthropic,
+          llmGetters.getQwen,
+          llmGetters.getOllama,
+          llmGetters.getLmStudio,
+          llmGetters.getArk,
+          llmGetters.getXiaomi,
+          llmGetters.getKimi,
+          llmGetters.getGlm,
+          llmGetters.getRelay,
+        );
         let aiDesign: any = {};
         try { aiDesign = JSON.parse((result.text || '').replace(/```json\s*|```/g, '').trim()); } catch { aiDesign = {}; }
         const colorMap: Record<string, string> = { white:'#f0f0f0',black:'#3a3a3a',red:'#e85545',blue:'#5599dd',green:'#5ddb5d',purple:'#9966cc',pink:'#f0a0b0',orange:'#f4a460',yellow:'#f5d442',brown:'#8B6914',cream:'#fff8dc',grey:'#888888' };

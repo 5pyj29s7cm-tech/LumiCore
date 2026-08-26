@@ -249,6 +249,8 @@ export function formatMeetingTranscriptForAnalysis(notes: unknown[]): string {
 
 export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
   getDeepSeek: any; getGemini: any; getOpenAI: any; getAnthropic: any; getQwen: any;
+  getOllama?: any; getLmStudio?: any; getArk?: any; getXiaomi?: any;
+  getKimi?: any; getGlm?: any; getRelay?: any;
 }) {
   const asyncHandler = (fn: (req: any, res: any, next?: any) => Promise<any>) =>
     (req: any, res: any, next: any) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -755,6 +757,8 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       [],
       { provider, model, maxTokens: 1800, userId },
       llm.getDeepSeek, llm.getGemini, llm.getOpenAI, llm.getAnthropic, llm.getQwen,
+      llm.getOllama, llm.getLmStudio, llm.getArk, llm.getXiaomi,
+      llm.getKimi, llm.getGlm, llm.getRelay,
     );
 
     const report = result.text || '';

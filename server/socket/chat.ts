@@ -3669,6 +3669,14 @@ export function registerChatHandler(
             llmGetters.getOpenAI,
             llmGetters.getAnthropic,
             llmGetters.getQwen,
+            undefined,
+            llmGetters.getOllama,
+            llmGetters.getLmStudio,
+            llmGetters.getArk,
+            llmGetters.getXiaomi,
+            llmGetters.getKimi,
+            llmGetters.getGlm,
+            llmGetters.getRelay,
           );
           if (step) {
             personalityRegistry.applyEvolution(personalityId, step, { userId: uid });

@@ -2,6 +2,7 @@
  * Autonomous Task Generator — curiosity-driven self-initiation.
  * Gathers context about the user's state and asks the LLM to suggest useful autonomous tasks.
  */
+import crypto from 'node:crypto';
 import { isAutonomousWorkAllowed } from './safety_gate';
 import { enqueue } from './task_queue';
 import {
@@ -22,6 +23,13 @@ interface LLMGetters {
   getOpenAI?: () => any;
   getAnthropic?: () => any;
   getQwen?: () => any;
+  getOllama?: () => any;
+  getLmStudio?: () => any;
+  getArk?: () => any;
+  getXiaomi?: () => any;
+  getKimi?: () => any;
+  getGlm?: () => any;
+  getRelay?: () => any;
 }
 
 type GeneratedAutonomousTask = {
@@ -399,13 +407,27 @@ ${contextParts.join('\n')}
 
   try {
     const messages: NormalizedMessage[] = [{ role: 'user', content: prompt }];
+    const routingRequestId = `autonomous_task_generation_${crypto.randomUUID()}`;
     const result = await makeLLMCall(
       messages, [],
-      getUserPreferredLLMConfig(userId, { maxTokens: 500 }),
+      getUserPreferredLLMConfig(userId, {
+        maxTokens: 500,
+        domain: 'personal',
+        source: 'autonomous_task_generation',
+        requestId: routingRequestId,
+        interactionId: routingRequestId,
+      }),
       getters.getDeepSeek, getters.getGemini,
       getters.getOpenAI || (() => null),
       getters.getAnthropic || (() => null),
       getters.getQwen || (() => null),
+      getters.getOllama || (() => null),
+      getters.getLmStudio || (() => null),
+      getters.getArk || (() => null),
+      getters.getXiaomi || (() => null),
+      getters.getKimi || (() => null),
+      getters.getGlm || (() => null),
+      getters.getRelay || (() => null),
     );
 
     const text = (result.text || '').replace(/```json|```/g, '').trim();
