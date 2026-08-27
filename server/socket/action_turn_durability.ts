@@ -102,10 +102,6 @@ export async function resolveAcceptedTurnConfirmation(input: {
       const clearedTask = await clearPendingConfirmationDurably(input.userId, input.taskScope);
       const clearedTaskless = await clearPendingConfirmationDurably(input.userId, input.channelScope);
       cleared = clearedTask || clearedTaskless;
-    } else if (unrelated) {
-      // A taskless grant is a one-turn offer. A new unrelated instruction
-      // revokes it, while exact task-bound grants remain resumable.
-      cleared = await clearPendingConfirmationDurably(input.userId, input.channelScope);
     } else if (correctionRequiresFreshConfirmation) {
       // A correction invalidates the exact action that was awaiting approval.
       // Revoke it before replanning so a later short "confirm" can never
@@ -116,6 +112,10 @@ export async function resolveAcceptedTurnConfirmation(input: {
         cleared = await clearPendingConfirmationDurably(input.userId, input.taskScope);
         if (!cleared) throw new Error('Pending confirmation correction could not be revoked');
       }
+    } else if (unrelated) {
+      // A taskless grant is a one-turn offer. A new unrelated instruction
+      // revokes it, while exact task-bound grants remain resumable.
+      cleared = await clearPendingConfirmationDurably(input.userId, input.channelScope);
     }
 
     const pending = explicitConfirmation

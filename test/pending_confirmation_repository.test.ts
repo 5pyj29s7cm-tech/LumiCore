@@ -12,6 +12,7 @@ import {
   consumePendingConfirmationDurably,
   getPendingConfirmation,
   recordPendingConfirmationDurably,
+  revokePendingConfirmationChannelDurably,
 } from '../server/tools/pending_confirmation';
 import { PendingConfirmationRepository } from '../server/tools/pending_confirmation_repository';
 
@@ -228,6 +229,52 @@ describe('encrypted pending confirmation repository', () => {
       [pending.id],
     );
     expect(afterRestart[0]?.status).toBe('cancelled');
+  });
+
+  it('revokes every task-bound grant in a deleted conversation channel and rejects late persistence', async () => {
+    clearAllPendingConfirmationsForTests();
+    const repository = new PendingConfirmationRepository({ keyPath, platform: 'linux' });
+    await repository.initializeAndHydrate();
+    configurePendingConfirmationPersistence(repository);
+    const nonce = `${Date.now()}-${Math.random()}`;
+    const userId = `deleted-channel-user-${nonce}`;
+    const conversationId = `deleted-channel-conversation-${nonce}`;
+    const taskId = `deleted-channel-task-${nonce}`;
+    const taskScope = buildTransportNeutralConfirmationScope({
+      domain: 'personal',
+      conversationId,
+      taskId,
+    });
+    const channelScope = buildTransportNeutralConfirmationScope({
+      domain: 'personal',
+      conversationId,
+    });
+    const pending = await recordPendingConfirmationDurably(
+      userId,
+      'write_file',
+      { path: 'deleted-channel.txt', content: 'must never execute' },
+      'chat',
+      taskScope,
+    );
+
+    await expect(revokePendingConfirmationChannelDurably(userId, {
+      domain: 'personal',
+      orgId: '',
+      channelId: String(channelScope.channelId),
+    })).resolves.toBe(1);
+    expect(getPendingConfirmation(userId, taskScope)).toBeNull();
+    await expect(recordPendingConfirmationDurably(
+      userId,
+      'write_file',
+      { path: 'late-write.txt', content: 'late' },
+      'chat',
+      taskScope,
+    )).rejects.toThrow('channel has been revoked');
+    const rows = await querySQL<any>(
+      'SELECT status FROM pending_tool_confirmations WHERE id = ?',
+      [pending.id],
+    );
+    expect(rows[0]?.status).toBe('cancelled');
   });
 
   it('fails closed on macOS instead of storing a plaintext data-root key', async () => {

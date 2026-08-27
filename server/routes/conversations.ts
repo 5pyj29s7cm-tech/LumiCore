@@ -13,7 +13,7 @@ import {
 } from "../conversation/manager";
 import {
   buildTransportNeutralConfirmationScope,
-  clearPendingConfirmationDurably,
+  revokePendingConfirmationChannelDurably,
 } from "../tools/pending_confirmation";
 import { ensurePendingConfirmationPersistenceInitialized } from "../tools/pending_confirmation_repository";
 
@@ -186,36 +186,22 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
       && conversationMatchesScope(candidate, scope)
     ));
     if (!conversation) return res.status(404).json({ error: "Not found" });
-    const taskIds = [...new Set<string>(
-      (db.conversationActionTasks || [])
-        .filter((row: any) => row.conversationId === conversation.id)
-        .map((row: any) => String(row.id || '').trim())
-        .filter(Boolean),
-    )];
     let pendingConfirmationsCancelled = 0;
     try {
       await ensurePendingConfirmationPersistenceInitialized();
-      for (const taskId of taskIds) {
-        const cancelled = await clearPendingConfirmationDurably(
-          req.user!.uid,
-          buildTransportNeutralConfirmationScope({
-            domain: scope.domain,
-            orgId: scope.orgId,
-            conversationId: conversation.id,
-            taskId,
-          }),
-        );
-        if (cancelled) pendingConfirmationsCancelled += 1;
-      }
-      const tasklessCancelled = await clearPendingConfirmationDurably(
+      const channelScope = buildTransportNeutralConfirmationScope({
+        domain: scope.domain,
+        orgId: scope.orgId,
+        conversationId: conversation.id,
+      });
+      pendingConfirmationsCancelled = await revokePendingConfirmationChannelDurably(
         req.user!.uid,
-        buildTransportNeutralConfirmationScope({
+        {
           domain: scope.domain,
           orgId: scope.orgId,
-          conversationId: conversation.id,
-        }),
+          channelId: String(channelScope.channelId || ''),
+        },
       );
-      if (tasklessCancelled) pendingConfirmationsCancelled += 1;
     } catch (error) {
       console.error('[Conversations] Failed to revoke pending confirmations before deletion:', error);
       return res.status(503).json({ error: 'Conversation confirmation cleanup is unavailable' });

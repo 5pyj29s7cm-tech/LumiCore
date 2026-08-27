@@ -219,6 +219,30 @@ function targetFingerprint(identity: string): string {
   return `target:${compact(identity, 500).replace(/[\\/]+/g, '/').toLowerCase()}`;
 }
 
+/**
+ * A parsed correction is the authoritative target event for its turn.  The
+ * generic target-anchor projection still scans the full instruction so it can
+ * reconcile receipts and active-document evidence, but an instruction such as
+ * "reject OLD; final target is NEW" contains both paths.  If that weaker scan
+ * selects OLD, preserve the structured replacement produced by
+ * targetUpdateFromTurn.  A projection that resolves the same replacement is
+ * retained so verified evidence can still promote it from candidate to
+ * confirmed.
+ */
+function preserveStructuredCorrectionTarget(
+  projected: TaskCapsuleTargetV1,
+  structured: TaskCapsuleTargetV1,
+  correction: TaskCapsuleCorrectionV1 | null,
+): TaskCapsuleTargetV1 {
+  const replacement = compact(correction?.replacementTarget, 500);
+  if (!replacement) return projected;
+  const replacementFingerprint = targetFingerprint(replacement);
+  if (targetFingerprint(targetIdentity(structured)) !== replacementFingerprint) return projected;
+  return targetFingerprint(targetIdentity(projected)) === replacementFingerprint
+    ? projected
+    : structured;
+}
+
 function fileNameFromPath(value: string): string {
   return compact(value.split(/[\\/]/).filter(Boolean).pop() || value, 180);
 }
@@ -746,7 +770,11 @@ export function updateTaskCapsuleV1(
   });
   return normalizeCapsule({
     ...next,
-    target: projection.target,
+    target: preserveStructuredCorrectionTarget(
+      projection.target,
+      next.target,
+      next.latestCorrection,
+    ),
     paths: uniqueStrings(
       next.paths.filter(candidate => !isUnconfirmedRuntimeCandidate(candidate, update.instruction || next.goal)),
       8,
@@ -1025,7 +1053,11 @@ export function buildTaskCapsuleV1(
   });
   return normalizeCapsule({
     ...capsule,
-    target: projection.target,
+    target: preserveStructuredCorrectionTarget(
+      projection.target,
+      capsule.target,
+      capsule.latestCorrection,
+    ),
     paths: capsule.paths.filter(candidate => !isUnconfirmedRuntimeCandidate(candidate, targetContext)),
     allowedSearchRoots: projection.allowedSearchRoots,
     analysisReady: projection.analysisReady,

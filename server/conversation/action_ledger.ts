@@ -249,6 +249,53 @@ function sanitizeState(state: ConversationActionContinuationState): Conversation
   };
 }
 
+/**
+ * Resolve the target owned by the durable task capsule, rather than inferring
+ * it again from the wording of the current turn. A correction commonly names
+ * both the rejected and replacement paths, while normalized action intent is
+ * intentionally non-executing for that wording. Falling back to the existing
+ * ledger row in that case leaves the top-level task target permanently pinned
+ * to the first path even though the current receipt uses the replacement.
+ */
+function currentTaskCorrectionTarget(state: ConversationActionContinuationState): string {
+  const capsule = state.taskCapsule;
+  if (!capsule) return '';
+
+  const correction = capsule.latestCorrection;
+  const correctionOwnsCurrentInstruction = Boolean(
+    correction?.replacementTarget
+    && (
+      (
+        correction.eventRef
+        && state.latestInstructionRef
+        && correction.eventRef === state.latestInstructionRef
+      )
+      || (
+        correction.text
+        && capsule.currentInstruction
+        && correction.text === capsule.currentInstruction
+      )
+    ),
+  );
+  if (correctionOwnsCurrentInstruction) {
+    return String(correction!.replacementTarget || '').trim().slice(0, 500);
+  }
+
+  return '';
+}
+
+function durableTaskCapsuleTarget(state: ConversationActionContinuationState): string {
+  const capsule = state.taskCapsule;
+  if (!capsule) return '';
+  if (capsule.target.status === 'rejected') return '';
+  return String(
+    capsule.target.path
+    || capsule.target.application
+    || capsule.target.label
+    || '',
+  ).trim().slice(0, 500);
+}
+
 export function sanitizeCapabilityExecutionPlan(
   plan: CapabilityExecutionPlan,
   persistedAt: string,
@@ -487,6 +534,8 @@ export function syncConversationActionTaskLedger(
     blocker: state.latestBlocker || '',
     updatedAt: now,
   }, now);
+  const correctedTarget = currentTaskCorrectionTarget(state);
+  const durableTarget = durableTaskCapsuleTarget(state);
   const values: ConversationActionTaskRow = {
     id: state.taskId,
     conversationId: input.conversation.id,
@@ -498,7 +547,7 @@ export function syncConversationActionTaskLedger(
     intentKind: intent.kind === 'none' ? task?.intentKind || 'desktop_operation' : intent.kind,
     operation: intent.kind === 'none' ? task?.operation || 'mutate' : intent.operation,
     goal: redactGoal(state.goal, intent),
-    target: intent.target || state.appTarget || task?.target || '',
+    target: correctedTarget || intent.target || durableTarget || state.appTarget || task?.target || '',
     status: taskStatus,
     blocker: state.latestBlocker || '',
     activeRequestId: persistedState.activeRequestId || '',

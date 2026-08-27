@@ -234,6 +234,40 @@ describe('accepted action-turn durability fence', () => {
     );
     expect(replacement.id).not.toBe(oldPending.id);
     expect(replacement.exactArgs).toMatchObject({ path: newTarget });
+
+    const mixedAdmission = await admitAcceptedUserTurnDurably({
+      persistAcceptedUserTurn: () => 'mixed-correction-message',
+      flush: async () => undefined,
+      onPersistenceUnknown: vi.fn(),
+    });
+    const mixedResolution = await resolveAcceptedTurnConfirmation({
+      admission: mixedAdmission!,
+      userId: 'corrected-confirmation-user',
+      userText: `不是 ${newTarget}，而是创建文件 corrected-final-target.txt，内容不变。`,
+      actionState: {
+        version: 2,
+        taskId: 'corrected-confirmation-task',
+        status: 'waiting_confirmation',
+        goal: 'create the confirmed file',
+        appTarget: '',
+        sourcePaths: [newTarget],
+        latestBlocker: '',
+        unfinished: true,
+        evidenceTools: ['write_file'],
+        latestInstruction: `create ${newTarget}`,
+        assistantState: 'waiting for confirmation',
+        toolSummaries: [],
+        updatedAt: new Date().toISOString(),
+      },
+      taskScope,
+      channelScope,
+    });
+    expect(mixedResolution).toMatchObject({
+      pending: null,
+      cleared: true,
+      correctionRequiresFreshConfirmation: true,
+    });
+    expect(getPendingConfirmation('corrected-confirmation-user', taskScope)).toBeNull();
   });
 
   it('recovers the same exact pending action for repeated confirmations and consumes it once', async () => {

@@ -129,6 +129,61 @@ describe('TaskCapsuleV1', () => {
     expect(updated.doNotRetry).toContainEqual(expect.objectContaining({ fingerprint: 'desktop_open:wrong' }));
   });
 
+  it('keeps the structured final replacement when one correction names both old and new paths', () => {
+    const targets = [0, 1, 2, 3].map(index => (
+      `C:\\Users\\Administrator\\LumiCore\\formal-client-e2e-artifacts\\target-${index}.txt`
+    ));
+    const goal = `创建确认门控文件 ${targets[0]}，内容保持不变。`;
+    const instructions = [
+      goal,
+      `不是 ${targets[0]}，把同一个任务的目标改成 ${targets[1]}，不要重试旧目标。`,
+      `再纠正一次：不要 ${targets[1]}，改成 ${targets[2]}，仍是同一个任务。`,
+      `最后一次纠正：拒绝 ${targets[2]}，最终目标是 ${targets[3]}，等待我的确认。`,
+    ];
+    let capsule = null as ReturnType<typeof buildTaskCapsuleV1>;
+
+    instructions.forEach((latestInstruction, index) => {
+      capsule = buildTaskCapsuleV1({
+        taskId: 'task-formal-correction',
+        revision: index + 1,
+        status: 'waiting_confirmation',
+        unfinished: true,
+        goal,
+        latestInstruction,
+        latestInstructionRef: `message-${index}`,
+        appTarget: '',
+        sourcePaths: [],
+        latestBlocker: '',
+        toolSummaries: [],
+        receipts: [],
+        updatedAt: `2026-08-27T02:30:0${index}.000Z`,
+      }, {
+        previousCapsule: capsule,
+        observedAt: `2026-08-27T02:30:0${index}.000Z`,
+      });
+      expect(capsule?.target.path).toBe(targets[index]);
+    });
+
+    expect(capsule?.target).toMatchObject({
+      path: targets[3],
+      status: 'candidate',
+      source: 'user_correction',
+    });
+    expect(capsule?.latestCorrection).toMatchObject({
+      previousTarget: targets[2],
+      replacementTarget: targets[3],
+      eventRef: 'message-3',
+    });
+    expect(capsule?.rejectedTargets.map(item => item.identity)).toEqual(
+      expect.arrayContaining(targets.slice(0, 3)),
+    );
+    expect(capsule?.doNotRetry.map(item => item.fingerprint)).toEqual(
+      expect.arrayContaining(targets.slice(0, 3).map(target => (
+        `target:${target.replace(/[\\/]+/g, '/').toLowerCase()}`
+      ))),
+    );
+  });
+
   it('does not bind ordinary conversational negation to an unfinished task', () => {
     const state = wpsSource();
     expect(classifyTaskCapsuleTurn('不是这个', state)).toBe('target_correction');

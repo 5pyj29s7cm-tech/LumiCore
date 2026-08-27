@@ -15,6 +15,7 @@ import {
   buildConversationActionContinuationState,
   normalizeConversationActionState,
 } from '../server/cognition/action_continuation';
+import { updateTaskCapsuleV1 } from '../server/conversation/task_capsule';
 
 function task(id: string): ConversationActionTaskRow {
   return {
@@ -95,6 +96,99 @@ describe('conversation action receipt ids', () => {
       createdAt: '2026-08-16T00:00:01.000Z',
     };
   }
+
+  it('writes three corrected capsule targets back to one durable task row', () => {
+    const taskId = 'task-corrected-target';
+    const root = 'C:\\formal-e2e';
+    const targets = [
+      `${root}\\target-0.txt`,
+      `${root}\\target-1.txt`,
+      `${root}\\target-2.txt`,
+      `${root}\\target-final.txt`,
+    ];
+    const goal = 'Create a file and wait for confirmation.';
+    const conversation: any = {
+      id: 'conversation-1',
+      userId: 'user-1',
+      domain: 'personal',
+      orgId: '',
+    };
+    const db: any = {
+      conversations: [conversation],
+      interactions: [],
+      conversationActionTasks: [],
+      conversationActionReceipts: [],
+    };
+    let state = normalizeConversationActionState({
+      version: 2,
+      taskId,
+      status: 'waiting_confirmation',
+      receipts: [],
+      revision: 1,
+      goal,
+      latestInstruction: goal,
+      latestInstructionRef: 'message-create',
+      appTarget: targets[0],
+      sourcePaths: [],
+      latestBlocker: '',
+      unfinished: true,
+      evidenceTools: [],
+      assistantState: 'Waiting for confirmation.',
+      toolSummaries: [],
+      updatedAt: '2026-08-27T18:43:44.000Z',
+    })!;
+    conversation.actionContinuationState = state;
+
+    const initial = syncConversationActionTaskLedger(db, {
+      conversation,
+      state,
+      userText: goal,
+      now: state.updatedAt,
+    });
+    expect(initial).toMatchObject({ id: taskId, target: targets[0] });
+
+    for (let index = 1; index < targets.length; index += 1) {
+      const instruction = `Replace ${targets[index - 1]} with ${targets[index]}.`;
+      const eventRef = `message-correction-${index}`;
+      const updatedAt = `2026-08-27T18:44:0${index}.000Z`;
+      const correctedCapsule = updateTaskCapsuleV1(state.taskCapsule!, {
+        instruction,
+        correction: {
+          text: instruction,
+          path: targets[index],
+          rejectCurrentTarget: true,
+          reason: 'The user explicitly replaced the prior target.',
+          observedAt: updatedAt,
+          eventRef,
+        },
+        updatedAt,
+      });
+      state = normalizeConversationActionState({
+        ...state,
+        status: 'waiting_confirmation',
+        revision: state.revision + 1,
+        latestInstruction: instruction,
+        latestInstructionRef: eventRef,
+        // Reproduce hydration of the stale top-level target. The capsule owns
+        // the replacement and must advance the row despite this old fallback.
+        appTarget: targets[0],
+        taskCapsule: correctedCapsule,
+        updatedAt,
+      })!;
+      conversation.actionContinuationState = state;
+
+      const corrected = syncConversationActionTaskLedger(db, {
+        conversation,
+        state,
+        userText: instruction,
+        now: updatedAt,
+      });
+
+      expect(corrected).toBe(initial);
+      expect(corrected?.target).toBe(targets[index]);
+      expect(db.conversationActionTasks).toHaveLength(1);
+    }
+  });
 
   it('allocates a new durable row id when one tool record is associated with another task', () => {
     const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
