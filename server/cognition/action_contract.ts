@@ -4,6 +4,7 @@ import { isInformationOnlyQuestion } from './tool_intent';
 import {
   requiresActiveWindowObservation,
   requiresDesktopFileListingObservation,
+  requiresRunningProcessObservation,
 } from './desktop_observation';
 import { classifyRuntimeWorkIntent } from './runtime_work_intent';
 import { CN_ACTION_CONTRACT_BLOCKERS } from '../regions/packs/cn/voice_fast_path_messages';
@@ -13,6 +14,7 @@ import {
   normalizeActionIntent,
 } from './normalized_action_intent';
 import { isReadOnlyKnowledgeBaseInspectionRequest } from './knowledge_intent';
+import type { TaskCapsuleV1 } from '../conversation/task_capsule';
 
 export type LumiActionContractKind =
   | 'none'
@@ -187,6 +189,23 @@ export function requiresCurrentAppUiMutation(input: string): boolean {
     && (CURRENT_APP_REFERENCE_RE.test(primary) || hasRecoveredTarget || hasNamedAuthoringSequence)
     && CURRENT_APP_MUTATION_INTENT_RE.test(primary)
   );
+}
+
+/**
+ * A request to inspect the document shown by a named authoring application is
+ * more than a desktop-window status read. The active window establishes the
+ * application anchor, but an exact document content receipt is still required
+ * before the root task can be considered complete.
+ */
+export function requiresCurrentAuthoringDocumentInspection(input: string): boolean {
+  const text = compact(extractPrimaryTaskText(input));
+  if (!text) return false;
+  const hasAuthoringApp = /(?:WPS|Microsoft\s+Word|Word|Excel|PowerPoint|Office)/iu.test(text);
+  // i18n-allow: Reviewed multilingual current-document input recognition; not user-visible copy.
+  const hasCurrentDocument = /(?:现在|当前|正在).{0,18}(?:打开|编辑|显示).{0,18}(?:这份|这个|该)?(?:文件|文档|表格|幻灯片|演示文稿|PPT|PDF)|(?:打开|编辑|显示)(?:着|的).{0,12}(?:这份|这个|该)?(?:文件|文档|表格|幻灯片|演示文稿|PPT|PDF)|(?:现在|当前|正在).{0,24}(?:活动窗口|前台窗口|窗口里|窗口内).{0,18}(?:文件|文档|表格|幻灯片|演示文稿|PPT|PDF)/u.test(text);
+  // i18n-allow: Reviewed multilingual document-inspection input recognition; not user-visible copy.
+  const wantsInspection = /(?:分析|总结|介绍|讲解|读取|阅读|看看|看一下|看法|想法|检查)|\b(?:analy[sz]e|summari[sz]e|review|inspect|read|present)\b/iu.test(text);
+  return hasAuthoringApp && hasCurrentDocument && wantsInspection;
 }
 
 export function extractCurrentAppTarget(input: string): string {
@@ -659,6 +678,28 @@ function buildArtifactWorkContract(): LumiActionContract {
   });
 }
 
+function buildReadOnlyArtifactInspectionContract(): LumiActionContract {
+  return withDefaults({
+    kind: 'artifact_work',
+    label: 'Exact read-only file inspection',
+    coreAction: 'Read semantic content from the one exact absolute file path named by the user without mutating it.',
+    preparationIsNotCompletion: [
+      'listing a directory or searching for a possible file',
+      'reading a model-selected path that the user did not name',
+      'returning file metadata without semantic content',
+      'reading a source file before an unfinished create, write, or edit action',
+    ],
+    requiredEvidence: [
+      'verified read_file receipt for the same absolute path present in the accepted user task',
+      'non-empty semantic file content from that receipt',
+    ],
+    preferredTools: ['read_file'],
+    verificationTools: ['read_file'],
+    nextStep: 'Read only the exact user-anchored file and answer from its verified semantic content.',
+    caution: 'A basename, directory search, guessed path, metadata-only result, or preparatory read cannot complete this contract.',
+  });
+}
+
 function buildDesktopOperationContract(): LumiActionContract {
   return withDefaults({
     kind: 'desktop_operation',
@@ -903,11 +944,18 @@ export function buildActionContract(input: string): LumiActionContract {
       caution: 'Only runtime ledger receipts prove Lumi task status or cancellation.',
     });
   }
+  // Preserve a narrow local-file inspection candidate across the generic
+  // question/status guards below. Domain-specific contracts still get first
+  // refusal, and the candidate is materialized only near the artifact branch.
+  const readOnlyArtifactInspection = requestsExactReadOnlyArtifactInspection(text);
   if (
-    normalizedIntent.kind === 'correction_explanation'
-    || normalizedIntent.kind === 'client_navigation'
-    || normalizedIntent.kind === 'client_state'
-    || normalizedIntent.kind === 'status_query'
+    !readOnlyArtifactInspection
+    && (
+      normalizedIntent.kind === 'correction_explanation'
+      || normalizedIntent.kind === 'client_navigation'
+      || normalizedIntent.kind === 'client_state'
+      || normalizedIntent.kind === 'status_query'
+    )
   ) return NONE_CONTRACT;
   if (normalizedIntent.kind === 'work_task') {
     return withDefaults({
@@ -953,7 +1001,7 @@ export function buildActionContract(input: string): LumiActionContract {
       caution: 'Never execute arbitrary plugin code, embed credentials in a manifest, widen signed permissions, or bypass the unified tool policy and receipt pipeline.',
     });
   }
-  if (isInformationOnlyQuestion(text)) return NONE_CONTRACT;
+  if (isInformationOnlyQuestion(text) && !readOnlyArtifactInspection) return NONE_CONTRACT;
   if (isReadOnlyKnowledgeBaseInspectionRequest(text)) return NONE_CONTRACT;
   // Blank AutoCAD creation has a dedicated verified COM path. It remains a
   // CAD document action even when continuation context also supplies the
@@ -987,6 +1035,7 @@ export function buildActionContract(input: string): LumiActionContract {
   const activeWindowObservation = requiresActiveWindowObservation(text);
   const desktopFileObservation = requiresDesktopFileListingObservation(text);
   const desktopObservationInspection = activeWindowObservation || desktopFileObservation;
+  const currentAuthoringDocumentInspection = requiresCurrentAuthoringDocumentInspection(text);
   const directedMessageSend = normalizedIntent.kind === 'messaging_send' || (
     normalizedIntent.kind !== 'messaging_read'
     && (
@@ -1063,6 +1112,7 @@ export function buildActionContract(input: string): LumiActionContract {
   }
 
   if (
+    !readOnlyArtifactInspection &&
     matches(text, /wechat|weixin|\u5fae\u4fe1|\u804a\u5929|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9|\u6d88\u606f|message|chat/i) &&
     matches(text, /\u770b\u770b|\u67e5\u770b|\u770b\u4e00\u4e0b|\u8bfb\u53d6|\u8bfb|\u6700\u8fd1|\u804a\u5929\u5185\u5bb9|\u804a\u5929\u8bb0\u5f55|\u603b\u7ed3|read|view|inspect|recent|history/i) &&
     !directedMessageSend &&
@@ -1261,6 +1311,36 @@ export function buildActionContract(input: string): LumiActionContract {
     });
   }
 
+  if (currentAuthoringDocumentInspection) {
+    return withDefaults({
+      kind: 'desktop_operation',
+      label: 'Current authoring document inspection',
+      coreAction: 'Anchor the named foreground authoring application, resolve one exact document target, and read its contents for the requested analysis.',
+      preparationIsNotCompletion: [
+        'observing only the active window or process',
+        'guessing a document from a window title without resolving an exact target',
+        'listing candidate files without reading the confirmed document',
+      ],
+      requiredEvidence: [
+        'verified active-window receipt for the named authoring application',
+        'successful content-reader receipt with a non-empty exact file target',
+      ],
+      preferredTools: [
+        'desktop_active_window',
+        'desktop_list_files',
+        'desktop_path_info',
+        'read_file',
+        'extract_document_text',
+        'read_pdf',
+        'read_docx',
+        'read_xlsx',
+      ],
+      verificationTools: ['desktop_active_window', 'desktop_path_info'],
+      nextStep: 'Observe the active authoring window, resolve the exact file inside bounded user locations, display the final filename, then read and analyze that file.',
+      caution: 'A window title is a candidate anchor, not proof that the correct document contents were analyzed.',
+    });
+  }
+
   if (desktopObservationInspection) {
     const requiredEvidence = [
       activeWindowObservation ? '\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\u7684\u5b9e\u65f6\u6807\u9898/\u8fdb\u7a0b\u56de\u6267' : '', // i18n-allow: reviewed Chinese desktop observation contract.
@@ -1285,6 +1365,8 @@ export function buildActionContract(input: string): LumiActionContract {
       caution: '\u4e0d\u80fd\u7528\u5386\u53f2\u8bb0\u5fc6\u3001\u7528\u6237\u4e3b\u76ee\u5f55\u6216\u5355\u4e00\u5de5\u5177\u7ed3\u679c\u4ee3\u66ff\u5f53\u524d\u8bf7\u6c42\u4e2d\u7684\u5168\u90e8\u684c\u9762\u8bc1\u636e\u3002', // i18n-allow: reviewed Chinese desktop observation contract.
     });
   }
+
+  if (readOnlyArtifactInspection) return buildReadOnlyArtifactInspectionContract();
 
   if (matches(text, /\u6587\u4ef6|\u6587\u6863|PPT|PDF|txt|markdown|md\b|docx|xlsx|pptx|\u521b\u5efa|\u5199\u5165|\u751f\u6210|\u5bfc\u51fa|\u4fdd\u5b58|create|write|generate|export|save/i)) {
     return buildArtifactWorkContract();
@@ -1804,12 +1886,269 @@ function hasMeaningfulArguments(record: ToolExecutionRecord): boolean {
   });
 }
 
+type RequestedAuthoringApplication = 'wps' | 'word' | 'excel' | 'powerpoint' | 'microsoft_office';
+
+const CURRENT_DOCUMENT_READER_RE = /^(?:read_file|extract_document_text|read_pdf|read_docx|read_xlsx)$/i;
+const DOCUMENT_TARGET_EXTENSION_RE = /\.(?:pptx?|docx?|xlsx?|pdf|rtf|txt|md|csv|json|wps|et|dps)$/i;
+const FAILED_DOCUMENT_READ_STATUS_RE = /^(?:failed|error|blocked|denied|forbidden|timeout|timed_out|cancelled|canceled|not_found|not_ready|partial|pending|queued|unverified|unknown)$/i;
+
+function requestedAuthoringApplication(taskText: string): RequestedAuthoringApplication | null {
+  const primary = compact(extractPrimaryTaskText(taskText));
+  if (/\bWPS(?:\s+Office)?\b/iu.test(primary)) return 'wps';
+  if (/\b(?:Microsoft\s+)?PowerPoint\b/iu.test(primary)) return 'powerpoint';
+  if (/\b(?:Microsoft\s+)?Excel\b/iu.test(primary)) return 'excel';
+  if (/\b(?:Microsoft\s+)?Word\b/iu.test(primary)) return 'word';
+  if (/\bMicrosoft\s+Office\b/iu.test(primary)) return 'microsoft_office';
+  return null;
+}
+
+function processMatchesAuthoringApplication(
+  processName: string,
+  requested: RequestedAuthoringApplication,
+): boolean {
+  const executable = processName.trim().split(/[\\/]/).pop()?.toLowerCase() || '';
+  if (!executable) return false;
+  if (requested === 'wps') return /^(?:wps|wpp|et|wpsoffice)(?:\.exe)?$/i.test(executable);
+  if (requested === 'word') return /^(?:winword)(?:\.exe)?$/i.test(executable);
+  if (requested === 'excel') return /^(?:excel)(?:\.exe)?$/i.test(executable);
+  if (requested === 'powerpoint') return /^(?:powerpnt)(?:\.exe)?$/i.test(executable);
+  return /^(?:winword|excel|powerpnt|msoffice|office)(?:\.exe)?$/i.test(executable);
+}
+
+function labelMatchesAuthoringApplication(
+  label: string,
+  requested: RequestedAuthoringApplication,
+): boolean {
+  const value = compact(label).toLowerCase();
+  if (!value) return false;
+  // i18n-allow: Reviewed WPS product aliases in observed native-window evidence; not user-visible copy.
+  if (requested === 'wps') return /(?:\bwps(?:\s+office|\s+writer)?\b|金山(?:文字|表格|演示|wps))/iu.test(value);
+  if (requested === 'word') return /\b(?:microsoft\s+)?word\b/iu.test(value);
+  if (requested === 'excel') return /\b(?:microsoft\s+)?excel\b/iu.test(value);
+  if (requested === 'powerpoint') return /\b(?:microsoft\s+)?powerpoint\b/iu.test(value);
+  return /\b(?:microsoft\s+office|word|excel|powerpoint)\b/iu.test(value);
+}
+
+function recordMatchesRequestedAuthoringWindow(
+  record: ToolExecutionRecord,
+  taskText: string,
+): boolean {
+  if (
+    !/^(?:desktop_active_window|get_active_window_info)$/i.test(record.name)
+    || record.terminalVerification?.status !== 'verified'
+    || hasFailedDesktopReceipt(record)
+  ) return false;
+  const requested = requestedAuthoringApplication(taskText);
+  if (!requested) return false;
+  const payload = parseRecordJson(record);
+  if (!payload) return false;
+  const processName = compact(
+    payload.processName
+    || payload.process_name
+    || payload.executable
+    || payload.process?.name,
+  );
+  // A concrete foreground process is stronger than a document/window title.
+  // If it names another application, a title containing "WPS" cannot override
+  // that mismatch (for example, a browser tab about WPS).
+  if (processName) return processMatchesAuthoringApplication(processName, requested);
+  const application = compact(
+    payload.application
+    || payload.applicationName
+    || payload.appName
+    || payload.app,
+  );
+  if (application) return labelMatchesAuthoringApplication(application, requested);
+  return labelMatchesAuthoringApplication(
+    payload.windowTitle || payload.title || '',
+    requested,
+  );
+}
+
+function verifiedObservedDocumentPath(record: ToolExecutionRecord, taskText: string): string {
+  if (!recordMatchesRequestedAuthoringWindow(record, taskText)) return '';
+  const payload = parseRecordJson(record);
+  const currentDocument = payload?.currentDocument
+    && typeof payload.currentDocument === 'object'
+    && !Array.isArray(payload.currentDocument)
+    ? payload.currentDocument as Record<string, any>
+    : {};
+  const pathStatus = compact(
+    currentDocument.pathStatus
+    || currentDocument.path_status
+    || payload?.documentPathStatus
+    || payload?.document_path_status,
+  );
+  if (/^(?:unknown|unresolved|missing|not_found|unavailable|null|none)$/i.test(pathStatus)) return '';
+  const candidate = compact(currentDocument.path || payload?.documentPath);
+  return DOCUMENT_TARGET_EXTENSION_RE.test(candidate) ? candidate : '';
+}
+
+function sameExactDocumentTarget(left: string, right: string): boolean {
+  const normalize = (value: string) => value
+    .normalize('NFKC')
+    .replace(/^['"“”‘’]+|['"“”‘’]+$/gu, '')
+    .replace(/\\/gu, '/')
+    .replace(/\/{2,}/gu, '/')
+    .trim();
+  const normalizedLeft = normalize(left);
+  const normalizedRight = normalize(right);
+  if (!normalizedLeft || !normalizedRight) return false;
+  const windowsIdentity = /^(?:[a-z]:\/|\/\/)/i.test(normalizedLeft)
+    || /^(?:[a-z]:\/|\/\/)/i.test(normalizedRight);
+  return windowsIdentity
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
+function exactDocumentReadTarget(record: ToolExecutionRecord): string {
+  const args = record.arguments || {};
+  const target = compact(
+    args.path
+    || args.filePath
+    || args.filepath
+    || args.documentPath
+    || args.documentpath
+    || args.targetPath
+    || args.targetpath
+    || args.target,
+  );
+  if (
+    !target
+    || /[\u0000-\u001f]/u.test(target)
+    // i18n-allow: Reviewed multilingual placeholder-target recognition; not user-visible copy.
+    || /^(?:none|null|undefined|unknown|n\/a|current|active|file|document|current\s+(?:file|document)|active\s+(?:file|document)|当前(?:文件|文档)|活动(?:文件|文档))$/iu.test(target)
+  ) return '';
+  const withoutQuery = target.split(/[?#]/, 1)[0].replace(/["'“”‘’]+$/u, '');
+  return DOCUMENT_TARGET_EXTENSION_RE.test(withoutQuery) ? target : '';
+}
+
+function hasActualDocumentReadContent(record: ToolExecutionRecord): boolean {
+  const rawResult = String(record.result || '').trim();
+  if (!rawResult) return false;
+  // The durable receipt may carry byte-count/digest metadata alongside the
+  // actual semantic result. Inspect the result itself here: generic
+  // parseRecordJson intentionally prefers receipt metadata, which would hide
+  // a valid read_file text result and make the completion ledger disagree
+  // with the user-visible tool loop.
+  let payload: Record<string, any> | null = null;
+  try {
+    const parsed = JSON.parse(rawResult);
+    payload = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, any>
+      : null;
+  } catch {
+    payload = null;
+  }
+  if (payload) {
+    const verification = payload.verification && typeof payload.verification === 'object'
+      ? payload.verification as Record<string, any>
+      : {};
+    const status = compact(
+      payload.status
+      || payload.verificationStatus
+      || verification.status,
+    );
+    if (
+      payload.ok === false
+      || payload.success === false
+      || payload.failed === true
+      || payload.completed === false
+      || payload.verified === false
+      || FAILED_DOCUMENT_READ_STATUS_RE.test(status)
+      || compact(payload.error || verification.error)
+    ) return false;
+    const structuredContent = [
+      payload.content,
+      payload.text,
+      payload.excerpt,
+      payload.bodyText,
+      payload.data,
+    ];
+    if (structuredContent.some(value => (
+      typeof value === 'string'
+        ? value.trim().length > 0
+        : Array.isArray(value)
+          ? value.length > 0
+          : Boolean(value && typeof value === 'object' && Object.keys(value).length > 0)
+    ))) return true;
+    // A JSON object returned by a document reader is a receipt, not document
+    // content, unless it carries one of the explicit content fields above.
+    return false;
+  }
+  if (/^(?:error|failed|blocked|not found|permission denied|timed out)(?:\b|:)/iu.test(rawResult)) return false;
+  if (record.name === 'read_pdf') {
+    const withoutMetadata = rawResult
+      .replace(/^Pages:\s*\d+\s*$/gimu, '')
+      .replace(/^Info:\s*\{[^\r\n]*\}\s*$/gimu, '')
+      .trim();
+    return withoutMetadata.length > 0;
+  }
+  return true;
+}
+
+function isSuccessfulExactDocumentRead(record: ToolExecutionRecord): boolean {
+  return CURRENT_DOCUMENT_READER_RE.test(record.name)
+    && !record.error
+    && record.terminalVerification?.status !== 'failed'
+    && Boolean(exactDocumentReadTarget(record))
+    && hasActualDocumentReadContent(record);
+}
+
+function requestsExactReadOnlyArtifactInspection(taskText: string): boolean {
+  const primary = compact(extractPrimaryTaskText(taskText));
+  if (!primary) return false;
+  // Keep this branch deliberately narrower than generic artifact work. A
+  // create/write/edit request may inspect the source first, but that read is
+  // preparation rather than completion of the requested mutation.
+  const wantsSemanticRead = /(?:\u8bfb\u53d6|\u9605\u8bfb|\u67e5\u770b|\u68c0\u67e5|\u68c0\u89c6|\u5206\u6790|\u603b\u7ed3|\u5ba1\u9605|\u5185\u5bb9|\u91cc\u9762|\u6587\u4ef6\u4e2d)|\b(?:read|inspect|examine|analy[sz]e|review|summari[sz]e|contents?|inside|marker)\b/iu.test(primary);
+  if (!wantsSemanticRead) return false;
+  const hasFileSubject = /(?:\u6587\u4ef6|\u6587\u6863|\u6587\u672c|\u8def\u5f84)|\b(?:file|document|filepath|path)\b|\.(?:txt|md|csv|json|docx?|xlsx?|pptx?|pdf|rtf)\b/iu.test(primary);
+  if (!hasFileSubject) return false;
+  const wantsMutation = /(?:\u521b\u5efa|\u65b0\u5efa|\u5199\u5165|\u7f16\u8f91|\u4fee\u6539|\u66f4\u65b0|\u8ffd\u52a0|\u66ff\u6362|\u5220\u9664|\u91cd\u547d\u540d|\u79fb\u52a8|\u590d\u5236|\u4fdd\u5b58|\u5bfc\u51fa|\u751f\u6210|\u8986\u76d6)|\b(?:creat(?:e|es|ed|ing)|writ(?:e|es|ing|ten)|edit(?:s|ed|ing)?|modif(?:y|ies|ied|ying)|updat(?:e|es|ed|ing)|append(?:s|ed|ing)?|replac(?:e|es|ed|ing)|delet(?:e|es|ed|ing)|remov(?:e|es|ed|ing)|renam(?:e|es|ed|ing)|mov(?:e|es|ed|ing)|copy|copies|copied|copying|sav(?:e|es|ed|ing)|export(?:s|ed|ing)?|generat(?:e|es|ed|ing)|overwrit(?:e|es|ing|ten))\b/iu.test(primary);
+  return !wantsMutation;
+}
+
+function taskTextAnchorsExactDocumentTarget(taskText: string, target: string): boolean {
+  const exactTarget = compact(target).replace(/^['"`\u201c\u201d\u2018\u2019]+|['"`\u201c\u201d\u2018\u2019]+$/gu, '');
+  // A basename, glob, search directory, or model-selected path is not an
+  // accepted source anchor. The user must name one complete absolute target.
+  const windowsTarget = /^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+[\\/])/u.test(exactTarget);
+  const posixTarget = /^\/(?!\/)/u.test(exactTarget);
+  if (!windowsTarget && !posixTarget) return false;
+  const normalize = (value: string) => value
+    .normalize('NFKC')
+    .replace(/\\/gu, '/')
+    .replace(/\/{2,}/gu, '/')
+    .trim();
+  const normalizedTarget = normalize(exactTarget);
+  const normalizedTask = normalize(extractPrimaryTaskText(taskText));
+  return windowsTarget
+    ? normalizedTask.toLowerCase().includes(normalizedTarget.toLowerCase())
+    : normalizedTask.includes(normalizedTarget);
+}
+
+function hasVerifiedExactReadOnlyArtifactEvidence(
+  records: ToolExecutionRecord[],
+  taskText: string,
+): boolean {
+  if (!requestsExactReadOnlyArtifactInspection(taskText)) return false;
+  return records.some(record => {
+    if (
+      record.name !== 'read_file'
+      || record.terminalVerification?.status !== 'verified'
+      || !isSuccessfulExactDocumentRead(record)
+    ) return false;
+    return taskTextAnchorsExactDocumentTarget(taskText, exactDocumentReadTarget(record));
+  });
+}
+
 function isDesktopAppInventoryRequest(text: string): boolean {
   return /\b(?:inspect|check|list|show|find|detect|inventory)\b.{0,64}\b(?:installed|launchable|available|local|app|application|software|program)\b|(?:\u68c0\u67e5|\u67e5\u770b|\u5217\u51fa|\u8bc6\u522b|\u68c0\u6d4b|\u76d8\u70b9|\u67e5\u627e).{0,32}(?:\u5df2\u5b89\u88c5|\u53ef\u542f\u52a8|\u5e94\u7528|\u8f6f\u4ef6|\u7a0b\u5e8f)/iu.test(text);
 }
 
 export function isRunningSoftwareInspectionRequest(text: string): boolean {
-  return /(?:\u540e\u53f0|\u6b63\u5728\u8fd0\u884c|\u5f00\u7740|\u8fd0\u884c\u4e2d).{0,24}(?:\u8f6f\u4ef6|\u5e94\u7528|\u7a0b\u5e8f|\u8fdb\u7a0b)|(?:\u8f6f\u4ef6|\u5e94\u7528|\u7a0b\u5e8f|\u8fdb\u7a0b).{0,24}(?:\u6b63\u5728\u8fd0\u884c|\u5f00\u7740|\u6709\u591a\u5c11|\u51e0\u4e2a)|\b(?:running|open|background)\b.{0,24}\b(?:apps?|applications?|software|processes?)\b/iu.test(text);
+  return requiresRunningProcessObservation(text);
 }
 
 function hasVerifiedGenericDesktopMutation(records: ToolExecutionRecord[]): boolean {
@@ -2057,6 +2396,7 @@ export function hasCoreActionEvidence(
   contract: LumiActionContract,
   records: ToolExecutionRecord[] = [],
   taskText = '',
+  taskCapsule?: TaskCapsuleV1 | null,
 ): boolean {
   if (!contract.applies) return true;
   const successful = expandSuccessfulRecords(records);
@@ -2133,6 +2473,9 @@ export function hasCoreActionEvidence(
       || hasVerifiedManifestCapabilityEvidence(contract, successful);
   }
   if (contract.kind === 'artifact_work') {
+    if (requestsExactReadOnlyArtifactInspection(taskText)) {
+      return hasVerifiedExactReadOnlyArtifactEvidence(successful, taskText);
+    }
     if (!hasRequestedArtifactPostWriteReadback(records, taskText)) return false;
     return successful.some(record => /write_file|create_|desktop_path_info|work_product_verify/i.test(record.name))
       || hasVerifiedManifestCapabilityEvidence(contract, successful);
@@ -2234,6 +2577,47 @@ export function hasCoreActionEvidence(
     // the whole durable task.
     if (requiresCurrentAppUiMutation(taskText)) {
       return hasCurrentAppUiMutationEvidence(records, taskText);
+    }
+    if (requiresCurrentAuthoringDocumentInspection(taskText)) {
+      const observedAuthoringWindows = successful.filter(record => (
+        recordMatchesRequestedAuthoringWindow(record, taskText)
+      ));
+      const observedExactPaths = observedAuthoringWindows
+        .map(record => verifiedObservedDocumentPath(record, taskText))
+        .filter(Boolean);
+      const capsuleCurrentTarget = compact(taskCapsule?.target?.path);
+      const capsuleRejectedTargets = (taskCapsule?.rejectedTargets || [])
+        .map(item => compact(item?.identity))
+        .filter(Boolean);
+      const capsuleHasUsableCurrentTarget = Boolean(
+        taskCapsule
+        && taskCapsule.schemaVersion === 1
+        && taskCapsule.target?.status !== 'rejected'
+        && capsuleCurrentTarget
+        && DOCUMENT_TARGET_EXTENSION_RE.test(capsuleCurrentTarget),
+      );
+      const capsuleCurrentTargetWasRejected = capsuleHasUsableCurrentTarget
+        && capsuleRejectedTargets.some(rejected => (
+          sameExactDocumentTarget(rejected, capsuleCurrentTarget)
+        ));
+      const readExactDocument = !capsuleCurrentTargetWasRejected && successful.some(record => {
+        if (!isSuccessfulExactDocumentRead(record)) return false;
+        const readTarget = exactDocumentReadTarget(record);
+        if (taskCapsule) {
+          // The capsule is server-owned durable task state. Once present, its
+          // exact current path is authoritative: neither a same-basename file
+          // nor a receipt for a target rejected by a later user correction may
+          // satisfy completion. A missing/non-path capsule target fails closed.
+          if (!capsuleHasUsableCurrentTarget) return false;
+          if (capsuleRejectedTargets.some(rejected => (
+            sameExactDocumentTarget(rejected, readTarget)
+          ))) return false;
+          if (!sameExactDocumentTarget(capsuleCurrentTarget, readTarget)) return false;
+        }
+        return observedExactPaths.length === 0
+          || observedExactPaths.some(path => sameExactDocumentTarget(path, readTarget));
+      });
+      return observedAuthoringWindows.length > 0 && readExactDocument;
     }
     const desktopLaunchTarget = extractDesktopLaunchTarget(taskText);
     const needsActiveWindow = requiresActiveWindowObservation(taskText);

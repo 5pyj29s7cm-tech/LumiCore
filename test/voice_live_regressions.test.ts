@@ -11,7 +11,7 @@ import { resolveWeChatRecipientFromHistory } from '../server/socket/voice_messag
 import { reservePriorityVoiceHandoff } from '../server/socket/voice';
 
 describe('live voice regression cases', () => {
-  it('preserves queued work and reserves the lane for confirmation or correction handoff', () => {
+  it('preserves queued work and reserves the lane for confirmation or correction handoff', async () => {
     const pipelineAbortController = new AbortController();
     const queued = [
       { text: 'next task one', queuedAt: '2026-07-26T00:00:00.000Z', voiceAuthorized: true },
@@ -44,7 +44,7 @@ describe('live voice regression cases', () => {
       ttsDecayTimers: [],
     };
 
-    reservePriorityVoiceHandoff(session as any, false);
+    expect(await reservePriorityVoiceHandoff(session as any, false)).toBe(true);
 
     expect(session.inputQueue).toBe(queued);
     expect(session.inputQueue.map(item => item.text)).toEqual(['next task one', 'next task two']);
@@ -77,18 +77,16 @@ describe('live voice regression cases', () => {
     expect(trace.signals.clientActionOnlyIntent).toBe(false);
   });
 
-  it('bridges a short app-page continuation to the real previous receipt', () => {
-    const bridge = buildRecentActionContinuationBridge('切换到联系人页面', [
+  it('does not let unbound history receipts override explicit client-page navigation', () => {
+    const history = [
       { role: 'user', message: '打开微信' },
       {
         role: 'assistant',
         message: '已打开微信。',
         toolCalls: [{ name: 'desktop_open', arguments: { target: '微信' }, result: 'Opened WeChat' }],
       },
-    ]);
-    expect(bridge).toContain('Recent action continuation context');
-    expect(bridge).toContain('desktop_open');
-    expect(bridge).toContain('打开微信');
+    ];
+    expect(buildRecentActionContinuationBridge('切换到联系人页面', history)).toBe('');
   });
 
   it('focuses an existing app without treating the rest of the sentence as its name', async () => {

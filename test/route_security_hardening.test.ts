@@ -1,6 +1,10 @@
 import { promises as dns } from 'node:dns';
 import jwt from 'jsonwebtoken';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  DESKTOP_SESSION_HEADER,
+  issueDesktopSessionProof,
+} from '../server/config/desktop_bootstrap';
 import { deviceRegistry } from '../server/devices';
 import { getMCPConfig, mcpManager } from '../server/mcp';
 import { connectToOrg, isPublicCompanyAddress, validateCompanyEndpoint } from '../server/org/branch';
@@ -16,6 +20,28 @@ const userToken = jwt.sign({ uid: userId, username: userId, role: 'user' }, JWT_
 const otherUserToken = jwt.sign({ uid: otherUserId, username: otherUserId, role: 'user' }, JWT_SECRET);
 const adminToken = jwt.sign({ uid: 'route-security-admin', username: 'admin', role: 'admin' }, JWT_SECRET);
 
+function nativeIdentity(pid: number) {
+  const startedAtUnixMs = Math.floor((Date.now() - 30_000) / 1_000) * 1_000;
+  return {
+    schemaVersion: 1 as const,
+    clientKind: 'tauri' as const,
+    pid,
+    startedAtUnixMs,
+    startedAt: new Date(startedAtUnixMs).toISOString(),
+    executablePath: process.platform === 'win32' ? 'C:\\LumiCore\\lumi-core.exe' : '/opt/LumiCore/lumi-core',
+    executableSha256: 'd'.repeat(64),
+    binaryHashUnavailable: false,
+    buildId: 'b'.repeat(40),
+    buildIdSemantics: 'baseline_commit' as const,
+    sourceFingerprint: 'e'.repeat(64),
+    sourceDirty: false,
+    appVersion: '3.1.0',
+    trustLevel: 'proof_bound_local_claim' as const,
+    osAttested: false as const,
+    webviewProfileTrustLevel: 'unbound' as const,
+  };
+}
+
 function auth(token: string, json = false) {
   return {
     ...(json ? { 'Content-Type': 'application/json' } : {}),
@@ -29,6 +55,7 @@ describe('route security hardening', () => {
   let originalMcpConfig: ReturnType<typeof getMCPConfig> = {};
   let ownDeviceId = '';
   let otherDeviceId = '';
+  let adminDesktopSessionProof = '';
 
   beforeAll(async () => {
     const app = await makeApp();
@@ -44,6 +71,7 @@ describe('route security hardening', () => {
       deviceFingerprint: 'route-security-user-device',
       domain: 'personal',
       orgId: '',
+      nativeClientIdentity: nativeIdentity(51_001),
     }).id;
     otherDeviceId = deviceRegistry.register(otherUserId, 'route-security-other-socket', {
       name: 'Other desktop',
@@ -52,6 +80,25 @@ describe('route security hardening', () => {
       orgId: '',
     }).id;
     deviceRegistry.registerMcpDevice('unscoped-remote', 'mcp_remote', { audio: true });
+    const adminIdentity = nativeIdentity(51_101);
+    deviceRegistry.register('route-security-admin', 'route-security-admin-socket', {
+      name: 'Admin desktop',
+      deviceFingerprint: 'route-security-admin-device',
+      domain: 'personal',
+      orgId: '',
+      nativeClientIdentity: adminIdentity,
+    });
+    const {
+      startedAt: _startedAt,
+      trustLevel: _trustLevel,
+      osAttested: _osAttested,
+      webviewProfileTrustLevel: _webviewProfileTrustLevel,
+      ...adminIdentityClaim
+    } = adminIdentity;
+    adminDesktopSessionProof = issueDesktopSessionProof(
+      'route-security-admin',
+      adminIdentityClaim,
+    ).proof;
 
     originalMcpConfig = getMCPConfig();
     mcpManager.saveConfig({
@@ -138,6 +185,8 @@ describe('route security hardening', () => {
     expect(list.status).toBe(200);
     const listBody: any = await list.json();
     expect(listBody.devices.map((device: any) => device.id)).toEqual([ownDeviceId]);
+    expect(listBody.devices[0]).not.toHaveProperty('nativeClientIdentity');
+    expect(JSON.stringify(listBody.devices[0])).not.toContain('executablePath');
     expect(listBody.devices.some((device: any) => device.id === otherDeviceId || device.id.startsWith('mcp_'))).toBe(false);
 
     const crossUserPair = await fetch(`${baseUrl}/api/devices/pair`, {
@@ -163,6 +212,49 @@ describe('route security hardening', () => {
       headers: auth(userToken),
     });
     expect(unpaired.status).toBe(200);
+  });
+
+  it('keeps native process evidence behind local admin and desktop-session proof', async () => {
+    const ordinary = await fetch(`${baseUrl}/api/devices/native-client-evidence`, {
+      headers: auth(userToken),
+    });
+    expect(ordinary.status).toBe(403);
+
+    const adminWithoutProof = await fetch(`${baseUrl}/api/devices/native-client-evidence`, {
+      headers: auth(adminToken),
+    });
+    expect(adminWithoutProof.status).toBe(403);
+
+    const adminWithInvalidProof = await fetch(`${baseUrl}/api/devices/native-client-evidence`, {
+      headers: {
+        ...auth(adminToken),
+        [DESKTOP_SESSION_HEADER]: 'invalid-desktop-proof',
+      },
+    });
+    expect(adminWithInvalidProof.status).toBe(403);
+
+    const accepted = await fetch(`${baseUrl}/api/devices/native-client-evidence`, {
+      headers: {
+        ...auth(adminToken),
+        [DESKTOP_SESSION_HEADER]: adminDesktopSessionProof,
+      },
+    });
+    expect(accepted.status).toBe(200);
+    expect(accepted.headers.get('cache-control')).toBe('no-store');
+    const body: any = await accepted.json();
+    expect(body.devices).toHaveLength(1);
+    expect(body.devices[0]).toMatchObject({
+      type: 'desktop',
+      status: 'online',
+      nativeClientIdentitySha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      nativeClientIdentity: {
+        clientKind: 'tauri',
+        pid: 51_101,
+        buildId: 'b'.repeat(40),
+      },
+    });
+    expect(body.devices[0]).not.toHaveProperty('userId');
+    expect(body.devices[0]).not.toHaveProperty('ipAddress');
   });
 
   it('protects founder/admin configuration and authenticates bounded feedback', async () => {

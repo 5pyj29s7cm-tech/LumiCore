@@ -719,6 +719,27 @@ describe('tool router', () => {
     ]));
   });
 
+  it('keeps runtime status on its ledger tool when process lists are explicitly rejected as a fallback', () => {
+    const route = routeToolsForTurn(
+      '[LUMI_REGRESSION:S1] 后台任务状态请只用 runtime_work_status 核对，不能用进程列表、数据库或文字猜测代替。',
+      [...DECLARATIONS, declaration('runtime_work_status')],
+    );
+
+    expect(route.categories).toEqual(['task_control']);
+    expect(route.hardAllowlist).toBe(true);
+    expect(route.toolNames).toEqual(['runtime_work_status']);
+    expect(route.toolNames).not.toContain('desktop_running_processes');
+  });
+
+  it('still routes a genuine live process and application query to the process tool', () => {
+    const route = routeToolsForTurn(
+      '列出当前正在运行的进程和应用。',
+      DECLARATIONS,
+    );
+
+    expect(route.toolNames).toContain('desktop_running_processes');
+  });
+
   it('filters unavailable MCP tools when a health gate is provided', () => {
     const route = routeToolsForTurn(
       'Lumi 帮我给 600519 做一个交易计划，算仓位和止损，再记录到模拟盘',
@@ -951,6 +972,91 @@ describe('tool router', () => {
       'desktop_ui_type',
     ]));
     expect(route.toolNames).not.toContain('work_takeover_task_continue');
+  });
+
+  it('anchors a current WPS active-window document before bounded discovery and reading', () => {
+    const route = routeToolsForTurn(
+      '[LUMI_REGRESSION:S3] 请分析当前 WPS 活动窗口里的演示文稿。先通过活动窗口建立目标锚点；当前文档路径未知，未确认文件名前不要读取。',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).toEqual(['current_document_inspection']);
+    expect(route.hardAllowlist).toBe(true);
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'desktop_active_window',
+      'desktop_list_files',
+      'desktop_path_info',
+      'read_file',
+    ]));
+    expect(route.toolNames).not.toContain('write_file');
+    expect(route.toolNames).not.toContain('desktop_running_processes');
+    expect(route.toolNames).not.toContain('desktop_capture_screen');
+    expect(route.toolNames).not.toContain('desktop_run_command');
+
+    const continuationRoute = routeToolsForTurn(
+      '准确文件名是 WPS-Quarterly-Review-Final.pptx，在桌面。请继续分析。',
+      DECLARATIONS,
+      {
+        actionTaskState: {
+          version: 2,
+          taskId: 'task-wps-analysis',
+          status: 'blocked',
+          revision: 4,
+          goal: '请分析当前 WPS 活动窗口里的演示文稿。',
+          latestInstruction: '准确文件名是 WPS-Quarterly-Review-Final.pptx，在桌面。请继续分析。',
+          appTarget: 'WPS',
+          sourcePaths: [],
+          latestBlocker: '',
+          unfinished: true,
+          evidenceTools: ['desktop_active_window'],
+          assistantState: '',
+          toolSummaries: [],
+          updatedAt: '2026-08-27T00:00:00.000Z',
+          taskCapsule: {
+            schemaVersion: 1,
+            taskId: 'task-wps-analysis',
+            revision: 4,
+            status: 'blocked',
+            unfinished: true,
+            goal: '请分析当前 WPS 活动窗口里的演示文稿。',
+            currentInstruction: '准确文件名是 WPS-Quarterly-Review-Final.pptx，在桌面。请继续分析。',
+            target: {
+              label: 'WPS-Quarterly-Review-Final.pptx',
+              application: 'WPS',
+              window: 'WPS-Quarterly-Review-Draft.pptx - WPS Office',
+              object: 'WPS-Quarterly-Review-Final.pptx',
+              path: '',
+              location: 'desktop',
+              status: 'candidate',
+              source: 'user_correction',
+            },
+            paths: [],
+            allowedSearchRoots: ['~/Desktop', '~/Documents', '~/Downloads'],
+            analysisReady: false,
+            nextAction: 'search_bounded_roots',
+            latestCorrection: null,
+            completedSteps: [],
+            blocker: '',
+            toolSummaries: [],
+            rejectedTargets: [{
+              identity: 'WPS-Quarterly-Review-Draft.pptx',
+              reason: 'The user explicitly rejected the previous target.',
+              observedAt: '2026-08-27T00:00:00.000Z',
+            }],
+            doNotRetry: [],
+            updatedAt: '2026-08-27T00:00:00.000Z',
+          },
+        },
+      },
+    );
+    expect(continuationRoute.categories).toEqual(['current_document_inspection']);
+    expect(continuationRoute.toolNames).toEqual(expect.arrayContaining([
+      'desktop_list_files',
+      'read_file',
+    ]));
+    expect(continuationRoute.hardAllowlist).toBe(true);
+    expect(continuationRoute.toolNames).not.toContain('desktop_running_processes');
+    expect(continuationRoute.toolNames).not.toContain('desktop_capture_screen');
   });
 
   it('treats regression-test wording as WPS text payload instead of code or capability work', () => {

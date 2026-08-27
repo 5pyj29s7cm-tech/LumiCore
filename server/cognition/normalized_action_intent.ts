@@ -74,6 +74,13 @@ const WALLPAPER_STATE_MUTATION_RE = /^(?:请|麻烦你)?\s*(?:打开|开启|启�
 // i18n-allow: Multilingual adjacent-reply restatement recognition; not user-visible copy.
 const IMMEDIATE_ASSISTANT_RESTATEMENT_RE = /^(?:(?:sorry|抱歉|不好意思)[,，。！!\s]*)?(?:(?:(?:你)?(?:刚刚|刚才)(?:你)?|你)[^，,。！？!?\n]{0,24}(?:又)?(?:卡住|卡了|断了|没说完|没听清)(?:了)?[,，。！？!?\s]*)?(?:请)?(?:(?:重新说|重说)(?:一下)?|再说(?:一遍|一次|一下)|重复(?:一遍|一次))[。！？.!?\s]*$|^(?:(?:sorry)[,!.\s]*)?(?:(?:you|that)[^,.!?\n]{0,24}(?:cut\s+out|got\s+stuck|stopped)[,.!?\s]*)?(?:please\s+)?(?:say(?:\s+(?:that|it))?\s+again|repeat(?:\s+(?:that|it))?(?:\s+again)?)[.!?\s]*$/iu;
 
+// Bare “怎么说” is the established voice-friendly request to hear Lumi's
+// preceding reply again. Keep this exact so content questions such as
+// “这个词/英文怎么说” remain ordinary conversation.
+// i18n-allow: Multilingual adjacent-reply restatement recognition; not user-visible copy.
+const BARE_ASSISTANT_RESTATEMENT_RE =
+  /^(?:(?:你)?(?:刚才|刚刚)\s*)?(?:怎么说|怎麼說)(?:的)?[啊呀吧嘛呢，,。！？?!\s]*$/u;
+
 function escapePattern(value: string): string {
   return value.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/[\s_-]+/g, '[\\s_-]*');
 }
@@ -115,7 +122,13 @@ function currentTurnText(value: string): string {
 
 export function isImmediateAssistantRestatementRequest(value: string): boolean {
   const text = currentTurnText(value).replace(/\s+/gu, ' ').trim().slice(0, 180);
-  return Boolean(text && IMMEDIATE_ASSISTANT_RESTATEMENT_RE.test(text));
+  return Boolean(
+    text
+    && (
+      IMMEDIATE_ASSISTANT_RESTATEMENT_RE.test(text)
+      || BARE_ASSISTANT_RESTATEMENT_RE.test(text)
+    ),
+  );
 }
 
 function trimSlot(value: string): string {
@@ -124,9 +137,94 @@ function trimSlot(value: string): string {
     .trim();
 }
 
+const ARTIFACT_FILE_EXTENSION_RE = /\.(?:txt|md|csv|json|docx?|xlsx?|pptx?|pdf)\b/iu;
+
+function explicitArtifactPath(text: string): string {
+  const absolute = text.match(
+    /([A-Za-z]:[\\/][^\r\n"'<>|?*]+?\.(?:txt|md|csv|json|docx?|xlsx?|pptx?|pdf))(?=$|[\s.,，。;；:：!！?？)）\]}'"])/iu,
+  )?.[1];
+  if (absolute) return trimSlot(absolute);
+  return trimSlot(
+    text.match(/([^\s\\/:*?"<>|\r\n]{1,160}\.(?:txt|md|csv|json|docx?|xlsx?|pptx?|pdf))\b/iu)?.[1] || '',
+  );
+}
+
+function hasAffirmativeArtifactCreationAction(text: string): boolean {
+  // Remove only clauses that negate the file mutation itself. A boundary such
+  // as "Do not report task status" must not erase a preceding affirmative
+  // write instruction.
+  // i18n-allow: Reviewed Chinese artifact-action input recognition; not user-visible copy.
+  const positiveChinese = text
+    .replace(
+      // i18n-allow: Reviewed Chinese artifact-action input recognition; not user-visible copy.
+      /(?:不要|别|无需|不用|禁止|请勿|勿).{0,16}(?:创建|新建|生成|写入|保存)[^，,。！？!?；;\n]*/gu,
+      ' ',
+    )
+    // Status interrogatives mention the historical verb but do not authorize
+    // another write (for example, "是否写入后回读").
+    // i18n-allow: Reviewed Chinese artifact-status input recognition; not user-visible copy.
+    .replace(/(?:是否|有没有|有没|能否).{0,16}(?:已经)?(?:创建|新建|生成|写入|保存)[^，,。！？!?；;\n]*/gu, ' ')
+    // i18n-allow: Reviewed Chinese artifact-status input recognition; not user-visible copy.
+    .replace(/(?:创建|新建|生成|写入|保存)(?:了|过)?(?:吗|没有|没|了没)[^，,。！？!?；;\n]*/gu, ' ');
+  // i18n-allow: Reviewed Chinese artifact-action input recognition; not user-visible copy.
+  if (/(?:创建|新建|生成|写入)/u.test(positiveChinese)) return true;
+
+  // i18n-allow: English artifact-creation input recognition; not user-visible copy.
+  const clauseImperative =
+    /(?:^|[\[\]{}()!?.,;:\n]\s*)(?:(?:please|now|then|next|you\s+must|you\s+should|must|should)\s+)*(?:create|write|generate|save)\b/iu;
+  // "Start a separate task by creating <path>" is an action contract, not a
+  // request to launch an application named "a separate task".
+  const startByCreating =
+    /\b(?:start|begin)\b[^.!?;\n]{0,120}\bby\s+creat(?:e|ing)\b/iu;
+  const requiredWriteTool =
+    /\b(?:must|should|need\s+to|required\s+to)\s+(?:call|use)\s+write_file\b/iu;
+  return clauseImperative.test(text) || startByCreating.test(text) || requiredWriteTool.test(text);
+}
+
+function explicitArtifactCreationIntent(text: string): NormalizedActionIntent | null {
+  const target = explicitArtifactPath(text);
+  if (!target || !ARTIFACT_FILE_EXTENSION_RE.test(target) || !hasAffirmativeArtifactCreationAction(text)) {
+    return null;
+  }
+  return {
+    kind: 'desktop_operation',
+    operation: 'create',
+    subject: 'user',
+    target,
+    payload: text,
+    sideEffectClass: 'local_write',
+    relation: 'new',
+    confidence: 0.99,
+    rule: 'explicit-artifact-create',
+  };
+}
+
+function explicitLocalArtifactReadIntent(text: string): NormalizedActionIntent | null {
+  const target = explicitArtifactPath(text);
+  if (!target) return null;
+  const targetIndex = text.indexOf(target);
+  const actionPrefix = targetIndex >= 0 ? text.slice(0, targetIndex).trim() : '';
+  // This owns only an explicit fresh command. “继续分析” and a path supplied
+  // by itself remain eligible to fill the target slot of an unfinished task.
+  // i18n-allow: Multilingual local-artifact read recognition; not user-visible copy.
+  if (!/^(?:(?:请|麻烦你|现在|直接)\s*)*(?:分析|读取|查看|审查|检查|总结)(?:一下)?\s*$|^(?:(?:please|now|directly)\s+)*(?:analy[sz]e|read|inspect|review|check|summari[sz]e)(?:\s+the)?\s*$/iu.test(actionPrefix)) {
+    return null;
+  }
+  return {
+    kind: 'desktop_operation',
+    operation: 'read',
+    subject: 'user',
+    target,
+    payload: text,
+    sideEffectClass: 'none',
+    relation: 'new',
+    confidence: 0.98,
+    rule: 'explicit-local-artifact-read',
+  };
+}
+
 export function isExplicitArtifactCreationText(text: string): boolean {
-  return /(?:创建|新建|生成|写入)/u.test(text)
-    && /(?:[A-Za-z]:[\\/]|\.(?:txt|md|csv|json|docx?|xlsx?|pptx?|pdf)\b)/iu.test(text);
+  return Boolean(explicitArtifactCreationIntent(currentTurnText(String(text || ''))));
 }
 
 export function isExternalCommitConfirmationOnlyRequest(text: string): boolean {
@@ -220,7 +318,7 @@ const EN_MIXED_STATUS_EXECUTION_RE =
   /\bif\s+(?:(?:not|unfinished|incomplete)\b|(?:(?:it|this|that|the\s+task)\s+)?(?:is|was|has\s+been)?\s*(?:not|isn['\u2019]?t|wasn['\u2019]?t|hasn['\u2019]?t)\s+(?:done|complete|completed|finished|successful)\b)[^.!?;\n]{0,28}\b(?:continue|resume|retry|re-?try|execute|run|finish|complete|proceed)\b|[?;.!]\s*(?:(?:if\s+(?:not|unfinished|incomplete)|then|please|now)\s*[,;:]?\s*)*(?:continue|resume|retry|re-?try|execute|run|finish|complete|proceed)\b/iu;
 
 const RECENT_ACTION_RECEIPT_QUERY_RE =
-  /(?:\u4f60|lumi)?\s*(?:\u521a\u624d|\u521a\u521a|\u4e0a\u4e00\u8f6e|\u4e0a\u6b21).{0,48}(?:\u505a|\u6253\u5f00|\u6267\u884c|\u53d1\u9001|\u521b\u5efa|\u64cd\u4f5c)(?:\u4e86)?.{0,36}(?:\u4ec0\u4e48|\u54ea\u4e2a|\u54ea\u4e9b|\u6210\u529f|\u5b8c\u6210|\u8bc1\u636e|\u56de\u6267)|\bwhat\s+did\s+(?:you|lumi)\s+(?:just\s+)?(?:do|open|run|send|create)\b|\bdid\s+(?:you|lumi)\s+(?:just\s+)?(?:open|run|send|create).{0,40}\bsuccessfully\b|\bwhat\s+evidence\b.{0,48}\b(?:succeed|succeeded|success|complete|completed)\b/iu;
+  /(?:\u4f60|lumi)?\s*(?:\u521a\u624d|\u521a\u521a|\u4e0a\u4e00\u8f6e|\u4e0a\u6b21).{0,48}(?:\u505a|\u6253\u5f00|\u6267\u884c|\u53d1\u9001|\u521b\u5efa|\u64cd\u4f5c)(?:\u4e86)?.{0,36}(?:\u4ec0\u4e48|\u54ea\u4e2a|\u54ea\u4e9b|\u6210\u529f|\u5b8c\u6210|\u8bc1\u636e|\u56de\u6267)|\bwhat\s+did\s+(?:you|lumi)\s+(?:just\s+)?(?:do|open|run|send|create)\b|\bdid\s+(?:you|lumi)\s+(?:just\s+)?(?:open|run|send|create).{0,120}\bsuccessfully\b|\bwhat\s+evidence\b.{0,48}\b(?:succeed|succeeded|success|complete|completed)\b/iu;
 
 /**
  * A narrow, read-only query for the immediately preceding turn's persisted
@@ -286,11 +384,29 @@ export function hasMixedStatusExecutionIntent(value: string): boolean {
 }
 
 function statusQuery(text: string): NormalizedActionIntent | null {
+  // A concrete new write owns the turn even when a separate scope fence uses
+  // a status noun. Retrospective/status-only forms are excluded by the strict
+  // affirmative artifact-action recognizer.
+  if (explicitArtifactCreationIntent(text)) return null;
   if (hasMixedStatusExecutionIntent(text)) return null;
   if (WALLPAPER_STATE_MUTATION_RE.test(text)) return null;
   // Reporting the id/status after creating a specifically described new task
   // is part of that creation contract, not a query about an older task.
   if (persistentWorkTaskCreation(text)) return null;
+  // i18n-allow: Chinese task-status control recognition; not user-visible copy.
+  if (/^(?:你|lumi)?\s*(?:现在|当前)?\s*(?:在)?\s*(?:干嘛|干啥|做什么|搞什么|忙什么)[啊呀吧嘛呢，,。！？?!\s]*$/iu.test(text)) {
+    return {
+      kind: 'status_query',
+      operation: 'status',
+      subject: 'lumi',
+      target: 'recent_task',
+      payload: '',
+      sideEffectClass: 'none',
+      relation: 'status',
+      confidence: 0.99,
+      rule: 'active-task-status-control',
+    };
+  }
   const namedArtifact = text.match(/([^\s\\/:*?"<>|\r\n]{1,160}\.(?:txt|md|docx?|xlsx?|pptx?|pdf|csv))\b/iu)?.[1]?.trim();
   const asksNamedArtifactStatus = Boolean(
     namedArtifact
@@ -673,7 +789,9 @@ function persistentWorkTaskCreation(text: string): NormalizedActionIntent | null
 export function normalizeActionIntent(value: string): NormalizedActionIntent {
   const text = currentTurnText(value);
   if (!text) return { ...EMPTY_INTENT };
-  const explicitArtifactCreation = isExplicitArtifactCreationText(text);
+  const artifactCreation = explicitArtifactCreationIntent(text);
+  const artifactRead = explicitLocalArtifactReadIntent(text);
+  const explicitArtifactCreation = Boolean(artifactCreation);
 
   // Order is a safety invariant. Later action-shaped words cannot override a
   // correction, status query, client-native route, external-AI read, or
@@ -682,6 +800,8 @@ export function normalizeActionIntent(value: string): NormalizedActionIntent {
     correctionOrExplanation(text),
     statusQuery(text),
     persistentWorkTaskCreation(text),
+    artifactCreation,
+    artifactRead,
     explicitArtifactCreation ? null : clientNavigation(text),
     explicitArtifactCreation ? null : externalAiHistoryRead(text),
     explicitArtifactCreation ? null : inboundMessageRead(text),

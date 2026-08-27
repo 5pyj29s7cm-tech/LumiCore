@@ -77,6 +77,11 @@ export interface LLMConfig {
   noImplicitFailover?: boolean;
   /** Candidate was compiled by a trusted routing/orchestration policy. */
   authorizedRoutingCandidate?: boolean;
+  /**
+   * Server-internal schema names that a small local candidate must retain.
+   * This never changes executor authorization or the cloud candidate payload.
+   */
+  localRequiredToolNames?: string[];
 }
 
 export interface LLMResult {
@@ -330,6 +335,52 @@ function resolveModelVisibleToolNames(
   return visible;
 }
 
+function taskExplicitlyNamesTool(task: string, toolName: string): boolean {
+  const escaped = String(toolName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (!escaped) return false;
+  return new RegExp(`(?:^|[^A-Za-z0-9_])${escaped}(?=$|[^A-Za-z0-9_])`, 'i')
+    .test(String(task || ''));
+}
+
+/**
+ * Identify schemas a local 4096-token attempt may not discard. The already
+ * ordered declaration array remains authoritative: hard projections retain
+ * every declaration, while a dynamic route retains its semantic winner,
+ * explicitly requested/previously executed tools, and discovery.
+ */
+function resolveLocalRequiredToolNames(
+  context: ToolContext | undefined,
+  primaryTask: string,
+  declarations: Array<{ function: { name: string } }>,
+  records: ToolExecutionRecord[],
+): string[] {
+  const orderedNames = declarations
+    .map(declaration => String(declaration.function.name || '').trim())
+    .filter(Boolean);
+  if (orderedNames.length === 0) return [];
+  const declared = new Set(orderedNames);
+  const required = new Set<string>();
+  const projection = context?.modelToolProjection;
+
+  if (projection && projection.allowDynamicDiscovery !== true) {
+    for (const name of orderedNames) required.add(name);
+  } else {
+    required.add(orderedNames[0]);
+    for (const name of orderedNames) {
+      if (taskExplicitlyNamesTool(primaryTask, name)) required.add(name);
+    }
+    for (const record of records) {
+      const name = String(record?.name || '').trim();
+      if (declared.has(name)) required.add(name);
+    }
+    const discovery = String(
+      projection?.discoveryToolName || 'client_capability_manifest',
+    ).trim();
+    if (declared.has(discovery)) required.add(discovery);
+  }
+  return orderedNames.filter(name => required.has(name));
+}
+
 const UNTRUSTED_OUTPUT_TOOL_RE = /(?:^mcp_|web|browser|url_|fetch|search|read_file|read_files|list_directory|grep_files|extract_document|read_pdf|read_docx|ocr_|clipboard_read|ui_snapshot|capture_screen|email|message_intake|external|authority_research|company_lookup)/i;
 
 export function isUntrustedToolOutput(toolName: string): boolean {
@@ -439,9 +490,17 @@ export function formatToolRecordForModel(record: ToolExecutionRecord): string {
 export function buildConfirmedStepContinuationMessages(
   goal: string,
   record: ToolExecutionRecord,
+  acceptedSource?: {
+    messageId: string;
+    text: string;
+  },
 ): NormalizedMessage[] {
   const toolCallId = String(record.id || `confirmed_${Date.now().toString(36)}`);
+  const sourceMessageId = String(acceptedSource?.messageId || '').trim();
+  const sourceText = String(acceptedSource?.text || '').trim();
   return [
+    // The original task is runtime-owned continuation context. It must not be
+    // attributed to the newly accepted confirmation transcript row.
     { role: 'user', content: String(goal || '').trim() },
     {
       role: 'assistant',
@@ -458,6 +517,11 @@ export function buildConfirmedStepContinuationMessages(
       name: record.name,
       content: formatToolRecordForModel(record),
     },
+    ...(sourceMessageId && sourceText ? [{
+      role: 'user' as const,
+      content: sourceText,
+      sourceMessageId,
+    }] : []),
     {
       role: 'system',
       content: buildConfirmedStepContinuationNote(record),
@@ -1651,6 +1715,12 @@ async function runWithToolsInternal(
         ...config,
         signal: attempt.signal,
         attemptTimeouts: attempt.attemptTimeouts,
+        localRequiredToolNames: resolveLocalRequiredToolNames(
+          context,
+          primaryTask,
+          toolDeclarations,
+          executionLog,
+        ),
       };
       return attempt.onChunk
         ? makeLLMCallStreaming(
@@ -2006,6 +2076,10 @@ async function runWithToolsInternal(
           return { allowed: true, arguments: executionArguments };
         },
       });
+      if (response.routingReceiptId) {
+        record.modelRoutingReceiptId = response.routingReceiptId;
+        record.executionOrigin = 'model_selected';
+      }
       executionLog.push(record);
       await onToolCall?.(record);
 

@@ -5,6 +5,8 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::native_identity::{native_client_identity, NativeClientIdentity};
+
 const MAX_PROOF_FILE_BYTES: u64 = 4096;
 const MAX_HTTP_RESPONSE_BYTES: usize = 1024 * 1024;
 const PRODUCT_DATA_DIRECTORY: &str = "LumiCore";
@@ -181,7 +183,11 @@ fn parse_http_response(raw: &[u8]) -> Result<(u16, Value), String> {
     Ok((status, parsed))
 }
 
-fn request_bootstrap(proof: &str, existing_token: Option<&str>) -> Result<(u16, Value), String> {
+fn request_bootstrap(
+    proof: &str,
+    existing_token: Option<&str>,
+    native_identity: &NativeClientIdentity,
+) -> Result<(u16, Value), String> {
     if !is_base64url_secret(proof) {
         return Err("Native bootstrap proof is invalid".to_string());
     }
@@ -208,11 +214,17 @@ fn request_bootstrap(proof: &str, existing_token: Option<&str>) -> Result<(u16, 
         .filter(|token| !token.trim().is_empty())
         .map(|token| format!("Authorization: Bearer {}\r\n", token.trim()))
         .unwrap_or_default();
+    let body = serde_json::to_vec(&serde_json::json!({
+        "nativeClientIdentity": native_identity,
+    }))
+    .map_err(|error| format!("Unable to serialize the native client identity: {error}"))?;
     let request = format!(
-        "POST /api/auth/bootstrap HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nContent-Length: 0\r\nX-Lumi-Desktop-Bootstrap: {proof}\r\n{authorization}\r\n"
+        "POST /api/auth/bootstrap HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\nX-Lumi-Desktop-Bootstrap: {proof}\r\n{authorization}\r\n",
+        body.len(),
     );
     stream
         .write_all(request.as_bytes())
+        .and_then(|_| stream.write_all(&body))
         .and_then(|_| stream.flush())
         .map_err(|error| format!("Unable to send the native bootstrap request: {error}"))?;
 
@@ -229,9 +241,11 @@ fn request_bootstrap(proof: &str, existing_token: Option<&str>) -> Result<(u16, 
 
 #[tauri::command]
 pub fn bootstrap_local_identity(existing_token: Option<String>) -> Result<Value, String> {
+    let native_identity = native_client_identity()?;
     for attempt in 0..2 {
         let proof = read_bootstrap_proof()?;
-        let (status, body) = request_bootstrap(&proof, existing_token.as_deref())?;
+        let (status, body) =
+            request_bootstrap(&proof, existing_token.as_deref(), &native_identity)?;
         if (200..300).contains(&status) {
             return Ok(body);
         }

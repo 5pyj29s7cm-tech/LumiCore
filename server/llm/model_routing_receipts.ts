@@ -1,6 +1,12 @@
 import crypto from 'node:crypto';
 import { readDB, writeDB } from '../../db_layer';
 import type { UserLLMSelectionMode } from './user_preferences';
+import { normalizeNativeRequestBinding } from '../devices/native_identity';
+import { normalizeVoiceTurnProvenance } from '../socket/voice_provenance';
+import {
+  normalizeProviderOutboundMessagesEvidence,
+  type ProviderOutboundMessagesEvidence,
+} from './outbound_message_evidence';
 
 export type ModelRouteAttemptStatus = 'succeeded' | 'failed' | 'skipped';
 
@@ -15,6 +21,12 @@ export interface ModelRouteAttempt {
   completedAt?: string;
   durationMs?: number;
   visibleOutputCommitted?: boolean;
+  /**
+   * Generated inside the provider adapter from the exact formatted outbound
+   * request. It contains only digests and bounded structural counts, never
+   * message text, credentials, URLs, or tool arguments.
+   */
+  outboundMessagesEvidence?: ProviderOutboundMessagesEvidence;
 }
 
 export interface ModelRoutingTrace {
@@ -34,6 +46,15 @@ export interface ModelRoutingReceipt extends ModelRoutingTrace {
   orgId: string;
   conversationId: string;
   requestId: string;
+  nativeDeviceId?: string;
+  executionSessionId?: string;
+  nativeClientIdentitySha256?: string;
+  audioInputKind?: 'physical_microphone' | 'synthetic_accepted_transcript' | '';
+  syntheticAudio?: boolean;
+  captureSessionId?: string;
+  sttReceiptId?: string;
+  contextChainId?: string;
+  previousRequestId?: string;
   interactionId: string;
   source: string;
   status: 'succeeded' | 'failed';
@@ -68,9 +89,22 @@ export function modelRoutingErrorDigest(error: unknown): string {
 }
 
 function normalizeAttempt(value: ModelRouteAttempt): ModelRouteAttempt {
+  const provider = compact(value.provider);
+  const model = compact(value.model);
+  const outboundMessagesEvidence = normalizeProviderOutboundMessagesEvidence(
+    value.outboundMessagesEvidence,
+  );
+  if (value.outboundMessagesEvidence !== undefined && !outboundMessagesEvidence) {
+    throw new Error('model_routing_outbound_evidence_invalid');
+  }
+  if (outboundMessagesEvidence
+    && (outboundMessagesEvidence.provider !== provider
+      || outboundMessagesEvidence.model !== model)) {
+    throw new Error('model_routing_outbound_evidence_attempt_mismatch');
+  }
   return {
-    provider: compact(value.provider),
-    model: compact(value.model),
+    provider,
+    model,
     status: value.status,
     ...(value.reason ? { reason: compact(value.reason) } : {}),
     ...(value.errorCategory ? { errorCategory: compact(value.errorCategory, 64) } : {}),
@@ -79,12 +113,19 @@ function normalizeAttempt(value: ModelRouteAttempt): ModelRouteAttempt {
     ...(value.completedAt ? { completedAt: compact(value.completedAt, 40) } : {}),
     ...(value.durationMs !== undefined ? { durationMs: Math.max(0, Math.trunc(Number(value.durationMs) || 0)) } : {}),
     ...(value.visibleOutputCommitted !== undefined ? { visibleOutputCommitted: value.visibleOutputCommitted === true } : {}),
+    ...(outboundMessagesEvidence ? { outboundMessagesEvidence } : {}),
   };
 }
 
 const MAX_RECEIPTS_PER_USER = 5_000;
+// Auto mode may inspect eight local candidates and then up to twelve ordered
+// cloud candidates. Keep the complete bounded route, including a late final
+// success, instead of silently truncating it at the old twelve-attempt limit.
+const MAX_ATTEMPTS_PER_RECEIPT = 24;
 
 export function persistModelRoutingReceipt(input: Omit<ModelRoutingReceipt, 'id'> & { id?: string }): ModelRoutingReceipt {
+  const nativeRequestBinding = normalizeNativeRequestBinding(input);
+  const voiceTurnProvenance = normalizeVoiceTurnProvenance(input);
   const receipt: ModelRoutingReceipt = {
     id: input.id || crypto.randomUUID(),
     userId: compact(input.userId || 'anonymous'),
@@ -92,6 +133,15 @@ export function persistModelRoutingReceipt(input: Omit<ModelRoutingReceipt, 'id'
     orgId: compact(input.orgId),
     conversationId: compact(input.conversationId),
     requestId: compact(input.requestId),
+    nativeDeviceId: nativeRequestBinding?.nativeDeviceId || '',
+    executionSessionId: nativeRequestBinding?.executionSessionId || '',
+    nativeClientIdentitySha256: nativeRequestBinding?.nativeClientIdentitySha256 || '',
+    audioInputKind: voiceTurnProvenance?.audioInputKind || '',
+    syntheticAudio: voiceTurnProvenance?.syntheticAudio,
+    captureSessionId: voiceTurnProvenance?.captureSessionId || '',
+    sttReceiptId: voiceTurnProvenance?.sttReceiptId || '',
+    contextChainId: voiceTurnProvenance?.contextChainId || '',
+    previousRequestId: voiceTurnProvenance?.previousRequestId || '',
     interactionId: compact(input.interactionId),
     source: compact(input.source),
     status: input.status,
@@ -101,7 +151,7 @@ export function persistModelRoutingReceipt(input: Omit<ModelRoutingReceipt, 'id'
     selectedProvider: compact(input.selectedProvider),
     selectedModel: compact(input.selectedModel),
     fallbackReason: compact(input.fallbackReason),
-    attempts: (input.attempts || []).map(normalizeAttempt).slice(0, 12),
+    attempts: (input.attempts || []).map(normalizeAttempt).slice(0, MAX_ATTEMPTS_PER_RECEIPT),
     startedAt: input.startedAt,
     completedAt: input.completedAt,
     durationMs: Math.max(0, Math.trunc(Number(input.durationMs) || 0)),

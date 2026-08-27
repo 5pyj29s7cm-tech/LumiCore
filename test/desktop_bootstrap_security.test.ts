@@ -1,15 +1,20 @@
 import fs from 'fs';
+import path from 'node:path';
 import bcrypt from 'bcryptjs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { readDB, writeDB } from '../db_layer';
 import { mountAuthRoutes } from '../server/routes/auth';
 import {
   getDesktopBootstrapProofPath,
+  getDesktopSessionNativeClientIdentity,
   initializeDesktopBootstrapProof,
+  issueDesktopSessionProof,
   resetDesktopBootstrapStateForTests,
+  resolveDesktopSession,
   verifyDesktopSessionProof,
 } from '../server/config/desktop_bootstrap';
 import { COOKIE_OPTS, JWT_SECRET, makeApp } from './helpers';
+import { bootstrapDesktopTestSession } from '../scripts/lib/desktop-bootstrap.mjs';
 
 describe.sequential('native desktop bootstrap security', () => {
   let url = '';
@@ -17,6 +22,20 @@ describe.sequential('native desktop bootstrap security', () => {
   let originalAutoLoginPassword: string | undefined;
   const knownPassword = 'existing-admin-password-42';
   const adminUid = 'existing-local-admin';
+  const nativeClientIdentity = {
+    schemaVersion: 1 as const,
+    clientKind: 'tauri' as const,
+    pid: process.pid,
+    startedAtUnixMs: Math.floor((Date.now() - 10_000) / 1_000) * 1_000,
+    executablePath: process.execPath,
+    executableSha256: 'd'.repeat(64),
+    binaryHashUnavailable: false,
+    buildId: 'a'.repeat(40),
+    buildIdSemantics: 'baseline_commit' as const,
+    sourceFingerprint: 'e'.repeat(64),
+    sourceDirty: false,
+    appVersion: '3.1.0',
+  };
 
   beforeAll(async () => {
     originalAutoLoginPassword = process.env.AUTO_LOGIN_PASSWORD;
@@ -101,6 +120,69 @@ describe.sequential('native desktop bootstrap security', () => {
     expect(incorrect.body.token).toBeUndefined();
   });
 
+  it('consumes the one-time bootstrap proof but refuses an invalid native process identity', async () => {
+    const proof = currentProof();
+    const invalid = await request('/auth/bootstrap', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Lumi-Desktop-Bootstrap': proof,
+      },
+      body: JSON.stringify({
+        nativeClientIdentity: {
+          ...nativeClientIdentity,
+          executablePath: 'relative-client.exe',
+        },
+      }),
+    });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.code).toBe('NATIVE_CLIENT_IDENTITY_REQUIRED');
+    expect(currentProof()).not.toBe(proof);
+
+    const replay = await request('/auth/bootstrap', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Lumi-Desktop-Bootstrap': proof,
+      },
+      body: JSON.stringify({ nativeClientIdentity }),
+    });
+    expect(replay.status).toBe(403);
+  });
+
+  it('never issues or verifies a trusted-local session without a bound identity', () => {
+    expect(() => issueDesktopSessionProof('identity-required', undefined))
+      .toThrow(/valid native client identity/i);
+    const issued = issueDesktopSessionProof('identity-required', nativeClientIdentity);
+    expect(resolveDesktopSession(issued.proof, 'identity-required')).toMatchObject({
+      nativeClientIdentity: {
+        ...nativeClientIdentity,
+        trustLevel: 'proof_bound_local_claim',
+        osAttested: false,
+        webviewProfileTrustLevel: 'unbound',
+      },
+    });
+    expect(resolveDesktopSession(issued.proof, 'wrong-user')).toBeNull();
+  });
+
+  it('keeps the Node acceptance helper compatible without impersonating Tauri', async () => {
+    const dataRoot = path.dirname(path.dirname(getDesktopBootstrapProofPath()));
+    const session = await bootstrapDesktopTestSession(`${url}/api`, dataRoot, {
+      timeoutMs: 5_000,
+      sourceRoot: process.cwd(),
+    });
+    expect(session.nativeClientIdentity).toMatchObject({
+      clientKind: 'local_acceptance_harness',
+      pid: process.pid,
+      buildIdSemantics: 'baseline_commit',
+      trustLevel: 'proof_bound_local_claim',
+      osAttested: false,
+      webviewProfileTrustLevel: 'unbound',
+    });
+    expect(resolveDesktopSession(session.desktopSessionProof, session.user.uid))
+      .toMatchObject({ nativeClientIdentity: session.nativeClientIdentity });
+  });
+
   it('consumes one proof once, rejects replay, and binds a runtime session proof to the user', async () => {
     const passwordBefore = readDB().users.find((user: any) => user.uid === adminUid)?.password;
     const loginBefore = await request('/auth/login', {
@@ -114,9 +196,11 @@ describe.sequential('native desktop bootstrap security', () => {
     const accepted = await request('/auth/bootstrap', {
       method: 'POST',
       headers: {
+        'Content-Type': 'application/json',
         'X-Lumi-Desktop-Bootstrap': proof,
         Authorization: `Bearer ${loginBefore.body.token}`,
       },
+      body: JSON.stringify({ nativeClientIdentity }),
     });
     expect(accepted.status).toBe(200);
     expect(accepted.body.user.uid).toBe(adminUid);
@@ -124,6 +208,15 @@ describe.sequential('native desktop bootstrap security', () => {
     expect(accepted.body.desktopSessionProof).toMatch(/^[A-Za-z0-9_-]{32,256}$/);
     expect(verifyDesktopSessionProof(accepted.body.desktopSessionProof, adminUid)).toBe(true);
     expect(verifyDesktopSessionProof(accepted.body.desktopSessionProof, 'another-user')).toBe(false);
+    expect(getDesktopSessionNativeClientIdentity(accepted.body.desktopSessionProof, adminUid))
+      .toMatchObject(nativeClientIdentity);
+    expect(accepted.body.nativeClientIdentity).toMatchObject(nativeClientIdentity);
+    expect(accepted.body.nativeClientIdentity).toMatchObject({
+      trustLevel: 'proof_bound_local_claim',
+      osAttested: false,
+      buildIdSemantics: 'baseline_commit',
+      webviewProfileTrustLevel: 'unbound',
+    });
 
     const replay = await request('/auth/bootstrap', {
       method: 'POST',
@@ -155,7 +248,11 @@ describe.sequential('native desktop bootstrap security', () => {
 
     const created = await request('/auth/bootstrap', {
       method: 'POST',
-      headers: { 'X-Lumi-Desktop-Bootstrap': currentProof() },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Lumi-Desktop-Bootstrap': currentProof(),
+      },
+      body: JSON.stringify({ nativeClientIdentity }),
     });
     expect(created.status).toBe(200);
     expect(created.body.user.role).toBe('admin');

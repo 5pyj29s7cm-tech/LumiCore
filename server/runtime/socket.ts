@@ -15,14 +15,17 @@ import { registerFocusHandlers } from "../socket/focus";
 import { registerSceneHandlers } from "../socket/scene";
 import { getSensory } from "../socket/shared";
 import { perceptionEvents } from "../socket/shared";
-import { deviceRegistry } from "../devices";
+import { deviceRegistry, projectPublicDevice } from "../devices";
 import { personalityRegistry } from "../personality";
 import { setOnAgentPromoted } from "../agents/orchestrator";
 import { initMemorySync, initMemoryAssociations } from "../memory";
 import { handleDesktopRelayResult } from "../socket/desktop_relay";
 import { getMember } from "../org/db";
 import { resolveSocketScope, runtimeScopeStorageKey } from "../socket/scope";
-import { verifyDesktopSessionProof } from "../config/desktop_bootstrap";
+import {
+  resolveDesktopSession,
+} from "../config/desktop_bootstrap";
+import { authorizeTaskRegressionDesktopRelaySocket } from "../evidence/task_regression_desktop_relay";
 
 interface SocketContext {
   io: Server;
@@ -88,12 +91,13 @@ export function initSocketRuntime({ io, jwtSecret, llm }: SocketContext) {
 
   // Set up broadcast callbacks
   deviceRegistry.setBroadcast((event, data) => {
+    const publicDevice = projectPublicDevice(data);
     if (String(data?.id || '').startsWith('mcp_')) {
-      io.emit(event, data);
+      io.emit(event, publicDevice);
     } else if (data?.domain === 'work' && data?.orgId) {
-      io.to(`org:${data.orgId}`).emit(event, data);
+      io.to(`org:${data.orgId}`).emit(event, publicDevice);
     } else if (data?.userId) {
-      io.to(`user:${data.userId}:personal`).emit(event, data);
+      io.to(`user:${data.userId}:personal`).emit(event, publicDevice);
     }
   });
   personalityRegistry.setBroadcast((event, data) => {
@@ -139,13 +143,36 @@ export function initSocketRuntime({ io, jwtSecret, llm }: SocketContext) {
     socket.data.authenticatedUsername = auth.username;
     socket.data.authenticatedRole = auth.role;
     const presentedDesktopProof = String(socket.handshake?.auth?.desktopSessionProof || '').trim();
-    socket.data.trustedLocalExecution = verifyDesktopSessionProof(
+    const desktopSession = resolveDesktopSession(
       presentedDesktopProof,
       auth.uid,
     );
+    socket.data.trustedLocalExecution = desktopSession !== null;
+    socket.data.nativeClientIdentity = desktopSession?.nativeClientIdentity || null;
+    socket.data.executionSessionId = desktopSession?.executionSessionId || '';
     if (presentedDesktopProof && socket.data.trustedLocalExecution !== true) {
       const error: any = new Error('Native desktop session proof expired or is invalid');
       error.data = { code: 'DESKTOP_SESSION_PROOF_REQUIRED' };
+      next(error);
+      return;
+    }
+    try {
+      authorizeTaskRegressionDesktopRelaySocket(socket, {
+        uid: auth.uid,
+        role: auth.role,
+      });
+    } catch (caught) {
+      const error: any = new Error('Isolated task regression desktop relay proof is invalid');
+      const diagnosticCode = caught instanceof Error
+        && /^task_regression_desktop_relay_[a-z0-9_]+$/u.test(caught.message)
+        ? caught.message
+        : 'task_regression_desktop_relay_authorization_failed';
+      error.data = {
+        code: 'TASK_REGRESSION_DESKTOP_RELAY_PROOF_REQUIRED',
+        ...(process.env.LUMI_TASK_REGRESSION_EVIDENCE_MODE === '1'
+          ? { diagnosticCode }
+          : {}),
+      };
       next(error);
       return;
     }

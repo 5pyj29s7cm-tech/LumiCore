@@ -3,6 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import { getDataRoot } from './data_path';
 import { ensurePrivateRuntimeDirectory, restrictOwnerAccess } from './runtime_file_security';
+import type { NativeClientIdentity } from '../../shared/native_client_identity';
+import { normalizeNativeClientIdentity } from '../devices/native_identity';
 
 export const DESKTOP_BOOTSTRAP_HEADER = 'x-lumi-desktop-bootstrap';
 export const DESKTOP_SESSION_HEADER = 'x-lumi-desktop-session';
@@ -20,8 +22,10 @@ interface BootstrapProofState {
 
 interface DesktopSessionState {
   digest: Buffer;
+  executionSessionId: string;
   uid: string;
   expiresAtMs: number;
+  nativeClientIdentity: NativeClientIdentity;
 }
 
 interface BootstrapProofFile {
@@ -109,15 +113,30 @@ export function consumeDesktopBootstrapProof(value: unknown): boolean {
   return true;
 }
 
-export function issueDesktopSessionProof(uid: string): { proof: string; expiresAt: string } {
+export function issueDesktopSessionProof(
+  uid: string,
+  nativeClientIdentity: unknown,
+): { proof: string; expiresAt: string } {
   const normalizedUid = String(uid || '').trim();
   if (!normalizedUid) throw new Error('A user id is required for a desktop session proof');
+  const normalizedIdentity = normalizeNativeClientIdentity(nativeClientIdentity);
+  if (!normalizedIdentity) {
+    throw new Error('A valid native client identity is required for this desktop session proof');
+  }
 
   const nowMs = Date.now();
   desktopSessions = desktopSessions.filter(session => session.expiresAtMs > nowMs);
   const proof = crypto.randomBytes(PROOF_BYTES).toString('base64url');
   const expiresAtMs = nowMs + DESKTOP_SESSION_TTL_MS;
-  desktopSessions.push({ digest: sha256(proof), uid: normalizedUid, expiresAtMs });
+  desktopSessions.push({
+    digest: sha256(proof),
+    executionSessionId: crypto.createHash('sha256')
+      .update(`lumi-desktop-execution-session:${proof}`, 'utf8')
+      .digest('hex'),
+    uid: normalizedUid,
+    expiresAtMs,
+    nativeClientIdentity: { ...normalizedIdentity },
+  });
   if (desktopSessions.length > MAX_DESKTOP_SESSIONS) {
     desktopSessions.splice(0, desktopSessions.length - MAX_DESKTOP_SESSIONS);
   }
@@ -128,19 +147,46 @@ export function issueDesktopSessionProof(uid: string): { proof: string; expiresA
  * Verifies a capability issued by this exact backend process. Capabilities are
  * held as hashes only, expire automatically, and are bound to the JWT subject.
  */
-export function verifyDesktopSessionProof(value: unknown, expectedUid?: string): boolean {
+export function verifyDesktopSessionProof(value: unknown, expectedUid: string): boolean {
+  return resolveDesktopSession(value, expectedUid) !== null;
+}
+
+export interface VerifiedDesktopSession {
+  nativeClientIdentity: NativeClientIdentity;
+  executionSessionId: string;
+}
+
+/** Atomically verifies one capability and returns its required identity. */
+export function resolveDesktopSession(
+  value: unknown,
+  expectedUid: string,
+): VerifiedDesktopSession | null {
   const supplied = typeof value === 'string' ? value.trim() : '';
-  if (supplied.length < 32 || supplied.length > 256) return false;
-  const normalizedUid = expectedUid === undefined ? undefined : String(expectedUid).trim();
-  if (normalizedUid !== undefined && !normalizedUid) return false;
+  if (supplied.length < 32 || supplied.length > 256) return null;
+  const normalizedUid = String(expectedUid || '').trim();
+  if (!normalizedUid) return null;
 
   const nowMs = Date.now();
   desktopSessions = desktopSessions.filter(session => session.expiresAtMs > nowMs);
   const suppliedDigest = sha256(supplied);
-  return desktopSessions.some(session => (
-    (normalizedUid === undefined || session.uid === normalizedUid)
-    && timingSafeDigestEqual(session.digest, suppliedDigest)
+  const session = desktopSessions.find(candidate => (
+    candidate.uid === normalizedUid
+    && timingSafeDigestEqual(candidate.digest, suppliedDigest)
   ));
+  return session
+    ? {
+        nativeClientIdentity: { ...session.nativeClientIdentity },
+        executionSessionId: session.executionSessionId,
+      }
+    : null;
+}
+
+/** @deprecated Prefer resolveDesktopSession when establishing trust. */
+export function getDesktopSessionNativeClientIdentity(
+  value: unknown,
+  expectedUid: string,
+): NativeClientIdentity | null {
+  return resolveDesktopSession(value, expectedUid)?.nativeClientIdentity || null;
 }
 
 export function resetDesktopBootstrapStateForTests(options: { removeFile?: boolean } = {}): void {

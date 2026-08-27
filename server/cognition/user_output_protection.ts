@@ -5,6 +5,13 @@ import { CN_USER_OUTPUT_PROTECTION_MESSAGES } from '../regions/packs/cn/user_out
 export interface UserFacingOutputProtectionOptions {
   task?: string;
   toolRecords?: ToolExecutionRecord[];
+  /**
+   * Exact output of `formatPendingConfirmationRequest(pending)`. This is an
+   * equality-bound envelope, not a reason-based bypass: arbitrary
+   * `waiting_confirmation` prose must still pass the ordinary native-output
+   * filters. Secrets are redacted again before the trusted text is returned.
+   */
+  trustedConfirmationRequestText?: string;
 }
 
 const MAX_PERSISTED_TOOL_RECORDS = 80;
@@ -103,7 +110,11 @@ function redactSensitive(value: string): string {
     .replace(STRUCTURED_SECRET_DETAIL_RE, '$1[redacted]')
     .replace(SECRET_DETAIL_RE, '$1=[redacted]')
     .replace(BEARER_SECRET_RE, 'Bearer [redacted]')
-    .replace(/(?:sk|key)-[A-Za-z0-9_-]{8,}/giu, '[redacted]')
+    // API-key prefixes must begin at a token boundary. Without the left
+    // boundary, ordinary names such as "lumi-task-regression" contain the
+    // substring "sk-regression" and their exact confirmation target is
+    // silently corrupted.
+    .replace(/(?<![A-Za-z0-9])(?:sk|key)-[A-Za-z0-9_-]{8,}/giu, '[redacted]')
     .replace(/data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\r\n]+/giu, '[image omitted]')
     .replace(/(["']?image_base64["']?\s*[:=]\s*["'])[^"']+(["'])/giu, '$1[image omitted]$2');
 }
@@ -381,6 +392,12 @@ export function sanitizeUserFacingExecutionOutput(
   const raw = stringify(value).trim();
   if (!raw) return '';
   const redacted = redactSensitive(raw);
+  const trustedConfirmationRequestText = String(
+    options.trustedConfirmationRequestText || '',
+  ).trim();
+  if (trustedConfirmationRequestText && raw === trustedConfirmationRequestText) {
+    return redacted;
+  }
   const oversizedToolOutput = raw.length > 8_000 && (options.toolRecords || []).length > 0;
   const oversizedUnscopedOutput = raw.length > 50_000;
   if (!containsUnsafeToolPayload(raw) && !oversizedToolOutput && !oversizedUnscopedOutput) return redacted;

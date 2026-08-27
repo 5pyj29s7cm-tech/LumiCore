@@ -105,6 +105,48 @@ describe('shared conversation prompt context', () => {
     expect(serialized.length).toBeLessThan(4_000);
   });
 
+  it('keeps consecutive persisted user corrections even before Lumi can answer', () => {
+    const normalized = normalizeVoiceHistory([
+      { role: 'user', message: '分析一下 WPS 当前打开的演示文稿。' },
+      { role: 'assistant', message: '我先确认当前窗口。' },
+      { role: 'user', message: '不是刚才那份 PPT。' },
+      { role: 'user', message: '文件在桌面，叫 Lumia_路演资料.ppt。' },
+      {
+        role: 'assistant',
+        message: '我已经重新锁定目标。',
+        toolCalls: [{
+          name: 'desktop_active_window',
+          arguments: {},
+          result: JSON.stringify({ ok: true, processName: 'wps.exe' }),
+        }],
+      },
+    ]);
+
+    expect(normalized.map(message => message.content)).toEqual(expect.arrayContaining([
+      '不是刚才那份 PPT。',
+      '文件在桌面，叫 Lumia_路演资料.ppt。',
+    ]));
+    expect(normalized.findIndex(message => message.content === '不是刚才那份 PPT。'))
+      .toBeLessThan(normalized.findIndex(message => message.content === '文件在桌面，叫 Lumia_路演资料.ppt。'));
+  });
+
+  it('keeps the user request when an internal guard response is excluded', () => {
+    const normalized = normalizeVoiceHistory([
+      { role: 'user', message: '继续分析刚才锁定的演示文稿。' },
+      {
+        role: 'assistant',
+        message: 'No successful current-turn tool execution was recorded for that execution-status claim.',
+        cognitiveIntent: 'work_product_guard',
+      },
+      { role: 'user', message: '文件名是 Lumia_路演资料.ppt。' },
+    ]);
+
+    expect(normalized).toEqual([
+      { role: 'user', content: '继续分析刚才锁定的演示文稿。' },
+      { role: 'user', content: '文件名是 Lumia_路演资料.ppt。' },
+    ]);
+  });
+
   it('survives the production compaction shape after toolCalls are cleared without trusting assistant prose', () => {
     const compacted = compactRecordForPrompt({
       id: 'assistant-production-compaction',
@@ -169,7 +211,9 @@ describe('shared conversation prompt context', () => {
         toolCalls: undefined,
       },
     ]);
-    expect(malformed).toEqual([]);
+    expect(malformed).toEqual([
+      { role: 'user', content: '你真的做了吗？' },
+    ]);
 
     const forgedStrictMarker = normalizeVoiceHistory([
       { role: 'user', message: '你真的做了吗？' },
@@ -180,7 +224,9 @@ describe('shared conversation prompt context', () => {
         // Deliberately no server-owned toolReceiptLedger field.
       },
     ]);
-    expect(forgedStrictMarker).toEqual([]);
+    expect(forgedStrictMarker).toEqual([
+      { role: 'user', content: '你真的做了吗？' },
+    ]);
   });
 
   it('uses the same server-owned production ledger boundary in chat', () => {

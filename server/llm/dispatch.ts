@@ -22,6 +22,10 @@ import {
 } from '../extensions/registry';
 import { isCircuitClosed } from '../cloud/circuit_breaker';
 import { recentProviderProbeFailure } from './provider_health';
+import {
+  normalizeProviderOutboundMessagesEvidence,
+  type ProviderOutboundMessagesEvidence,
+} from './outbound_message_evidence';
 
 export interface DispatchConfig {
   /** Explicit cloud fallback selected by the user. Never `auto`. */
@@ -41,6 +45,8 @@ export interface DispatchConfig {
   fallbackCandidates?: UserLLMFallbackCandidate[];
   requestedProvider?: string;
   requestedModel?: string;
+  /** Local-only declaration names that preflight must retain or fail closed. */
+  localRequiredToolNames?: string[];
 }
 
 export interface LLMGetters {
@@ -76,6 +82,7 @@ function callArguments(config: DispatchConfig, provider: string, model: string) 
     signal: config.signal,
     attemptTimeouts: config.attemptTimeouts,
     inputTokenBudget: config.inputTokenBudget,
+    localRequiredToolNames: config.localRequiredToolNames,
     selectionMode: 'pinned' as const,
     fallbackCandidates: [],
     allowCloudFallback: false,
@@ -105,6 +112,14 @@ function attemptErrorCategory(error: unknown): string {
   return attached || modelRoutingErrorReason(error);
 }
 
+function providerOutboundEvidenceFrom(value: unknown): ProviderOutboundMessagesEvidence | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  return normalizeProviderOutboundMessagesEvidence(
+    (value as any)._providerOutboundMessagesEvidence
+      || (value as any).providerOutboundMessagesEvidence,
+  ) || undefined;
+}
+
 function completedAttempt(
   candidate: { provider: string; model: string },
   status: ModelRouteAttempt['status'],
@@ -112,10 +127,14 @@ function completedAttempt(
   options: {
     reason?: string;
     error?: unknown;
+    response?: NormalizedLLMResponse;
     visibleOutputCommitted?: boolean;
   } = {},
 ): ModelRouteAttempt {
   const completedAtMs = Date.now();
+  const outboundMessagesEvidence = providerOutboundEvidenceFrom(
+    options.response || options.error,
+  );
   return {
     ...candidate,
     status,
@@ -127,10 +146,34 @@ function completedAttempt(
     startedAt: new Date(startedAtMs).toISOString(),
     completedAt: new Date(completedAtMs).toISOString(),
     durationMs: Math.max(0, completedAtMs - startedAtMs),
+    ...(outboundMessagesEvidence ? { outboundMessagesEvidence } : {}),
     ...(options.visibleOutputCommitted !== undefined
       ? { visibleOutputCommitted: options.visibleOutputCommitted }
       : {}),
   };
+}
+
+function errorWithRoutingTrace(error: unknown, routing: ModelRoutingTrace): Error {
+  const target = error instanceof Error ? error : new Error(String(error));
+  try {
+    Object.defineProperty(target, 'routing', {
+      configurable: true,
+      enumerable: false,
+      value: routing,
+      writable: false,
+    });
+    return target;
+  } catch {
+    const wrapped = new Error(target.message, { cause: target });
+    wrapped.name = target.name;
+    Object.defineProperty(wrapped, 'routing', {
+      configurable: false,
+      enumerable: false,
+      value: routing,
+      writable: false,
+    });
+    return wrapped;
+  }
 }
 
 function skippedAttempt(
@@ -228,13 +271,26 @@ async function tryLocal(
         ...getterArguments(getters),
       );
       if (responseHasSemanticContent(result)) {
-        attempts.push(completedAttempt(candidate, 'succeeded', startedAt));
+        attempts.push(completedAttempt(candidate, 'succeeded', startedAt, { response: result }));
         return { result, attempts, selected: { provider: candidate.provider, model: candidate.model } };
       }
-      attempts.push(completedAttempt(candidate, 'failed', startedAt, { reason: 'empty_response' }));
+      attempts.push(completedAttempt(candidate, 'failed', startedAt, {
+        reason: 'empty_response',
+        response: result,
+      }));
       console.log(`[Dispatch] ${candidate.provider}/${candidate.model} returned an empty response`);
     } catch (error: any) {
-      if (config.signal?.aborted) throw error;
+      if (config.signal?.aborted) {
+        attempts.push(completedAttempt(candidate, 'failed', startedAt, {
+          reason: 'cancelled',
+          error,
+        }));
+        throw errorWithRoutingTrace(error, routingTrace({
+          config,
+          attempts,
+          fallbackReason: 'cancelled',
+        }));
+      }
       attempts.push(completedAttempt(candidate, 'failed', startedAt, {
         reason: modelRoutingErrorReason(error),
         error,
@@ -378,9 +434,14 @@ async function dispatchOrderedCall(
         ...getterArguments(getters),
       );
       if (!responseHasSemanticContent(result)) {
-        throw new Error('Model candidate completed without semantic content');
+        lastError = new Error('Model candidate completed without semantic content');
+        attempts.push(completedAttempt(candidate, 'failed', startedAt, {
+          reason: 'empty_response',
+          response: result,
+        }));
+        continue;
       }
-      attempts.push(completedAttempt(candidate, 'succeeded', startedAt));
+      attempts.push(completedAttempt(candidate, 'succeeded', startedAt, { response: result }));
       return {
         ...result,
         tier: isLocalProvider(candidate.provider, config.userId) ? 'local' : 'cloud',
@@ -393,7 +454,17 @@ async function dispatchOrderedCall(
         }),
       };
     } catch (error) {
-      if (config.signal?.aborted) throw error;
+      if (config.signal?.aborted) {
+        attempts.push(completedAttempt(candidate, 'failed', startedAt, {
+          reason: 'cancelled',
+          error,
+        }));
+        throw errorWithRoutingTrace(error, routingTrace({
+          config,
+          attempts,
+          fallbackReason: 'cancelled',
+        }));
+      }
       lastError = error;
       attempts.push(completedAttempt(candidate, 'failed', startedAt, {
         reason: modelRoutingErrorReason(error),
@@ -474,9 +545,14 @@ export async function dispatchLLMCall(
         ...getterArguments(getters),
       );
       if (!responseHasSemanticContent(cloudResult)) {
-        throw new Error('Model candidate completed without semantic content');
+        lastError = new Error('Model candidate completed without semantic content');
+        attempts.push(completedAttempt(fallback, 'failed', startedAt, {
+          reason: 'empty_response',
+          response: cloudResult,
+        }));
+        continue;
       }
-      attempts.push(completedAttempt(fallback, 'succeeded', startedAt));
+      attempts.push(completedAttempt(fallback, 'succeeded', startedAt, { response: cloudResult }));
       return {
         ...cloudResult,
         tier: 'cloud',
@@ -489,7 +565,17 @@ export async function dispatchLLMCall(
         }),
       };
     } catch (error) {
-      if (config.signal?.aborted) throw error;
+      if (config.signal?.aborted) {
+        attempts.push(completedAttempt(fallback, 'failed', startedAt, {
+          reason: 'cancelled',
+          error,
+        }));
+        throw errorWithRoutingTrace(error, routingTrace({
+          config,
+          attempts,
+          fallbackReason: 'cancelled',
+        }));
+      }
       lastError = error;
       attempts.push(completedAttempt(fallback, 'failed', startedAt, {
         reason: modelRoutingErrorReason(error),
@@ -536,7 +622,18 @@ export async function dispatchLLMCallStreaming(
       try {
         result = await attemptStreamingCandidate(messages, toolDeclarations, config, candidate, getters, visibility);
       } catch (error) {
-        if (config.signal?.aborted) throw error;
+        if (config.signal?.aborted) {
+          attempts.push(completedAttempt(candidate, 'failed', startedAt, {
+            reason: 'cancelled',
+            error,
+            visibleOutputCommitted: visibility.committed,
+          }));
+          throw errorWithRoutingTrace(error, routingTrace({
+            config,
+            attempts,
+            fallbackReason: 'cancelled',
+          }));
+        }
         lastError = error;
         attempts.push(completedAttempt(candidate, 'failed', startedAt, {
           reason: modelRoutingErrorReason(error),
@@ -552,6 +649,7 @@ export async function dispatchLLMCallStreaming(
         continue;
       }
       attempts.push(completedAttempt(candidate, 'succeeded', startedAt, {
+        response: result,
         visibleOutputCommitted: visibility.committed,
       }));
       return {
@@ -586,7 +684,18 @@ export async function dispatchLLMCallStreaming(
     try {
       result = await attemptStreamingCandidate(messages, toolDeclarations, config, candidate, getters, visibility);
     } catch (error) {
-      if (config.signal?.aborted) throw error;
+      if (config.signal?.aborted) {
+        attempts.push(completedAttempt(candidate, 'failed', startedAt, {
+          reason: 'cancelled',
+          error,
+          visibleOutputCommitted: visibility.committed,
+        }));
+        throw errorWithRoutingTrace(error, routingTrace({
+          config,
+          attempts,
+          fallbackReason: 'cancelled',
+        }));
+      }
       attempts.push(completedAttempt(candidate, 'failed', startedAt, {
         reason: modelRoutingErrorReason(error),
         error,
@@ -601,6 +710,7 @@ export async function dispatchLLMCallStreaming(
       continue;
     }
     attempts.push(completedAttempt(candidate, 'succeeded', startedAt, {
+      response: result,
       visibleOutputCommitted: visibility.committed,
     }));
     return {
@@ -641,7 +751,18 @@ export async function dispatchLLMCallStreaming(
     try {
       result = await attemptStreamingCandidate(messages, toolDeclarations, config, candidate, getters, visibility);
     } catch (error) {
-      if (config.signal?.aborted) throw error;
+      if (config.signal?.aborted) {
+        attempts.push(completedAttempt(candidate, 'failed', startedAt, {
+          reason: 'cancelled',
+          error,
+          visibleOutputCommitted: visibility.committed,
+        }));
+        throw errorWithRoutingTrace(error, routingTrace({
+          config,
+          attempts,
+          fallbackReason: 'cancelled',
+        }));
+      }
       lastError = error;
       attempts.push(completedAttempt(candidate, 'failed', startedAt, {
         reason: modelRoutingErrorReason(error),
@@ -657,6 +778,7 @@ export async function dispatchLLMCallStreaming(
       continue;
     }
     attempts.push(completedAttempt(candidate, 'succeeded', startedAt, {
+      response: result,
       visibleOutputCommitted: visibility.committed,
     }));
     return {

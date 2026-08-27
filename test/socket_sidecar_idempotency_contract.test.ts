@@ -18,7 +18,9 @@ describe('socket sidecar idempotency integration', () => {
       expect(cancelSideEffect).toBeGreaterThan(durableBarrier);
       expect(code.slice(durableBarrier, cancelSideEffect)).toContain('catch');
       expect(code.slice(durableBarrier, cancelSideEffect)).toContain('getByRequestId(');
-      expect(code.slice(durableBarrier, cancelSideEffect)).toContain('controlTargetRequestId');
+      expect(code.slice(durableBarrier, cancelSideEffect)).toMatch(
+        /(?:controlTargetRequestId|cancellationTargetRequestId)/,
+      );
     });
 
     it(`${relativePath} checks an exact request receipt before classifying a sidecar replay`, () => {

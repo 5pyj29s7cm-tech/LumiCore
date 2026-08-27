@@ -40,11 +40,89 @@ describe('desktop observation routing', () => {
     '做个桌面程序检查',
     '看一下后台程序运行情况',
     '检查一下后台进程状态',
+    '列出当前正在运行的进程和应用',
   ])('routes a natural program-status request to one process snapshot: %s', (text) => {
     expect(buildDesktopObservationPlan(text)).toEqual([{
       name: 'desktop_running_processes',
       arguments: { top: 20 },
     }]);
+  });
+
+  it.each([
+    '[LUMI_REGRESSION:S1] 后台任务状态请只用 runtime_work_status 核对，不能用进程列表、数据库或文字猜测代替。',
+    '请核对哪些后台任务仍可撤回；不要用进程列表、数据库或文字猜测代替真实任务回执。',
+  ])('does not create a positive process observation from a negated fallback: %s', (text) => {
+    expect(buildDesktopObservationPlan(text)).toEqual([]);
+  });
+
+  it('keeps a later genuine process query after a negated fallback clause', () => {
+    expect(buildDesktopObservationPlan(
+      '不要用进程列表代替任务回执，但请另外列出当前正在运行的进程和应用。',
+    )).toEqual([{
+      name: 'desktop_running_processes',
+      arguments: { top: 20 },
+    }]);
+  });
+
+  it('preserves other positive desktop observations beside a negated process fallback', () => {
+    expect(buildDesktopObservationPlan(
+      '后台任务状态不能用进程列表代替；请另外查看当前活动窗口并列出桌面文件。',
+    )).toEqual([{
+      name: 'desktop_active_window',
+      arguments: {},
+    }, {
+      name: 'desktop_list_files',
+      arguments: { path: '~/Desktop', limit: 1000 },
+    }]);
+  });
+
+  it('does not block a verified runtime-work status receipt on a negated process fallback', () => {
+    const taskText = '[LUMI_REGRESSION:S1] 后台任务状态请只用 runtime_work_status 核对，不能用进程列表、数据库或文字猜测代替。';
+    const finalized = finalizeLumiResponse({
+      taskText,
+      responseText: '当前有 2 个可撤回的后台任务。',
+      toolRecords: [{
+        name: 'runtime_work_status',
+        arguments: {},
+        result: JSON.stringify({ ok: true, status: 'active', activeCount: 2, items: [] }),
+        terminalVerification: {
+          status: 'verified' as const,
+          strategy: 'terminal_receipt' as const,
+          reason: 'Unified runtime ledger returned the current active count.',
+        },
+      }],
+      source: 'chat',
+    });
+
+    expect(finalized.blocked).toBe(false);
+    expect(finalized.text).toContain('2');
+  });
+
+  it('still enforces a verified process receipt for a genuine live process query', () => {
+    const taskText = '列出当前正在运行的进程和应用。';
+    const missing = finalizeLumiResponse({
+      taskText,
+      responseText: '当前进程已列出。',
+      toolRecords: [],
+      source: 'chat',
+    });
+    const verified = finalizeLumiResponse({
+      taskText,
+      responseText: '当前正在运行 LumiCore 和 WPS。',
+      toolRecords: [{
+        name: 'desktop_running_processes',
+        arguments: { top: 20 },
+        result: JSON.stringify({ processes: [{ name: 'lumi-core.exe' }, { name: 'wps.exe' }] }),
+        ...verifiedTerminalReceipt,
+      }],
+      source: 'chat',
+    });
+
+    expect(missing.blocked).toBe(true);
+    expect(missing.reason).toContain('desktop_running_processes');
+    expect(verified.blocked).toBe(false);
+    expect(verified.text).toContain('lumi-core.exe');
+    expect(verified.text).toContain('wps.exe');
   });
 
   it('does not replace a requested desktop mutation with observation-only work', () => {

@@ -15,6 +15,14 @@ function kindsFromArgs(value: unknown): RuntimeWorkKind[] | undefined {
   ));
 }
 
+function taskIdsFromArgs(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return Array.from(new Set(value
+    .map(item => String(item || '').trim().slice(0, 180))
+    .filter(Boolean)))
+    .slice(0, 64);
+}
+
 function scopeFromContext(context: { domain?: string; orgId?: string } | undefined): RuntimeWorkScope {
   if (context?.domain === 'work') {
     const orgId = String(context.orgId || '').trim();
@@ -68,6 +76,11 @@ export function registerRuntimeWorkTools(registry: ToolRegistry): void {
       type: 'object',
       properties: {
         taskId: { type: 'string', description: 'Optional exact runtime task id. Omit to cancel all matching active work.' },
+        taskIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional immutable batch of exact runtime task ids. An empty array cancels nothing; it never means all work.',
+        },
         kinds: {
           type: 'array',
           items: { type: 'string', enum: ['delegation', 'autonomy', 'takeover'] },
@@ -79,6 +92,7 @@ export function registerRuntimeWorkTools(registry: ToolRegistry): void {
     handler: async (args, context) => JSON.stringify(cancelRuntimeWork({
       userId: context?.userId || 'anonymous',
       taskId: args.taskId ? String(args.taskId) : undefined,
+      taskIds: taskIdsFromArgs(args.taskIds),
       kinds: kindsFromArgs(args.kinds),
       scope: scopeFromContext(context),
     }), null, 2),

@@ -20,6 +20,21 @@ export interface PreparedModelRequestContext {
   droppedToolNames: string[];
 }
 
+/**
+ * A model request may bind exactly one durable transcript row to its provider
+ * input evidence. Silently choosing between multiple annotated rows would make
+ * the evidence ambiguous, so malformed or multi-source requests fail closed
+ * before any provider formatting or network call can occur.
+ */
+export class ModelRequestSourceProvenanceError extends Error {
+  readonly code = 'model_request_source_provenance_invalid';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'ModelRequestSourceProvenanceError';
+  }
+}
+
 export const DEFAULT_MODEL_REQUEST_INPUT_BUDGET_TOKENS = 24_000;
 const MIN_MODEL_REQUEST_INPUT_BUDGET_TOKENS = 4_096;
 const MAX_MODEL_REQUEST_INPUT_BUDGET_TOKENS = 131_072;
@@ -75,6 +90,31 @@ export function estimateModelRequestInputTokens(
     + messages.reduce((total, message) => total + messageTokens(message), 0);
 }
 
+export function resolveAnnotatedSourceUserIndex(messages: NormalizedMessage[]): number {
+  let sourceUserIndex = -1;
+  for (const [index, message] of (messages || []).entries()) {
+    const sourceMessageId = (message as NormalizedMessage | undefined)?.sourceMessageId;
+    if (sourceMessageId === undefined || sourceMessageId === null) continue;
+    if (typeof sourceMessageId !== 'string' || !sourceMessageId || sourceMessageId.trim() !== sourceMessageId) {
+      throw new ModelRequestSourceProvenanceError(
+        `Model request sourceMessageId at message ${index} must be a non-empty trimmed string`,
+      );
+    }
+    if (message.role !== 'user') {
+      throw new ModelRequestSourceProvenanceError(
+        `Model request sourceMessageId at message ${index} must annotate a user message`,
+      );
+    }
+    if (sourceUserIndex >= 0) {
+      throw new ModelRequestSourceProvenanceError(
+        `Model request contains multiple sourceMessageId annotations at messages ${sourceUserIndex} and ${index}`,
+      );
+    }
+    sourceUserIndex = index;
+  }
+  return sourceUserIndex;
+}
+
 function clipTextToTokens(value: string, budget: number, label: string): string {
   const text = String(value || '');
   if (estimateModelRequestTextTokens(text) <= budget) return text;
@@ -107,15 +147,17 @@ function clipContentToTokens(content: MessageContent, budget: number, label: str
 }
 
 function compactMessage(message: NormalizedMessage, budget: number, label: string): NormalizedMessage {
+  const fixedTokens = 8 + estimateModelRequestTextTokens(JSON.stringify(message.toolCalls || []));
   return {
     ...message,
-    content: clipContentToTokens(message.content, Math.max(24, budget - 12), label),
+    content: clipContentToTokens(message.content, Math.max(1, budget - fixedTokens), label),
     reasoningContent: null,
   };
 }
 
-// i18n-allow -- bilingual safety-instruction recognition; not user-visible copy.
-const CRITICAL_SYSTEM_BLOCK = /(?:security|safety|untrusted|prompt injection|action constitution|confirmation|privacy|credential|secret|forbidden|must not|never|execution boundary|cancell?ation|tool-output|安全|权限|隐私|密钥|凭据|禁止|不得|必须|确认|取消|执行边界)/i;
+// i18n-allow -- bilingual safety/task-continuity recognition; not user-visible copy.
+const TASK_CAPSULE_SYSTEM_BLOCK = /(?:Current task capsule\s*\(TaskCapsuleV1\)|TaskCapsuleV1|当前任务胶囊)/i;
+const CRITICAL_SYSTEM_BLOCK = /(?:security|safety|untrusted|prompt injection|action constitution|confirmation|privacy|credential|secret|forbidden|must not|never|execution boundary|cancell?ation|tool-output|Current task capsule\s*\(TaskCapsuleV1\)|TaskCapsuleV1|安全|权限|隐私|密钥|凭据|禁止|不得|必须|确认|取消|执行边界|当前任务胶囊)/i;
 
 function compactSystemBlock(value: string, budget: number): string {
   if (estimateModelRequestTextTokens(value) <= budget) return value;
@@ -181,14 +223,33 @@ function compactSystemMessage(message: NormalizedMessage, budget: number): Norma
   const ranked = blocks.map((block, index) => ({
     block,
     index,
-    score: (CRITICAL_SYSTEM_BLOCK.test(block) ? 1_000 : 0)
+    score: (TASK_CAPSULE_SYSTEM_BLOCK.test(block) ? 10_000 : 0)
+      + (CRITICAL_SYSTEM_BLOCK.test(block) ? 1_000 : 0)
       + (index === 0 ? 500 : 0)
       + (index === blocks.length - 1 ? 400 : 0)
       + (/^#{1,4}\s/m.test(block) ? 40 : 0),
   })).sort((left, right) => right.score - left.score || left.index - right.index);
   const chosen = new Map<number, string>();
   let remaining = Math.max(32, budget - 24);
-  const protectedBlocks = ranked.filter(candidate => candidate.score >= 400);
+  // TaskCapsuleV1 is the durable bridge between terse follow-ups and the
+  // task/receipt ledger. Losing it under budget pressure makes the provider
+  // forget the confirmed target and latest correction even though the server
+  // still owns both. Give the single current capsule a dedicated first share;
+  // safety blocks continue to consume the remaining protected budget below.
+  const currentTaskCapsule = ranked.find(candidate => TASK_CAPSULE_SYSTEM_BLOCK.test(candidate.block));
+  if (currentTaskCapsule && remaining >= 32) {
+    const capsuleBudget = Math.min(
+      remaining,
+      Math.max(512, Math.floor(budget * 0.35)),
+    );
+    const selected = compactSystemBlock(currentTaskCapsule.block, capsuleBudget);
+    const selectedCost = estimateModelRequestTextTokens(selected) + 2;
+    if (selectedCost <= remaining) {
+      chosen.set(currentTaskCapsule.index, selected);
+      remaining -= selectedCost;
+    }
+  }
+  const protectedBlocks = ranked.filter(candidate => candidate.score >= 400 && !chosen.has(candidate.index));
   for (const [position, candidate] of protectedBlocks.entries()) {
     if (remaining < 20) break;
     const protectedLeft = protectedBlocks.length - position;
@@ -366,6 +427,7 @@ export function prepareModelRequestContext(input: {
     ...declaration,
     function: { ...declaration.function, parameters: { ...(declaration.function.parameters || {}) } },
   }));
+  const sourceUserIndex = resolveAnnotatedSourceUserIndex(originalMessages);
   const originalEstimatedInputTokens = estimateModelRequestInputTokens(originalMessages, originalTools);
   if (originalEstimatedInputTokens <= budgetTokens) {
     return {
@@ -384,11 +446,17 @@ export function prepareModelRequestContext(input: {
   for (let index = originalMessages.length - 1; index >= 0; index -= 1) {
     if (originalMessages[index].role === 'user') { latestUserIndex = index; break; }
   }
+  const protectedUserIndexes = [sourceUserIndex, latestUserIndex]
+    .filter((index, position, indexes) => index >= 0 && indexes.indexOf(index) === position);
   const systemIndexes = originalMessages
     .map((message, index) => message.role === 'system' ? index : -1)
     .filter(index => index >= 0);
-  const currentText = messageText(originalMessages[latestUserIndex]);
-  const originalCurrentCost = latestUserIndex >= 0 ? messageTokens(originalMessages[latestUserIndex]) : 0;
+  const currentText = protectedUserIndexes
+    .map(index => messageText(originalMessages[index]))
+    .filter(Boolean)
+    .join('\n');
+  const originalCurrentCost = protectedUserIndexes
+    .reduce((sum, index) => sum + messageTokens(originalMessages[index]), 0);
   const minimumSystemBudget = systemIndexes.length > 0
     ? Math.min(
         originalMessages.filter(message => message.role === 'system').reduce((sum, message) => sum + messageTokens(message), 0),
@@ -408,22 +476,43 @@ export function prepareModelRequestContext(input: {
 
   const selected = new Map<number, NormalizedMessage>();
   const availableForMessages = Math.max(256, budgetTokens - toolCost);
-  const currentBudget = latestUserIndex >= 0
-    ? Math.max(64, availableForMessages - minimumSystemBudget)
+  const currentBudget = protectedUserIndexes.length > 0
+    ? Math.max(0, availableForMessages - minimumSystemBudget)
     : 0;
+  if (protectedUserIndexes.length > 0 && currentBudget < protectedUserIndexes.length * 64) {
+    throw new ModelRequestSourceProvenanceError(
+      `Model request budget cannot retain ${protectedUserIndexes.length} protected user messages`,
+    );
+  }
   let currentInputCompacted = false;
-  if (latestUserIndex >= 0) {
-    const current = originalMessages[latestUserIndex];
-    const preparedCurrent = messageTokens(current) <= currentBudget
+  let remainingCurrentBudget = currentBudget;
+  for (const [position, index] of protectedUserIndexes.entries()) {
+    const current = originalMessages[index];
+    const protectedLeft = protectedUserIndexes.length - position - 1;
+    const reservedForLater = protectedLeft * 64;
+    const messageBudget = Math.max(64, remainingCurrentBudget - reservedForLater);
+    const label = index === sourceUserIndex && index !== latestUserIndex
+      ? 'annotated source user input'
+      : index === latestUserIndex && index !== sourceUserIndex
+        ? 'latest synthetic user input'
+        : 'current user input';
+    const preparedCurrent = messageTokens(current) <= messageBudget
       ? { ...current }
-      : compactMessage(current, currentBudget, 'current user input');
-    currentInputCompacted = messageTokens(current) > messageTokens(preparedCurrent);
-    selected.set(latestUserIndex, preparedCurrent);
+      : compactMessage(current, messageBudget, label);
+    const preparedCost = messageTokens(preparedCurrent);
+    if (preparedCost > messageBudget) {
+      throw new ModelRequestSourceProvenanceError(
+        `Model request budget could not retain protected user message ${index}`,
+      );
+    }
+    currentInputCompacted ||= messageTokens(current) > preparedCost;
+    selected.set(index, preparedCurrent);
+    remainingCurrentBudget -= preparedCost;
   }
 
   let usedMessageTokens = [...selected.values()].reduce((sum, message) => sum + messageTokens(message), 0);
   let remaining = Math.max(0, availableForMessages - usedMessageTokens);
-  const excluded = new Set([...systemIndexes, ...(latestUserIndex >= 0 ? [latestUserIndex] : [])]);
+  const excluded = new Set([...systemIndexes, ...protectedUserIndexes]);
   const segments = historySegments(originalMessages, excluded);
   const hasHistory = segments.length > 0;
   const systemBudget = systemIndexes.length > 0

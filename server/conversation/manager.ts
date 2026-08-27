@@ -1,4 +1,4 @@
-import { readDB, writeDB } from '../../db_layer';
+import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { estimateTokenCount } from '../llm/providers';
 import {
@@ -34,6 +34,8 @@ import {
   sanitizeSummaryForPrompt,
 } from './summary_grounding';
 import { sanitizeToolRecordsForPersistence } from '../cognition/user_output_protection';
+import { normalizeNativeRequestBinding } from '../devices/native_identity';
+import { normalizeVoiceTurnProvenance } from '../socket/voice_provenance';
 import {
   normalizeCompletionFeedbackForPersistence,
   type TaskCompletionFeedback,
@@ -49,8 +51,12 @@ import {
   repairContradictoryConversationActionReceipts,
   compactLegacyScheduledCapabilityExecutions,
   archiveBoundConversationActionReceipts,
+  finalizeConversationActionTask,
+  getConversationActionStateByTaskId,
   getConversationActionStateFromLedger,
   syncConversationActionTaskLedger,
+  type ConversationActionTerminalDisposition,
+  type ConversationActionLiveProjection,
 } from './action_ledger';
 import type { CapabilityExecutionPlan } from '../cognition/capability_execution_plan';
 import type { OrchestrationPrivateNodeHandoff, WorkflowResult } from '../agents/orchestrator';
@@ -87,11 +93,13 @@ import {
   reconcileConversationActionTurnLease,
   reconcileConversationActionTurnLeases,
   releaseConversationActionTurnLease,
+  type ConversationActionTurn,
 } from './action_turn_ledger';
 import {
   buildTransportNeutralConfirmationScope,
   getPendingConfirmation,
 } from '../tools/pending_confirmation';
+import { partitionConversationReceiptsByOwnership } from './receipt_ownership';
 
 function hasExactPendingConfirmationForTask(input: {
   id: string;
@@ -164,18 +172,36 @@ function hydrateConversationActionState(
     userId: conversation.userId,
     query: resolveHistoricalTask ? query : '',
   });
-  const existingUpdatedAt = existing ? Date.parse(existing.updatedAt) : Number.NaN;
-  const ledgerUpdatedAt = ledgerState ? Date.parse(ledgerState.updatedAt) : Number.NaN;
-  const newestRuntimeState = existing && ledgerState
-    ? (existing.taskId === ledgerState.taskId
+  const exactExistingLedgerState = existing?.taskId
+    ? getConversationActionStateByTaskId(db, {
+        conversationId: conversation.id,
+        userId: conversation.userId,
+        taskId: existing.taskId,
+      })
+    : null;
+  const exactLedgerUpdatedAt = exactExistingLedgerState
+    ? Date.parse(exactExistingLedgerState.updatedAt)
+    : Number.NaN;
+  const rawExistingUpdatedAt = existing ? Date.parse(existing.updatedAt) : Number.NaN;
+  const authoritativeExisting = exactExistingLedgerState
+    && Number.isFinite(exactLedgerUpdatedAt)
+    && (!Number.isFinite(rawExistingUpdatedAt) || exactLedgerUpdatedAt >= rawExistingUpdatedAt)
+    ? exactExistingLedgerState
+    : existing;
+  const existingLive = authoritativeExisting?.unfinished ? authoritativeExisting : null;
+  const ledgerLive = ledgerState?.unfinished ? ledgerState : null;
+  const existingUpdatedAt = existingLive ? Date.parse(existingLive.updatedAt) : Number.NaN;
+  const ledgerUpdatedAt = ledgerLive ? Date.parse(ledgerLive.updatedAt) : Number.NaN;
+  const state = existingLive && ledgerLive
+    ? existingLive.taskId === ledgerLive.taskId
       && Number.isFinite(ledgerUpdatedAt)
       && (!Number.isFinite(existingUpdatedAt) || ledgerUpdatedAt > existingUpdatedAt)
-        ? ledgerState
-        : existing)
-    : existing || (ledgerState?.unfinished ? ledgerState : null);
-  const state = resolveHistoricalTask
-    ? ledgerState || existing
-    : newestRuntimeState;
+        ? ledgerLive
+        : existingLive
+    : existingLive || ledgerLive;
+  // Historical and terminal projections live only in the durable ledger.
+  // A query may influence which unfinished ledger row is selected, but it may
+  // never repopulate the conversation's live pointer with completed work.
   if (state) conversation.actionContinuationState = state;
   else delete conversation.actionContinuationState;
   return state;
@@ -207,26 +233,13 @@ function detachUnrelatedConversationActionState(
 ): boolean {
   const previous = normalizeConversationActionState(conversation.actionContinuationState);
   if (!previous || !shouldDetachUnrelatedActionState(previous, userText)) return false;
-  const cancelled = normalizeConversationActionState({
-    ...previous,
-    version: 2,
-    status: 'cancelled',
-    unfinished: false,
-    latestBlocker: '',
-    activeRequestId: undefined,
+  return Boolean(finalizeConversationActionTask(db, {
+    conversation,
+    state: previous,
+    outcome: 'cancelled',
     assistantState: 'Detached because the user started an unrelated turn.',
-    revision: (previous.revision || 0) + 1,
-    updatedAt: now,
-  });
-  if (cancelled) {
-    syncConversationActionTaskLedger(db, {
-      conversation,
-      state: cancelled,
-      now,
-    });
-  }
-  delete conversation.actionContinuationState;
-  return true;
+    now,
+  }));
 }
 
 export interface Conversation {
@@ -291,6 +304,16 @@ export interface MessageRecord {
   receivedAt?: string;
   /** Stable request identity for one local/socket turn. */
   requestId?: string;
+  /** Proof-bound native request provenance; absent on web/remote/harness turns. */
+  nativeDeviceId?: string;
+  executionSessionId?: string;
+  nativeClientIdentitySha256?: string;
+  audioInputKind?: 'physical_microphone' | 'synthetic_accepted_transcript' | '';
+  syntheticAudio?: boolean;
+  captureSessionId?: string;
+  sttReceiptId?: string;
+  contextChainId?: string;
+  previousRequestId?: string;
   /** Structured model/runtime classification for durable task ownership. */
   taskIntent?: 'task' | 'conversation' | '';
   /** Bounded, allowlisted task outcome summary shown after history reload. */
@@ -418,7 +441,7 @@ export function startNewConversation(userId: string, agentId?: string, domain?: 
       && conversation.agentId === (agentId || '')
       && conversation.status === 'active'
       && conversationMatchesScope(conversation, scope.domain, scope.orgId)
-    ) {
+          ) {
       conversation.status = 'closed';
       conversation.lastActiveAt = now;
     }
@@ -442,6 +465,102 @@ export function startNewConversation(userId: string, agentId?: string, domain?: 
   db.conversations.push(conversation);
   writeDB(db);
   return conversation;
+}
+
+/**
+ * Create an explicitly-bound conversation without changing the user's active
+ * conversation. Formal E2E and other diagnostic callers must always send the
+ * returned conversationId; the closed status keeps it out of normal active
+ * conversation selection while still allowing bound turns to run.
+ */
+export function startIsolatedConversation(userId: string, agentId?: string, domain?: string, orgId?: string): Conversation {
+  const db = readDB();
+  if (!db.conversations) db.conversations = [];
+  const scope = resolveConversationScope(domain, orgId);
+  const now = new Date().toISOString();
+  const conversation: Conversation = {
+    id: 'conv_' + crypto.randomUUID(),
+    userId,
+    agentId: agentId || '',
+    title: '',
+    status: 'closed',
+    summary: '',
+    summaryChain: [],
+    lastSummaryMessageCount: 0,
+    messageCount: 0,
+    lastActiveAt: now,
+    createdAt: now,
+    domain: scope.domain,
+    orgId: scope.orgId,
+  };
+  db.conversations.push(conversation);
+  writeDB(db);
+  return conversation;
+}
+
+export interface DeletedConversationData {
+  conversationId: string;
+  interactions: number;
+  actionTasks: number;
+  actionTurns: number;
+  actionReceipts: number;
+  routingReceipts: number;
+  backgroundTasks: number;
+}
+
+/** Delete only records carrying the exact, already-authorized conversation id. */
+export function deleteConversationData(
+  conversationId: string,
+  userId: string,
+  domain?: string,
+  orgId?: string,
+): DeletedConversationData | null {
+  const db = readDB();
+  const conversation = (db.conversations || []).find((candidate: Conversation) => (
+    candidate.id === conversationId
+    && candidate.userId === userId
+    && conversationMatchesScope(candidate, domain, orgId)
+  ));
+  if (!conversation) return null;
+
+  const before = {
+    interactions: (db.interactions || []).length,
+    actionTasks: (db.conversationActionTasks || []).length,
+    actionTurns: (db.conversationActionTurns || []).length,
+    actionReceipts: (db.conversationActionReceipts || []).length,
+    routingReceipts: (db.modelRoutingReceipts || []).length,
+    backgroundTasks: (db.backgroundDelegationTasks || []).length,
+  };
+  const ownedTaskIds = new Set(
+    (db.conversationActionTasks || [])
+      .filter((row: any) => row.conversationId === conversationId)
+      .map((row: any) => String(row.id || ''))
+      .filter(Boolean),
+  );
+
+  db.conversations = (db.conversations || []).filter((row: Conversation) => row.id !== conversationId);
+  db.interactions = (db.interactions || []).filter((row: any) => row.conversationId !== conversationId);
+  db.conversationActionTasks = (db.conversationActionTasks || [])
+    .filter((row: any) => row.conversationId !== conversationId);
+  db.conversationActionTurns = (db.conversationActionTurns || [])
+    .filter((row: any) => row.conversationId !== conversationId);
+  db.conversationActionReceipts = (db.conversationActionReceipts || [])
+    .filter((row: any) => row.conversationId !== conversationId && !ownedTaskIds.has(String(row.taskId || '')));
+  db.modelRoutingReceipts = (db.modelRoutingReceipts || [])
+    .filter((row: any) => row.conversationId !== conversationId);
+  db.backgroundDelegationTasks = (db.backgroundDelegationTasks || [])
+    .filter((row: any) => row.conversationId !== conversationId && row.context?.conversationId !== conversationId);
+  writeDB(db);
+
+  return {
+    conversationId,
+    interactions: before.interactions - db.interactions.length,
+    actionTasks: before.actionTasks - db.conversationActionTasks.length,
+    actionTurns: before.actionTurns - db.conversationActionTurns.length,
+    actionReceipts: before.actionReceipts - db.conversationActionReceipts.length,
+    routingReceipts: before.routingReceipts - db.modelRoutingReceipts.length,
+    backgroundTasks: before.backgroundTasks - db.backgroundDelegationTasks.length,
+  };
 }
 
 const DEFAULT_CONVERSATION_ROLLOVER_MESSAGE_LIMIT = 240;
@@ -634,19 +753,12 @@ export function closeConversation(conversationId: string, summary?: string, user
   });
   const previous = normalizeConversationActionState(conv.actionContinuationState);
   if (previous?.unfinished) {
-    conv.actionContinuationState = {
-      ...previous,
-      status: 'cancelled',
-      unfinished: false,
-      latestBlocker: '',
-      assistantState: 'Conversation closed by the user.',
-      activeRequestId: undefined,
-      revision: (previous.revision || 0) + 1,
-      updatedAt: now,
-    };
-    syncConversationActionTaskLedger(db, {
+    finalizeConversationActionTask(db, {
       conversation: conv,
-      state: conv.actionContinuationState,
+      state: previous,
+      outcome: 'cancelled',
+      requestId: closingRequestId,
+      assistantState: 'Conversation closed by the user.',
       now,
     });
   } else if (closingRequestId) {
@@ -781,6 +893,8 @@ export const CONVERSATION_ACTION_EXECUTION_HEARTBEAT_INTERVAL_MS = Math.floor(
 interface ManagerActionTurnLease {
   ownerId: string;
   prepared: boolean;
+  /** Executor fenced by this lease, aborted if an expired owner is recovered. */
+  abortController?: AbortController;
 }
 
 const managerActionTurnLeases = new Map<string, ManagerActionTurnLease>();
@@ -853,6 +967,35 @@ function managerActionTurnKey(input: {
   return JSON.stringify([input.conversationId, input.userId, input.requestId]);
 }
 
+/**
+ * Drop a process-local owner only after the durable lease no longer proves
+ * that it owns this request. Keeping an expired map entry made an idempotent
+ * retry return `busy` forever even though the durable TTL had recovered.
+ */
+function reconcileManagerActionTurnLeaseOwner(input: {
+  conversationId: string;
+  userId: string;
+  requestId: string;
+}): ManagerActionTurnLease | undefined {
+  const key = managerActionTurnKey(input);
+  const managerLease = managerActionTurnLeases.get(key);
+  if (!managerLease) return undefined;
+  const durableTurn = getConversationActionTurn(input);
+  if (
+    durableTurn?.status === 'leased'
+    && durableTurn.leaseOwnerId === managerLease.ownerId
+  ) return managerLease;
+
+  if (managerLease.abortController && !managerLease.abortController.signal.aborted) {
+    managerLease.abortController.abort(new Error(
+      'Conversation action execution lease expired or lost ownership',
+    ));
+  }
+  stopManagerActionTurnHeartbeat(input);
+  managerActionTurnLeases.delete(key);
+  return undefined;
+}
+
 function acquireManagerActionTurnLease(input: {
   conversationId: string;
   userId: string;
@@ -860,7 +1003,14 @@ function acquireManagerActionTurnLease(input: {
   reuseExistingLease: boolean;
 }): { acquired: true; ownerId: string } | { acquired: false; reason: 'busy' | 'stale' } {
   const key = managerActionTurnKey(input);
-  const existingManagerLease = managerActionTurnLeases.get(key);
+  // Recover the durable TTL first, then discard only a map owner that no
+  // longer matches it. The inverse order lets an expired in-memory entry act
+  // as an unbounded busy lock.
+  const recoveredDurableLeases = reconcileConversationActionTurnLeases();
+  for (const recovered of recoveredDurableLeases.turns) {
+    reconcileManagerActionTurnLeaseOwner(recovered);
+  }
+  const existingManagerLease = reconcileManagerActionTurnLeaseOwner(input);
   if (!input.reuseExistingLease && existingManagerLease) {
     return { acquired: false, reason: 'busy' };
   }
@@ -868,9 +1018,8 @@ function acquireManagerActionTurnLease(input: {
     return { acquired: false, reason: 'busy' };
   }
 
-  // The database is process-exclusive. Reconcile abandoned process epochs and
-  // expired leases synchronously before enforcing one live request per thread.
-  reconcileConversationActionTurnLeases();
+  // The database is process-exclusive. Durable recovery above runs
+  // synchronously before enforcing one live request per thread.
   const competing = listConversationActionTurns({
     conversationId: input.conversationId,
     userId: input.userId,
@@ -1110,55 +1259,15 @@ export function quarantineConversationTerminalDurabilityStage(
       ),
     );
     const previous = currentOwnsTask ? currentState : taskState;
-    const marker = {
-      status: 'persistence_unknown' as const,
-      requestId: entry.requestId,
-      quarantinedAt: now,
-    };
-    const unknownState = previous
-      ? normalizeConversationActionState({
-          ...previous,
-          version: 2,
-          status: 'blocked',
-          unfinished: true,
-          latestBlocker: blocker,
-          assistantState: text,
-          activeRequestId: undefined,
-          completionSource: undefined,
-          terminalPersistence: marker,
-          revision: (previous.revision || 0) + 1,
-          updatedAt: now,
-        })
-      : null;
-
-    if (conversation && currentOwnsTask && unknownState) {
-      conversation.actionContinuationState = unknownState;
-    }
-    if (conversation?.pendingActionContinuation?.requestId === entry.requestId) {
-      delete conversation.pendingActionContinuation;
-    }
-    if (durableTask) {
-      // Durable task terminals are normally monotonic. A failed strict fence
-      // is the exceptional case where the in-memory terminal was never safe
-      // to publish, so reset it before the normal sync applies the quarantine.
-      durableTask.status = 'blocked';
-      durableTask.blocker = blocker;
-      durableTask.activeRequestId = '';
-      durableTask.completionSource = '';
-      durableTask.completedAt = '';
-      durableTask.updatedAt = now;
-      durableTask.revision = Math.max(1, Number(durableTask.revision) || 0) + 1;
-      if (unknownState && conversation) {
-        syncConversationActionTaskLedger(db, {
-          conversation,
-          state: unknownState,
-          now,
-        });
-      }
-      const refreshedContext = parsePersistedObject(durableTask.context);
-      durableTask.context = JSON.stringify({
-        ...refreshedContext,
-        terminalPersistence: marker,
+    if (conversation && previous) {
+      finalizeConversationActionTask(db, {
+        conversation,
+        state: previous,
+        outcome: 'persistence_unknown',
+        requestId: entry.requestId,
+        blocker,
+        assistantState: text,
+        now,
       });
     }
 
@@ -1200,11 +1309,28 @@ function finalizePersistedAssistantActionTurnInDb(
       now: input.now,
     });
   }
+  const boundTurn = (db.conversationActionTurns || []).find((candidate: any) => (
+    candidate.conversationId === input.conversationId
+    && candidate.userId === input.userId
+    && candidate.requestId === input.requestId
+  ));
+  const boundTask = boundTurn?.taskId
+    ? (db.conversationActionTasks || []).find((candidate: any) => (
+      candidate.id === boundTurn.taskId
+      && candidate.conversationId === input.conversationId
+      && candidate.userId === input.userId
+    ))
+    : null;
+  const taskOutcome = ['blocked', 'completed', 'cancelled', 'failed']
+    .includes(String(boundTask?.status || ''))
+    ? String(boundTask.status)
+    : '';
   finalizeManagerActionTurnFromAssistant({
     conversationId: input.conversationId,
     userId: input.userId,
     requestId: input.requestId,
     assistantMessageId: input.assistantMessageId,
+    reason: taskOutcome ? `task_outcome:${taskOutcome}` : undefined,
     now: input.now,
   });
 }
@@ -1413,10 +1539,18 @@ function persistConversationActionLeaseLoss(input: {
   ));
   if (conversation) {
     hydrateConversationActionState(db, conversation);
-    finalizeConversationActionRequestInDb(db, conversation, input.requestId, {
-      fallbackBlocker: input.reason,
-      now: input.occurredAt,
-    });
+    const previous = normalizeConversationActionState(conversation.actionContinuationState);
+    if (previous) {
+      finalizeConversationActionTask(db, {
+        conversation,
+        state: previous,
+        outcome: 'persistence_unknown',
+        requestId: input.requestId,
+        blocker: `persistence_unknown: ${input.reason}`,
+        assistantState: input.reason,
+        now: input.occurredAt,
+      });
+    }
     writeDB(db);
   }
   return reconciled.turn?.status === 'persistence_unknown';
@@ -1448,6 +1582,8 @@ export function startConversationActionExecutionHeartbeat(input: {
 
   const key = managerActionTurnKey(identity);
   stopManagerActionTurnHeartbeat(identity);
+  const managerLease = managerActionTurnLeases.get(key);
+  if (managerLease) managerLease.abortController = input.abortController;
   let running = true;
   let leaseLost = false;
   let timer: ReturnType<typeof setInterval> | null = null;
@@ -1583,7 +1719,30 @@ export function prepareConversationActionExecution(input: {
         : 'conversation_action_turn_not_persisted',
     );
   }
-  const prepared = prepareConversationActionTaskState(conversation.actionContinuationState, input);
+  const persistedTurn = getConversationActionTurn({
+    conversationId: input.conversationId,
+    userId: input.userId,
+    requestId: input.requestId,
+  });
+  const exactBoundTaskState = persistedTurn?.taskId
+    ? getConversationActionStateByTaskId(db, {
+        conversationId: input.conversationId,
+        userId: input.userId,
+        taskId: persistedTurn.taskId,
+      })
+    : null;
+  if (exactBoundTaskState) {
+    // A replay of the same immutable request must continue the task already
+    // bound to that request. Reclassifying the same text as a new task causes
+    // a task_conflict after TTL recovery and turns self-recovery back into a
+    // permanent busy response.
+    conversation.actionContinuationState = exactBoundTaskState;
+  }
+  const prepared = prepareConversationActionTaskState(conversation.actionContinuationState, {
+    ...input,
+    forceResume: input.forceResume === true || Boolean(exactBoundTaskState),
+    forceNewTask: exactBoundTaskState ? false : input.forceNewTask,
+  });
   if (prepared.state?.taskId) {
     const taskBinding = bindConversationActionTurnTask({
       conversationId: input.conversationId,
@@ -1836,6 +1995,7 @@ interface FinalizeConversationActionRequestOptions {
   assistantState?: string;
   fallbackBlocker?: string;
   now?: string;
+  terminalDisposition?: ConversationActionTerminalDisposition;
 }
 
 /**
@@ -1866,41 +2026,47 @@ function finalizeConversationActionRequestInDb(
   const now = options.now || new Date().toISOString();
 
   if (previous && stateOwnsRequest) {
-    const completion = taskCompletionFromReceipts(previous.goal, previous.receipts || []);
+    const completion = taskCompletionFromReceipts(
+      previous.goal,
+      previous.receipts || [],
+      previous.taskCapsule,
+    );
     const requestWasRunning = conversationTaskStatusOwnsExecutionLease(previous.status);
-    const status = completion.complete
+    const authoritativeBlocked = Boolean(
+      options.terminalDisposition?.outcome === 'blocked'
+      && options.terminalDisposition.requestId === normalizedRequestId
+      && options.terminalDisposition.taskId === previous.taskId,
+    );
+    const status = authoritativeBlocked
+      ? 'blocked'
+      : completion.complete
       ? 'completed'
       : requestWasRunning
         ? 'blocked'
         : previous.status;
-    const next = normalizeConversationActionState({
-      ...previous,
-      status,
-      unfinished: !isTerminalConversationTaskStatus(status),
-      latestBlocker: status === 'blocked'
-        ? previous.latestBlocker
+    const finalized = finalizeConversationActionTask(db, {
+      conversation,
+      state: previous,
+      outcome: status === 'completed' ? 'completed' : 'blocked',
+      requestId: normalizedRequestId,
+      blocker: status === 'blocked'
+        ? (authoritativeBlocked ? options.terminalDisposition?.reason : '')
+          || previous.latestBlocker
           || completion.blocker
           || options.fallbackBlocker
           || 'The execution request ended without a verified terminal result.'
-        : status === 'completed' || status === 'waiting_confirmation'
-          ? ''
-          : previous.latestBlocker,
+        : '',
       assistantState: options.assistantState !== undefined
         ? compactRolloverText(options.assistantState, 700)
         : previous.assistantState,
-      completionSource: completion.complete ? 'tool_receipt' : previous.completionSource,
-      activeRequestId: undefined,
-      revision: (previous.revision || 0) + 1,
-      updatedAt: now,
+      completionSource: authoritativeBlocked
+        ? undefined
+        : completion.complete
+          ? 'tool_receipt'
+          : previous.completionSource,
+      now,
     });
-    if (next) {
-      conversation.actionContinuationState = next;
-      syncConversationActionTaskLedger(db, {
-        conversation,
-        state: next,
-        now,
-      });
-    }
+    if (finalized) return finalized.state;
   }
 
   if (pendingOwnsRequest) delete conversation.pendingActionContinuation;
@@ -1933,24 +2099,15 @@ export function cancelConversationActionExecution(
     requestId: requestId || undefined,
     reason,
   });
-  conversation.actionContinuationState = {
-    ...previous,
-    version: 2,
-    status: 'cancelled',
-    unfinished: false,
-    latestBlocker: '',
-    assistantState: reason,
-    activeRequestId: undefined,
-    revision: (previous.revision || 0) + 1,
-    updatedAt: new Date().toISOString(),
-  };
-  delete conversation.pendingActionContinuation;
-  syncConversationActionTaskLedger(db, {
+  const finalized = finalizeConversationActionTask(db, {
     conversation,
-    state: conversation.actionContinuationState,
+    state: previous,
+    outcome: 'cancelled',
+    requestId,
+    assistantState: reason,
   });
   writeDB(db);
-  return conversation.actionContinuationState;
+  return finalized?.state || previous;
 }
 
 export function completeConversationActionFromUserObservation(
@@ -1965,26 +2122,17 @@ export function completeConversationActionFromUserObservation(
   if (conversation) hydrateConversationActionState(db, conversation);
   const previous = normalizeConversationActionState(conversation?.actionContinuationState);
   if (!conversation || !previous || !isUserObservedTaskCompletion(userText, previous)) return null;
-  conversation.actionContinuationState = {
-    ...previous,
-    version: 2,
-    status: 'completed',
-    unfinished: false,
-    latestBlocker: '',
-    assistantState: userText.replace(/\s+/g, ' ').trim().slice(0, 700),
-    activeRequestId: undefined,
-    completionSource: 'user_observation',
-    revision: (previous.revision || 0) + 1,
-    updatedAt: new Date().toISOString(),
-  };
-  syncConversationActionTaskLedger(db, {
+  const finalized = finalizeConversationActionTask(db, {
     conversation,
-    state: conversation.actionContinuationState,
+    state: previous,
+    outcome: 'completed',
+    requestId: previous.activeRequestId,
+    assistantState: userText,
+    completionSource: 'user_observation',
     userText,
   });
-  delete conversation.pendingActionContinuation;
   writeDB(db);
-  return conversation.actionContinuationState;
+  return finalized?.state || previous;
 }
 
 /**
@@ -2041,6 +2189,1090 @@ export function settleConversationActionExecutionRequest(
   }
   writeDB(db);
   return settled;
+}
+
+export interface ConvergeConversationActionRequestLeaseInput {
+  conversationId: string;
+  userId: string;
+  requestId: string;
+  now?: Date | string | number;
+  /** @internal Keep the process owner until the staged mutation is strictly flushed. */
+  deferLocalOwnerClear?: boolean;
+}
+
+export type ConversationActionRequestLeaseEvidence =
+  | 'found'
+  | 'missing'
+  | 'ambiguous'
+  | 'unbound';
+
+export interface ConvergeConversationActionRequestLeaseResult {
+  conversationId: string;
+  userId: string;
+  requestId: string;
+  taskId: string;
+  assistantMessageId: string;
+  beforeStatus: ConversationActionTurn['status'] | 'missing';
+  finalStatus: ConversationActionTurn['status'] | 'missing';
+  action: 'none' | 'terminal' | 'cancelled' | 'persistence_unknown';
+  converged: boolean;
+  changed: boolean;
+  reason: string;
+  evidence: {
+    conversation: ConversationActionRequestLeaseEvidence;
+    task: ConversationActionRequestLeaseEvidence;
+    assistant: ConversationActionRequestLeaseEvidence;
+  };
+  localOwnerCleared: boolean;
+  turn: ConversationActionTurn | null;
+}
+
+function normalizeConversationActionRequestLeaseIdentity(
+  input: ConvergeConversationActionRequestLeaseInput,
+): ConvergeConversationActionRequestLeaseInput & {
+  conversationId: string;
+  userId: string;
+  requestId: string;
+  now: string;
+} {
+  const conversationId = String(input.conversationId || '').trim();
+  const userId = String(input.userId || '').trim();
+  const requestId = String(input.requestId || '').trim();
+  if (!conversationId || !userId || !requestId) {
+    throw new TypeError('conversationId, userId, and requestId are required');
+  }
+  const parsedNow = input.now instanceof Date
+    ? new Date(input.now.getTime())
+    : new Date(input.now ?? Date.now());
+  if (!Number.isFinite(parsedNow.getTime())) throw new TypeError('now must be a valid date');
+  return {
+    ...input,
+    conversationId,
+    userId,
+    requestId,
+    now: parsedNow.toISOString(),
+  };
+}
+
+function clearManagerActionRequestLeaseOwner(
+  identity: Pick<ConvergeConversationActionRequestLeaseInput, 'conversationId' | 'userId' | 'requestId'>,
+  abortReason = '',
+): boolean {
+  const key = managerActionTurnKey(identity);
+  const owner = managerActionTurnLeases.get(key);
+  stopManagerActionTurnHeartbeat(identity);
+  const cleared = managerActionTurnLeases.delete(key);
+  if (abortReason && owner?.abortController && !owner.abortController.signal.aborted) {
+    owner.abortController.abort(new Error(abortReason));
+  }
+  return cleared;
+}
+
+export type ForegroundRequestFinalizationOutcome =
+  | 'terminal'
+  | 'cancelled'
+  | 'superseded'
+  | 'blocked'
+  | 'persistence_unknown';
+
+export interface FinalizeForegroundRequestInput {
+  /** Immutable identity of the already accepted foreground request. */
+  readonly conversationId: string;
+  readonly userId: string;
+  readonly requestId: string;
+  /** Optional caller assertion. It must agree with the durable turn binding. */
+  readonly expectedTaskId?: string;
+  readonly outcome: ForegroundRequestFinalizationOutcome;
+  /** Exact durable assistant row. Text alone is never terminal evidence. */
+  readonly assistantMessageId?: string;
+  /** Bounded user-visible state copied into a task projection when one exists. */
+  readonly assistantState?: string;
+  readonly reason?: string;
+  readonly now?: Date | string | number;
+  /** @internal Keep the process owner until the staged mutation is strictly flushed. */
+  readonly deferLocalOwnerClear?: boolean;
+}
+
+export type ForegroundRequestFinalizationEvidence =
+  | 'found'
+  | 'missing'
+  | 'ambiguous'
+  | 'unbound'
+  | 'mismatch';
+
+export interface FinalizeForegroundRequestResult {
+  conversationId: string;
+  userId: string;
+  requestId: string;
+  requestedOutcome: ForegroundRequestFinalizationOutcome;
+  effectiveOutcome: ForegroundRequestFinalizationOutcome;
+  taskId: string;
+  assistantMessageId: string;
+  taskStatus: string;
+  actionTurnStatus: ConversationActionTurn['status'] | 'missing' | 'ambiguous';
+  converged: boolean;
+  changed: boolean;
+  reason: string;
+  evidence: {
+    conversation: ForegroundRequestFinalizationEvidence;
+    actionTurn: ForegroundRequestFinalizationEvidence;
+    task: ForegroundRequestFinalizationEvidence;
+    assistant: ForegroundRequestFinalizationEvidence;
+  };
+  localOwnerCleared: boolean;
+}
+
+function normalizeForegroundRequestFinalizationInput(
+  input: FinalizeForegroundRequestInput,
+): FinalizeForegroundRequestInput & {
+  conversationId: string;
+  userId: string;
+  requestId: string;
+  expectedTaskId: string;
+  assistantMessageId: string;
+  assistantState: string | undefined;
+  reason: string;
+  now: string;
+} {
+  const conversationId = String(input.conversationId || '').trim();
+  const userId = String(input.userId || '').trim();
+  const requestId = String(input.requestId || '').trim();
+  if (!conversationId || !userId || !requestId) {
+    throw new TypeError('conversationId, userId, and requestId are required');
+  }
+  if (!['terminal', 'cancelled', 'superseded', 'blocked', 'persistence_unknown'].includes(input.outcome)) {
+    throw new TypeError('outcome must be terminal, cancelled, superseded, blocked, or persistence_unknown');
+  }
+  const parsedNow = input.now instanceof Date
+    ? new Date(input.now.getTime())
+    : new Date(input.now ?? Date.now());
+  if (!Number.isFinite(parsedNow.getTime())) throw new TypeError('now must be a valid date');
+  return {
+    ...input,
+    conversationId,
+    userId,
+    requestId,
+    expectedTaskId: String(input.expectedTaskId || '').trim(),
+    assistantMessageId: String(input.assistantMessageId || '').trim(),
+    assistantState: input.assistantState === undefined
+      ? undefined
+      : String(input.assistantState || '').replace(/\s+/g, ' ').trim().slice(0, 700),
+    reason: String(input.reason || '').replace(/\s+/g, ' ').trim().slice(0, 380),
+    now: parsedNow.toISOString(),
+  };
+}
+
+function foregroundTaskPersistenceRequestId(task: any): string {
+  const context = parsePersistedObject(task?.context);
+  const actionState = parsePersistedObject(context.actionState);
+  const marker = context.terminalPersistence?.status === 'persistence_unknown'
+    ? context.terminalPersistence
+    : actionState.terminalPersistence?.status === 'persistence_unknown'
+      ? actionState.terminalPersistence
+      : null;
+  return String(marker?.requestId || '').trim();
+}
+
+function foregroundTaskAlreadyConverged(
+  task: any,
+  outcome: ForegroundRequestFinalizationOutcome,
+  requestId: string,
+): boolean {
+  if (!task || String(task.activeRequestId || '').trim()) return false;
+  if (outcome === 'terminal' && task.status !== 'completed') return false;
+  if (outcome === 'cancelled' && task.status !== 'cancelled') return false;
+  if (
+    (outcome === 'blocked' || outcome === 'superseded' || outcome === 'persistence_unknown')
+    && task.status !== 'blocked'
+  ) {
+    return false;
+  }
+  if (outcome === 'persistence_unknown') {
+    return foregroundTaskPersistenceRequestId(task) === requestId;
+  }
+  const finalization = parsePersistedObject(parsePersistedObject(task.context).taskFinalization);
+  const persistedOutcome = outcome === 'terminal'
+    ? 'completed'
+    : outcome === 'superseded' ? 'blocked' : outcome;
+  return String(finalization.requestId || '').trim() === requestId
+    && finalization.outcome === persistedOutcome;
+}
+
+function applyForegroundActionTurnOutcomeInDb(
+  turn: ConversationActionTurn,
+  input: {
+    status: 'terminal' | 'cancelled' | 'persistence_unknown';
+    assistantMessageId: string;
+    reason: string;
+    now: string;
+  },
+): boolean {
+  if (
+    turn.status === input.status
+    && (input.status !== 'terminal' || turn.terminalMessageId === input.assistantMessageId)
+  ) return false;
+
+  turn.status = input.status;
+  turn.terminalMessageId = input.status === 'terminal' ? input.assistantMessageId : '';
+  turn.terminalReason = input.reason;
+  turn.terminalAt = input.now;
+  turn.updatedAt = input.now;
+  turn.revision = Math.max(0, Number(turn.revision) || 0) + 1;
+  turn.leaseOwnerId = '';
+  turn.leaseEpoch = '';
+  turn.leaseAcquiredAt = '';
+  turn.leaseHeartbeatAt = '';
+  turn.leaseExpiresAt = '';
+  if (input.status === 'persistence_unknown') {
+    turn.recoveryReason = input.reason;
+    turn.recoveredAt = input.now;
+  }
+  return true;
+}
+
+function quarantineForegroundTaskWithoutActionTurnInDb(
+  task: any,
+  state: ConversationActionContinuationState,
+  input: {
+    requestId: string;
+    reason: string;
+    assistantState?: string;
+    now: string;
+  },
+): ConversationActionContinuationState | null {
+  const marker = {
+    status: 'persistence_unknown' as const,
+    requestId: input.requestId,
+    quarantinedAt: input.now,
+  };
+  const next = normalizeConversationActionState({
+    ...state,
+    version: 2,
+    status: 'blocked',
+    unfinished: true,
+    latestBlocker: input.reason,
+    assistantState: input.assistantState === undefined
+      ? state.assistantState
+      : input.assistantState,
+    activeRequestId: undefined,
+    completionSource: undefined,
+    terminalPersistence: marker,
+    revision: Math.max(Number(task.revision) || 0, state.revision || 0) + 1,
+    updatedAt: input.now,
+  });
+  if (!next) return null;
+  const context = parsePersistedObject(task.context);
+  task.status = 'blocked';
+  task.blocker = input.reason;
+  task.activeRequestId = '';
+  task.completionSource = '';
+  task.completedAt = '';
+  task.updatedAt = input.now;
+  task.revision = next.revision;
+  task.context = JSON.stringify({
+    ...context,
+    actionState: next,
+    taskFinalization: {
+      outcome: 'persistence_unknown',
+      requestId: input.requestId,
+      reason: input.reason,
+      finalizedAt: input.now,
+    },
+    terminalPersistence: marker,
+  });
+  return next;
+}
+
+/**
+ * Atomically converge one foreground request in the shared in-memory DB.
+ *
+ * The immutable action-turn binding is the authority for task ownership. The
+ * task/live/pending projections are settled first, then the durable action
+ * turn and finally its process-local owner. Missing or ambiguous evidence is
+ * never guessed: an otherwise identifiable request is quarantined as
+ * persistence_unknown instead of publishing success.
+ *
+ * Chat and Task now use this boundary before releasing foreground resources.
+ * Voice is intentionally not integrated in this slice.
+ */
+export function finalizeForegroundRequest(
+  input: FinalizeForegroundRequestInput,
+): FinalizeForegroundRequestResult {
+  const identity = normalizeForegroundRequestFinalizationInput(input);
+  const db = readDB();
+  const conversations = (Array.isArray(db.conversations) ? db.conversations : [])
+    .filter((row: Conversation) => (
+      row.id === identity.conversationId && row.userId === identity.userId
+    ));
+  const turns = (Array.isArray(db.conversationActionTurns) ? db.conversationActionTurns : [])
+    .filter((row: ConversationActionTurn) => (
+      row.conversationId === identity.conversationId
+      && row.userId === identity.userId
+      && row.requestId === identity.requestId
+    ));
+  const assistants = identity.assistantMessageId
+    ? (Array.isArray(db.interactions) ? db.interactions : []).filter((row: any) => (
+        row.id === identity.assistantMessageId
+        && row.userId === identity.userId
+        && row.conversationId === identity.conversationId
+        && row.role === 'assistant'
+        && (
+          String(row.requestId || '') === identity.requestId
+          || String(row.externalMessageId || '') === identity.requestId
+        )
+      ))
+    : [];
+
+  const evidence: FinalizeForegroundRequestResult['evidence'] = {
+    conversation: conversations.length === 1
+      ? 'found'
+      : conversations.length === 0 ? 'missing' : 'ambiguous',
+    actionTurn: turns.length === 1
+      ? 'found'
+      : turns.length === 0 ? 'missing' : 'ambiguous',
+    task: 'unbound',
+    assistant: !identity.assistantMessageId
+      ? 'unbound'
+      : assistants.length === 1 ? 'found' : assistants.length === 0 ? 'missing' : 'ambiguous',
+  };
+
+  const turnTaskIds: string[] = [...new Set<string>(turns.map((turn: ConversationActionTurn) => (
+    String(turn.taskId || '').trim()
+  )).filter(Boolean))];
+  const durableTurnTaskId = turns.length === 1
+    ? String(turns[0].taskId || '').trim()
+    : turnTaskIds.length === 1 ? turnTaskIds[0] : '';
+  // An executor can survive a damaged/missing action-turn row. The caller's
+  // expectedTaskId is usable only as a fail-closed cleanup fence when the one
+  // exact task row still says this request owns its active lease. It is never
+  // sufficient evidence for completion.
+  const durableTaskId = durableTurnTaskId || (
+    turns.length === 0 ? identity.expectedTaskId : ''
+  );
+  const taskRows = durableTaskId
+    ? (Array.isArray(db.conversationActionTasks) ? db.conversationActionTasks : [])
+        .filter((row: any) => (
+          row.id === durableTaskId
+          && row.conversationId === identity.conversationId
+          && row.userId === identity.userId
+        ))
+    : [];
+  if (durableTaskId) {
+    evidence.task = taskRows.length === 1
+      ? 'found'
+      : taskRows.length === 0 ? 'missing' : 'ambiguous';
+  }
+
+  let reason = identity.reason;
+  let effectiveOutcome = identity.outcome;
+  const exactMissingTurnTaskFence = Boolean(
+    turns.length === 0
+    && identity.expectedTaskId
+    && durableTaskId === identity.expectedTaskId
+    && taskRows.length === 1
+    && String(taskRows[0].activeRequestId || '').trim() === identity.requestId
+  );
+  let taskCanMutate = taskRows.length === 1
+    && (turns.length > 0 || exactMissingTurnTaskFence);
+  const exactAssistant = evidence.assistant === 'found';
+  let failedClosed = false;
+  const failClosed = (nextReason: string) => {
+    if (!reason || (identity.outcome === 'superseded' && !failedClosed)) reason = nextReason;
+    effectiveOutcome = 'persistence_unknown';
+    failedClosed = true;
+  };
+
+  if (evidence.actionTurn !== 'found') failClosed(`action_turn_${evidence.actionTurn}`);
+  if (evidence.conversation !== 'found') failClosed(`conversation_${evidence.conversation}`);
+  if (turns.length > 1 && turnTaskIds.length !== 1) {
+    evidence.task = turnTaskIds.length === 0 ? 'unbound' : 'ambiguous';
+    taskCanMutate = false;
+    failClosed('action_turn_task_binding_ambiguous');
+  }
+  if (identity.expectedTaskId) {
+    if (!durableTurnTaskId && turns.length > 0) {
+      evidence.task = 'mismatch';
+      taskCanMutate = false;
+      failClosed('expected_task_binding_missing');
+    } else if (durableTurnTaskId && durableTurnTaskId !== identity.expectedTaskId) {
+      evidence.task = 'mismatch';
+      taskCanMutate = false;
+      failClosed('expected_task_binding_mismatch');
+    }
+  }
+  if (durableTaskId && taskRows.length !== 1) {
+    taskCanMutate = false;
+    failClosed(`task_${evidence.task}`);
+  }
+  if (taskRows.length === 1) {
+    const activeRequestId = String(taskRows[0].activeRequestId || '').trim();
+    if (
+      (turns.length === 0 && identity.expectedTaskId && !exactMissingTurnTaskFence)
+      || (activeRequestId && activeRequestId !== identity.requestId)
+    ) {
+      evidence.task = 'mismatch';
+      taskCanMutate = false;
+      failClosed('task_active_request_mismatch');
+    }
+  }
+  if (identity.outcome === 'terminal' && !exactAssistant) {
+    failClosed(`assistant_${evidence.assistant}`);
+  }
+  if (identity.outcome === 'blocked' && !exactAssistant && !reason) {
+    reason = 'Foreground request ended without a durable assistant transcript.';
+  }
+  if (
+    !exactAssistant
+    && taskRows.length === 1
+    && ['completed', 'failed'].includes(String(taskRows[0].status || ''))
+  ) {
+    failClosed(`terminal_task_without_assistant:${String(taskRows[0].status || 'unknown')}`);
+  }
+  if (taskRows.length === 1 && foregroundTaskPersistenceRequestId(taskRows[0])) {
+    failClosed('task_already_persistence_unknown');
+  }
+
+  let desiredActionStatus: 'terminal' | 'cancelled' | 'persistence_unknown' =
+    effectiveOutcome === 'cancelled' || effectiveOutcome === 'superseded'
+      ? 'cancelled'
+      : effectiveOutcome === 'persistence_unknown'
+        ? 'persistence_unknown'
+        : exactAssistant ? 'terminal' : 'persistence_unknown';
+  if (!reason) {
+    reason = desiredActionStatus === 'terminal'
+      ? 'Exact durable assistant transcript finalized the foreground request.'
+      : desiredActionStatus === 'cancelled'
+        ? 'Foreground request was cancelled.'
+        : effectiveOutcome === 'blocked'
+          ? 'Foreground request is blocked and remains resumable.'
+          : 'Foreground request persistence outcome is unknown.';
+  }
+
+  // A previously quarantined request cannot be promoted by an ordinary retry.
+  // Likewise, a conflicting terminal identity must not mutate its task first.
+  let preserveUniqueTurn = false;
+  if (turns.length === 1) {
+    const current = turns[0];
+    const compatibleTerminal = current.status === desiredActionStatus
+      && (current.status !== 'terminal' || current.terminalMessageId === identity.assistantMessageId);
+    if (
+      ['terminal', 'cancelled', 'persistence_unknown'].includes(current.status)
+      && !compatibleTerminal
+    ) {
+      taskCanMutate = false;
+      preserveUniqueTurn = true;
+      effectiveOutcome = current.status === 'persistence_unknown'
+        ? 'persistence_unknown'
+        : effectiveOutcome;
+      desiredActionStatus = current.status;
+      reason = `action_turn_terminal_conflict:${current.status}`;
+    }
+  }
+
+  let dbChanged = false;
+  let taskStatus = taskRows.length === 1 ? String(taskRows[0].status || '') : '';
+  let finalizedTaskState: ConversationActionContinuationState | null = null;
+  if (durableTaskId && taskCanMutate) {
+    const taskOutcome = effectiveOutcome === 'terminal'
+      ? 'completed'
+      : effectiveOutcome === 'superseded' ? 'blocked' : effectiveOutcome;
+    const taskOutcomeKey: ForegroundRequestFinalizationOutcome = effectiveOutcome;
+    if (!foregroundTaskAlreadyConverged(taskRows[0], taskOutcomeKey, identity.requestId)) {
+      const taskState = getConversationActionStateByTaskId(db, {
+        conversationId: identity.conversationId,
+        userId: identity.userId,
+        taskId: durableTaskId,
+      });
+      const projection: ConversationActionLiveProjection = conversations.length === 1
+        ? conversations[0]
+        : { id: identity.conversationId, userId: identity.userId };
+      const finalizedState = taskState && exactMissingTurnTaskFence
+        ? quarantineForegroundTaskWithoutActionTurnInDb(taskRows[0], taskState, {
+            requestId: identity.requestId,
+            reason,
+            assistantState: identity.assistantState,
+            now: identity.now,
+          })
+        : taskState && finalizeConversationActionTask(db, {
+            conversation: projection,
+            state: taskState,
+            outcome: taskOutcome,
+            requestId: identity.requestId,
+            blocker: effectiveOutcome === 'terminal' || effectiveOutcome === 'superseded' ? '' : reason,
+            assistantState: identity.assistantState,
+            completionSource: effectiveOutcome === 'terminal' ? taskState.completionSource : undefined,
+            now: identity.now,
+          })?.state;
+      if (finalizedState) {
+        finalizedTaskState = finalizedState;
+        taskStatus = finalizedState.status;
+        if (effectiveOutcome === 'superseded') {
+          // Supersession is not a user-facing blocker, so keep latestBlocker
+          // clean while retaining an explicit internal audit reason.
+          const taskContext = parsePersistedObject(taskRows[0].context);
+          const taskFinalization = parsePersistedObject(taskContext.taskFinalization);
+          taskRows[0].context = JSON.stringify({
+            ...taskContext,
+            taskFinalization: {
+              ...taskFinalization,
+              requestDisposition: 'superseded',
+              reason,
+            },
+          });
+        }
+        dbChanged = true;
+      } else {
+        taskCanMutate = false;
+        effectiveOutcome = 'persistence_unknown';
+        desiredActionStatus = 'persistence_unknown';
+        reason = 'task_finalization_failed';
+      }
+    } else {
+      finalizedTaskState = getConversationActionStateByTaskId(db, {
+        conversationId: identity.conversationId,
+        userId: identity.userId,
+        taskId: durableTaskId,
+      });
+    }
+  }
+
+  // Remove only the exact request projection. A newer task/request is never
+  // cleared by a delayed finalizer.
+  for (const conversation of conversations) {
+    if (conversation.pendingActionContinuation?.requestId === identity.requestId) {
+      delete conversation.pendingActionContinuation;
+      dbChanged = true;
+    }
+    const live = normalizeConversationActionState(conversation.actionContinuationState);
+    if (
+      finalizedTaskState
+      && live?.taskId === durableTaskId
+      && (!live.activeRequestId || live.activeRequestId === identity.requestId)
+    ) {
+      if (isTerminalConversationTaskStatus(finalizedTaskState.status)) {
+        delete conversation.actionContinuationState;
+        dbChanged = true;
+      } else if (JSON.stringify(live) !== JSON.stringify(finalizedTaskState)) {
+        conversation.actionContinuationState = finalizedTaskState;
+        dbChanged = true;
+      }
+    }
+  }
+
+  if (turns.length > 0 && !(turns.length === 1 && preserveUniqueTurn)) {
+    for (const turn of turns) {
+      // Ambiguous duplicate rows are all quarantined. For a unique row the
+      // preflight above preserves any conflicting monotonic terminal state.
+      const status = turns.length > 1 ? 'persistence_unknown' : desiredActionStatus;
+      dbChanged = applyForegroundActionTurnOutcomeInDb(turn, {
+        status,
+        assistantMessageId: status === 'terminal' ? identity.assistantMessageId : '',
+        reason,
+        now: identity.now,
+      }) || dbChanged;
+    }
+  }
+
+  if (dbChanged) writeDB(db);
+  const localOwnerCleared = identity.deferLocalOwnerClear
+    ? false
+    : clearManagerActionRequestLeaseOwner(
+        identity,
+        desiredActionStatus === 'terminal' ? '' : reason,
+      );
+  const finalTurnStatus = turns.length === 0
+    ? 'missing'
+    : turns.length > 1 ? 'ambiguous' : turns[0].status;
+  const taskConverged = !durableTaskId
+    ? !identity.expectedTaskId
+    : taskCanMutate && !String(taskRows[0]?.activeRequestId || '').trim();
+  const actionConverged = turns.length === 1
+    && ['terminal', 'cancelled', 'persistence_unknown'].includes(turns[0].status);
+
+  return {
+    conversationId: identity.conversationId,
+    userId: identity.userId,
+    requestId: identity.requestId,
+    requestedOutcome: identity.outcome,
+    effectiveOutcome,
+    taskId: durableTaskId,
+    assistantMessageId: exactAssistant ? identity.assistantMessageId : '',
+    taskStatus,
+    actionTurnStatus: finalTurnStatus,
+    converged: actionConverged && taskConverged,
+    changed: dbChanged || localOwnerCleared,
+    reason,
+    evidence,
+    localOwnerCleared,
+  };
+}
+
+export interface SupersedeConversationActionExecutionRequestInput {
+  readonly conversationId: string;
+  readonly userId: string;
+  readonly requestId: string;
+  readonly expectedTaskId: string;
+  readonly reason?: string;
+  readonly now?: Date | string | number;
+  /** @internal Release-time callers retain the process owner through strict flush. */
+  readonly deferLocalOwnerClear?: boolean;
+}
+
+export type SupersedeConversationActionExecutionRequestResult =
+  FinalizeForegroundRequestResult & {
+    requestedOutcome: 'superseded';
+    superseded: boolean;
+  };
+
+/**
+ * End only the transport request that yielded to an exact continuation.
+ *
+ * The shared foreground finalizer updates the task, live/pending projection,
+ * and action turn in one database mutation. The task remains blocked and
+ * resumable, while the known old request is recorded as cancelled with an
+ * explicit supersession reason instead of being quarantined as persistence
+ * unknown. A later request may therefore bind the same task id safely.
+ */
+export function supersedeConversationActionExecutionRequest(
+  input: SupersedeConversationActionExecutionRequestInput,
+): SupersedeConversationActionExecutionRequestResult {
+  const expectedTaskId = String(input.expectedTaskId || '').trim();
+  if (!expectedTaskId) throw new TypeError('expectedTaskId is required');
+  const requestedReason = String(input.reason || '').replace(/\s+/g, ' ').trim();
+  const reason = /^superseded:/i.test(requestedReason)
+    ? requestedReason
+    : `superseded: ${requestedReason || 'Foreground request yielded to an exact continuation.'}`;
+  const result = finalizeForegroundRequest({
+    conversationId: input.conversationId,
+    userId: input.userId,
+    requestId: input.requestId,
+    expectedTaskId,
+    outcome: 'superseded',
+    reason,
+    now: input.now,
+    deferLocalOwnerClear: input.deferLocalOwnerClear,
+  });
+  return {
+    ...result,
+    requestedOutcome: 'superseded',
+    superseded: Boolean(
+      result.converged
+      && result.effectiveOutcome === 'superseded'
+      && result.actionTurnStatus === 'cancelled'
+      && result.taskStatus === 'blocked'
+    ),
+  };
+}
+
+/**
+ * Reconcile one foreground request from durable transcript/task evidence.
+ *
+ * This deliberately does not depend on a live conversation projection: an
+ * executor can outlive a deleted conversation or task row, and its durable
+ * action-turn lease must still stop fencing the thread. A successful assistant
+ * transcript is sufficient terminal evidence. Missing or ambiguous ownership
+ * is quarantined instead of being guessed from the task projection.
+ *
+ * Every foreground transport uses this manager-level primitive before its
+ * channel-specific resources are released.
+ */
+export function convergeConversationActionRequestLease(
+  input: ConvergeConversationActionRequestLeaseInput,
+): ConvergeConversationActionRequestLeaseResult {
+  const identity = normalizeConversationActionRequestLeaseIdentity(input);
+  const db = readDB();
+  const before = getConversationActionTurn(identity);
+  const conversations = (Array.isArray(db.conversations) ? db.conversations : [])
+    .filter((row: Conversation) => row.id === identity.conversationId && row.userId === identity.userId);
+  const assistants = (Array.isArray(db.interactions) ? db.interactions : [])
+    .filter((row: any) => (
+      row.userId === identity.userId
+      && row.conversationId === identity.conversationId
+      && row.role === 'assistant'
+      && (
+        String(row.requestId || '') === identity.requestId
+        || String(row.externalMessageId || '') === identity.requestId
+      )
+    ));
+  const taskId = String(before?.taskId || '').trim();
+  const tasks = taskId
+    ? (Array.isArray(db.conversationActionTasks) ? db.conversationActionTasks : [])
+        .filter((row: any) => (
+          row.id === taskId
+          && row.conversationId === identity.conversationId
+          && row.userId === identity.userId
+        ))
+    : [];
+  const evidence = {
+    conversation: conversations.length === 1
+      ? 'found' as const
+      : conversations.length === 0 ? 'missing' as const : 'ambiguous' as const,
+    task: !taskId
+      ? 'unbound' as const
+      : tasks.length === 1 ? 'found' as const : tasks.length === 0 ? 'missing' as const : 'ambiguous' as const,
+    assistant: assistants.length === 1
+      ? 'found' as const
+      : assistants.length === 0 ? 'missing' as const : 'ambiguous' as const,
+  };
+
+  const result = (
+    action: ConvergeConversationActionRequestLeaseResult['action'],
+    reason: string,
+    turn: ConversationActionTurn | null,
+    changed: boolean,
+    localOwnerCleared: boolean,
+  ): ConvergeConversationActionRequestLeaseResult => {
+    const exactTask = tasks.length === 1 ? tasks[0] : null;
+    const exactTaskActiveRequestId = String(exactTask?.activeRequestId || '').trim();
+    const taskLeaseSettled = !exactTask || (
+      exactTaskActiveRequestId
+        ? exactTaskActiveRequestId !== identity.requestId
+        : !conversationTaskStatusOwnsExecutionLease(String(exactTask.status || ''))
+    );
+    return {
+      conversationId: identity.conversationId,
+      userId: identity.userId,
+      requestId: identity.requestId,
+      taskId,
+      assistantMessageId: String(turn?.terminalMessageId || '').trim(),
+      beforeStatus: before?.status || 'missing',
+      finalStatus: turn?.status || 'missing',
+      action,
+      // A terminal action-turn is only one half of foreground convergence. A
+      // task owned by this exact request must still be settled. An explicit,
+      // different activeRequestId proves that a successor already owns the
+      // task; an old finally block must then converge request-scoped without
+      // clearing or mutating that newer owner.
+      converged: Boolean(
+        turn
+        && ['terminal', 'cancelled', 'persistence_unknown'].includes(turn.status)
+        && taskLeaseSettled
+      ),
+      changed: changed || localOwnerCleared,
+      reason,
+      evidence,
+      localOwnerCleared,
+      turn,
+    };
+  };
+
+  if (!before) {
+    const localOwnerCleared = identity.deferLocalOwnerClear
+      ? false
+      : clearManagerActionRequestLeaseOwner(
+          identity,
+          'The durable conversation action turn is missing.',
+        );
+    return result('none', 'action_turn_missing', null, false, localOwnerCleared);
+  }
+
+  if (['terminal', 'cancelled', 'persistence_unknown'].includes(before.status)) {
+    const localOwnerCleared = identity.deferLocalOwnerClear
+      ? false
+      : clearManagerActionRequestLeaseOwner(
+          identity,
+          before.status === 'terminal'
+            ? ''
+            : `Conversation action request is already ${before.status}.`,
+        );
+    return result('none', 'already_converged', before, false, localOwnerCleared);
+  }
+
+  let observedStatus: 'terminal' | 'cancelled' | 'persistence_unknown' | null = null;
+  let terminalMessageId = '';
+  let reason = '';
+
+  if (evidence.assistant === 'ambiguous') {
+    observedStatus = 'persistence_unknown';
+    reason = 'assistant_request_binding_ambiguous';
+  } else if (evidence.assistant === 'found') {
+    terminalMessageId = String(assistants[0]?.id || '').trim();
+    if (terminalMessageId) {
+      observedStatus = 'terminal';
+      reason = 'durable_assistant_transcript_found';
+    } else {
+      observedStatus = 'persistence_unknown';
+      reason = 'assistant_message_identity_missing';
+    }
+  } else if (evidence.conversation !== 'found') {
+    observedStatus = 'persistence_unknown';
+    reason = evidence.conversation === 'missing'
+      ? 'conversation_missing'
+      : 'conversation_binding_ambiguous';
+  } else if (evidence.task === 'missing' || evidence.task === 'ambiguous') {
+    observedStatus = 'persistence_unknown';
+    reason = evidence.task === 'missing' ? 'task_missing' : 'task_binding_ambiguous';
+  } else if (evidence.task === 'found' && tasks[0]?.status === 'cancelled') {
+    observedStatus = 'cancelled';
+    reason = 'durable_task_cancelled';
+  } else if (evidence.task === 'found' && isTerminalConversationTaskStatus(tasks[0]?.status)) {
+    // completed/failed proves that task execution ended, but without a durable
+    // assistant record it cannot prove what (if anything) the user saw.
+    observedStatus = 'persistence_unknown';
+    reason = `terminal_task_without_assistant:${String(tasks[0]?.status || 'unknown')}`;
+  }
+
+  if (!observedStatus) {
+    return result('none', taskId ? 'nonterminal_task_still_active' : 'terminal_evidence_missing', before, false, false);
+  }
+
+  if (
+    observedStatus === 'persistence_unknown'
+    && evidence.task === 'found'
+    && evidence.assistant !== 'found'
+  ) {
+    const finalized = finalizeForegroundRequest({
+      conversationId: identity.conversationId,
+      userId: identity.userId,
+      requestId: identity.requestId,
+      expectedTaskId: taskId,
+      outcome: 'persistence_unknown',
+      reason,
+      now: identity.now,
+      deferLocalOwnerClear: identity.deferLocalOwnerClear,
+    });
+    const finalTurn = getConversationActionTurn(identity);
+    return {
+      ...result(
+        finalTurn?.status === 'persistence_unknown' ? 'persistence_unknown' : 'none',
+        reason,
+        finalTurn,
+        finalized.changed,
+        finalized.localOwnerCleared,
+      ),
+      converged: finalized.converged,
+    };
+  }
+
+  const reconciled = reconcileConversationActionTurnLease({
+    conversationId: identity.conversationId,
+    userId: identity.userId,
+    requestId: identity.requestId,
+    observedStatus,
+    terminalMessageId: terminalMessageId || undefined,
+    reason,
+    now: identity.now,
+  });
+  const finalTurn = reconciled.turn || getConversationActionTurn(identity);
+  const localOwnerCleared = identity.deferLocalOwnerClear
+    ? false
+    : clearManagerActionRequestLeaseOwner(
+        identity,
+        observedStatus === 'terminal'
+          ? ''
+          : `Conversation action request converged to ${observedStatus}: ${reason}`,
+      );
+  return result(
+    reconciled.action === 'terminal'
+      || reconciled.action === 'cancelled'
+      || reconciled.action === 'persistence_unknown'
+      ? reconciled.action
+      : 'none',
+    reconciled.reconciled ? reason : reconciled.reason,
+    finalTurn,
+    reconciled.reconciled,
+    localOwnerCleared,
+  );
+}
+
+export interface ForegroundRequestDurabilityDependencies {
+  /** Strict persistence barrier. Tests may inject a deterministic failure. */
+  flush?: () => Promise<void>;
+}
+
+export interface DurableForegroundReleaseGateSnapshot {
+  attempts: number;
+  resourcesReleased: boolean;
+  recoveryOwned: boolean;
+  retryScheduled: boolean;
+}
+
+export interface DurableForegroundReleaseGate {
+  release(reason?: string): Promise<boolean>;
+  snapshot(): DurableForegroundReleaseGateSnapshot;
+  /** Cancel the unref'd recovery worker during test/server teardown. */
+  dispose(): void;
+}
+
+export interface CreateDurableForegroundReleaseGateInput {
+  /** Returns true only after the exact request is strictly durable/release-safe. */
+  converge(reason: string): Promise<boolean>;
+  /** Idempotent heartbeat/desktop/serial cleanup. */
+  releaseResources(): void;
+  onFailure?(input: { reason: string; error: unknown; attempts: number }): void;
+  onRecoveryTakeover?(input: { reason: string; error: unknown; attempts: number }): void;
+  retryDelaysMs?: readonly number[];
+  recoveryTakeoverAfterAttempts?: number;
+}
+
+/**
+ * Gate transport cleanup behind strict durable convergence.
+ *
+ * Transient failures retain every foreground resource. A structurally broken
+ * request cannot hold the desktop/serial lane forever, however: after bounded
+ * exponential attempts this gate becomes the explicit fail-closed recovery
+ * owner, releases transport resources, and continues low-frequency persistence
+ * retries without reporting convergence. The manager request owner remains
+ * intact until a later strict barrier succeeds.
+ */
+export function createDurableForegroundReleaseGate(
+  input: CreateDurableForegroundReleaseGateInput,
+): DurableForegroundReleaseGate {
+  const retryDelaysMs = (input.retryDelaysMs?.length
+    ? input.retryDelaysMs
+    : [250, 500, 1_000, 2_000, 4_000, 10_000, 30_000])
+    .map(value => Math.max(1, Math.floor(Number(value) || 0)));
+  const recoveryTakeoverAfterAttempts = Math.max(
+    1,
+    Math.floor(Number(input.recoveryTakeoverAfterAttempts ?? 6) || 1),
+  );
+  let attempts = 0;
+  let resourcesReleased = false;
+  let recoveryOwned = false;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let inFlight: Promise<boolean> | null = null;
+  let latestReason = 'Foreground request reached its release boundary.';
+  let disposed = false;
+
+  const releaseResourcesOnce = (): void => {
+    if (resourcesReleased) return;
+    input.releaseResources();
+    resourcesReleased = true;
+  };
+  const scheduleRetry = (): void => {
+    if (disposed || retryTimer) return;
+    const delay = retryDelaysMs[Math.min(Math.max(0, attempts - 1), retryDelaysMs.length - 1)];
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      void release(latestReason);
+    }, delay);
+    retryTimer.unref?.();
+  };
+  const release = async (reason = latestReason): Promise<boolean> => {
+    latestReason = String(reason || latestReason);
+    if (disposed) return false;
+    if (resourcesReleased && !recoveryOwned) return true;
+    if (inFlight) return inFlight;
+    // A finally block and a fast-path boundary may both call release. Once a
+    // retry worker is scheduled, those duplicate calls must not accelerate the
+    // takeover threshold or create a second worker.
+    if (retryTimer) return false;
+    const attempt = (async (): Promise<boolean> => {
+      attempts += 1;
+      let failure: unknown = null;
+      try {
+        if (await input.converge(latestReason)) {
+          releaseResourcesOnce();
+          recoveryOwned = false;
+          if (retryTimer) clearTimeout(retryTimer);
+          retryTimer = null;
+          return true;
+        }
+        failure = new Error('foreground_request_not_durably_converged');
+      } catch (error) {
+        failure = error;
+      }
+
+      input.onFailure?.({ reason: latestReason, error: failure, attempts });
+      if (!recoveryOwned && attempts >= recoveryTakeoverAfterAttempts) {
+        recoveryOwned = true;
+        input.onRecoveryTakeover?.({ reason: latestReason, error: failure, attempts });
+        // The gate, rather than the channel executor, now owns retry/recovery.
+        // This releases scarce transport resources but deliberately returns
+        // false so no caller can mistake takeover for durable convergence.
+        releaseResourcesOnce();
+      }
+      scheduleRetry();
+      return false;
+    })();
+    inFlight = attempt;
+    try {
+      return await attempt;
+    } finally {
+      if (inFlight === attempt) inFlight = null;
+    }
+  };
+
+  return {
+    release,
+    dispose: () => {
+      disposed = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = null;
+    },
+    snapshot: () => ({
+      attempts,
+      resourcesReleased,
+      recoveryOwned,
+      retryScheduled: Boolean(retryTimer),
+    }),
+  };
+}
+
+function clearDurableForegroundRequestOwner(
+  identity: Pick<ConvergeConversationActionRequestLeaseInput, 'conversationId' | 'userId' | 'requestId'>,
+  terminal: boolean,
+  reason: string,
+): boolean {
+  return clearManagerActionRequestLeaseOwner(
+    identity,
+    terminal ? '' : reason || 'Foreground request reached a durable fail-closed terminal.',
+  );
+}
+
+/**
+ * Strict release-time reconciliation. `writeDB()` stages an in-memory
+ * snapshot; this wrapper always executes the strict barrier, including on an
+ * idempotent retry after an earlier flush failed. The process owner is cleared
+ * only after both convergence and that barrier succeed.
+ */
+export async function convergeConversationActionRequestLeaseDurably(
+  input: ConvergeConversationActionRequestLeaseInput,
+  dependencies: ForegroundRequestDurabilityDependencies = {},
+): Promise<ConvergeConversationActionRequestLeaseResult> {
+  const identity = normalizeConversationActionRequestLeaseIdentity(input);
+  const result = convergeConversationActionRequestLease({
+    ...identity,
+    deferLocalOwnerClear: true,
+  });
+  await (dependencies.flush || flushDBOrThrow)();
+  if (!result.converged) return result;
+  const localOwnerCleared = clearDurableForegroundRequestOwner(
+    identity,
+    result.finalStatus === 'terminal',
+    result.reason,
+  );
+  return {
+    ...result,
+    changed: result.changed || localOwnerCleared,
+    localOwnerCleared,
+  };
+}
+
+/** Strictly persist a fail-closed foreground terminal before releasing owner. */
+export async function finalizeForegroundRequestDurably(
+  input: FinalizeForegroundRequestInput,
+  dependencies: ForegroundRequestDurabilityDependencies = {},
+): Promise<FinalizeForegroundRequestResult> {
+  const identity = normalizeForegroundRequestFinalizationInput(input);
+  const result = finalizeForegroundRequest({
+    ...identity,
+    deferLocalOwnerClear: true,
+  });
+  // Always flush: an idempotent in-memory retry may be carrying the dirty
+  // snapshot left behind by the previous strict-barrier failure.
+  await (dependencies.flush || flushDBOrThrow)();
+  if (!result.converged) return result;
+  const localOwnerCleared = clearDurableForegroundRequestOwner(
+    identity,
+    result.actionTurnStatus === 'terminal',
+    result.reason,
+  );
+  return {
+    ...result,
+    changed: result.changed || localOwnerCleared,
+    localOwnerCleared,
+  };
 }
 
 /**
@@ -2136,25 +3368,17 @@ export function recoverOrphanedConversationActionExecutions(
       // Keep the task waiting; its one-time grant is still safe to consume.
       continue;
     }
-    conversation.actionContinuationState = {
-      ...previous,
-      version: 2,
-      status: 'blocked',
-      unfinished: true,
-      latestBlocker: waitingForConfirmation
+    const finalized = finalizeConversationActionTask(db, {
+      conversation,
+      state: previous,
+      outcome: 'blocked',
+      requestId: previous.activeRequestId,
+      blocker: waitingForConfirmation
         ? RECONFIRMATION_REQUIRED_BLOCKER
         : 'The previous runtime ended before this task reached a terminal receipt.',
-      activeRequestId: undefined,
-      revision: (previous.revision || 0) + 1,
-      updatedAt: now,
-    };
-    delete conversation.pendingActionContinuation;
-    syncConversationActionTaskLedger(db, {
-      conversation,
-      state: conversation.actionContinuationState,
       now,
     });
-    recovered += 1;
+    if (finalized) recovered += 1;
   }
   if (
     migrated > 0
@@ -2195,6 +3419,27 @@ export function setConversationActionExecutionStatus(
     || conversation.pendingActionContinuation?.requestId
     || '',
   ).trim();
+  if (['completed', 'failed', 'cancelled', 'blocked'].includes(status)) {
+    const finalized = finalizeConversationActionTask(db, {
+      conversation,
+      state: previous,
+      outcome: status as 'completed' | 'failed' | 'cancelled' | 'blocked',
+      requestId: requestIdForLease,
+      blocker: options.blocker,
+      assistantState: options.assistantState,
+      retainPendingAction: true,
+    });
+    if (status === 'cancelled' && requestIdForLease) {
+      cancelManagerActionTurns({
+        conversationId,
+        userId,
+        requestId: requestIdForLease,
+        reason: options.blocker || options.assistantState || 'Task cancelled.',
+      });
+    }
+    writeDB(db);
+    return finalized?.state || previous;
+  }
   // A task can remain resumable while no executor owns it. The accepted turn,
   // however, stays fenced until its assistant terminal crosses the strict DB
   // boundary; otherwise a failed flush could release it while a false success
@@ -2221,18 +3466,75 @@ export function setConversationActionExecutionStatus(
     conversation,
     state: conversation.actionContinuationState,
   });
-  if (!requestLeaseActive && requestIdForLease) {
-    if (status === 'cancelled') {
-      cancelManagerActionTurns({
-        conversationId,
-        userId,
-        requestId: requestIdForLease,
-        reason: options.blocker || options.assistantState || 'Task cancelled.',
-      });
-    }
-  }
   writeDB(db);
   return conversation.actionContinuationState;
+}
+
+function normalizeConversationActionTerminalDisposition(
+  value: unknown,
+): ConversationActionTerminalDisposition | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.outcome !== 'blocked') return null;
+  const taskId = String(candidate.taskId || '').trim().slice(0, 180);
+  const requestId = String(candidate.requestId || '').trim().slice(0, 180);
+  const reason = String(
+    candidate.reason || 'The foreground request ended without a verified complete result.',
+  ).replace(/\s+/g, ' ').trim().slice(0, 380);
+  if (!taskId || !requestId || !reason) return null;
+  return { outcome: 'blocked', taskId, requestId, reason };
+}
+
+/**
+ * Fence a transport's terminal adjudication to the exact still-open action
+ * turn and task. A transport may submit this semantic result, but it cannot
+ * use it to rewrite a task owned by another request or any durable terminal.
+ */
+function resolveConversationActionTerminalDisposition(input: {
+  db: any;
+  conversation: Conversation;
+  role: string;
+  requestId?: string;
+  skipActionContinuation?: boolean;
+  terminalDisposition?: unknown;
+}): ConversationActionTerminalDisposition | null {
+  if (input.role !== 'assistant' || input.skipActionContinuation) return null;
+  const disposition = normalizeConversationActionTerminalDisposition(input.terminalDisposition);
+  if (!disposition || disposition.requestId !== String(input.requestId || '').trim()) return null;
+  const pending = input.conversation.pendingActionContinuation;
+  const state = normalizeConversationActionState(input.conversation.actionContinuationState);
+  if (
+    !pending
+    || pending.requestId !== disposition.requestId
+    || !state
+    || state.taskId !== disposition.taskId
+    || isTerminalConversationTaskStatus(state.status)
+  ) return null;
+
+  const task = (input.db.conversationActionTasks || []).find((candidate: any) => (
+    candidate.id === disposition.taskId
+    && candidate.conversationId === input.conversation.id
+    && candidate.userId === input.conversation.userId
+  ));
+  const turn = (input.db.conversationActionTurns || []).find((candidate: any) => (
+    candidate.conversationId === input.conversation.id
+    && candidate.userId === input.conversation.userId
+    && candidate.requestId === disposition.requestId
+    && candidate.taskId === disposition.taskId
+    && (candidate.status === 'accepted' || candidate.status === 'leased')
+  ));
+  if (!task || !turn || isTerminalConversationTaskStatus(task.status)) return null;
+
+  const taskFinalization = parsePersistedObject(parsePersistedObject(task.context).taskFinalization);
+  const ownsActiveLease = state.activeRequestId === disposition.requestId
+    && task.activeRequestId === disposition.requestId;
+  const ownsExactPreblockedRequest = state.status === 'blocked'
+    && task.status === 'blocked'
+    && !state.activeRequestId
+    && !task.activeRequestId
+    && taskFinalization.outcome === 'blocked'
+    && taskFinalization.requestId === disposition.requestId;
+  return ownsActiveLease || ownsExactPreblockedRequest ? disposition : null;
 }
 
 export function addMessage(msg: {
@@ -2257,10 +3559,22 @@ export function addMessage(msg: {
   timestamp?: string;
   /** Immutable foreground request identity used to reject late replies. */
   requestId?: string;
+  /** Proof-bound native request provenance; absent on web/remote/harness turns. */
+  nativeDeviceId?: string;
+  executionSessionId?: string;
+  nativeClientIdentitySha256?: string;
+  audioInputKind?: 'physical_microphone' | 'synthetic_accepted_transcript';
+  syntheticAudio?: boolean;
+  captureSessionId?: string;
+  sttReceiptId?: string;
+  contextChainId?: string;
+  previousRequestId?: string;
   /** Explicit structured intent emitted by the model/runtime for this reply. */
   taskIntent?: 'task' | 'conversation';
   /** User-visible structured outcome; normalized before it reaches memory/SQLite. */
   completionFeedback?: unknown;
+  /** @internal Request/task-fenced semantic result from a foreground transport. */
+  terminalTaskDisposition?: ConversationActionTerminalDisposition;
   /**
    * Persist the accepted instruction before routing/tool selection finishes,
    * while leaving creation of the real task state to the foreground executor.
@@ -2277,6 +3591,8 @@ export function addMessage(msg: {
   const now = msg.timestamp || new Date().toISOString();
   const normalizedToolCalls = normalizeToolCalls(msg.toolCalls);
   const completionFeedback = normalizeCompletionFeedbackForPersistence(msg.completionFeedback);
+  const nativeRequestBinding = normalizeNativeRequestBinding(msg);
+  const voiceTurnProvenance = normalizeVoiceTurnProvenance(msg);
   let currentUserMessageIdForLedger = '';
 
   const interaction: any = {
@@ -2301,6 +3617,15 @@ export function addMessage(msg: {
     routeSequence: Number.isFinite(msg.routeSequence) ? msg.routeSequence : undefined,
     receivedAt: msg.receivedAt || '',
     requestId: msg.requestId || '',
+    nativeDeviceId: nativeRequestBinding?.nativeDeviceId || '',
+    executionSessionId: nativeRequestBinding?.executionSessionId || '',
+    nativeClientIdentitySha256: nativeRequestBinding?.nativeClientIdentitySha256 || '',
+    audioInputKind: voiceTurnProvenance?.audioInputKind || '',
+    syntheticAudio: voiceTurnProvenance?.syntheticAudio,
+    captureSessionId: voiceTurnProvenance?.captureSessionId || '',
+    sttReceiptId: voiceTurnProvenance?.sttReceiptId || '',
+    contextChainId: voiceTurnProvenance?.contextChainId || '',
+    previousRequestId: voiceTurnProvenance?.previousRequestId || '',
     taskIntent: msg.taskIntent || '',
     ...(completionFeedback ? { completionFeedback } : {}),
     timestamp: now,
@@ -2343,6 +3668,61 @@ export function addMessage(msg: {
         conv.title = msg.content.trim().slice(0, 80);
       }
 
+      const records = normalizedToolCalls || [];
+      const receiptOwnership = !msg.skipActionContinuation
+        && msg.role === 'assistant'
+        && msg.mode !== 'proactive'
+        ? partitionConversationReceiptsByOwnership(records, {
+          taskId: conv.actionContinuationState?.taskId,
+          requestId: conv.actionContinuationState?.activeRequestId
+            || conv.pendingActionContinuation?.requestId,
+        })
+        : { currentRecords: records, staleRecords: [] };
+      const terminalTaskDisposition = receiptOwnership.staleRecords.length === 0
+        ? resolveConversationActionTerminalDisposition({
+            db,
+            conversation: conv,
+            role: msg.role,
+            requestId: msg.requestId,
+            skipActionContinuation: msg.skipActionContinuation,
+            terminalDisposition: msg.terminalTaskDisposition,
+          })
+        : null;
+      if (receiptOwnership.staleRecords.length > 0) {
+        // Receipt ownership is independent from the transient user/assistant
+        // pairing pointer. A late terminal may arrive after that pointer was
+        // cleared, but it must still be archived against its immutable task.
+        archiveBoundConversationActionReceipts(db, {
+          conversationId: conv.id,
+          userId: conv.userId,
+          records: receiptOwnership.staleRecords,
+          turnId: msg.requestId,
+          now,
+        });
+      }
+      if (
+        msg.role === 'assistant'
+        && !conv.pendingActionContinuation
+        && receiptOwnership.staleRecords.length > 0
+        && receiptOwnership.currentRecords.length === 0
+      ) {
+        // The foreground pairing slot has already closed. Persist the delayed
+        // transcript/archive, fence its historical turn, and return without a
+        // generic task sync that would rewrite audit fields on the newer owner.
+        if (msg.requestId) {
+          finalizePersistedAssistantActionTurnInDb(db, {
+            conversationId: conv.id,
+            userId: conv.userId,
+            requestId: msg.requestId,
+            assistantMessageId: id,
+            assistantText: msg.content,
+            now,
+          });
+        }
+        writeDB(db);
+        return id;
+      }
+
       if (!msg.skipActionContinuation && msg.role === 'user' && !msg.deferActionPreparation) {
         const userText = String(msg.content || '').trim();
         if (userText) {
@@ -2366,19 +3746,16 @@ export function addMessage(msg: {
             ),
           );
           if (userObservedCompletion && conv.actionContinuationState) {
-            conv.actionContinuationState = {
-              ...conv.actionContinuationState,
-              version: 2,
-              status: 'completed',
-              unfinished: false,
-              latestBlocker: '',
-              assistantState: userText.replace(/\s+/g, ' ').trim().slice(0, 700),
-              activeRequestId: undefined,
+            finalizeConversationActionTask(db, {
+              conversation: conv,
+              state: conv.actionContinuationState,
+              outcome: 'completed',
+              requestId: msg.requestId,
+              assistantState: userText,
               completionSource: 'user_observation',
-              revision: (conv.actionContinuationState.revision || 0) + 1,
-              updatedAt: now,
-            };
-            delete conv.pendingActionContinuation;
+              userText,
+              now,
+            });
           } else {
             // A user-message wording heuristic may stage pending turn context,
             // but it never creates a durable task. The canonical capability
@@ -2413,22 +3790,7 @@ export function addMessage(msg: {
         const pending = conv.pendingActionContinuation;
         currentUserMessageIdForLedger = pending.messageId;
         const activeTaskId = String(conv.actionContinuationState?.taskId || '');
-        const activeRequestId = String(conv.actionContinuationState?.activeRequestId || pending.requestId || '');
-        const records = normalizedToolCalls || [];
-        const staleRecords = records.filter((record: any) => (
-          (record?.taskId && activeTaskId && record.taskId !== activeTaskId)
-          || (record?.requestId && activeRequestId && record.requestId !== activeRequestId)
-        ));
-        if (staleRecords.length) {
-          archiveBoundConversationActionReceipts(db, {
-            conversationId: conv.id,
-            userId: conv.userId,
-            records: staleRecords,
-            turnId: msg.requestId,
-            now,
-          });
-        }
-        const currentToolRecords = records.filter(record => !staleRecords.includes(record));
+        const currentToolRecords = receiptOwnership.currentRecords;
         const requestMismatch = Boolean(
           pending.requestId
           && msg.requestId
@@ -2535,11 +3897,13 @@ export function addMessage(msg: {
             toolCalls: currentToolRecords,
             updatedAt: now,
             evidenceMessageId: id,
+            userMessageId: pending.messageId,
             requestId: conv.actionContinuationState?.activeRequestId || pending.requestId || msg.requestId,
             toolPolicy: conv.actionContinuationState?.policySnapshot,
           });
           if (nextState) {
             const receiptTaskId = activeTaskId || nextState.taskId;
+            const receiptRequestId = String(msg.requestId || pending.requestId || '').trim();
             const attemptRecords = currentToolRecords.map((record: any) => ({
               ...record,
               taskId: receiptTaskId,
@@ -2560,6 +3924,7 @@ export function addMessage(msg: {
                   unfinished: true,
                   latestBlocker: '',
                   completionSource: undefined,
+                  activeRequestId: receiptRequestId || undefined,
                 },
                 userText: pending.userText,
                 rootUserMessageId: currentUserMessageIdForLedger || undefined,
@@ -2567,14 +3932,63 @@ export function addMessage(msg: {
                 now,
               });
             }
-            archiveBoundConversationActionReceipts(db, {
+            if (receiptRequestId && receiptTaskId) {
+              bindConversationActionTurnTask({
+                conversationId: conv.id,
+                userId: conv.userId,
+                requestId: receiptRequestId,
+                taskId: receiptTaskId,
+                now,
+              });
+            }
+            const receiptArchive = archiveBoundConversationActionReceipts(db, {
               conversationId: conv.id,
               userId: conv.userId,
               records: attemptRecords,
               turnId: currentUserMessageIdForLedger || msg.requestId || pending.requestId,
               now,
+              terminalDisposition: terminalTaskDisposition || undefined,
+              currentPairingAuthority: {
+                userMessageId: pending.messageId,
+                assistantMessageId: id,
+              },
             });
-            conv.actionContinuationState = nextState;
+            const receiptAdjudicated = receiptArchive.adjudicatedTaskIds.includes(receiptTaskId);
+            if (!receiptAdjudicated) {
+              // Historical/unbound records remain append-only evidence. They
+              // cannot update the current live projection in this fallback.
+            } else if (receiptArchive.terminalDispositionApplied) {
+              // The append-only receipts and authoritative request outcome were
+              // committed together. Never recompute completion from a successful
+              // earlier step later in this assistant persistence boundary.
+            } else if (isTerminalConversationTaskStatus(nextState.status)) {
+              finalizeConversationActionTask(db, {
+                conversation: conv,
+                state: nextState,
+                outcome: nextState.status as 'completed' | 'failed' | 'cancelled',
+                requestId: receiptRequestId,
+                blocker: nextState.latestBlocker,
+                assistantState: nextState.assistantState,
+                completionSource: nextState.completionSource,
+                userText: pending.userText,
+                now,
+                retainPendingAction: true,
+              });
+            } else if (nextState.status === 'blocked') {
+              finalizeConversationActionTask(db, {
+                conversation: conv,
+                state: nextState,
+                outcome: 'blocked',
+                requestId: msg.requestId || pending.requestId,
+                blocker: nextState.latestBlocker,
+                assistantState: nextState.assistantState,
+                userText: pending.userText,
+                now,
+                retainPendingAction: true,
+              });
+            } else {
+              conv.actionContinuationState = nextState;
+            }
           }
         } else if (
           msg.taskIntent === 'task'
@@ -2596,28 +4010,35 @@ export function addMessage(msg: {
             now,
           });
           if (prepared.state) {
-            conv.actionContinuationState = {
-              ...prepared.state,
-              status: 'blocked',
-              latestBlocker: 'No terminal tool receipt was recorded for the requested step.',
+            finalizeConversationActionTask(db, {
+              conversation: conv,
+              state: prepared.state,
+              outcome: 'blocked',
+              requestId: pending.requestId || msg.requestId || id,
+              blocker: terminalTaskDisposition?.reason
+                || 'No terminal tool receipt was recorded for the requested step.',
               assistantState: compactRolloverText(msg.content, 700),
-              revision: (prepared.state.revision || 0) + 1,
-              updatedAt: now,
-            };
+              userText: pending.userText,
+              now,
+              retainPendingAction: true,
+            });
           }
         } else if (
           conv.actionContinuationState?.unfinished
           && pendingExpectsExecution
         ) {
-          conv.actionContinuationState = {
-            ...conv.actionContinuationState,
-            version: 2,
-            status: 'blocked',
-            latestBlocker: 'No terminal tool receipt was recorded for the requested step.',
-            assistantState: String(msg.content || '').replace(/\s+/g, ' ').trim().slice(0, 700),
-            revision: (conv.actionContinuationState.revision || 0) + 1,
-            updatedAt: now,
-          };
+          finalizeConversationActionTask(db, {
+            conversation: conv,
+            state: conv.actionContinuationState,
+            outcome: 'blocked',
+            requestId: msg.requestId || pending.requestId,
+            blocker: terminalTaskDisposition?.reason
+              || 'No terminal tool receipt was recorded for the requested step.',
+            assistantState: msg.content,
+            userText: pending.userText,
+            now,
+            retainPendingAction: true,
+          });
         }
         const terminalRequestId = String(msg.requestId || pending.requestId || '').trim();
         if (terminalRequestId && conv.actionContinuationState?.taskId) {
@@ -2637,6 +4058,7 @@ export function addMessage(msg: {
             assistantState: msg.content,
             fallbackBlocker: 'The execution request ended without a terminal tool receipt.',
             now,
+            terminalDisposition: terminalTaskDisposition || undefined,
           },
         );
       }
@@ -2755,6 +4177,23 @@ export function addMessageIdempotent(msg: IdempotentConversationMessage): string
         item.id === msg.conversationId && item.userId === msg.userId
       ));
       if (conversation) {
+        const replayRecords = normalizeToolCalls(msg.toolCalls) || [];
+        const receiptOwnership = partitionConversationReceiptsByOwnership(replayRecords, {
+          taskId: conversation.actionContinuationState?.taskId,
+          requestId: conversation.actionContinuationState?.activeRequestId
+            || conversation.pendingActionContinuation?.requestId,
+        });
+        if (receiptOwnership.staleRecords.length > 0) {
+          // The transcript row is immutable and already user-visible. A late
+          // transport replay may contribute only archive-bound receipts; it
+          // must never append or rewrite the assistant projection.
+          archiveBoundConversationActionReceipts(db, {
+            conversationId: conversation.id,
+            userId: conversation.userId,
+            records: receiptOwnership.staleRecords,
+            turnId: requestId,
+          });
+        }
         finalizeConversationActionRequestInDb(db, conversation, requestId, {
           assistantState: existing.message,
           fallbackBlocker: 'The terminal assistant record was replayed without a verified task outcome.',

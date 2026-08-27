@@ -1,4 +1,5 @@
 import { apiFetch } from './apiClient';
+import type { NativeClientIdentity } from '../../shared/native_client_identity';
 
 export interface User {
   uid: string;
@@ -89,6 +90,7 @@ export async function bootstrap(): Promise<{
   token?: string;
   desktopSessionProof?: string;
   desktopSessionExpiresAt?: string;
+  nativeClientIdentity?: NativeClientIdentity;
   error?: string;
 }> {
   try {

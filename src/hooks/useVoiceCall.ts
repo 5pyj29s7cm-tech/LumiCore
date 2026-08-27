@@ -5,6 +5,10 @@ import {
 } from '@/lib/agentResponseDelivery';
 import { closeAudioContext } from '@/lib/audioContextLifecycle';
 import {
+  classifyVoiceCaptureHealth,
+  VOICE_CAPTURE_STALL_MS,
+} from '@/lib/voiceCaptureRecovery';
+import {
   applyPreferredVoiceOutputDevice,
   requestPreferredMicrophoneStream,
   VOICE_DEVICE_PREFERENCE_CHANGED,
@@ -56,6 +60,11 @@ export interface VoiceStartPayload {
   domain: 'personal' | 'work';
   orgId?: string;
   sessionId: string;
+  /** Declares the browser capture path; the server accepts it as physical only
+   * when the socket is proof-bound to the registered Tauri client and PCM
+   * chunks are observed before the STT final. */
+  audioInputKind: 'physical_microphone';
+  captureSessionId: string;
 }
 
 export interface VoiceSwitchPayload {
@@ -185,6 +194,10 @@ export function useVoiceCall({
   const callGenerationRef = useRef(0);
   const playbackGenerationRef = useRef(0);
   const startInFlightRef = useRef(false);
+  const isMutedRef = useRef(false);
+  const lastCaptureFrameAtRef = useRef(0);
+  const captureRecoveryTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const captureRecoveryInFlightRef = useRef(false);
 
   useEffect(() => { canSendMicAudioRef.current = canSendMicAudio; }, [canSendMicAudio]);
   useEffect(() => { callStateRef.current = callState; }, [callState]);
@@ -303,7 +316,170 @@ export function useVoiceCall({
     void closeAudioContext(audioContext.current);
     audioContext.current = null;
     rawAudioLevelRef.current = 0;
+    lastCaptureFrameAtRef.current = 0;
   }, []);
+
+  const installMicrophoneCapture = useCallback(async (
+    generation: number,
+    replaceExisting = false,
+  ): Promise<void> => {
+    const stream = await requestPreferredMicrophoneStream({
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    });
+    if (generation !== callGenerationRef.current) {
+      stream.getTracks().forEach(track => track.stop());
+      return;
+    }
+
+    const nextContext = new AudioContext({ sampleRate: 16000 });
+    try {
+      stream.getAudioTracks().forEach(track => { track.enabled = !isMutedRef.current; });
+      const source = nextContext.createMediaStreamSource(stream);
+      // 128 ms frames keep realtime STT and spoken barge-in responsive while
+      // remaining large enough to avoid excessive socket overhead.
+      const scriptProcessor = nextContext.createScriptProcessor(2048, 1, 1);
+      scriptProcessor.onaudioprocess = (event) => {
+        lastCaptureFrameAtRef.current = Date.now();
+        const currentSocket = socketRef.current;
+        if (!currentSocket?.connected) return;
+        const input = event.inputBuffer.getChannelData(0);
+        const int16 = new Int16Array(input.length);
+        let frameSum = 0;
+        for (let i = 0; i < input.length; i++) {
+          const s = Math.max(-1, Math.min(1, input[i]));
+          frameSum += s * s;
+          int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+        const chunk = new Uint8Array(int16.buffer);
+        const frameRms = Math.sqrt(frameSum / Math.max(1, input.length));
+        rawAudioLevelRef.current = frameRms;
+        window.dispatchEvent(new CustomEvent('lumi:voice-audio-level', {
+          detail: { level: frameRms },
+        }));
+
+        // Keep realtime STT active while Lumi speaks. Browser echo cancellation
+        // plus the server's recent-TTS matcher remove self speech; keeping this
+        // lane open gives stop commands a semantic path even when the local
+        // energy detector does not cross its threshold.
+        if (isTtsPlaying.current) {
+          currentSocket.volatile.emit('audio:chunk', chunk);
+
+          const ttsAgeMs = ttsStartedAt.current > 0 ? Date.now() - ttsStartedAt.current : 0;
+          if (ttsAgeMs <= 450) {
+            ttsEchoFloorRef.current = ttsEchoFloorRef.current === 0
+              ? frameRms
+              : (ttsEchoFloorRef.current * 0.72) + (frameRms * 0.28);
+            ttsBargeInFramesRef.current = 0;
+          } else {
+            const adaptiveThreshold = Math.max(
+              0.018,
+              Math.min(0.09, (ttsEchoFloorRef.current * 2.2) + 0.006),
+            );
+            ttsBargeInFramesRef.current = frameRms > adaptiveThreshold
+              ? ttsBargeInFramesRef.current + 1
+              : 0;
+            if (ttsBargeInFramesRef.current > 0 && !transcriptionOnlyRef.current) {
+              window.dispatchEvent(new CustomEvent('lumi:voice-pcm-frame', {
+                detail: { samples: new Float32Array(input), rms: frameRms },
+              }));
+            }
+            const strongSpeechFrame = frameRms > Math.max(0.045, adaptiveThreshold * 1.6);
+            const sustainedCandidate = ttsBargeInFramesRef.current >= (strongSpeechFrame ? 3 : 5);
+            if (sustainedCandidate && !ttsBargeInCandidateSentRef.current) {
+              ttsBargeInCandidateSentRef.current = true;
+              currentSocket.emit('audio:interrupt-candidate', {
+                source: 'local_energy',
+                rms: Number(frameRms.toFixed(4)),
+                threshold: Number(adaptiveThreshold.toFixed(4)),
+                frames: ttsBargeInFramesRef.current,
+                ttsAgeMs,
+              });
+            }
+          }
+          return;
+        }
+
+        const micAllowed = transcriptionOnlyRef.current || (canSendMicAudioRef.current?.() ?? true);
+        if (!micAllowed) return;
+
+        if (!transcriptionOnlyRef.current) {
+          window.dispatchEvent(new CustomEvent('lumi:voice-pcm-frame', {
+            detail: { samples: new Float32Array(input), rms: frameRms },
+          }));
+        }
+
+        if (!transcriptionOnlyRef.current && callStateRef.current === 'passive' && frameRms < 0.004) {
+          const now = Date.now();
+          if (now - lastPassiveSilenceKeepAlive.current < 1500) return;
+          lastPassiveSilenceKeepAlive.current = now;
+        }
+
+        currentSocket.volatile.emit('audio:chunk', chunk);
+      };
+
+      source.connect(scriptProcessor);
+      const zeroGain = nextContext.createGain();
+      zeroGain.gain.value = 0;
+      scriptProcessor.connect(zeroGain);
+      zeroGain.connect(nextContext.destination);
+
+      if (replaceExisting) cleanupCapture();
+      if (generation !== callGenerationRef.current) {
+        scriptProcessor.onaudioprocess = null;
+        try { scriptProcessor.disconnect(); } catch {}
+        stream.getTracks().forEach(track => track.stop());
+        void closeAudioContext(nextContext);
+        return;
+      }
+      streamRef.current = stream;
+      audioContext.current = nextContext;
+      scriptProcessorRef.current = scriptProcessor;
+      lastCaptureFrameAtRef.current = Date.now();
+      window.dispatchEvent(new CustomEvent('lumi:voice-capture-state', { detail: { active: true } }));
+    } catch (error) {
+      stream.getTracks().forEach(track => track.stop());
+      void closeAudioContext(nextContext);
+      throw error;
+    }
+  }, [cleanupCapture]);
+
+  const recoverMicrophoneCapture = useCallback(async (forceRestart = false): Promise<void> => {
+    if (!isCallActive.current || captureRecoveryInFlightRef.current) return;
+    const context = audioContext.current;
+    const health = forceRestart ? 'restart_capture' : classifyVoiceCaptureHealth({
+      callActive: isCallActive.current,
+      trackStates: streamRef.current?.getAudioTracks().map(track => track.readyState) || [],
+      audioContextState: context?.state || null,
+      lastFrameAt: lastCaptureFrameAtRef.current,
+      stallMs: VOICE_CAPTURE_STALL_MS,
+    });
+    if (health === 'inactive' || health === 'healthy') return;
+
+    if (health === 'resume_context' && context) {
+      try {
+        await context.resume();
+        if (context.state === 'running') {
+          lastCaptureFrameAtRef.current = Date.now();
+          return;
+        }
+      } catch {}
+    }
+
+    captureRecoveryInFlightRef.current = true;
+    const generation = callGenerationRef.current;
+    try {
+      await installMicrophoneCapture(generation, true);
+      if (generation === callGenerationRef.current && isCallActive.current) setError(null);
+    } catch (captureError: any) {
+      if (generation === callGenerationRef.current && isCallActive.current) {
+        setError(captureError?.message || 'Microphone input was interrupted and could not be restored.');
+      }
+    } finally {
+      captureRecoveryInFlightRef.current = false;
+    }
+  }, [installMicrophoneCapture]);
 
   const clearPassiveTimers = useCallback(() => {
     if (passiveTimer.current) { clearTimeout(passiveTimer.current); passiveTimer.current = null; }
@@ -330,6 +506,7 @@ export function useVoiceCall({
     transcriptionOnlyRef.current = false;
     ttsStartedAt.current = 0;
     setIsMuted(false);
+    isMutedRef.current = false;
 
     setCallState('idle');
   }, [cleanupCapture, disposePlaybackContexts, clearPassiveTimers, clearThinkingWatchdog]);
@@ -789,129 +966,12 @@ export function useVoiceCall({
       await waitForVoiceSocket(activeSocket);
       if (generation !== callGenerationRef.current) return;
 
-      const stream = await requestPreferredMicrophoneStream({
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      });
-      if (generation !== callGenerationRef.current) {
-        stream.getTracks().forEach(track => track.stop());
-        return;
-      }
-      streamRef.current = stream;
-      window.dispatchEvent(new CustomEvent('lumi:voice-capture-state', { detail: { active: true } }));
-
-      // Set up audio level monitoring at the realtime STT sample rate.
-      audioContext.current = new AudioContext({ sampleRate: 16000 });
-      const source = audioContext.current.createMediaStreamSource(stream);
-
-      // Set up ScriptProcessorNode to capture raw PCM (linear16) for realtime STT.
-      // 128 ms frames keep realtime STT and spoken barge-in responsive while
-      // remaining large enough to avoid excessive socket overhead.
-      const bufferSize = 2048;
-      const scriptProcessor = audioContext.current.createScriptProcessor(bufferSize, 1, 1);
-
-      scriptProcessor.onaudioprocess = (event) => {
-        const currentSocket = socketRef.current;
-        if (!currentSocket?.connected) return;
-        const input = event.inputBuffer.getChannelData(0);
-        // Convert float32 [-1,1] to int16 PCM
-        const int16 = new Int16Array(input.length);
-        let frameSum = 0;
-        for (let i = 0; i < input.length; i++) {
-          const s = Math.max(-1, Math.min(1, input[i]));
-          frameSum += s * s;
-          int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-        }
-        const chunk = new Uint8Array(int16.buffer);
-        const frameRms = Math.sqrt(frameSum / Math.max(1, input.length));
-        rawAudioLevelRef.current = frameRms;
-        window.dispatchEvent(new CustomEvent('lumi:voice-audio-level', {
-          detail: { level: frameRms },
-        }));
-
-        // Keep realtime STT active while Lumi speaks. Browser echo cancellation
-        // plus the server's recent-TTS matcher remove self speech; keeping this
-        // lane open gives stop commands a semantic path even when the local
-        // energy detector does not cross its threshold.
-        if (isTtsPlaying.current) {
-          currentSocket.volatile.emit('audio:chunk', chunk);
-
-          const ttsAgeMs = ttsStartedAt.current > 0 ? Date.now() - ttsStartedAt.current : 0;
-          // Learn the current room/speaker echo at the start of every
-          // utterance. A fixed threshold made normal-volume and short
-          // interruptions unreliable across different microphones.
-          if (ttsAgeMs <= 450) {
-            ttsEchoFloorRef.current = ttsEchoFloorRef.current === 0
-              ? frameRms
-              : (ttsEchoFloorRef.current * 0.72) + (frameRms * 0.28);
-            ttsBargeInFramesRef.current = 0;
-          } else {
-            const adaptiveThreshold = Math.max(
-              0.018,
-              Math.min(0.09, (ttsEchoFloorRef.current * 2.2) + 0.006),
-            );
-            ttsBargeInFramesRef.current = frameRms > adaptiveThreshold
-              ? ttsBargeInFramesRef.current + 1
-              : 0;
-            if (ttsBargeInFramesRef.current > 0 && !transcriptionOnlyRef.current) {
-              // Feed likely near-end speech to the utterance-scoped voiceprint
-              // verifier. Raw energy alone must never stop playback: speaker
-              // echo and room transients can cross the same threshold. The
-              // server stops TTS only after STT echo filtering and speaker/
-              // semantic admission accept the utterance.
-              window.dispatchEvent(new CustomEvent('lumi:voice-pcm-frame', {
-                detail: { samples: new Float32Array(input), rms: frameRms },
-              }));
-            }
-            const strongSpeechFrame = frameRms > Math.max(0.045, adaptiveThreshold * 1.6);
-            const sustainedCandidate = ttsBargeInFramesRef.current >= (strongSpeechFrame ? 3 : 5);
-            if (sustainedCandidate && !ttsBargeInCandidateSentRef.current) {
-              ttsBargeInCandidateSentRef.current = true;
-              currentSocket.emit('audio:interrupt-candidate', {
-                source: 'local_energy',
-                rms: Number(frameRms.toFixed(4)),
-                threshold: Number(adaptiveThreshold.toFixed(4)),
-                frames: ttsBargeInFramesRef.current,
-                ttsAgeMs,
-              });
-            }
-          }
-          return;
-        }
-
-        const micAllowed = transcriptionOnlyRef.current || (canSendMicAudioRef.current?.() ?? true);
-        if (!micAllowed) return;
-
-        if (!transcriptionOnlyRef.current) {
-          // Feed speaker verification from the exact PCM stream sent to STT.
-          // A second getUserMedia stream drifts across utterance boundaries and
-          // can accidentally authorize loudspeaker audio with a stale match.
-          window.dispatchEvent(new CustomEvent('lumi:voice-pcm-frame', {
-            detail: { samples: new Float32Array(input), rms: frameRms },
-          }));
-        }
-
-        if (!transcriptionOnlyRef.current && callStateRef.current === 'passive' && frameRms < 0.004) {
-          const now = Date.now();
-          if (now - lastPassiveSilenceKeepAlive.current < 1500) return;
-          lastPassiveSilenceKeepAlive.current = now;
-        }
-
-        currentSocket.volatile.emit('audio:chunk', chunk);
-      };
-
-      source.connect(scriptProcessor);
-      // Mute output to speakers to prevent feedback loop
-      const zeroGain = audioContext.current.createGain();
-      zeroGain.gain.value = 0;
-      scriptProcessor.connect(zeroGain);
-      zeroGain.connect(audioContext.current.destination);
-
-      scriptProcessorRef.current = scriptProcessor;
+      await installMicrophoneCapture(generation);
+      if (generation !== callGenerationRef.current) return;
 
       isCallActive.current = true;
       callStartTime.current = Date.now();
+      const captureSessionId = createVoiceSessionId();
       const startPayload: VoiceStartPayload = {
         voiceId: preferredVoiceIdRef.current || requestedVoiceId,
         personalityId,
@@ -919,7 +979,9 @@ export function useVoiceCall({
         transcriptionOnly: options.transcriptionOnly === true,
         domain: options.domain || 'personal',
         orgId: options.domain === 'work' ? options.orgId : undefined,
-        sessionId: createVoiceSessionId(),
+        sessionId: captureSessionId,
+        audioInputKind: 'physical_microphone',
+        captureSessionId,
       };
       activeStartPayload.current = startPayload;
       activeSocket.emit('audio:start', startPayload);
@@ -936,7 +998,7 @@ export function useVoiceCall({
     } finally {
       startInFlightRef.current = false;
     }
-  }, [cleanupCapture, disabled]);
+  }, [cleanupCapture, disabled, installMicrophoneCapture]);
 
   const switchVoice = useCallback((voiceId?: string): boolean => {
     const normalizedVoiceId = normalizeSelectedVoiceId(voiceId);
@@ -953,13 +1015,30 @@ export function useVoiceCall({
   }, []);
 
   useEffect(() => {
-    const applyOutputPreference = () => {
+    if (disabled) return;
+    const timer = setInterval(() => {
+      void recoverMicrophoneCapture(false);
+    }, 1_000);
+    captureRecoveryTimerRef.current = timer;
+    return () => {
+      clearInterval(timer);
+      if (captureRecoveryTimerRef.current === timer) captureRecoveryTimerRef.current = null;
+    };
+  }, [disabled, recoverMicrophoneCapture]);
+
+  useEffect(() => {
+    const applyDevicePreference = (event: Event) => {
+      const detail = (event as CustomEvent<{ kind?: 'input' | 'output' }>).detail;
+      if (detail?.kind === 'input') {
+        void recoverMicrophoneCapture(true);
+        return;
+      }
       if (ttsContext.current) void applyPreferredVoiceOutputDevice(ttsContext.current);
       if (proactiveContext.current) void applyPreferredVoiceOutputDevice(proactiveContext.current);
     };
-    window.addEventListener(VOICE_DEVICE_PREFERENCE_CHANGED, applyOutputPreference);
-    return () => window.removeEventListener(VOICE_DEVICE_PREFERENCE_CHANGED, applyOutputPreference);
-  }, []);
+    window.addEventListener(VOICE_DEVICE_PREFERENCE_CHANGED, applyDevicePreference);
+    return () => window.removeEventListener(VOICE_DEVICE_PREFERENCE_CHANGED, applyDevicePreference);
+  }, [recoverMicrophoneCapture]);
 
   const startCallRef = useRef(startCall);
   startCallRef.current = startCall;
@@ -989,6 +1068,7 @@ export function useVoiceCall({
   const toggleMute = useCallback(() => {
     setIsMuted(prev => {
       const next = !prev;
+      isMutedRef.current = next;
       if (streamRef.current) {
         streamRef.current.getAudioTracks().forEach(t => { t.enabled = !next; });
       }

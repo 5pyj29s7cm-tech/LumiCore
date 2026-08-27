@@ -27,6 +27,8 @@ export interface TaskCapsuleCorrectionV1 {
   previousTarget: string;
   replacementTarget: string;
   observedAt: string;
+  /** Durable identity of the user correction event, when one is available. */
+  eventRef?: string;
 }
 
 export interface TaskCapsuleCompletedStepV1 {
@@ -86,6 +88,8 @@ export interface DurableTaskCapsuleSource {
   status?: ConversationTaskStatus;
   goal?: string;
   latestInstruction?: string;
+  /** Persisted user message id, falling back to the owning request id. */
+  latestInstructionRef?: string;
   appTarget?: string;
   sourcePaths?: string[];
   latestBlocker?: string;
@@ -104,6 +108,7 @@ export interface TaskCapsuleCorrectionUpdateV1 {
   rejectCurrentTarget?: boolean;
   reason?: string;
   observedAt?: string;
+  eventRef?: string;
 }
 
 export interface TaskCapsuleUpdateV1 {
@@ -120,6 +125,8 @@ export interface TaskCapsuleUpdateV1 {
 
 export interface BuildTaskCapsuleOptions {
   currentTurnText?: string;
+  /** Persisted user message id, falling back to the current request id. */
+  currentTurnRef?: string;
   previousCapsule?: TaskCapsuleV1 | null;
   observedAt?: string;
 }
@@ -137,8 +144,15 @@ const MAX_DO_NOT_RETRY = 12;
 // i18n-allow: multilingual task-target correction recognition; not user-visible copy.
 const TARGET_CORRECTION_RE = /^(?:(?:不对|错了|搞错了|弄错了)[，,:：\s]*)?(?:(?:不是|并不是|别用|不要用)\s*(?:(?:(?:这|那|刚才|之前|当前)(?:个|份|张|条)?\s*)?(?:文件|文档|PPT|演示文稿|表格|图片|资料|窗口|页面|应用|软件|路径|目录|版本|目标)|[^\r\n，,;；。！？!?]{1,180}\.(?:pptx?|docx?|xlsx?|pdf|txt|md|csv|json|png|jpe?g|gif|svg|dwg|dxf|zip)))[^。！？!?]{0,180}[。！？!?]*$|^(?:(?:no|wrong)[,:\s]+)?(?:not|wrong)\s+(?:(?:(?:this|that|the\s+(?:current|previous|last))\s+)?(?:file|document|presentation|sheet|image|window|app|path|version|target)\b|[^\r\n,;.!?]{1,180}\.(?:pptx?|docx?|xlsx?|pdf|txt|md|csv|json|png|jpe?g|gif|svg|dwg|dxf|zip)\b).{0,180}[.!?]*$/iu;
 
+// Inside an established unfinished file task, this exact deictic rejection is
+// target feedback. Keeping it separate from TARGET_CORRECTION_RE prevents a
+// conversational “不是，我想问……” from binding to old work.
+// i18n-allow: multilingual task-target correction recognition; not user-visible copy.
+const TERSE_DEICTIC_TARGET_CORRECTION_RE =
+  /^(?:不对[，,:：\s]*)?(?:不是|并不是|别用|不要用)\s*(?:这|那)(?:个|份|张|条)?[啊呀吧嘛呢，,。！？?!\s]*$|^(?:no|wrong|not)\s+(?:this|that)(?:\s+one)?[.!?\s]*$/iu;
+
 // i18n-allow: multilingual task-target detail recognition; not user-visible copy.
-const TARGET_DETAIL_RE = /^(?:(?:文件|文档|PPT|演示文稿|表格|图片|资料|目标|路径|目录)(?:在|位于|是|叫|名为|名称是)|(?:在|位于)(?:桌面|下载|文档|当前窗口)|[A-Za-z]:[\\/]|\\\\).{1,420}$|^(?:(?:the\s+)?(?:file|document|presentation|sheet|image|target|path)(?:\s+is|\s+is\s+named|\s+is\s+on)|it(?:'s| is)\s+(?:on|in|named|called))\b.{1,420}$/iu;
+const TARGET_DETAIL_RE = /^(?:(?:(?:准确|正确|具体|完整)?(?:文件名|文档名|PPT名|演示文稿名|表格名|图片名|资料名)|(?:文件|文档|PPT|演示文稿|表格|图片|资料|目标|路径|目录))(?:在|位于|是|为|叫|名为|名称是)|(?:在|位于)(?:桌面|下载|文档|当前窗口)|[A-Za-z]:[\\/]|\\\\).{1,420}$|^(?:(?:the\s+)?(?:file|document|presentation|sheet|image|target|path)(?:\s+is|\s+is\s+named|\s+is\s+on)|it(?:'s| is)\s+(?:on|in|named|called))\b.{1,420}$/iu;
 
 const EXPLICIT_FILE_NAME_RE = /(?:^|[\\/\s，,:："'“”‘’])([^\\/\r\n，,;；"'“”‘’]{1,180}\.(?:pptx?|docx?|xlsx?|pdf|txt|md|csv|json|png|jpe?g|gif|svg|dwg|dxf|zip))[。！？.!?]*$/iu;
 // i18n-allow: multilingual file-task context recognition; not user-visible copy.
@@ -224,7 +238,7 @@ function explicitFileName(text: string): string {
   const absolutePath = clean.match(/(?:[A-Za-z]:[\\/]|\\\\)[^\r\n，,；;。！？!?]{1,420}/u)?.[0];
   if (absolutePath) return compact(absolutePath, 500);
   // i18n-allow: multilingual explicit filename recognition; not user-visible copy.
-  const named = clean.match(/(?:叫|名为|名称是|named|called)\s*["'“”‘’]?([^"'“”‘’\r\n，,；;。！？!?]{1,200}\.(?:pptx?|docx?|xlsx?|pdf|txt|md|csv|json|png|jpe?g|gif|svg|dwg|dxf|zip))/iu)?.[1];
+  const named = clean.match(/(?:(?:准确|正确|具体|完整)?(?:文件名|文档名|PPT名|演示文稿名|表格名|图片名|资料名)\s*(?:是|为|叫|名为|名称是)|叫|名为|名称是|named|called)\s*["'“”‘’]?([^"'“”‘’\r\n，,；;。！？!?]{1,200}\.(?:pptx?|docx?|xlsx?|pdf|txt|md|csv|json|png|jpe?g|gif|svg|dwg|dxf|zip))/iu)?.[1];
   if (named) return compact(named, 220);
   return compact(clean.match(EXPLICIT_FILE_NAME_RE)?.[1], 220);
 }
@@ -248,9 +262,27 @@ function applicationFromText(text: string): string {
 function replacementClause(text: string): string {
   const clean = compact(text, 500).replace(/[。！？!?]+$/u, '');
   // i18n-allow: multilingual target-replacement recognition; not user-visible copy.
-  const replacement = clean.match(/(?:而是|应该是|改成|换成|(?<!不)要用|请用|(?<!不要)(?<!别)用)\s*["'“”‘’]?(.{1,220})$/u)?.[1]
-    || clean.match(/\b(?:instead(?:\s+use)?|use|replace(?:\s+it)?\s+with)\s+["']?(.{1,220})$/iu)?.[1];
-  return compact(replacement?.replace(/["'“”‘’]+$/u, ''), 220);
+  const replacement = clean.match(/(?:而是|应该是|改成|换成|(?<!不)要用|请用|(?<!不要)(?<!别)用)\s*["'“”‘’]?(.{1,420})$/u)?.[1]
+    || clean.match(/\b(?:instead(?:\s+use)?|use|replace(?:\s+it)?\s+with)\s+["']?(.{1,420})$/iu)?.[1];
+  return compact(replacement?.replace(/["'“”‘’]+$/u, ''), 500);
+}
+
+function explicitTargetReplacement(text: string): string {
+  const clean = compact(text, 500);
+  // Long absolute paths can make the legacy whole-sentence correction regex
+  // exceed its bounded branches. Bind only an explicit replacement clause
+  // whose replacement itself names a file/path/application; conversational
+  // "use a warmer tone" wording must not become task-target feedback.
+  // i18n-allow: multilingual target-replacement recognition; not user-visible copy.
+  const hasReplacementCue = /(?:而是|应该是|改成|换成)/u.test(clean)
+    || /(?:不是|并不是|别用|不要用).*(?:请用|(?<!不)要用)/u.test(clean)
+    || /\b(?:instead(?:\s+use)?|replace(?:\s+it)?\s+with)\b/iu.test(clean);
+  if (!hasReplacementCue) return '';
+  const replacement = replacementClause(clean);
+  if (!replacement) return '';
+  return explicitFileName(replacement) || applicationFromText(replacement)
+    ? replacement
+    : '';
 }
 
 function targetUpdateFromTurn(text: string): {
@@ -263,12 +295,15 @@ function targetUpdateFromTurn(text: string): {
 } | null {
   const clean = compact(text, 500);
   if (!clean) return null;
-  const correction = TARGET_CORRECTION_RE.test(clean);
+  const boundedReplacement = explicitTargetReplacement(clean);
+  const correction = TARGET_CORRECTION_RE.test(clean)
+    || TERSE_DEICTIC_TARGET_CORRECTION_RE.test(clean)
+    || Boolean(boundedReplacement);
   const detail = TARGET_DETAIL_RE.test(clean);
   const fileName = explicitFileName(clean);
   if (!correction && !detail && !fileName) return null;
 
-  const replacement = correction ? replacementClause(clean) : '';
+  const replacement = correction ? (boundedReplacement || replacementClause(clean)) : '';
   const replacementFile = explicitFileName(replacement);
   const path = compact(replacementFile || fileName, 500);
   const application = applicationFromText(replacement || clean);
@@ -297,6 +332,10 @@ export function classifyTaskCapsuleTurn(
   const clean = compact(text, 500);
   if (!clean) return 'none';
   if (TARGET_CORRECTION_RE.test(clean)) return 'target_correction';
+  if (explicitTargetReplacement(clean)) return 'target_correction';
+  if (TERSE_DEICTIC_TARGET_CORRECTION_RE.test(clean) && hasFileTaskContext(source)) {
+    return 'target_correction';
+  }
   if (TARGET_DETAIL_RE.test(clean)) return 'target_detail';
   if (explicitFileName(clean) && hasFileTaskContext(source)) return 'target_detail';
   return 'none';
@@ -481,6 +520,9 @@ function normalizeCapsule(capsule: TaskCapsuleV1): TaskCapsuleV1 {
           previousTarget: compact(capsule.latestCorrection.previousTarget, 500),
           replacementTarget: compact(capsule.latestCorrection.replacementTarget, 500),
           observedAt: timestamp(capsule.latestCorrection.observedAt),
+          ...(compact(capsule.latestCorrection.eventRef, 180)
+            ? { eventRef: compact(capsule.latestCorrection.eventRef, 180) }
+            : {}),
         }
       : null,
     completedSteps: [...completedByReceipt.values()].slice(-MAX_COMPLETED_STEPS),
@@ -566,6 +608,9 @@ export function normalizeTaskCapsuleV1(value: unknown): TaskCapsuleV1 | null {
           previousTarget: compact(rawCorrection.previousTarget, 500),
           replacementTarget: compact(rawCorrection.replacementTarget, 500),
           observedAt: timestamp(rawCorrection.observedAt),
+          ...(compact(rawCorrection.eventRef, 180)
+            ? { eventRef: compact(rawCorrection.eventRef, 180) }
+            : {}),
         }
       : null,
     completedSteps: objectItems(candidate.completedSteps).map(step => ({
@@ -655,6 +700,9 @@ export function updateTaskCapsuleV1(
       previousTarget,
       replacementTarget,
       observedAt,
+      ...(compact(update.correction.eventRef, 180)
+        ? { eventRef: compact(update.correction.eventRef, 180) }
+        : {}),
     };
   }
 
@@ -710,11 +758,73 @@ export function updateTaskCapsuleV1(
   });
 }
 
+function correctionPostStateMatches(
+  capsule: TaskCapsuleV1,
+  correction: TaskCapsuleCorrectionV1,
+  text: string,
+  replacementIdentity: string,
+): boolean {
+  if (correction.text !== redactSecrets(text, 500)) return false;
+  if (targetFingerprint(replacementIdentity) !== targetFingerprint(correction.replacementTarget)) {
+    return false;
+  }
+
+  const currentIdentity = targetIdentity(capsule.target);
+  const expectedIdentity = correction.replacementTarget || correction.previousTarget;
+  if (!expectedIdentity
+    || targetFingerprint(currentIdentity) !== targetFingerprint(expectedIdentity)) return false;
+  if (!correction.replacementTarget && capsule.target.status !== 'rejected') return false;
+
+  if (correction.previousTarget) {
+    const rejectedFingerprint = targetFingerprint(correction.previousTarget);
+    if (!capsule.rejectedTargets.some(item => (
+      targetFingerprint(item.identity) === rejectedFingerprint
+    ))) return false;
+    if (!capsule.doNotRetry.some(item => item.fingerprint === rejectedFingerprint)) return false;
+  }
+  return true;
+}
+
+function bindCorrectionEventRef(
+  capsule: TaskCapsuleV1,
+  eventRef: string,
+): TaskCapsuleV1 {
+  if (!capsule.latestCorrection) return capsule;
+  return normalizeCapsule({
+    ...capsule,
+    latestCorrection: {
+      ...capsule.latestCorrection,
+      eventRef,
+    },
+  });
+}
+
+function recordRepeatedCorrectionEvent(
+  capsule: TaskCapsuleV1,
+  text: string,
+  eventRef: string,
+  observedAt: string,
+): TaskCapsuleV1 {
+  if (!capsule.latestCorrection) return capsule;
+  return normalizeCapsule({
+    ...capsule,
+    currentInstruction: redactSecrets(text, 700),
+    latestCorrection: {
+      ...capsule.latestCorrection,
+      text: redactSecrets(text, 500),
+      observedAt,
+      eventRef,
+    },
+    updatedAt: observedAt,
+  });
+}
+
 function applyTargetTurn(
   capsule: TaskCapsuleV1,
   text: string,
   source: DurableTaskCapsuleSource,
   observedAt: string,
+  eventRef?: string,
 ): TaskCapsuleV1 {
   const kind = classifyTaskCapsuleTurn(text, source);
   if (kind === 'none') return capsule;
@@ -726,6 +836,40 @@ function applyTargetTurn(
     replacementIdentity
     && targetFingerprint(replacementIdentity) !== targetFingerprint(currentIdentity),
   );
+  const previousCorrection = capsule.latestCorrection;
+  const normalizedEventRef = compact(eventRef, 180);
+  const previousEventRef = compact(previousCorrection?.eventRef, 180);
+  const expectedPostState = Boolean(
+    previousCorrection
+    && correctionPostStateMatches(capsule, previousCorrection, text, replacementIdentity),
+  );
+
+  if (previousCorrection && normalizedEventRef && previousEventRef === normalizedEventRef) {
+    // An immutable event id is a replay only while every correction side
+    // effect is still in its expected post-state.
+    if (expectedPostState) return capsule;
+    // A same-id/state conflict is not classified as replay. It is fail-closed:
+    // preserve the observed current state instead of rolling an older event
+    // over a newer or otherwise inconsistent target.
+    return capsule;
+  }
+  if (previousCorrection && expectedPostState) {
+    if (!previousEventRef && normalizedEventRef) {
+      // Legacy capsules did not retain a stable event id. Once the owning
+      // persisted row/request is available, bind it without rewriting any
+      // correction, rejection, or do-not-retry timestamp.
+      return bindCorrectionEventRef(capsule, normalizedEventRef);
+    }
+    if (previousEventRef && normalizedEventRef && previousEventRef !== normalizedEventRef) {
+      // The same words in another durable user event are not a replay. Record
+      // the new event identity, while preserving the already-correct target
+      // and avoiding a false rejection of that target.
+      return recordRepeatedCorrectionEvent(capsule, text, normalizedEventRef, observedAt);
+    }
+    // With no stable incoming identity, legacy hydration can only preserve an
+    // already-complete exact post-state; it must not fabricate replay proof.
+    return capsule;
+  }
   return updateTaskCapsuleV1(capsule, {
     instruction: text,
     correction: {
@@ -739,6 +883,7 @@ function applyTargetTurn(
         ? 'The user explicitly rejected the previous target.'
         : 'The user supplied a more specific target for the active task.',
       observedAt,
+      eventRef: normalizedEventRef || undefined,
     },
     updatedAt: observedAt,
   });
@@ -806,7 +951,14 @@ export function buildTaskCapsuleV1(
         source: 'tool_receipt',
       })
     : previousCorrectionTarget
-      || (initialTarget.status !== 'unresolved' ? initialTarget : previous?.target)
+      // A durable active-window/document candidate from the previous revision
+      // is more specific than the generic appTarget rebuilt on every
+      // normalization pass. Replacing "Draft.pptx" with "WPS" here made a
+      // following "not this file" correction reject the application instead
+      // of the exact observed document. Fresh receipt evidence is reconciled by
+      // the target-anchor projection below and may still advance this target.
+      || previous?.target
+      || (initialTarget.status !== 'unresolved' ? initialTarget : null)
       || initialTarget;
 
   let capsule = normalizeCapsule({
@@ -844,13 +996,24 @@ export function buildTaskCapsuleV1(
   // Rebuild correction state from the durable latest instruction. This keeps
   // the capsule stable even before a dedicated persisted capsule column exists.
   const latestInstruction = compact(source.latestInstruction, 700);
+  const latestInstructionRef = compact(source.latestInstructionRef, 180);
   if (latestInstruction && latestInstruction !== goal) {
-    capsule = applyTargetTurn(capsule, latestInstruction, source, timestamp(source.updatedAt));
+    capsule = applyTargetTurn(
+      capsule,
+      latestInstruction,
+      source,
+      timestamp(source.updatedAt),
+      latestInstructionRef,
+    );
   }
 
   const currentTurn = compact(options.currentTurnText, 700);
-  if (currentTurn && currentTurn !== latestInstruction) {
-    capsule = applyTargetTurn(capsule, currentTurn, source, updatedAt);
+  const currentTurnRef = compact(options.currentTurnRef, 180);
+  if (currentTurn && (
+    currentTurn !== latestInstruction
+    || Boolean(currentTurnRef && currentTurnRef !== latestInstructionRef)
+  )) {
+    capsule = applyTargetTurn(capsule, currentTurn, source, updatedAt, currentTurnRef);
   }
   const projection = buildTaskTargetAnchorProjection({
     taskText: targetContext,

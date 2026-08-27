@@ -6,6 +6,10 @@ import {
   type UserFacingOutputProtectionOptions,
 } from './user_output_protection';
 import { buildActionContract } from './action_contract';
+import {
+  hasMixedStatusExecutionIntent,
+  normalizeActionIntent,
+} from './normalized_action_intent';
 
 export type ExecutionGuardIntent = 'conversation' | 'status_query' | 'action_execution';
 
@@ -203,6 +207,18 @@ export function classifyExecutionGuardIntent(
   records: ToolExecutionRecord[] = [],
 ): ExecutionGuardIntent {
   const clean = String(task || '').replace(/\s+/g, ' ').trim();
+  const normalizedIntent = normalizeActionIntent(clean);
+  // An explicit new mutation owns the turn even when a scope fence contains a
+  // status word (for example, "write <path>; do not report task status"). The
+  // old ordering checked the noun first and converted a missing-tool recovery
+  // into a read-only status response, permanently preventing the requested
+  // write from reaching its confirmation boundary.
+  if (
+    normalizedIntent.relation === 'new'
+    && normalizedIntent.sideEffectClass !== 'none'
+    && normalizedIntent.operation !== 'status'
+  ) return 'action_execution';
+  if (hasMixedStatusExecutionIntent(clean)) return 'action_execution';
   if (STATUS_QUERY.test(clean)) return 'status_query';
   if (CONVERSATION_ONLY.test(clean)) return 'conversation';
   const contract = buildActionContract(clean);
@@ -452,9 +468,7 @@ export function sanitizeExecutionResponseForDelivery<
   TDelivery extends ExecutionResponseDelivery,
 >(
   delivery: TDelivery,
-  options: {
-    task?: string;
-    toolRecords?: ToolExecutionRecord[];
+  options: UserFacingOutputProtectionOptions & {
     intent?: ExecutionGuardIntent;
   } = {},
 ): TDelivery {

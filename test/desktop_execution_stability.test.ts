@@ -182,8 +182,8 @@ describe('desktop execution stability policy', () => {
       expect(source).toContain('agent:desktop_execution_policy');
       expect(source).toContain('actuationTools: desktopExecutionPolicy.actuationTools');
     }
-    expect(chatSource).toMatch(/source:\s*'chat',[\s\S]{0,160}taskId:\s*requestId/);
-    expect(voiceSource).toMatch(/source:\s*'voice',[\s\S]{0,160}taskId:\s*requestId/);
-    expect(taskSource).toMatch(/source:\s*'task',[\s\S]{0,160}taskId:\s*requestId/);
+    expect(chatSource).toMatch(/source:\s*'chat',[\s\S]{0,160}taskId:\s*durableTaskId,[\s\S]{0,80}requestId/);
+    expect(voiceSource).toMatch(/source:\s*'voice',[\s\S]{0,160}taskId:\s*actionTaskExecution\.state\?\.taskId,[\s\S]{0,80}requestId/);
+    expect(taskSource).toMatch(/source:\s*'task',[\s\S]{0,160}taskId:\s*actionTaskExecution\.state\?\.taskId,[\s\S]{0,80}requestId/);
   });
 });

@@ -213,12 +213,15 @@ describe('model-owned main chat architecture', () => {
     expect(chatSource).not.toContain('const capabilityMetaResponse');
     expect(chatSource).not.toContain('const deterministicKnowledgeInspection');
     expect(chatSource).not.toContain("reason: 'conversation_execution_facts'");
-    // Natural-language dispatch remains model-owned. Preparation is limited to
-    // an already-issued durable task/revision selected by structured feedback.
+    // Natural-language dispatch remains model-owned. Tool-capable fresh turns
+    // create only a durable task envelope before the model/tool relay so every
+    // receipt has a stable taskId; preparation itself does not execute tools.
     expect(chatSource).toContain('const bindsExistingAction = Boolean(');
+    expect(chatSource).toContain('const preparesFreshAction = Boolean(');
+    expect(chatSource).toContain('executionDecision.allowToolUse || Boolean(pendingConfirmation)');
     expect(chatSource).toContain('prepareConversationActionExecution({');
     expect(chatSource).toContain('userMessageId: acceptedUserMessageId');
-    expect(chatSource).not.toContain('forceTask: true');
+    expect(chatSource).toContain('forceTask: true');
     expect(chatSource).not.toContain('persistConversationExecutionPlan');
     expect(chatSource).not.toContain("setConversationActionExecutionStatus(conversationId, uid, 'executing'");
     // A cancellation is recorded as a terminal continuation boundary.  Normal

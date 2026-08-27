@@ -55,6 +55,7 @@ describe('deterministic runtime-work routing', () => {
         conversationId: 'conversation-1',
         assistantTurnId: 'assistant-turn-7',
       },
+      targetTaskIds: ['runtime-task-1'],
       now,
     });
     expect(offer).not.toBeNull();
@@ -68,7 +69,7 @@ describe('deterministic runtime-work routing', () => {
     };
     expect(resolvePendingRuntimeCleanupOffer('清理一下', context)).toMatchObject({
       intent: 'cancel',
-      toolCall: { name: 'runtime_work_cancel', arguments: {} },
+      toolCall: { name: 'runtime_work_cancel', arguments: { taskIds: ['runtime-task-1'] } },
     });
     expect(classifyRuntimeWorkIntent('清理一下', context)).toBe('cancel');
 
@@ -89,12 +90,14 @@ describe('deterministic runtime-work routing', () => {
     expect(createPendingRuntimeCleanupOffer({
       assistantText: '我可以整理一下说明。',
       scope: { conversationId: 'conversation-1', assistantTurnId: 'assistant-turn-1' },
+      targetTaskIds: ['runtime-task-1'],
       now,
     })).toBeNull();
 
     const offer = createPendingRuntimeCleanupOffer({
       assistantText: '需要我清理这些后台任务吗？',
       scope: { conversationId: 'conversation-1', assistantTurnId: 'assistant-turn-1' },
+      targetTaskIds: ['runtime-task-1'],
       now,
     });
     expect(classifyRuntimeWorkIntent('清理一下', {
@@ -124,6 +127,16 @@ describe('deterministic runtime-work routing', () => {
       role: 'assistant',
       message: '\u8981\u4e0d\u8981\u6211\u5e2e\u4f60\u6e05\u7406\u8fd9\u4e9b\u540e\u53f0\u4efb\u52a1\uff1f',
       timestamp: '2026-08-27T00:00:30.000Z',
+      toolCalls: [{
+        name: 'runtime_work_status',
+        arguments: {},
+        result: JSON.stringify({
+          ok: true,
+          items: [{ id: 'runtime-task-1', controls: { canCancel: true } }],
+        }),
+        error: '',
+        terminalVerification: { status: 'verified' },
+      }],
     };
     const context = buildPendingAssistantOfferContextFromTranscript({
       messages: [

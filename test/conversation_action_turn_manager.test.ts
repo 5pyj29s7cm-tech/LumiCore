@@ -379,6 +379,16 @@ describe('manager conversation action-turn integration', () => {
         terminalPersistence: { status: 'persistence_unknown', requestId },
       },
     });
+
+    expect(persistAssistant({
+      userId,
+      conversationId: conversation.id,
+      requestId,
+      text: 'A delayed replay must not republish success.',
+    })).toBe(assistant.id);
+    expect(getConversationActionTurn({ conversationId: conversation.id, userId, requestId }))
+      .toMatchObject({ status: 'persistence_unknown', terminalMessageId: '' });
+    expect(durableTask).toMatchObject({ status: 'blocked', completedAt: '' });
   });
 
   it('keeps the action lease busy while the terminal receipt is pending', async () => {
@@ -791,6 +801,127 @@ describe('manager conversation action-turn integration', () => {
         bindingFailure: 'busy',
         diagnosticCode: 'conversation_action_turn_busy',
       });
+    } finally {
+      heartbeat.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('recovers an expired in-process owner instead of leaving an exact request permanently busy', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-27T01:30:00.000Z'));
+    const { userId, conversation } = scope('expired-manager-owner');
+    const requestId = 'request-expired-manager-owner';
+    const userText = 'Continue the exact accepted task after its abandoned executor expires.';
+    const messageId = persistUser({
+      userId,
+      conversationId: conversation.id,
+      requestId,
+      text: userText,
+    });
+    const first = prepareConversationActionExecution({
+      conversationId: conversation.id,
+      userId,
+      userText,
+      requestId,
+      userMessageId: messageId,
+      toolPolicy: TOOL_POLICY,
+      forceTask: true,
+    });
+    expect(first.state?.taskId).toBeTruthy();
+
+    const abandonedController = new AbortController();
+    const heartbeat = startConversationActionExecutionHeartbeat({
+      conversationId: conversation.id,
+      userId,
+      requestId,
+      abortController: abandonedController,
+    });
+    heartbeat.stop();
+
+    try {
+      await vi.advanceTimersByTimeAsync(300_001);
+      const retried = prepareConversationActionExecution({
+        conversationId: conversation.id,
+        userId,
+        userText,
+        requestId,
+        userMessageId: messageId,
+        toolPolicy: TOOL_POLICY,
+        forceTask: true,
+      });
+
+      expect(abandonedController.signal.aborted).toBe(true);
+      expect(retried).toMatchObject({
+        kind: 'resume',
+        state: { taskId: first.state?.taskId, activeRequestId: requestId },
+      });
+      expect(getConversationActionTurn({ conversationId: conversation.id, userId, requestId }))
+        .toMatchObject({ status: 'leased', taskId: first.state?.taskId });
+      persistAssistant({ userId, conversationId: conversation.id, requestId });
+    } finally {
+      heartbeat.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('aborts an expired competing owner before a newer request acquires the conversation', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-27T01:45:00.000Z'));
+    const { userId, conversation } = scope('expired-competing-owner');
+    const firstRequestId = 'request-expired-competing-a';
+    const secondRequestId = 'request-expired-competing-b';
+    const firstMessageId = persistUser({
+      userId,
+      conversationId: conversation.id,
+      requestId: firstRequestId,
+      text: 'Run the abandoned first task.',
+    });
+    const secondMessageId = persistUser({
+      userId,
+      conversationId: conversation.id,
+      requestId: secondRequestId,
+      text: 'Run the newer replacement task.',
+    });
+    prepareConversationActionExecution({
+      conversationId: conversation.id,
+      userId,
+      userText: 'Run the abandoned first task.',
+      requestId: firstRequestId,
+      userMessageId: firstMessageId,
+      toolPolicy: TOOL_POLICY,
+      forceTask: true,
+    });
+    const abandonedController = new AbortController();
+    const heartbeat = startConversationActionExecutionHeartbeat({
+      conversationId: conversation.id,
+      userId,
+      requestId: firstRequestId,
+      abortController: abandonedController,
+    });
+    heartbeat.stop();
+
+    try {
+      await vi.advanceTimersByTimeAsync(300_001);
+      const replacement = prepareConversationActionExecution({
+        conversationId: conversation.id,
+        userId,
+        userText: 'Run the newer replacement task.',
+        requestId: secondRequestId,
+        userMessageId: secondMessageId,
+        toolPolicy: TOOL_POLICY,
+        forceTask: true,
+        forceNewTask: true,
+      });
+
+      expect(abandonedController.signal.aborted).toBe(true);
+      expect(replacement.state?.taskId).toBeTruthy();
+      expect(getConversationActionTurn({
+        conversationId: conversation.id,
+        userId,
+        requestId: secondRequestId,
+      })).toMatchObject({ status: 'leased', taskId: replacement.state?.taskId });
+      persistAssistant({ userId, conversationId: conversation.id, requestId: secondRequestId });
     } finally {
       heartbeat.stop();
       vi.useRealTimers();

@@ -1,13 +1,15 @@
 import { Router } from "express";
-import { requireAuth, optionalAuth } from "../middleware/auth";
-import { readDB, writeDB } from "../../db_layer";
+import { requireAuth } from "../middleware/auth";
+import { readDB } from "../../db_layer";
 import {
   getUserConversations,
   getMessages,
   closeConversation,
   getActiveConversation,
   startNewConversation,
+  startIsolatedConversation,
   activateConversation,
+  deleteConversationData,
 } from "../conversation/manager";
 
 type ConversationScope = { domain: 'personal' | 'work'; orgId: string };
@@ -67,7 +69,10 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
       return res.status(403).json({ error: 'A connected organization is required for a work conversation' });
     }
     const agentId = String(req.body?.agentId || req.query?.agentId || 'lumi').trim() || 'lumi';
-    const conversation = startNewConversation(req.user!.uid, agentId, scope.domain, scope.orgId);
+    const isolated = req.body?.activation === 'isolated';
+    const conversation = isolated
+      ? startIsolatedConversation(req.user!.uid, agentId, scope.domain, scope.orgId)
+      : startNewConversation(req.user!.uid, agentId, scope.domain, scope.orgId);
     res.status(201).json({ conversation });
   });
 
@@ -168,20 +173,14 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
   });
 
   router.delete("/conversations/:id", requireAuth, (req, res) => {
-    const db = readDB();
-    if (!db.conversations) return res.status(404).json({ error: "Not found" });
-    const conv = db.conversations.find((c: any) => c.id === req.params.id);
-    if (!conv) return res.status(404).json({ error: "Not found" });
-    // Ownership + domain check
-    if (conv.userId !== req.user!.uid) return res.status(403).json({ error: "Unauthorized" });
     const scope = getConversationScope(req);
-    if (!conversationMatchesScope(conv, scope)) return res.status(403).json({ error: "Unauthorized" });
-    const idx = db.conversations.findIndex((c: any) => c.id === req.params.id);
-    db.conversations.splice(idx, 1);
-    if (db.interactions) {
-      db.interactions = db.interactions.filter((i: any) => i.conversationId !== req.params.id);
-    }
-    writeDB(db);
-    res.json({ success: true });
+    const deleted = deleteConversationData(
+      req.params.id,
+      req.user!.uid,
+      scope.domain,
+      scope.orgId,
+    );
+    if (!deleted) return res.status(404).json({ error: "Not found" });
+    res.json({ success: true, deleted });
   });
 }

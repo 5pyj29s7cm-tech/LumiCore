@@ -76,6 +76,8 @@ const PERFORMANCE_INDEX_SQL = [
   `CREATE INDEX IF NOT EXISTS idx_memories_org ON memories(orgId, userId)`,
   `CREATE INDEX IF NOT EXISTS idx_interactions_user_domain ON interactions(userId, domain)`,
   `CREATE INDEX IF NOT EXISTS idx_interactions_org ON interactions(orgId, userId)`,
+  `CREATE INDEX IF NOT EXISTS idx_interactions_request ON interactions(requestId)`,
+  `CREATE INDEX IF NOT EXISTS idx_interactions_voice_chain ON interactions(contextChainId, captureSessionId, timestamp)`,
   `CREATE INDEX IF NOT EXISTS idx_agents_user_domain ON agents(userId, domain)`,
   `CREATE INDEX IF NOT EXISTS idx_agents_org ON agents(orgId, userId)`,
   `CREATE INDEX IF NOT EXISTS idx_conversations_user_domain ON conversations(userId, domain)`,
@@ -92,6 +94,8 @@ const PERFORMANCE_INDEX_SQL = [
   `CREATE INDEX IF NOT EXISTS idx_model_routing_conversation_completed ON model_routing_receipts(conversationId, completedAt)`,
   `CREATE INDEX IF NOT EXISTS idx_model_routing_request ON model_routing_receipts(requestId)`,
   `CREATE INDEX IF NOT EXISTS idx_model_routing_selected ON model_routing_receipts(selectedProvider, selectedModel, completedAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_model_routing_native_session ON model_routing_receipts(nativeDeviceId, executionSessionId)`,
+  `CREATE INDEX IF NOT EXISTS idx_model_routing_voice_chain ON model_routing_receipts(contextChainId, captureSessionId, completedAt)`,
   `CREATE INDEX IF NOT EXISTS idx_chat_execution_receipts_expiry ON chat_execution_terminal_receipts(expiresAt)`,
   `CREATE INDEX IF NOT EXISTS idx_read_only_tool_patterns_scope ON read_only_tool_patterns(userId, domain, orgId, updatedAt)`,
   `CREATE INDEX IF NOT EXISTS idx_background_tasks_user_status ON background_delegation_tasks(userId, status, updatedAt)`,
@@ -288,6 +292,9 @@ function parseStoredActionContinuationState(value: unknown): Record<string, any>
     } : {}),
     goal,
     latestInstruction: compactStoredContinuationValue(raw.latestInstruction || goal, 700),
+    ...(compactStoredContinuationValue(raw.latestInstructionRef, 180)
+      ? { latestInstructionRef: compactStoredContinuationValue(raw.latestInstructionRef, 180) }
+      : {}),
     appTarget: compactStoredContinuationValue(raw.appTarget, 160),
     sourcePaths,
     latestBlocker: compactStoredContinuationValue(raw.latestBlocker, 380),
@@ -533,6 +540,16 @@ function migrateSchema(): Promise<void> {
     db!.run("ALTER TABLE interactions ADD COLUMN externalMessageId TEXT DEFAULT ''", onAlter);
     db!.run("ALTER TABLE interactions ADD COLUMN routeSequence INTEGER", onAlter);
     db!.run("ALTER TABLE interactions ADD COLUMN receivedAt TEXT DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE interactions ADD COLUMN requestId TEXT DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE interactions ADD COLUMN nativeDeviceId TEXT DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE interactions ADD COLUMN executionSessionId TEXT DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE interactions ADD COLUMN nativeClientIdentitySha256 TEXT DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE interactions ADD COLUMN audioInputKind TEXT DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE interactions ADD COLUMN syntheticAudio INTEGER", onAlter);
+    db!.run("ALTER TABLE interactions ADD COLUMN captureSessionId TEXT DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE interactions ADD COLUMN sttReceiptId TEXT DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE interactions ADD COLUMN contextChainId TEXT DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE interactions ADD COLUMN previousRequestId TEXT DEFAULT ''", onAlter);
     db!.run("ALTER TABLE agents ADD COLUMN domain TEXT DEFAULT 'personal'", onAlter);
     db!.run("ALTER TABLE agents ADD COLUMN orgId TEXT DEFAULT ''", onAlter);
     // Add domain + orgId to conversations for personal/work isolation
@@ -544,10 +561,24 @@ function migrateSchema(): Promise<void> {
     db!.run("ALTER TABLE conversations ADD COLUMN lastSummaryMessageCount INTEGER DEFAULT -1", onAlter);
     db!.run("ALTER TABLE conversations ADD COLUMN actionContinuationState TEXT DEFAULT '{}'", onAlter);
     db!.run("ALTER TABLE conversation_action_tasks ADD COLUMN context TEXT NOT NULL DEFAULT '{}'", onAlter);
+    // Preserve the immutable tool-selection provenance across backend restarts.
+    // Never reconstruct this binding from requestId: one request may own both
+    // a preflight route and the actual tool-planning route.
+    db!.run("ALTER TABLE conversation_action_receipts ADD COLUMN modelRoutingReceiptId TEXT NOT NULL DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE conversation_action_receipts ADD COLUMN executionOrigin TEXT NOT NULL DEFAULT ''", onAlter);
     db!.run("ALTER TABLE model_routing_receipts ADD COLUMN conversationId TEXT NOT NULL DEFAULT ''", onAlter);
     db!.run("ALTER TABLE model_routing_receipts ADD COLUMN requestId TEXT NOT NULL DEFAULT ''", onAlter);
     db!.run("ALTER TABLE model_routing_receipts ADD COLUMN interactionId TEXT NOT NULL DEFAULT ''", onAlter);
     db!.run("ALTER TABLE model_routing_receipts ADD COLUMN source TEXT NOT NULL DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN nativeDeviceId TEXT NOT NULL DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN executionSessionId TEXT NOT NULL DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN nativeClientIdentitySha256 TEXT NOT NULL DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN audioInputKind TEXT NOT NULL DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN syntheticAudio INTEGER", onAlter);
+    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN captureSessionId TEXT NOT NULL DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN sttReceiptId TEXT NOT NULL DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN contextChainId TEXT NOT NULL DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN previousRequestId TEXT NOT NULL DEFAULT ''", onAlter);
     // Canvas sessions: persisted workbench state with personal/work isolation
     db!.run(`CREATE TABLE IF NOT EXISTS canvas_sessions (
       id TEXT PRIMARY KEY,
@@ -685,6 +716,16 @@ function createTables(): Promise<void> {
         externalMessageId TEXT DEFAULT '',
         routeSequence INTEGER,
         receivedAt TEXT DEFAULT '',
+        requestId TEXT DEFAULT '',
+        nativeDeviceId TEXT DEFAULT '',
+        executionSessionId TEXT DEFAULT '',
+        nativeClientIdentitySha256 TEXT DEFAULT '',
+        audioInputKind TEXT DEFAULT '',
+        syntheticAudio INTEGER,
+        captureSessionId TEXT DEFAULT '',
+        sttReceiptId TEXT DEFAULT '',
+        contextChainId TEXT DEFAULT '',
+        previousRequestId TEXT DEFAULT '',
         timestamp TEXT NOT NULL
       );
 
@@ -787,6 +828,8 @@ function createTables(): Promise<void> {
         conversationId TEXT NOT NULL,
         turnId TEXT DEFAULT '',
         requestId TEXT DEFAULT '',
+        modelRoutingReceiptId TEXT NOT NULL DEFAULT '',
+        executionOrigin TEXT NOT NULL DEFAULT '',
         idempotencyKey TEXT NOT NULL,
         toolName TEXT NOT NULL,
         targetIdentity TEXT DEFAULT '',
@@ -803,6 +846,15 @@ function createTables(): Promise<void> {
         orgId TEXT NOT NULL DEFAULT '',
         conversationId TEXT NOT NULL DEFAULT '',
         requestId TEXT NOT NULL DEFAULT '',
+        nativeDeviceId TEXT NOT NULL DEFAULT '',
+        executionSessionId TEXT NOT NULL DEFAULT '',
+        nativeClientIdentitySha256 TEXT NOT NULL DEFAULT '',
+        audioInputKind TEXT NOT NULL DEFAULT '',
+        syntheticAudio INTEGER,
+        captureSessionId TEXT NOT NULL DEFAULT '',
+        sttReceiptId TEXT NOT NULL DEFAULT '',
+        contextChainId TEXT NOT NULL DEFAULT '',
+        previousRequestId TEXT NOT NULL DEFAULT '',
         interactionId TEXT NOT NULL DEFAULT '',
         source TEXT NOT NULL DEFAULT '',
         status TEXT NOT NULL,
@@ -1445,6 +1497,16 @@ async function loadMemoryDB(): Promise<void> {
     externalMessageId: i.externalMessageId || '',
     routeSequence: Number.isFinite(i.routeSequence) ? Number(i.routeSequence) : undefined,
     receivedAt: i.receivedAt || '',
+    requestId: i.requestId || i.externalMessageId || '',
+    nativeDeviceId: i.nativeDeviceId || '',
+    executionSessionId: i.executionSessionId || '',
+    nativeClientIdentitySha256: i.nativeClientIdentitySha256 || '',
+    audioInputKind: i.audioInputKind || '',
+    syntheticAudio: i.syntheticAudio === 1 ? true : i.syntheticAudio === 0 ? false : undefined,
+    captureSessionId: i.captureSessionId || '',
+    sttReceiptId: i.sttReceiptId || '',
+    contextChainId: i.contextChainId || '',
+    previousRequestId: i.previousRequestId || '',
   }));
 
   const legacySummaryRepairs: LegacySummaryPersistenceRepair[] = [];
@@ -1503,6 +1565,9 @@ async function loadMemoryDB(): Promise<void> {
     conversationActionReceipts: conversationActionReceipts || [],
     modelRoutingReceipts: (modelRoutingReceiptsRaw || []).map((receipt: any) => ({
       ...receipt,
+      syntheticAudio: receipt.syntheticAudio === 1
+        ? true
+        : receipt.syntheticAudio === 0 ? false : undefined,
       attempts: (() => {
         try { return JSON.parse(receipt.attempts || '[]'); } catch { return []; }
       })(),
@@ -2061,9 +2126,9 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
     },
     {
       name: 'interactions',
-      createSQL: `CREATE TABLE _temp_interactions (id TEXT PRIMARY KEY, userId TEXT NOT NULL, agentId TEXT, module TEXT, message TEXT NOT NULL, response TEXT, role TEXT DEFAULT '', personality TEXT DEFAULT '', mode TEXT DEFAULT '', toolCalls TEXT DEFAULT '', conversationId TEXT DEFAULT '', cognitiveIntent TEXT DEFAULT '', llmWasCalled INTEGER DEFAULT 0, completionFeedback TEXT DEFAULT '', domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '', source TEXT DEFAULT '', channel TEXT DEFAULT '', externalMessageId TEXT DEFAULT '', routeSequence INTEGER, receivedAt TEXT DEFAULT '', timestamp TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_interactions (id, userId, agentId, module, message, response, role, personality, mode, toolCalls, conversationId, cognitiveIntent, llmWasCalled, completionFeedback, domain, orgId, source, channel, externalMessageId, routeSequence, receivedAt, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => memoryDB.interactions.map((i: any) => [i.id, i.userId || 'unknown', i.agentId || null, i.personality || i.module || null, i.content || i.message || '', i.response || '', i.role || '', i.personality || '', i.mode || '', serializeStoredToolCalls(i.toolCalls), i.conversationId || '', i.cognitiveIntent || '', i.llmWasCalled ? 1 : 0, serializeCompletionFeedbackForPersistence(i.completionFeedback), i.domain || 'personal', i.orgId || '', i.source || '', i.channel || '', i.externalMessageId || '', Number.isFinite(i.routeSequence) ? i.routeSequence : null, i.receivedAt || '', i.timestamp]),
+      createSQL: `CREATE TABLE _temp_interactions (id TEXT PRIMARY KEY, userId TEXT NOT NULL, agentId TEXT, module TEXT, message TEXT NOT NULL, response TEXT, role TEXT DEFAULT '', personality TEXT DEFAULT '', mode TEXT DEFAULT '', toolCalls TEXT DEFAULT '', conversationId TEXT DEFAULT '', cognitiveIntent TEXT DEFAULT '', llmWasCalled INTEGER DEFAULT 0, completionFeedback TEXT DEFAULT '', domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '', source TEXT DEFAULT '', channel TEXT DEFAULT '', externalMessageId TEXT DEFAULT '', routeSequence INTEGER, receivedAt TEXT DEFAULT '', requestId TEXT DEFAULT '', nativeDeviceId TEXT DEFAULT '', executionSessionId TEXT DEFAULT '', nativeClientIdentitySha256 TEXT DEFAULT '', audioInputKind TEXT DEFAULT '', syntheticAudio INTEGER, captureSessionId TEXT DEFAULT '', sttReceiptId TEXT DEFAULT '', contextChainId TEXT DEFAULT '', previousRequestId TEXT DEFAULT '', timestamp TEXT NOT NULL)`,
+      insertSQL: `INSERT INTO _temp_interactions (id, userId, agentId, module, message, response, role, personality, mode, toolCalls, conversationId, cognitiveIntent, llmWasCalled, completionFeedback, domain, orgId, source, channel, externalMessageId, routeSequence, receivedAt, requestId, nativeDeviceId, executionSessionId, nativeClientIdentitySha256, audioInputKind, syntheticAudio, captureSessionId, sttReceiptId, contextChainId, previousRequestId, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => memoryDB.interactions.map((i: any) => [i.id, i.userId || 'unknown', i.agentId || null, i.personality || i.module || null, i.content || i.message || '', i.response || '', i.role || '', i.personality || '', i.mode || '', serializeStoredToolCalls(i.toolCalls), i.conversationId || '', i.cognitiveIntent || '', i.llmWasCalled ? 1 : 0, serializeCompletionFeedbackForPersistence(i.completionFeedback), i.domain || 'personal', i.orgId || '', i.source || '', i.channel || '', i.externalMessageId || '', Number.isFinite(i.routeSequence) ? i.routeSequence : null, i.receivedAt || '', i.requestId || i.externalMessageId || '', i.nativeDeviceId || '', i.executionSessionId || '', i.nativeClientIdentitySha256 || '', i.audioInputKind || '', i.syntheticAudio === true ? 1 : i.syntheticAudio === false ? 0 : null, i.captureSessionId || '', i.sttReceiptId || '', i.contextChainId || '', i.previousRequestId || '', i.timestamp]),
     },
     {
       name: 'memories',
@@ -2097,14 +2162,14 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
     },
     {
       name: 'conversation_action_receipts',
-      createSQL: `CREATE TABLE _temp_conversation_action_receipts (id TEXT PRIMARY KEY, taskId TEXT NOT NULL, conversationId TEXT NOT NULL, turnId TEXT DEFAULT '', requestId TEXT DEFAULT '', idempotencyKey TEXT NOT NULL, toolName TEXT NOT NULL, targetIdentity TEXT DEFAULT '', inputDigest TEXT DEFAULT '', envelope TEXT NOT NULL DEFAULT '{}', outcome TEXT NOT NULL, createdAt TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_conversation_action_receipts (id, taskId, conversationId, turnId, requestId, idempotencyKey, toolName, targetIdentity, inputDigest, envelope, outcome, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.conversationActionReceipts || []).map((r: any) => [r.id, r.taskId, r.conversationId, r.turnId || '', r.requestId || '', r.idempotencyKey || '', r.toolName || '', r.targetIdentity || '', r.inputDigest || '', typeof r.envelope === 'string' ? r.envelope : JSON.stringify(r.envelope || {}), r.outcome || 'failed', r.createdAt]),
+      createSQL: `CREATE TABLE _temp_conversation_action_receipts (id TEXT PRIMARY KEY, taskId TEXT NOT NULL, conversationId TEXT NOT NULL, turnId TEXT DEFAULT '', requestId TEXT DEFAULT '', modelRoutingReceiptId TEXT NOT NULL DEFAULT '', executionOrigin TEXT NOT NULL DEFAULT '', idempotencyKey TEXT NOT NULL, toolName TEXT NOT NULL, targetIdentity TEXT DEFAULT '', inputDigest TEXT DEFAULT '', envelope TEXT NOT NULL DEFAULT '{}', outcome TEXT NOT NULL, createdAt TEXT NOT NULL)`,
+      insertSQL: `INSERT INTO _temp_conversation_action_receipts (id, taskId, conversationId, turnId, requestId, modelRoutingReceiptId, executionOrigin, idempotencyKey, toolName, targetIdentity, inputDigest, envelope, outcome, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.conversationActionReceipts || []).map((r: any) => [r.id, r.taskId, r.conversationId, r.turnId || '', r.requestId || '', r.modelRoutingReceiptId || '', r.executionOrigin || '', r.idempotencyKey || '', r.toolName || '', r.targetIdentity || '', r.inputDigest || '', typeof r.envelope === 'string' ? r.envelope : JSON.stringify(r.envelope || {}), r.outcome || 'failed', r.createdAt]),
     },
     {
       name: 'model_routing_receipts',
-      createSQL: `CREATE TABLE _temp_model_routing_receipts (id TEXT PRIMARY KEY, userId TEXT NOT NULL, domain TEXT NOT NULL DEFAULT 'personal', orgId TEXT NOT NULL DEFAULT '', conversationId TEXT NOT NULL DEFAULT '', requestId TEXT NOT NULL DEFAULT '', interactionId TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, requestedProvider TEXT NOT NULL, requestedModel TEXT NOT NULL, selectionMode TEXT NOT NULL, selectedProvider TEXT NOT NULL DEFAULT '', selectedModel TEXT NOT NULL DEFAULT '', fallbackReason TEXT NOT NULL DEFAULT '', attempts TEXT NOT NULL DEFAULT '[]', startedAt TEXT NOT NULL, completedAt TEXT NOT NULL, durationMs INTEGER NOT NULL DEFAULT 0)`,
-      insertSQL: `INSERT INTO _temp_model_routing_receipts (id, userId, domain, orgId, conversationId, requestId, interactionId, source, status, requestedProvider, requestedModel, selectionMode, selectedProvider, selectedModel, fallbackReason, attempts, startedAt, completedAt, durationMs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      createSQL: `CREATE TABLE _temp_model_routing_receipts (id TEXT PRIMARY KEY, userId TEXT NOT NULL, domain TEXT NOT NULL DEFAULT 'personal', orgId TEXT NOT NULL DEFAULT '', conversationId TEXT NOT NULL DEFAULT '', requestId TEXT NOT NULL DEFAULT '', nativeDeviceId TEXT NOT NULL DEFAULT '', executionSessionId TEXT NOT NULL DEFAULT '', nativeClientIdentitySha256 TEXT NOT NULL DEFAULT '', audioInputKind TEXT NOT NULL DEFAULT '', syntheticAudio INTEGER, captureSessionId TEXT NOT NULL DEFAULT '', sttReceiptId TEXT NOT NULL DEFAULT '', contextChainId TEXT NOT NULL DEFAULT '', previousRequestId TEXT NOT NULL DEFAULT '', interactionId TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, requestedProvider TEXT NOT NULL, requestedModel TEXT NOT NULL, selectionMode TEXT NOT NULL, selectedProvider TEXT NOT NULL DEFAULT '', selectedModel TEXT NOT NULL DEFAULT '', fallbackReason TEXT NOT NULL DEFAULT '', attempts TEXT NOT NULL DEFAULT '[]', startedAt TEXT NOT NULL, completedAt TEXT NOT NULL, durationMs INTEGER NOT NULL DEFAULT 0)`,
+      insertSQL: `INSERT INTO _temp_model_routing_receipts (id, userId, domain, orgId, conversationId, requestId, nativeDeviceId, executionSessionId, nativeClientIdentitySha256, audioInputKind, syntheticAudio, captureSessionId, sttReceiptId, contextChainId, previousRequestId, interactionId, source, status, requestedProvider, requestedModel, selectionMode, selectedProvider, selectedModel, fallbackReason, attempts, startedAt, completedAt, durationMs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       rows: () => (memoryDB.modelRoutingReceipts || []).map((receipt: any) => [
         receipt.id,
         receipt.userId || 'anonymous',
@@ -2112,6 +2177,15 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
         receipt.orgId || '',
         receipt.conversationId || '',
         receipt.requestId || '',
+        receipt.nativeDeviceId || '',
+        receipt.executionSessionId || '',
+        receipt.nativeClientIdentitySha256 || '',
+        receipt.audioInputKind || '',
+        receipt.syntheticAudio === true ? 1 : receipt.syntheticAudio === false ? 0 : null,
+        receipt.captureSessionId || '',
+        receipt.sttReceiptId || '',
+        receipt.contextChainId || '',
+        receipt.previousRequestId || '',
         receipt.interactionId || '',
         receipt.source || '',
         receipt.status || 'failed',

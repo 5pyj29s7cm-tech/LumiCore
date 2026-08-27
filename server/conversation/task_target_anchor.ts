@@ -281,7 +281,7 @@ function explicitFile(text: string): string {
   const targetClause = compact(replacement || clean, 500);
   // i18n-allow: multilingual explicit filename recognition; not user-visible copy.
   const named = targetClause.match(new RegExp(
-    `(?:\u53eb|\u540d\u4e3a|\u540d\u79f0\u662f|named|called)\\s*["'“”‘’]?([^"'“”‘’\\r\\n，,；;。！？!?]{1,200}\\.${FILE_EXTENSIONS})`,
+    `(?:\u51c6\u786e\u6587\u4ef6\u540d\u662f|\u6587\u4ef6\u540d(?:\u79f0)?\u662f|\u53eb|\u540d\u4e3a|\u540d\u79f0\u662f|(?:exact\\s+)?file\\s*name\\s+is|named|called)\\s*["'“”‘’]?([^"'“”‘’\\r\\n，,；;。！？!?]{1,200}\\.${FILE_EXTENSIONS})`,
     'iu',
   ))?.[1];
   return compact(

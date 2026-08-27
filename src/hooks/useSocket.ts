@@ -7,6 +7,7 @@ import {
   endDesktopAutomationActivity,
 } from '@/services/desktopAutomationActivity';
 import { desktopCommandRelayOutput } from '@/lib/desktopCommandReceipt';
+import { getNativeClientIdentity } from '@/services/nativeClientIdentity';
 
 const isTauri = isTauriRuntime();
 let registeredSocket: Socket | null = null;
@@ -43,7 +44,17 @@ function registerSharedSocketHandlers(socket: Socket) {
     registeredSocket.off('tool:desktop_cancel', desktopCancelHandler);
   }
 
-  const registerDevice = () => {
+  const registerDevice = async () => {
+    let nativeClientIdentity = null;
+    if (isTauri) {
+      try {
+        nativeClientIdentity = await getNativeClientIdentity();
+      } catch (error) {
+        console.error('[Device] Native process identity unavailable; desktop registration stopped', error);
+        return;
+      }
+      if (!socket.connected) return;
+    }
     socket.emit('device:register', {
       name: navigator.platform || 'Unknown Device',
       type: isTauri ? 'desktop' : 'web',
@@ -55,16 +66,18 @@ function registerSharedSocketHandlers(socket: Socket) {
         holographic: false,
       },
       osInfo: navigator.platform || '',
+      ...(nativeClientIdentity ? { nativeClientIdentity } : {}),
     });
   };
 
-  socket.on('connect', registerDevice);
+  const onConnect = () => { void registerDevice(); };
+  socket.on('connect', onConnect);
   socket.on('tool:desktop_exec', desktopExecHandler);
   socket.on('tool:desktop_cancel', desktopCancelHandler);
-  if (socket.connected) registerDevice();
+  if (socket.connected) void registerDevice();
 
   registeredSocket = socket;
-  deviceConnectHandler = registerDevice;
+  deviceConnectHandler = onConnect;
 }
 
 function desktopCancelHandler(data: { correlationId?: string; name?: string }) {

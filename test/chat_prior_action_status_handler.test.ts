@@ -14,6 +14,7 @@ import { registerChatHandler } from '../server/socket/chat';
 import { getChatExecution } from '../server/socket/chat_execution_registry';
 import { queryMemoriesVector } from '../server/memory';
 import { retrieveChunks } from '../server/agents/rag';
+import { getConversationActionStateByTaskId } from '../server/conversation/action_ledger';
 
 vi.mock('../server/memory', async importOriginal => {
   const actual = await importOriginal<typeof import('../server/memory')>();
@@ -533,6 +534,12 @@ describe('chat prior-action status handler', () => {
       },
     });
     expect(getOrCreateActiveConversation(userId, 'lumi', 'personal', '').actionContinuationState)
+      .toBeUndefined();
+    expect(getConversationActionStateByTaskId(readDB(), {
+      conversationId,
+      userId,
+      taskId: idleTask?.taskId || '',
+    }))
       .toMatchObject({ taskId: idleTask?.taskId, status: 'cancelled', unfinished: false });
     expect(llmTripwire).not.toHaveBeenCalled();
   });

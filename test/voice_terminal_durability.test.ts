@@ -288,11 +288,11 @@ describe('voice terminal wiring', () => {
       source.indexOf('const commitVoiceTerminal = async'),
       source.indexOf('const maxIterations =', source.indexOf('const commitVoiceTerminal = async')),
     );
-    expect(strictHelper.indexOf('settleConversationActionExecutionRequest(')).toBeGreaterThan(0);
-    expect(strictHelper.indexOf('settleConversationActionExecutionRequest('))
-      .toBeGreaterThan(strictHelper.indexOf('persistVoiceAssistantMessage('));
+    const dispositionAt = strictHelper.indexOf('terminalTaskDisposition: input.blocked');
+    expect(dispositionAt).toBeGreaterThan(strictHelper.indexOf('persistVoiceAssistantMessage('));
+    expect(strictHelper).not.toContain('settleConversationActionExecutionRequest(');
     expect(strictHelper.indexOf('flush: flushDBOrThrow'))
-      .toBeGreaterThan(strictHelper.indexOf('settleConversationActionExecutionRequest('));
+      .toBeGreaterThan(dispositionAt);
     expect(source).toContain("socket.on('audio:cancel_turn', async");
     expect(source).toContain('await commitActiveVoiceCancellation(session, {');
     expect(source).toContain('publish: false');

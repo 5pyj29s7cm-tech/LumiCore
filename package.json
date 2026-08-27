@@ -33,6 +33,8 @@
     "test:inventory": "node scripts/check-vitest-count.mjs",
     "security:audit": "node scripts/check-production-audit.mjs",
     "e2e:formal-client": "node scripts/formal-client-e2e.mjs",
+    "e2e:formal-stage9": "node scripts/formal-stage9-adjudicator.mjs",
+    "e2e:formal-stage9-producer": "node scripts/formal-stage9-producer-package.mjs",
     "variant:new": "node scripts/variant-manager.mjs new",
     "variant:status": "node scripts/variant-manager.mjs status",
     "variant:check": "node scripts/variant-manager.mjs status --all --fetch --strict",

@@ -123,6 +123,8 @@ export interface FinalizeConversationActionTurnInput extends ConversationActionT
   expectedRevision?: number;
   /** Reserved for recovery from independently verified durable evidence. */
   force?: boolean;
+  /** Dedicated reconciliation only; ordinary terminal writers must omit it. */
+  resolvePersistenceUnknown?: boolean;
   now?: Date | string | number;
 }
 
@@ -580,16 +582,23 @@ export function finalizeConversationActionTurn(
       turn: cloneTurn(turn),
     };
   }
-  if (turn.status === 'persistence_unknown' && input.status === 'persistence_unknown') {
-    if (terminalStateIsIdempotent(turn, input)) {
+  if (turn.status === 'persistence_unknown') {
+    if (input.status === 'persistence_unknown' && terminalStateIsIdempotent(turn, input)) {
       return { finalized: true, changed: false, turn: cloneTurn(turn) };
     }
-    return {
-      finalized: false,
-      changed: false,
-      reason: 'terminal_conflict',
-      turn: cloneTurn(turn),
-    };
+    if (input.resolvePersistenceUnknown === true && input.status !== 'persistence_unknown') {
+      // Continue to the independently verified reconciliation below.
+    } else {
+      // Unknown durability is an irreversible quarantine for ordinary runtime
+      // finalization. Only a dedicated, independently verified recovery API may
+      // ever resolve it; a delayed assistant replay cannot publish success.
+      return {
+        finalized: false,
+        changed: false,
+        reason: 'terminal_conflict',
+        turn: cloneTurn(turn),
+      };
+    }
   }
   if (input.expectedRevision !== undefined && turn.revision !== input.expectedRevision) {
     return {
@@ -687,6 +696,7 @@ export function reconcileConversationActionTurnLease(
       terminalMessageId: input.terminalMessageId,
       reason,
       force: true,
+      resolvePersistenceUnknown: true,
       now: now.iso,
     });
     if (result.finalized === false) {

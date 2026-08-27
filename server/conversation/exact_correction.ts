@@ -1,9 +1,15 @@
 import { isImmediateAssistantRestatementRequest } from '../cognition/normalized_action_intent';
+import { findLatestRepeatableAssistantReply } from './assistant_restatement';
 
 export interface ConversationCorrectionRecord {
   role?: string;
+  type?: string;
   message?: string;
   response?: string;
+  content?: string;
+  text?: string;
+  toolCalls?: unknown;
+  cognitiveIntent?: string;
 }
 
 interface ExactReplacement {
@@ -85,13 +91,7 @@ export function resolveExactConversationCorrection(
   history: ConversationCorrectionRecord[],
 ): string | null {
   if (isImmediateAssistantRestatementRequest(userText)) {
-    for (let index = history.length - 1; index >= 0; index -= 1) {
-      const record = history[index];
-      if (!record || !['assistant', 'agent'].includes(String(record.role || ''))) continue;
-      const reply = recordText(record);
-      if (reply) return reply;
-    }
-    return null;
+    return findLatestRepeatableAssistantReply(history) || null;
   }
 
   const replacement = parseExactReplacement(userText);

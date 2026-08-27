@@ -410,6 +410,8 @@ export interface NormalizedLLMResponse {
   streamIncomplete?: boolean;
   /** Exact model route used for this call, including explicit fallback evidence. */
   routing?: ModelRoutingTrace;
+  /** Durable id minted only after the exact routing trace is persisted. */
+  routingReceiptId?: string;
 }
 
 export interface ToolExecutionRecord {
@@ -417,6 +419,10 @@ export interface ToolExecutionRecord {
   taskId?: string;
   turnId?: string;
   requestId?: string;
+  /** Exact persisted model call whose output selected this tool invocation. */
+  modelRoutingReceiptId?: string;
+  /** Runtime-owned decision boundary that selected this exact invocation. */
+  executionOrigin?: 'model_selected' | 'confirmed_action_resume' | 'deterministic_route';
   idempotencyKey?: string;
   name: string;
   arguments: Record<string, any>;

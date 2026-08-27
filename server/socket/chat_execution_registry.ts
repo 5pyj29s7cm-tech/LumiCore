@@ -39,12 +39,51 @@ export type ChatExecutionSnapshot = {
   terminalEvent?: ChatExecutionEvent;
 };
 
+export type DurableChatCancellationBinding = {
+  controlRequestId: string;
+  targetRequestId: string;
+  controlTerminal: ChatExecutionSnapshot;
+  targetTerminal: ChatExecutionSnapshot;
+};
+
+/**
+ * Durable conversation/task identity observed by the status route. Recovery
+ * receipts alone cannot establish "current": after a restart they contain
+ * bounded terminal history, while the conversation ledger may already own a
+ * newer accepted request.
+ */
+export type DurableChatCancellationStatusFence = {
+  currentTask?: {
+    taskId: string;
+    revision: number;
+    activeRequestId?: string;
+    unfinished: boolean;
+  };
+  relation?: {
+    binding: string;
+    taskId?: string;
+    revision?: number;
+    targetRequestId?: string;
+  };
+  requestedTarget?: {
+    requestId?: string;
+    taskId?: string;
+    revision?: number;
+  };
+};
+
 type StoredExecution = ChatExecutionSnapshot & {
   scopeKey: string;
   recoveryScopeKey: string;
   controlIntentTarget?: string;
   controlIntentDurable?: boolean;
   controlIntentBarrier?: Promise<void>;
+  /** Installed at sidecar reservation so duplicates can wait before a more
+   * specific control-intent or terminal receipt barrier has been created. */
+  sidecarDurabilityBarrier?: Promise<void>;
+  resolveSidecarDurability?: () => void;
+  rejectSidecarDurability?: (error: unknown) => void;
+  sidecarDurabilitySettled?: boolean;
   /**
    * A strict terminal is kept private until its durable receipt settles. This
    * prevents reconnect/retry readers from replaying a success that only exists
@@ -126,6 +165,26 @@ function parsePayload(value: unknown): Record<string, any> {
   }
 }
 
+function finiteRevision(value: unknown): number | undefined {
+  const revision = Number(value);
+  return Number.isFinite(revision) && revision >= 0 ? Math.trunc(revision) : undefined;
+}
+
+function exactTerminalTaskBinding(
+  value: unknown,
+  requestId: string,
+): { taskId: string; revision: number; targetRequestId: string } | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  const taskId = compactString(candidate.taskId, 180);
+  const targetRequestId = compactString(candidate.targetRequestId, 180);
+  const revision = finiteRevision(candidate.revision);
+  if (!taskId || revision === undefined || targetRequestId !== compactString(requestId, 180)) {
+    return undefined;
+  }
+  return { taskId, revision, targetRequestId };
+}
+
 function sanitizeTerminalPayload(
   scope: ChatExecutionScope,
   record: StoredExecution,
@@ -151,9 +210,21 @@ function sanitizeTerminalPayload(
   if (agentName) sanitized.agentName = agentName;
   const completionFeedback = normalizeCompletionFeedbackForPersistence(payload.completionFeedback);
   if (completionFeedback) sanitized.completionFeedback = completionFeedback;
+  const taskBinding = exactTerminalTaskBinding(payload.taskRelation, record.requestId);
+  if (taskBinding) sanitized.taskBinding = taskBinding;
   if (record.sidecar === true && record.controlIntentTarget) {
     sanitized.controlIntent = 'cancel';
     sanitized.targetRequestId = compactString(record.controlIntentTarget, 180);
+  } else if (
+    record.sidecar === true
+    && payload.controlIntent === 'status'
+    && compactString(payload.targetRequestId, 180)
+  ) {
+    // A post-terminal status sidecar is a read-only exact-target query. Keep
+    // only its bounded target fence so acceptance/reconnect readers can prove
+    // it did not silently drift to a newer or merely "latest" execution.
+    sanitized.controlIntent = 'status';
+    sanitized.targetRequestId = compactString(payload.targetRequestId, 180);
   }
   if (terminal.event === 'agent:response') {
     const text = compactString(payload.text, MAX_TERMINAL_TEXT_CHARS);
@@ -289,6 +360,10 @@ function copySnapshot(record?: StoredExecution): ChatExecutionSnapshot | null {
     controlIntentTarget: _controlIntentTarget,
     controlIntentDurable: _controlIntentDurable,
     controlIntentBarrier: _controlIntentBarrier,
+    sidecarDurabilityBarrier: _sidecarDurabilityBarrier,
+    resolveSidecarDurability: _resolveSidecarDurability,
+    rejectSidecarDurability: _rejectSidecarDurability,
+    sidecarDurabilitySettled: _sidecarDurabilitySettled,
     terminalReceiptPending: _terminalReceiptPending,
     terminalReceiptDurable: _terminalReceiptDurable,
     terminalReceiptBarrier: _terminalReceiptBarrier,
@@ -328,7 +403,11 @@ function terminalStatusForEvent(
   if (event === 'agent:error') return 'failed';
   if (event !== 'agent:response') return null;
   const reason = String(payload.reason || '').trim().toLowerCase();
-  if (reason === 'cancelled' || reason === 'canceled') return 'cancelled';
+  if (
+    reason === 'cancelled'
+    || reason === 'canceled'
+    || reason === 'request_cancelled'
+  ) return 'cancelled';
   if (payload.blocked === true || payload.finalized !== true) return 'failed';
   return 'completed';
 }
@@ -387,6 +466,42 @@ export function beginChatExecution(
   });
   activeByScope.set(scopeKey, key);
   return null;
+}
+
+function createSidecarDurabilityBoundary(): Pick<StoredExecution,
+  | 'sidecarDurabilityBarrier'
+  | 'resolveSidecarDurability'
+  | 'rejectSidecarDurability'
+  | 'sidecarDurabilitySettled'
+> {
+  let resolve!: () => void;
+  let reject!: (error: unknown) => void;
+  const barrier = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  // The original handler commonly settles the boundary before a duplicate
+  // exists. Mark the rejection observed without changing what later awaiters
+  // receive from the original promise.
+  void barrier.catch(() => undefined);
+  return {
+    sidecarDurabilityBarrier: barrier,
+    resolveSidecarDurability: resolve,
+    rejectSidecarDurability: reject,
+    sidecarDurabilitySettled: false,
+  };
+}
+
+function resolveSidecarDurability(record: StoredExecution): void {
+  if (record.sidecar !== true || record.sidecarDurabilitySettled === true) return;
+  record.sidecarDurabilitySettled = true;
+  record.resolveSidecarDurability?.();
+}
+
+function rejectSidecarDurability(record: StoredExecution, error: unknown): void {
+  if (record.sidecar !== true || record.sidecarDurabilitySettled === true) return;
+  record.sidecarDurabilitySettled = true;
+  record.rejectSidecarDurability?.(error);
 }
 
 /**
@@ -496,6 +611,7 @@ export function beginChatSidecarExecution(
   if (executions.has(key)) return false;
 
   const now = new Date().toISOString();
+  const durabilityBoundary = createSidecarDurabilityBoundary();
   executions.set(key, {
     scopeKey: normalizedScopeKey(scope),
     recoveryScopeKey: normalizedRecoveryScopeKey(scope),
@@ -506,6 +622,7 @@ export function beginChatSidecarExecution(
     createdAt: now,
     updatedAt: now,
     terminal: false,
+    ...durabilityBoundary,
   });
   return true;
 }
@@ -563,6 +680,10 @@ export async function persistChatSidecarCancellationIntent(
     record.status = 'cancelling';
     record.updatedAt = now;
     record.lastEvent = { event: 'agent:status', payload };
+    resolveSidecarDurability(record);
+  }).catch(error => {
+    rejectSidecarDurability(record, error);
+    throw error;
   });
   record.controlIntentBarrier = barrier;
   try {
@@ -572,23 +693,121 @@ export async function persistChatSidecarCancellationIntent(
   }
 }
 
-/** Wait for a duplicate control request's original durable reservation. */
+function sidecarDurabilityError(
+  code: 'CHAT_SIDECAR_TERMINAL_RECEIPT_NOT_DURABLE' | 'CHAT_SIDECAR_CONTROL_INTENT_NOT_DURABLE',
+  message: string,
+  cause?: unknown,
+): Error & { code: string } {
+  const error = new Error(message) as Error & { code: string; cause?: unknown };
+  error.code = code;
+  if (cause !== undefined) error.cause = cause;
+  return error;
+}
+
+/**
+ * Wait for a duplicate sidecar's durable publication boundary.
+ *
+ * Status sidecars never have a cancellation-intent barrier. Once their strict
+ * terminal write starts, that terminal barrier is the only valid duplicate
+ * boundary. Cancellation sidecars also prefer an in-flight terminal barrier
+ * over their older intent fence, so a duplicate cannot observe "cancelling"
+ * after the terminal commit has already taken ownership.
+ */
 export async function waitForChatSidecarCancellationIntent(
   scope: ChatExecutionScope,
   requestId: string,
 ): Promise<void> {
-  const record = executions.get(executionKey(scope, requestId));
-  if (!record || record.sidecar !== true || record.terminal) return;
-  if (record.controlIntentDurable === true) return;
-  if (!record.controlIntentBarrier) {
-    throw new Error('Chat sidecar cancellation intent is not durably reserved');
-  }
-  await record.controlIntentBarrier;
-  // Re-read after awaiting: apart from avoiding stale state, this prevents
-  // TypeScript from retaining the pre-await `false | undefined` narrowing.
-  const refreshed = executions.get(executionKey(scope, requestId));
-  if (refreshed?.controlIntentDurable !== true) {
-    throw new Error('Chat sidecar cancellation intent is not durably reserved');
+  const key = executionKey(scope, requestId);
+  for (;;) {
+    const record = executions.get(key);
+    if (!record || record.sidecar !== true || record.requestId !== requestId) {
+      throw sidecarDurabilityError(
+        'CHAT_SIDECAR_CONTROL_INTENT_NOT_DURABLE',
+        'Chat sidecar durable reservation is missing',
+      );
+    }
+
+    if (record.terminalReceiptPending) {
+      const barrier = record.terminalReceiptBarrier;
+      if (!barrier) {
+        throw sidecarDurabilityError(
+          'CHAT_SIDECAR_TERMINAL_RECEIPT_NOT_DURABLE',
+          'Chat sidecar terminal receipt barrier is missing',
+        );
+      }
+      try {
+        await barrier;
+      } catch (cause) {
+        throw sidecarDurabilityError(
+          'CHAT_SIDECAR_TERMINAL_RECEIPT_NOT_DURABLE',
+          'Chat sidecar terminal receipt is not durably committed',
+          cause,
+        );
+      }
+      continue;
+    }
+
+    if (record.terminal) {
+      if (record.terminalReceiptDurable === true) return;
+      const barrier = record.terminalReceiptBarrier;
+      if (barrier) {
+        try {
+          await barrier;
+        } catch (cause) {
+          throw sidecarDurabilityError(
+            'CHAT_SIDECAR_TERMINAL_RECEIPT_NOT_DURABLE',
+            'Chat sidecar terminal receipt is not durably committed',
+            cause,
+          );
+        }
+        continue;
+      }
+      throw sidecarDurabilityError(
+        'CHAT_SIDECAR_TERMINAL_RECEIPT_NOT_DURABLE',
+        'Chat sidecar terminal receipt is not durably committed',
+      );
+    }
+
+    if (record.controlIntentDurable === true) return;
+    const controlBarrier = record.controlIntentBarrier;
+    if (!controlBarrier) {
+      const sidecarBarrier = record.sidecarDurabilityBarrier;
+      if (sidecarBarrier) {
+        try {
+          await sidecarBarrier;
+        } catch (cause) {
+          const failed = executions.get(key);
+          const terminalFailure = Boolean(
+            failed?.terminalReceiptPending
+            || failed?.terminal
+            || failed?.terminalReceiptBarrier,
+          );
+          throw sidecarDurabilityError(
+            terminalFailure
+              ? 'CHAT_SIDECAR_TERMINAL_RECEIPT_NOT_DURABLE'
+              : 'CHAT_SIDECAR_CONTROL_INTENT_NOT_DURABLE',
+            terminalFailure
+              ? 'Chat sidecar terminal receipt is not durably committed'
+              : 'Chat sidecar cancellation intent is not durably reserved',
+            cause,
+          );
+        }
+        continue;
+      }
+      throw sidecarDurabilityError(
+        'CHAT_SIDECAR_CONTROL_INTENT_NOT_DURABLE',
+        'Chat sidecar cancellation intent is not durably reserved',
+      );
+    }
+    try {
+      await controlBarrier;
+    } catch (cause) {
+      throw sidecarDurabilityError(
+        'CHAT_SIDECAR_CONTROL_INTENT_NOT_DURABLE',
+        'Chat sidecar cancellation intent is not durably reserved',
+        cause,
+      );
+    }
   }
 }
 
@@ -600,6 +819,114 @@ export function getChatSidecarCancellationTarget(
   const record = executions.get(executionKey(scope, requestId));
   if (!record || record.sidecar !== true || record.controlIntentDurable !== true) return '';
   return record.controlIntentTarget || '';
+}
+
+/**
+ * Resolve the durable cancellation receipt for the conversation's current
+ * foreground execution.
+ *
+ * This intentionally does not inspect transcript adjacency. Cancellation can
+ * finalize the foreground assistant row after the stop sidecar row, so the
+ * visually last message is not a reliable execution relation. The binding is
+ * accepted only when both ends have strict durable terminal receipts and the
+ * sidecar tombstone names the exact current foreground request.
+ */
+function terminalMatchesStatusFence(
+  target: StoredExecution,
+  fence?: DurableChatCancellationStatusFence,
+): boolean {
+  if (!fence) return true;
+  const currentTask = fence.currentTask;
+  const relation = fence.relation;
+  const requestedTarget = fence.requestedTarget;
+  const targetBinding = exactTerminalTaskBinding(
+    target.terminalEvent?.payload?.taskBinding || target.terminalEvent?.payload?.taskRelation,
+    target.requestId,
+  );
+
+  // An accepted/nonterminal task is authoritative even when its process-local
+  // queue disappeared during restart. It may only resolve the exact request
+  // that owns its durable live pointer; an idle unfinished task cannot safely
+  // fall back to older terminal history.
+  if (currentTask) {
+    const currentTaskId = compactString(currentTask.taskId, 180);
+    const currentRequestId = compactString(currentTask.activeRequestId, 180);
+    const currentRevision = finiteRevision(currentTask.revision);
+    if (!currentTaskId || currentRevision === undefined || !targetBinding) return false;
+    if (currentTask.unfinished && !currentRequestId) return false;
+    if (currentRequestId && currentRequestId !== target.requestId) return false;
+    if (
+      targetBinding.taskId !== currentTaskId
+      || targetBinding.revision !== currentRevision
+    ) return false;
+  }
+
+  if (relation) {
+    const relationRequestId = compactString(relation.targetRequestId, 180);
+    const relationTaskId = compactString(relation.taskId, 180);
+    const relationRevision = finiteRevision(relation.revision);
+    if (relation.binding === 'active_task' && !relationRequestId) return false;
+    if (relationRequestId && relationRequestId !== target.requestId) return false;
+    if (relationTaskId || relationRevision !== undefined) {
+      if (!targetBinding) return false;
+      if (relationTaskId && relationTaskId !== targetBinding.taskId) return false;
+      if (relationRevision !== undefined && relationRevision !== targetBinding.revision) return false;
+    }
+  }
+  if (requestedTarget) {
+    const requestedRequestId = compactString(requestedTarget.requestId, 180);
+    const requestedTaskId = compactString(requestedTarget.taskId, 180);
+    const requestedRevision = finiteRevision(requestedTarget.revision);
+    if (requestedRequestId && requestedRequestId !== target.requestId) return false;
+    if (requestedTaskId || requestedRevision !== undefined) {
+      if (!targetBinding) return false;
+      if (requestedTaskId && requestedTaskId !== targetBinding.taskId) return false;
+      if (requestedRevision !== undefined && requestedRevision !== targetBinding.revision) return false;
+    }
+  }
+  return true;
+}
+
+export function getDurableChatCancellationForCurrentExecution(
+  scope: ChatExecutionScope,
+  fence?: DurableChatCancellationStatusFence,
+): DurableChatCancellationBinding | null {
+  purgeExpiredExecutions();
+  const target = resolveExecution(scope);
+  if (
+    !target
+    || target.sidecar === true
+    || target.terminal !== true
+    || target.terminalReceiptDurable !== true
+    || target.status !== 'cancelled'
+    || !target.terminalEvent
+  ) return null;
+  if (!terminalMatchesStatusFence(target, fence)) return null;
+
+  const controls = [...executions.values()].filter(record => (
+    record.scopeKey === target.scopeKey
+    && record.sidecar === true
+    && record.terminal === true
+    && record.terminalReceiptDurable === true
+    && record.controlIntentDurable === true
+    && record.controlIntentTarget === target.requestId
+    && record.terminalEvent?.payload?.controlIntent === 'cancel'
+    && compactString(record.terminalEvent?.payload?.targetRequestId, 180) === target.requestId
+  ));
+  // More than one durable tombstone is an ambiguous control history even when
+  // both name the same target. A status query must fail closed rather than
+  // silently picking a receipt.
+  if (controls.length !== 1) return null;
+  const [control] = controls;
+  const controlTerminal = copySnapshot(control);
+  const targetTerminal = copySnapshot(target);
+  if (!controlTerminal || !targetTerminal) return null;
+  return {
+    controlRequestId: control.requestId,
+    targetRequestId: target.requestId,
+    controlTerminal,
+    targetTerminal,
+  };
 }
 
 export function recordChatExecutionEvent(
@@ -672,6 +999,14 @@ export async function recordChatExecutionTerminalEventDurably(
     ...payload,
     source: payload.source || record.source,
     requestId,
+    ...(record.sidecar === true
+      && record.controlIntentDurable === true
+      && record.controlIntentTarget
+      ? {
+          controlIntent: 'cancel',
+          targetRequestId: record.controlIntentTarget,
+        }
+      : {}),
   };
   const status = terminalStatusForEvent(event, normalizedPayload);
   if (!status) throw new Error('Strict chat terminal receipt requires a terminal event');
@@ -709,6 +1044,7 @@ export async function recordChatExecutionTerminalEventDurably(
       record.terminalReceiptDurable = true;
       record.terminalReceiptPending = undefined;
       record.terminalReceiptBarrier = undefined;
+      resolveSidecarDurability(record);
     })
     .catch(error => {
       if (record.terminalReceiptPending === pending) {
@@ -739,6 +1075,7 @@ export async function recordChatExecutionTerminalEventDurably(
         record.terminalReceiptPending = undefined;
       }
       record.terminalReceiptBarrier = undefined;
+      rejectSidecarDurability(record, error);
       throw error;
     });
   record.terminalReceiptBarrier = barrier;
@@ -809,9 +1146,11 @@ export async function recordChatExecutionPersistenceUnknownDurably(
   const barrier = enqueueStrictPersistence(adapter => adapter.upsert(receipt)).then(
     () => {
       record.terminalReceiptDurable = true;
+      resolveSidecarDurability(record);
     },
     error => {
       record.terminalReceiptDurable = false;
+      rejectSidecarDurability(record, error);
       throw error;
     },
   );
@@ -897,6 +1236,10 @@ export async function initializeChatExecutionRegistryPersistence(
     const isTerminalReceipt = ['completed', 'cancelled', 'failed'].includes(receipt.status)
       && ['agent:response', 'agent:error'].includes(receipt.event)
       && (receipt.event !== 'agent:error' || receipt.status === 'failed');
+    const isTerminalCancellationBinding = isTerminalReceipt
+      && receiptPayload.sidecar === true
+      && receiptPayload.controlIntent === 'cancel'
+      && Boolean(compactString(receiptPayload.targetRequestId, 180));
     if (!isSidecarControlIntent && !isTerminalReceipt) continue;
     const updatedAtMs = Date.parse(receipt.updatedAt);
     const expiresAtMs = Date.parse(receipt.expiresAt);
@@ -926,10 +1269,10 @@ export async function initializeChatExecutionRegistryPersistence(
       requestId: receipt.requestId,
       source: receipt.source,
       sidecar: recoveredEvent.payload.sidecar === true,
-      controlIntentTarget: isSidecarControlIntent
+      controlIntentTarget: isSidecarControlIntent || isTerminalCancellationBinding
         ? compactString(recoveredEvent.payload.targetRequestId, 180)
         : undefined,
-      controlIntentDurable: isSidecarControlIntent,
+      controlIntentDurable: isSidecarControlIntent || isTerminalCancellationBinding,
       status: receipt.status,
       createdAt: receipt.createdAt,
       updatedAt: receipt.updatedAt,

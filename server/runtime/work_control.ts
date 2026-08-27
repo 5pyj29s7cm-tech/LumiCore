@@ -116,6 +116,14 @@ export interface RuntimeWorkSnapshot {
 export interface RuntimeWorkCancellationResult {
   ok: boolean;
   status: 'idle' | 'cancelled' | 'cancelling' | 'partial' | 'failed';
+  requestedTaskIds: string[];
+  cancelledTaskIds: string[];
+  cancellingTaskIds: string[];
+  notCancelledTaskIds: string[];
+  targetResults: Array<{
+    taskId: string;
+    status: 'cancelled' | 'cancelling' | 'already_terminal' | 'not_found' | 'failed';
+  }>;
   matchedCount: number;
   cancelledCount: number;
   cancellingCount: number;
@@ -584,13 +592,20 @@ export function resumeRuntimeWork(input: {
 export function cancelRuntimeWork(input: {
   userId: string;
   taskId?: string;
+  taskIds?: string[];
   kinds?: RuntimeWorkKind[];
   scope?: RuntimeWorkScope;
 }): RuntimeWorkCancellationResult {
   const selected = normalizeKinds(input.kinds);
   const before = getRuntimeWorkSnapshot(input.userId, [...selected], input.scope);
-  const matched = input.taskId
-    ? before.items.filter(item => item.id === input.taskId && item.controls.canCancel)
+  const requestedTaskIds = Array.from(new Set([
+    ...(Array.isArray(input.taskIds) ? input.taskIds : []),
+    ...(input.taskId ? [input.taskId] : []),
+  ].map(item => bounded(item, 180)).filter(Boolean))).slice(0, 64);
+  const hasExactTargetSet = Array.isArray(input.taskIds) || Boolean(input.taskId);
+  const requestedTaskIdSet = new Set(requestedTaskIds);
+  const matched = hasExactTargetSet
+    ? before.items.filter(item => requestedTaskIdSet.has(item.id) && item.controls.canCancel)
     : before.items.filter(item => item.controls.canCancel);
 
   const acceptedIds = new Set<string>();
@@ -649,21 +664,64 @@ export function cancelRuntimeWork(input: {
     || (item.status === 'running' && item.cancellationRequested)
   )).length;
   const cancelledCount = outcomeItems.filter(item => item.phase === 'cancelled').length;
-  const requestRejected = invalidWorkScope(input.scope) || Boolean(input.taskId && matched.length === 0);
-  const failedCount = Math.max(0, matched.length - acceptedIds.size) + (requestRejected ? 1 : 0);
+  const cancelledTaskIds = outcomeItems
+    .filter(item => item.phase === 'cancelled')
+    .map(item => item.id);
+  const cancellingTaskIds = outcomeItems
+    .filter(item => item.phase === 'cancelling' || item.cancellationRequested)
+    .map(item => item.id)
+    .filter(id => !cancelledTaskIds.includes(id));
+  const beforeById = new Map(before.items.map(item => [item.id, item]));
+  const alreadyTerminalTaskIds = hasExactTargetSet
+    ? requestedTaskIds.filter(id => {
+        const item = beforeById.get(id);
+        return Boolean(item && item.evidence.terminal && !item.controls.canCancel);
+      })
+    : [];
+  const notCancelledTaskIds = hasExactTargetSet
+    ? requestedTaskIds.filter(id => (
+        !acceptedIds.has(id) && !alreadyTerminalTaskIds.includes(id)
+      ))
+    : [];
+  const targetResults = requestedTaskIds.map(taskId => {
+    if (cancelledTaskIds.includes(taskId)) return { taskId, status: 'cancelled' as const };
+    if (cancellingTaskIds.includes(taskId)) return { taskId, status: 'cancelling' as const };
+    if (alreadyTerminalTaskIds.includes(taskId)) return { taskId, status: 'already_terminal' as const };
+    if (!beforeById.has(taskId)) return { taskId, status: 'not_found' as const };
+    return { taskId, status: 'failed' as const };
+  });
+  const invalidScope = invalidWorkScope(input.scope);
+  const requestRejected = invalidScope || Boolean(
+    hasExactTargetSet
+    && requestedTaskIds.length > 0
+    && acceptedIds.size === 0
+    && alreadyTerminalTaskIds.length === 0
+  );
+  const failedCount = invalidScope
+    ? 1
+    : hasExactTargetSet
+      ? notCancelledTaskIds.length
+      : Math.max(0, matched.length - acceptedIds.size);
   return {
-    ok: !requestRejected && (matched.length === 0 || failedCount === 0),
+    ok: !requestRejected && failedCount === 0,
     status: requestRejected
       ? 'failed'
-      : matched.length === 0
-      ? 'idle'
-      : failedCount === matched.length
-        ? 'failed'
-        : failedCount > 0
+      : hasExactTargetSet && requestedTaskIds.length === 0
+        ? 'idle'
+      : failedCount > 0
+        ? acceptedIds.size > 0 || alreadyTerminalTaskIds.length > 0
           ? 'partial'
-          : cancellingCount > 0
-            ? 'cancelling'
-            : 'cancelled',
+          : 'failed'
+      : cancellingCount > 0
+        ? 'cancelling'
+      : acceptedIds.size > 0
+        ? 'cancelled'
+        : 'idle',
+    requestedTaskIds,
+    cancelledTaskIds,
+    cancellingTaskIds,
+    notCancelledTaskIds,
+    targetResults,
     matchedCount: matched.length,
     cancelledCount,
     cancellingCount,

@@ -5,9 +5,11 @@ import {
   DEFAULT_MODEL_REQUEST_INPUT_BUDGET_TOKENS,
   estimateModelRequestInputTokens,
   estimateModelRequestTextTokens,
+  ModelRequestSourceProvenanceError,
   prepareModelRequestContext,
 } from '../server/llm/request_context_budget';
 import {
+  formatDeepSeekRequest,
   makeLLMCall,
   makeLLMCallStreaming,
   type NormalizedMessage,
@@ -134,6 +136,145 @@ describe('whole model-request context budget', () => {
     expect(request.messages.at(-1).content).toContain('CURRENT_INPUT_SENTINEL');
     expect(estimateModelRequestTextTokens(JSON.stringify({ messages: request.messages, tools: request.tools })))
       .toBeLessThanOrEqual(6_200);
+  });
+
+  it('protects the annotated source ahead of a trailing synthetic user message under a tight budget', () => {
+    const sourceMessageId = 'durable-user-source-1';
+    const prepared = prepareModelRequestContext({
+      messages: [
+        { role: 'system', content: `Safety boundary. ${'large system context '.repeat(2_000)}` },
+        ...Array.from({ length: 20 }, (_, index): NormalizedMessage => ({
+          role: index % 2 === 0 ? 'user' : 'assistant',
+          content: `old turn ${index} ${'large historical context '.repeat(300)}`,
+        })),
+        {
+          role: 'user',
+          content: `ANNOTATED_SOURCE_SENTINEL ${'exact accepted instruction '.repeat(1_000)}`,
+          sourceMessageId,
+        },
+        { role: 'assistant', content: 'A recovery pass is required.' },
+        {
+          role: 'user',
+          content: `SYNTHETIC_RECOVERY_SENTINEL ${'synthetic recovery guidance '.repeat(1_000)}`,
+        },
+      ],
+      toolDeclarations: [],
+      inputTokenBudget: 4_096,
+    });
+
+    const source = prepared.messages.find(message => message.sourceMessageId === sourceMessageId);
+    expect(source?.role).toBe('user');
+    expect(String(source?.content)).toContain('ANNOTATED_SOURCE_SENTINEL');
+    expect(String(prepared.messages.at(-1)?.content)).toContain('SYNTHETIC_RECOVERY_SENTINEL');
+    expect(prepared.estimatedInputTokens).toBeLessThanOrEqual(4_096);
+
+    const providerRequest = formatDeepSeekRequest({
+      model: 'source-protection-test',
+      messages: prepared.messages,
+      toolDeclarations: [],
+    });
+    expect(JSON.stringify(providerRequest)).not.toContain('sourceMessageId');
+    expect(JSON.stringify(providerRequest.messages)).toContain('ANNOTATED_SOURCE_SENTINEL');
+  });
+
+  it('retains the durable task capsule and latest correction when system context is compacted', () => {
+    const taskCapsule = [
+      'Current task capsule (TaskCapsuleV1):',
+      '- Original goal: analyze the presentation currently open in WPS.',
+      '- Confirmed target: quarterly-review-final.pptx',
+      '- Latest correction: do not use quarterly-review-draft.pptx.',
+      '- Waiting for: continue the analysis from slide 12.',
+    ].join('\n');
+    const backgroundBlocks = Array.from(
+      { length: 80 },
+      (_, index) => `## Background ${index}\n${'ordinary capability context '.repeat(120)}`,
+    );
+    const prepared = prepareModelRequestContext({
+      messages: [
+        {
+          role: 'system',
+          content: [
+            ...backgroundBlocks.slice(0, 40),
+            taskCapsule,
+            ...backgroundBlocks.slice(40),
+          ].join('\n\n'),
+        },
+        { role: 'user', content: '继续', sourceMessageId: 'capsule-source-1' },
+      ],
+      toolDeclarations: [],
+      inputTokenBudget: 4_096,
+    });
+
+    const providerContext = JSON.stringify(prepared.messages);
+    expect(prepared.compacted).toBe(true);
+    expect(prepared.estimatedInputTokens).toBeLessThanOrEqual(4_096);
+    expect(providerContext).toContain('Current task capsule (TaskCapsuleV1)');
+    expect(providerContext).toContain('quarterly-review-final.pptx');
+    expect(providerContext).toContain('do not use quarterly-review-draft.pptx');
+    expect(String(prepared.messages.at(-1)?.content)).toContain('继续');
+  });
+
+  it('delivers the durable task capsule and latest correction at the real provider boundary', async () => {
+    const taskCapsule = [
+      'Current task capsule (TaskCapsuleV1):',
+      '- Original goal: analyze the presentation currently open in WPS.',
+      '- Confirmed target: quarterly-review-final.pptx',
+      '- Latest correction: do not use quarterly-review-draft.pptx.',
+      '- Waiting for: continue the analysis from slide 12.',
+    ].join('\n');
+    const backgroundBlocks = Array.from(
+      { length: 80 },
+      (_, index) => `## Provider background ${index}\n${'ordinary capability context '.repeat(120)}`,
+    );
+    let providerRequest: any;
+    const client = {
+      chat: { completions: { create: vi.fn(async (params: any) => {
+        providerRequest = params;
+        return {
+          choices: [{ message: { role: 'assistant', content: 'continued from the confirmed target' } }],
+          usage: { prompt_tokens: 100, completion_tokens: 6, total_tokens: 106 },
+        };
+      }) } },
+    };
+
+    const result = await makeLLMCall(
+      [
+        {
+          role: 'system',
+          content: [
+            ...backgroundBlocks.slice(0, 40),
+            taskCapsule,
+            ...backgroundBlocks.slice(40),
+          ].join('\n\n'),
+        },
+        { role: 'user', content: '继续', sourceMessageId: 'capsule-provider-source-1' },
+      ],
+      [],
+      { provider: 'deepseek', model: 'capsule-provider-test', inputTokenBudget: 4_096 },
+      () => client,
+      () => null,
+    );
+
+    const delivered = JSON.stringify(providerRequest.messages);
+    expect(result.text).toBe('continued from the confirmed target');
+    expect(delivered).toContain('Current task capsule (TaskCapsuleV1)');
+    expect(delivered).toContain('quarterly-review-final.pptx');
+    expect(delivered).toContain('do not use quarterly-review-draft.pptx');
+    expect(delivered).toContain('继续');
+    expect(delivered).not.toContain('sourceMessageId');
+    expect(estimateModelRequestTextTokens(JSON.stringify({ messages: providerRequest.messages })))
+      .toBeLessThanOrEqual(4_200);
+  });
+
+  it('fails closed when one request contains multiple annotated source messages', () => {
+    expect(() => prepareModelRequestContext({
+      messages: [
+        { role: 'user', content: 'first source', sourceMessageId: 'source-1' },
+        { role: 'user', content: 'second source', sourceMessageId: 'source-2' },
+      ],
+      toolDeclarations: [],
+      inputTokenBudget: 4_096,
+    })).toThrow(ModelRequestSourceProvenanceError);
   });
 
   it('uses the full client manual only for an explicit Lumi self-diagnostic', () => {

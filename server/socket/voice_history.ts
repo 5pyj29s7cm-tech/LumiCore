@@ -71,30 +71,36 @@ export function normalizeVoiceHistoryRecord(record: any): NormalizedMessage[] {
 }
 
 /**
- * Build voice model history only from completed, trustworthy conversation
- * pairs. Execution receipts continue through TaskLedger instead of prose.
+ * Build bounded voice/task model history from server-persisted turns.
+ *
+ * Assistant prose still has to pass the execution/guard filters above, but a
+ * rejected assistant row must not erase the user's request with it. The
+ * socket callers remove the currently executing user row by id/request id
+ * before calling this function, so any remaining unpaired user row is durable
+ * context left by an interruption, correction, restart, or rejected internal
+ * guard response and must survive into the next turn.
+ *
+ * Execution receipts continue through TaskLedger instead of prose.
  */
 export function normalizeVoiceHistory(records: any[]): NormalizedMessage[] {
   const output: NormalizedMessage[] = [];
-  let pendingUser: any | null = null;
+  let pendingUsers: NormalizedMessage[] = [];
 
   for (const record of Array.isArray(records) ? records : []) {
     const role = String(record?.role || '').toLowerCase();
     if (role === 'user') {
-      pendingUser = record;
+      pendingUsers.push(...normalizeVoiceHistoryRecord(record));
       continue;
     }
     if (role !== 'assistant') continue;
 
     const assistant = normalizeVoiceHistoryRecord(record);
-    if (pendingUser) {
-      const user = normalizeVoiceHistoryRecord(pendingUser);
-      if (user.length > 0 && assistant.length > 0) output.push(...user, ...assistant);
-      pendingUser = null;
-      continue;
-    }
+    if (pendingUsers.length > 0) output.push(...pendingUsers);
+    pendingUsers = [];
     if (assistant.length > 0) output.push(...assistant);
   }
+
+  if (pendingUsers.length > 0) output.push(...pendingUsers);
 
   return output.slice(-20);
 }

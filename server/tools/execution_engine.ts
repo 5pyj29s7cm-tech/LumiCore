@@ -195,6 +195,7 @@ export interface ExecuteToolCallInput {
   name: string;
   arguments?: Record<string, any>;
   id?: string;
+  executionOrigin?: ToolExecutionRecord['executionOrigin'];
   context?: ToolContext;
   /**
    * Optional domain guard. It may normalize arguments or block execution, but
@@ -473,6 +474,7 @@ export async function executeToolCall(
     taskId: input.context?.taskId,
     turnId: input.context?.turnId,
     requestId: input.context?.requestId,
+    executionOrigin: input.executionOrigin,
     name: input.name,
     arguments: receiptArguments,
     result: '',

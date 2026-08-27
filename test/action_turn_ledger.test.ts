@@ -268,6 +268,16 @@ describe('conversation action turn ledger', () => {
       leaseOwnerId: 'worker-b',
       processEpoch: 'epoch-a',
     })).toMatchObject({ acquired: false, reason: 'terminal' });
+    expect(finalizeConversationActionTurn({
+      ...key,
+      status: 'terminal',
+      terminalMessageId: 'assistant-delayed-replay',
+      force: true,
+    })).toMatchObject({
+      finalized: false,
+      reason: 'terminal_conflict',
+      turn: { status: 'persistence_unknown', terminalMessageId: '' },
+    });
 
     const reconciled = reconcileConversationActionTurnLease({
       ...key,

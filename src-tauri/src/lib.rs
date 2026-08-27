@@ -20,8 +20,10 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 mod local_bootstrap;
+mod native_identity;
 mod window_activation;
 use local_bootstrap::bootstrap_local_identity;
+use native_identity::get_native_client_identity;
 use window_activation::{execute_window_activation_steps, WindowActivationOps};
 
 const WINDOW_TOGGLE_SHORTCUT: &str = "Alt+Space";
@@ -5607,6 +5609,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             bootstrap_local_identity,
+            get_native_client_identity,
             get_system_info,
             get_desktop_capability_status,
             get_live_stats,

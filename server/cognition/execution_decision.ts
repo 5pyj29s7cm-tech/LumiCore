@@ -500,6 +500,7 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
         maxTools: input.flow.channel === 'voice' ? 24 : 32,
         capabilityManifest: input.toolRegistry?.getCapabilityManifest(baseToolPolicy),
         pendingAssistantOfferContext: input.pendingAssistantOfferContext,
+        actionTaskState: input.actionTaskState,
       })
     : null;
   const toolRoute = rawToolRoute

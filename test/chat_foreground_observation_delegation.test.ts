@@ -6,11 +6,25 @@ import { io as createSocketClient, type Socket as ClientSocket } from 'socket.io
 
 const mocks = vi.hoisted(() => ({
   runWithTools: vi.fn(),
+  processInputError: null as Error | null,
 }));
 
 vi.mock('../server/llm/adapter', async importOriginal => {
   const actual = await importOriginal<typeof import('../server/llm/adapter')>();
   return { ...actual, runWithTools: mocks.runWithTools };
+});
+
+vi.mock('../server/cognition', async importOriginal => {
+  const actual = await importOriginal<typeof import('../server/cognition')>();
+  return {
+    ...actual,
+    processInput: (...args: Parameters<typeof actual.processInput>) => {
+      const error = mocks.processInputError;
+      mocks.processInputError = null;
+      if (error) throw error;
+      return actual.processInput(...args);
+    },
+  };
 });
 
 vi.mock('../server/memory', async importOriginal => {
@@ -312,5 +326,68 @@ describe('chat foreground desktop observation delegation gate', () => {
     expect(desktopCalls).toEqual([{ name: 'desktop_active_window', arguments: {} }]);
     expect(backgroundEvents).toEqual([]);
     expect(listBackgroundTasks(userId)).toEqual([]);
+  });
+
+  it('turns an ordinary executor exception into one durable natural assistant response', async () => {
+    const failureRequestId = `chat-foreground-natural-failure-${suffix}`;
+    const errorFrames: any[] = [];
+    const onAgentError = (payload: any) => {
+      if (String(payload?.requestId || '') === failureRequestId) errorFrames.push(payload);
+    };
+    client.on('agent:error', onAgentError);
+    mocks.processInputError = new Error('private execution detail must stay internal');
+
+    const responsePromise = waitForRequestEvent<Record<string, any>>(
+      client,
+      'agent:response',
+      failureRequestId,
+    );
+    const ack = await client.timeout(5_000).emitWithAck('agent:chat', {
+      text: EXACT_OBSERVATION_REQUEST,
+      history: [],
+      agentId: 'lumi',
+      domain: 'personal',
+      source: 'command-center-chat',
+      requestId: failureRequestId,
+      conversationId,
+    });
+    expect(ack).toMatchObject({ ok: true, requestId: failureRequestId });
+
+    const response = await responsePromise;
+    client.off('agent:error', onAgentError);
+    expect(response).toMatchObject({
+      requestId: failureRequestId,
+      conversationId,
+      finalized: true,
+      blocked: true,
+      reason: 'chat_execution_failed',
+    });
+    expect(response.text).toBe('这次没有完成处理，已经停止，你可以直接继续说。');
+    expect(JSON.stringify(response)).not.toContain('private execution detail');
+    expect(errorFrames).toEqual([]);
+
+    const db = readDB();
+    const assistant = (db.interactions || []).find((row: any) => (
+      row.userId === userId
+      && row.conversationId === conversationId
+      && row.role === 'assistant'
+      && String(row.requestId || row.externalMessageId || '') === failureRequestId
+    ));
+    expect(assistant).toMatchObject({
+      message: '这次没有完成处理，已经停止，你可以直接继续说。',
+      cognitiveIntent: 'chat_execution_failed',
+    });
+    const actionTurn = (db.conversationActionTurns || []).find((row: any) => (
+      row.userId === userId
+      && row.conversationId === conversationId
+      && row.requestId === failureRequestId
+    ));
+    expect(actionTurn).toMatchObject({
+      status: 'terminal',
+      terminalMessageId: assistant.id,
+      leaseOwnerId: '',
+    });
+    const task = (db.conversationActionTasks || []).find((row: any) => row.id === actionTurn.taskId);
+    expect(task).toMatchObject({ status: 'blocked', activeRequestId: '' });
   });
 });

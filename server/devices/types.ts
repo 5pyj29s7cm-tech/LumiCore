@@ -1,3 +1,5 @@
+import type { NativeClientIdentity } from '../../shared/native_client_identity';
+
 export type DeviceType = 'desktop' | 'mobile' | 'ar_glasses' | 'holographic_prototype' | 'web';
 
 export type DeviceStatus = 'online' | 'offline' | 'pairing';
@@ -29,6 +31,8 @@ export interface DeviceInfo {
   socketId: string | null; // current Socket.IO connection
   ipAddress: string | null;
   osInfo: string | null;
+  /** Proof-bound local claim; `osAttested` remains false until independently probed. */
+  nativeClientIdentity: NativeClientIdentity | null;
   firstSeen: string;
   lastSeen: string;
   lastPerceptionEvent?: string; // timestamp of last perception data pushed

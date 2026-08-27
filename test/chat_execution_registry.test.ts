@@ -1,11 +1,26 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { closeDatabase, ensureDatabaseInitialized, querySQL, runSQL } from '../db_layer';
+import {
+  closeDatabase,
+  ensureDatabaseInitialized,
+  flushDBOrThrow,
+  initDatabase,
+  querySQL,
+  runSQL,
+} from '../db_layer';
+import {
+  addMessageIdempotent,
+  cancelConversationActionExecution,
+  getConversationForScope,
+  getOrCreateActiveConversation,
+  prepareConversationActionExecution,
+} from '../server/conversation/manager';
 import {
   beginChatExecution,
   beginChatExecutionDurably,
   beginQueuedChatExecution,
   beginChatSidecarExecution,
   getChatExecution,
+  getDurableChatCancellationForCurrentExecution,
   getChatSidecarCancellationTarget,
   initializeChatExecutionRegistryPersistence,
   markChatExecutionCancelling,
@@ -491,6 +506,131 @@ describe('chat execution registry', () => {
     expect(duplicateAcknowledged).toBe(false);
   });
 
+  it.each([
+    { label: 'status', withCancellationIntent: false },
+    { label: 'cancellation', withCancellationIntent: true },
+  ])('waits for the strict terminal barrier of a duplicate $label sidecar', async ({
+    withCancellationIntent,
+  }) => {
+    let releaseTerminalWrite!: () => void;
+    const terminalWrite = new Promise<void>(resolve => { releaseTerminalWrite = resolve; });
+    const adapter: ChatExecutionPersistenceAdapter = {
+      async loadRecoverable() { return []; },
+      async purgeExpired() {},
+      async upsert(receipt) {
+        if (receipt.status === 'cancelling') return;
+        await terminalWrite;
+      },
+    };
+    await initializeChatExecutionRegistryPersistence(adapter, Date.now());
+    const requestId = withCancellationIntent ? 'cancel-terminal-deferred' : 'status-terminal-deferred';
+    expect(beginChatSidecarExecution(scope, requestId)).toBe(true);
+    if (withCancellationIntent) {
+      await persistChatSidecarCancellationIntent(scope, requestId, 'foreground-A');
+    }
+
+    const terminal = recordChatExecutionTerminalEventDurably(scope, requestId, 'agent:response', {
+      text: withCancellationIntent ? 'cancelled' : 'still working',
+      sidecar: true,
+      finalized: true,
+      blocked: false,
+      ...(withCancellationIntent
+        ? { reason: 'cancelled_by_user' }
+        : { reason: 'target_execution_status', controlIntent: 'status', targetRequestId: 'foreground-A' }),
+    });
+    let duplicateSettled = false;
+    const duplicate = waitForChatSidecarCancellationIntent(scope, requestId)
+      .then(() => { duplicateSettled = true; });
+    await Promise.resolve();
+
+    expect(duplicateSettled).toBe(false);
+    expect(getChatExecution(scope, requestId)).toMatchObject({ terminal: false });
+
+    releaseTerminalWrite();
+    await Promise.all([terminal, duplicate]);
+    expect(duplicateSettled).toBe(true);
+    expect(getChatExecution(scope, requestId)).toMatchObject({
+      sidecar: true,
+      terminal: true,
+      status: 'completed',
+    });
+  });
+
+  it('classifies a failed status-terminal barrier as terminal durability, not a missing control intent', async () => {
+    let rejectTerminalWrite!: (error: Error) => void;
+    const terminalWrite = new Promise<void>((_resolve, reject) => { rejectTerminalWrite = reject; });
+    const adapter: ChatExecutionPersistenceAdapter = {
+      async loadRecoverable() { return []; },
+      async purgeExpired() {},
+      async upsert() { await terminalWrite; },
+    };
+    await initializeChatExecutionRegistryPersistence(adapter, Date.now());
+    expect(beginChatSidecarExecution(scope, 'status-terminal-failure')).toBe(true);
+    const terminal = recordChatExecutionTerminalEventDurably(
+      scope,
+      'status-terminal-failure',
+      'agent:response',
+      {
+        text: 'status result',
+        sidecar: true,
+        finalized: true,
+        blocked: false,
+        reason: 'target_execution_status',
+        controlIntent: 'status',
+        targetRequestId: 'foreground-A',
+      },
+    );
+    const duplicate = waitForChatSidecarCancellationIntent(scope, 'status-terminal-failure');
+    rejectTerminalWrite(new Error('fsync failed'));
+
+    await expect(terminal).rejects.toThrow(/fsync failed/i);
+    await expect(duplicate).rejects.toMatchObject({
+      code: 'CHAT_SIDECAR_TERMINAL_RECEIPT_NOT_DURABLE',
+    });
+  });
+
+  it('waits from status-sidecar reservation until its terminal writer installs and commits the barrier', async () => {
+    let releaseTerminalWrite!: () => void;
+    const terminalWrite = new Promise<void>(resolve => { releaseTerminalWrite = resolve; });
+    const adapter: ChatExecutionPersistenceAdapter = {
+      async loadRecoverable() { return []; },
+      async purgeExpired() {},
+      async upsert() { await terminalWrite; },
+    };
+    await initializeChatExecutionRegistryPersistence(adapter, Date.now());
+    expect(beginChatSidecarExecution(scope, 'status-pre-terminal-race')).toBe(true);
+
+    let duplicateSettled = false;
+    const duplicate = waitForChatSidecarCancellationIntent(scope, 'status-pre-terminal-race')
+      .then(() => { duplicateSettled = true; });
+    await Promise.resolve();
+    expect(duplicateSettled).toBe(false);
+
+    const terminal = recordChatExecutionTerminalEventDurably(
+      scope,
+      'status-pre-terminal-race',
+      'agent:response',
+      {
+        text: 'status result',
+        sidecar: true,
+        finalized: true,
+        blocked: false,
+        reason: 'target_execution_status',
+        controlIntent: 'status',
+        targetRequestId: 'foreground-A',
+      },
+    );
+    await Promise.resolve();
+    expect(duplicateSettled).toBe(false);
+
+    releaseTerminalWrite();
+    await Promise.all([terminal, duplicate]);
+    expect(getChatExecution(scope, 'status-pre-terminal-race')).toMatchObject({
+      terminal: true,
+      status: 'completed',
+    });
+  });
+
   it('retains a settled cancellation sidecar for the full control replay window', async () => {
     vi.useFakeTimers();
     const now = Date.parse('2026-08-22T00:00:00.000Z');
@@ -513,6 +653,18 @@ describe('chat execution registry', () => {
     vi.setSystemTime(later);
     expect(await initializeChatExecutionRegistryPersistence(persistence.adapter, later)).toBe(1);
     expect(beginChatSidecarExecution(scope, 'cancel-retained')).toBe(false);
+    expect(getChatExecution(scope, 'cancel-retained')).toMatchObject({
+      sidecar: true,
+      status: 'completed',
+      terminal: true,
+      terminalEvent: {
+        payload: {
+          controlIntent: 'cancel',
+          targetRequestId: 'foreground-A',
+        },
+      },
+    });
+    expect(getChatSidecarCancellationTarget(scope, 'cancel-retained')).toBe('foreground-A');
   });
 
   it('purges an abandoned in-memory sidecar after the control replay window', () => {
@@ -681,5 +833,150 @@ describe('chat execution registry', () => {
       'DELETE FROM chat_execution_terminal_receipts WHERE userId = ? AND requestId = ?',
       [sqliteScope.userId, requestId],
     );
+  });
+
+  it('does not treat hydrated cancelled A as current when reopened durable conversation owns accepted B', async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const userId = `sqlite-current-fence-${suffix}`;
+    await initDatabase();
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    const sqliteScope: ChatExecutionScope = {
+      userId,
+      domain: 'personal',
+      source: 'chat',
+      conversationId: conversation.id,
+    };
+    const requestA = `request-A-${suffix}`;
+    const requestB = `request-B-${suffix}`;
+    const stopA = `stop-A-${suffix}`;
+    const toolPolicy = {
+      allowedTools: ['desktop_open'],
+      requireConfirmation: [],
+      forbiddenTools: [],
+      maxIterations: 4,
+    };
+
+    await initializeChatExecutionRegistryPersistence();
+    const messageA = addMessageIdempotent({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'user',
+      content: 'Run task A.',
+      requestId: requestA,
+      deferActionPreparation: true,
+      domain: 'personal',
+      source: 'chat',
+      channel: 'chat',
+    });
+    const preparedA = prepareConversationActionExecution({
+      conversationId: conversation.id,
+      userId,
+      userText: 'Run task A.',
+      requestId: requestA,
+      userMessageId: messageA,
+      toolPolicy,
+      forceTask: true,
+    });
+    expect(preparedA.state?.taskId).toBeTruthy();
+
+    beginChatExecution(sqliteScope, requestA);
+    expect(beginChatSidecarExecution(sqliteScope, stopA)).toBe(true);
+    await persistChatSidecarCancellationIntent(sqliteScope, stopA, requestA);
+    const cancelledA = cancelConversationActionExecution(
+      conversation.id,
+      userId,
+      'Cancelled before task B was accepted.',
+      requestA,
+    );
+    expect(cancelledA).toMatchObject({ taskId: preparedA.state!.taskId, status: 'cancelled' });
+    await recordChatExecutionTerminalEventDurably(sqliteScope, requestA, 'agent:response', {
+      text: 'Task A cancelled.',
+      agentName: 'Lumi',
+      finalized: true,
+      blocked: false,
+      reason: 'request_cancelled',
+      taskRelation: {
+        binding: 'active_task',
+        taskId: preparedA.state!.taskId,
+        revision: preparedA.state!.revision,
+        targetRequestId: requestA,
+      },
+    });
+    await recordChatExecutionTerminalEventDurably(sqliteScope, stopA, 'agent:response', {
+      text: 'Task A cancelled.',
+      agentName: 'Lumi',
+      sidecar: true,
+      finalized: true,
+      blocked: false,
+      reason: 'cancelled_by_user',
+    });
+
+    const messageB = addMessageIdempotent({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'user',
+      content: 'Run task B.',
+      requestId: requestB,
+      deferActionPreparation: true,
+      domain: 'personal',
+      source: 'chat',
+      channel: 'chat',
+    });
+    const preparedB = prepareConversationActionExecution({
+      conversationId: conversation.id,
+      userId,
+      userText: 'Run task B.',
+      requestId: requestB,
+      userMessageId: messageB,
+      toolPolicy,
+      forceTask: true,
+    });
+    expect(preparedB.state).toMatchObject({
+      activeRequestId: requestB,
+      unfinished: true,
+    });
+    expect(preparedB.state?.taskId).not.toBe(preparedA.state?.taskId);
+    await flushDBOrThrow();
+
+    resetChatExecutionRegistryForTests();
+    await closeDatabase();
+    await initDatabase();
+    expect(await initializeChatExecutionRegistryPersistence()).toBeGreaterThanOrEqual(2);
+    const reopenedConversation = getConversationForScope(
+      conversation.id,
+      userId,
+      'personal',
+      '',
+    );
+    expect(reopenedConversation?.actionContinuationState).toMatchObject({
+      taskId: preparedB.state!.taskId,
+      revision: preparedB.state!.revision,
+      activeRequestId: requestB,
+      unfinished: true,
+    });
+    // Recovery receipts contain only terminal A, so an unfenced lookup can
+    // still find that bounded history. The durable conversation fence is what
+    // prevents the status fast path from presenting it as current.
+    expect(getDurableChatCancellationForCurrentExecution(sqliteScope)).toMatchObject({
+      targetRequestId: requestA,
+    });
+    expect(getDurableChatCancellationForCurrentExecution(sqliteScope, {
+      currentTask: {
+        taskId: preparedB.state!.taskId,
+        revision: preparedB.state!.revision,
+        activeRequestId: requestB,
+        unfinished: true,
+      },
+      relation: {
+        binding: 'active_task',
+        taskId: preparedB.state!.taskId,
+        revision: preparedB.state!.revision,
+        targetRequestId: requestB,
+      },
+    })).toBeNull();
+
+    await runSQL('DELETE FROM chat_execution_terminal_receipts WHERE userId = ?', [userId]);
   });
 });

@@ -61,6 +61,35 @@ beforeEach(() => {
 });
 
 describe('LLM tool-loop recovery and terminal truth', () => {
+  it('attributes a confirmation continuation to the accepted confirmation row, not the old goal', () => {
+    const messages = buildConfirmedStepContinuationMessages(
+      'Delete the exact reviewed cache entry, then verify it is gone.',
+      {
+        id: 'confirmed-delete-1',
+        name: 'delete_reviewed_cache_entry',
+        arguments: { id: 'cache-entry-1' },
+        result: JSON.stringify({ ok: true, status: 'verified' }),
+      },
+      {
+        messageId: 'durable-confirmation-message-1',
+        text: '确认',
+      },
+    );
+
+    const userMessages = messages.filter(message => message.role === 'user');
+    expect(userMessages).toEqual([
+      expect.objectContaining({
+        content: 'Delete the exact reviewed cache entry, then verify it is gone.',
+      }),
+      expect.objectContaining({
+        content: '确认',
+        sourceMessageId: 'durable-confirmation-message-1',
+      }),
+    ]);
+    expect(userMessages[0]).not.toHaveProperty('sourceMessageId');
+    expect(messages.filter(message => message.sourceMessageId)).toHaveLength(1);
+  });
+
   it('reviews a confirmed receipt, blocks mutation replay, and continues only the missing verification', async () => {
     const registry = new ToolRegistry();
     const mutation = vi.fn(async () => encodeToolResult('mutation should not run twice', {
@@ -134,6 +163,7 @@ describe('LLM tool-loop recovery and terminal truth', () => {
       .mockResolvedValueOnce({
         text: 'checking the still-missing acceptance condition',
         toolCalls: [{ id: 'readback-1', name: 'confirmation_readback', arguments: {} }],
+        routingReceiptId: 'routing-confirmation-readback',
       })
       .mockResolvedValueOnce({
         text: 'trying to repeat the mutation after verification',
@@ -164,6 +194,8 @@ describe('LLM tool-loop recovery and terminal truth', () => {
     expect(mutation).not.toHaveBeenCalled();
     expect(readback).toHaveBeenCalledTimes(1);
     expect(result.toolCalls.map(record => record.id)).toEqual(['confirmed-once', 'readback-1']);
+    expect(result.toolCalls.find(record => record.id === 'readback-1'))
+      .toMatchObject({ modelRoutingReceiptId: 'routing-confirmation-readback' });
     const finalModelMessages = mocks.makeLLMCall.mock.calls[2][0] as Array<{ role: string; content: string }>;
     expect(finalModelMessages.some(message => (
       message.role === 'tool'

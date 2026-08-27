@@ -422,7 +422,7 @@ describe('finalized output paths', () => {
     }
 
     const chatHistoryStart = chat.indexOf('const recentFailureExplanation =');
-    const chatHistoryEnd = chat.indexOf('// ── Desktop relay', chatHistoryStart);
+    const chatHistoryEnd = chat.indexOf('let pendingConfirmationCreatedThisTurn', chatHistoryStart);
     const chatHistoryPath = chat.slice(chatHistoryStart, chatHistoryEnd);
     expect(chatHistoryPath).toContain('groundedTurnEvidence.push');
     expect(chatHistoryPath).not.toContain('agent:response');

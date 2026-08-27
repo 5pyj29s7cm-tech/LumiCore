@@ -26,9 +26,83 @@ export function toolRecordIdempotencyKey(record: ToolExecutionRecord): string {
     .digest('hex');
 }
 
+function cleanObservedTarget(value: unknown): string {
+  const target = String(value ?? '')
+    .replace(/[\u0000-\u001f\u007f]/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  if (!target || /^(?:none|null|undefined|unknown|n\/a|unavailable)$/i.test(target)) return '';
+  return target.slice(0, 500);
+}
+
+function looksLikeObservedDocumentPath(value: string): boolean {
+  return /^(?:~[\\/]|[a-z]:[\\/]|\\\\|\/)/i.test(value)
+    || /[\\/]/u.test(value)
+    || /\.(?:pptx?|docx?|xlsx?|pdf|rtf|txt|md|csv|json|wps|et|dps)$/i.test(value);
+}
+
+function verifiedObservedWindowTarget(record: ToolExecutionRecord): string {
+  if (
+    record.terminalVerification?.status !== 'verified'
+    || !toolRecordSucceeded(record)
+  ) return '';
+  const parsed = record.receipt !== undefined ? record.receipt : parseResult(record.result);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return '';
+  const payload = parsed as Record<string, any>;
+  const currentDocument = payload.currentDocument
+    && typeof payload.currentDocument === 'object'
+    && !Array.isArray(payload.currentDocument)
+    ? payload.currentDocument as Record<string, any>
+    : {};
+  const pathStatus = cleanObservedTarget(
+    currentDocument.pathStatus
+    || currentDocument.path_status
+    || payload.documentPathStatus
+    || payload.document_path_status,
+  ).toLowerCase();
+  const path = cleanObservedTarget(currentDocument.path || payload.documentPath);
+  const pathIsUnknown = /^(?:unknown|unresolved|missing|not_found|unavailable|null|none)$/i.test(pathStatus);
+  if (path && !pathIsUnknown && looksLikeObservedDocumentPath(path)) return path;
+
+  return cleanObservedTarget(
+    currentDocument.name
+    || payload.documentName
+    || payload.windowTitle
+    || payload.title,
+  );
+}
+
+function runtimeWorkCancelTaskSetIdentity(record: ToolExecutionRecord): string {
+  if (record.name !== 'runtime_work_cancel') return '';
+  const rawTaskIds = record.arguments?.taskIds;
+  if (
+    !Array.isArray(rawTaskIds)
+    || rawTaskIds.length === 0
+    || rawTaskIds.some(taskId => typeof taskId !== 'string' || !taskId.trim())
+  ) return '';
+  const taskIds = Array.from(new Set(rawTaskIds.map(taskId => taskId.trim()))).sort();
+  if (taskIds.length === 0) return '';
+  const digest = crypto.createHash('sha256').update(JSON.stringify(taskIds)).digest('hex');
+  return `runtime_work_cancel:taskIds:sha256:${digest}:count:${taskIds.length}`;
+}
+
 export function toolRecordTargetIdentity(record: ToolExecutionRecord): string {
+  // Foreground observation tools accept no semantic target argument. Ignore
+  // caller/model-supplied compatibility arguments even when present: only the
+  // explicitly verified native result may establish the durable identity.
+  if (/^(?:desktop_active_window|get_active_window_info)$/i.test(record.name)) {
+    return verifiedObservedWindowTarget(record);
+  }
+
+  // Batch runtime cleanup has no generic `target` argument by design: the
+  // immutable target is the exact non-empty taskIds set. Persist only a
+  // deterministic identity of its sorted/deduplicated members; never add an
+  // argument or reinterpret an empty array as cancel-all authority.
+  const runtimeWorkTaskSet = runtimeWorkCancelTaskSetIdentity(record);
+  if (runtimeWorkTaskSet) return runtimeWorkTaskSet;
+
   const args = record.arguments || {};
-  return String(
+  const argumentTarget = String(
     args.contact
     || args.recipient
     || args.target
@@ -37,7 +111,9 @@ export function toolRecordTargetIdentity(record: ToolExecutionRecord): string {
     || args.url
     || args.applicationTarget
     || '',
-  ).trim().slice(0, 500);
+  ).trim();
+  if (argumentTarget) return argumentTarget.slice(0, 500);
+  return '';
 }
 
 export function buildToolExecutionEnvelope(

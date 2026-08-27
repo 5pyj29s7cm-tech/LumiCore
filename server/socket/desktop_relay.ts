@@ -3,6 +3,10 @@ import type { Server, Socket } from "socket.io";
 import { deviceRegistry } from "../devices";
 import { captureNativeUiSnapshot, runNativeUiAction } from "../external_control/native_ui";
 import {
+  executeTaskRegressionDesktopRelay,
+  hasTaskRegressionDesktopRelayAuthorization,
+} from "../evidence/task_regression_desktop_relay";
+import {
   acquireDesktopControlLease,
   type DesktopControlLeaseHandle,
   type DesktopControlLeaseSnapshot,
@@ -52,6 +56,7 @@ export type DesktopRelayOptions = {
   cancelOnRequestSocketDisconnect?: boolean;
   signal?: AbortSignal;
   taskId?: string;
+  requestId?: string;
   leaseTimeoutMs?: number;
   leaseDurationMs?: number;
   onControlPaused?: (reason: string) => void;
@@ -289,6 +294,49 @@ export function createDesktopRelay(options: DesktopRelayOptions): DesktopRelay {
     const combined = combineAbortSignals([options.signal, lease.signal]);
     const executionSignal = combined.signal;
     try {
+      if (
+        [
+          'desktop_write_text_file',
+          'desktop_active_window',
+          'desktop_list_files',
+          'desktop_read_text_file',
+        ].includes(toolName)
+        && options.requestSocket
+        && hasTaskRegressionDesktopRelayAuthorization(options.requestSocket)
+      ) {
+        const regressionCorrelationId = `desktop-${options.source}_${randomUUID()}`;
+        options.emitToolLifecycle?.({
+          correlationId: regressionCorrelationId,
+          name: toolName,
+          arguments: args,
+        });
+        try {
+          const regressionResult = executeTaskRegressionDesktopRelay(
+            options.requestSocket,
+            toolName,
+            args,
+            String(options.requestId || ''),
+          );
+          options.emitToolLifecycle?.({
+            correlationId: regressionCorrelationId,
+            name: toolName,
+            arguments: args,
+            result: options.formatResultForLifecycle
+              ? options.formatResultForLifecycle(regressionResult)
+              : regressionResult,
+          });
+          return regressionResult;
+        } catch (error: any) {
+          const message = error?.message || String(error);
+          options.emitToolLifecycle?.({
+            correlationId: regressionCorrelationId,
+            name: toolName,
+            arguments: args,
+            error: message,
+          });
+          throw error;
+        }
+      }
       if (LOCAL_DESKTOP_UI_TOOLS.has(toolName) && !isCoLocatedNativeDesktopRuntime()) {
         throw new Error(
           `Native desktop UI tool "${toolName}" is blocked because the server is not proven to share the selected Windows/macOS desktop session. Use computer_use on the connected desktop instead.`,

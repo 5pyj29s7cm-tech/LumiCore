@@ -15,11 +15,15 @@ import {
   isSimpleDesktopOpenRequest,
   requestsBlankAutoCadDocument,
   requiresExternalAiHistory,
+  requiresCurrentAuthoringDocumentInspection,
   requiresCurrentAppUiMutation,
   requiresCadGeometryExtractionOnly,
   requiresVisibleAutoCadExecution,
 } from './action_contract';
-import { isRecoveredCurrentAppEditingContinuation } from './action_continuation';
+import {
+  isRecoveredCurrentAppEditingContinuation,
+  type ConversationActionContinuationState,
+} from './action_continuation';
 import { detectRequestedOperationMode, isPureOperationModeSwitchRequest } from './operation_modes';
 import { buildDesktopObservationPlan } from './desktop_observation';
 import {
@@ -33,7 +37,10 @@ import {
 } from './normalized_action_intent';
 import { isReadOnlyKnowledgeBaseInspectionRequest } from './knowledge_intent';
 import { classifyRuntimeWorkIntent } from './runtime_work_intent';
-import type { PendingAssistantOfferContext } from './pending_assistant_offer';
+import {
+  isRuntimeCleanupOfferAcceptanceText,
+  type PendingAssistantOfferContext,
+} from './pending_assistant_offer';
 
 type ToolDeclaration = ReturnType<ToolRegistry['getToolDeclarations']>[number];
 
@@ -61,6 +68,8 @@ export interface ToolRouteOptions {
    * remains transport-independent.
    */
   pendingAssistantOfferContext?: PendingAssistantOfferContext;
+  /** Trusted server-owned durable task state for terse continuation turns. */
+  actionTaskState?: ConversationActionContinuationState | null;
 }
 
 function unique(values: string[]): string[] {
@@ -292,15 +301,6 @@ function strictDesktopObservationToolNames(
     || plan.some(call => !STRICT_DESKTOP_OBSERVATION_TOOLS.has(call.name))
   ) return [];
   return unique(plan.map(call => call.name));
-}
-
-function isCurrentAuthoringDocumentInspection(text: string): boolean {
-  const hasAuthoringApp = /(?:WPS|Microsoft\s+Word|Word|Excel|PowerPoint|Office)/iu.test(text);
-  // i18n-allow: Reviewed multilingual current-document input recognition; not user-visible copy.
-  const hasCurrentDocument = /(?:现在|当前|正在).{0,18}(?:打开|编辑|显示).{0,18}(?:这份|这个|该)?(?:文件|文档|表格|幻灯片|PPT|PDF)|(?:打开|编辑|显示)(?:着|的).{0,12}(?:这份|这个|该)?(?:文件|文档|表格|幻灯片|PPT|PDF)/u.test(text);
-  // i18n-allow: Reviewed multilingual document-inspection input recognition; not user-visible copy.
-  const wantsInspection = /(?:分析|总结|介绍|讲解|读取|阅读|看看|看一下|看法|想法|检查)|\b(?:analy[sz]e|summari[sz]e|review|inspect|read|present)\b/iu.test(text);
-  return hasAuthoringApp && hasCurrentDocument && wantsInspection;
 }
 
 function isDocumentOpenAndReviewRequest(text: string): boolean {
@@ -733,7 +733,14 @@ export function routeToolsForTurn(
   const localCadSourceRequest = isLocalCadSourceRequest(text);
   const localCadImageSourceRequest = isLocalCadImageSourceRequest(text);
   const cadGeometryExtractionOnly = requiresCadGeometryExtractionOnly(text);
-  const currentAuthoringDocumentInspection = isCurrentAuthoringDocumentInspection(text);
+  const currentAuthoringDocumentInspection = requiresCurrentAuthoringDocumentInspection(text)
+    || Boolean(
+      options?.actionTaskState?.unfinished
+      && requiresCurrentAuthoringDocumentInspection(options.actionTaskState.goal)
+      && ['inspect_active_document', 'search_bounded_roots', 'analyze', 'clarify_target'].includes(
+        String(options.actionTaskState.taskCapsule?.nextAction || ''),
+      ),
+    );
   const documentOpenAndReview = !currentAuthoringDocumentInspection
     && !localCadSourceRequest
     && actionContract.kind !== 'design_delivery'
@@ -881,10 +888,10 @@ export function routeToolsForTurn(
     selected.clear();
     for (const name of [
       'desktop_active_window',
-      'desktop_running_processes',
-      'desktop_capture_screen',
+      'desktop_list_files',
       'search_files',
       'desktop_path_info',
+      'read_file',
       'extract_document_text',
       'read_pdf',
       'read_docx',
@@ -1066,6 +1073,18 @@ export function routeToolsForTurn(
     addIfAvailable(selected, available, 'client_action');
     categories.push('client_surface');
     reasons.push('a compound mode-and-work request needs both client mode control and the task tools selected for the remaining instruction');
+  }
+
+  if (
+    runtimeWorkIntent === 'none'
+    && isRuntimeCleanupOfferAcceptanceText(text)
+  ) {
+    // A referential "clean them" utterance has no cancellation authority on
+    // its own. Without a validated adjacent offer it may be clarified by the
+    // model, but runtime work mutation stays unavailable.
+    selected.delete('runtime_work_cancel');
+    forbiddenToolNames.add('runtime_work_cancel');
+    reasons.push('referential cleanup has no valid adjacent assistant offer; runtime cancellation remains fail-closed');
   }
 
   const orderedBeforeHealthGate = applyRoutePriority(

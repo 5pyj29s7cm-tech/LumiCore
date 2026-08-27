@@ -16,6 +16,7 @@ import {
 import {
   buildTransportNeutralConfirmationScope,
   clearAllPendingConfirmationsForTests,
+  consumePendingConfirmationDurably,
   getPendingConfirmation,
   recordPendingConfirmation,
 } from '../server/tools/pending_confirmation';
@@ -167,6 +168,61 @@ describe('accepted action-turn durability fence', () => {
 
     expect(resolution.cleared).toBe(false);
     expect(getPendingConfirmation('bound-confirmation-user', taskScope)?.id).toBe(taskBound.id);
+  });
+
+  it('recovers the same exact pending action for repeated confirmations and consumes it once', async () => {
+    const channelScope = buildTransportNeutralConfirmationScope({
+      domain: 'personal',
+      conversationId: 'repeat-confirmation-conversation',
+    });
+    const taskScope = buildTransportNeutralConfirmationScope({
+      domain: 'personal',
+      conversationId: 'repeat-confirmation-conversation',
+      taskId: 'repeat-confirmation-task',
+    });
+    const exactArgs = { target: 'WPS', path: 'D:\\deliverables\\final.docx' };
+    const pending = recordPendingConfirmation(
+      'repeat-confirmation-user',
+      'desktop_open',
+      exactArgs,
+      'chat',
+      taskScope,
+    );
+    const admit = async (messageId: string) => admitAcceptedUserTurnDurably({
+      persistAcceptedUserTurn: () => messageId,
+      flush: async () => undefined,
+      onPersistenceUnknown: vi.fn(),
+    });
+    const [firstAdmission, repeatedAdmission] = await Promise.all([
+      admit('confirmation-1'),
+      admit('confirmation-2'),
+    ]);
+
+    const [first, repeated] = await Promise.all([
+      resolveAcceptedTurnConfirmation({
+        admission: firstAdmission!,
+        userId: 'repeat-confirmation-user',
+        userText: '确认',
+        taskScope,
+        channelScope,
+      }),
+      resolveAcceptedTurnConfirmation({
+        admission: repeatedAdmission!,
+        userId: 'repeat-confirmation-user',
+        userText: '确认了',
+        taskScope,
+        channelScope,
+      }),
+    ]);
+
+    expect(first.pending).toMatchObject({ id: pending.id, toolName: 'desktop_open', exactArgs });
+    expect(repeated.pending).toMatchObject({ id: pending.id, toolName: 'desktop_open', exactArgs });
+    expect(await consumePendingConfirmationDurably(
+      'repeat-confirmation-user', pending.id, pending.toolName, exactArgs, taskScope,
+    )).toBe(true);
+    expect(await consumePendingConfirmationDurably(
+      'repeat-confirmation-user', pending.id, pending.toolName, exactArgs, taskScope,
+    )).toBe(false);
   });
 
   it.each([

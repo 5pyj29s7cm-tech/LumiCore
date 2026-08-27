@@ -1,4 +1,38 @@
-export type SerialExecutionLeaseState = 'queued' | 'active' | 'cancelled' | 'finished';
+export type SerialExecutionLeaseState = 'queued' | 'active' | 'cancelled' | 'timed_out' | 'finished';
+
+export const DEFAULT_SERIAL_EXECUTION_WAIT_TIMEOUT_MS = 120_000;
+export const DEFAULT_SERIAL_EXECUTION_CANCEL_TIMEOUT_MS = 10_000;
+
+export class SerialExecutionWaitTimeoutError extends Error {
+  readonly code = 'serial_execution_wait_timeout';
+
+  constructor(
+    readonly key: string,
+    readonly requestId: string,
+    readonly timeoutMs: number,
+  ) {
+    super(`Serial execution wait timed out after ${timeoutMs}ms.`);
+    this.name = 'SerialExecutionWaitTimeoutError';
+  }
+}
+
+export class SerialExecutionCancellationTimeoutError extends Error {
+  readonly code = 'serial_execution_cancellation_timeout';
+
+  constructor(
+    readonly key: string,
+    readonly requestId: string,
+    readonly timeoutMs: number,
+  ) {
+    super(`Serial execution cancellation did not settle after ${timeoutMs}ms.`);
+    this.name = 'SerialExecutionCancellationTimeoutError';
+  }
+}
+
+export interface SerialExecutionQueueOptions {
+  waitTimeoutMs?: number;
+  cancelTimeoutMs?: number;
+}
 
 type QueueState = {
   active?: SerialExecutionLease;
@@ -47,8 +81,32 @@ export class SerialExecutionLease {
   }
 
   async waitForTurn(): Promise<boolean> {
-    if (this.predecessor) await this.predecessor.finished;
+    if (this.predecessor) {
+      const timeoutMs = this.owner.waitTimeoutMs;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const predecessorFinished = this.predecessor.finished.then(() => 'finished' as const);
+      const waitTimedOut = new Promise<'timed_out'>(resolve => {
+        timeout = setTimeout(() => resolve('timed_out'), timeoutMs);
+      });
+      const outcome = await Promise.race([predecessorFinished, waitTimedOut]);
+      if (timeout) clearTimeout(timeout);
+      if (outcome === 'timed_out') {
+        this.leaseState = 'timed_out';
+        this.controller.abort(new SerialExecutionWaitTimeoutError(this.key, this.requestId, timeoutMs));
+        this.release();
+        return false;
+      }
+    }
     if (this.controller.signal.aborted) {
+      this.release();
+      return false;
+    }
+    // A timed-out or cancelled middle lease may finish before the true active
+    // predecessor. Never let its successor overtake that still-running owner.
+    const active = this.owner.getActive(this.key);
+    if (active && active !== this) {
+      this.controller.abort(new Error('serial_execution_predecessor_still_active'));
+      this.leaseState = 'cancelled';
       this.release();
       return false;
     }
@@ -60,7 +118,7 @@ export class SerialExecutionLease {
   release(): void {
     if (this.released) return;
     this.released = true;
-    this.leaseState = 'finished';
+    if (this.leaseState !== 'timed_out') this.leaseState = 'finished';
     this.owner.release(this);
     this.finish();
   }
@@ -72,6 +130,21 @@ export class SerialExecutionLease {
  */
 export class SerialExecutionQueue {
   private readonly states = new Map<string, QueueState>();
+  readonly waitTimeoutMs: number;
+  readonly cancelTimeoutMs: number;
+
+  constructor(options: SerialExecutionQueueOptions = {}) {
+    const waitTimeoutMs = options.waitTimeoutMs ?? DEFAULT_SERIAL_EXECUTION_WAIT_TIMEOUT_MS;
+    const cancelTimeoutMs = options.cancelTimeoutMs ?? DEFAULT_SERIAL_EXECUTION_CANCEL_TIMEOUT_MS;
+    if (!Number.isSafeInteger(waitTimeoutMs) || waitTimeoutMs < 1 || waitTimeoutMs > 30 * 60_000) {
+      throw new TypeError('waitTimeoutMs must be an integer between 1 and 1800000');
+    }
+    if (!Number.isSafeInteger(cancelTimeoutMs) || cancelTimeoutMs < 1 || cancelTimeoutMs > 5 * 60_000) {
+      throw new TypeError('cancelTimeoutMs must be an integer between 1 and 300000');
+    }
+    this.waitTimeoutMs = waitTimeoutMs;
+    this.cancelTimeoutMs = cancelTimeoutMs;
+  }
 
   reserve(key: string, requestId: string): SerialExecutionLease {
     const state = this.states.get(key) || { leases: new Map<string, SerialExecutionLease>() };
@@ -111,8 +184,21 @@ export class SerialExecutionQueue {
   cancelRequest(key: string, requestId: string): Promise<boolean> {
     const lease = this.getByRequestId(key, requestId);
     if (!lease) return Promise.resolve(false);
+    const wasQueued = lease.state === 'queued' || lease.state === 'cancelled';
     lease.cancel();
-    return lease.finished.then(() => true);
+    if (wasQueued) return Promise.resolve(true);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const settled = lease.finished.then(() => true);
+    const timedOut = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => reject(new SerialExecutionCancellationTimeoutError(
+        key,
+        requestId,
+        this.cancelTimeoutMs,
+      )), this.cancelTimeoutMs);
+    });
+    return Promise.race([settled, timedOut]).finally(() => {
+      if (timeout) clearTimeout(timeout);
+    });
   }
 
   activate(lease: SerialExecutionLease): void {

@@ -59,6 +59,8 @@ export interface ConversationActionReceiptRow {
   conversationId: string;
   turnId: string;
   requestId: string;
+  modelRoutingReceiptId?: string;
+  executionOrigin?: ToolExecutionRecord['executionOrigin'];
   idempotencyKey: string;
   toolName: string;
   targetIdentity: string;
@@ -128,6 +130,22 @@ function parseObject(value: unknown): Record<string, any> {
     } catch {}
   }
   return {};
+}
+
+function taskPersistenceUnknownMarker(
+  task: ConversationActionTaskRow | null | undefined,
+): ConversationActionContinuationState['terminalPersistence'] | undefined {
+  if (!task) return undefined;
+  const context = parseObject(task.context);
+  const taskMarker = context.terminalPersistence;
+  const stateMarker = parseObject(context.actionState).terminalPersistence;
+  const marker = taskMarker?.status === 'persistence_unknown' ? taskMarker : stateMarker;
+  if (marker?.status !== 'persistence_unknown') return undefined;
+  return {
+    status: 'persistence_unknown',
+    requestId: String(marker.requestId || '').trim().slice(0, 180),
+    quarantinedAt: String(marker.quarantinedAt || '').trim().slice(0, 80),
+  };
 }
 
 function formatEnglishPreviousActionLedgerStatus(
@@ -350,40 +368,27 @@ function latestParentTask(
 }
 
 function markSupersededTask(
-  tasks: ConversationActionTaskRow[],
+  db: any,
+  conversation: ConversationActionLiveProjection,
   supersededTaskId: string | undefined,
   replacementTaskId: string,
   now: string,
 ): void {
   if (!supersededTaskId || supersededTaskId === replacementTaskId) return;
-  const previous = tasks.find(candidate => candidate.id === supersededTaskId);
-  if (!previous || isTerminalConversationTaskStatus(previous.status)) return;
-  const context = parseObject(previous.context);
-  const actionState = normalizeConversationActionState(context.actionState);
+  const actionState = getConversationActionStateByTaskId(db, {
+    conversationId: conversation.id,
+    userId: conversation.userId,
+    taskId: supersededTaskId,
+  });
+  if (!actionState || isTerminalConversationTaskStatus(actionState.status)) return;
   const blocker = `Superseded by task ${replacementTaskId}.`;
-  previous.status = 'cancelled';
-  previous.blocker = blocker;
-  previous.activeRequestId = '';
-  previous.completionSource = 'superseded';
-  previous.updatedAt = now;
-  previous.completedAt = now;
-  previous.revision = Math.max(1, Number(previous.revision) || 0) + 1;
-  previous.context = JSON.stringify({
-    ...context,
-    ...(actionState
-      ? {
-          actionState: sanitizeState({
-            ...actionState,
-            status: 'cancelled',
-            unfinished: false,
-            latestBlocker: blocker,
-            activeRequestId: undefined,
-            supersededTaskId: replacementTaskId,
-            revision: Math.max(actionState.revision || 0, previous.revision),
-            updatedAt: now,
-          }),
-        }
-      : {}),
+  finalizeConversationActionTask(db, {
+    conversation,
+    state: { ...actionState, supersededTaskId: replacementTaskId },
+    outcome: 'cancelled',
+    blocker,
+    assistantState: blocker,
+    now,
   });
 }
 
@@ -396,6 +401,8 @@ export function syncConversationActionTaskLedger(
     rootUserMessageId?: string;
     currentUserMessageId?: string;
     now?: string;
+    /** Internal recursion guard used by the finalization boundary. */
+    skipSupersession?: boolean;
   },
 ): ConversationActionTaskRow | null {
   ensureTables(db);
@@ -409,13 +416,28 @@ export function syncConversationActionTaskLedger(
   const now = input.now || state.updatedAt || new Date().toISOString();
   const intent = normalizeActionIntent(input.userText || state.latestInstruction || state.goal);
   const tasks = db.conversationActionTasks as ConversationActionTaskRow[];
-  markSupersededTask(tasks, state.supersededTaskId, state.taskId, now);
   let task = tasks.find(candidate => candidate.id === state.taskId);
+  const currentContext = parseObject(task?.context);
+  const persistenceUnknownMarker = taskPersistenceUnknownMarker(task);
+  if (persistenceUnknownMarker) {
+    const incomingMarker = state.terminalPersistence;
+    const isSameQuarantine = incomingMarker?.status === 'persistence_unknown'
+      && incomingMarker.requestId === persistenceUnknownMarker.requestId
+      && state.status === 'blocked'
+      && state.unfinished === true
+      && !state.completionSource;
+    // A durability quarantine is a bottom-level fence, not merely a UI state.
+    // Ordinary task syncs may neither publish a terminal nor erase the marker;
+    // only a future dedicated reconciliation boundary may resolve it.
+    if (!isSameQuarantine) return task || null;
+  }
+  if (!input.skipSupersession) {
+    markSupersededTask(db, input.conversation, state.supersededTaskId, state.taskId, now);
+  }
   const parent = intent.relation === 'child'
     ? latestParentTask(tasks, input.conversation.id, state.taskId)
     : undefined;
   const parentContext = parent ? parseObject(parent.context) : {};
-  const currentContext = parseObject(task?.context);
   if (task && !canTransitionConversationTaskStatus(task.status, state.status)) {
     // Late/replayed requests may still archive their immutable receipts through
     // archiveBoundConversationActionReceipts, but they cannot reopen a durable
@@ -504,10 +526,219 @@ export function syncConversationActionTaskLedger(
   return task;
 }
 
+export type ConversationActionTaskFinalizationOutcome =
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'blocked'
+  | 'persistence_unknown';
+
 /**
- * Persist terminal records that arrive after their request was replaced. The
- * immutable task/request identity decides ownership; the current conversation
- * pointer is never modified by a late record from an older task.
+ * Request-scoped terminal adjudication supplied by a foreground transport.
+ *
+ * This is deliberately narrower than task finalization: a blocked request
+ * leaves the durable task resumable, while preventing a successful receipt
+ * from an earlier step in the same request from being mistaken for completion.
+ */
+export interface ConversationActionTerminalDisposition {
+  outcome: 'blocked';
+  taskId: string;
+  requestId: string;
+  reason: string;
+}
+
+export interface ConversationActionLiveProjection {
+  id: string;
+  userId: string;
+  domain?: string;
+  orgId?: string;
+  actionContinuationState?: ConversationActionContinuationState;
+  pendingActionContinuation?: {
+    userText: string;
+    messageId: string;
+    requestId?: string;
+    updatedAt: string;
+  };
+}
+
+/**
+ * The sole convergence boundary for a foreground conversation task that ends
+ * a request or reaches a terminal outcome. Durable history is always written
+ * to the task ledger; only unfinished state may remain as the conversation's
+ * live pointer.
+ *
+ * `persistence_unknown` is the one deliberate rollback of a staged terminal
+ * projection. It remains blocked and resumable, carries an explicit marker,
+ * and never publishes completion.
+ */
+export function finalizeConversationActionTask(
+  db: any,
+  input: {
+    conversation: ConversationActionLiveProjection;
+    state?: ConversationActionContinuationState | null;
+    outcome: ConversationActionTaskFinalizationOutcome;
+    requestId?: string;
+    blocker?: string;
+    assistantState?: string;
+    completionSource?: ConversationActionContinuationState['completionSource'];
+    userText?: string;
+    now?: string;
+    /** Keep transcript pairing until its assistant row crosses durability. */
+    retainPendingAction?: boolean;
+    /** Hidden historical recovery must not replace a newer live task. */
+    updateLivePointer?: boolean;
+  },
+): {
+  state: ConversationActionContinuationState;
+  task: ConversationActionTaskRow | null;
+  livePointerRetained: boolean;
+} | null {
+  ensureTables(db);
+  const previous = normalizeConversationActionState(
+    input.state || input.conversation.actionContinuationState,
+  );
+  if (!previous?.taskId) return null;
+  const now = input.now || new Date().toISOString();
+  const requestId = String(input.requestId || previous.activeRequestId || '').trim().slice(0, 180);
+  const persistenceUnknown = input.outcome === 'persistence_unknown';
+  if (persistenceUnknown) {
+    const boundTurn = (db.conversationActionTurns || []).find((candidate: any) => (
+      candidate.conversationId === input.conversation.id
+      && candidate.userId === input.conversation.userId
+      && candidate.requestId === requestId
+      && candidate.taskId === previous.taskId
+    ));
+    if (!requestId || !boundTurn) return null;
+  }
+  const status: ConversationTaskStatus = input.outcome === 'persistence_unknown'
+    ? 'blocked'
+    : input.outcome;
+  const marker = persistenceUnknown
+    ? {
+        status: 'persistence_unknown' as const,
+        requestId,
+        quarantinedAt: now,
+      }
+    : undefined;
+  const blocker = String(input.blocker || '').replace(/\s+/g, ' ').trim().slice(0, 380);
+  const next = normalizeConversationActionState({
+    ...previous,
+    version: 2,
+    status,
+    unfinished: !isTerminalConversationTaskStatus(status),
+    latestBlocker: status === 'blocked' || status === 'failed' ? blocker || previous.latestBlocker : '',
+    assistantState: input.assistantState !== undefined
+      ? String(input.assistantState || '').replace(/\s+/g, ' ').trim().slice(0, 700)
+      : previous.assistantState,
+    activeRequestId: undefined,
+    completionSource: status === 'completed'
+      ? input.completionSource || previous.completionSource
+      : undefined,
+    terminalPersistence: marker,
+    revision: (previous.revision || 0) + 1,
+    updatedAt: now,
+  });
+  if (!next) return null;
+
+  const existingTask = (db.conversationActionTasks as ConversationActionTaskRow[]).find(candidate => (
+    candidate.id === previous.taskId
+    && candidate.conversationId === input.conversation.id
+    && candidate.userId === input.conversation.userId
+  ));
+  const existingPersistenceUnknown = taskPersistenceUnknownMarker(existingTask);
+  if (!persistenceUnknown && existingTask && existingPersistenceUnknown) {
+    const quarantinedState = conversationActionStateFromTask(existingTask)
+      || normalizeConversationActionState({
+        ...previous,
+        status: 'blocked',
+        unfinished: true,
+        latestBlocker: existingTask.blocker || previous.latestBlocker,
+        activeRequestId: undefined,
+        completionSource: undefined,
+        terminalPersistence: existingPersistenceUnknown,
+      });
+    if (!quarantinedState) return null;
+    const live = normalizeConversationActionState(input.conversation.actionContinuationState);
+    const ownsLivePointer = live?.taskId === previous.taskId;
+    if (input.updateLivePointer !== false && (ownsLivePointer || !live)) {
+      input.conversation.actionContinuationState = quarantinedState;
+    }
+    return {
+      state: quarantinedState,
+      task: existingTask,
+      livePointerRetained: normalizeConversationActionState(
+        input.conversation.actionContinuationState,
+      )?.taskId === previous.taskId,
+    };
+  }
+  if (persistenceUnknown && existingTask) {
+    // A failed strict durability fence invalidates the staged terminal. Reset
+    // the row before the normal monotonic sync writes the explicit quarantine.
+    existingTask.status = 'blocked';
+    existingTask.blocker = next.latestBlocker;
+    existingTask.activeRequestId = '';
+    existingTask.completionSource = '';
+    existingTask.completedAt = '';
+  }
+
+  const task = syncConversationActionTaskLedger(db, {
+    conversation: input.conversation,
+    state: next,
+    userText: input.userText,
+    now,
+    skipSupersession: true,
+  });
+  if (task) {
+    if (input.outcome === 'cancelled' && blocker) task.blocker = blocker;
+    if (input.outcome === 'cancelled' && previous.supersededTaskId) {
+      task.completionSource = 'superseded';
+    }
+    const context = parseObject(task.context);
+    task.context = JSON.stringify({
+      ...context,
+      taskFinalization: {
+        outcome: input.outcome,
+        requestId,
+        reason: blocker,
+        finalizedAt: now,
+      },
+      ...(marker ? { terminalPersistence: marker } : {}),
+    });
+  }
+  const persistedState = conversationActionStateFromTask(task) || next;
+  const live = normalizeConversationActionState(input.conversation.actionContinuationState);
+  const ownsLivePointer = Boolean(live?.taskId === previous.taskId);
+  if (input.updateLivePointer !== false) {
+    if (isTerminalConversationTaskStatus(persistedState.status)) {
+      if (ownsLivePointer) delete input.conversation.actionContinuationState;
+    } else if (ownsLivePointer || !live) {
+      input.conversation.actionContinuationState = persistedState;
+    }
+  }
+  if (
+    !input.retainPendingAction
+    &&
+    input.conversation.pendingActionContinuation
+    && (!requestId || input.conversation.pendingActionContinuation.requestId === requestId)
+  ) {
+    delete input.conversation.pendingActionContinuation;
+  }
+  return {
+    state: persistedState,
+    task,
+    livePointerRetained: !isTerminalConversationTaskStatus(persistedState.status)
+      && normalizeConversationActionState(input.conversation.actionContinuationState)?.taskId === previous.taskId,
+  };
+}
+
+/**
+ * Persist terminal records that arrive after their request was replaced.
+ *
+ * Every task-bound receipt remains append-only audit evidence. Recomputing the
+ * task projection is a stronger operation: the receipt request must still be
+ * the exact active owner in the task context, task row, and action-turn ledger.
+ * A historical receipt from an older request on the same task is therefore
+ * archived without being allowed to settle a successor's live projection.
  */
 export function archiveBoundConversationActionReceipts(
   db: any,
@@ -517,8 +748,23 @@ export function archiveBoundConversationActionReceipts(
     records: ToolExecutionRecord[];
     turnId?: string;
     now?: string;
+    /** @internal Exact, manager-fenced terminal adjudication for this request. */
+    terminalDisposition?: ConversationActionTerminalDisposition;
+    /**
+     * @internal Legacy requestless compatibility. Only the manager's current
+     * user/assistant pairing may use this; stale/replay archive calls omit it.
+     */
+    currentPairingAuthority?: {
+      userMessageId: string;
+      assistantMessageId: string;
+    };
   },
-): { archived: number; taskIds: string[] } {
+): {
+  archived: number;
+  taskIds: string[];
+  adjudicatedTaskIds: string[];
+  terminalDispositionApplied: boolean;
+} {
   ensureTables(db);
   const now = input.now || new Date().toISOString();
   const tasks = db.conversationActionTasks as ConversationActionTaskRow[];
@@ -539,6 +785,8 @@ export function archiveBoundConversationActionReceipts(
 
   let archived = 0;
   const taskIds: string[] = [];
+  const adjudicatedTaskIds: string[] = [];
+  let terminalDispositionApplied = false;
   for (const [taskId, records] of grouped) {
     const task = tasks.find(candidate => candidate.id === taskId)!;
     archived += appendConversationActionReceipts(db, {
@@ -551,11 +799,118 @@ export function archiveBoundConversationActionReceipts(
     const context = parseObject(task.context);
     const state = normalizeConversationActionState(context.actionState);
     if (state) {
+      const requestIds = [...new Set(
+        records.map(record => String(record.requestId || '').trim()).filter(Boolean),
+      )];
+      const receiptRequestId = requestIds.length === 1
+        && records.every(record => String(record.requestId || '').trim() === requestIds[0])
+        ? requestIds[0]
+        : '';
+      const activeTurn = receiptRequestId
+        ? (db.conversationActionTurns || []).find((candidate: any) => (
+            candidate.conversationId === input.conversationId
+            && candidate.userId === input.userId
+            && candidate.requestId === receiptRequestId
+            && candidate.taskId === taskId
+            && (candidate.status === 'accepted' || candidate.status === 'leased')
+          ))
+        : null;
+      const exactRequestOwnsActiveTask = Boolean(
+        receiptRequestId
+        && state.activeRequestId === receiptRequestId
+        && task.activeRequestId === receiptRequestId
+        && activeTurn,
+      );
+      const authority = input.currentPairingAuthority;
+      const conversation = (db.conversations || []).find((candidate: any) => (
+        candidate.id === input.conversationId && candidate.userId === input.userId
+      ));
+      const pending = conversation?.pendingActionContinuation;
+      const exactUser = authority?.userMessageId
+        ? (db.interactions || []).find((candidate: any) => (
+            candidate.id === authority.userMessageId
+            && candidate.conversationId === input.conversationId
+            && candidate.userId === input.userId
+            && candidate.role === 'user'
+          ))
+        : null;
+      const exactAssistant = authority?.assistantMessageId
+        ? (db.interactions || []).find((candidate: any) => (
+            candidate.id === authority.assistantMessageId
+            && candidate.conversationId === input.conversationId
+            && candidate.userId === input.userId
+            && candidate.role === 'assistant'
+            && candidate.mode !== 'proactive'
+          ))
+        : null;
+      const competingActiveTurn = (db.conversationActionTurns || []).some((candidate: any) => (
+        candidate.conversationId === input.conversationId
+        && candidate.userId === input.userId
+        && candidate.taskId === taskId
+        && (candidate.status === 'accepted' || candidate.status === 'leased')
+      ));
+      const currentRequestlessPairingOwnsTask = Boolean(
+        !receiptRequestId
+        && records.every(record => !String(record.requestId || '').trim())
+        && !state.activeRequestId
+        && !task.activeRequestId
+        && authority?.userMessageId
+        && authority?.assistantMessageId
+        && pending?.messageId === authority.userMessageId
+        && !pending?.requestId
+        && exactUser
+        && exactAssistant
+        && !String(exactAssistant.requestId || '').trim()
+        && !competingActiveTurn,
+      );
+      const requestOwnsActiveTask = exactRequestOwnsActiveTask
+        || currentRequestlessPairingOwnsTask;
+      if (!requestOwnsActiveTask) {
+        // Audit-only path. In particular, never merge an R1 receipt into the
+        // R2 state merely because both requests are bound to the same task id.
+        taskIds.push(taskId);
+        continue;
+      }
+      adjudicatedTaskIds.push(taskId);
+      const disposition = input.terminalDisposition;
+      const dispositionRequestId = String(disposition?.requestId || '').trim().slice(0, 180);
+      const dispositionReason = String(disposition?.reason || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 380);
+      const boundTurn = dispositionRequestId
+        ? (db.conversationActionTurns || []).find((candidate: any) => (
+            candidate.conversationId === input.conversationId
+            && candidate.userId === input.userId
+            && candidate.requestId === dispositionRequestId
+            && candidate.taskId === taskId
+            && (candidate.status === 'accepted' || candidate.status === 'leased')
+          ))
+        : null;
+      const authoritativeBlocked = Boolean(
+        disposition?.outcome === 'blocked'
+        && disposition.taskId === taskId
+        && dispositionRequestId
+        && dispositionReason
+        && !isTerminalConversationTaskStatus(task.status)
+        && boundTurn
+        && requestOwnsActiveTask
+        && records.every(record => (
+          String(record.taskId || '').trim() === taskId
+          && String(record.requestId || '').trim() === dispositionRequestId
+        )),
+      );
       const receipts = mergeTaskReceipts(state.receipts || [], records, now);
-      const completion = taskCompletionFromReceipts(state.goal || task.goal, receipts);
+      const completion = taskCompletionFromReceipts(
+        state.goal || task.goal,
+        receipts,
+        state.taskCapsule,
+      );
       const waitingForConfirmation = records.some(isConfirmationBlockedToolRecord);
       const hasFailure = records.some(record => !toolRecordSucceeded(record));
-      const status: ConversationTaskStatus = isTerminalConversationTaskStatus(task.status)
+      const status: ConversationTaskStatus = authoritativeBlocked
+        ? 'blocked'
+        : isTerminalConversationTaskStatus(task.status)
         ? task.status
         : completion.complete
           ? 'completed'
@@ -572,37 +927,58 @@ export function archiveBoundConversationActionReceipts(
         status,
         unfinished: !isTerminalConversationTaskStatus(status),
         latestBlocker: status === 'blocked'
-          ? completion.blocker || task.blocker
+          ? authoritativeBlocked
+            ? dispositionReason
+            : completion.blocker || task.blocker
           : status === 'failed' || status === 'cancelled'
             ? task.blocker
             : '',
-        activeRequestId: requestLeaseActive
+        activeRequestId: !authoritativeBlocked && requestLeaseActive
           && !records.some(record => record.requestId === state.activeRequestId)
           ? state.activeRequestId
           : undefined,
-        completionSource: status === 'completed' && completion.complete
+        completionSource: !authoritativeBlocked && status === 'completed' && completion.complete
           ? 'tool_receipt'
-          : state.completionSource,
+          : authoritativeBlocked
+            ? undefined
+            : state.completionSource,
         revision: Math.max(state.revision || 0, task.revision || 0) + 1,
         updatedAt: now,
       });
-      if (nextState) context.actionState = sanitizeState(nextState);
-      task.context = JSON.stringify(context);
-      task.status = status;
-      task.blocker = status === 'blocked'
-        ? nextState?.latestBlocker || task.blocker
-        : status === 'cancelled'
-          ? task.blocker
-          : '';
-      task.activeRequestId = nextState?.activeRequestId || '';
-      task.completionSource = nextState?.completionSource || task.completionSource;
-      task.updatedAt = now;
-      task.revision = nextState?.revision || task.revision;
-      if (isTerminalConversationTaskStatus(status)) task.completedAt = task.completedAt || now;
+      if (nextState && (status === 'blocked' || isTerminalConversationTaskStatus(status))) {
+        finalizeConversationActionTask(db, {
+          conversation: conversation || {
+            id: task.conversationId,
+            userId: task.userId,
+            domain: task.domain,
+            orgId: task.orgId,
+          },
+          state: nextState,
+          outcome: status as 'blocked' | 'completed' | 'failed' | 'cancelled',
+          requestId: authoritativeBlocked
+            ? dispositionRequestId
+            : records.find(record => record.requestId)?.requestId,
+          blocker: nextState.latestBlocker,
+          assistantState: nextState.assistantState,
+          completionSource: nextState.completionSource,
+          now,
+          updateLivePointer: Boolean(conversation),
+        });
+        if (authoritativeBlocked) terminalDispositionApplied = true;
+      } else {
+        if (nextState) context.actionState = sanitizeState(nextState);
+        task.context = JSON.stringify(context);
+        task.status = status;
+        task.blocker = status === 'cancelled' ? task.blocker : '';
+        task.activeRequestId = nextState?.activeRequestId || '';
+        task.completionSource = nextState?.completionSource || task.completionSource;
+        task.updatedAt = now;
+        task.revision = nextState?.revision || task.revision;
+      }
     }
     taskIds.push(taskId);
   }
-  return { archived, taskIds };
+  return { archived, taskIds, adjudicatedTaskIds, terminalDispositionApplied };
 }
 
 export function appendConversationActionReceipts(
@@ -650,6 +1026,10 @@ export function appendConversationActionReceipts(
       conversationId: input.task.conversationId,
       turnId: envelope.turnId,
       requestId: envelope.requestId,
+      ...(record.modelRoutingReceiptId
+        ? { modelRoutingReceiptId: String(record.modelRoutingReceiptId).trim().slice(0, 180) }
+        : {}),
+      ...(record.executionOrigin ? { executionOrigin: record.executionOrigin } : {}),
       idempotencyKey: envelope.idempotencyKey,
       toolName: envelope.toolName,
       targetIdentity: envelope.targetIdentity,
@@ -698,6 +1078,7 @@ export function ensureBackgroundConversationActionTask(
     taskId: input.taskId,
     goal: input.goal,
     latestInstruction: input.goal,
+    latestInstructionRef: input.requestId,
     status: 'executing',
     unfinished: true,
     latestBlocker: '',
@@ -766,14 +1147,14 @@ export function settleBackgroundConversationActionTask(
     requestId: input.requestId,
     now,
   });
-  const context = parseObject(task.context);
-  const previous = normalizeConversationActionState(context.actionState);
+  const previous = normalizeConversationActionState(parseObject(task.context).actionState);
   const baseState: ConversationActionContinuationState = previous || {
     version: 2,
     taskId: task.id,
     goal: task.goal,
     appTarget: task.target,
     latestInstruction: task.goal,
+    latestInstructionRef: task.activeRequestId || undefined,
     unfinished: true,
     latestBlocker: '',
     sourcePaths: [],
@@ -784,29 +1165,27 @@ export function settleBackgroundConversationActionTask(
     revision: task.revision,
     updatedAt: task.updatedAt,
   };
-  task.status = input.status;
-  task.blocker = input.status === 'blocked' ? String(input.blocker || 'Background execution did not reach verified completion.') : '';
-  task.activeRequestId = '';
-  task.completionSource = input.status === 'completed' ? 'tool_receipt' : '';
-  task.updatedAt = now;
-  task.completedAt = now;
-  task.revision = Math.max(1, Number(task.revision) || 0) + 1;
-  context.actionState = normalizeConversationActionState({
-    ...baseState,
-    version: 2,
-    taskId: task.id,
-    goal: previous?.goal || task.goal,
-    latestInstruction: previous?.latestInstruction || task.goal,
-    status: input.status,
-    unfinished: false,
-    latestBlocker: task.blocker,
-    activeRequestId: undefined,
+  const conversation = (db.conversations || []).find((candidate: any) => (
+    candidate.id === task.conversationId && candidate.userId === task.userId
+  ));
+  const finalized = finalizeConversationActionTask(db, {
+    conversation: conversation || {
+      id: task.conversationId,
+      userId: task.userId,
+      domain: task.domain,
+      orgId: task.orgId,
+    },
+    state: baseState,
+    outcome: input.status,
+    requestId: input.requestId || task.activeRequestId,
+    blocker: input.status === 'blocked'
+      ? String(input.blocker || 'Background execution did not reach verified completion.')
+      : '',
     completionSource: input.status === 'completed' ? 'tool_receipt' : undefined,
-    revision: task.revision,
-    updatedAt: now,
+    now,
+    updateLivePointer: false,
   });
-  task.context = JSON.stringify(context);
-  return task;
+  return finalized?.task || task;
 }
 
 type SchedulerAuditOutcome = 'executing' | 'verified' | 'blocked' | 'failed' | 'unknown';
@@ -1485,6 +1864,25 @@ export function getConversationActionStateFromLedger(
   return conversationActionStateFromTask(findConversationActionTask(db, input));
 }
 
+/**
+ * Resolve the immutable task already bound to a request. Unlike the general
+ * ledger selector, this cannot be displaced by a newer status/audit task.
+ */
+export function getConversationActionStateByTaskId(
+  db: any,
+  input: { conversationId: string; userId: string; taskId: string },
+): ConversationActionContinuationState | null {
+  ensureTables(db);
+  const taskId = String(input.taskId || '').trim();
+  if (!taskId) return null;
+  const task = (db.conversationActionTasks as ConversationActionTaskRow[]).find(candidate => (
+    candidate.id === taskId
+    && candidate.conversationId === input.conversationId
+    && candidate.userId === input.userId
+  ));
+  return conversationActionStateFromTask(task);
+}
+
 export function formatConversationActionLedgerStatus(
   db: any,
   input: { conversationId: string; userId: string; query?: string },
@@ -1783,6 +2181,38 @@ export function recoverConversationActionTaskLeases(
     const actionState = normalizeConversationActionState(context.actionState);
     const orderingTimestamp = hasNewerTask ? task.updatedAt : now;
 
+    const conversation = (db.conversations || []).find((candidate: any) => (
+      candidate.id === task.conversationId && candidate.userId === task.userId
+    ));
+    const recoverableState = actionState || conversationActionStateFromTask(task);
+    if (conversation && recoverableState) {
+      const finalized = finalizeConversationActionTask(db, {
+        conversation,
+        state: recoverableState,
+        outcome: 'blocked',
+        requestId: task.activeRequestId,
+        blocker,
+        now: orderingTimestamp,
+        retainPendingAction: true,
+        updateLivePointer: !hasNewerTask,
+      });
+      if (finalized) {
+        const refreshedContext = parseObject(task.context);
+        task.context = JSON.stringify({
+          ...refreshedContext,
+          executionLeaseRecovery: {
+            recoveredAt: now,
+            priorStatus: previousStatus,
+            newerTaskAlreadyExists: hasNewerTask,
+          },
+        });
+        recovered += 1;
+        continue;
+      }
+    }
+
+    // Legacy/malformed rows without their owning conversation cannot pass
+    // through the foreground finalizer; keep this bounded migration fallback.
     task.status = 'blocked';
     task.blocker = blocker;
     task.activeRequestId = '';
@@ -1882,7 +2312,11 @@ export function repairContradictoryConversationActionReceipts(db: any): number {
       records,
       task.updatedAt,
     );
-    const completion = taskCompletionFromReceipts(state.goal || task.goal, receipts);
+    const completion = taskCompletionFromReceipts(
+      state.goal || task.goal,
+      receipts,
+      state.taskCapsule,
+    );
     const status = completion.complete ? 'completed' : task.status;
     const nextState = normalizeConversationActionState({
       ...state,

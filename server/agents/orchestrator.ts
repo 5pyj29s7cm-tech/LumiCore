@@ -84,6 +84,7 @@ type ScopedLLMConfig = {
   requestId?: string;
   interactionId?: string;
   source?: string;
+  inputTokenBudget?: number;
 };
 
 export interface LlmGetters {
@@ -1249,6 +1250,7 @@ export async function decomposeTask(
         requestId: config.requestId,
         interactionId: config.interactionId,
         source: config.source || 'orchestrator_decompose',
+        inputTokenBudget: config.inputTokenBudget,
       },
       llmGetters.getDeepSeek,
       llmGetters.getGemini,
@@ -1922,6 +1924,7 @@ async function executeWorkerTask(
             dataRoutingPolicy: privacyPolicy,
             noImplicitFailover: true,
             authorizedRoutingCandidate: true,
+            inputTokenBudget: llmConfig.inputTokenBudget,
           },
           async (record) => {
             toolExecutionStarted = toolExecutionStarted || record.adapterStarted === true;

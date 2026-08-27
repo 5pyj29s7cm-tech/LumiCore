@@ -10,6 +10,7 @@ import {
   formatCnToolFailureDetail,
 } from '../regions/packs/cn/voice_fast_path_messages';
 import { isGuardGeneratedConversationRecord } from '../conversation/guard_history';
+import { findLatestRepeatableAssistantReply } from '../conversation/assistant_restatement';
 import { buildActionContract } from './action_contract';
 import type { ToolPolicy } from '../personality/types';
 import { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
@@ -78,6 +79,8 @@ export interface ConversationActionContinuationState extends RecentActionContinu
   supersededTaskId?: string;
   revision?: number;
   latestInstruction: string;
+  /** Persisted user message id, falling back to the owning request id. */
+  latestInstructionRef?: string;
   assistantState: string;
   toolSummaries: string[];
   /** Durable semantic projection shared by chat, voice, and restart hydration. */
@@ -104,6 +107,8 @@ export interface ConversationActionContinuationUpdate {
   toolCalls: unknown;
   updatedAt?: string;
   evidenceMessageId?: string;
+  /** Exact persisted user message that supplied userText, when available. */
+  userMessageId?: string;
   requestId?: string;
   toolPolicy?: ToolPolicy;
 }
@@ -180,6 +185,16 @@ function explicitDurableTaskReference(text: string): boolean {
 
 function compact(value: unknown, limit = 700): string {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
+}
+
+function compactAssistantState(value: unknown, status: ConversationTaskStatus): string {
+  const exact = String(value || '').trim();
+  // A bounded confirmation request is itself the user-visible authorization
+  // boundary. Preserve its line structure so the durable pending checkpoint
+  // can be byte-for-byte identical to the Socket terminal and transcript.
+  // Oversized/untrusted state keeps the ordinary compact projection.
+  if (status === 'waiting_confirmation' && exact.length <= 700) return exact;
+  return compact(exact, 700);
 }
 
 function recordRole(item: ActionContinuationHistoryItem): string {
@@ -379,11 +394,11 @@ function successfulApplicationTarget(call: any): string {
 
 // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
 const STATUS_FOLLOWUP_RE =
-  /^(?:在执行吗|有没有在执行(?:(?:这个|那个)?任务)?|执行了吗|做了吗|完成了吗|好了没|结果呢|怎么样了|怎么还没|为什么(?:会)?失败|怎么(?:会)?失败|失败(?:在)?哪里|(?:我问你)?(?:你)?为什么(?:没(?:有)?(?:完成|执行)|不(?:去)?执行)(?:[，,。！？?!\s]*(?:你)?为什么不(?:去)?执行)?|我刚刚给你了什么任务|我刚才给你的任务是什么|你在搞什么|你在干嘛|回答我)[啊呀吧嘛呢，,。！？?!]*$/iu; // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  /^(?:在执行吗|有没有在执行(?:(?:这个|那个)?任务)?|执行了吗|做了吗|完成了吗|好了没|结果呢|怎么样了|怎么还没|为什么(?:会)?失败|怎么(?:会)?失败|失败(?:在)?哪里|(?:我问你)?(?:你)?为什么(?:没(?:有)?(?:完成|执行)|不(?:去)?执行)(?:[，,。！？?!\s]*(?:你)?为什么不(?:去)?执行)?|我刚刚给你了什么任务|我刚才给你的任务是什么|你在搞什么|你在干嘛|你在干啥|回答我)[啊呀吧嘛呢，,。！？?!]*$/iu; // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
 
 // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
 const CN_SHORT_EXECUTION_CONTINUATION_RE =
-  /^(?:确认|确定|继续|继续执行|接着做|执行|开始|开始执行|重试|再试|再来一次|建立|创建|打开|保存|发送|提交|就这么做|按这个做|做吧|弄吧)[。！？.!?]*$/u; // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  /^(?:确认(?:了)?|确定(?:了)?|继续|继续执行|接着做|执行|开始|开始执行|重试|再试|再来一次|建立|创建|打开|保存|发送|提交|就这么做|按这个做|做吧|弄吧)[。！？.!?]*$/u; // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
 
 const ENGLISH_STATUS_FOLLOWUP_RE =
   /^(?:are you (?:doing|running) it|did you do it|is it (?:done|running)|what(?:'s| is) the result|why (?:didn'?t|haven'?t) you|what was my task)[.!?]*$/i;
@@ -470,6 +485,7 @@ export function classifyRecentActionFollowupIntent(text: string): RecentActionFo
   if (isImmediateAssistantRestatementRequest(clean)) return 'repeat';
   const normalizedIntent = normalizeActionIntent(clean);
   if (normalizedIntent.kind === 'status_query') return 'status';
+  if (normalizedIntent.kind !== 'none' && normalizedIntent.relation === 'new') return 'none';
   if (hasMixedStatusExecutionIntent(clean)) return 'execute';
   if (MIXED_STATUS_QUESTION_RE.test(clean)) return 'status';
   if (
@@ -660,8 +676,9 @@ export function normalizeConversationActionState(
     .map((receipt: any): ConversationTaskReceipt | null => normalizeConversationTaskReceipt(receipt))
     .filter((receipt): receipt is ConversationTaskReceipt => Boolean(receipt))
     .slice(-40);
+  const storedCapsule = normalizeTaskCapsuleV1(value.taskCapsule);
   const receiptCompletion = receipts.length > 0
-    ? taskCompletionFromReceipts(goal, receipts)
+    ? taskCompletionFromReceipts(goal, receipts, storedCapsule)
     : null;
   const unfinished = isTerminalConversationTaskStatus(status)
     ? false
@@ -680,6 +697,7 @@ export function normalizeConversationActionState(
     revision: Math.max(0, Math.trunc(Number(value.revision) || 0)),
     goal,
     latestInstruction: compact(value.latestInstruction || goal, 700),
+    latestInstructionRef: compact(value.latestInstructionRef, 180) || undefined,
     appTarget: compact(value.appTarget, 160),
     sourcePaths: Array.from(new Set(Array.isArray(value.sourcePaths) ? value.sourcePaths : []))
       .map(path => compact(path, 500))
@@ -697,7 +715,7 @@ export function normalizeConversationActionState(
       .map(name => compact(name, 120))
       .filter(Boolean)
       .slice(-10),
-    assistantState: compact(value.assistantState, 700),
+    assistantState: compactAssistantState(value.assistantState, status),
     toolSummaries: Array.from(new Set(Array.isArray(value.toolSummaries) ? value.toolSummaries : []))
       .map(summary => compact(summary, 700))
       .filter(Boolean)
@@ -717,7 +735,6 @@ export function normalizeConversationActionState(
         }
       : undefined,
   };
-  const storedCapsule = normalizeTaskCapsuleV1(value.taskCapsule);
   const previousCapsule = storedCapsule
     && (!normalizedState.taskId || storedCapsule.taskId === normalizedState.taskId)
     ? storedCapsule
@@ -739,6 +756,11 @@ export function classifyConversationActionFollowupIntent(
   if (isImmediateAssistantRestatementRequest(text)) return 'repeat';
   const durableState = normalizeConversationActionState(state);
   const compactText = compact(text, 500);
+  const normalizedIntent = normalizeActionIntent(text);
+  // A self-contained normalized action is new work. Resolve this before a
+  // TaskCapsule path/detail heuristic, otherwise a new artifact path or client
+  // navigation can be swallowed by an unrelated unfinished file task.
+  if (normalizedIntent.kind !== 'none' && normalizedIntent.relation === 'new') return 'none';
   if (
     durableState?.unfinished
     && isTaskCapsuleTargetContinuation(compactText, durableState)
@@ -750,7 +772,6 @@ export function classifyConversationActionFollowupIntent(
     conversationActionRequiresFreshConfirmationReview(durableState)
     && isExplicitConfirmationReply(compactText)
   ) return 'status';
-  const normalizedIntent = normalizeActionIntent(text);
   if (
     normalizedIntent.kind === 'correction_explanation'
     || normalizedIntent.kind === 'work_task'
@@ -810,7 +831,11 @@ export function buildConversationActionContinuationState(
     && isActionBearingGoal(userText)
     ? userText
     : goal;
-  const completion = taskCompletionFromReceipts(completionGoal, receipts);
+  const completion = taskCompletionFromReceipts(
+    completionGoal,
+    receipts,
+    inheritsPrevious ? previous?.taskCapsule : undefined,
+  );
   const currentFailure = [...calls].reverse().find(record => !toolCallSucceeded(record));
   const waitingForConfirmation = calls.some(isConfirmationBlockedToolRecord);
   const hasFailure = completion.records.some(record => !toolCallSucceeded(record));
@@ -823,6 +848,8 @@ export function buildConversationActionContinuationState(
     : hasFailure
       ? 'blocked'
       : 'executing';
+  const currentInstructionRef = compact(input.userMessageId, 180)
+    || compact(input.requestId, 180);
 
   return normalizeConversationActionState({
     version: 2,
@@ -837,6 +864,9 @@ export function buildConversationActionContinuationState(
     latestInstruction: followupIntent === 'status' && previous
       ? previous.latestInstruction
       : userText,
+    latestInstructionRef: followupIntent === 'status' && previous
+      ? previous.latestInstructionRef
+      : currentInstructionRef || undefined,
     appTarget: current.appTarget || (inheritsPrevious ? previous!.appTarget : ''),
     sourcePaths: Array.from(new Set([
       ...(inheritsPrevious ? previous!.sourcePaths : []),
@@ -850,7 +880,7 @@ export function buildConversationActionContinuationState(
       ...(inheritsPrevious ? previous!.evidenceTools : []),
       ...current.evidenceTools,
     ])).slice(-10),
-    assistantState: assistantText,
+    assistantState: compactAssistantState(input.assistantText, status),
     toolSummaries: Array.from(new Set([
       ...(inheritsPrevious ? previous!.toolSummaries : []),
       ...currentSummaries,
@@ -872,6 +902,8 @@ export function prepareConversationActionTaskState(
     userText: string;
     requestId: string;
     toolPolicy: ToolPolicy;
+    /** Exact persisted user message, preferred over requestId as event identity. */
+    userMessageId?: string;
     forceResume?: boolean;
     /** The current explicit workflow must supersede, never resume, older unfinished work. */
     forceNewTask?: boolean;
@@ -898,14 +930,24 @@ export function prepareConversationActionTaskState(
   if (!resume && !isAction) return { state: null, kind: 'conversation' };
 
   const now = input.now || new Date().toISOString();
+  const latestInstructionRef = compact(input.userMessageId, 180)
+    || compact(input.requestId, 180);
   if (resume && previous) {
     return {
       kind: 'resume',
       state: normalizeConversationActionState({
         ...previous,
         version: 2,
-        status: previous.status === 'waiting_confirmation' ? 'waiting_confirmation' : 'planning',
+        // `waiting_confirmation` describes an idle task with no foreground
+        // request owner. Once a new accepted turn resumes that exact pending
+        // action, the successor request must enter an owning phase so its
+        // verified receipt can be adjudicated against the task after restart.
+        // Keeping the task in `waiting_confirmation` makes normalization drop
+        // activeRequestId, which archives the confirmed receipt but leaves the
+        // task and live pointer stuck at the old confirmation checkpoint.
+        status: 'planning',
         latestInstruction: userText,
+        latestInstructionRef: latestInstructionRef || undefined,
         activeRequestId: input.requestId,
         policySnapshot: snapshotTaskPolicy(
           applyTaskPolicySnapshot(input.toolPolicy, previous.policySnapshot),
@@ -929,6 +971,7 @@ export function prepareConversationActionTaskState(
       revision: 1,
       goal: userText,
       latestInstruction: userText,
+      latestInstructionRef: latestInstructionRef || undefined,
       appTarget: '',
       sourcePaths: [],
       latestBlocker: '',
@@ -952,30 +995,62 @@ export function formatConversationActionTaskStatus(
     ? CN_TASK_EXECUTION_MESSAGES.goalWithCurrentStep(rootGoal, latestInstruction)
     : rootGoal;
   const successes = (state.receipts || []).filter(receipt => receipt.outcome === 'success').length;
-  if (state.status === 'cancelled') return CN_TASK_EXECUTION_MESSAGES.cancelled;
-  if (conversationActionRequiresFreshConfirmationReview(state)) {
-    return CN_TASK_EXECUTION_MESSAGES.reconfirmationRequired(goal);
-  }
-  if (state.status === 'failed') {
-    return CN_TASK_EXECUTION_MESSAGES.blocked(
+  let activity = '';
+  const feedback = CN_TASK_EXECUTION_MESSAGES.feedback;
+  let blocker: string = feedback.noBlocker;
+  let userAction: string = feedback.noUserAction;
+  let nextStep: string = feedback.continueAndVerify;
+  if (state.status === 'cancelled') {
+    activity = CN_TASK_EXECUTION_MESSAGES.cancelled;
+    blocker = feedback.cancelledBlocker;
+    nextStep = feedback.restartAfterCancel;
+  } else if (conversationActionRequiresFreshConfirmationReview(state)) {
+    activity = CN_TASK_EXECUTION_MESSAGES.reconfirmationRequired(goal);
+    blocker = feedback.exactConfirmationUnavailable;
+    userAction = feedback.reviewFreshConfirmation;
+    nextStep = feedback.regenerateConfirmation;
+  } else if (state.status === 'failed') {
+    activity = CN_TASK_EXECUTION_MESSAGES.blocked(
       goal,
       formatCnToolFailureDetail(state.latestBlocker || 'The task ended without a verified result.'),
     );
-  }
-  if (state.status === 'completed' || !state.unfinished) {
+    blocker = formatCnToolFailureDetail(
+      state.latestBlocker || 'The task ended without a verified result.',
+    );
+    userAction = feedback.requestRetryOrCorrection;
+    nextStep = feedback.replanFailedStep;
+  } else if (state.status === 'completed' || !state.unfinished) {
     if (state.completionSource === 'user_observation') {
-      return CN_TASK_EXECUTION_MESSAGES.completedFromUserObservation(goal);
+      activity = CN_TASK_EXECUTION_MESSAGES.completedFromUserObservation(goal);
+    } else {
+      activity = CN_TASK_EXECUTION_MESSAGES.completed(goal, successes);
     }
-    return CN_TASK_EXECUTION_MESSAGES.completed(goal, successes);
-  }
-  if (state.status === 'waiting_confirmation') {
-    return CN_TASK_EXECUTION_MESSAGES.waitingConfirmation(goal);
-  }
-  if (state.latestBlocker) {
+    blocker = feedback.terminalSettled;
+    nextStep = feedback.waitForInstruction;
+  } else if (state.status === 'waiting_confirmation') {
+    activity = CN_TASK_EXECUTION_MESSAGES.waitingConfirmation(goal);
+    blocker = feedback.waitingAtConfirmation;
+    userAction = feedback.reviewCurrentConfirmation;
+    nextStep = feedback.resumeExactAction;
+  } else if (state.latestBlocker) {
     const detail = state.latestBlocker.replace(/^[A-Za-z0-9_.:-]+:\s*/, '');
-    return CN_TASK_EXECUTION_MESSAGES.blocked(goal, formatCnToolFailureDetail(detail));
+    const publicBlocker = formatCnToolFailureDetail(detail);
+    activity = CN_TASK_EXECUTION_MESSAGES.blocked(goal, publicBlocker);
+    blocker = publicBlocker;
+    userAction = feedback.requestRetryOrCorrection;
+    nextStep = feedback.resumeBlockedStep;
+  } else {
+    activity = CN_TASK_EXECUTION_MESSAGES.executing(goal, successes);
   }
-  return CN_TASK_EXECUTION_MESSAGES.executing(goal, successes);
+
+  return feedback.format({
+    activity,
+    target: goal,
+    completedSteps: successes,
+    blocker,
+    userAction,
+    nextStep,
+  });
 }
 
 /**
@@ -1046,6 +1121,7 @@ export function buildRecentActionContinuationBridge(
   userText: string,
   history: ActionContinuationHistoryItem[] | undefined,
   persistedState?: ConversationActionContinuationState | null,
+  currentTurnRef?: string,
 ): string {
   const currentText = compact(userText, 700);
   const normalizedDurableState = normalizeConversationActionState(persistedState);
@@ -1076,11 +1152,9 @@ export function buildRecentActionContinuationBridge(
     })
     .filter(item => ['user', 'assistant', 'agent'].includes(recordRole(item)) && recordText(item))
     .filter(item => !(recordRole(item) === 'user' && recordText(item) === currentText));
+
   if (followupIntent === 'repeat') {
-    const immediateAssistantReply = [...recent]
-      .reverse()
-      .find(item => ['assistant', 'agent'].includes(recordRole(item)) && recordText(item));
-    const reply = immediateAssistantReply ? recordText(immediateAssistantReply) : '';
+    const reply = findLatestRepeatableAssistantReply(recent);
     if (!reply) return '';
     return [
       '## Recent action continuation context',
@@ -1122,6 +1196,7 @@ export function buildRecentActionContinuationBridge(
     ? buildTaskCapsuleV1(durableState, {
         previousCapsule: durableState.taskCapsule,
         currentTurnText: currentText,
+        currentTurnRef: compact(currentTurnRef, 180) || undefined,
       })
     : null;
   const taskCapsulePrompt = taskCapsule ? formatTaskCapsuleForPrompt(taskCapsule) : '';

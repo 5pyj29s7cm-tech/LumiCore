@@ -1,5 +1,7 @@
 import { readDB, writeDB } from '../../db_layer';
 import { DeviceInfo, DeviceType, DeviceCapabilities, DeviceScope } from './types';
+import type { NativeClientIdentity } from '../../shared/native_client_identity';
+import { nativeClientIdentitySha256 } from './native_identity';
 
 function normalizeDeviceScope(scope?: Partial<DeviceScope>): DeviceScope {
   const orgId = String(scope?.orgId || '').trim();
@@ -25,7 +27,7 @@ class DeviceRegistry {
   register(
     userId: string,
     socketId: string,
-    info: { name?: string; type?: DeviceType; capabilities?: Partial<DeviceCapabilities>; ipAddress?: string; osInfo?: string; deviceFingerprint?: string; domain?: DeviceScope['domain']; orgId?: string },
+    info: { name?: string; type?: DeviceType; capabilities?: Partial<DeviceCapabilities>; ipAddress?: string; osInfo?: string; deviceFingerprint?: string; domain?: DeviceScope['domain']; orgId?: string; nativeClientIdentity?: NativeClientIdentity | null },
   ): DeviceInfo {
     const now = new Date().toISOString();
     const scope = normalizeDeviceScope(info);
@@ -33,40 +35,72 @@ class DeviceRegistry {
     // Use persistent fingerprint from client as dedup key, falling back to socketId
     const fingerprint = info.deviceFingerprint || socketId;
     const scopeId = scope.domain === 'work' ? `org_${scope.orgId}` : 'personal';
-    const id = `dev_${userId}_${scopeId}_${fingerprint}`;
+    // Keep one stable registry entry per proof-bound native process without
+    // embedding the process id or start time in the device id returned by
+    // ordinary authenticated APIs.
+    const nativeInstanceSha256 = info.nativeClientIdentity
+      ? nativeClientIdentitySha256(info.nativeClientIdentity)
+      : '';
+    const nativeInstanceKey = nativeInstanceSha256
+      ? `_native_${nativeInstanceSha256}`
+      : '';
+    const id = `dev_${userId}_${scopeId}_${fingerprint}${nativeInstanceKey}`;
 
     // 1) Exact match — same device reconnected
     const existing = this.devices.get(id);
     if (existing) {
+      const deviceName = info.name || existing.name || 'Unknown Device';
+      const deviceType = info.type || 'desktop';
       existing.status = 'online';
       existing.lastSeen = now;
       existing.socketId = socketId;
       existing.domain = scope.domain;
       existing.orgId = scope.orgId;
+      existing.type = deviceType;
+      existing.name = deviceName;
+      existing.capabilities = {
+        audio: info.capabilities?.audio ?? existing.capabilities.audio,
+        video: info.capabilities?.video ?? existing.capabilities.video,
+        spatial: info.capabilities?.spatial ?? existing.capabilities.spatial,
+        haptic: info.capabilities?.haptic ?? existing.capabilities.haptic,
+        holographic: info.capabilities?.holographic ?? existing.capabilities.holographic,
+      };
       if (info.ipAddress) existing.ipAddress = info.ipAddress;
       if (info.osInfo) existing.osInfo = info.osInfo;
-      if (info.name) existing.name = info.name;
+      existing.nativeClientIdentity = info.nativeClientIdentity
+        ? { ...info.nativeClientIdentity }
+        : null;
       this.broadcastCb?.('devices:update', existing);
       return existing;
     }
 
-    // 2) Merge by name+type — same physical device with different key
-    // (happens when old clients without fingerprint reconnect with new socketId)
+    // 2) Legacy name+type merge is only for devices without a proof-bound
+    // native process identity. Distinct native instances must never overwrite
+    // one another merely because their display metadata matches.
     const deviceName = info.name || 'Unknown Device';
     const deviceType = info.type || 'desktop';
-    for (const [key, dev] of this.devices) {
-      if (dev.userId === userId && deviceMatchesScope(dev, scope) && dev.name === deviceName && dev.type === deviceType) {
-        // Reuse this entry, update id to new fingerprint
-        this.devices.delete(key);
-        dev.id = id;
-        dev.status = 'online';
-        dev.lastSeen = now;
-        dev.socketId = socketId;
-        if (info.ipAddress) dev.ipAddress = info.ipAddress;
-        if (info.osInfo) dev.osInfo = info.osInfo;
-        this.devices.set(id, dev);
-        this.broadcastCb?.('devices:update', dev);
-        return dev;
+    if (!info.nativeClientIdentity) {
+      for (const [key, dev] of this.devices) {
+        if (dev.nativeClientIdentity) continue;
+        if (
+          dev.userId === userId
+          && deviceMatchesScope(dev, scope)
+          && dev.name === deviceName
+          && dev.type === deviceType
+        ) {
+          // Reuse this entry, update id to new fingerprint.
+          this.devices.delete(key);
+          dev.id = id;
+          dev.status = 'online';
+          dev.lastSeen = now;
+          dev.socketId = socketId;
+          if (info.ipAddress) dev.ipAddress = info.ipAddress;
+          if (info.osInfo) dev.osInfo = info.osInfo;
+          dev.nativeClientIdentity = null;
+          this.devices.set(id, dev);
+          this.broadcastCb?.('devices:update', dev);
+          return dev;
+        }
       }
     }
 
@@ -88,6 +122,9 @@ class DeviceRegistry {
       socketId,
       ipAddress: info.ipAddress || null,
       osInfo: info.osInfo || null,
+      nativeClientIdentity: info.nativeClientIdentity
+        ? { ...info.nativeClientIdentity }
+        : null,
       firstSeen: now,
       lastSeen: now,
     };
@@ -176,6 +213,7 @@ class DeviceRegistry {
       socketId: null,
       ipAddress: null,
       osInfo: 'MCP Remote',
+      nativeClientIdentity: null,
       firstSeen: now,
       lastSeen: now,
     };

@@ -64,6 +64,29 @@ function stripNegativeConstraints(value: string): string {
     .replace(/\b(?:do\s+not|don't|never|must\s+not|without)\b[^.;!?\n\r]*/giu, ' ');
 }
 
+const NEGATED_PROCESS_OBSERVATION_CLAUSE_RE =
+  /(?:\u4e0d\u80fd|\u4e0d\u8981|\u522b|\u7981\u6b62|\u4e0d\u53ef|\u4e0d\u5e94|\u4e0d\u53ef\u4ee5|\u4e0d\u7528|\u65e0\u9700|\u907f\u514d|\u52ff)|\b(?:do\s+not|don't|cannot|can't|never|must\s+not|should\s+not|without)\b/iu;
+const PROCESS_OBSERVATION_MENTION_RE =
+  /(?:\u8fdb\u7a0b\u5217\u8868|\u8fd0\u884c\u8fdb\u7a0b|\u5f53\u524d\u8fdb\u7a0b|\u6b63\u5728\u8fd0\u884c.{0,12}(?:\u8fdb\u7a0b|\u5e94\u7528|\u7a0b\u5e8f|\u8f6f\u4ef6))|\b(?:process\s+list|running\s+(?:process(?:es)?|apps?|applications?|programs?|software))\b/iu;
+
+/**
+ * Remove only clauses that mention a process snapshot as a forbidden
+ * substitute. Keeping this narrower than the general negative-constraint
+ * stripper prevents unrelated negation wording from changing observation
+ * semantics, while preserving positive clauses on either side of a comma.
+ */
+function stripNegatedProcessObservationClauses(value: string): string {
+  return String(value || '')
+    .split(/([\uFF0C,\u3002\uFF1B;\uFF01!\uFF1F?\n\r]+)/u)
+    .map(clause => (
+      NEGATED_PROCESS_OBSERVATION_CLAUSE_RE.test(clause)
+      && PROCESS_OBSERVATION_MENTION_RE.test(clause)
+        ? ' '
+        : clause
+    ))
+    .join(' ');
+}
+
 export function requiresActiveWindowObservation(input: string): boolean {
   return /\b(?:active|foreground|current)\s+window\b|\bwindow\s+title\b|(?:\u5f53\u524d|\u6d3b\u52a8|\u524d\u53f0)\u7a97\u53e3|\u7a97\u53e3\u6807\u9898|(?:\u8bf4\u660e|\u62a5\u544a|\u56de\u62a5).{0,16}(?:\u5b9e\u9645|\u771f\u5b9e).{0,16}(?:\u8fdb\u7a0b|\u7a97\u53e3)|\b(?:report|show|state)\b.{0,24}\b(?:actual|real)\b.{0,20}\b(?:process|window)\b/iu.test(String(input || ''));
 }
@@ -74,7 +97,7 @@ export function requiresDesktopFileListingObservation(input: string): boolean {
 }
 
 export function requiresRunningProcessObservation(input: string): boolean {
-  const text = String(input || '');
+  const text = stripNegatedProcessObservationClauses(input);
   const conceptual = /\b(?:explain|describe|define|teach|model|transition|lifecycle|theory|concept|operating\s+systems?)\b|(?:\u89e3\u91ca|\u8bf4\u660e|\u5b9a\u4e49|\u6a21\u578b|\u8f6c\u6362|\u751f\u547d\u5468\u671f|\u539f\u7406|\u6982\u5ff5|\u64cd\u4f5c\u7cfb\u7edf)/iu.test(text);
   const explicitLive = /\b(?:running\s+process(?:es)?|process\s+list|runtime\s+state|desktop\s+(?:state|status)|desktop\s+(?:program|app)(?:lication)?\s+check)\b|\b(?:running|active)\s+(?:desktop\s+)?(?:ai\s+)?app(?:lication)?s?\b|(?:\u8fd0\u884c|\u6d3b\u8dc3|\u5f53\u524d)\u8fdb\u7a0b|\u8fdb\u7a0b\u5217\u8868|\u684c\u9762\u8fd0\u884c\u72b6\u6001|(?:\u6b63\u5728\u8fd0\u884c|\u5df2\u8fd0\u884c).{0,16}(?:AI|\u4eba\u5de5\u667a\u80fd)?\u5e94\u7528|(?:\u505a\u4e2a|\u505a\u4e00\u4e2a|\u8fdb\u884c|\u68c0\u67e5|\u67e5\u770b|\u770b\u4e00\u4e0b|\u770b\u4e0b|\u770b\u770b).{0,10}(?:\u684c\u9762)?(?:\u7a0b\u5e8f|\u8f6f\u4ef6|\u5e94\u7528)(?:\u68c0\u67e5|\u72b6\u6001|\u8fd0\u884c\u60c5\u51b5)|(?:\u540e\u53f0|\u5f53\u524d|\u684c\u9762).{0,12}(?:\u591a\u5c11|\u51e0\u4e2a|\u6709\u54ea\u4e9b|\u770b\u770b|\u770b\u4e00\u4e0b|\u67e5\u770b)?.{0,8}(?:\u7a0b\u5e8f|\u8f6f\u4ef6|\u5e94\u7528|\u8fdb\u7a0b).{0,12}(?:\u8fd0\u884c|\u8fd0\u884c\u60c5\u51b5|\u72b6\u6001|\u68c0\u67e5)|(?:\u540e\u53f0|\u5f53\u524d).{0,12}(?:\u7a0b\u5e8f|\u8f6f\u4ef6|\u5e94\u7528|\u8fdb\u7a0b).{0,12}(?:\u591a\u5c11|\u51e0\u4e2a|\u6709\u54ea\u4e9b)/iu.test(text);
   if (explicitLive) return true;
@@ -109,7 +132,12 @@ export function buildDesktopObservationPlan(input: string): DesktopObservationTo
   const wantsProcesses = requiresRunningProcessObservation(text);
   const wantsIdle = /\b(?:idle\s+time|away\s+time)\b|\u7a7a\u95f2\u65f6\u95f4|\u591a\u4e45\u6ca1\u64cd\u4f5c/iu.test(text);
   const wantsSystem = requiresSystemInfoObservation(text);
-  const wantsAppInventory = /\b(?:(?:installed|launchable|available|local(?:ly)?)\s+(?:desktop\s+)?(?:ai\s+)?app(?:lication)?s?|app(?:lication)?\s+(?:inventory|list))\b|\b(?:inspect|check|list|show|find|detect|inventory)\b.{0,64}\b(?:installed|launchable|available|local|app|application|software|program|launch\s+target)\b|(?:\u5df2\u5b89\u88c5|\u53ef\u542f\u52a8|\u672c\u673a|\u672c\u5730).{0,16}(?:AI|\u4eba\u5de5\u667a\u80fd)?\u5e94\u7528|\u5e94\u7528(?:\u6e05\u5355|\u5217\u8868)|(?:\u68c0\u67e5|\u67e5\u770b|\u5217\u51fa|\u8bc6\u522b|\u68c0\u6d4b|\u76d8\u70b9|\u67e5\u627e).{0,32}(?:\u5df2\u5b89\u88c5|\u53ef\u542f\u52a8|\u5e94\u7528|\u8f6f\u4ef6|\u7a0b\u5e8f|\u542f\u52a8\u5165\u53e3|\u5b89\u88c5\u72b6\u6001)/iu.test(text);
+  const explicitAppInventory = /\b(?:(?:installed|launchable|available|local(?:ly)?)\s+(?:desktop\s+)?(?:ai\s+)?app(?:lication)?s?|app(?:lication)?\s+(?:inventory|list))\b|\b(?:inspect|check|list|show|find|detect|inventory)\b.{0,64}\b(?:installed|launchable|available|local|launch\s+target)\b|(?:\u5df2\u5b89\u88c5|\u53ef\u542f\u52a8|\u672c\u673a|\u672c\u5730).{0,16}(?:AI|\u4eba\u5de5\u667a\u80fd)?\u5e94\u7528|\u5e94\u7528(?:\u6e05\u5355|\u5217\u8868)|(?:\u68c0\u67e5|\u67e5\u770b|\u5217\u51fa|\u8bc6\u522b|\u68c0\u6d4b|\u76d8\u70b9|\u67e5\u627e).{0,32}(?:\u5df2\u5b89\u88c5|\u53ef\u542f\u52a8|\u542f\u52a8\u5165\u53e3|\u5b89\u88c5\u72b6\u6001)/iu.test(text);
+  const genericAppInventory = /\b(?:inspect|check|list|show|find|detect|inventory)\b.{0,64}\b(?:app|application|software|program)\b|(?:\u68c0\u67e5|\u67e5\u770b|\u5217\u51fa|\u8bc6\u522b|\u68c0\u6d4b|\u76d8\u70b9|\u67e5\u627e).{0,32}(?:\u5e94\u7528|\u8f6f\u4ef6|\u7a0b\u5e8f)/iu.test(text);
+  // A request for apps that are running is a process snapshot, not an
+  // installed/launchable application inventory. Explicit inventory wording
+  // still requests both probes when the user asks for both scopes.
+  const wantsAppInventory = explicitAppInventory || (!wantsProcesses && genericAppInventory);
   const wantsDesktopState = /\bdesktop\s+(?:state|status|runtime)\b|\u684c\u9762\u8fd0\u884c\u72b6\u6001|\u684c\u9762\u72b6\u6001/iu.test(text);
   if (!wantsActiveWindow && !wantsDesktopFiles && !wantsProcesses && !wantsIdle && !wantsSystem && !wantsAppInventory && !wantsDesktopState) return [];
 
@@ -119,6 +147,7 @@ export function buildDesktopObservationPlan(input: string): DesktopObservationTo
     // Treat "software/process is running" as observed state, not an instruction to run it.
     // Keeping the noun requirement preserves imperative phrases such as "运行 Photoshop".
     .replace(/(?:\u7a0b\u5e8f|\u8f6f\u4ef6|\u5e94\u7528|\u8fdb\u7a0b).{0,4}(?:\u6b63\u5728|\u8fd8\u5728|\u5df2\u7ecf|\u5df2|\u5728)?\u8fd0\u884c(?:\u4e2d|\u7740|\u72b6\u6001|\u60c5\u51b5)?/giu, ' ')
+    .replace(/(?:(?:\u6b63\u5728|\u8fd8\u5728|\u5df2\u7ecf|\u5df2|\u5f53\u524d)\u8fd0\u884c(?:\u4e2d|\u7740)?(?:\u7684)?|\u8fd0\u884c(?:\u4e2d|\u7740|\u7684))(?:AI|\u4eba\u5de5\u667a\u80fd)?(?:\u7a0b\u5e8f|\u8f6f\u4ef6|\u5e94\u7528|\u8fdb\u7a0b)/giu, ' ')
     .replace(/\b(?:software|program|app(?:lication)?|process)(?:es)?\s+(?:is|are|currently\s+)?running\b/giu, ' ');
   const hasPositiveMutation = /\b(?:open|launch|start|click|type|switch|close|send|post|write|change|modify|run)\b|(?:\u6253\u5f00|\u542f\u52a8|\u70b9\u51fb|\u8f93\u5165|\u5207\u6362|\u5173\u95ed|\u53d1\u9001|\u53d1\u5e03|\u5199\u5165|\u4fee\u6539|\u8fd0\u884c)(?!\u72b6\u6001|\u60c5\u51b5)/iu.test(mutationText);
   if (hasPositiveMutation) return [];

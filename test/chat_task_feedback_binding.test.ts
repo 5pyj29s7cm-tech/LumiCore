@@ -3,6 +3,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const chat = readFileSync(path.join(process.cwd(), 'server/socket/chat.ts'), 'utf8');
+const task = readFileSync(path.join(process.cwd(), 'server/socket/task.ts'), 'utf8');
 
 describe('chat task feedback binding integration', () => {
   it('resolves and exposes a structured relation before queue control', () => {
@@ -22,6 +23,57 @@ describe('chat task feedback binding integration', () => {
     expect(chat).toContain('controlTargetRevision?: number');
     expect(chat).toContain("resolvedTaskRelation.binding === 'stale'");
     expect(chat).toContain('reason: resolvedTaskRelation.reason');
+  });
+
+  it('binds typed or spoken status/cancel controls to the server-owned lease', () => {
+    expect(chat).toContain(
+      'if (controlTargetRequestId && controlTargetRequestId !== existingSession.requestId)',
+    );
+    expect(chat).toContain('const cancellationTargetRequestId = controlTargetRequestId');
+    expect(chat).toContain('|| resolvedTaskRelation.targetRequestId');
+    expect(chat).toContain(
+      'persistChatSidecarCancellationIntent(executionScope, requestId, cancellationTargetRequestId)',
+    );
+    expect(chat).toContain(
+      'chatExecutionQueue.cancelRequest(sessionKey, cancellationTargetRequestId)',
+    );
+    expect(chat).not.toContain("reason: 'missing_control_target'");
+    expect(task).toContain(
+      'if (controlTargetRequestId && controlTargetRequestId !== runningTask.requestId)',
+    );
+    expect(task).toContain(
+      'const cancellationTargetRequestId = controlTargetRequestId || previous.requestId',
+    );
+    expect(task).not.toContain("reason: 'missing_control_target'");
+  });
+
+  it('propagates foreground cancellation through classification and the tool/model loop', () => {
+    const classifier = chat.indexOf('const llmClassifier = async');
+    const classifierCall = chat.indexOf('const result = await makeLLMCall(', classifier);
+    const toolLoop = chat.indexOf('const result = await runWithTools(', classifierCall);
+    const cancellationCatch = chat.lastIndexOf("if (abortController.signal.aborted || error?.name === 'AbortError')");
+
+    expect(classifier).toBeGreaterThan(-1);
+    expect(classifierCall).toBeGreaterThan(classifier);
+    expect(chat.slice(classifierCall, classifierCall + 1_200)).toContain('signal: abortController.signal');
+    expect(toolLoop).toBeGreaterThan(classifierCall);
+    expect(chat.slice(toolLoop, toolLoop + 1_200)).toContain('signal: abortController.signal');
+    expect(cancellationCatch).toBeGreaterThan(toolLoop);
+    expect(chat.slice(cancellationCatch, cancellationCatch + 1_800)).toContain('cancelConversationActionExecution(');
+    expect(chat.slice(cancellationCatch, cancellationCatch + 1_800)).toContain("cognitiveIntent: 'task_cancelled'");
+  });
+
+  it('settles a repeated confirmation as a no-op before binding a new task', () => {
+    const duplicateConfirmation = chat.indexOf('const adjacentConfirmedAction = !pendingConfirmation');
+    const bindTurn = chat.indexOf('const boundTurn = bindConversationActionExecutionTurn({', duplicateConfirmation);
+
+    expect(duplicateConfirmation).toBeGreaterThan(-1);
+    expect(chat.slice(duplicateConfirmation, duplicateConfirmation + 900)).toContain('findAdjacentVerifiedConfirmedAction({');
+    expect(chat.slice(duplicateConfirmation, duplicateConfirmation + 900)).toContain('currentRequestId: requestId');
+    expect(chat.slice(duplicateConfirmation, duplicateConfirmation + 900)).not.toContain("resolvedTaskRelation.binding === 'previous_task'");
+    expect(chat.slice(duplicateConfirmation, duplicateConfirmation + 2_000)).toContain('CN_TASK_EXECUTION_MESSAGES.noPendingConfirmation');
+    expect(chat.slice(duplicateConfirmation, duplicateConfirmation + 2_000)).toContain("cognitiveIntent: 'duplicate_confirmation_noop'");
+    expect(bindTurn).toBeGreaterThan(duplicateConfirmation);
   });
 
   it('routes bound correction/retry/accept feedback through the existing task revision', () => {

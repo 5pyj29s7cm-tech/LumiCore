@@ -3,6 +3,11 @@ import {
   conversationActionRequiresFreshConfirmationReview,
   type ConversationActionContinuationState,
 } from './action_continuation';
+import { normalizeActionIntent } from './normalized_action_intent';
+import {
+  resolvePendingRuntimeCleanupOffer,
+  type PendingAssistantOfferContext,
+} from './pending_assistant_offer';
 
 /**
  * Legacy queue-control classification retained for callers that only need to
@@ -25,6 +30,20 @@ export type ActiveTaskFeedbackKind =
   | 'retry'
   | 'repeat'
   | 'new_task';
+
+/**
+ * Canonical relation used by every transport and by durable task evidence.
+ * Legacy `feedback` values stay available for operation-specific behavior,
+ * but callers no longer have to reinterpret correction/accept/new_task.
+ */
+export type DeterministicTaskTurnRelation =
+  | 'continue'
+  | 'correct'
+  | 'confirm'
+  | 'cancel'
+  | 'status'
+  | 'repeat'
+  | 'new';
 
 export type ActiveTaskFeedbackBinding =
   | 'active_task'
@@ -52,6 +71,7 @@ export type ActiveTaskFeedbackOperation =
  */
 export interface ActiveTaskMessageResolution {
   relation: ActiveTaskMessageRelation;
+  taskRelation: DeterministicTaskTurnRelation;
   feedback: ActiveTaskFeedbackKind;
   binding: ActiveTaskFeedbackBinding;
   operation: ActiveTaskFeedbackOperation;
@@ -72,6 +92,8 @@ export interface ActiveTaskRelationOptions {
   controlTargetTaskId?: string;
   /** Optional optimistic-concurrency revision supplied by that client. */
   controlTargetRevision?: number;
+  /** Exact adjacent assistant proposal, derived from the durable transcript. */
+  pendingAssistantOfferContext?: PendingAssistantOfferContext;
 }
 
 // These are task-control utterances, not domain intents. Keeping them here
@@ -100,7 +122,7 @@ const CONTINUE_ONLY_RE =
 // pending action or root-task verification.
 // i18n-allow: multilingual task-feedback recognition; not user-visible copy.
 const ACCEPT_ONLY_RE =
-  /^(?:(?:我)?(?:确认|同意|接受|批准|授权)(?:(?:这个|该|上述|当前|刚才的)?(?:操作|方案|修改|执行|权限扩张))?|(?:嗯|好|好的|可以|行|没问题|就这样|按这个做|开始吧)|(?:yes|ok|okay|confirmed?|approved?|accepted?|go\s+ahead|looks\s+good))[。！？.!?]*$/iu; // i18n-allow: multilingual task-feedback recognition; not user-visible copy.
+  /^(?:(?:我)?(?:确认|同意|接受|批准|授权)(?:(?:这个|该|上述|当前|刚才的)?(?:操作|方案|修改|执行|权限扩张))?了?|(?:嗯|好|好的|可以|行|没问题|就这样|按这个做|开始吧)|(?:yes|ok|okay|confirmed?|approved?|accepted?|go\s+ahead|looks\s+good))[。！？.!?]*$/iu; // i18n-allow: multilingual task-feedback recognition; not user-visible copy.
 
 // Corrections re-plan the same root task. Requiring either an explicit error
 // marker or a referential object prevents an unrelated concrete instruction
@@ -110,7 +132,6 @@ const CORRECTION_RE =
   /^(?:(?:不对|错了|搞错了|弄错了|纠正一下|更正一下|不是这样)[，,:：\s]*|(?:no|wrong|that(?:'s| is)\s+wrong|correction)\b[,:\s]*).{1,500}$|^(?:把|将)(?:它|这个|那个|刚才的|上一步|当前步骤).{0,80}(?:改成|换成|更正为|调整为).{1,360}$|^(?:不是).{1,160}(?:而是|应该是).{1,320}$|^(?:(?:我说的|我的意思|刚才说的).{0,80}(?:是|要).{1,220}(?:不是|而不是).{1,220})$|^(?:change|correct|update)\s+(?:it|this|that|the\s+(?:last|current)\s+step)\b.{1,360}$|^(?:I\s+meant|what\s+I\s+meant\s+was)\b.{1,220}\b(?:not|instead\s+of)\b.{1,220}$/iu; // i18n-allow: multilingual task-feedback recognition; not user-visible copy.
 const TERSE_TARGET_CORRECTION_RE =
   /^(?:不是|并不是|别用|不要用)(?:这|那|刚才|之前|当前)?(?:个|份|张|条)?\s*(?:文件|文档|PPT|演示文稿|表格|图片|资料|窗口|页面|应用|软件|路径|目录|版本|目标)?[^。！？!?]{0,160}[。！？!?]*$|^(?:no|wrong|not)\s+(?:this|that|the\s+(?:current|previous|last))?\s*(?:file|document|presentation|sheet|image|window|app|path|target)?[.!?]*$/iu; // i18n-allow: multilingual task-target correction recognition; not user-visible copy.
-
 function compact(value: unknown, limit = 180): string {
   return String(value || '').replace(/\s+/gu, ' ').trim().slice(0, limit);
 }
@@ -123,9 +144,35 @@ function finiteRevision(value: unknown): number | undefined {
 function feedbackKind(
   normalized: string,
   state?: ConversationActionContinuationState | null,
+  assistantOfferContext?: PendingAssistantOfferContext,
 ): ActiveTaskFeedbackKind {
   if (REPLACE_RE.test(normalized)) return 'replace';
   if (CANCEL_ONLY_RE.test(normalized)) return 'cancel';
+  const acceptedCleanupOffer = resolvePendingRuntimeCleanupOffer(
+    normalized,
+    assistantOfferContext,
+  );
+  if (acceptedCleanupOffer) {
+    const offeredConversationTaskId = compact(
+      assistantOfferContext?.offer?.scope.taskId,
+      180,
+    );
+    const currentConversationTaskId = compact(state?.taskId, 180);
+    // The pending offer targets runtime-work ids through its tool arguments.
+    // Its scope.taskId is only the conversation action that made the offer.
+    // Never attach acceptance to a different task that appeared while queued.
+    if (offeredConversationTaskId === currentConversationTaskId) return 'accept';
+  }
+  const normalizedIntent = normalizeActionIntent(normalized);
+  // A fully specified normalized action cannot be feedback about an older
+  // task. Bind this before status/continue heuristics so a new file, client
+  // surface, read, or external action is not swallowed by an old task merely
+  // because its verb also appears in the terse-continuation vocabulary.
+  if (
+    normalizedIntent.relation === 'new'
+    && normalizedIntent.kind !== 'none'
+    && normalizedIntent.operation !== 'status'
+  ) return 'new_task';
   if (RETRY_ONLY_RE.test(normalized)) return 'retry';
   if (ACCEPT_ONLY_RE.test(normalized)) {
     return conversationActionRequiresFreshConfirmationReview(state) ? 'status' : 'accept';
@@ -150,6 +197,22 @@ function queueRelation(feedback: ActiveTaskFeedbackKind): ActiveTaskMessageRelat
     return 'continue';
   }
   return 'queue';
+}
+
+function deterministicTaskRelation(
+  feedback: ActiveTaskFeedbackKind,
+): DeterministicTaskTurnRelation {
+  switch (feedback) {
+    case 'correction': return 'correct';
+    case 'accept': return 'confirm';
+    case 'cancel': return 'cancel';
+    case 'status': return 'status';
+    case 'repeat': return 'repeat';
+    case 'replace':
+    case 'new_task': return 'new';
+    case 'continue':
+    case 'retry': return 'continue';
+  }
 }
 
 function feedbackOperation(feedback: ActiveTaskFeedbackKind): ActiveTaskFeedbackOperation {
@@ -182,8 +245,11 @@ export function resolveActiveTaskMessageRelation(
   options: ActiveTaskRelationOptions = {},
 ): ActiveTaskMessageResolution {
   const normalized = compact(text, 700);
-  const feedback = normalized ? feedbackKind(normalized, state) : 'new_task';
+  const feedback = normalized
+    ? feedbackKind(normalized, state, options.pendingAssistantOfferContext)
+    : 'new_task';
   const relation = queueRelation(feedback);
+  const taskRelation = deterministicTaskRelation(feedback);
   const terminalState = Boolean(
     state
     && (!state.unfinished || ['completed', 'cancelled'].includes(String(state.status || ''))),
@@ -209,6 +275,12 @@ export function resolveActiveTaskMessageRelation(
     ),
   );
   const canBindPreviousStatus = feedback === 'status' && Boolean(durableTaskId);
+  const canBindPreviousAcceptance = Boolean(
+    feedback === 'accept'
+    && terminalState
+    && durableTaskId
+    && !activeRequestId,
+  );
   const canBindDurableTask = Boolean(
     activeMatchesState
     && (state?.unfinished || canBindPreviousStatus || activeRequestId),
@@ -230,7 +302,10 @@ export function resolveActiveTaskMessageRelation(
   const durableFenceOwnsIdleTask = Boolean(
     !activeRequestId
     && exactDurableFence
-    && (state?.unfinished || (feedback === 'status' && terminalState)),
+    && (
+      state?.unfinished
+      || (terminalState && (feedback === 'status' || feedback === 'accept'))
+    ),
   );
   const requestMismatch = Boolean(
     explicitRequestId
@@ -243,6 +318,7 @@ export function resolveActiveTaskMessageRelation(
   if (stale) {
     return {
       relation,
+      taskRelation,
       feedback,
       binding: 'stale',
       operation: 'reject_stale',
@@ -262,6 +338,7 @@ export function resolveActiveTaskMessageRelation(
   if (feedback === 'repeat') {
     return {
       relation,
+      taskRelation,
       feedback,
       binding: 'conversation',
       operation: 'repeat',
@@ -274,6 +351,7 @@ export function resolveActiveTaskMessageRelation(
   if (feedback === 'new_task') {
     return {
       relation,
+      taskRelation,
       feedback,
       binding: 'new_task',
       operation: 'enqueue',
@@ -283,22 +361,23 @@ export function resolveActiveTaskMessageRelation(
     };
   }
 
-  const completedStatusLookup = Boolean(
-    feedback === 'status'
+  const terminalPreviousLookup = Boolean(
+    (feedback === 'status' || feedback === 'accept')
     && terminalState
     && durableTaskId
     && !runtimeRequestId,
   );
-  const binding: ActiveTaskFeedbackBinding = completedStatusLookup
+  const binding: ActiveTaskFeedbackBinding = terminalPreviousLookup
     ? 'previous_task'
     : canBindDurableTask || hasRuntimeTarget
       ? 'active_task'
-      : canBindPreviousStatus
+      : canBindPreviousStatus || canBindPreviousAcceptance
         ? 'previous_task'
         : 'conversation';
-  const boundTaskId = canBindDurableTask ? durableTaskId : '';
+  const boundTaskId = canBindDurableTask || binding === 'previous_task' ? durableTaskId : '';
   return {
     relation,
+    taskRelation,
     feedback,
     binding,
     operation: feedbackOperation(feedback),
@@ -332,6 +411,7 @@ export function formatActiveTaskRelationContext(
     '## Bound task feedback',
     `- followupIntent: ${resolution.feedback === 'status' ? 'status' : execute ? 'execute' : 'none'}`,
     `- feedbackRelation: ${resolution.feedback}`,
+    `- taskRelation: ${resolution.taskRelation}`,
     `- feedbackOperation: ${resolution.operation}`,
     resolution.taskId ? `- taskId: ${resolution.taskId}` : '',
     resolution.revision !== undefined ? `- taskRevision: ${resolution.revision}` : '',

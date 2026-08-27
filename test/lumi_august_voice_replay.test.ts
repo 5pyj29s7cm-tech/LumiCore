@@ -62,14 +62,17 @@ describe('August 7-8 real voice replay', () => {
     expectTools('帮我检查下桌面的文件。', ['desktop_list_files']);
   });
 
-  it('routes analysis of the currently open WPS file through observation and document reading', () => {
+  it('routes analysis of the currently open WPS file through exact foreground observation and document reading', () => {
     expectTools('帮我分析一下WPS现在打开的这份文件。', [
       'desktop_active_window',
-      'desktop_running_processes',
-      'desktop_capture_screen',
       'search_files',
       'extract_document_text',
     ]);
+    for (const channel of ['chat', 'voice'] as const) {
+      const pipeline = build('帮我分析一下WPS现在打开的这份文件。', channel);
+      expect(pipeline.execution.toolPolicy.allowedTools).not.toContain('desktop_running_processes');
+      expect(pipeline.execution.toolPolicy.allowedTools).not.toContain('desktop_capture_screen');
+    }
   });
 
   it('keeps open-and-present PDF work on desktop plus document tools', () => {

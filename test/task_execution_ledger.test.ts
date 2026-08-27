@@ -115,6 +115,44 @@ describe('durable conversation task execution ledger', () => {
     expect(resumed.state?.policySnapshot?.allowedTools).toEqual(expect.arrayContaining(initialPolicy.allowedTools));
   });
 
+  it('binds a resumed waiting-confirmation task to the successor request', () => {
+    const policy = {
+      allowedTools: ['desktop_write_text_file'],
+      requireConfirmation: ['desktop_write_text_file'],
+      forbiddenTools: [],
+      maxIterations: 5,
+    };
+    const started = prepareConversationActionTaskState(null, {
+      userText: 'Write the exact approved file.',
+      requestId: 'request-before-confirmation',
+      toolPolicy: policy,
+      forceTask: true,
+    });
+    const waiting = {
+      ...started.state!,
+      status: 'waiting_confirmation' as const,
+      unfinished: true,
+      activeRequestId: undefined,
+    };
+
+    const resumed = prepareConversationActionTaskState(waiting, {
+      userText: '确认',
+      requestId: 'request-after-restart-confirmation',
+      toolPolicy: policy,
+      forceResume: true,
+    });
+
+    expect(resumed).toMatchObject({
+      kind: 'resume',
+      state: {
+        taskId: started.state?.taskId,
+        status: 'planning',
+        activeRequestId: 'request-after-restart-confirmation',
+        unfinished: true,
+      },
+    });
+  });
+
   it('lets an explicitly selected workflow supersede an unrelated unfinished task', () => {
     const policy = { allowedTools: ['industry_output_create'], requireConfirmation: [], forbiddenTools: [], maxIterations: 5 };
     const oldTask = prepareConversationActionTaskState(null, {
@@ -195,6 +233,31 @@ describe('durable conversation task execution ledger', () => {
     expect(blocked?.latestBlocker).toContain('application not found');
     expect(formatConversationActionTaskStatus(blocked)).toContain('还没完成');
     expect(recordsToTaskReceipts([])).toEqual([]);
+  });
+
+  it('reports the six user-facing task facts without leaking an internal guard', () => {
+    const started = prepareConversationActionTaskState(null, {
+      userText: '打开桌面上的季度报告并核对内容',
+      requestId: 'feedback-request',
+      toolPolicy: { allowedTools: ['desktop_open'], requireConfirmation: [], forbiddenTools: [], maxIterations: 5 },
+    });
+    const reply = formatConversationActionTaskStatus({
+      ...started.state!,
+      status: 'blocked',
+      latestBlocker: 'No successful current-turn tool execution was recorded for that execution-status claim.',
+      unfinished: true,
+    });
+
+    for (const label of [
+      '正在做什么：',
+      '当前目标：',
+      '已完成什么：',
+      '卡在哪里：',
+      '是否需要你操作：',
+      '下一步：',
+    ]) expect(reply).toContain(label);
+    expect(reply).not.toContain('No successful current-turn tool execution');
+    expect(reply).toContain('没有拿到可执行的入口或可验证的结果');
   });
 
   it('keeps a terse confirmation attached to the original multi-step goal', () => {

@@ -21,6 +21,7 @@ import { mountNotificationRoutes } from "../routes/notifications";
 import { autonomyRoutes } from "../routes/autonomy_routes";
 import { mountExploreRoutes, mountPlanRoutes } from "../routes/plan_explore_routes";
 import { mountCommandCenterPlanRoutes } from "../routes/command_center_plan_routes";
+import { mountTaskRegressionEvidenceRoutes } from "../evidence/task_truth_snapshot_route";
 
 interface RouteContext {
   apiRouter: Router;
@@ -94,6 +95,10 @@ export function mountAllRoutes({ apiRouter, jwtSecret, llm, getCookieOptions, io
 
   // Autonomy
   apiRouter.use('/autonomy', autonomyRoutes());
+
+  // This mounts nothing unless an isolated regression child process presents
+  // the complete startup proof. It is absent from normal desktop/production.
+  mountTaskRegressionEvidenceRoutes(apiRouter);
 
   // Misc (founder vision, feedback, admin config, Org chat)
   mountMiscRoutes(apiRouter, jwtSecret, llmGetters);

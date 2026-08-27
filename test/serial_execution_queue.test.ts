@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { SerialExecutionQueue } from '../server/cognition/serial_execution_queue';
+import {
+  SerialExecutionQueue,
+  SerialExecutionCancellationTimeoutError,
+  SerialExecutionWaitTimeoutError,
+} from '../server/cognition/serial_execution_queue';
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -10,8 +14,7 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 async function flushMicrotasks(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let index = 0; index < 4; index += 1) await Promise.resolve();
 }
 
 describe('SerialExecutionQueue', () => {
@@ -169,5 +172,78 @@ describe('SerialExecutionQueue', () => {
     expect(await replacementRun).toBe(true);
     expect(events).toEqual(['start:A']);
     replacement.release();
+  });
+
+  it('times out a queued lease instead of waiting forever for a leaked predecessor', async () => {
+    const queue = new SerialExecutionQueue({ waitTimeoutMs: 20 });
+    const active = queue.reserve('scope', 'A');
+    expect(await active.waitForTurn()).toBe(true);
+    const queued = queue.reserve('scope', 'B');
+
+    await expect(queued.waitForTurn()).resolves.toBe(false);
+    expect(queued.state).toBe('timed_out');
+    expect(queued.signal.aborted).toBe(true);
+    expect(queued.signal.reason).toBeInstanceOf(SerialExecutionWaitTimeoutError);
+    expect(queue.getActive('scope')).toBe(active);
+    expect(queue.getByRequestId('scope', 'B')).toBeUndefined();
+
+    active.release();
+  });
+
+  it('does not let a successor overtake the still-active owner after a middle wait times out', async () => {
+    const queue = new SerialExecutionQueue({ waitTimeoutMs: 20 });
+    const active = queue.reserve('scope', 'A');
+    expect(await active.waitForTurn()).toBe(true);
+    const timedOut = queue.reserve('scope', 'B');
+    const successor = queue.reserve('scope', 'C');
+
+    expect(await timedOut.waitForTurn()).toBe(false);
+    expect(await successor.waitForTurn()).toBe(false);
+    expect(successor.signal.aborted).toBe(true);
+    expect(queue.getActive('scope')).toBe(active);
+    expect(queue.getByRequestId('scope', 'C')).toBeUndefined();
+
+    const lateArrival = queue.reserve('scope', 'D');
+    expect(await lateArrival.waitForTurn()).toBe(false);
+    expect(queue.getActive('scope')).toBe(active);
+
+    active.release();
+    const recovered = queue.reserve('scope', 'E');
+    expect(await recovered.waitForTurn()).toBe(true);
+    recovered.release();
+  });
+
+  it('rejects invalid watchdog durations', () => {
+    expect(() => new SerialExecutionQueue({ waitTimeoutMs: 0 })).toThrow(TypeError);
+    expect(() => new SerialExecutionQueue({ waitTimeoutMs: 30 * 60_000 + 1 })).toThrow(TypeError);
+    expect(() => new SerialExecutionQueue({ cancelTimeoutMs: 0 })).toThrow(TypeError);
+    expect(() => new SerialExecutionQueue({ cancelTimeoutMs: 5 * 60_000 + 1 })).toThrow(TypeError);
+  });
+
+  it('reports a cancellation-settlement timeout instead of hanging forever', async () => {
+    const queue = new SerialExecutionQueue({ cancelTimeoutMs: 20 });
+    const active = queue.reserve('scope', 'A');
+    expect(await active.waitForTurn()).toBe(true);
+
+    await expect(queue.cancelRequest('scope', 'A'))
+      .rejects.toBeInstanceOf(SerialExecutionCancellationTimeoutError);
+    expect(active.signal.aborted).toBe(true);
+    expect(queue.getActive('scope')).toBe(active);
+
+    active.release();
+  });
+
+  it('acknowledges cancellation of a queued request without waiting for its predecessor', async () => {
+    const queue = new SerialExecutionQueue({ cancelTimeoutMs: 20 });
+    const active = queue.reserve('scope', 'A');
+    expect(await active.waitForTurn()).toBe(true);
+    const queued = queue.reserve('scope', 'B');
+
+    await expect(queue.cancelRequest('scope', 'B')).resolves.toBe(true);
+    expect(queued.signal.aborted).toBe(true);
+    expect(queued.state).toBe('cancelled');
+
+    active.release();
+    expect(await queued.waitForTurn()).toBe(false);
   });
 });

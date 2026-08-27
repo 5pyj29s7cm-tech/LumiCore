@@ -15,6 +15,7 @@ import {
   DESKTOP_BOOTSTRAP_HEADER,
   issueDesktopSessionProof,
 } from "../config/desktop_bootstrap";
+import { normalizeNativeClientIdentity } from '../devices/native_identity';
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -142,6 +143,13 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
     if (typeof presentedProof !== 'string' || !consumeDesktopBootstrapProof(presentedProof)) {
       return res.status(403).json({ error: "Native desktop bootstrap proof is required" });
     }
+    const nativeClientIdentity = normalizeNativeClientIdentity(req.body?.nativeClientIdentity);
+    if (!nativeClientIdentity) {
+      return res.status(400).json({
+        error: 'A valid native client process identity is required',
+        code: 'NATIVE_CLIENT_IDENTITY_REQUIRED',
+      });
+    }
 
     const db = readDB();
     let admin: any = null;
@@ -189,7 +197,7 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
       jwtSecret,
       { expiresIn: "24h" },
     );
-    const desktopSession = issueDesktopSessionProof(admin.uid);
+    const desktopSession = issueDesktopSessionProof(admin.uid, req.body.nativeClientIdentity);
     res.cookie("token", token, getCookieOptions());
     const { password: _, ...userWithoutPassword } = admin;
     const userResp: any = { ...userWithoutPassword };
@@ -199,6 +207,7 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
       token,
       desktopSessionProof: desktopSession.proof,
       desktopSessionExpiresAt: desktopSession.expiresAt,
+      nativeClientIdentity,
     });
     } catch (err: any) {
       console.error('[Auth] bootstrap error:', err.message);

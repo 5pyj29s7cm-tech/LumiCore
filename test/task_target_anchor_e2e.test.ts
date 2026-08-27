@@ -365,7 +365,7 @@ describe('real file/desktop target anchoring', () => {
       assistantState: '',
       toolSummaries: [],
       receipts: [],
-      updatedAt: NOW,
+      updatedAt: new Date().toISOString(),
     } satisfies ConversationActionContinuationState)!;
 
     expect(state.taskCapsule).toMatchObject({
@@ -393,6 +393,53 @@ describe('real file/desktop target anchoring', () => {
     })).toMatchObject({
       allowed: false,
       code: 'rejected_target',
+    });
+  });
+
+  it.each([
+    `准确文件名是 ${FILE_NAME}，在桌面。请继续分析 WPS 当前文件。`,
+    `The exact filename is ${FILE_NAME} on Desktop. Continue analyzing the current WPS document.`,
+  ])('binds an exact supplemental filename to the one bounded Desktop receipt: %s', taskText => {
+    const listReceipt = record({
+      name: 'desktop_list_files',
+      arguments: { path: '~/Desktop', limit: 100 },
+      result: JSON.stringify([{
+        name: FILE_NAME,
+        path: FILE_PATH,
+        type: 'file',
+      }]),
+      terminalVerification: {
+        status: 'verified',
+        strategy: 'terminal_receipt',
+        reason: 'bounded desktop listing completed',
+      },
+    });
+    const projection = buildTaskTargetAnchorProjection({
+      taskText,
+      applicationHint: 'WPS',
+      evidence: [activeWps, listReceipt],
+    });
+
+    expect(projection).toMatchObject({
+      target: {
+        application: 'WPS',
+        object: FILE_NAME,
+        path: FILE_PATH,
+        status: 'confirmed',
+        source: 'tool_receipt',
+      },
+      analysisReady: true,
+      nextAction: 'analyze',
+    });
+    expect(guardTaskTargetToolCall({
+      taskText,
+      toolName: 'extract_document_text',
+      arguments: { filePath: FILE_PATH },
+      toolRecords: [activeWps, listReceipt],
+      enforceStructuredFileRead: true,
+    })).toMatchObject({
+      allowed: true,
+      normalizedArguments: { filePath: FILE_PATH },
     });
   });
 

@@ -96,4 +96,41 @@ describe('conversation session routes', () => {
     expect(createResponse.status).toBe(401);
     expect(activateResponse.status).toBe(401);
   });
+
+  it('creates and deletes an explicitly-bound isolated conversation without moving the personal active pointer', async () => {
+    const beforeResponse = await fetch(`${url}/api/conversations/active?domain=personal&agentId=lumi`, {
+      headers: headers(),
+    });
+    const before = (await beforeResponse.json()).activeConversation;
+    expect(before?.id).toBeTruthy();
+
+    const createResponse = await fetch(`${url}/api/conversations/new?domain=personal`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ agentId: 'lumi', domain: 'personal', activation: 'isolated' }),
+    });
+    const created = (await createResponse.json()).conversation;
+    expect(createResponse.status).toBe(201);
+    expect(created).toMatchObject({ agentId: 'lumi', status: 'closed', domain: 'personal' });
+
+    const afterCreateResponse = await fetch(`${url}/api/conversations/active?domain=personal&agentId=lumi`, {
+      headers: headers(),
+    });
+    expect((await afterCreateResponse.json()).activeConversation).toEqual(before);
+
+    const deleteResponse = await fetch(
+      `${url}/api/conversations/${encodeURIComponent(created.id)}?domain=personal`,
+      { method: 'DELETE', headers: headers() },
+    );
+    expect(deleteResponse.status).toBe(200);
+    expect(await deleteResponse.json()).toMatchObject({
+      success: true,
+      deleted: { conversationId: created.id },
+    });
+
+    const afterDeleteResponse = await fetch(`${url}/api/conversations/active?domain=personal&agentId=lumi`, {
+      headers: headers(),
+    });
+    expect((await afterDeleteResponse.json()).activeConversation).toEqual(before);
+  });
 });

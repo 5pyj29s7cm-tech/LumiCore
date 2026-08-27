@@ -20,6 +20,11 @@ import {
   requiresExternalAiHistory,
   requiresArtifactPostWriteReadback,
 } from '../server/cognition/action_contract';
+import type { TaskCapsuleV1 } from '../server/conversation/task_capsule';
+import {
+  recordsToTaskReceipts,
+  taskCompletionFromReceipts,
+} from '../server/cognition/task_execution_ledger';
 
 describe('Lumi action contract', () => {
   it('keeps a named persistent-task ledger status query out of runtime task control', () => {
@@ -854,6 +859,266 @@ describe('Lumi action contract', () => {
     ]);
     expect(hasCoreActionEvidence(contract, activeOnly, text)).toBe(false);
     expect(hasCoreActionEvidence(contract, complete, text)).toBe(true);
+  });
+
+  it('does not complete current WPS analysis from an active-window candidate alone', () => {
+    const text = '[LUMI_REGRESSION:S3] 请分析当前 WPS 活动窗口里的演示文稿。当前文档路径未知，未确认文件名前不要读取。';
+    const contract = buildActionContract(text);
+    const activeCandidate = {
+      name: 'desktop_active_window',
+      arguments: {},
+      result: JSON.stringify({
+        ok: true,
+        title: 'WPS-Quarterly-Review-Draft.pptx - WPS Office',
+        processName: 'wps.exe',
+        documentName: 'WPS-Quarterly-Review-Draft.pptx',
+      }),
+      terminalVerification: {
+        status: 'verified' as const,
+        strategy: 'terminal_receipt' as const,
+        reason: 'foreground observation returned',
+      },
+    };
+    const exactRead = {
+      name: 'read_file',
+      arguments: { path: '~/Desktop/WPS-Quarterly-Review-Final.pptx' },
+      result: JSON.stringify({ ok: true, content: 'verified final presentation content' }),
+      terminalVerification: {
+        status: 'verified' as const,
+        strategy: 'terminal_receipt' as const,
+        reason: 'exact target contents returned',
+      },
+    };
+
+    expect(contract).toMatchObject({
+      kind: 'desktop_operation',
+      label: 'Current authoring document inspection',
+    });
+    expect(hasCoreActionEvidence(contract, [activeCandidate], text)).toBe(false);
+    expect(hasCoreActionEvidence(contract, [activeCandidate, exactRead], text)).toBe(true);
+  });
+
+  it('fails closed on the wrong authoring app and malformed document-read evidence', () => {
+    const text = '请分析当前 WPS 活动窗口里的演示文稿。';
+    const contract = buildActionContract(text);
+    const verification = {
+      status: 'verified' as const,
+      strategy: 'terminal_receipt' as const,
+      reason: 'test receipt',
+    };
+    const wpsWindow = {
+      name: 'desktop_active_window',
+      arguments: {},
+      result: JSON.stringify({ ok: true, processName: 'wps.exe', title: '季度复盘.pptx - WPS Office' }),
+      terminalVerification: verification,
+    };
+    const wordWindowWithMisleadingTitle = {
+      ...wpsWindow,
+      result: JSON.stringify({
+        ok: true,
+        processName: 'WINWORD.EXE',
+        title: 'WPS 使用说明.docx - Microsoft Word',
+      }),
+    };
+    const validRead = {
+      name: 'extract_document_text',
+      arguments: { filePath: '~/Desktop/季度复盘.pptx' },
+      result: '第一页：季度目标与实际完成情况。',
+      terminalVerification: verification,
+    };
+
+    expect(hasCoreActionEvidence(contract, [wordWindowWithMisleadingTitle, validRead], text)).toBe(false);
+    expect(hasCoreActionEvidence(contract, [wpsWindow, {
+      ...validRead,
+      arguments: { password: 'does-not-identify-a-file' },
+    }], text)).toBe(false);
+    expect(hasCoreActionEvidence(contract, [wpsWindow, {
+      ...validRead,
+      result: JSON.stringify({ ok: false, status: 'not_found', error: 'missing' }),
+    }], text)).toBe(false);
+    expect(hasCoreActionEvidence(contract, [wpsWindow, {
+      ...validRead,
+      result: JSON.stringify({ ok: true, content: '' }),
+    }], text)).toBe(false);
+    expect(hasCoreActionEvidence(contract, [wpsWindow, validRead], text)).toBe(true);
+
+    const wpsWindowWithKnownPath = {
+      ...wpsWindow,
+      result: JSON.stringify({
+        ok: true,
+        processName: 'wps.exe',
+        currentDocument: {
+          name: '季度复盘.pptx',
+          path: 'C:\\Users\\Tester\\Desktop\\季度复盘.pptx',
+          pathStatus: 'resolved',
+        },
+      }),
+    };
+    expect(hasCoreActionEvidence(contract, [wpsWindowWithKnownPath, validRead], text)).toBe(false);
+    expect(hasCoreActionEvidence(contract, [wpsWindowWithKnownPath, {
+      ...validRead,
+      arguments: { filePath: 'c:/users/tester/desktop/季度复盘.pptx' },
+    }], text)).toBe(true);
+  });
+
+  it('threads TaskCapsule current and rejected targets into current-document completion evidence', () => {
+    const text = '\u8bf7\u5206\u6790\u5f53\u524d WPS \u6d3b\u52a8\u7a97\u53e3\u91cc\u7684\u6f14\u793a\u6587\u7a3f\u3002';
+    const contract = buildActionContract(text);
+    const currentPath = 'C:\\Users\\Tester\\Desktop\\Quarterly-Review.pptx';
+    const rejectedPath = 'D:\\Archive\\Quarterly-Review.pptx';
+    const sameBasenameWrongDirectory = 'E:\\Other\\Quarterly-Review.pptx';
+    const verification = {
+      status: 'verified' as const,
+      strategy: 'terminal_receipt' as const,
+      reason: 'exact semantic document read',
+    };
+    const wpsWindow = {
+      name: 'desktop_active_window',
+      arguments: {},
+      result: JSON.stringify({
+        ok: true,
+        processName: 'wps.exe',
+        title: 'Quarterly-Review.pptx - WPS Office',
+      }),
+      terminalVerification: verification,
+    };
+    const read = (path: string, id: string) => ({
+      id,
+      name: 'extract_document_text',
+      arguments: { filePath: path },
+      result: JSON.stringify({ ok: true, content: `verified content from ${path}` }),
+      terminalVerification: verification,
+    });
+    const capsule = {
+      schemaVersion: 1,
+      taskId: 'task-wps-corrected-target',
+      revision: 4,
+      status: 'executing',
+      unfinished: true,
+      goal: text,
+      currentInstruction: text,
+      target: {
+        label: 'Quarterly-Review.pptx',
+        application: 'WPS',
+        window: 'Quarterly-Review.pptx - WPS Office',
+        object: 'Quarterly-Review.pptx',
+        path: currentPath,
+        location: 'Desktop',
+        status: 'confirmed',
+        source: 'tool_receipt',
+      },
+      paths: [rejectedPath, currentPath],
+      allowedSearchRoots: ['C:\\Users\\Tester\\Desktop'],
+      analysisReady: true,
+      nextAction: 'analyze',
+      latestCorrection: {
+        text: `Use ${currentPath}, not ${rejectedPath}.`,
+        previousTarget: rejectedPath,
+        replacementTarget: currentPath,
+        observedAt: '2026-08-27T00:00:00.000Z',
+      },
+      completedSteps: [],
+      blocker: '',
+      toolSummaries: [],
+      rejectedTargets: [{
+        identity: rejectedPath,
+        reason: 'Rejected by the user correction.',
+        observedAt: '2026-08-27T00:00:00.000Z',
+      }],
+      doNotRetry: [],
+      updatedAt: '2026-08-27T00:00:01.000Z',
+    } satisfies TaskCapsuleV1;
+    const currentRead = read('c:/users/tester/desktop/Quarterly-Review.pptx', 'current-read');
+    const lateRejectedRead = read(rejectedPath, 'late-rejected-read');
+    const wrongDirectoryRead = read(sameBasenameWrongDirectory, 'same-basename-wrong-directory');
+
+    // Legacy callers without a server-owned capsule retain the old active-window behavior.
+    expect(hasCoreActionEvidence(contract, [wpsWindow, lateRejectedRead], text)).toBe(true);
+    expect(hasCoreActionEvidence(contract, [wpsWindow, lateRejectedRead], text, capsule)).toBe(false);
+    expect(hasCoreActionEvidence(contract, [wpsWindow, wrongDirectoryRead], text, capsule)).toBe(false);
+    expect(hasCoreActionEvidence(contract, [wpsWindow, currentRead], text, capsule)).toBe(true);
+    // A rejected receipt arriving after the accepted read is historical only.
+    expect(hasCoreActionEvidence(
+      contract,
+      [wpsWindow, currentRead, lateRejectedRead],
+      text,
+      capsule,
+    )).toBe(true);
+    expect(taskCompletionFromReceipts(
+      text,
+      recordsToTaskReceipts([wpsWindow, lateRejectedRead]),
+      capsule,
+    ).complete).toBe(false);
+    expect(taskCompletionFromReceipts(
+      text,
+      recordsToTaskReceipts([wpsWindow, currentRead, lateRejectedRead]),
+      capsule,
+    ).complete).toBe(true);
+  });
+
+  it('completes an exact read-only file inspection from verified same-path semantic content', () => {
+    const exactPath = 'C:\\Users\\Tester\\Documents\\s8-marker.txt';
+    const text = `Inspect the exact marker inside ${exactPath} and report its contents.`;
+    const contract = buildActionContract(text);
+    const verifiedRead = {
+      name: 'read_file',
+      arguments: { path: 'c:/users/tester/documents/s8-marker.txt' },
+      result: 'S8_ACTION_CONTRACT_VERIFIED',
+      receipt: {
+        kind: 'text_readback_metadata',
+        byteLength: 27,
+        contentDigest: 'deterministic-test-digest',
+      },
+      terminalVerification: {
+        status: 'verified' as const,
+        strategy: 'terminal_receipt' as const,
+        reason: 'Exact file contents returned.',
+      },
+    };
+
+    expect(contract.kind).toBe('artifact_work');
+    expect(hasCoreActionEvidence(contract, [verifiedRead], text)).toBe(true);
+    expect(hasCoreActionEvidence(contract, [{
+      ...verifiedRead,
+      terminalVerification: undefined,
+    }], text)).toBe(false);
+  });
+
+  it('does not complete a file mutation from its preparatory read receipt', () => {
+    const exactPath = 'C:\\Users\\Tester\\Documents\\s8-marker.txt';
+    const text = `Modify ${exactPath} to contain a new marker; inspect the current contents first.`;
+    const contract = buildActionContract(text);
+    const preparatoryRead = {
+      name: 'read_file',
+      arguments: { path: exactPath },
+      result: 'old marker',
+      terminalVerification: {
+        status: 'verified' as const,
+        strategy: 'terminal_receipt' as const,
+        reason: 'Source contents returned.',
+      },
+    };
+
+    expect(contract.kind).toBe('artifact_work');
+    expect(hasCoreActionEvidence(contract, [preparatoryRead], text)).toBe(false);
+  });
+
+  it('does not accept a model-selected file from a vague search request as the anchored target', () => {
+    const text = 'Find the marker file somewhere under C:\\Users\\Tester\\Documents, read it, and report its contents.';
+    const contract = buildActionContract(text);
+    const unanchoredRead = {
+      name: 'read_file',
+      arguments: { path: 'C:\\Users\\Tester\\Documents\\guessed-marker.txt' },
+      result: 'guessed marker',
+      terminalVerification: {
+        status: 'verified' as const,
+        strategy: 'terminal_receipt' as const,
+        reason: 'A file was read, but it was not user-anchored.',
+      },
+    };
+
+    expect(contract.kind).toBe('artifact_work');
+    expect(hasCoreActionEvidence(contract, [unanchoredRead], text)).toBe(false);
   });
 
   it('requires authenticated result evidence for login-then-search browser work', () => {

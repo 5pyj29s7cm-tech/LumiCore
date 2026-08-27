@@ -19,6 +19,8 @@ function startPayload(voiceId = 'voice-a'): VoiceStartPayload {
     transcriptionOnly: false,
     domain: 'personal',
     sessionId: 'session-current',
+    audioInputKind: 'physical_microphone',
+    captureSessionId: 'session-current',
   };
 }
 
@@ -39,7 +41,12 @@ describe('live voice selection', () => {
     const transition = prepareVoiceSwitch(startPayload(), ' voice-b ');
 
     expect(transition).toEqual({
-      nextPayload: expect.objectContaining({ voiceId: 'voice-b', sessionId: 'session-current' }),
+      nextPayload: expect.objectContaining({
+        voiceId: 'voice-b',
+        sessionId: 'session-current',
+        audioInputKind: 'physical_microphone',
+        captureSessionId: 'session-current',
+      }),
       event: { voiceId: 'voice-b', sessionId: 'session-current' },
     });
     expect(prepareVoiceSwitch(transition!.nextPayload, 'voice-b')?.event).toBeNull();

@@ -12,6 +12,11 @@ import {
 import type { ExecutionGuardRecoveryFinalization } from '../server/cognition/execution_guard_recovery';
 import type { ToolExecutionRecord } from '../server/tools/types';
 import { sanitizeToolRecordsForPersistence } from '../server/cognition/user_output_protection';
+import {
+  clearAllPendingConfirmationsForTests,
+  formatPendingConfirmationRequest,
+  recordPendingConfirmation,
+} from '../server/tools/pending_confirmation';
 
 function record(patch: Partial<ToolExecutionRecord> = {}): ToolExecutionRecord {
   return {
@@ -362,6 +367,55 @@ describe('execution guard recovery', () => {
     expect(tasklist.text).toContain('chrome.exe');
     expect(tasklist.text).not.toMatch(/PID Session Name|100,000 K/iu);
     expect(String(tasklist.text).length).toBeLessThan(300);
+  });
+
+  it('preserves only the exact safe pending-confirmation envelope with path fields', () => {
+    clearAllPendingConfirmationsForTests();
+    try {
+      const pending = recordPendingConfirmation(
+        'trusted-confirmation-output',
+        'web_login',
+        {
+          path: 'C:\\isolated\\lumi-task-regression\\account.json',
+          username: 'owner',
+          password: 'must-never-leak',
+          clientSecret: 'also-must-never-leak',
+        },
+        'chat',
+        { actionIntent: 'Log in with the isolated account' },
+      );
+      const confirmationRequest = formatPendingConfirmationRequest(pending);
+      expect(confirmationRequest).toContain('C:\\isolated\\lumi-task-regression\\account.json');
+      expect(confirmationRequest).toContain('[redacted]');
+      expect(confirmationRequest).not.toContain('must-never-leak');
+      expect(confirmationRequest).not.toContain('also-must-never-leak');
+
+      const trusted = sanitizeExecutionResponseForDelivery({
+        text: confirmationRequest,
+        finalized: true,
+        blocked: false,
+        reason: 'waiting_confirmation',
+      }, {
+        task: 'Log in with the isolated account',
+        trustedConfirmationRequestText: confirmationRequest,
+      });
+      expect(trusted.text).toBe(confirmationRequest);
+      expect(trusted.text).toContain('lumi-task-regression');
+      expect(trusted.reason).toBe('waiting_confirmation');
+      expect(JSON.stringify(trusted)).not.toContain('must-never-leak');
+      expect(JSON.stringify(trusted)).not.toContain('also-must-never-leak');
+
+      const untrusted = sanitizeExecutionResponseForDelivery({
+        text: confirmationRequest,
+        finalized: true,
+        blocked: false,
+        reason: 'waiting_confirmation',
+      }, { task: 'Log in with the isolated account' });
+      expect(untrusted.text).not.toBe(confirmationRequest);
+      expect(untrusted.text).not.toContain('C:\\isolated\\account.json');
+    } finally {
+      clearAllPendingConfirmationsForTests();
+    }
   });
 
   it('persists verified receipt facts without storing screenshot or oversized raw payloads', () => {
