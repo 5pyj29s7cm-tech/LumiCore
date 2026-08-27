@@ -34,7 +34,7 @@ const TRUSTED_EXPLICIT_LOCAL_WRITE_TOOL_RE =
   /^(write_file|create_(?:docx|pdf|ppt|pptx|xlsx|txt|markdown|md)|transcribe_audio_to_text_file|cad_generate_dxf|cad_prepare_autocad_operations|document_|export_|save_)/i;
 // i18n-allow: Reviewed multilingual confirmation-boundary input recognition; not user-visible copy.
 const EXPLICIT_CONFIRMATION_BOUNDARY_PATTERN =
-  /(?:不要|不得|禁止|别).{0,20}(?:代替|替代|自行|自动|自己).{0,12}(?:用户|我)?.{0,8}(?:确认|批准|同意)|(?:等待|等我|等用户|需要|要求|必须|先).{0,20}(?:用户|我|人工).{0,8}(?:确认|批准|同意)|(?:到|在).{0,12}(?:确认|批准).{0,12}(?:边界|之前|前).{0,12}(?:立即|先)?.{0,8}(?:停止|停下|等待)|(?:未经|没有).{0,8}(?:用户|我).{0,8}(?:确认|批准|同意).{0,20}(?:不得|不要|禁止|别|不应|不能).{0,12}(?:执行|写入|创建|生成|继续)|\b(?:stop|wait|pause)\b.{0,48}\b(?:confirmation|approval)\b|\b(?:do\s+not|don't|never)\b.{0,48}\b(?:self[-\s]?confirm|auto[-\s]?confirm|confirm(?:ation)?\s+(?:for|on\s+behalf\s+of)\s+(?:the\s+)?user)\b/iu;
+  /(?:不要|不得|禁止|别).{0,20}(?:代替|替代|自行|自动|自己).{0,12}(?:用户|我)?.{0,8}(?:确认|批准|同意)|(?:等待|等我|等用户|需要|要求|必须|先).{0,20}(?:用户|我|人工).{0,8}(?:确认|批准|同意)|(?:到|在).{0,12}(?:确认|批准).{0,12}(?:边界|之前|前).{0,12}(?:立即|先)?.{0,8}(?:停止|停下|等待)|(?:未经|没有).{0,8}(?:用户|我).{0,8}(?:确认|批准|同意).{0,20}(?:不得|不要|禁止|别|不应|不能).{0,12}(?:执行|写入|创建|生成|继续)|\b(?:stop|wait|pause)\b.{0,24}\b(?:at|before|until|pending)\b.{0,24}\b(?:confirmation|approval)\b|\b(?:do\s+not|don't|never)\b.{0,48}\b(?:self[-\s]?confirm|auto[-\s]?confirm|confirm(?:ation)?\s+(?:for|on\s+behalf\s+of)\s+(?:the\s+)?user)\b/iu;
 
 const LOW_RISK_DESKTOP_COMMAND_PATTERN =
   /^(?:cmd(?:\.exe)?\s+\/c\s+start\b|start\s+|explorer(?:\.exe)?\b|rundll32\b|powershell(?:\.exe)?\s+.*\b(?:start-process|invoke-item)\b|pwsh(?:\.exe)?\s+.*\b(?:start-process|invoke-item)\b|acad(?:\.exe)?\b|".+?\\(?:acad|wps|weixin|wechat|winword|excel|powerpnt|notepad)\.exe")/i;
@@ -137,7 +137,7 @@ export function evaluateActionConstitution(
 
   if (
     domain === 'local_write'
-    && EXPLICIT_CONFIRMATION_BOUNDARY_PATTERN.test(String(context?.actionIntent || '').trim())
+    && hasExplicitConfirmationBoundary(context)
   ) {
     return confirm(
       domain,
@@ -230,6 +230,7 @@ export function canAutoApproveAction(toolName: string, args: Record<string, any>
     || toolName === 'self_improvement_queue'
     || toolName === 'self_improvement_activate'
   ) return false;
+  if (hasExplicitConfirmationBoundary(context)) return false;
   const domain = classifyAction(toolName, args);
   const risk = classifyActionRisk(toolName, args, context);
   if (risk === 'high') return false;
@@ -239,6 +240,10 @@ export function canAutoApproveAction(toolName: string, args: Record<string, any>
     && (isSocialContentCommit(actionText, toolName) || GENERIC_EXTERNAL_COMMIT_PATTERN.test(actionText))
   ) return false;
   return !['system', 'destructive'].includes(domain);
+}
+
+function hasExplicitConfirmationBoundary(context?: Pick<ToolContext, 'actionIntent'>): boolean {
+  return EXPLICIT_CONFIRMATION_BOUNDARY_PATTERN.test(String(context?.actionIntent || '').trim());
 }
 
 export function classifyAction(

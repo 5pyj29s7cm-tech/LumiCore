@@ -141,6 +141,7 @@ describe('Action Constitution', () => {
     });
     expect(decision.level).toBe('confirm');
     expect(decision.requiresUserConfirmation).toBe(true);
+    expect(canAutoApproveAction('write_file', { path: 'notes.txt' }, { actionIntent })).toBe(false);
 
     const ordinaryDecision = evaluateActionConstitution('write_file', {
       path: 'ordinary-notes.txt',
@@ -152,6 +153,12 @@ describe('Action Constitution', () => {
     });
     expect(ordinaryDecision.level).toBe('safe');
     expect(ordinaryDecision.requiresUserConfirmation).toBe(false);
+    expect(canAutoApproveAction('write_file', { path: 'ordinary-notes.txt' }, {
+      actionIntent: '先确认源文件存在，再生成报告。',
+    })).toBe(true);
+    expect(canAutoApproveAction('write_file', { path: 'ordinary-notes.txt' }, {
+      actionIntent: 'Write the file now. Stop when confirmation is required.',
+    })).toBe(true);
 
     let confirmationRequests = 0;
     let executed = false;
@@ -174,9 +181,9 @@ describe('Action Constitution', () => {
       allowLocalFileWrites: true,
       localWriteIntentReason: 'The current turn requested a local text-file deliverable.',
       actionIntent,
-      requestConfirmation: async () => {
+      requestConfirmation: async (toolName, args) => {
         confirmationRequests += 1;
-        return false;
+        return canAutoApproveAction(toolName, args, { actionIntent });
       },
     });
 
