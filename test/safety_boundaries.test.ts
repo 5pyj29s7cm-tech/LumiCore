@@ -132,6 +132,59 @@ describe('Action Constitution', () => {
     expect(decision.requiresUserConfirmation).toBe(true);
   });
 
+  it('does not auto-approve a local deliverable when the user explicitly reserves confirmation', async () => {
+    const actionIntent = '创建文件，但不要代替用户确认；到确认边界立即停止。';
+    const decision = evaluateActionConstitution('write_file', { path: 'notes.txt' }, 'confirm', {
+      allowLocalFileWrites: true,
+      localWriteIntentReason: 'The current turn requested a local text-file deliverable.',
+      actionIntent,
+    });
+    expect(decision.level).toBe('confirm');
+    expect(decision.requiresUserConfirmation).toBe(true);
+
+    const ordinaryDecision = evaluateActionConstitution('write_file', {
+      path: 'ordinary-notes.txt',
+      content: '交付前必须确认字段完整。',
+    }, 'confirm', {
+      allowLocalFileWrites: true,
+      localWriteIntentReason: 'The current turn requested a local text-file deliverable.',
+      actionIntent: '先确认源文件存在，再生成报告。',
+    });
+    expect(ordinaryDecision.level).toBe('safe');
+    expect(ordinaryDecision.requiresUserConfirmation).toBe(false);
+
+    let confirmationRequests = 0;
+    let executed = false;
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'write_file',
+      description: 'Write a file',
+      parameters: {},
+      permission: 'user',
+      securityLevel: 'confirm',
+      handler: async () => {
+        executed = true;
+        return 'wrote';
+      },
+    });
+    const result = await registry.execute('write_file', { path: 'notes.txt' }, {
+      source: 'chat',
+      userId: 'confirmation-owner',
+      authenticated: true,
+      allowLocalFileWrites: true,
+      localWriteIntentReason: 'The current turn requested a local text-file deliverable.',
+      actionIntent,
+      requestConfirmation: async () => {
+        confirmationRequests += 1;
+        return false;
+      },
+    });
+
+    expect(result).toContain('requires user confirmation');
+    expect(confirmationRequests).toBe(1);
+    expect(executed).toBe(false);
+  });
+
   it('forbids destructive generic commands', () => {
     const decision = evaluateActionConstitution('desktop_run_command', { command: 'rm -rf C:\\important' }, 'confirm');
     expect(decision.level).toBe('forbidden');
