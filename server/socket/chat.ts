@@ -856,10 +856,18 @@ export function registerChatHandler(
     const selectedConversation = persistedRequestConversation || (requestedConversationId
       ? getConversationForScope(requestedConversationId, uid, resolvedDomain, resolvedOrgId)
       : getOrCreateActiveConversation(uid, conversationAgentId, resolvedDomain, resolvedOrgId));
+    const explicitlyBoundConversation = Boolean(
+      requestedConversationId
+      && selectedConversation?.id === requestedConversationId,
+    );
     if (
       !selectedConversation
       || selectedConversation.agentId !== conversationAgentId
-      || (selectedConversation.status !== 'active' && !persistedRequestTurn)
+      || (
+        selectedConversation.status !== 'active'
+        && !persistedRequestTurn
+        && !explicitlyBoundConversation
+      )
     ) {
       try { ack?.({ ok: false, requestId, error: 'Conversation is unavailable for this user, agent, or workspace' }); } catch {}
       return;

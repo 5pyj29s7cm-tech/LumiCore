@@ -47,7 +47,7 @@ import {
   listBackgroundTasks,
   resetBackgroundTasksForTest,
 } from '../server/agents/background_tasks';
-import { getOrCreateActiveConversation } from '../server/conversation/manager';
+import { startIsolatedConversation } from '../server/conversation/manager';
 import {
   handleDesktopRelayResult,
 } from '../server/socket/desktop_relay';
@@ -110,7 +110,10 @@ describe('chat foreground desktop observation delegation gate', () => {
       })),
     ];
     writeDB(db);
-    conversationId = getOrCreateActiveConversation(userId, 'lumi', 'personal', '').id;
+    // Formal/native acceptance conversations are deliberately closed so they
+    // cannot replace the user's active chat. An exact conversationId must
+    // still be able to carry the bound Socket turn end to end.
+    conversationId = startIsolatedConversation(userId, 'lumi', 'personal', '').id;
 
     mocks.runWithTools.mockImplementation(async (...args: any[]) => {
       const registry = args[1];
