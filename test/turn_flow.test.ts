@@ -55,6 +55,8 @@ describe('Lumi turn flow', () => {
     '你好 Lumi，我正在和你进行现场验收。请用两句话说明你是谁、能做什么，并明确今天只按我的指令行动。不要调用工具。',
     '接着刚才的验收，请记住验收代号是晨星716，只回复已记住，不执行工具。',
     '最终同步验收：只回复“修复复测已完成”，不调用工具。',
+    '这是虚构的上下文验收，不需要任何工具。请记住杯子代号 cup-123，只简短确认已经记住。',
+    '继续保持不调用工具。刚才杯子的代号是什么？只回复代号。',
   ])('keeps the field no-tool dialogue outside completion evidence: %s', async (text) => {
     const { initDatabase } = await import('../db_layer');
     const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');

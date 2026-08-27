@@ -56,6 +56,9 @@ describe('Lumi client action routing', () => {
       signals: { explicitNoToolInstruction: true },
     });
     expect(hasExplicitNoToolInstruction('不用问我，直接调用工具完成')).toBe(false);
+    expect(hasExplicitNoToolInstruction('这是虚构的上下文验收，不需要任何工具。请记住杯子代号。')).toBe(true);
+    expect(hasExplicitNoToolInstruction('继续保持不调用工具。刚才杯子的代号是什么？')).toBe(true);
+    expect(hasExplicitNoToolInstruction('不需要任何工具说明，直接调用工具完成')).toBe(false);
   });
 
   it('treats do-not-execute-new-actions as a hard current-turn tool veto', () => {

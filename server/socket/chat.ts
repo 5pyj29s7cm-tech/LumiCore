@@ -100,7 +100,6 @@ import {
   extractTopics,
   trackTopic,
   getTopicContext,
-  getActiveConversation,
   getConversationForScope,
   getOrCreateActiveConversation,
   getConversationActionStatus,
@@ -1156,9 +1155,13 @@ export function registerChatHandler(
       && Number.isFinite(data.controlTargetRevision)
       ? Math.max(0, Math.trunc(data.controlTargetRevision))
       : undefined;
-    const activeConversationForStatus = existingSession ? getActiveConversation(
+    // The serial queue key already includes the explicitly selected
+    // conversation id. Resolve status against that exact conversation; using
+    // the user's globally active chat here leaks isolated/native E2E sidecars
+    // into an unrelated personal transcript.
+    const activeConversationForStatus = existingSession ? getConversationForScope(
+      selectedConversationId,
       uid,
-      conversationAgentId,
       resolvedDomain,
       resolvedOrgId,
     ) : null;
@@ -1407,12 +1410,7 @@ export function registerChatHandler(
         }, errorContext: 'Stale status control terminal' });
         return;
       }
-      const activeConversation = activeConversationForStatus || getActiveConversation(
-        uid,
-        conversationAgentId,
-        resolvedDomain,
-        resolvedOrgId,
-      );
+      const activeConversation = activeConversationForStatus || selectedConversation;
       if (activeConversation) {
         addMessageIdempotent({
           userId: uid,

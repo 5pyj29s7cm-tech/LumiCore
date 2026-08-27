@@ -329,10 +329,15 @@ export function isPriorTurnToolReceiptQuestion(text: string): boolean {
   const value = currentTurnText(String(text || '')).replace(/\s+/gu, ' ').trim();
   if (!value) return false;
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-  const positiveToolText = value.replace(
-    /(?:不要|别|无需|不用|禁止|请勿|勿)\s*(?:再|继续|再次)?\s*(?:调用|使用|执行|启动)?\s*(?:(?:任何|这些|外部|新(?:的)?|其他|其它)\s*){0,3}(?:工具|插件|技能|脚本)/giu,
-    ' ',
-  );
+  const positiveToolText = value
+    .replace(
+      /(?:不要|别|无需|不需要|不用|禁止|请勿|勿|不)\s*(?:再|继续|再次)?\s*(?:调用|使用|执行|启动)?\s*(?:(?:任何|这些|外部|新(?:的)?|其他|其它)\s*){0,3}(?:工具|插件|技能|脚本)(?!(?:说明|介绍|解释|清单|列表|文档))/giu, // i18n-allow: Chinese negated tool-instruction recognition; not user-visible copy.
+      ' ',
+    )
+    .replace(
+      /\b(?:do\s+not|don't|without)\s+(?:call(?:ing)?|use|using|run(?:ning)?|execute|executing)?\s*(?:any\s+)?(?:tools?|plugins?|skills?|scripts?)\b/giu,
+      ' ',
+    );
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   const priorTurn = /(?:上一轮|上一回合|上一次|上次|刚才|刚刚|前一轮)|\b(?:previous|prior|last)\s+(?:turn|request|message)\b|\bjust\b/iu.test(value);
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.

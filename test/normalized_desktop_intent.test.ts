@@ -410,6 +410,21 @@ describe('normalized desktop intent priority', () => {
     });
   });
 
+  it('does not turn a negated tool mention in ordinary context recall into a receipt query', () => {
+    const text = '继续保持不调用工具。刚才杯子的代号是什么？只回复代号。';
+    expect(isPriorTurnToolReceiptQuestion(text)).toBe(false);
+    expect(normalizeActionIntent(text)).toMatchObject({
+      kind: 'none',
+      relation: 'new',
+    });
+    expect(isPriorTurnToolReceiptQuestion(
+      'Do not call any tools. What was the cup code from the previous turn?',
+    )).toBe(false);
+    expect(isPriorTurnToolReceiptQuestion(
+      'Was no tool receipt recorded in the previous turn?',
+    )).toBe(true);
+  });
+
   it.each([
     ['你能不能使用桌面工具打开记事本？现在打开它。', '记事本'],
     ['Can you use desktop tools to open Notepad? Open it now.', 'Notepad'],
