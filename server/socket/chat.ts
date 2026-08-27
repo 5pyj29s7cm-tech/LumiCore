@@ -2056,6 +2056,7 @@ export function registerChatHandler(
             cognitiveIntent: responseIntent,
             llmWasCalled: false,
             requestId,
+            skipActionContinuation: true,
           }),
           publishAfter: () => {
             emitConversationUpdated({

@@ -615,6 +615,76 @@ describe('conversation action continuation state', () => {
     });
   });
 
+  it('keeps side-channel status transcript writes read-only for the durable task row', () => {
+    const userId = `conversation-status-read-only-${Date.now()}-${Math.random()}`;
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    const instruction = 'Create a local report and wait for confirmation.';
+    const taskRequestId = 'status-read-only-task-request';
+    const userMessageId = persistActionTurn({
+      conversationId: conversation.id,
+      userId,
+      userText: instruction,
+      requestId: taskRequestId,
+    });
+    const prepared = prepareConversationActionExecution({
+      conversationId: conversation.id,
+      userId,
+      userText: instruction,
+      requestId: taskRequestId,
+      userMessageId,
+      toolPolicy: {
+        allowedTools: ['write_file'],
+        requireConfirmation: ['write_file'],
+        forbiddenTools: [],
+        maxIterations: 8,
+      },
+    });
+    expect(prepared.state?.taskId).toBeTruthy();
+    setConversationActionExecutionStatus(
+      conversation.id,
+      userId,
+      'waiting_confirmation',
+      { requestId: taskRequestId, assistantState: 'Waiting for confirmation.' },
+    );
+
+    const before = structuredClone(
+      (readDB().conversationActionTasks || []).find((row: any) => row.id === prepared.state?.taskId),
+    );
+    expect(before).toBeDefined();
+
+    const statusRequestId = 'status-read-only-query-request';
+    addMessageIdempotent({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'user',
+      content: 'Is this task complete? Report status only.',
+      source: 'chat_task_status',
+      channel: 'chat',
+      cognitiveIntent: 'task_status',
+      requestId: statusRequestId,
+      skipActionContinuation: true,
+      timestamp: '2026-08-28T03:10:00.000Z',
+    });
+    addMessageIdempotent({
+      userId,
+      agentId: 'lumi',
+      conversationId: conversation.id,
+      role: 'assistant',
+      content: 'The task is waiting for confirmation.',
+      source: 'chat_task_status',
+      channel: 'chat',
+      cognitiveIntent: 'task_status',
+      requestId: statusRequestId,
+      skipActionContinuation: true,
+      timestamp: '2026-08-28T03:10:01.000Z',
+    });
+
+    const after = (readDB().conversationActionTasks || [])
+      .find((row: any) => row.id === prepared.state?.taskId);
+    expect(after).toEqual(before);
+  });
+
   it('rejects a different persisted turn while another request owns the action pointer', () => {
     const userId = `conversation-action-busy-${Date.now()}-${Math.random()}`;
     const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');

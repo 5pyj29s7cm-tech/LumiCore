@@ -4063,7 +4063,7 @@ export function addMessage(msg: {
         );
       }
 
-      if (conv.actionContinuationState) {
+      if (conv.actionContinuationState && !msg.skipActionContinuation) {
         syncConversationActionTaskLedger(db, {
           conversation: conv,
           state: conv.actionContinuationState,

@@ -360,8 +360,8 @@ describe('TaskCapsuleV1', () => {
   });
 
   it('keeps the exact absolute replacement path when a correction also asks to continue', () => {
-    const oldPath = String.raw`C:\Users\Administrator\AppData\Local\Temp\lumi-task-regression-debug\artifacts\s6-missing-0123456789ab.txt`;
-    const newPath = String.raw`C:\Users\Administrator\AppData\Local\Temp\lumi-task-regression-debug\artifacts\s6-correct-0123456789ab.txt`;
+    const oldPath = String.raw`C:\Users\ExampleUser\AppData\Local\Temp\lumi-task-regression-fixture\artifacts\s6-missing-0123456789ab.txt`;
+    const newPath = String.raw`C:\Users\ExampleUser\AppData\Local\Temp\lumi-task-regression-fixture\artifacts\s6-correct-0123456789ab.txt`;
     const goal = `[LUMI_REGRESSION:S6] 请在桌面查找并读取文件 ${oldPath}，如果找不到就明确告诉我，等我纠正后继续这个任务。`;
     const correction = `纠正一下：不是 ${oldPath}，而是 ${newPath}。请继续刚才的同一个任务。[LUMI_REGRESSION:S6:TEXT]`;
     const initial = buildTaskCapsuleV1({
