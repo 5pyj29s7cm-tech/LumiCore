@@ -253,7 +253,7 @@ export function normalizeFormalNativeClientEvidence(value) {
 
 export function isValidFormalNativeClientEvidence(value) {
   const identity = normalizeFormalNativeClientEvidence(value);
-  const executablePathValid = path.isAbsolute(identity.executablePath)
+  const executablePathValid = path.posix.isAbsolute(identity.executablePath)
     || path.win32.isAbsolute(identity.executablePath);
   return identity.schemaVersion === 1
     && identity.clientKind === 'tauri'

@@ -4,6 +4,10 @@ import path from 'node:path';
 const SHA256_RE = /^[a-f0-9]{64}$/iu;
 const BUILD_ID_RE = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/iu;
 
+function isAbsoluteExecutablePath(value) {
+  return path.posix.isAbsolute(value) || path.win32.isAbsolute(value);
+}
+
 function normalizedStartMs(value) {
   const milliseconds = typeof value === 'number' ? value : Date.parse(String(value || ''));
   if (!Number.isSafeInteger(milliseconds) || milliseconds <= 0) return 0;
@@ -59,7 +63,7 @@ function validateCandidate(device, expected, options) {
     || identity.buildId !== expected.buildId) {
     return { ok: false, code: 'native_device_process_identity_mismatch' };
   }
-  if (!path.isAbsolute(identity.executablePath)
+  if (!isAbsoluteExecutablePath(identity.executablePath)
     || identity.buildIdSemantics !== 'baseline_commit'
     || !SHA256_RE.test(identity.sourceFingerprint)
     || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(identity.appVersion)) {

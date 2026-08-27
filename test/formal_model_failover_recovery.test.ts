@@ -411,6 +411,14 @@ describe('formal real model failover recovery protocol', () => {
         eligibleAsNativeClientEvidence: false,
       },
     });
+    expect(validateAcceptanceHarnessIdentity({
+      ...observerIdentity(),
+      executablePath: '/opt/lumicore/formal-acceptance-observer',
+    }, BUILD_ID)).toMatchObject({ ok: true });
+    expect(validateAcceptanceHarnessIdentity({
+      ...observerIdentity(),
+      executablePath: 'relative/formal-acceptance-observer',
+    }, BUILD_ID)).toMatchObject({ ok: false });
     expect(validateAcceptanceHarnessIdentity(nativeIdentity(), BUILD_ID)).toMatchObject({
       ok: false,
       code: 'failover_observer_must_be_acceptance_harness',

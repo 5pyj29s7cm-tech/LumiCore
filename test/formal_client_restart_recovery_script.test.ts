@@ -429,6 +429,14 @@ describe('formal restart-recovery E2E protocol', () => {
     })).toBe(false);
     const valid = nativeClientEvidence(300, '2026-08-27T03:59:00.000Z');
     expect(isValidFormalNativeClientEvidence(valid)).toBe(true);
+    const posixValid = nativeClientEvidence(300, '2026-08-27T03:59:00.000Z', {
+      executablePath: '/Applications/LumiCore.app/Contents/MacOS/lumi-core',
+    });
+    expect(isValidFormalNativeClientEvidence(posixValid)).toBe(true);
+    expect(isValidFormalNativeClientEvidence({
+      ...valid,
+      executablePath: 'relative/lumi-core',
+    })).toBe(false);
     expect(isValidFormalNativeClientEvidence({
       ...valid,
       clientKind: 'local_acceptance_harness',

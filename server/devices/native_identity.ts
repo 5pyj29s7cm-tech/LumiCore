@@ -19,7 +19,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isAbsoluteExecutablePath(value: string): boolean {
-  return path.isAbsolute(value) || path.win32.isAbsolute(value);
+  return path.posix.isAbsolute(value) || path.win32.isAbsolute(value);
 }
 
 /**

@@ -81,6 +81,21 @@ describe('native client process identity', () => {
     });
   });
 
+  it('accepts Windows and POSIX absolute executable paths on every server OS', () => {
+    expect(normalizeNativeClientIdentity({
+      ...claim,
+      executablePath: 'C:\\Program Files\\LumiCore\\lumi-core.exe',
+    }, { nowMs })).not.toBeNull();
+    expect(normalizeNativeClientIdentity({
+      ...claim,
+      executablePath: '/Applications/LumiCore.app/Contents/MacOS/lumi-core',
+    }, { nowMs })).not.toBeNull();
+    expect(normalizeNativeClientIdentity({
+      ...claim,
+      executablePath: 'relative/lumi-core',
+    }, { nowMs })).toBeNull();
+  });
+
   it('derives one stable identity hash from both the wire claim and normalized registry identity', () => {
     const normalized = normalizeNativeClientIdentity(claim, { nowMs });
     const reorderedClaim = Object.fromEntries(Object.entries(claim).reverse());

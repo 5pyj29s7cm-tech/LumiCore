@@ -29,9 +29,8 @@ jobs:
         run: npm run lint
       - name: Run complete Vitest suite
         # Several security suites create isolated Git repositories and worktrees.
-        # Keep them serial on shared runners so Git subprocesses cannot contend
-        # with another Vitest worker for temporary repositories and worktrees.
-        run: npm test -- --maxWorkers=1 --reporter=json --outputFile=vitest-results.json
+        # Bound concurrency without serializing the entire 3,700+ test inventory.
+        run: npm test -- --maxWorkers=2 --reporter=json --outputFile=vitest-results.json
       - name: Enforce test inventory
         if: always()
         run: npm run test:inventory -- vitest-results.json

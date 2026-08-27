@@ -210,7 +210,7 @@ function normalizeObservedClientIdentity(value) {
     || !['tauri', 'local_acceptance_harness'].includes(String(value?.clientKind || ''))
     || !Number.isSafeInteger(Number(value?.pid)) || Number(value.pid) <= 0
     || !Number.isSafeInteger(startedAtUnixMs) || startedAtUnixMs < Date.UTC(2000, 0, 1)
-    || !path.isAbsolute(executablePath) && !path.win32.isAbsolute(executablePath)
+    || !path.posix.isAbsolute(executablePath) && !path.win32.isAbsolute(executablePath)
     || value?.binaryHashUnavailable !== false || !SHA256_RE.test(executableSha256)
     || !BUILD_ID_RE.test(buildId) || value?.buildIdSemantics !== 'baseline_commit'
     || !SHA256_RE.test(sourceFingerprint) || typeof value?.sourceDirty !== 'boolean'

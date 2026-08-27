@@ -69,6 +69,16 @@ describe('formal native client binding', () => {
     });
   });
 
+  it('accepts native executable paths from either client OS on every runner OS', () => {
+    expect(selectFormalNativeClientDevice([device()], expected)).toMatchObject({ ok: true });
+    expect(selectFormalNativeClientDevice([
+      device({ nativeClientIdentity: { executablePath: '/opt/lumicore/lumi-core' } }),
+    ], expected)).toMatchObject({ ok: true });
+    expect(selectFormalNativeClientDevice([
+      device({ nativeClientIdentity: { executablePath: 'relative/lumi-core' } }),
+    ], expected)).toMatchObject({ ok: false, code: 'native_device_identity_invalid' });
+  });
+
   it('never accepts the local acceptance harness as the product client', () => {
     const result = selectFormalNativeClientDevice([
       device({ nativeClientIdentity: { clientKind: 'local_acceptance_harness' } }),
