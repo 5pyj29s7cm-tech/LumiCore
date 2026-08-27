@@ -49,7 +49,7 @@ function Invoke-JsonRequest {
   }
   if ($null -ne $Body) {
     $params.ContentType = "application/json"
-    $params.Body = ($Body | ConvertTo-Json -Compress)
+    $params.Body = ($Body | ConvertTo-Json -Compress -Depth 4)
   }
   return Invoke-RestMethod @params
 }
@@ -58,6 +58,7 @@ function Invoke-DesktopBootstrap {
   param(
     [string]$BaseUrl,
     [string]$DataRoot,
+    [hashtable]$NativeClientIdentity,
     [int]$TimeoutSec = 15
   )
 
@@ -80,6 +81,7 @@ function Invoke-DesktopBootstrap {
       return Invoke-JsonRequest `
         -Uri "$BaseUrl/auth/bootstrap" `
         -Method "POST" `
+        -Body @{ nativeClientIdentity = $NativeClientIdentity } `
         -Headers @{ "X-Lumi-Desktop-Bootstrap" = $Proof } `
         -TimeoutSec $TimeoutSec
     } catch {
@@ -88,6 +90,49 @@ function Invoke-DesktopBootstrap {
     }
   }
   throw "Desktop bootstrap failed: $LastError"
+}
+
+function New-InstallerAcceptanceHarnessIdentity {
+  param([object]$RuntimeMeta)
+
+  $BuildId = [string]$RuntimeMeta.buildId
+  $SourceFingerprint = [string]$RuntimeMeta.sourceFingerprint
+  $AppVersion = [string]$RuntimeMeta.version
+  if ($BuildId -notmatch '^(?:[a-f0-9]{40}|[a-f0-9]{64})$') {
+    throw "Prepared runtime build id is invalid"
+  }
+  if ($SourceFingerprint -notmatch '^[a-f0-9]{64}$') {
+    throw "Prepared runtime source fingerprint is invalid"
+  }
+  if ($AppVersion -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
+    throw "Prepared runtime version is invalid"
+  }
+  if ($null -eq $RuntimeMeta.sourceDirty -or $RuntimeMeta.sourceDirty.GetType() -ne [bool]) {
+    throw "Prepared runtime source state is invalid"
+  }
+
+  $HarnessProcess = Get-Process -Id $PID
+  $ExecutablePath = [string]$HarnessProcess.Path
+  if ([string]::IsNullOrWhiteSpace($ExecutablePath) -or -not [System.IO.Path]::IsPathRooted($ExecutablePath)) {
+    throw "Installer acceptance harness executable path is unavailable"
+  }
+  $StartedAtUnixMs = [DateTimeOffset]::new($HarnessProcess.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds()
+  $ExecutableSha256 = (Get-FileHash -LiteralPath $ExecutablePath -Algorithm SHA256).Hash.ToLowerInvariant()
+
+  return [ordered]@{
+    schemaVersion = 1
+    clientKind = "local_acceptance_harness"
+    pid = $PID
+    startedAtUnixMs = $StartedAtUnixMs
+    executablePath = [System.IO.Path]::GetFullPath($ExecutablePath)
+    executableSha256 = $ExecutableSha256
+    binaryHashUnavailable = $false
+    buildId = $BuildId.ToLowerInvariant()
+    buildIdSemantics = "baseline_commit"
+    sourceFingerprint = $SourceFingerprint.ToLowerInvariant()
+    sourceDirty = [bool]$RuntimeMeta.sourceDirty
+    appVersion = $AppVersion
+  }
 }
 
 function Stop-InstalledBackend {
@@ -237,6 +282,7 @@ function Remove-InstallerShortcutResidue {
   }
 }
 
+$NativeClientIdentity = New-InstallerAcceptanceHarnessIdentity -RuntimeMeta $ExpectedRuntimeMeta
 $Stamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 $CodexRun = [System.IO.Path]::GetFullPath((Join-Path $ProjectRoot ".codex-run"))
 $RunRoot = [System.IO.Path]::GetFullPath((Join-Path $CodexRun "installer-first-run-$Stamp"))
@@ -365,7 +411,11 @@ try {
     throw "Installed Socket.IO handshake failed"
   }
 
-  $Bootstrap = Invoke-DesktopBootstrap -BaseUrl $BaseUrl -DataRoot $DataRoot -TimeoutSec 15
+  $Bootstrap = Invoke-DesktopBootstrap `
+    -BaseUrl $BaseUrl `
+    -DataRoot $DataRoot `
+    -NativeClientIdentity $NativeClientIdentity `
+    -TimeoutSec 15
   if (-not $Bootstrap.success -or [string]::IsNullOrWhiteSpace($Bootstrap.token)) {
     throw "Installed app local identity bootstrap failed"
   }
@@ -465,7 +515,11 @@ try {
     throw "Installed app did not restart with a clean database"
   }
 
-  $RestartBootstrap = Invoke-DesktopBootstrap -BaseUrl $BaseUrl -DataRoot $DataRoot -TimeoutSec 15
+  $RestartBootstrap = Invoke-DesktopBootstrap `
+    -BaseUrl $BaseUrl `
+    -DataRoot $DataRoot `
+    -NativeClientIdentity $NativeClientIdentity `
+    -TimeoutSec 15
   $RestartHeaders = @{ Authorization = "Bearer $($RestartBootstrap.token)" }
   $RestartMarketplace = Invoke-JsonRequest -Uri "$BaseUrl/marketplace/skills?lang=zh" -TimeoutSec 8
   if (-not [bool](@($RestartMarketplace | Where-Object { $_.id -eq $SkillId -and $_.installed }).Count)) {
