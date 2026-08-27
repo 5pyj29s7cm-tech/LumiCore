@@ -31,9 +31,10 @@ describe('desktop bootstrap acceptance harness identity', () => {
     expect(smokeScript).toContain('function New-InstallerAcceptanceHarnessIdentity');
     expect(smokeScript).toContain('clientKind = "local_acceptance_harness"');
     expect(smokeScript).toContain('$HarnessProcess = Get-Process -Id $PID');
-    expect(smokeScript).toContain(
-      'Get-FileHash -LiteralPath $ExecutablePath -Algorithm SHA256',
-    );
+    expect(smokeScript).toContain('function Get-Sha256File');
+    expect(smokeScript).toContain('[System.Security.Cryptography.SHA256]::Create()');
+    expect(smokeScript).toContain('[System.IO.FileShare]::ReadWrite');
+    expect(smokeScript).not.toContain('Get-FileHash');
     expect(smokeScript).toContain('-Body @{ nativeClientIdentity = $NativeClientIdentity }');
     expect(smokeScript.match(/-NativeClientIdentity \$NativeClientIdentity/g)).toHaveLength(2);
     expect(smokeScript).toContain('$SmokeStage = "prepare-native-client-identity"');

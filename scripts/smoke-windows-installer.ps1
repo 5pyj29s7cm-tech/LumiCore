@@ -92,6 +92,27 @@ function Invoke-DesktopBootstrap {
   throw "Desktop bootstrap failed: $LastError"
 }
 
+function Get-Sha256File {
+  param([string]$Path)
+
+  $Stream = [System.IO.File]::Open(
+    $Path,
+    [System.IO.FileMode]::Open,
+    [System.IO.FileAccess]::Read,
+    [System.IO.FileShare]::ReadWrite
+  )
+  try {
+    $Hasher = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      return ([System.BitConverter]::ToString($Hasher.ComputeHash($Stream))).Replace("-", "").ToLowerInvariant()
+    } finally {
+      $Hasher.Dispose()
+    }
+  } finally {
+    $Stream.Dispose()
+  }
+}
+
 function New-InstallerAcceptanceHarnessIdentity {
   param([object]$RuntimeMeta)
 
@@ -117,7 +138,7 @@ function New-InstallerAcceptanceHarnessIdentity {
     throw "Installer acceptance harness executable path is unavailable"
   }
   $StartedAtUnixMs = [DateTimeOffset]::new($HarnessProcess.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds()
-  $ExecutableSha256 = (Get-FileHash -LiteralPath $ExecutablePath -Algorithm SHA256).Hash.ToLowerInvariant()
+  $ExecutableSha256 = Get-Sha256File -Path $ExecutablePath
 
   return [ordered]@{
     schemaVersion = 1

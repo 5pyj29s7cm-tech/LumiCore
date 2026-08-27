@@ -63,7 +63,22 @@ jobs:
             throw "Expected exactly one NSIS installer, found $($installers.Count)"
           }
           $installer = $installers[0]
-          $digest = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $stream = [System.IO.File]::Open(
+            $installer.FullName,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::Read
+          )
+          try {
+            $hasher = [System.Security.Cryptography.SHA256]::Create()
+            try {
+              $digest = ([System.BitConverter]::ToString($hasher.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
+            } finally {
+              $hasher.Dispose()
+            }
+          } finally {
+            $stream.Dispose()
+          }
           "$digest  $($installer.Name)" | Set-Content -LiteralPath "$($installer.FullName).sha256" -Encoding ascii
           $signature = Get-AuthenticodeSignature -LiteralPath $installer.FullName
           [ordered]@{
