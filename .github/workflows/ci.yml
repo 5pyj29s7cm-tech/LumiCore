@@ -28,7 +28,10 @@ jobs:
       - name: Lint and type-check
         run: npm run lint
       - name: Run complete Vitest suite
-        run: npm test -- --reporter=json --outputFile=vitest-results.json
+        # Several security suites create isolated Git repositories and worktrees.
+        # Bound worker concurrency so shared runners do not turn process pressure
+        # into false 15s/120s timeout failures.
+        run: npm test -- --maxWorkers=2 --reporter=json --outputFile=vitest-results.json
       - name: Enforce test inventory
         if: always()
         run: npm run test:inventory -- vitest-results.json
