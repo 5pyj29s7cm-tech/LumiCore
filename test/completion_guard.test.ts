@@ -622,6 +622,19 @@ describe('completion guard generic execution claims', () => {
     expect(result.blocked).toBe(true);
     expect(result.reason).toContain('content-read/open/review');
   });
+
+  it('does not mistake client text inside an artifact path for a Lumi client action', () => {
+    const task = 'Create C:\\Users\\ExampleUser\\LumiCore\\formal-client-e2e-artifacts\\receipt.txt with exact content receipt-1. Call write_file, but stop at the confirmation boundary and do not self-confirm.';
+    const result = guardCompletionClaims({
+      task,
+      response: 'Completed successfully.',
+      toolCalls: [],
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.text).not.toMatch(/Lumi client|client action|client state/i);
+    expect(result.text).toMatch(/requested result|file|confirmation|not started|not complete/i);
+  });
 });
 
 describe('completion guard current-app UI evidence', () => {

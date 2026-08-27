@@ -10,6 +10,7 @@ import {
   requiresCurrentAppUiMutation,
 } from '../cognition/action_contract';
 import { formatCnToolFailureDetail, isInternalExecutionDetail } from '../regions/packs/cn/voice_fast_path_messages';
+import { normalizeActionIntent } from '../cognition/normalized_action_intent';
 
 export interface CompletionGuardResult {
   text: string;
@@ -214,6 +215,13 @@ const CLIENT_SURFACE_TASK_RE =
   /客户端|自己的客户端|中枢世界|中枢|世界视图|云端画布|技能大厅|知识库|运行日志|主屏幕|主页|桌面小组件|小组件|client_get_state|client_action|\b(?:client|nexus|nexus\s+view|cloud\s+canvas|world\s+view|desktop\s+widget|widget\s+mode)\b/iu;
 
 function isClientSurfaceTask(task: string): boolean {
+  const intent = normalizeActionIntent(task || '');
+  if (
+    intent.kind === 'desktop_operation'
+    && intent.operation === 'create'
+    && intent.sideEffectClass === 'local_write'
+    && intent.relation === 'new'
+  ) return false;
   return CLIENT_SURFACE_TASK_RE.test(task || '');
 }
 

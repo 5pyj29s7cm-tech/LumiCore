@@ -37,6 +37,7 @@ import type { UserLLMFallbackCandidate, UserLLMSelectionMode } from './user_pref
 import { CN_DURABLE_EXECUTION_MESSAGES } from '../i18n/durable_execution_messages';
 import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../regions/packs/cn/execution_evidence_messages';
 import { redactDiagnosticSecrets } from '../client/diagnostic_sanitizer';
+import { buildDeterministicExplicitToolRecoveryCall } from '../cognition/deterministic_tool_recovery';
 
 export { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
 
@@ -1688,6 +1689,7 @@ async function runWithToolsInternal(
     ? Math.max(routedMaxIterations, 3)
     : routedMaxIterations;
   const identicalRecoveryRetries = new Map<string, number>();
+  const deterministicRecoveryToolCallIds = new Set<string>();
   let recoveryReplans = 0;
   let verificationObligationReplans = 0;
   for (let iteration = 0; iteration < effectiveMaxIterations; iteration++) {
@@ -1796,11 +1798,19 @@ async function runWithToolsInternal(
       });
     }
 
-    if (!response.toolCalls || response.toolCalls.length === 0) {
+    let plannedToolCalls = response.toolCalls || [];
+    if (plannedToolCalls.length === 0) {
+      const deterministicRecovery = executionLog.length === 0
+        ? buildDeterministicExplicitToolRecoveryCall(primaryTask, exposedToolNames)
+        : null;
       if (
         iteration === 0
         && executionLog.length === 0
-        && hasRelevantEvidenceTool(toolRegistry, primaryTask, exposedToolNames)
+        && (
+          hasRelevantEvidenceTool(toolRegistry, primaryTask, exposedToolNames)
+          || Boolean(deterministicRecovery)
+        )
+        && iteration + 1 < effectiveMaxIterations
       ) {
         conversationHistory.push({
           role: 'system',
@@ -1808,6 +1818,17 @@ async function runWithToolsInternal(
         });
         continue;
       }
+      if (deterministicRecovery) {
+        const id = `deterministic_recovery_${iteration}_${Date.now().toString(36)}`;
+        deterministicRecoveryToolCallIds.add(id);
+        plannedToolCalls = [{
+          id,
+          name: deterministicRecovery.name,
+          arguments: deterministicRecovery.arguments,
+        }];
+      }
+    }
+    if (plannedToolCalls.length === 0) {
       const missingVerification = buildMissingVerificationObligationPrompt(
         primaryTask,
         executionLog,
@@ -1866,7 +1887,7 @@ async function runWithToolsInternal(
       };
     }
 
-    const rawToolCalls = response.toolCalls.map((tc, index) => ({
+    const rawToolCalls = plannedToolCalls.map((tc, index) => ({
       ...tc,
       id: tc.id || `call_${iteration}_${index}_${Date.now().toString(36)}`,
     }));
@@ -1999,7 +2020,9 @@ async function runWithToolsInternal(
 
     conversationHistory.push({
       role: 'assistant',
-      content: response.text,
+      content: normalizedToolCalls.some(call => deterministicRecoveryToolCallIds.has(call.id || ''))
+        ? 'Server-owned recovery of the explicit, fully specified tool request.'
+        : response.text,
       toolCalls: normalizedToolCalls,
       reasoningContent: response.reasoningContent,
     });
@@ -2076,7 +2099,9 @@ async function runWithToolsInternal(
           return { allowed: true, arguments: executionArguments };
         },
       });
-      if (response.routingReceiptId) {
+      if (deterministicRecoveryToolCallIds.has(tc.id || '')) {
+        record.executionOrigin = 'deterministic_route';
+      } else if (response.routingReceiptId) {
         record.modelRoutingReceiptId = response.routingReceiptId;
         record.executionOrigin = 'model_selected';
       }
