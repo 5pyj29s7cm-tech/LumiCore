@@ -192,6 +192,38 @@ function confirmationPayloadDigest(args: Record<string, any>): string {
   return crypto.createHash('sha256').update(JSON.stringify(stableValue(args || {}))).digest('hex');
 }
 
+/** Compare exact tool arguments without depending on object key order. */
+export function confirmationArgumentsMatch(
+  left: Record<string, any>,
+  right: Record<string, any>,
+): boolean {
+  return argsHash(left || {}) === argsHash(right || {});
+}
+
+/**
+ * Prove that a pending record is the exact proposal created by this immutable
+ * task request, rather than an older same-task confirmation returned by the
+ * one-boundary deduplication rule.
+ */
+export function pendingConfirmationMatchesExactProposal(
+  pending: PendingToolConfirmation | null | undefined,
+  toolName: string,
+  args: Record<string, any>,
+  scope: Pick<PendingConfirmationScope, 'taskId' | 'originRequestId'>,
+): boolean {
+  return Boolean(
+    pending
+    && pending.expiresAt > Date.now()
+    && pending.toolName === String(toolName || '').trim()
+    && pending.taskId === String(scope.taskId || '').trim()
+    && pending.originRequestId === String(scope.originRequestId || '').trim()
+    && pending.argsHash === argsHash(args || {})
+    && confirmationArgumentsMatch(pending.exactArgs, args || {})
+    && pending.target === confirmationTarget(args || {})
+    && pending.payloadDigest === confirmationPayloadDigest(args || {}),
+  );
+}
+
 function sanitizeValue(value: any, depth = 0): any {
   if (depth > 4) return '[nested data omitted]';
   if (Array.isArray(value)) return value.slice(0, 20).map(item => sanitizeValue(item, depth + 1));

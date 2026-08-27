@@ -224,6 +224,12 @@ describe('accepted action-turn durability fence', () => {
       cleared: true,
       correctionRequiresFreshConfirmation: true,
     });
+    expect(resolution.revokedCorrectionBasis).toMatchObject({
+      id: oldPending.id,
+      taskId: 'corrected-confirmation-task',
+      toolName: 'write_file',
+      exactArgs: { path: oldTarget, content: 'same content' },
+    });
     expect(getPendingConfirmation('corrected-confirmation-user', taskScope)).toBeNull();
     const replacement = recordPendingConfirmation(
       'corrected-confirmation-user',

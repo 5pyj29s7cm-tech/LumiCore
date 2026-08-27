@@ -14,6 +14,10 @@ import {
   compactToolResultForModel,
   runWithTools,
 } from "../llm/adapter";
+import {
+  buildDurableTaskDeterministicToolRecoveryCall,
+  validateRuntimeOwnedDeterministicToolRecoveryCall,
+} from '../cognition/deterministic_tool_recovery';
 import { toolRegistry } from "../tools/registry";
 import { ToolExecutionRecord } from "../tools/types";
 import { executeToolCall } from "../tools/execution_engine";
@@ -131,9 +135,11 @@ import { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
 import {
   buildTransportNeutralConfirmationScope,
   clearPendingConfirmationDurably,
+  confirmationArgumentsMatch,
   consumePendingConfirmationDurably,
   getPendingConfirmationDurably,
   isExplicitConfirmationReply,
+  pendingConfirmationMatchesExactProposal,
   recordPendingConfirmationDurably,
 } from "../tools/pending_confirmation";
 import { ensurePendingConfirmationPersistenceInitialized } from '../tools/pending_confirmation_repository';
@@ -2778,6 +2784,11 @@ async function processVoiceInput(
     leaseTimeoutMs: VOICE_DESKTOP_LEASE_WAIT_MS,
   });
 
+  const runtimeOwnedDeterministicRecoveryCall = buildDurableTaskDeterministicToolRecoveryCall(
+    actionTaskExecution.state,
+    requestId,
+    confirmationResolution.revokedCorrectionBasis,
+  );
   let pendingConfirmationCreatedThisTurn: Awaited<ReturnType<typeof recordPendingConfirmationDurably>> | null = null;
   const requestConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
     if (
@@ -2801,6 +2812,18 @@ async function processVoiceInput(
     // re-plan after a denial, but it cannot silently replace the action the
     // user is being asked to approve.
     if (pendingConfirmationCreatedThisTurn) return false;
+    const exactWriteCorrection = correctionRequiresFreshConfirmation
+      && confirmationResolution.revokedCorrectionBasis?.toolName === 'write_file';
+    if (
+      exactWriteCorrection
+      && (
+        !runtimeOwnedDeterministicRecoveryCall
+        || toolName !== runtimeOwnedDeterministicRecoveryCall.name
+        || !confirmationArgumentsMatch(args, runtimeOwnedDeterministicRecoveryCall.arguments)
+      )
+    ) {
+      throw new Error('Corrected write confirmation did not match the runtime-owned exact proposal');
+    }
     const pending = await recordPendingConfirmationDurably(session.userId, toolName, args, 'voice', {
       domain: voiceScope.domain,
       orgId: voiceScope.orgId,
@@ -2809,6 +2832,17 @@ async function processVoiceInput(
       originRequestId: requestId,
       actionIntent: actionIntentText,
     });
+    if (
+      correctionRequiresFreshConfirmation
+      && !pendingConfirmationMatchesExactProposal(
+        pending,
+        toolName,
+        args,
+        { taskId: actionTaskExecution.state?.taskId, originRequestId: requestId },
+      )
+    ) {
+      throw new Error('Corrected action confirmation was not bound to the current task request');
+    }
     pendingConfirmationCreatedThisTurn = pending;
     const confirmationMessage = CN_TASK_EXECUTION_MESSAGES.waitingConfirmation(
       actionTaskExecution.state?.goal || actionIntentText,
@@ -2837,6 +2871,7 @@ async function processVoiceInput(
     orgId: voiceScope.orgId,
     desktopRelay,
     llmGetters,
+    taskRevision: actionTaskExecution.state?.revision,
     source: 'voice',
     supervisedExternalCommits: true,
     allowLocalFileWrites,
@@ -4079,7 +4114,7 @@ async function processVoiceInput(
       { role: 'user', content: routedUserText },
     ];
     const complexity = classifyComplexity(routedUserText, { userId: session.userId, personalityId: session.personalityId });
-    const shouldOrchestrate = shouldAttemptOrchestration({
+    const shouldOrchestrate = !runtimeOwnedDeterministicRecoveryCall && shouldAttemptOrchestration({
       channel: 'voice',
       text: turnFlow.routeText,
       complexity,
@@ -4227,6 +4262,7 @@ async function processVoiceInput(
       // execution recovery pass instead of reducing the task to one sentence.
       recoveryConversationMessages = messages;
 
+      const voiceDeterministicRecoveryCallIds = new Set<string>();
       voiceToolLoop: for (let iter = 0; iter < maxIterations; iter++) {
       if (pipelineAbort?.signal.aborted) break;
 
@@ -4264,7 +4300,7 @@ async function processVoiceInput(
       );
       if (!isCurrentTurn()) return;
 
-      const plannedToolCalls = streamResult.toolCalls?.length
+      let plannedToolCalls = streamResult.toolCalls?.length
         ? normalizePlannedToolScope(
             streamResult.toolCalls.map((call, index) => ({
               ...call,
@@ -4274,6 +4310,27 @@ async function processVoiceInput(
             turnFlow.routeText,
           )
         : [];
+
+      const runtimeRecovery = toolResults.length === 0
+        ? validateRuntimeOwnedDeterministicToolRecoveryCall(
+            runtimeOwnedDeterministicRecoveryCall || undefined,
+            {
+              taskId: actionTaskExecution.state?.taskId,
+              taskRevision: actionTaskExecution.state?.revision,
+              requestId,
+            },
+            toolDeclarations.map(declaration => declaration.function.name),
+          )
+        : null;
+      if (runtimeRecovery) {
+        const id = `voice_deterministic_correction_${iter}_${Date.now().toString(36)}`;
+        voiceDeterministicRecoveryCallIds.add(id);
+        plannedToolCalls = [{
+          id,
+          name: runtimeRecovery.name,
+          arguments: runtimeRecovery.arguments,
+        }];
+      }
 
       messages.push({
         role: 'assistant',
@@ -4327,6 +4384,9 @@ async function processVoiceInput(
           id: tc.id,
           name: tc.name,
           arguments: executionArguments,
+          ...(voiceDeterministicRecoveryCallIds.has(tc.id || '')
+            ? { executionOrigin: 'deterministic_route' as const }
+            : {}),
           context: toolContext,
           preflight: () => currentAppGuard.allowed
             ? { allowed: true, arguments: executionArguments }
@@ -4403,6 +4463,7 @@ async function processVoiceInput(
       finalization: finalResponse,
       allowToolUse: executionDecision.allowToolUse,
       pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
+      requiresFreshConfirmation: correctionRequiresFreshConfirmation,
       aborted: !isCurrentTurn(),
       isAborted: () => !isCurrentTurn(),
       isPendingConfirmation: () => Boolean(pendingConfirmationCreatedThisTurn),
@@ -4446,6 +4507,7 @@ async function processVoiceInput(
           undefined,
           {
             ...toolContext,
+            ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}),
             source: 'voice_guard_recovery',
             priorToolRecords,
             isCancelled: () => !isCurrentTurn(),

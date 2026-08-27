@@ -64,11 +64,13 @@ import { canAutoApproveAction } from "../tools/action_constitution";
 import {
   buildTransportNeutralConfirmationScope,
   clearPendingConfirmationDurably,
+  confirmationArgumentsMatch,
   consumePendingConfirmationDurably,
   formatPendingConfirmationRequest,
   getPendingConfirmationDurably,
   isExplicitConfirmationReply,
   isConfirmationCancellation,
+  pendingConfirmationMatchesExactProposal,
   recordPendingConfirmationDurably,
 } from "../tools/pending_confirmation";
 import { ensurePendingConfirmationPersistenceInitialized } from '../tools/pending_confirmation_repository';
@@ -137,6 +139,7 @@ import {
   conversationActionRequiresFreshConfirmationReview,
   formatConversationActionTaskStatus,
 } from "../cognition/action_continuation";
+import { buildDurableTaskDeterministicToolRecoveryCall } from '../cognition/deterministic_tool_recovery';
 import {
   isPriorTurnToolReceiptQuestion,
   normalizeActionIntent,
@@ -2642,6 +2645,7 @@ export function registerChatHandler(
       }
 
       let pendingConfirmationCreatedThisTurn: Awaited<ReturnType<typeof recordPendingConfirmationDurably>> | null = null;
+      let runtimeOwnedDeterministicRecoveryCall: ReturnType<typeof buildDurableTaskDeterministicToolRecoveryCall> = null;
       let pendingConfirmationAssistantState = '';
       const requestToolConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
         if (pendingConfirmationCreatedThisTurn) return false;
@@ -2677,6 +2681,18 @@ export function registerChatHandler(
           orgId: resolvedOrgId,
           conversationId: conversationId || selectedConversationId,
         });
+        const exactWriteCorrection = correctionRequiresFreshConfirmation
+          && confirmationResolution.revokedCorrectionBasis?.toolName === 'write_file';
+        if (
+          exactWriteCorrection
+          && (
+            !runtimeOwnedDeterministicRecoveryCall
+            || toolName !== runtimeOwnedDeterministicRecoveryCall.name
+            || !confirmationArgumentsMatch(args, runtimeOwnedDeterministicRecoveryCall.arguments)
+          )
+        ) {
+          throw new Error('Corrected write confirmation did not match the runtime-owned exact proposal');
+        }
         const pending = await recordPendingConfirmationDurably(uid, toolName, args, eventSource, {
           domain: resolvedDomain,
           orgId: resolvedOrgId,
@@ -2685,6 +2701,17 @@ export function registerChatHandler(
           originRequestId: requestId,
           actionIntent: visibleUserText,
         });
+        if (
+          correctionRequiresFreshConfirmation
+          && !pendingConfirmationMatchesExactProposal(
+            pending,
+            toolName,
+            args,
+            { taskId: confirmationTaskId, originRequestId: requestId },
+          )
+        ) {
+          throw new Error('Corrected action confirmation was not bound to the current task request');
+        }
         pendingConfirmationCreatedThisTurn = pending;
         const confirmationRequestText = formatPendingConfirmationRequest(pending);
         pendingConfirmationAssistantState = confirmationRequestText;
@@ -2822,6 +2849,11 @@ export function registerChatHandler(
         return;
       }
       const durableTaskId = actionTaskExecution.state?.taskId;
+      runtimeOwnedDeterministicRecoveryCall = buildDurableTaskDeterministicToolRecoveryCall(
+        actionTaskExecution.state,
+        requestId,
+        confirmationResolution.revokedCorrectionBasis,
+      );
       foregroundRequestIdentity = Object.freeze({
         conversationId: conversation.id,
         userId: uid,
@@ -3653,7 +3685,7 @@ export function registerChatHandler(
         ].join('\n');
       }
 
-      if (!responseText && legacyDelegationHint.shouldDelegate) {
+      if (!responseText && !runtimeOwnedDeterministicRecoveryCall && legacyDelegationHint.shouldDelegate) {
         const delegationRecord = await executeToolCall({
           registry: toolRegistry,
           id: `background-register-${requestId}`,
@@ -3886,6 +3918,7 @@ export function registerChatHandler(
               orgId: resolvedOrgId,
               desktopRelay,
               llmGetters,
+              taskRevision: actionTaskExecution.state?.revision,
               source: 'chat',
               supervisedExternalCommits: true,
               allowLocalFileWrites,
@@ -3908,6 +3941,7 @@ export function registerChatHandler(
               modelToolProjection,
               actionIntent: visibleUserText,
               routedTaskText: turnFlow.routeText,
+              ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}),
               desktopExecutionTracker,
               ...(executionDecision.allowToolUse || clientActionOnlyTurn || selfRepairTurn ? { requestConfirmation: requestToolConfirmation } : {}),
             },
@@ -3988,6 +4022,7 @@ export function registerChatHandler(
         finalization: finalResponse,
         allowToolUse: executionDecision.allowToolUse && !isSanctuary,
         pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
+        requiresFreshConfirmation: correctionRequiresFreshConfirmation,
         aborted: abortController.signal.aborted,
         isAborted: () => abortController.signal.aborted,
         isPendingConfirmation: () => Boolean(pendingConfirmationCreatedThisTurn),
@@ -4047,6 +4082,7 @@ export function registerChatHandler(
               orgId: resolvedOrgId,
               desktopRelay,
               llmGetters,
+              taskRevision: actionTaskExecution.state?.revision,
               source: 'chat_guard_recovery',
               supervisedExternalCommits: true,
               allowLocalFileWrites,
@@ -4064,6 +4100,7 @@ export function registerChatHandler(
               modelToolProjection,
               actionIntent: visibleUserText,
               routedTaskText: turnFlow.routeText,
+              ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}),
               priorToolRecords,
               desktopExecutionTracker,
               requestConfirmation: requestToolConfirmation,

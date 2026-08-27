@@ -82,8 +82,10 @@ import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_wri
 import { canAutoApproveAction } from "../tools/action_constitution";
 import {
   buildTransportNeutralConfirmationScope,
+  confirmationArgumentsMatch,
   consumePendingConfirmationDurably,
   formatPendingConfirmationPrompt,
+  pendingConfirmationMatchesExactProposal,
   recordPendingConfirmationDurably,
 } from "../tools/pending_confirmation";
 import { ensurePendingConfirmationPersistenceInitialized } from '../tools/pending_confirmation_repository';
@@ -99,6 +101,7 @@ import {
   classifyConversationActionFollowupIntent,
   formatConversationActionTaskStatus,
 } from "../cognition/action_continuation";
+import { buildDurableTaskDeterministicToolRecoveryCall } from '../cognition/deterministic_tool_recovery';
 import {
   coalesceToolExecutionRecords,
   confirmedStepNeedsContinuation,
@@ -1099,6 +1102,13 @@ export function registerTaskHandler(
       forceTask: executionDecision.allowToolUse,
       forceResume: Boolean(pendingConfirmation || actionFollowupIntent === 'execute'),
     });
+    const runtimeOwnedDeterministicRecoveryCall = 'bindingFailure' in actionTaskExecution
+      ? null
+      : buildDurableTaskDeterministicToolRecoveryCall(
+          actionTaskExecution.state,
+          requestId,
+          confirmationResolution.revokedCorrectionBasis,
+        );
     if ('bindingFailure' in actionTaskExecution) {
       const staleText = actionTaskExecution.bindingFailure === 'busy'
         ? CN_TASK_EXECUTION_MESSAGES.actionTurnBusy
@@ -1402,6 +1412,7 @@ export function registerTaskHandler(
     };
     let pendingConfirmationCreatedThisTurn: Awaited<ReturnType<typeof recordPendingConfirmationDurably>> | null = null;
     const requestConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
+      if (pendingConfirmationCreatedThisTurn) return false;
       if (
         pendingConfirmation
         && await consumePendingConfirmationDurably(
@@ -1419,6 +1430,18 @@ export function registerTaskHandler(
         !correctionRequiresFreshConfirmation
         && canAutoApproveAction(toolName, args, { actionIntent: routedTaskText })
       ) return true;
+      const exactWriteCorrection = correctionRequiresFreshConfirmation
+        && confirmationResolution.revokedCorrectionBasis?.toolName === 'write_file';
+      if (
+        exactWriteCorrection
+        && (
+          !runtimeOwnedDeterministicRecoveryCall
+          || toolName !== runtimeOwnedDeterministicRecoveryCall.name
+          || !confirmationArgumentsMatch(args, runtimeOwnedDeterministicRecoveryCall.arguments)
+        )
+      ) {
+        throw new Error('Corrected write confirmation did not match the runtime-owned exact proposal');
+      }
       const pending = await recordPendingConfirmationDurably(uid, toolName, args, 'task', {
         domain: taskScope.domain,
         orgId: taskScope.orgId,
@@ -1427,6 +1450,17 @@ export function registerTaskHandler(
         originRequestId: requestId,
         actionIntent: routedTaskText,
       });
+      if (
+        correctionRequiresFreshConfirmation
+        && !pendingConfirmationMatchesExactProposal(
+          pending,
+          toolName,
+          args,
+          { taskId: actionTaskExecution.state?.taskId, originRequestId: requestId },
+        )
+      ) {
+        throw new Error('Corrected action confirmation was not bound to the current task request');
+      }
       pendingConfirmationCreatedThisTurn = pending;
       setConversationActionExecutionStatus(convForHistory.id, uid, 'waiting_confirmation', {
         assistantState: formatPendingConfirmationPrompt(pending),
@@ -1737,7 +1771,7 @@ export function registerTaskHandler(
       // ── Orchestrator: decompose complex tasks into sub-tasks for worker agents ──
       let orchestratedText = '';
       const orchestratedToolRecords: ToolExecutionRecord[] = [];
-      if (!pendingConfirmation && (cognition.intent.category === 'command' || cognition.intent.category === 'code' || cognition.intent.category === 'question')) {
+      if (!pendingConfirmation && !runtimeOwnedDeterministicRecoveryCall && (cognition.intent.category === 'command' || cognition.intent.category === 'code' || cognition.intent.category === 'question')) {
         const orchestrationContext = {
           ...toolSecurityContext,
           userId: uid,
@@ -1953,7 +1987,7 @@ export function registerTaskHandler(
             }
           }
         },
-        { ...toolSecurityContext, userId: uid, taskId: actionTaskExecution.state?.taskId, conversationId: convForHistory.id, turnId: requestId, requestId, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: routedTaskText, routedTaskText, toolPolicy: executionDecision.toolPolicy, modelToolProjection, desktopExecutionTracker, isCancelled: () => taskLease.signal.aborted, llmGetters, source: 'task', supervisedExternalCommits: true },
+        { ...toolSecurityContext, userId: uid, taskId: actionTaskExecution.state?.taskId, taskRevision: actionTaskExecution.state?.revision, conversationId: convForHistory.id, turnId: requestId, requestId, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: routedTaskText, routedTaskText, ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}), toolPolicy: executionDecision.toolPolicy, modelToolProjection, desktopExecutionTracker, isCancelled: () => taskLease.signal.aborted, llmGetters, source: 'task', supervisedExternalCommits: true },
         llmGetters.getOllama,
         llmGetters.getLmStudio,
         llmGetters.getArk,
@@ -2041,6 +2075,7 @@ export function registerTaskHandler(
         finalization: finalTaskResponse,
         allowToolUse: executionDecision.allowToolUse,
         pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
+        requiresFreshConfirmation: correctionRequiresFreshConfirmation,
         aborted: taskLease.signal.aborted,
         isAborted: () => taskLease.signal.aborted,
         isPendingConfirmation: () => Boolean(pendingConfirmationCreatedThisTurn),
@@ -2092,12 +2127,14 @@ export function registerTaskHandler(
               requestConfirmation,
               actionIntent: routedTaskText,
               routedTaskText,
+              ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}),
               toolPolicy: executionDecision.toolPolicy,
               modelToolProjection,
               priorToolRecords,
               desktopExecutionTracker,
               isCancelled: () => taskLease.signal.aborted,
               llmGetters,
+              taskRevision: actionTaskExecution.state?.revision,
               source: 'task_guard_recovery',
               supervisedExternalCommits: true,
             },

@@ -5,6 +5,7 @@ import {
   buildTransportNeutralConfirmationScope,
   buildVoiceConfirmationChannelScope,
   clearAllPendingConfirmationsForTests,
+  confirmationArgumentsMatch,
   consumePendingConfirmation,
   formatPendingConfirmationPrompt,
   formatPendingConfirmationRequest,
@@ -12,6 +13,7 @@ import {
   hydratePendingConfirmationFromPersistence,
   isConfirmationCancellation,
   isExplicitConfirmationReply,
+  pendingConfirmationMatchesExactProposal,
   recordPendingConfirmation,
 } from '../server/tools/pending_confirmation';
 
@@ -73,6 +75,44 @@ describe('One-time pending tool confirmations', () => {
     expect(request).toContain('Confirmation is required');
     expect(request).toContain('[redacted]');
     expect(request).not.toContain('super-secret-password');
+  });
+
+  it('binds an exact proposal to its task and immutable origin request', () => {
+    const args = { path: 'C:\\Temp\\corrected.txt', content: 'exact content' };
+    const pending = recordPendingConfirmation(
+      'u-exact-proposal',
+      'write_file',
+      args,
+      'chat',
+      {
+        channelId: 'conversation:exact-proposal',
+        taskId: 'task-exact-proposal',
+        originRequestId: 'request-exact-proposal',
+      },
+    );
+
+    expect(confirmationArgumentsMatch(args, {
+      content: 'exact content',
+      path: 'C:\\Temp\\corrected.txt',
+    })).toBe(true);
+    expect(pendingConfirmationMatchesExactProposal(
+      pending,
+      'write_file',
+      { content: 'exact content', path: 'C:\\Temp\\corrected.txt' },
+      { taskId: 'task-exact-proposal', originRequestId: 'request-exact-proposal' },
+    )).toBe(true);
+    expect(pendingConfirmationMatchesExactProposal(
+      pending,
+      'write_file',
+      args,
+      { taskId: 'task-exact-proposal', originRequestId: 'different-request' },
+    )).toBe(false);
+    expect(pendingConfirmationMatchesExactProposal(
+      pending,
+      'write_file',
+      { ...args, content: 'tampered' },
+      { taskId: 'task-exact-proposal', originRequestId: 'request-exact-proposal' },
+    )).toBe(false);
   });
 
   it('binds and displays the exact self-improvement patch and activation identity', () => {

@@ -31,6 +31,8 @@ export interface ExecutionGuardRecoveryInput {
   reason?: string;
   allowToolUse: boolean;
   pendingConfirmation?: boolean;
+  /** The accepted turn revoked an older target and must establish a new exact confirmation. */
+  requiresFreshConfirmation?: boolean;
   aborted?: boolean;
   toolRecords?: ToolExecutionRecord[];
   task?: string;
@@ -72,6 +74,8 @@ export interface ExecutionGuardRecoveryRunInput<
   finalization: TFinalization;
   allowToolUse: boolean;
   pendingConfirmation?: boolean;
+  /** The accepted turn revoked an older target and must establish a new exact confirmation. */
+  requiresFreshConfirmation?: boolean;
   aborted?: boolean;
   toolRecords: ToolExecutionRecord[];
   attempt: (
@@ -234,10 +238,14 @@ export function classifyExecutionGuardIntent(
 
 export function decideExecutionGuardRecovery(input: ExecutionGuardRecoveryInput): ExecutionGuardRecoveryDecision {
   const records = input.toolRecords || [];
-  const intent = input.intent || (input.task !== undefined
-    ? classifyExecutionGuardIntent(input.task, records)
-    : 'action_execution');
-  if (!input.blocked) return { recoverable: false, reason: 'response_not_blocked', intent };
+  const missingFreshConfirmation = input.requiresFreshConfirmation === true
+    && input.pendingConfirmation !== true;
+  const intent = input.intent || (input.requiresFreshConfirmation
+    ? 'action_execution'
+    : input.task !== undefined
+      ? classifyExecutionGuardIntent(input.task, records)
+      : 'action_execution');
+  if (!input.blocked && !missingFreshConfirmation) return { recoverable: false, reason: 'response_not_blocked', intent };
   if (intent === 'conversation') {
     return { recoverable: false, reason: 'conversation_requires_natural_clarification', intent };
   }
@@ -249,6 +257,9 @@ export function decideExecutionGuardRecovery(input: ExecutionGuardRecoveryInput)
   if (input.aborted) return { recoverable: false, reason: 'request_cancelled', intent };
   if (hasUncertainExternalCommit(records)) {
     return { recoverable: false, reason: 'uncertain_external_commit_requires_reconciliation', intent };
+  }
+  if (missingFreshConfirmation) {
+    return { recoverable: true, code: 'missing_tool_execution', reason: 'retry_fresh_confirmation_route', intent };
   }
   const reason = String(input.reason || '');
   const recordDetail = records.map(record => `${record.error || ''}\n${record.result || ''}`).join('\n');
@@ -626,26 +637,35 @@ export async function recoverBlockedExecutionOnce<
   input: ExecutionGuardRecoveryRunInput<TFinalization>,
 ): Promise<ExecutionGuardRecoveryRunResult<TFinalization>> {
   const priorToolRecords = [...input.toolRecords];
+  const pendingAtEntry = Boolean(input.pendingConfirmation || input.isPendingConfirmation?.());
+  const initialFinalization = input.requiresFreshConfirmation && !pendingAtEntry
+    ? {
+        ...input.finalization,
+        blocked: true,
+        reason: 'missing_fresh_confirmation',
+      } as TFinalization
+    : input.finalization;
   const decision = decideExecutionGuardRecovery({
-    blocked: input.finalization.blocked,
-    reason: input.finalization.reason,
+    blocked: initialFinalization.blocked,
+    reason: initialFinalization.reason,
     task: input.task,
     intent: input.intent,
     allowToolUse: input.allowToolUse,
-    pendingConfirmation: input.pendingConfirmation || input.isPendingConfirmation?.(),
+    pendingConfirmation: pendingAtEntry,
+    requiresFreshConfirmation: input.requiresFreshConfirmation,
     aborted: input.aborted || input.isAborted?.(),
     toolRecords: priorToolRecords,
   });
   const unchanged = (): ExecutionGuardRecoveryRunResult<TFinalization> => {
     const finalization = sanitizeLeakingFinalization(
-      input.finalization,
+      initialFinalization,
       input.task,
       priorToolRecords,
       decision,
     );
     return {
       attempted: false,
-      recoveryFailed: false,
+      recoveryFailed: input.requiresFreshConfirmation === true && initialFinalization.blocked,
       decision,
       responseText: finalization.text,
       toolRecords: priorToolRecords,
@@ -685,6 +705,16 @@ export async function recoverBlockedExecutionOnce<
       ? String(recovery.text)
       : input.responseText;
     let finalization = input.finalize(candidateText, toolRecords);
+    const pendingAfterRecovery = Boolean(
+      input.pendingConfirmation || input.isPendingConfirmation?.(),
+    );
+    if (input.requiresFreshConfirmation && !pendingAfterRecovery) {
+      finalization = {
+        ...finalization,
+        blocked: true,
+        reason: 'missing_fresh_confirmation',
+      };
+    }
     if (
       !finalization.blocked
       && decision.intent === 'action_execution'
@@ -744,7 +774,7 @@ export async function recoverBlockedExecutionOnce<
       };
     }
     const finalization = sanitizeLeakingFinalization(
-      input.finalization,
+      initialFinalization,
       input.task,
       toolRecords,
       decision,

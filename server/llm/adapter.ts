@@ -37,7 +37,10 @@ import type { UserLLMFallbackCandidate, UserLLMSelectionMode } from './user_pref
 import { CN_DURABLE_EXECUTION_MESSAGES } from '../i18n/durable_execution_messages';
 import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../regions/packs/cn/execution_evidence_messages';
 import { redactDiagnosticSecrets } from '../client/diagnostic_sanitizer';
-import { buildDeterministicExplicitToolRecoveryCall } from '../cognition/deterministic_tool_recovery';
+import {
+  buildDeterministicExplicitToolRecoveryCall,
+  validateRuntimeOwnedDeterministicToolRecoveryCall,
+} from '../cognition/deterministic_tool_recovery';
 
 export { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
 
@@ -530,8 +533,24 @@ export function buildConfirmedStepContinuationMessages(
   ];
 }
 
+function stableToolCallValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableToolCallValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.keys(value as Record<string, unknown>)
+      .sort()
+      .map(key => [key, stableToolCallValue((value as Record<string, unknown>)[key])]),
+  );
+}
+
 function toolCallSignature(call: Pick<ToolExecutionRecord, 'name' | 'arguments'>): string {
-  return `${call.name}\u0000${JSON.stringify(call.arguments || {})}`;
+  return `${call.name}\u0000${JSON.stringify(stableToolCallValue(call.arguments || {}))}`;
+}
+
+function withoutRuntimeOwnedRecoveryCall(context?: ToolContext): ToolContext | undefined {
+  if (!context?.runtimeOwnedDeterministicRecoveryCall) return context;
+  const { runtimeOwnedDeterministicRecoveryCall: _runtimePrivate, ...toolContext } = context;
+  return toolContext;
 }
 
 function isVerifiedToolSuccess(record: ToolExecutionRecord | undefined): boolean {
@@ -1549,7 +1568,7 @@ export async function runWithTools(
           context?.toolPolicy,
           {
             failClosedWithoutPolicy: context?.source === 'orchestrator',
-            context,
+            context: withoutRuntimeOwnedRecoveryCall(context),
             visibleToolNames: resolveModelVisibleToolNames(context, checkpointRecords),
           },
         );
@@ -1650,6 +1669,10 @@ async function runWithToolsInternal(
     .filter(record => Boolean(record?.name))
     .slice(-40);
   const executionLog: ToolExecutionRecord[] = [...priorExecutionRecords];
+  // Exact content recovered from a revoked confirmation is adapter-private.
+  // No registry declaration hook or tool handler may observe that hidden
+  // payload unless it becomes the validated arguments of write_file itself.
+  const toolExecutionContext = withoutRuntimeOwnedRecoveryCall(context);
   const usageRecords: LLMUsageRecord[] = usageRecordSink || [];
   const invocationBudget: ToolInvocationBudgetState = invocationBudgetState || newToolInvocationBudget();
   invocationBudget.lastTouchedAt = Date.now();
@@ -1705,8 +1728,8 @@ async function runWithToolsInternal(
       context?.toolPolicy,
       {
         failClosedWithoutPolicy: context?.source === 'orchestrator',
-        context,
-        visibleToolNames: resolveModelVisibleToolNames(context, executionLog),
+        context: toolExecutionContext,
+        visibleToolNames: resolveModelVisibleToolNames(toolExecutionContext, executionLog),
       },
     );
     const exposedToolNames = new Set(toolDeclarations.map(declaration => declaration.function.name));
@@ -1799,16 +1822,54 @@ async function runWithToolsInternal(
     }
 
     let plannedToolCalls = response.toolCalls || [];
-    if (plannedToolCalls.length === 0) {
-      const deterministicRecovery = executionLog.length === 0
+    const noNewExecutionRecord = executionLog.length === priorExecutionRecords.length;
+    const runtimeRecovery = noNewExecutionRecord
+      ? validateRuntimeOwnedDeterministicToolRecoveryCall(
+          context?.runtimeOwnedDeterministicRecoveryCall,
+          context,
+          exposedToolNames,
+        )
+      : null;
+    const runtimeRecoveryAlreadyRecorded = runtimeRecovery
+      ? priorExecutionRecords.some(record => (
+          toolCallSignature(record) === toolCallSignature({
+            name: runtimeRecovery.name,
+            arguments: runtimeRecovery.arguments,
+          })
+        ))
+      : false;
+    if (runtimeRecovery) {
+      // The accepted correction has one server-owned exact action. Model tool
+      // output cannot change its path/content or substitute another tool.
+      if (runtimeRecoveryAlreadyRecorded) {
+        plannedToolCalls = [];
+      } else {
+        const id = `deterministic_correction_${iteration}_${Date.now().toString(36)}`;
+        deterministicRecoveryToolCallIds.add(id);
+        plannedToolCalls = [{
+          id,
+          name: runtimeRecovery.name,
+          arguments: runtimeRecovery.arguments,
+        }];
+      }
+    } else if (plannedToolCalls.length === 0) {
+      const explicitRecoveryCandidate = noNewExecutionRecord
         ? buildDeterministicExplicitToolRecoveryCall(primaryTask, exposedToolNames)
+        : null;
+      const explicitRecovery = explicitRecoveryCandidate && !priorExecutionRecords.some(record => (
+        toolCallSignature(record) === toolCallSignature({
+          name: explicitRecoveryCandidate.name,
+          arguments: explicitRecoveryCandidate.arguments,
+        })
+      ))
+        ? explicitRecoveryCandidate
         : null;
       if (
         iteration === 0
-        && executionLog.length === 0
+        && noNewExecutionRecord
         && (
           hasRelevantEvidenceTool(toolRegistry, primaryTask, exposedToolNames)
-          || Boolean(deterministicRecovery)
+          || Boolean(explicitRecovery)
         )
         && iteration + 1 < effectiveMaxIterations
       ) {
@@ -1818,13 +1879,13 @@ async function runWithToolsInternal(
         });
         continue;
       }
-      if (deterministicRecovery) {
+      if (explicitRecovery) {
         const id = `deterministic_recovery_${iteration}_${Date.now().toString(36)}`;
         deterministicRecoveryToolCallIds.add(id);
         plannedToolCalls = [{
           id,
-          name: deterministicRecovery.name,
-          arguments: deterministicRecovery.arguments,
+          name: explicitRecovery.name,
+          arguments: explicitRecovery.arguments,
         }];
       }
     }
@@ -1902,7 +1963,7 @@ async function runWithToolsInternal(
         messages,
         config,
         usageRecords,
-        context,
+        context: toolExecutionContext,
         onToolCall,
       });
     }
@@ -1925,7 +1986,7 @@ async function runWithToolsInternal(
         messages,
         config,
         usageRecords,
-        context,
+        context: toolExecutionContext,
         onToolCall,
       });
     }
@@ -2008,7 +2069,7 @@ async function runWithToolsInternal(
         messages,
         config,
         usageRecords,
-        context,
+        context: toolExecutionContext,
         onToolCall,
       });
     }
@@ -2084,7 +2145,7 @@ async function runWithToolsInternal(
         id: tc.id,
         name: tc.name,
         arguments: executionArguments,
-        context,
+        context: toolExecutionContext,
         preflight: () => {
           if (!currentAppGuard.allowed) {
             return { allowed: false, reason: currentAppGuard.reason, arguments: executionArguments };

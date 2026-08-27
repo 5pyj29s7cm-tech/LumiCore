@@ -222,6 +222,25 @@ export interface ToolContext {
   systemExecution?: boolean;
   /** Durable execution correlation shared by task, confirmation and receipt ledgers. */
   taskId?: string;
+  /** Exact durable task revision bound to this immutable request. */
+  taskRevision?: number;
+  /**
+   * Runtime-owned exact call recovered from the durable task ledger for this
+   * immutable request. User payloads and model output must never populate it.
+   * The adapter still intersects it with the exposed manifest and executes it
+   * through the ordinary policy, confirmation, lifecycle and receipt path.
+   */
+  runtimeOwnedDeterministicRecoveryCall?: {
+    source: 'durable_task_capsule';
+    taskId: string;
+    taskRevision: number;
+    requestId: string;
+    name: 'write_file';
+    arguments: {
+      path: string;
+      content: string;
+    };
+  };
   conversationId?: string;
   /** Owning conversation agent/personality for durable delegated work. */
   conversationAgentId?: string;

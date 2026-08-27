@@ -23,6 +23,12 @@ export interface AcceptedUserTurnAdmission<T> {
 
 export interface AcceptedTurnConfirmationResolution {
   pending: PendingToolConfirmation | null;
+  /**
+   * Runtime-only, integrity-checked exact action that a target correction just
+   * revoked. It may seed a narrowly validated corrected call, but it is never
+   * itself reusable or exposed to the model/client.
+   */
+  revokedCorrectionBasis: PendingToolConfirmation | null;
   scope: PendingConfirmationScope;
   prompt: string;
   cleared: boolean;
@@ -97,6 +103,7 @@ export async function resolveAcceptedTurnConfirmation(input: {
       && input.taskScope.taskId,
     );
     let cleared = false;
+    let revokedCorrectionBasis: PendingToolConfirmation | null = null;
 
     if (cancellation) {
       const clearedTask = await clearPendingConfirmationDurably(input.userId, input.taskScope);
@@ -111,6 +118,7 @@ export async function resolveAcceptedTurnConfirmation(input: {
       if (existing) {
         cleared = await clearPendingConfirmationDurably(input.userId, input.taskScope);
         if (!cleared) throw new Error('Pending confirmation correction could not be revoked');
+        revokedCorrectionBasis = existing;
       }
     } else if (unrelated) {
       // A taskless grant is a one-turn offer. A new unrelated instruction
@@ -125,6 +133,7 @@ export async function resolveAcceptedTurnConfirmation(input: {
     const scope = pending && !pending.taskId ? input.channelScope : input.taskScope;
     return {
       pending,
+      revokedCorrectionBasis,
       scope,
       prompt: pending ? formatPendingConfirmationPrompt(pending) : '',
       cleared,
