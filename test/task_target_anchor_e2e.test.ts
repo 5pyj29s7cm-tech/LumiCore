@@ -294,6 +294,16 @@ describe('real file/desktop target anchoring', () => {
       'Inspect https://example.com/files/report.pdf',
     )).toBe(false);
 
+    const chinesePosixTask = '请在目录 /tmp/lumi_test_123 中查找并读取文件 missing.txt';
+    expect(isAllowedTaskSearchDirectory('/tmp/lumi_test_123', chinesePosixTask)).toBe(true);
+    expect(isAllowedTaskSearchDirectory('/tmp/lumi_test_123-other', chinesePosixTask)).toBe(false);
+    expect(guardTaskTargetToolCall({
+      taskText: chinesePosixTask,
+      toolName: 'search_files',
+      arguments: { directory: '/tmp/lumi_test_123', pattern: 'missing.txt' },
+      toolRecords: [],
+    })).toMatchObject({ allowed: true });
+
     const ambiguousSpacePath = 'Analyze /home/alice/Private Files/report.pdf';
     expect(isAllowedTaskSearchDirectory('/home/alice/Private', ambiguousSpacePath)).toBe(false);
     expect(isAllowedTaskSearchDirectory('/home/alice/Private Files', ambiguousSpacePath)).toBe(false);

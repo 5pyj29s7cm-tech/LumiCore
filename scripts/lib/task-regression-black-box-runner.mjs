@@ -2948,8 +2948,16 @@ async function waitForScenarioState(context, input, predicate, timeoutMs = 8_000
 
 function canonicalComparableFilesystemPath(value) {
   const supplied = String(value || '').trim();
-  if (!supplied || !path.isAbsolute(supplied)) return null;
-  return normalizedPath(supplied);
+  if (!supplied) return null;
+  if (/^[a-z]:[\\/]/iu.test(supplied) || /^\\\\/u.test(supplied)) {
+    if (!path.win32.isAbsolute(supplied)) return null;
+    return path.win32.normalize(supplied.replace(/\//gu, '\\')).toLowerCase();
+  }
+  if (supplied.startsWith('/')) {
+    if (!path.posix.isAbsolute(supplied)) return null;
+    return path.posix.normalize(supplied);
+  }
+  return null;
 }
 
 function sameCanonicalFilesystemPath(left, right) {

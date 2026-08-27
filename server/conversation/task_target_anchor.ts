@@ -312,7 +312,7 @@ function explicitAbsolutePaths(text: string): string[] {
     // An unquoted space may be prose or part of a POSIX filename. Only retain
     // the token when a conservative clause boundary makes that unambiguous.
     // i18n-allow: multilingual path-clause boundary recognition; not user-visible copy.
-    return /^(?:(?:for|to|from|in|under|with|using|and|then|please)(?=$|\s|[，,；;。！？!?"'“”‘’\)\]}])|(?:中|里|下|内|用于|然后|请)(?=$|\s|[，,；;。！？!?"'“”‘’\)\]}]))/iu.test(continuation)
+    return /^(?:(?:for|to|from|in|under|with|using|and|then|please)(?=$|\s|[，,；;。！？!?"'“”‘’\)\]}])|(?:中|里|下|内)(?=$|\s|[，,；;。！？!?"'“”‘’\)\]}]|查找|搜索|寻找|检索|读取)|(?:用于|然后|请)(?=$|\s|[，,；;。！？!?"'“”‘’\)\]}]))/iu.test(continuation)
       ? [value]
       : [];
   });
