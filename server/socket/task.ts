@@ -834,6 +834,7 @@ export function registerTaskHandler(
     confirmationScope = confirmationResolution.scope;
     const pendingConfirmation = confirmationResolution.pending;
     const pendingConfirmationPrompt = confirmationResolution.prompt;
+    const correctionRequiresFreshConfirmation = confirmationResolution.correctionRequiresFreshConfirmation;
 
     const taskLease = runAfterAcceptedUserTurnAdmission(taskAdmission, () => {
       if (previous && activeMessageRelation === 'replace') {
@@ -1414,7 +1415,10 @@ export function registerTaskHandler(
         console.log(`[TaskHandler] Consumed one-time confirmation for "${toolName}".`);
         return true;
       }
-      if (canAutoApproveAction(toolName, args, { actionIntent: routedTaskText })) return true;
+      if (
+        !correctionRequiresFreshConfirmation
+        && canAutoApproveAction(toolName, args, { actionIntent: routedTaskText })
+      ) return true;
       const pending = await recordPendingConfirmationDurably(uid, toolName, args, 'task', {
         domain: taskScope.domain,
         orgId: taskScope.orgId,

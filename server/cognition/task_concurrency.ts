@@ -3,6 +3,7 @@ import {
   conversationActionRequiresFreshConfirmationReview,
   type ConversationActionContinuationState,
 } from './action_continuation';
+import { classifyTaskCapsuleTurn } from '../conversation/task_capsule';
 import { normalizeActionIntent } from './normalized_action_intent';
 import {
   resolvePendingRuntimeCleanupOffer,
@@ -178,6 +179,14 @@ function feedbackKind(
     return conversationActionRequiresFreshConfirmationReview(state) ? 'status' : 'accept';
   }
   if (CONTINUE_ONLY_RE.test(normalized)) return 'continue';
+
+  // Long path-bearing corrections frequently exceed the deliberately terse
+  // language patterns below. Reuse the task capsule's target-aware parser so
+  // an explicit old-target -> new-target correction keeps the same task even
+  // when both absolute paths are hundreds of characters long.
+  if (classifyTaskCapsuleTurn(normalized, state) === 'target_correction') {
+    return 'correction';
+  }
 
   if (
     CORRECTION_RE.test(normalized)

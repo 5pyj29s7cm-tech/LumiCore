@@ -1800,6 +1800,7 @@ async function processVoiceInput(
   pendingConfirmation = confirmationResolution.pending;
   pendingConfirmationPrompt = confirmationResolution.prompt;
   confirmationScope = confirmationResolution.scope;
+  const correctionRequiresFreshConfirmation = confirmationResolution.correctionRequiresFreshConfirmation;
 
   try {
     const superseded = await runAfterAcceptedUserTurnAdmission(
@@ -2792,7 +2793,10 @@ async function processVoiceInput(
       logger.info(`[Audio] Consumed one-time confirmation for "${toolName}".`);
       return true;
     }
-    if (canAutoApproveAction(toolName, args, { actionIntent: routedUserText })) return true;
+    if (
+      !correctionRequiresFreshConfirmation
+      && canAutoApproveAction(toolName, args, { actionIntent: routedUserText })
+    ) return true;
     // One task turn owns one immutable confirmation boundary. The model may
     // re-plan after a denial, but it cannot silently replace the action the
     // user is being asked to approve.

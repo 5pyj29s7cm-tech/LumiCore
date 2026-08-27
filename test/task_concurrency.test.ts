@@ -69,6 +69,33 @@ describe('active task message relation', () => {
     }
   });
 
+  it('keeps all long formal file-target corrections on the same task', () => {
+    const root = 'C:\\Users\\Administrator\\LumiCore\\formal-client-e2e-artifacts\\LUMI-E2E-correction-lifecycle';
+    const targets = [0, 1, 2, 3].map(index => `${root}\\target-${index}.txt`);
+    const waitingState: ConversationActionContinuationState = {
+      ...activeState,
+      status: 'waiting_confirmation',
+      latestInstruction: `create ${targets[0]}`,
+      sourcePaths: [targets[0]],
+      activeRequestId: undefined,
+    };
+    const corrections = [
+      `不是 ${targets[0]}，把同一个任务的目标改成 ${targets[1]}，内容保持不变；不要沿用或重试旧目标。`,
+      `再纠正一次：不要 ${targets[1]}，改成 ${targets[2]}，仍是同一个任务且内容不变。`,
+      `最后一次纠正：拒绝 ${targets[2]}，最终目标是 ${targets[3]}，内容不变；等待我的确认。`,
+    ];
+
+    for (const text of corrections) {
+      expect(resolveActiveTaskMessageRelation(text, waitingState)).toMatchObject({
+        feedback: 'correction',
+        taskRelation: 'correct',
+        operation: 'replan',
+        binding: 'active_task',
+        taskId: 'task-1',
+      });
+    }
+  });
+
   it('projects every turn onto the canonical seven-way task relation', () => {
     const cases = [
       ['清理一下', 'continue'],

@@ -262,7 +262,7 @@ function applicationFromText(text: string): string {
 function replacementClause(text: string): string {
   const clean = compact(text, 500).replace(/[。！？!?]+$/u, '');
   // i18n-allow: multilingual target-replacement recognition; not user-visible copy.
-  const replacement = clean.match(/(?:而是|应该是|改成|换成|(?<!不)要用|请用|(?<!不要)(?<!别)用)\s*["'“”‘’]?(.{1,420})$/u)?.[1]
+  const replacement = clean.match(/(?:而是|应该是|最终目标(?:是|改为)|改成|换成|(?<!不)要用|请用|(?<!不要)(?<!别)用)\s*["'“”‘’]?(.{1,420})$/u)?.[1]
     || clean.match(/\b(?:instead(?:\s+use)?|use|replace(?:\s+it)?\s+with)\s+["']?(.{1,420})$/iu)?.[1];
   return compact(replacement?.replace(/["'“”‘’]+$/u, ''), 500);
 }
@@ -274,7 +274,7 @@ function explicitTargetReplacement(text: string): string {
   // whose replacement itself names a file/path/application; conversational
   // "use a warmer tone" wording must not become task-target feedback.
   // i18n-allow: multilingual target-replacement recognition; not user-visible copy.
-  const hasReplacementCue = /(?:而是|应该是|改成|换成)/u.test(clean)
+  const hasReplacementCue = /(?:而是|应该是|最终目标(?:是|改为)|改成|换成)/u.test(clean)
     || /(?:不是|并不是|别用|不要用).*(?:请用|(?<!不)要用)/u.test(clean)
     || /\b(?:instead(?:\s+use)?|replace(?:\s+it)?\s+with)\b/iu.test(clean);
   if (!hasReplacementCue) return '';

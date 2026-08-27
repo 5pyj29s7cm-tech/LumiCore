@@ -11,6 +11,11 @@ import {
   activateConversation,
   deleteConversationData,
 } from "../conversation/manager";
+import {
+  buildTransportNeutralConfirmationScope,
+  clearPendingConfirmationDurably,
+} from "../tools/pending_confirmation";
+import { ensurePendingConfirmationPersistenceInitialized } from "../tools/pending_confirmation_repository";
 
 type ConversationScope = { domain: 'personal' | 'work'; orgId: string };
 
@@ -172,8 +177,49 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
     res.json({ success: true, conversation: closed });
   });
 
-  router.delete("/conversations/:id", requireAuth, (req, res) => {
+  router.delete("/conversations/:id", requireAuth, async (req, res) => {
     const scope = getConversationScope(req);
+    const db = readDB();
+    const conversation = (db.conversations || []).find((candidate: any) => (
+      candidate.id === req.params.id
+      && candidate.userId === req.user!.uid
+      && conversationMatchesScope(candidate, scope)
+    ));
+    if (!conversation) return res.status(404).json({ error: "Not found" });
+    const taskIds = [...new Set<string>(
+      (db.conversationActionTasks || [])
+        .filter((row: any) => row.conversationId === conversation.id)
+        .map((row: any) => String(row.id || '').trim())
+        .filter(Boolean),
+    )];
+    let pendingConfirmationsCancelled = 0;
+    try {
+      await ensurePendingConfirmationPersistenceInitialized();
+      for (const taskId of taskIds) {
+        const cancelled = await clearPendingConfirmationDurably(
+          req.user!.uid,
+          buildTransportNeutralConfirmationScope({
+            domain: scope.domain,
+            orgId: scope.orgId,
+            conversationId: conversation.id,
+            taskId,
+          }),
+        );
+        if (cancelled) pendingConfirmationsCancelled += 1;
+      }
+      const tasklessCancelled = await clearPendingConfirmationDurably(
+        req.user!.uid,
+        buildTransportNeutralConfirmationScope({
+          domain: scope.domain,
+          orgId: scope.orgId,
+          conversationId: conversation.id,
+        }),
+      );
+      if (tasklessCancelled) pendingConfirmationsCancelled += 1;
+    } catch (error) {
+      console.error('[Conversations] Failed to revoke pending confirmations before deletion:', error);
+      return res.status(503).json({ error: 'Conversation confirmation cleanup is unavailable' });
+    }
     const deleted = deleteConversationData(
       req.params.id,
       req.user!.uid,
@@ -181,6 +227,6 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
       scope.orgId,
     );
     if (!deleted) return res.status(404).json({ error: "Not found" });
-    res.json({ success: true, deleted });
+    res.json({ success: true, deleted, pendingConfirmationsCancelled });
   });
 }

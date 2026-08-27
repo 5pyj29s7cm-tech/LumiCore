@@ -1974,6 +1974,8 @@ export async function processWithPersonality(
   if (confirmationResolution) confirmationScope = confirmationResolution.scope;
   const pendingConfirmation = confirmationResolution?.pending || null;
   const pendingConfirmationPrompt = confirmationResolution?.prompt || '';
+  const correctionRequiresFreshConfirmation =
+    confirmationResolution?.correctionRequiresFreshConfirmation === true;
   const organizationMembership = isOrganizationBound ? getMember(orgId, effectiveUserId) : null;
   const canWriteOrganization = organizationMembership?.status === 'active' && organizationMembership.role !== 'viewer';
   const routingText = [
@@ -2356,7 +2358,10 @@ export async function processWithPersonality(
       console.log(`[Messaging] Consumed one-time ${source} confirmation for "${toolName}".`);
       return true;
     }
-    if (canAutoApproveAction(toolName, args, { actionIntent: requestText })) return true;
+    if (
+      !correctionRequiresFreshConfirmation
+      && canAutoApproveAction(toolName, args, { actionIntent: requestText })
+    ) return true;
     if (pendingConfirmationCreatedThisTurn) return false;
     if (!confirmationChannelScope) return false;
     const pending = await recordPendingConfirmationDurably(

@@ -905,6 +905,7 @@ export function registerChatHandler(
     });
     const confirmationCancellationRequested = isConfirmationCancellation(visibleUserText);
     let pendingConfirmationCleared = false;
+    let correctionRequiresFreshConfirmation = false;
     let executionScope: ChatExecutionScope = {
       userId: uid,
       domain: resolvedDomain,
@@ -1673,6 +1674,7 @@ export function registerChatHandler(
     pendingConfirmationPrompt = confirmationResolution.prompt;
     confirmationScope = confirmationResolution.scope;
     pendingConfirmationCleared = confirmationResolution.cleared;
+    correctionRequiresFreshConfirmation = confirmationResolution.correctionRequiresFreshConfirmation;
 
     // Install the lease before waiting. Otherwise two messages arriving while
     // the same task is active both wait for that task and wake concurrently,
@@ -2655,7 +2657,10 @@ export function registerChatHandler(
           console.log(`[ChatHandler] Consumed one-time confirmation for "${toolName}".`);
           return true;
         }
-        if (canAutoApproveAction(toolName, args, { actionIntent: visibleUserText })) return true;
+        if (
+          !correctionRequiresFreshConfirmation
+          && canAutoApproveAction(toolName, args, { actionIntent: visibleUserText })
+        ) return true;
         // Tool-capable turns prepare their durable task before entering the
         // relay, so confirmation and confirmation-resume keep the same task.
         const confirmationTaskId = actionTaskExecution.state?.taskId;

@@ -170,6 +170,72 @@ describe('accepted action-turn durability fence', () => {
     expect(getPendingConfirmation('bound-confirmation-user', taskScope)?.id).toBe(taskBound.id);
   });
 
+  it('revokes a rejected pending target and requires a fresh confirmation for its correction', async () => {
+    const oldTarget = 'C:\\Users\\Administrator\\LumiCore\\formal-client-e2e-artifacts\\LUMI-E2E-confirmation-correction\\target-0.txt';
+    const newTarget = 'C:\\Users\\Administrator\\LumiCore\\formal-client-e2e-artifacts\\LUMI-E2E-confirmation-correction\\target-1.txt';
+    const channelScope = buildTransportNeutralConfirmationScope({
+      domain: 'personal',
+      conversationId: 'corrected-confirmation-conversation',
+    });
+    const taskScope = buildTransportNeutralConfirmationScope({
+      domain: 'personal',
+      conversationId: 'corrected-confirmation-conversation',
+      taskId: 'corrected-confirmation-task',
+    });
+    const oldPending = recordPendingConfirmation(
+      'corrected-confirmation-user',
+      'write_file',
+      { path: oldTarget, content: 'same content' },
+      'chat',
+      taskScope,
+    );
+    const admission = await admitAcceptedUserTurnDurably({
+      persistAcceptedUserTurn: () => 'correction-message',
+      flush: async () => undefined,
+      onPersistenceUnknown: vi.fn(),
+    });
+
+    const resolution = await resolveAcceptedTurnConfirmation({
+      admission: admission!,
+      userId: 'corrected-confirmation-user',
+      userText: `不是 ${oldTarget}，把同一个任务的目标改成 ${newTarget}，内容保持不变；不要沿用或重试旧目标。`,
+      actionState: {
+        version: 2,
+        taskId: 'corrected-confirmation-task',
+        status: 'waiting_confirmation',
+        goal: 'create the confirmed file',
+        appTarget: '',
+        sourcePaths: [],
+        latestBlocker: '',
+        unfinished: true,
+        evidenceTools: ['write_file'],
+        latestInstruction: `create ${oldTarget}`,
+        assistantState: 'waiting for confirmation',
+        toolSummaries: [],
+        updatedAt: new Date().toISOString(),
+      },
+      taskScope,
+      channelScope,
+    });
+
+    expect(resolution).toMatchObject({
+      pending: null,
+      prompt: '',
+      cleared: true,
+      correctionRequiresFreshConfirmation: true,
+    });
+    expect(getPendingConfirmation('corrected-confirmation-user', taskScope)).toBeNull();
+    const replacement = recordPendingConfirmation(
+      'corrected-confirmation-user',
+      'write_file',
+      { path: newTarget, content: 'same content' },
+      'chat',
+      taskScope,
+    );
+    expect(replacement.id).not.toBe(oldPending.id);
+    expect(replacement.exactArgs).toMatchObject({ path: newTarget });
+  });
+
   it('recovers the same exact pending action for repeated confirmations and consumes it once', async () => {
     const channelScope = buildTransportNeutralConfirmationScope({
       domain: 'personal',
