@@ -36,5 +36,9 @@ describe('desktop bootstrap acceptance harness identity', () => {
     );
     expect(smokeScript).toContain('-Body @{ nativeClientIdentity = $NativeClientIdentity }');
     expect(smokeScript.match(/-NativeClientIdentity \$NativeClientIdentity/g)).toHaveLength(2);
+    expect(smokeScript).toContain('$SmokeStage = "prepare-native-client-identity"');
+    expect(smokeScript).toContain(
+      '::error file=scripts/smoke-windows-installer.ps1,title=$AnnotationTitle::$AnnotationMessage',
+    );
   });
 });

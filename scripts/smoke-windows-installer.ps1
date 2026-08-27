@@ -282,7 +282,6 @@ function Remove-InstallerShortcutResidue {
   }
 }
 
-$NativeClientIdentity = New-InstallerAcceptanceHarnessIdentity -RuntimeMeta $ExpectedRuntimeMeta
 $Stamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 $CodexRun = [System.IO.Path]::GetFullPath((Join-Path $ProjectRoot ".codex-run"))
 $RunRoot = [System.IO.Path]::GetFullPath((Join-Path $CodexRun "installer-first-run-$Stamp"))
@@ -312,8 +311,13 @@ $App = $null
 $Succeeded = $false
 $Result = $null
 $CleanupFailure = ""
+$NativeClientIdentity = $null
+$SmokeStage = "initialize"
 
 try {
+  $SmokeStage = "prepare-native-client-identity"
+  $NativeClientIdentity = New-InstallerAcceptanceHarnessIdentity -RuntimeMeta $ExpectedRuntimeMeta
+  $SmokeStage = "install"
   $InstallArgs = @("/S", "/D=$InstallDir")
   $InstallerProcess = Start-Process -FilePath $Installer -ArgumentList $InstallArgs -Wait -PassThru -WindowStyle Hidden
   "installer exit=$($InstallerProcess.ExitCode)" | Set-Content -Path $InstallLog
@@ -332,6 +336,7 @@ try {
     throw "Installed lumi-core.exe not found under $InstallDir"
   }
 
+  $SmokeStage = "validate-installed-runtime"
   $InstalledRuntimeMetaFile = Get-ChildItem -LiteralPath $InstallDir -Filter "runtime-meta.json" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
   if (-not $InstalledRuntimeMetaFile) {
     throw "Installed runtime metadata not found under $InstallDir"
@@ -354,6 +359,7 @@ try {
   $env:LUMI_LOG_FILE = $RuntimeLog
   $env:USERPROFILE = $HomeDir
 
+  $SmokeStage = "launch-installed-client"
   $App = Start-Process `
     -FilePath $InstalledExe `
     -WorkingDirectory (Split-Path $InstalledExe) `
@@ -362,6 +368,7 @@ try {
     -RedirectStandardOutput $LaunchOut `
     -RedirectStandardError $LaunchErr
 
+  $SmokeStage = "wait-for-backend-health"
   $BaseUrl = "http://127.0.0.1:$Port/api"
   $Ready = $false
   $Health = $null
@@ -411,6 +418,7 @@ try {
     throw "Installed Socket.IO handshake failed"
   }
 
+  $SmokeStage = "desktop-bootstrap"
   $Bootstrap = Invoke-DesktopBootstrap `
     -BaseUrl $BaseUrl `
     -DataRoot $DataRoot `
@@ -433,6 +441,7 @@ try {
     throw "Installer smoke skill must be bundled. $SkillId is $($Skill.installSource)"
   }
 
+  $SmokeStage = "install-bundled-skill"
   $InstallSkill = Invoke-JsonRequest `
     -Uri "$BaseUrl/marketplace/skills/acquire" `
     -Method "POST" `
@@ -449,6 +458,7 @@ try {
   }
 
   $DirName = $SkillId -replace "^skill-", ""
+  $SmokeStage = "wait-for-skill-connection"
   $Connected = $false
   $Deadline = (Get-Date).AddSeconds($TimeoutSeconds)
   while ((Get-Date) -lt $Deadline) {
@@ -471,6 +481,7 @@ try {
     throw "Installed skill, MCP config, database, generated-output directory, or runtime log was not persisted in the isolated profile"
   }
 
+  $SmokeStage = "restart-installed-client"
   # Restart with the same clean-user profile and verify skill/MCP persistence.
   if ($App -and -not $App.HasExited) {
     Stop-Process -Id $App.Id -Force -ErrorAction SilentlyContinue
@@ -515,6 +526,7 @@ try {
     throw "Installed app did not restart with a clean database"
   }
 
+  $SmokeStage = "restart-desktop-bootstrap"
   $RestartBootstrap = Invoke-DesktopBootstrap `
     -BaseUrl $BaseUrl `
     -DataRoot $DataRoot `
@@ -556,9 +568,11 @@ try {
   }
   if (-not $Reconnected) { throw "Installed MCP skill did not reconnect after restart" }
 
+  $SmokeStage = "sqlite-integrity"
   & node (Join-Path $ProjectRoot "scripts\check-sqlite-integrity.mjs") $DatabasePath
   if ($LASTEXITCODE -ne 0) { throw "Installed SQLite integrity or foreign-key check failed" }
 
+  $SmokeStage = "complete"
   $Succeeded = $true
   $Result = [pscustomobject]@{
     ok = $true
@@ -592,6 +606,13 @@ try {
     runRoot = $(if ($Keep) { $RunRoot } else { $null })
   }
 } catch {
+  if ($env:GITHUB_ACTIONS -eq "true") {
+    $AnnotationTitle = "Windows installer smoke failed ($SmokeStage)"
+    $AnnotationMessage = "$($_.Exception.Message)"
+    $AnnotationTitle = $AnnotationTitle.Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A").Replace(":", "%3A").Replace(",", "%2C")
+    $AnnotationMessage = $AnnotationMessage.Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
+    Write-Host "::error file=scripts/smoke-windows-installer.ps1,title=$AnnotationTitle::$AnnotationMessage"
+  }
   Write-Error $_
   if (Test-Path $LaunchOut) {
     Write-Host "--- launch stdout tail ---"
