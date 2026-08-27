@@ -70,7 +70,7 @@ describe('active task message relation', () => {
   });
 
   it('keeps all long formal file-target corrections on the same task', () => {
-    const root = 'C:\\Users\\Administrator\\LumiCore\\formal-client-e2e-artifacts\\LUMI-E2E-correction-lifecycle';
+    const root = 'C:\\Users\\ExampleUser\\LumiCore\\formal-client-e2e-artifacts\\LUMI-E2E-correction-lifecycle';
     const targets = [0, 1, 2, 3].map(index => `${root}\\target-${index}.txt`);
     const waitingState: ConversationActionContinuationState = {
       ...activeState,

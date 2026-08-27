@@ -171,8 +171,8 @@ describe('accepted action-turn durability fence', () => {
   });
 
   it('revokes a rejected pending target and requires a fresh confirmation for its correction', async () => {
-    const oldTarget = 'C:\\Users\\Administrator\\LumiCore\\formal-client-e2e-artifacts\\LUMI-E2E-confirmation-correction\\target-0.txt';
-    const newTarget = 'C:\\Users\\Administrator\\LumiCore\\formal-client-e2e-artifacts\\LUMI-E2E-confirmation-correction\\target-1.txt';
+    const oldTarget = 'C:\\Users\\ExampleUser\\LumiCore\\formal-client-e2e-artifacts\\LUMI-E2E-confirmation-correction\\target-0.txt';
+    const newTarget = 'C:\\Users\\ExampleUser\\LumiCore\\formal-client-e2e-artifacts\\LUMI-E2E-confirmation-correction\\target-1.txt';
     const channelScope = buildTransportNeutralConfirmationScope({
       domain: 'personal',
       conversationId: 'corrected-confirmation-conversation',

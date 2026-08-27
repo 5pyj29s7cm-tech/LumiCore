@@ -131,7 +131,7 @@ describe('TaskCapsuleV1', () => {
 
   it('keeps the structured final replacement when one correction names both old and new paths', () => {
     const targets = [0, 1, 2, 3].map(index => (
-      `C:\\Users\\Administrator\\LumiCore\\formal-client-e2e-artifacts\\target-${index}.txt`
+      `C:\\Users\\ExampleUser\\LumiCore\\formal-client-e2e-artifacts\\target-${index}.txt`
     ));
     const goal = `创建确认门控文件 ${targets[0]}，内容保持不变。`;
     const instructions = [
