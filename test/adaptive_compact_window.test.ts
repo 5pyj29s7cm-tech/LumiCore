@@ -84,4 +84,13 @@ describe('adaptive compact client window', () => {
     expect(css).toContain('.lumi-shell-window-controls');
     expect(css).toContain('@media (max-width: 820px), (max-height: 700px)');
   });
+
+  it('keeps the learning stream available without pinning it to the desktop widget rail', () => {
+    const desktop = source('src/components/DesktopUI.tsx');
+
+    expect(desktop).not.toContain('<DailyPlans t={t} onOpenQueue={() => toggleWindow(\'plans\')} />');
+    expect(desktop).toContain("{ id: 'plans'");
+    expect(desktop).toContain("windowId === 'plans'");
+    expect(desktop).toContain('<ExecutionWorkQueue t={t} />');
+  });
 });

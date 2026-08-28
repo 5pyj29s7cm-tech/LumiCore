@@ -445,7 +445,7 @@
   },
   "agent-chat-page.24h-autonomous-work.81b1d75d6b": {
     "en": "24h autonomous work",
-    "zh": "24h 自主运行"
+    "zh": "自主运行"
   },
   "agent-chat-page.add-file-to-message.50db7cd91e": {
     "en": "Add file to message",
@@ -2273,11 +2273,11 @@
   },
   "desktop-ui.24h-autonomous-work.81b1d75d6b": {
     "en": "24h autonomous work",
-    "zh": "24h 自主运行"
+    "zh": "自主运行"
   },
   "desktop-ui.24h-autonomous.1cd235aa0d": {
     "en": "24h Autonomous",
-    "zh": "24h 自主运行"
+    "zh": "自主运行"
   },
   "desktop-ui.absorbing.9a2002c5f8": {
     "en": "Absorbing",

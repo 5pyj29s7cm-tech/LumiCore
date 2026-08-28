@@ -5398,9 +5398,6 @@ export function DesktopUI({
                 onModeChange={requestOperationModeChange}
               />
 
-              {/* Daily Plans Widget */}
-              <DailyPlans t={t} onOpenQueue={() => toggleWindow('plans')} />
-
               {/* Notification Preview */}
               {false && notifications.filter(n => !n.read).length > 0 && (
                 <GlassCard className="p-5 rounded-[2rem] space-y-2 border-white/5 bg-black/30 backdrop-blur-3xl cursor-pointer hover:bg-white/[0.06] transition-all" onClick={() => toggleWindow('notifications')}>
