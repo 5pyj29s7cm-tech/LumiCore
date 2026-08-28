@@ -1656,12 +1656,361 @@ body,
   background: #04080e;
 }
 
+/*
+ * The command center is a single-core field, not an office simulator. Keep
+ * the visual language deliberately sparse: one core, a few real task beacons,
+ * and a deep field that gives the transition somewhere to travel.
+ */
+.lumi-core-command-field {
+  isolation: isolate;
+  background:
+    radial-gradient(circle at 50% 47%, rgba(44, 52, 112, .32), transparent 30%),
+    radial-gradient(circle at 20% 12%, rgba(96, 72, 164, .14), transparent 33%),
+    linear-gradient(145deg, #070a18 0%, #030611 53%, #010208 100%);
+}
+
+.lumi-core-command-field::before {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  content: "";
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 35%, rgba(0, 0, 0, .42) 100%);
+}
+
+.lumi-core-command-field__backdrop,
+.lumi-core-command-field__nebula,
+.lumi-core-command-field__horizon,
+.lumi-core-command-field__stars,
+.lumi-core-command-field__grid,
+.lumi-core-command-field__routes {
+  pointer-events: none;
+}
+
+.lumi-core-command-field__backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.lumi-core-command-field__backdrop::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background-image: radial-gradient(rgba(255, 255, 255, .12) .45px, transparent .6px);
+  background-size: 4px 4px;
+  opacity: .08;
+  mix-blend-mode: screen;
+}
+
+.lumi-core-command-field__nebula {
+  position: absolute;
+  width: 46%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  filter: blur(46px);
+  opacity: .3;
+  transform: translate3d(0, 0, 0);
+  animation: lumi-core-nebula-drift 18s ease-in-out infinite;
+}
+
+.lumi-core-command-field__nebula--violet {
+  top: -19%;
+  left: -13%;
+  background: rgba(124, 92, 246, .22);
+}
+
+.lumi-core-command-field__nebula--cyan {
+  right: -17%;
+  bottom: -24%;
+  background: rgba(34, 211, 238, .17);
+  animation-delay: -8s;
+  animation-direction: reverse;
+}
+
+.lumi-core-command-field__nebula--rose {
+  top: 31%;
+  right: 20%;
+  width: 24%;
+  opacity: .14;
+  background: rgba(251, 113, 133, .22);
+  animation-duration: 23s;
+  animation-delay: -13s;
+}
+
+.lumi-core-command-field__horizon {
+  position: absolute;
+  right: -18%;
+  bottom: -21%;
+  left: -18%;
+  height: 47%;
+  border-top: 1px solid rgba(129, 140, 248, .2);
+  border-radius: 50% 50% 0 0;
+  box-shadow: 0 -22px 80px rgba(67, 56, 202, .12), 0 -1px 0 rgba(103, 232, 249, .16);
+  opacity: .65;
+  transform: perspective(520px) rotateX(58deg);
+  transform-origin: center bottom;
+}
+
+.lumi-core-command-field__stars {
+  position: absolute;
+  inset: -8%;
+}
+
+.lumi-core-command-field__stars--far {
+  opacity: .75;
+  transform: scale(1.04);
+}
+
+.lumi-core-command-field__stars--near {
+  opacity: .95;
+  transform: scale(1.08);
+}
+
+.lumi-core-command-field__star {
+  position: absolute;
+  display: block;
+  border-radius: 999px;
+  background: #d9f8ff;
+  box-shadow: 0 0 7px rgba(165, 243, 252, .85);
+  animation: lumi-core-star-twinkle 5.6s ease-in-out infinite;
+}
+
+.lumi-core-command-field__star--near {
+  background: #ede9fe;
+  box-shadow: 0 0 10px rgba(196, 181, 253, .9);
+  animation-duration: 4.2s;
+}
+
+.lumi-core-command-field__hud {
+  position: absolute;
+  top: 18px;
+  left: 20px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: rgba(226, 232, 240, .54);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+}
+
+.lumi-core-command-field__hud-title {
+  color: rgba(255, 255, 255, .72);
+}
+
+.lumi-core-command-field__hud-divider {
+  width: 22px;
+  height: 1px;
+  background: linear-gradient(to right, rgba(255, 255, 255, .3), transparent);
+}
+
+.lumi-core-command-field__hud-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(165, 243, 252, .72);
+}
+
+.lumi-core-command-field__hud-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+}
+
+.lumi-core-command-field__hud-count {
+  position: absolute;
+  top: 15px;
+  right: 20px;
+  z-index: 20;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  color: rgba(255, 255, 255, .72);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: .08em;
+}
+
+.lumi-core-command-field__hud-count-mark {
+  width: 8px;
+  height: 8px;
+  border: 1px solid rgba(165, 243, 252, .46);
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px rgba(165, 243, 252, .06), 0 0 12px rgba(165, 243, 252, .26);
+}
+
+.lumi-core-command-field__grid {
+  position: absolute;
+  inset: 8%;
+  z-index: 1;
+  border: 1px solid rgba(165, 180, 252, .08);
+  border-radius: 50%;
+  background:
+    repeating-radial-gradient(circle at center, transparent 0 10%, rgba(165, 180, 252, .045) 10.2% 10.35%, transparent 10.5% 19.8%),
+    linear-gradient(90deg, transparent 49.8%, rgba(103, 232, 249, .08) 50%, transparent 50.2%),
+    linear-gradient(0deg, transparent 49.8%, rgba(103, 232, 249, .06) 50%, transparent 50.2%);
+  opacity: .7;
+  -webkit-mask-image: radial-gradient(circle, black 20%, transparent 76%);
+  mask-image: radial-gradient(circle, black 20%, transparent 76%);
+}
+
+.lumi-core-command-field__routes {
+  position: absolute;
+  inset: 4%;
+  z-index: 2;
+  overflow: visible;
+  fill: none;
+  stroke: rgba(165, 243, 252, .2);
+  stroke-width: .22;
+  stroke-dasharray: 1.2 4.8;
+  animation: lumi-core-route-flow 18s linear infinite;
+}
+
+.lumi-core-command-field__routes path {
+  stroke: rgba(196, 181, 253, .18);
+}
+
+[data-lumi-core-field-state="working"] .lumi-core-command-field__routes {
+  stroke: rgba(103, 232, 249, .3);
+}
+
+[data-lumi-core-field-state="attention"] .lumi-core-command-field__routes,
+[data-lumi-core-field-state="attention"] .lumi-core-command-field__routes path {
+  stroke: rgba(251, 113, 133, .32);
+}
+
+[data-lumi-core-field-state="attention"] .lumi-core-command-field__horizon {
+  border-top-color: rgba(251, 113, 133, .28);
+  box-shadow: 0 -22px 80px rgba(190, 24, 93, .14), 0 -1px 0 rgba(251, 113, 133, .2);
+}
+
+.lumi-core-command-field__orbit {
+  z-index: 3;
+  opacity: .78;
+  transform-style: preserve-3d;
+}
+
+.lumi-core-command-field__orbit--0 {
+  border-style: solid;
+  opacity: .92;
+}
+
+.lumi-core-command-field__orbit--1 {
+  border-style: dashed;
+  opacity: .68;
+}
+
+.lumi-core-command-field__orbit--2 {
+  border-style: dotted;
+  opacity: .5;
+}
+
+.lumi-core-command-field__orbit-marker {
+  animation: lumi-core-marker-pulse 2.8s ease-in-out infinite;
+}
+
+.lumi-core-command-field__core {
+  position: absolute;
+  filter: drop-shadow(0 18px 40px rgba(4, 7, 20, .74));
+}
+
+.lumi-core-command-field__core-aura {
+  position: absolute;
+  inset: -18%;
+  z-index: -1;
+  border-radius: 50%;
+  filter: blur(10px);
+  opacity: .9;
+  animation: lumi-core-aura-breathe 5.5s ease-in-out infinite;
+}
+
+.lumi-core-command-field__core-label {
+  min-width: 104px;
+  border-color: rgba(196, 181, 253, .16);
+  background: linear-gradient(145deg, rgba(9, 13, 31, .86), rgba(3, 6, 16, .72));
+}
+
+.lumi-core-command-field__beacon {
+  background: linear-gradient(145deg, rgba(10, 16, 34, .88), rgba(4, 7, 18, .7));
+  box-shadow: 0 8px 28px rgba(1, 2, 8, .4), 0 0 18px rgba(165, 243, 252, .08);
+  box-shadow: 0 8px 28px rgba(1, 2, 8, .4), 0 0 22px color-mix(in srgb, var(--beacon-color) 16%, transparent);
+  transition: background-color .2s ease, border-color .2s ease, box-shadow .2s ease;
+}
+
+.lumi-core-command-field__beacon::before {
+  position: absolute;
+  inset: 3px;
+  content: "";
+  pointer-events: none;
+  border: 1px solid rgba(165, 243, 252, .12);
+  border: 1px solid color-mix(in srgb, var(--beacon-color) 28%, transparent);
+  border-radius: 9px;
+  opacity: .45;
+}
+
+.lumi-core-command-field__beacon-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  filter: drop-shadow(0 0 5px currentColor);
+}
+
+.lumi-core-command-field__empty {
+  border-color: rgba(196, 181, 253, .12);
+  background: rgba(5, 8, 21, .42);
+  color: rgba(255, 255, 255, .34);
+}
+
+@keyframes lumi-core-nebula-drift {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(4%, -3%, 0) scale(1.08); }
+}
+
+@keyframes lumi-core-star-twinkle {
+  0%, 100% { opacity: .48; transform: scale(.8); }
+  48% { opacity: 1; transform: scale(1.18); }
+}
+
+@keyframes lumi-core-route-flow {
+  to { stroke-dashoffset: -48; }
+}
+
+@keyframes lumi-core-marker-pulse {
+  0%, 100% { transform: scale(.8); opacity: .58; }
+  50% { transform: scale(1.28); opacity: 1; }
+}
+
+@keyframes lumi-core-aura-breathe {
+  0%, 100% { opacity: .62; transform: scale(.94); }
+  50% { opacity: 1; transform: scale(1.06); }
+}
+
 .lumi-command-center-office {
   isolation: isolate;
   background:
-    radial-gradient(ellipse at 68% 30%, rgba(28, 211, 204, .075), transparent 41%),
-    radial-gradient(ellipse at 16% 24%, rgba(255, 118, 43, .055), transparent 31%),
-    linear-gradient(155deg, #0c181e 0%, #081218 52%, #050c11 100%) !important;
+    radial-gradient(ellipse at 50% 0%, rgba(129, 140, 248, .08), transparent 44%),
+    linear-gradient(155deg, #070a15 0%, #030611 54%, #010208 100%) !important;
+}
+
+.lumi-command-center-office--orbital {
+  isolation: isolate;
+}
+
+.lumi-command-center-office--orbital::before {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  content: "";
+  pointer-events: none;
+  background: linear-gradient(105deg, transparent 0%, rgba(165, 243, 252, .12) 47%, rgba(196, 181, 253, .2) 50%, transparent 54%);
+  opacity: 0;
+  transform: translateX(-110%);
+  animation: lumi-command-center-orbital-reveal 1.15s cubic-bezier(.2, .75, .2, 1) .08s both;
 }
 
 .lumi-command-center-office::after {
@@ -1678,6 +2027,25 @@ body,
 .lumi-command-center-chat-rail {
   position: relative;
   border-radius: 0;
+  background-image: linear-gradient(180deg, rgba(13, 18, 30, .34), rgba(4, 7, 14, .18));
+  box-shadow: inset 18px 0 38px rgba(1, 2, 8, .16);
+}
+
+.lumi-command-center-chat-rail--entering {
+  will-change: transform, opacity;
+}
+
+.lumi-command-center-chat-rail--entering::after {
+  position: absolute;
+  inset: 10% auto 10% 0;
+  z-index: 3;
+  width: 1px;
+  content: "";
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, rgba(165, 243, 252, .34), rgba(196, 181, 253, .2), transparent);
+  box-shadow: 0 0 24px rgba(103, 232, 249, .22);
+  opacity: 0;
+  animation: lumi-command-center-chat-edge 1s ease-out .18s both;
 }
 
 .lumi-command-center-chat-rail::before {
@@ -1688,6 +2056,18 @@ body,
   content: "";
   pointer-events: none;
   background: linear-gradient(to bottom, transparent 2%, rgba(255, 255, 255, 0.09) 18%, rgba(255, 255, 255, 0.09) 82%, transparent 98%);
+}
+
+@keyframes lumi-command-center-orbital-reveal {
+  0% { opacity: 0; transform: translateX(-110%); }
+  28% { opacity: 1; }
+  100% { opacity: 0; transform: translateX(110%); }
+}
+
+@keyframes lumi-command-center-chat-edge {
+  0% { opacity: 0; transform: scaleY(.25); }
+  35% { opacity: 1; transform: scaleY(1); }
+  100% { opacity: 0; transform: scaleY(1); }
 }
 
 [data-compact-layout="true"] .lumi-dock {
@@ -1991,6 +2371,42 @@ body,
     display: none;
   }
 
+  .lumi-core-command-field {
+    min-height: 220px !important;
+  }
+
+  .lumi-core-command-field__hud {
+    top: 12px;
+    left: 14px;
+    gap: 6px;
+    font-size: 8px;
+    letter-spacing: .16em;
+  }
+
+  .lumi-core-command-field__hud-divider {
+    width: 12px;
+  }
+
+  .lumi-core-command-field__hud-count {
+    top: 10px;
+    right: 14px;
+    font-size: 14px;
+  }
+
+  .lumi-core-command-field__beacon {
+    max-width: 112px;
+    padding: 6px 8px;
+    font-size: 8px;
+  }
+
+  .lumi-core-command-field__core-label {
+    top: 70%;
+    min-width: 88px;
+    padding: 6px 10px;
+    transform: translateX(-50%) scale(.84);
+    transform-origin: top center;
+  }
+
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2000,5 +2416,16 @@ body,
     animation-duration: .01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: .01ms !important;
+  }
+
+  .lumi-core-command-field__nebula,
+  .lumi-core-command-field__star,
+  .lumi-core-command-field__routes,
+  .lumi-core-command-field__orbit-marker,
+  .lumi-core-command-field__core-aura,
+  .lumi-core-command-field .animate-spin,
+  .lumi-command-center-office--orbital::before,
+  .lumi-command-center-chat-rail--entering::after {
+    animation: none !important;
   }
 }

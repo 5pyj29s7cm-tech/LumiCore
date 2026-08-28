@@ -19,6 +19,21 @@ describe('single-core command center', () => {
     expect(sphere).toContain('{activeTasks.map((task, index) =>');
   });
 
+  it('uses a deterministic orbital field and respects reduced-motion preferences', () => {
+    const sphere = source('src/components/LumiCoreSphere.tsx');
+    const styles = source('src/index.css');
+
+    expect(sphere).toContain('data-lumi-core-command-field');
+    expect(sphere).toContain('const COSMOS_STARS = [');
+    expect(sphere).toContain('useReducedMotion()');
+    expect(sphere).toContain('data-lumi-core-field-state={state}');
+    expect(sphere).not.toContain('Math.random');
+    expect(styles).toContain('.lumi-core-command-field__routes');
+    expect(styles).toContain('@keyframes lumi-core-route-flow');
+    expect(styles).toContain('.lumi-command-center-office--orbital::before');
+    expect(styles).toContain('@media (prefers-reduced-motion: reduce)');
+  });
+
   it('keeps the app topmost when either Command Center or Wallpaper is active', () => {
     const desktop = source('src/components/DesktopUI.tsx');
     const systemService = source('src/services/systemService.ts');

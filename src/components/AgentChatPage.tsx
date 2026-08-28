@@ -3281,7 +3281,7 @@ export function AgentChatPage({
             initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.82, x: '-7%' }}
             animate={{ opacity: 1, scale: 1, x: 0 }}
             transition={{ duration: prefersReducedMotion ? 0 : 0.48, ease: [0.2, 0.75, 0.2, 1] }}
-            className="lumi-command-center-office relative min-h-0 min-w-0 flex-1 overflow-hidden border-r border-white/[0.08]"
+            className="lumi-command-center-office relative min-h-0 min-w-0 flex-1 overflow-hidden border-r border-white/[0.08] lumi-command-center-office--orbital"
           >
             <div className="absolute inset-0">
               <CommandCenterPanel
