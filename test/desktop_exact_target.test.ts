@@ -63,6 +63,30 @@ describe('desktop exact-target execution', () => {
     });
   }, 10_000);
 
+  it('verifies NetEase Cloud Music from its native cloudmusic process', async () => {
+    const desktopRelay = vi.fn(async (name: string) => {
+      if (name === 'desktop_open') return 'launch accepted';
+      if (name === 'desktop_active_window') {
+        return JSON.stringify({ title: '月牙儿 - Ice Paper', process_name: 'cloudmusic.exe' });
+      }
+      throw new Error(`unexpected relay ${name}`);
+    });
+    const record = await executeToolCall({
+      registry: registry(),
+      name: 'desktop_open',
+      arguments: { target: '网易云音乐' },
+      context: { desktopRelay },
+    });
+
+    expect(record.error).toBeUndefined();
+    expect(record.terminalVerification?.status).toBe('verified');
+    expect(JSON.parse(record.result)).toMatchObject({
+      status: 'verified',
+      targetMatched: true,
+      actualTarget: { processName: 'cloudmusic.exe' },
+    });
+  });
+
   it('does not treat a launch acknowledgement without post-state observation as success', async () => {
     const desktopRelay = vi.fn(async (name: string) => {
       if (name === 'desktop_open') return JSON.stringify({ ok: true, target: 'AutoCAD' });

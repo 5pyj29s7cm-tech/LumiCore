@@ -23,7 +23,6 @@ describe('remote organization work routing integration', () => {
   const memberA = `remote-routing-member-a-${suffix}`;
   const memberB = `remote-routing-member-b-${suffix}`;
   let orgId = '';
-  let agentId = '';
 
   function message(
     text: string,
@@ -61,29 +60,6 @@ describe('remote organization work routing integration', () => {
     for (const membership of db.orgMemberships.filter((item: any) => item.orgId === orgId)) {
       if ([memberA, memberB].includes(membership.userId)) membership.departmentId = department.id;
     }
-    agentId = `remote-legal-agent-${suffix}`;
-    db.agents.push({
-      id: agentId,
-      ownerUid: ownerId,
-      userId: ownerId,
-      name: 'Remote Legal Worker',
-      category: 'analysis',
-      data: '{}',
-      config: '{}',
-      status: 'active',
-      personalityId: 'lumi',
-      modelPreference: '',
-      memoryScope: 'shared',
-      autonomyLevel: 'reactive',
-      runtimeConfig: '{}',
-      runtime: 'internal',
-      domain: 'work',
-      orgId,
-      createdAt: new Date().toISOString(),
-      skillTags: ['contract-review'],
-      knowledgeDomains: ['contract-review'],
-      healthStatus: 'online',
-    });
     writeDB(db);
     const position = createOrganizationPosition({
       orgId,
@@ -92,7 +68,6 @@ describe('remote organization work routing integration', () => {
       name: 'Contract Review',
       skillTags: ['contract-review'],
       memberIds: [memberA, memberB],
-      agentIds: [agentId],
     });
     createOrganizationWorkRoutingRule({
       orgId,
@@ -130,7 +105,7 @@ describe('remote organization work routing integration', () => {
     });
   });
 
-  it('creates and completes one durable work item around a bound callback without bypassing organization routing', async () => {
+  it('creates one durable human-owned work item without letting a callback bypass organization routing', async () => {
     const messageId = `remote-route-${suffix}`;
     let callbackCalls = 0;
     const reply = await processWithPersonality(
@@ -142,14 +117,14 @@ describe('remote organization work routing integration', () => {
         },
       },
     );
-    expect(reply).toBe('Contract review callback completed.');
-    expect(callbackCalls).toBe(1);
+    expect(reply).toContain('LumiCore');
+    expect(reply).toContain(memberA);
+    expect(callbackCalls).toBe(0);
     const items = listOrganizationWorkItems(orgId).filter(item => item.requestId === `feishu_bot:${messageId}`);
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
-      status: 'completed',
+      status: 'waiting_human',
       assignedMemberId: memberA,
-      assignedAgentIds: [agentId],
     });
     expect(items[0].collaboratorMemberIds).toContain(memberB);
     expect(items[0].taskId).toBeTruthy();
@@ -194,15 +169,15 @@ describe('remote organization work routing integration', () => {
         },
       },
     );
-    expect(continuedReply).toContain('not complete');
-    expect(continuedReply).toContain('no verified terminal receipt');
+    expect(continuedReply).toContain('LumiCore');
+    expect(continuedReply).toContain(memberA);
     expect(callbackCalls).toBe(0);
     const sameTaskItems = listOrganizationWorkItems(orgId, { taskId: workItem.taskId });
     expect(sameTaskItems).toHaveLength(1);
     expect(sameTaskItems[0]).toMatchObject({
       id: workItem.id,
-      status: 'blocked',
-      lastBlocker: 'The external commit has no verified terminal receipt.',
+      status: 'waiting_human',
+      humanOwnerUserId: memberA,
     });
   });
 
@@ -220,11 +195,11 @@ describe('remote organization work routing integration', () => {
     );
 
     expect(reply).not.toContain('等待组织管理员审批');
-    expect(reply).toContain('no verified terminal receipt');
+    expect(reply).toContain('LumiCore');
     expect(callbackCalls).toBe(0);
     const [workItem] = listOrganizationWorkItems(orgId).filter(item => item.requestId === `feishu_bot:${requestId}`);
     expect(workItem.approvalId).toBeNull();
-    expect(workItem.status).not.toBe('waiting_approval');
+    expect(workItem.status).toBe('waiting_human');
   });
 
   it('runs deterministic organization knowledge commands inside the same task and receipt route', async () => {
@@ -260,11 +235,11 @@ describe('remote organization work routing integration', () => {
         onMessage: async () => ({ platform: 'feishu', text: 'Mentioned-member route completed.' }),
       },
     );
-    expect(reply).toBe('Mentioned-member route completed.');
+    expect(reply).toContain('LumiCore');
+    expect(reply).toContain(memberB);
     const [item] = listOrganizationWorkItems(orgId).filter(candidate => candidate.requestId === `feishu_bot:${messageId}`);
     expect(item.assignedMemberId).toBe(memberB);
     expect(item.collaboratorMemberIds).toContain(ownerId);
     expect(item.collaboratorMemberIds).not.toContain('ou-unbound-outsider');
-    expect(item.assignedAgentIds).toContain(agentId);
   });
 });

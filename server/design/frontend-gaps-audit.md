@@ -18,8 +18,6 @@ Codex 产品完整化参考。按优先级排列：P0=用户路径断点，P1=�
 | `GET /api/explore/history` | 扫描历史 |
 | `GET /api/explore/profession` | 职业检测结果 |
 | `POST /api/explore/profession/rescan` | 重新检测职业 |
-| `POST /api/explore/profession/install` | 安装职业代理 |
-| `GET /api/explore/profession/templates/:profession` | 职业模板详情 |
 | `GET /api/plans` | 计划列表 |
 | `GET /api/plans/today` | 今日计划 |
 | `GET /api/plans/:id` | 计划详情 |
@@ -47,13 +45,13 @@ Codex 产品完整化参考。按优先级排列：P0=用户路径断点，P1=�
 ### 3. LAP 长期自主规划（5 条路由）
 **文件**: `server/lap/routes.ts`
 **前端**: 无任何消费者
-**用途**: Agent 长期会话 + 任务追踪
+**用途**: 经明确授权的 Lumi 对等会话 + 任务追踪
 
 | 路由 | 用途 |
 |------|------|
-| `GET /api/lap/identity` | Agent 身份 |
+| `GET /api/lap/identity` | 本机 Lumi LAP 身份 |
 | `GET /api/lap/sessions` | 会话列表 |
-| `GET /api/lap/tasks/:agentId` | Agent 任务 |
+| `GET /api/lap/tasks/:agentId` | 对等 Lumi 任务 |
 | `GET /api/lap/contexts/:sessionId` | 会话上下文 |
 | `DELETE /api/lap/sessions/:sessionId` | 删除会话 |
 
@@ -77,19 +75,14 @@ Codex 产品完整化参考。按优先级排列：P0=用户路径断点，P1=�
 
 **建议**: 在侧边栏或 DesktopUI 加 "联系人" 面板。
 
-### 5. 组织模板实时事件（6 个 socket）
+### 5. 知识库实时事件（1 个 socket）
 **后端 emit，前端无 listener**
 
 | 事件 | 用途 |
 |------|------|
-| `template:submitted` | 模板提交审核 |
-| `template:approved` | 模板审核通过 |
-| `template:rejected` | 模板驳回 |
-| `template:published` | 模板发布 |
-| `template:status` | 模板状态变更 |
 | `kb:article` | 知识库文章变更 |
 
-**建议**: TemplateReviewQueue / TemplateMarketplace 监听这些事件做实时刷新，不用手动刷新页面。
+**建议**: 知识库界面监听该事件做实时刷新，不用手动刷新页面。
 
 ### 6. Token 用量实时推送（2 个 socket）
 | 事件 | 用途 |
@@ -185,7 +178,6 @@ Codex 产品完整化参考。按优先级排列：P0=用户路径断点，P1=�
 | `org:heartbeat:ack` | 组织心跳确认 |
 | `org:sync:ack` | 组织同步确认 |
 | `org:kb:stale` | 知识库过期通知 |
-| `agent:removed` | 代理被移除通知 |
 
 ---
 
@@ -195,7 +187,7 @@ Codex 产品完整化参考。按优先级排列：P0=用户路径断点，P1=�
 
 | 子系统 | 路由数 | 备注 |
 |--------|--------|------|
-| `/api/lap/*` | 5 | LAP 全部未接入 |
+| `/api/lap/*` | 保留 | 已接入授权、配对、撤销和上下文防火墙；不得作为本地任务扇出机制 |
 | `/api/api/explore/*` | 7 | 双前缀 bug + 未接入 |
 | `/api/api/plans/*` | 7 | 双前缀 bug + 未接入 |
 | `/api/contacts/*` | 5 | 联系人全部未接入 |
@@ -208,6 +200,6 @@ Codex 产品完整化参考。按优先级排列：P0=用户路径断点，P1=�
 ## 建议接入顺序
 
 1. **第 1 批** (P0): 系统探索 + 计划系统（修双前缀 bug → 前端页面）→ 分支连接 → LAP
-2. **第 2 批** (P1): 联系人 → 组织模板 socket → 记忆系统补全
+2. **第 2 批** (P1): 联系人 → 知识库 socket → 记忆系统补全
 3. **第 3 批** (P2): 人格详情 → 市场 → 文件管理 → 音乐 → MCP socket
 4. **第 4 批** (P3): 清理死代码或加 `// TODO: frontend wire-up pending`

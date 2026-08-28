@@ -10,21 +10,6 @@ import {
   type AutonomousTask,
 } from '../autonomy/task_queue';
 import {
-  getBackgroundTask,
-  listBackgroundTasks,
-  requestCancelBackgroundTask,
-  requestPauseBackgroundTask,
-  resumeBackgroundTask,
-} from '../agents/background_tasks';
-import {
-  backgroundTaskMatchesScope,
-  projectBackgroundTask,
-} from '../agents/background_task_public';
-export {
-  backgroundTaskMatchesScope,
-  projectBackgroundTask,
-} from '../agents/background_task_public';
-import {
   buildTaskCompletionFeedback,
   type TaskTerminalReceipt,
 } from '../cognition/acceptance_evidence';
@@ -86,14 +71,6 @@ export function autonomousTaskMatchesScope(task: AutonomousTask, scope: TaskScop
   if (scope.domain === 'work' && !scope.orgId.trim()) return false;
   if (domain === 'work' && !orgId) return false;
   return domain === scope.domain && (domain === 'personal' || orgId === scope.orgId);
-}
-
-function backgroundControls(status: string) {
-  return {
-    canPause: status === 'queued' || status === 'running',
-    canResume: status === 'paused',
-    canCancel: ['queued', 'running', 'pausing', 'paused'].includes(status),
-  };
 }
 
 function autonomousControls(status: string) {
@@ -303,64 +280,6 @@ export function autonomyRoutes(): Router {
     const task = resumeAutonomousTask(req.params.id, req.user!.uid);
     if (!task) return res.status(404).json({ error: 'Task not found or not resumable' });
     res.json({ task: projectAutonomousTask(task) });
-  });
-
-  router.get('/background-tasks', requireAuth, (req, res) => {
-    const scope = resolveDomain(req.user!);
-    const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 50, 1), 200);
-    const tasks = listBackgroundTasks(req.user!.uid)
-      .filter(task => backgroundTaskMatchesScope(task, scope))
-      .slice(0, limit)
-      .map(projectBackgroundTask);
-    res.json({ tasks, scope });
-  });
-
-  router.post('/background-tasks/:id/cancel', requireAuth, (req, res) => {
-    const scope = resolveDomain(req.user!);
-    const existing = getBackgroundTask(req.params.id, req.user!.uid);
-    if (!existing || !backgroundTaskMatchesScope(existing, scope)) {
-      return res.status(404).json({ error: 'Background task not found' });
-    }
-    if (!backgroundControls(existing.status).canCancel) {
-      return res.status(409).json({ error: 'Background task is not cancellable', task: projectBackgroundTask(existing) });
-    }
-    const task = requestCancelBackgroundTask(req.params.id, req.user!.uid);
-    if (!task) return res.status(404).json({ error: 'Background task not found' });
-    const projected = projectBackgroundTask(task);
-    res.json({
-      status: projected.status,
-      cancelRequested: projected.cancelRequested,
-      cancelled: projected.status === 'cancelled',
-      task: projected,
-    });
-  });
-
-  router.post('/background-tasks/:id/pause', requireAuth, (req, res) => {
-    const scope = resolveDomain(req.user!);
-    const existing = getBackgroundTask(req.params.id, req.user!.uid);
-    if (!existing || !backgroundTaskMatchesScope(existing, scope)) {
-      return res.status(404).json({ error: 'Background task not found or not pausable' });
-    }
-    if (!backgroundControls(existing.status).canPause) {
-      return res.status(409).json({ error: 'Background task is not pausable', task: projectBackgroundTask(existing) });
-    }
-    const task = requestPauseBackgroundTask(req.params.id, req.user!.uid);
-    if (!task) return res.status(404).json({ error: 'Background task not found or not pausable' });
-    res.json({ task: projectBackgroundTask(task) });
-  });
-
-  router.post('/background-tasks/:id/resume', requireAuth, (req, res) => {
-    const scope = resolveDomain(req.user!);
-    const existing = getBackgroundTask(req.params.id, req.user!.uid);
-    if (!existing || !backgroundTaskMatchesScope(existing, scope)) {
-      return res.status(404).json({ error: 'Background task not found or not resumable' });
-    }
-    if (!backgroundControls(existing.status).canResume) {
-      return res.status(409).json({ error: 'Background task is not resumable', task: projectBackgroundTask(existing) });
-    }
-    const task = resumeBackgroundTask(req.params.id, req.user!.uid);
-    if (!task) return res.status(404).json({ error: 'Background task not found or not resumable' });
-    res.json({ task: projectBackgroundTask(task) });
   });
 
   return router;

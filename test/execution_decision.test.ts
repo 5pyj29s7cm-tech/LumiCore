@@ -775,7 +775,6 @@ describe('Lumi execution decision', () => {
     expect(dispatch.flow.workSurfaceRoute.directDesktop).toBe(true);
     expect(dispatch.flow.workSurfaceRoute.artifactFirst).toBe(false);
     expect(dispatch.flow.executionGovernance.capabilityLearningIntent).toBe('none');
-    expect(dispatch.flow.executionGovernance.delegationIntent).toBe('foreground_owned');
     expect(dispatch.flow.specialWorkflow).toBeNull();
     expect(decision.toolRoute?.categories).toEqual(expect.arrayContaining([
       'external_control',

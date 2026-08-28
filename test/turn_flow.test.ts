@@ -74,7 +74,6 @@ describe('Lumi turn flow', () => {
     expect(flow.selfRepairTurn).toBe(false);
     expect(flow.completionEvidenceNeeded).toBe(false);
     expect(flow.executionGovernance.verificationIntent).toBe('none');
-    expect(flow.executionGovernance.delegationIntent).toBe('none');
   });
 
   it('keeps a quoted old action inside an explicit no-tool correction off the client-action lane', async () => {
@@ -134,7 +133,6 @@ describe('Lumi turn flow', () => {
     expect(dispatch.flow.clientActionOnlyTurn).toBe(false);
     expect(dispatch.flow.selfRepairTurn).toBe(false);
     expect(dispatch.flow.specialWorkflow).toBeNull();
-    expect(dispatch.flow.executionGovernance.delegationIntent).toBe('none');
     expect(dispatch.flow.routeText).not.toContain('active task');
     if (channel === 'chat') {
       expect(dispatch.promptOverlay).toContain('only text entry');
@@ -300,7 +298,6 @@ describe('Lumi turn flow', () => {
     expect(flow.effectiveOperationMode).toBe('chat');
     expect(flow.selfRepairTurn).toBe(true);
     expect(flow.allowToolUseForTurn).toBe(true);
-    expect(flow.executionGovernance.delegationIntent).toBe('none');
   });
 
   it('keeps guard-polluted conversational follow-ups chat-only in text and voice', async () => {
@@ -627,7 +624,7 @@ describe('Lumi turn flow', () => {
     expect(flow.allowToolUseForTurn).toBe(true);
   });
 
-  it('describes Lumi as the orchestrator over skills, tasks, and external systems', async () => {
+  it('describes LumiCore as the execution owner over skills, tasks, and external systems', async () => {
     const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
     const flow = buildLumiTurnFlow({
       userId: 'turn_flow_prompt_user',
@@ -674,7 +671,7 @@ describe('Lumi turn flow', () => {
     expect(flow.promptOverlay).toContain('capability_gap_autofix');
   });
 
-  it('marks explicit background work as delegation while keeping Lumi as owner', async () => {
+  it('keeps explicit former delegation wording on the single LumiCore execution path', async () => {
     const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
     const flow = buildLumiTurnFlow({
       userId: 'turn_flow_delegate_user',
@@ -684,8 +681,8 @@ describe('Lumi turn flow', () => {
       operationMode: 'assistant',
     });
 
-    expect(flow.executionGovernance.delegationIntent).toBe('explicit_background');
-    expect(flow.promptOverlay).toContain('Lumi remains the owner');
+    expect(flow.allowToolUseForTurn).toBe(true);
+    expect(flow.promptOverlay).toContain('one LumiCore execution owner');
   });
 
   it('uses continuation context for parameters without letting it replace the current intent', async () => {

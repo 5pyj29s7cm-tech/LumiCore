@@ -10,7 +10,6 @@ import jwt from 'jsonwebtoken';
 import { requireAuth, requireOrganizationBranchAuth } from '../middleware/auth';
 import * as EDB from './db';
 import * as KB from './kb';
-import * as Templates from './templates';
 import { getJwtSecret } from '../config/local_identity';
 import {
   BranchSyncValidationError,
@@ -193,10 +192,6 @@ export function mountBranchRoutes(router: Router) {
       orgId: req.user!.orgId,
       connectedBranches: [...branchHeartbeats.keys()].filter(key => key.startsWith(orgPrefix)).length,
     });
-  });
-
-  router.get('/branch/templates', requireOrganizationBranchAuth, requireBranchSession, requireBranchDevicePermission('template_read'), (req: Request, res: Response) => {
-    res.json(Templates.listTemplates(req.user!.orgId!, { status: 'published' }));
   });
 
   router.post('/branch/kb/search', requireOrganizationBranchAuth, requireBranchSession, requireBranchDevicePermission('kb_read'), (req: Request, res: Response) => {

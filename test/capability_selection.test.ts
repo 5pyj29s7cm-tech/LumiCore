@@ -25,13 +25,8 @@ const declarations = [
   'desktop_ai_list_targets',
   'desktop_ai_discovery_plan',
   'desktop_ai_register_target',
-  'desktop_ai_roundtable',
   'desktop_ai_ask',
   'desktop_ai_collect_answer',
-  'external_ai_route_plan',
-  'external_ai_collaborate',
-  'external_ai_collect_answers',
-  'external_ai_session_status',
   'external_ai_history_source_register',
   'external_ai_history_source_list',
   'external_ai_history_source_revoke',
@@ -284,8 +279,9 @@ describe('Lumi capability selection', () => {
     expect(dispatch.flow.workSurfaceRoute.artifactFirst).toBe(true);
     expect(dispatch.flow.workSurfaceRoute.directDesktop).toBe(true);
     expect(selection.lane).toBe('design_cad');
-    expect(selection.promptOverlay).toContain('call cad_prepare_autocad_operations');
-    expect(selection.preferredTools.slice(0, 10)).toEqual(expect.arrayContaining([
+    expect(selection.promptOverlay).toContain('Use cad_draw_floorplan_in_autocad as the single resumable owner');
+    expect(selection.preferredTools).toEqual(expect.arrayContaining([
+      'cad_draw_floorplan_in_autocad',
       'desktop_path_info',
       'desktop_list_files',
       'desktop_list_apps',
@@ -334,21 +330,8 @@ describe('Lumi capability selection', () => {
     expect(selection.preferredTools).toContain('cad_prepare_autocad_operations');
     expect(selection.preferredTools).toContain('mcp_cad-drafting_autocad_playback_file');
     expect(selection.preferredTools).not.toContain('cad_generate_dxf');
-    expect(selection.promptOverlay).toContain('never substitute DXF/DWG generation');
+    expect(selection.promptOverlay).toContain('Never substitute DXF/DWG generation');
     expect(execution.toolRoute?.toolNames).not.toContain('cad_generate_dxf');
-  });
-
-  it('routes legacy desktop AI wording into the unified external collaboration lane', async () => {
-    const { dispatch, selection } = await selectCapability({
-      userId: 'capability_selection_desktop_ai_roundtable_user',
-      text: 'Use desktop_ai_roundtable with ChatGPT and Claude, collect their visible answers, then summarize them.',
-      operationMode: 'assistant',
-    });
-
-    expect(dispatch.flow.workSurfaceRoute.directDesktop).toBe(false);
-    expect(selection.lane).toBe('external_tool');
-    expect(selection.preferredTools).toContain('external_ai_collaborate');
-    expect(selection.preferredTools).not.toContain('desktop_ai_roundtable');
   });
 
   it('selects artifact work for reports and local files', async () => {
@@ -417,15 +400,15 @@ describe('Lumi capability selection', () => {
     expect(dispatch.flow.workSurfaceRoute.directDesktop).toBe(true);
     expect(dispatch.flow.workSurfaceRoute.artifactFirst).toBe(false);
     expect(dispatch.flow.executionGovernance.capabilityLearningIntent).toBe('none');
-    expect(dispatch.flow.executionGovernance.delegationIntent).toBe('foreground_owned');
     expect(selection.lane).toBe('desktop_control');
     expect(selection.primary).toContain('WPS');
     expect(selection.preferredTools.slice(0, 6)).toEqual(expect.arrayContaining([
+      'wps_create_document_with_text',
       'desktop_active_window',
       'desktop_ui_snapshot',
       'desktop_ui_focus',
-      'desktop_ui_type',
     ]));
+    expect(selection.preferredTools).toContain('desktop_ui_type');
     for (const forbiddenCategory of [
       'code_git',
       'capability_learning',
@@ -444,37 +427,30 @@ describe('Lumi capability selection', () => {
     expect(selection.preferredTools).not.toContain('computer_use');
     expect(selection.preferredTools).not.toContain('mouse_click');
     expect(selection.preferredTools).not.toContain('keyboard_type');
-    expect(selection.promptOverlay).toContain('do not type or paste until');
-    expect(selection.promptOverlay).toContain('Never repeat the same New/Blank selector');
+    expect(selection.promptOverlay).toContain('Use wps_create_document_with_text as the single resumable owner');
+    expect(selection.promptOverlay).toContain('do not start a parallel manual New/Blank/type sequence');
   });
 
-  it('selects desktop AI collaboration tools for WorkBuddy and Codex delegation', async () => {
+  it('selects one bounded desktop AI target as a LumiCore tool', async () => {
     const { selection, execution } = await selectCapability({
       userId: 'capability_selection_desktop_ai_user',
-      text: '把这个问题发给 ChatGPT、Claude、WorkBuddy 和 Codex，再把其它 AI 的回答拿回来总结',
+      text: '把这个问题发给 ChatGPT，再把它的回答拿回来',
       operationMode: 'assistant',
     });
 
     expect(selection.lane).toBe('external_tool');
     expect(selection.preferredTools.slice(0, 6)).toEqual(expect.arrayContaining([
-      'external_ai_collaborate',
-      'external_ai_collect_answers',
-      'external_ai_session_status',
-      'external_ai_route_plan',
+      'desktop_ai_ask',
+      'desktop_ai_collect_answer',
       'desktop_ai_list_targets',
     ]));
-    expect(execution.toolRoute?.toolNames.indexOf('external_ai_collaborate')).toBeLessThan(
+    expect(execution.toolRoute?.toolNames.indexOf('desktop_ai_ask')).toBeLessThan(
       execution.toolRoute?.toolNames.indexOf('computer_use') ?? Number.POSITIVE_INFINITY,
     );
-    expect(execution.toolRoute?.toolNames).not.toEqual(expect.arrayContaining([
-      'desktop_ai_ask',
-      'desktop_ai_roundtable',
-      'desktop_ai_collect_answer',
-    ]));
   });
 
-  it('keeps chat, voice, and task external-AI routes on the same unified submission tools', async () => {
-    const text = 'Ask ChatGPT and Claude for independent answers, then collect and compare them.';
+  it('keeps chat, voice, and task on the same single-target external-AI tools', async () => {
+    const text = 'Ask ChatGPT for an answer, then collect the visible result.';
     const routes = await Promise.all((['chat', 'voice', 'task'] as const).map(async channel => {
       const { execution } = await selectCapability({
         userId: `capability_selection_external_ai_${channel}`,
@@ -482,21 +458,12 @@ describe('Lumi capability selection', () => {
         channel,
         operationMode: 'assistant',
       });
-      return (execution.toolRoute?.toolNames || []).filter(name => (
-        name.startsWith('external_ai_') || /^desktop_ai_(?:ask|roundtable|collect_answer)$/.test(name)
-      ));
+      return (execution.toolRoute?.toolNames || []).filter(name => /^desktop_ai_(?:ask|collect_answer)$/.test(name));
     }));
 
     for (const route of routes) {
       expect(route).toEqual(expect.arrayContaining([
-        'external_ai_collaborate',
-        'external_ai_collect_answers',
-        'external_ai_session_status',
-        'external_ai_route_plan',
-      ]));
-      expect(route).not.toEqual(expect.arrayContaining([
         'desktop_ai_ask',
-        'desktop_ai_roundtable',
         'desktop_ai_collect_answer',
       ]));
     }
@@ -516,8 +483,8 @@ describe('Lumi capability selection', () => {
       'external_ai_history_sync',
       'external_ai_history_status',
     ]));
-    expect(selection.preferredTools).not.toContain('external_ai_collaborate');
-    expect(execution.toolRoute?.forbiddenToolNames).toContain('external_ai_collaborate');
+    expect(selection.preferredTools).not.toContain('desktop_ai_ask');
+    expect(execution.toolRoute?.forbiddenToolNames).toContain('desktop_ai_ask');
     expect(selection.promptOverlay).toContain('Never submit a new prompt');
   });
 
@@ -533,7 +500,7 @@ describe('Lumi capability selection', () => {
       return {
         tools: (execution.toolRoute?.toolNames || []).filter(name => name.startsWith('external_ai_')),
         forbidden: (execution.toolRoute?.forbiddenToolNames || []).filter(name => (
-          name.startsWith('external_ai_') || /^desktop_ai_(?:ask|roundtable|collect_answer)$/.test(name)
+          name.startsWith('external_ai_') || /^desktop_ai_(?:ask|collect_answer)$/.test(name)
         )),
       };
     }));
@@ -546,8 +513,8 @@ describe('Lumi capability selection', () => {
       'external_ai_history_status',
       'external_ai_history_source_list',
     ]));
-    expect(routes[0].tools).not.toContain('external_ai_collaborate');
-    expect(routes[0].forbidden).toContain('external_ai_collaborate');
+    expect(routes[0].tools).not.toContain('desktop_ai_ask');
+    expect(routes[0].forbidden).toContain('desktop_ai_ask');
   });
 
   it('selects browser/account work for saved-login dashboards', async () => {

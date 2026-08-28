@@ -6,26 +6,17 @@ function source(relativePath: string): string {
   return readFileSync(path.join(process.cwd(), relativePath), 'utf8');
 }
 
-describe('command center live agent office', () => {
-  it('reuses the personal Lumi sphere as a live command cosmos driven by real task state', () => {
+describe('single-core command center', () => {
+  it('renders one LumiCore sphere with task state in orbit', () => {
     const panel = source('src/components/CommandCenterPanel.tsx');
-    const sphere = source('src/components/LocalAgentSphere.tsx');
-    const styles = source('src/index.css');
+    const sphere = source('src/components/LumiCoreSphere.tsx');
 
-    expect(panel).toContain('<LocalAgentSphere');
-    expect(panel).toContain('variant="command-center"');
-    expect(panel).toContain('buildCommandCenterCosmosAgents(agents, backgroundTasks)');
-    expect(panel).toContain('cosmosAgents={cosmosAgents}');
-    expect(panel).toContain('cosmosTasks={cosmosTasks}');
-    expect(panel).toContain('taskTitle: task?.title');
-    expect(panel).not.toContain("from './AgentOfficeScene'");
-    expect(panel).not.toContain('<AgentOfficeScene');
-    expect(sphere).toContain('data-cosmos-agent-id={cosmosAgent.id}');
-    expect(sphere).toContain('data-task-route');
-    expect(sphere).toContain('data-cosmos-unassigned-task');
-    expect(sphere).toContain('localAgentCosmosPosition(index)');
-    expect(styles).toContain('.lumi-command-cosmos__route');
-    expect(styles).toContain('@keyframes lumi-cosmos-route');
+    expect(panel).toContain('<LumiCoreSphere');
+    expect(panel).toContain('buildLumiCoreOrbitTasks(tasks)');
+    expect(panel).toContain('tasks={orbitTasks}');
+    expect(panel).toContain('state={coreState}');
+    expect(sphere).toContain('const activeTasks = tasks.filter(task => task.active).slice(0, 8)');
+    expect(sphere).toContain('{activeTasks.map((task, index) =>');
   });
 
   it('keeps the app topmost when either Command Center or Wallpaper is active', () => {
@@ -40,25 +31,23 @@ describe('command center live agent office', () => {
 
   it('does not manufacture a fake working state or random activity', () => {
     const panel = source('src/components/CommandCenterPanel.tsx');
+    const sphere = source('src/components/LumiCoreSphere.tsx');
 
     expect(panel).not.toContain('Math.random');
-    expect(panel).toContain('taskClaimsAgent(item, agent)');
-    expect(panel).toContain('(task.workerNames || []).some(worker => identities.has');
-    expect(panel).toContain('commandCenterTaskIsActive(item)');
+    expect(sphere).not.toContain('Math.random');
+    expect(panel).toContain('commandCenterTaskIsActive(task)');
+    expect(panel).toContain("const coreState = hasAttention ? 'attention' : activeTasks.length > 0 ? 'working' : 'ready'");
   });
 
-  it('keeps the office mounted while task state refreshes silently', () => {
+  it('keeps the command center mounted while task state refreshes', () => {
     const panel = source('src/components/CommandCenterPanel.tsx');
 
-    expect(panel).toContain('const hasLoadedOfficeRef = useRef(false)');
-    expect(panel).toContain('const refreshInFlightRef = useRef<{ scopeKey: string; generation: number; promise: Promise<void> } | null>(null)');
-    expect(panel).toContain('if (firstLoad) setLoading(true)');
-    expect(panel).toContain('if (firstLoad) setLoading(false)');
-    expect(panel).toContain('return inFlight.promise');
-    expect(panel).toContain('<LocalAgentSphere');
+    expect(panel).toContain('const refreshInFlightRef = useRef<Promise<void> | null>(null)');
+    expect(panel).toContain('if (refreshInFlightRef.current) return refreshInFlightRef.current');
+    expect(panel).toContain('<LumiCoreSphere');
     expect(panel).not.toContain('loading ? (');
-    expect(panel).toContain('setTimeout(() => void refresh(), 600)');
-    expect(panel).toContain('setInterval(() => void refresh(), 60_000)');
+    expect(panel).toContain("'autonomous:task_started'");
+    expect(panel).toContain('timer = setTimeout(() => { void refresh(); void refreshRuntime(); }, 100)');
   });
 
   it('keeps the office and chat in an integrated split workspace with transient task status', () => {
@@ -92,12 +81,11 @@ describe('command center live agent office', () => {
     expect(taskWidget).toContain("const ACTIVE_TASK_STATUSES = new Set(['created', 'planning', 'executing', 'verifying', 'waiting_confirmation'])");
     expect(taskWidget).toContain('AnimatePresence');
     expect(taskWidget).toContain('view.visible &&');
-    expect(taskWidget).toContain('primaryTask?.evidence.verified');
+    expect(taskWidget).toContain('primaryRuntimeTask?.evidence.verified');
     expect(panel).not.toContain('className="custom-scrollbar absolute bottom-4 right-4 top-16 z-30');
     expect(panel).toContain('className="absolute bottom-4 left-1/2 z-30');
     expect(panel).not.toContain("grid-cols-[minmax(0,1fr)_260px]");
-    expect(panel).not.toContain('<TeamHub');
     expect(panel).toContain("onOpenNexus ? onOpenNexus() : onViewChange('core')");
-    expect(surfaces).toContain("open_team: 'office'");
+    expect(surfaces).toContain("'open_command_center'");
   });
 });

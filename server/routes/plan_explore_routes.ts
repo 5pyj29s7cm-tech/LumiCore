@@ -20,7 +20,6 @@ import {
   SystemExplorationAlreadyRunningError,
 } from "../runtime/system_exploration_worker";
 import { getProfessionProfile, buildProfessionOverlay, detectProfession, saveProfessionProfile } from "../autonomy/professions";
-import { installProfessionAgents, getProfessionTemplates } from "../autonomy/profession_templates";
 import { readDB } from "../../db_layer";
 import { getMember } from "../org/db";
 import type { PlanScope } from "../autonomy/planner";
@@ -126,16 +125,6 @@ export function mountExploreRoutes(router: Router) {
     res.json({ profiles });
   });
 
-  router.post("/explore/profession/install", ...systemAdmin, (_req, res) => {
-    const count = installProfessionAgents();
-    const profiles = getProfessionProfile();
-    res.json({ installed: count, profiles });
-  });
-
-  router.get("/explore/profession/templates/:profession", requireAuth, (req, res) => {
-    const templates = getProfessionTemplates(req.params.profession);
-    res.json({ templates });
-  });
 }
 
 export function mountPlanRoutes(router: Router) {

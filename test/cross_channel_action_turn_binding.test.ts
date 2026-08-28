@@ -61,14 +61,18 @@ describe('cross-channel action turn ownership wiring', () => {
     expect(rejected).toBeGreaterThan(prepared);
   });
 
-  it('passes the exact persisted execution graph on every non-background recovery path', () => {
+  it('carries durable receipts through every single-core recovery path', () => {
+    const chat = source('server/socket/chat.ts');
     const task = source('server/socket/task.ts');
     const voice = source('server/socket/voice.ts');
     const messaging = source('server/regions/packs/cn/messaging_routes.ts');
 
-    expect(task).toContain('resumeExecutionGraph: taskModelRecovery?.graph');
-    expect(voice).toContain('resumeExecutionGraph: voiceModelRecovery?.graph');
-    expect(messaging).toContain('resumeExecutionGraph: recovery?.graph');
+    for (const code of [chat, task, voice]) {
+      expect(code).toContain('attempt: async ({ instruction, priorToolRecords, recordTool })');
+      expect(code).toContain('priorToolRecords,');
+    }
+    expect(messaging).toContain('toolRecords: preDeliveryRecords');
+    expect(messaging).toContain('`${source}_guard_recovery`');
   });
 
   it('starts a fail-closed lease heartbeat after preparation in every foreground channel', () => {
@@ -76,7 +80,7 @@ describe('cross-channel action turn ownership wiring', () => {
       {
         name: 'chat',
         code: source('server/socket/chat.ts'),
-        prepare: 'const actionTaskExecution = bindsExistingAction',
+        prepare: 'const actionTaskExecution = acceptedRuntimeCleanupOffer',
         heartbeat: 'actionLeaseHeartbeat = startConversationActionExecutionHeartbeat({',
         abort: 'abortController,',
         stop: 'actionLeaseHeartbeat?.stop();',

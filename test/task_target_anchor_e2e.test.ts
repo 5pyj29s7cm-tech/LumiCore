@@ -106,8 +106,8 @@ describe('real file/desktop target anchoring', () => {
       source: 'active_window',
     }));
     expect(capsule.paths).toEqual([]);
-    expect(capsule.analysisReady).toBe(true);
-    expect(capsule.nextAction).toBe('analyze');
+    expect(capsule.analysisReady).toBe(false);
+    expect(capsule.nextAction).toBe('search_bounded_roots');
     expect(capsule.allowedSearchRoots).toEqual([
       '~/Desktop',
       '~/Documents',
@@ -119,7 +119,7 @@ describe('real file/desktop target anchoring', () => {
     expect(prompt).toContain(`- targetObject: ${FILE_NAME}`);
     expect(prompt).toContain('- targetStatus: confirmed');
     expect(prompt).toContain('- targetSource: active_window');
-    expect(prompt).toContain('- analysisReady: yes');
+    expect(prompt).toContain('- analysisReady: no');
     expect(prompt).not.toContain('dist-server');
     expect(prompt).not.toContain('node_modules |');
   });
@@ -162,6 +162,12 @@ describe('real file/desktop target anchoring', () => {
       taskText,
       toolName: 'extract_document_text',
       arguments: {},
+      toolRecords: [activeWps],
+    })).toMatchObject({ allowed: false, code: 'target_unresolved' });
+    expect(guardCurrentAppToolCall({
+      taskText,
+      toolName: 'desktop_path_info',
+      arguments: { target: FILE_PATH },
       toolRecords: [activeWps],
     })).toMatchObject({ allowed: false, code: 'target_unresolved' });
     expect(guardCurrentAppToolCall({
@@ -210,6 +216,216 @@ describe('real file/desktop target anchoring', () => {
         },
       },
     });
+    expect(guardCurrentAppToolCall({
+      taskText,
+      toolName: 'desktop_path_info',
+      arguments: { target: FILE_PATH },
+      toolRecords: [activeWps, desktopSearch],
+    })).toMatchObject({
+      allowed: true,
+      normalizedArguments: { target: FILE_PATH },
+    });
+
+    const duplicateSearch = record({
+      name: 'search_files',
+      arguments: { directory: path.join(os.homedir(), 'Documents'), pattern: '*.ppt*' },
+      result: JSON.stringify([{
+        name: FILE_NAME,
+        path: path.join(os.homedir(), 'Documents', FILE_NAME),
+      }]),
+      terminalVerification: desktopSearch.terminalVerification,
+    });
+    expect(guardCurrentAppToolCall({
+      taskText,
+      toolName: 'extract_document_text',
+      arguments: { filePath: FILE_PATH },
+      toolRecords: [activeWps, desktopSearch, duplicateSearch],
+    })).toMatchObject({
+      allowed: false,
+      code: 'active_document_required',
+      anchor: { analysisReady: false, nextAction: 'inspect_active_document' },
+    });
+  });
+
+  it('blocks generic current-document discovery until a verified authoring window exists', () => {
+    const taskText = '分析打开的这份文件';
+    const activeLumi = record({
+      name: 'desktop_active_window',
+      result: JSON.stringify({
+        ok: true,
+        processName: 'lumi-core.exe',
+        windowTitle: 'LumiCore',
+      }),
+      terminalVerification: {
+        status: 'verified',
+        strategy: 'terminal_receipt',
+        reason: 'foreground window observed',
+      },
+    });
+    const unverifiedWps = record({
+      name: 'desktop_active_window',
+      result: activeWps.result,
+    });
+    const runningWps = (windowTitles: string[]) => record({
+      name: 'desktop_running_processes',
+      result: JSON.stringify([{
+        pid: 4200,
+        name: 'wpp.exe',
+        window_title: windowTitles[0] || '',
+        window_titles: windowTitles,
+      }]),
+      terminalVerification: {
+        status: 'verified',
+        strategy: 'measured',
+        reason: 'native process/window snapshot',
+      },
+    });
+
+    for (const toolRecords of [[], [activeLumi], [unverifiedWps]]) {
+      expect(guardTaskTargetToolCall({
+        taskText,
+        toolName: 'desktop_list_files',
+        arguments: { path: USER_DESKTOP },
+        toolRecords,
+      })).toMatchObject({
+        allowed: false,
+        code: 'active_document_required',
+      });
+      expect(guardTaskTargetToolCall({
+        taskText,
+        toolName: 'search_files',
+        arguments: { directory: USER_DESKTOP, pattern: '*.ppt*' },
+        toolRecords,
+      })).toMatchObject({
+        allowed: false,
+        code: 'active_document_required',
+      });
+    }
+
+    expect(guardTaskTargetToolCall({
+      taskText,
+      toolName: 'search_files',
+      arguments: { directory: USER_DESKTOP, pattern: '*.ppt*' },
+      toolRecords: [activeWps],
+    })).toMatchObject({ allowed: true });
+
+    const uniqueBackground = runningWps([`${FILE_NAME} - WPS Office`]);
+    expect(buildTaskTargetAnchorProjection({
+      taskText,
+      evidence: [activeLumi, uniqueBackground],
+    })).toMatchObject({
+      target: {
+        application: 'WPS',
+        object: FILE_NAME,
+        source: 'running_window',
+        status: 'confirmed',
+      },
+      analysisReady: false,
+      nextAction: 'search_bounded_roots',
+    });
+    expect(guardTaskTargetToolCall({
+      taskText,
+      toolName: 'search_files',
+      arguments: { directory: USER_DESKTOP, pattern: '*.ppt*' },
+      toolRecords: [activeLumi, uniqueBackground],
+    })).toMatchObject({ allowed: true });
+
+    for (const ambiguous of [
+      runningWps([]),
+      runningWps([
+        `${FILE_NAME} - WPS Office`,
+        'Another-Deck.pptx - WPS Office',
+      ]),
+    ]) {
+      expect(guardTaskTargetToolCall({
+        taskText,
+        toolName: 'search_files',
+        arguments: { directory: USER_DESKTOP, pattern: '*.ppt*' },
+        toolRecords: [activeLumi, ambiguous],
+      })).toMatchObject({
+        allowed: false,
+        code: 'active_document_required',
+        anchor: { nextAction: 'inspect_active_document' },
+      });
+    }
+  });
+
+  it('keeps verified window provenance after path resolution and rebinds same-file path drift', () => {
+    const taskText = '帮我分析一下 WPS 当前打开的文件，先告诉我它主要讲了什么。';
+    const runningWps = record({
+      name: 'desktop_running_processes',
+      result: JSON.stringify([{
+        pid: 88712,
+        name: 'wpp.exe',
+        window_title: `${FILE_NAME} - WPS Office`,
+        window_titles: [`${FILE_NAME} - WPS Office`],
+      }]),
+      terminalVerification: {
+        status: 'verified',
+        strategy: 'measured',
+        reason: 'native process/window snapshot',
+      },
+    });
+    const files = Array.from({ length: 81 }, (_, index) => ({
+      name: `unrelated-${index}.pptx`,
+      path: path.join(USER_DESKTOP, `unrelated-${index}.pptx`),
+      type: 'file',
+    }));
+    files.splice(40, 0, { name: FILE_NAME, path: FILE_PATH, type: 'file' });
+    const largeDesktopListing = record({
+      name: 'desktop_list_files',
+      arguments: { path: USER_DESKTOP, limit: 100 },
+      result: JSON.stringify(files),
+      terminalVerification: {
+        status: 'verified',
+        strategy: 'terminal_receipt',
+        reason: 'bounded desktop listing completed',
+      },
+    });
+    const evidence = [runningWps, largeDesktopListing];
+
+    expect(buildTaskTargetAnchorProjection({ taskText, evidence })).toMatchObject({
+      target: {
+        application: 'WPS',
+        window: `${FILE_NAME} - WPS Office`,
+        object: FILE_NAME,
+        path: FILE_PATH,
+        source: 'tool_receipt',
+      },
+      windowVerified: true,
+      pathResolved: true,
+      analysisReady: true,
+      nextAction: 'analyze',
+    });
+
+    // Resolving the path must not make the next bounded discovery call forget
+    // that the native WPS window was already verified.
+    expect(guardTaskTargetToolCall({
+      taskText,
+      toolName: 'search_files',
+      arguments: { directory: USER_DESKTOP, pattern: '*.ppt*' },
+      toolRecords: evidence,
+    })).toMatchObject({ allowed: true, anchor: { windowVerified: true, pathResolved: true } });
+
+    const guessedPath = path.join(USER_DESKTOP, '演示资料', FILE_NAME);
+    expect(guardTaskTargetToolCall({
+      taskText,
+      toolName: 'desktop_path_info',
+      arguments: { target: guessedPath },
+      toolRecords: evidence,
+    })).toMatchObject({
+      allowed: true,
+      normalizedArguments: { target: FILE_PATH },
+    });
+    expect(guardTaskTargetToolCall({
+      taskText,
+      toolName: 'extract_document_text',
+      arguments: { filePath: guessedPath },
+      toolRecords: evidence,
+    })).toMatchObject({
+      allowed: true,
+      normalizedArguments: { filePath: FILE_PATH },
+    });
   });
 
   it('returns a natural structured clarification instead of analyzing an unnamed window', () => {
@@ -227,14 +443,14 @@ describe('real file/desktop target anchoring', () => {
     expect(guarded).toMatchObject({
       allowed: false,
       status: 'blocked',
-      code: 'target_unresolved',
+      code: 'active_document_required',
       clarification: { required: true },
       anchor: {
         analysisReady: false,
-        nextAction: 'clarify_target',
+        nextAction: 'inspect_active_document',
         target: {
           application: 'WPS',
-          window: 'WPS Office',
+          window: '',
           object: '',
           status: 'unresolved',
         },

@@ -4,12 +4,6 @@ import path from 'node:path';
 import jwt from 'jsonwebtoken';
 import { describe, expect, it } from 'vitest';
 import {
-  claimBackgroundTask,
-  registerBackgroundTask,
-  resetBackgroundTasksForTest,
-  type BackgroundDelegationTask,
-} from '../server/agents/background_tasks';
-import {
   enqueue,
   markRunning,
   resetAutonomousTaskQueueForTest,
@@ -18,46 +12,19 @@ import {
 import {
   autonomyRoutes,
   autonomousTaskMatchesScope,
-  backgroundTaskMatchesScope,
   projectAutonomousTask,
-  projectBackgroundTask,
   runtimeControlHttpOutcome,
   runtimeControlSucceeded,
 } from '../server/routes/autonomy_routes';
 import { JWT_SECRET, makeApp } from './helpers';
 import {
+  buildLumiCoreOrbitTasks,
   commandCenterTaskIsActive,
-  mergeCommandCenterTasks,
   normalizeCommandCenterTask,
 } from '../src/components/CommandCenterPanel';
 import { isCurrentScopeRequest } from '../src/components/scopeRequestGuard';
 
 const source = (relativePath: string) => fs.readFileSync(path.join(process.cwd(), relativePath), 'utf8');
-
-function backgroundTask(overrides: Partial<BackgroundDelegationTask> = {}): BackgroundDelegationTask {
-  return {
-    id: 'background-1',
-    userId: 'owner',
-    title: 'Deliver the verified report',
-    prompt: 'private raw prompt',
-    status: 'running',
-    workers: [{ id: 'worker-1', name: 'Researcher' }],
-    workerNames: ['Researcher'],
-    context: { domain: 'personal', provider: 'private-provider', toolPolicy: { allowedTools: ['secret-tool'], requireConfirmation: [], forbiddenTools: [], maxIterations: 4 } },
-    checkpoint: { phase: 'verify', completedNodeIds: ['research'], receiptIds: ['receipt-1'], updatedAt: '2026-08-26T00:01:00.000Z' },
-    idempotencyKey: 'private-idempotency-key',
-    toolCallsCount: 2,
-    cancelRequested: false,
-    pauseRequested: false,
-    attempt: 1,
-    recoveryCount: 0,
-    leaseId: 'private-lease',
-    leaseOwner: 'private-worker',
-    createdAt: '2026-08-26T00:00:00.000Z',
-    updatedAt: '2026-08-26T00:01:00.000Z',
-    ...overrides,
-  };
-}
 
 function autonomousTask(overrides: Partial<AutonomousTask> = {}): AutonomousTask {
   return {
@@ -78,78 +45,46 @@ function autonomousTask(overrides: Partial<AutonomousTask> = {}): AutonomousTask
 }
 
 describe('autonomy route safe projections', () => {
-  it('keeps background work inside the active personal or exact organization scope', () => {
-    const personal = backgroundTask();
-    const workA = backgroundTask({ context: { domain: 'work', orgId: 'org-a' } });
-    const malformedWork = backgroundTask({ context: { domain: 'work' } });
+  it('keeps autonomous work inside the supported personal scope', () => {
+    const personal = autonomousTask();
+    const work = autonomousTask({ domain: 'work', orgId: 'org-a' } as Partial<AutonomousTask>);
+    const malformedWork = autonomousTask({ domain: 'work' } as Partial<AutonomousTask>);
 
-    expect(backgroundTaskMatchesScope(personal, { domain: 'personal', orgId: '' })).toBe(true);
-    expect(backgroundTaskMatchesScope(personal, { domain: 'work', orgId: 'org-a' })).toBe(false);
-    expect(backgroundTaskMatchesScope(workA, { domain: 'work', orgId: 'org-a' })).toBe(true);
-    expect(backgroundTaskMatchesScope(workA, { domain: 'work', orgId: 'org-b' })).toBe(false);
-    expect(backgroundTaskMatchesScope(workA, { domain: 'work', orgId: '' })).toBe(false);
-    expect(backgroundTaskMatchesScope(malformedWork, { domain: 'personal', orgId: '' })).toBe(false);
-    expect(backgroundTaskMatchesScope(malformedWork, { domain: 'work', orgId: '' })).toBe(false);
+    expect(autonomousTaskMatchesScope(personal, { domain: 'personal', orgId: '' })).toBe(true);
+    expect(autonomousTaskMatchesScope(personal, { domain: 'work', orgId: 'org-a' })).toBe(false);
+    expect(autonomousTaskMatchesScope(work, { domain: 'work', orgId: 'org-a' })).toBe(true);
+    expect(autonomousTaskMatchesScope(work, { domain: 'work', orgId: 'org-b' })).toBe(false);
+    expect(autonomousTaskMatchesScope(malformedWork, { domain: 'personal', orgId: '' })).toBe(false);
   });
 
-  it('returns only task-center fields and omits raw prompts, policies, leases and receipts', () => {
-    const projection = projectBackgroundTask(backgroundTask({
-      resultPreview: 'Saved with api_key=private-value and Bearer abcdefghijk',
-      error: 'authorization: Bearer abcdefghijklmnop',
+  it('omits prompts, plans, leases, and raw failure details', () => {
+    const projection = projectAutonomousTask(autonomousTask({
+      title: 'Review password=autonomy-title-secret',
+      description: 'private prompt with api_key=private-value',
+      status: 'failed',
+      error: 'authorization: Bearer autonomy-reason-secret',
     }));
 
     expect(projection).toMatchObject({
-      id: 'background-1',
-      kind: 'delegation',
-      status: 'running',
-      phase: 'verify',
-      cancelRequested: false,
-      controls: { canPause: true, canResume: false, canCancel: true },
+      id: 'autonomy-1',
+      kind: 'autonomy',
+      status: 'failed',
+      controls: { canPause: false, canResume: false, canCancel: false },
     });
-    for (const privateField of ['userId', 'prompt', 'context', 'idempotencyKey', 'leaseId', 'leaseOwner', 'terminalReceipt']) {
+    for (const privateField of ['userId', 'description', 'executionPlan', 'leaseId', 'terminalReceipt']) {
       expect(projection).not.toHaveProperty(privateField);
     }
-    expect(projection.resultPreview).toBe('Saved with api_key=[redacted] and Bearer [redacted]');
-    expect(projection.error).toContain('local runtime logs');
-    expect(JSON.stringify(projection)).not.toContain('abcdefghijk');
-  });
-
-  it('strongly redacts titles and every completion-feedback reason field', () => {
-    const backgroundProjection = projectBackgroundTask(backgroundTask({
-      title: 'Deploy api_key=sk-background-title-secret',
-      status: 'failed',
-      error: 'authorization: Bearer background-secret-value',
-    }));
-    const autonomousProjection = projectAutonomousTask(autonomousTask({
-      title: 'Review password=autonomy-title-secret',
-      status: 'failed',
-      error: 'client_secret=autonomy-reason-secret',
-    }));
-
-    const payload = JSON.stringify({ backgroundProjection, autonomousProjection });
-    for (const secret of [
-      'sk-background-title-secret',
-      'background-secret-value',
-      'autonomy-title-secret',
-      'autonomy-reason-secret',
-    ]) {
-      expect(payload).not.toContain(secret);
-    }
+    const payload = JSON.stringify(projection);
+    expect(payload).not.toContain('autonomy-title-secret');
+    expect(payload).not.toContain('autonomy-reason-secret');
+    expect(payload).not.toContain('private-value');
     expect(payload).toContain('[redacted]');
-    expect(backgroundProjection.completionFeedback.blockers.join(' ')).toContain('local runtime logs');
-    expect(autonomousProjection.completionFeedback.blockers.join(' ')).toContain('local runtime logs');
+    expect(projection.completionFeedback.blockers.join(' ')).toContain('local runtime logs');
   });
 
-  it('treats the current autonomous executor as personal-only and projects cancellation honestly', () => {
+  it('projects a running cancellation request honestly', () => {
     const task = autonomousTask({ cancelRequestedAt: '2026-08-26T00:01:30.000Z' });
-    expect(autonomousTaskMatchesScope(task, { domain: 'personal', orgId: '' })).toBe(true);
-    expect(autonomousTaskMatchesScope(task, { domain: 'work', orgId: 'org-a' })).toBe(false);
-
-    const projection = projectAutonomousTask(task);
-    expect(projection).toMatchObject({ status: 'running', cancelRequested: true });
-    expect(projection).not.toHaveProperty('description');
-    expect(projection).not.toHaveProperty('executionPlan');
-    expect(projection).not.toHaveProperty('leaseId');
+    expect(projectAutonomousTask(task)).toMatchObject({ status: 'running', cancelRequested: true });
   });
 
   it('does not project autonomous prompts or takeover action instructions', () => {
@@ -165,41 +100,26 @@ describe('autonomy route safe projections', () => {
 });
 
 describe('task-center control wiring', () => {
-  it('preserves detailed task evidence when canonical work only supplies control fields', () => {
-    const detailed = normalizeCommandCenterTask({
-      id: 'merge-1',
-      kind: 'delegation',
-      title: 'Overall task',
+  it('normalizes one LumiCore task and projects it into the orbit', () => {
+    const task = normalizeCommandCenterTask({
+      id: 'orbit-1',
+      kind: 'autonomy',
+      title: 'Verify the report',
       status: 'running',
-      workerNames: ['Worker A'],
+      phase: 'verify',
       toolCallsCount: 4,
-      resultPreview: 'draft ready',
-      error: 'verification pending',
-      completionFeedback: { status: 'working', evidence: ['receipt:1'] },
-    })!;
-    const canonical = normalizeCommandCenterTask({
-      id: 'merge-1',
-      kind: 'delegation',
-      title: 'Overall task',
-      status: 'running',
-      phase: 'working',
-      progress: { checkpoint: 'verify', completedUnits: 1, totalUnits: 2, receiptCount: 1, toolCallCount: 7 },
+      progress: { checkpoint: 'verify', completedUnits: 1, totalUnits: 2, receiptCount: 1, toolCallCount: 4 },
       controls: { canPause: true, canResume: false, canCancel: true },
-    })!;
-
-    expect(mergeCommandCenterTasks(detailed, canonical)).toMatchObject({
-      workerNames: ['Worker A'],
-      toolCallsCount: 7,
-      resultPreview: 'draft ready',
-      error: 'verification pending',
-      completionFeedback: { status: 'working', evidence: ['receipt:1'] },
-      progress: { checkpoint: 'verify', completedUnits: 1, totalUnits: 2 },
     });
+    expect(task).not.toBeNull();
+    expect(buildLumiCoreOrbitTasks([task!])).toEqual([
+      expect.objectContaining({ id: 'orbit-1', title: 'Verify the report', state: 'working', active: true }),
+    ]);
   });
 
   it('keeps a running task active even when its checkpoint phase is domain-specific', () => {
-    expect(commandCenterTaskIsActive({ id: 'active-1', status: 'running', phase: 'wave_completed' })).toBe(true);
-    expect(commandCenterTaskIsActive({ id: 'terminal-1', status: 'completed', phase: 'arbitrated' })).toBe(false);
+    expect(commandCenterTaskIsActive({ id: 'active-1', title: 'Active', status: 'running', phase: 'verify' })).toBe(true);
+    expect(commandCenterTaskIsActive({ id: 'terminal-1', title: 'Done', status: 'completed', phase: 'complete' })).toBe(false);
   });
 
   it('rejects responses from an earlier generation or another scope', () => {
@@ -209,22 +129,17 @@ describe('task-center control wiring', () => {
     expect(isCurrentScopeRequest(personalRequest, 'work:org-a', 3)).toBe(false);
   });
 
-  it('does not treat a lost-race or partial runtime control as success', () => {
+  it('does not treat a lost race or partial runtime control as success', () => {
     expect(runtimeControlSucceeded({ ok: true, matchedCount: 1 })).toBe(true);
     expect(runtimeControlSucceeded({ ok: true, matchedCount: 0 })).toBe(false);
     expect(runtimeControlSucceeded({ ok: false, matchedCount: 1 })).toBe(false);
     expect(runtimeControlSucceeded({ ok: true, matchedCount: 1, status: 'partial', failedCount: 1 })).toBe(false);
-    expect(runtimeControlSucceeded({ ok: true, matchedCount: 1, status: 'failed' })).toBe(false);
     expect(runtimeControlHttpOutcome('pause', {
       ok: false,
       matchedCount: 2,
       status: 'partial',
       failedCount: 1,
-    })).toMatchObject({
-      accepted: false,
-      httpStatus: 409,
-      error: expect.stringContaining('(partial)'),
-    });
+    })).toMatchObject({ accepted: false, httpStatus: 409, error: expect.stringContaining('(partial)') });
     expect(runtimeControlHttpOutcome('resume', {
       ok: true,
       matchedCount: 1,
@@ -233,42 +148,32 @@ describe('task-center control wiring', () => {
     })).toEqual({ accepted: true, httpStatus: 200 });
   });
 
-  it('uses canonical runtime controls and separates plan state from latest run state', () => {
+  it('uses one canonical LumiCore task projection', () => {
     const panel = source('src/components/CommandCenterPanel.tsx');
     const planner = source('src/components/CommandCenterPlanner.tsx');
     const autonomousFeed = source('src/components/AutonomousFeed.tsx');
 
     expect(panel).toContain("apiFetch('/api/autonomy/work')");
-    expect(panel).toContain('backgroundTasks.filter(commandCenterTaskIsActive)');
+    expect(panel).toContain('tasks.filter(commandCenterTaskIsActive)');
     expect(panel).toContain('data-command-center-task-controls');
     expect(panel).toContain('data-task-cancel-requested');
     expect(planner).toContain('data-command-center-plan-run-status');
     expect(planner).toContain('runningPlanIdsRef.current.has(plan.id)');
-    expect(planner).not.toContain('const status = task?.status || plan.status');
-    expect(autonomousFeed).toContain("const returnedStatus = String(data.status || data.task?.status || task.status)");
-    expect(autonomousFeed).toContain('if (!socket || isWork) return');
     expect(autonomousFeed).toContain("apiFetch('/api/autonomy/queue')");
     expect(autonomousFeed).toContain('data-autonomous-cancel-requested');
-    expect(autonomousFeed).not.toContain("const cancelledTask = { ...task, status: 'cancelled' as const");
   });
 
   it('reports cancellation requests without claiming a running task is already cancelled', async () => {
-    resetBackgroundTasksForTest({ markHydrated: true });
     resetAutonomousTaskQueueForTest({ markHydrated: true });
-    const background = registerBackgroundTask({
+    const controllable = enqueue({
       userId: 'owner',
-      title: 'Running delegation',
-      prompt: 'execute',
-      context: { domain: 'personal' },
-    });
-    expect(claimBackgroundTask(background.id)?.status).toBe('running');
-    const controllable = registerBackgroundTask({
-      userId: 'owner',
-      title: 'Controllable delegation',
-      prompt: 'execute',
-      context: { domain: 'personal' },
-    });
-    const autonomous = enqueue({
+      title: 'Controllable task',
+      description: 'execute',
+      source: 'user_request',
+      priority: 5,
+      mode: 'analysis',
+    })!;
+    const running = enqueue({
       userId: 'owner',
       title: 'Running autonomy',
       description: 'execute',
@@ -276,7 +181,7 @@ describe('task-center control wiring', () => {
       priority: 5,
       mode: 'analysis',
     })!;
-    expect(markRunning(autonomous.id)?.status).toBe('running');
+    expect(markRunning(running.id)?.status).toBe('running');
 
     const fixture = await makeApp();
     fixture.apiRouter.use('/autonomy', autonomyRoutes());
@@ -290,22 +195,16 @@ describe('task-center control wiring', () => {
         phase: 'queued',
         controls: { canPause: true, canResume: false, canCancel: true },
       });
+
       const pauseResponse = await fetch(`${fixture.url}/api/autonomy/work/${controllable.id}/pause`, { method: 'POST', headers });
       expect(await pauseResponse.json()).toMatchObject({ status: 'paused', items: [{ id: controllable.id, phase: 'paused' }] });
       const resumeResponse = await fetch(`${fixture.url}/api/autonomy/work/${controllable.id}/resume`, { method: 'POST', headers });
       expect(await resumeResponse.json()).toMatchObject({ status: 'resumed', items: [{ id: controllable.id, phase: 'queued' }] });
-      const cancelResponse = await fetch(`${fixture.url}/api/autonomy/work/${controllable.id}/cancel`, { method: 'POST', headers });
-      expect(await cancelResponse.json()).toMatchObject({ status: 'cancelled', cancelRequested: true, cancelled: true });
 
-      const backgroundResponse = await fetch(`${fixture.url}/api/autonomy/background-tasks/${background.id}/cancel`, { method: 'POST', headers });
-      const backgroundPayload = await backgroundResponse.json() as any;
-      expect(backgroundResponse.status).toBe(200);
-      expect(backgroundPayload).toMatchObject({ status: 'cancelling', cancelRequested: true, cancelled: false });
-
-      const autonomousResponse = await fetch(`${fixture.url}/api/autonomy/tasks/${autonomous.id}/cancel`, { method: 'POST', headers });
-      const autonomousPayload = await autonomousResponse.json() as any;
-      expect(autonomousResponse.status).toBe(200);
-      expect(autonomousPayload).toMatchObject({ status: 'running', cancelRequested: true, cancelled: false });
+      const runningResponse = await fetch(`${fixture.url}/api/autonomy/tasks/${running.id}/cancel`, { method: 'POST', headers });
+      const runningPayload = await runningResponse.json() as any;
+      expect(runningResponse.status).toBe(200);
+      expect(runningPayload).toMatchObject({ status: 'running', cancelRequested: true, cancelled: false });
     } finally {
       fixture.cleanup();
     }

@@ -18,10 +18,8 @@ installApiBridge();
 initializeSharedSocketRuntime();
 
 const SETUP_DONE_KEY = 'lumi_setup_complete';
-const AgentChatPage = lazy(() => import('../components/AgentChatPage').then(m => ({ default: m.AgentChatPage })));
 const Docs = lazy(() => import('../components/Docs').then(m => ({ default: m.Docs })));
 const FoundersSanctuary = lazy(() => import('../components/FoundersSanctuary').then(m => ({ default: m.FoundersSanctuary })));
-const LumiEcosystem = lazy(() => import('../components/LumiEcosystem').then(m => ({ default: m.LumiEcosystem })));
 const OrgPortal = lazy(() => import('../components/OrgPortal').then(m => ({ default: m.OrgPortal })));
 const Profile = lazy(() => import('../components/Profile').then(m => ({ default: m.Profile })));
 const Settings = lazy(() => import('../components/Settings').then(m => ({ default: m.Settings })));
@@ -32,7 +30,6 @@ export function DesktopApp() {
   const shell = useAppShell();
   const { resolvedAppearanceMode } = useApp();
   const [activeTab, setActiveTab] = useState('home');
-  const [selectedAgent, setSelectedAgent] = useState<any>(null);
   const [showSetup, setShowSetup] = useState(() => localStorage.getItem(SETUP_DONE_KEY) !== '1');
   const [startupVisible, setStartupVisible] = useState(true);
 
@@ -49,9 +46,8 @@ export function DesktopApp() {
   const renderTabContent = (tab: string) => {
     switch (tab) {
       case 'home': return null;
-      case 'ecosystem': return <Suspense fallback={null}><div className="space-y-24"><LumiEcosystem t={shell.t} onChatAgent={(a: any) => { setSelectedAgent(a); setActiveTab('agent-chat'); }} /><SkillHall t={shell.t} lang={shell.lang} /></div></Suspense>;
+      case 'ecosystem': return <Suspense fallback={null}><SkillHall t={shell.t} lang={shell.lang} /></Suspense>;
       case 'generate': return !shell.user ? <LoginRequired t={shell.t} onLogin={shell.handleLogin} /> : <Suspense fallback={null}><SkillHall t={shell.t} lang={shell.lang} initialTab="generate" /></Suspense>;
-      case 'agent-chat': return !shell.user ? <LoginRequired t={shell.t} onLogin={shell.handleLogin} /> : <Suspense fallback={null}><AgentChatPage t={shell.t} user={shell.user} agent={selectedAgent} isOpen={true} onClose={() => setActiveTab('ecosystem')} /></Suspense>;
       case 'docs': return <Suspense fallback={null}><Docs t={shell.t} /></Suspense>;
       case 'founders': return <Suspense fallback={null}><FoundersSanctuary t={shell.t} user={shell.user} onBack={() => setActiveTab('home')} /></Suspense>;
       case 'profile': return !shell.user ? <LoginRequired t={shell.t} onLogin={shell.handleLogin} /> : <Suspense fallback={null}><Profile t={shell.t} /></Suspense>;

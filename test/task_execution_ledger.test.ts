@@ -115,6 +115,64 @@ describe('durable conversation task execution ledger', () => {
     expect(resumed.state?.policySnapshot?.allowedTools).toEqual(expect.arrayContaining(initialPolicy.allowedTools));
   });
 
+  it('treats a receipt-only runtime cancellation as success after nested JSON normalization', () => {
+    expect(toolRecordSucceeded({
+      name: 'runtime_work_cancel',
+      arguments: { taskIds: ['task-a'] },
+      result: '',
+      receipt: JSON.stringify(JSON.stringify({
+        ok: true,
+        status: 'cancelled',
+        matchedCount: 1,
+        cancelledCount: 1,
+        cancellingCount: 0,
+        failedCount: 0,
+      })),
+      terminalVerification: {
+        status: 'verified',
+        strategy: 'terminal_receipt',
+        reason: 'The runtime ledger confirmed cancellation.',
+      },
+    })).toBe(true);
+  });
+
+  it('does not complete task cleanup from unrelated directory/search success after core failures', () => {
+    const receipts = recordsToTaskReceipts([{
+      name: 'database_query',
+      arguments: { query: 'SELECT * FROM commandCenterPlans' },
+      result: '',
+      error: 'Could not determine table name.',
+    }, {
+      name: 'runtime_work_cancel',
+      arguments: { taskIds: ['task-a'] },
+      result: JSON.stringify({ ok: false, status: 'failed', matchedCount: 1 }),
+      error: 'Cancellation did not settle.',
+    }, {
+      name: 'list_directory',
+      arguments: { path: '.' },
+      result: JSON.stringify({ ok: true, status: 'completed', entries: ['entry.cjs', 'node.exe'] }),
+      terminalVerification: {
+        status: 'verified',
+        strategy: 'terminal_receipt',
+        reason: 'The unrelated directory listing was returned.',
+      },
+    }, {
+      name: 'search_files',
+      arguments: { path: '.', pattern: 'task' },
+      result: JSON.stringify({ ok: true, status: 'completed', matches: ['runtime'] }),
+      terminalVerification: {
+        status: 'verified',
+        strategy: 'terminal_receipt',
+        reason: 'The unrelated file search was returned.',
+      },
+    }]);
+
+    expect(taskCompletionFromReceipts('\u6e05\u6389\u8fd9\u4e9b\u4efb\u52a1', receipts)).toMatchObject({
+      complete: false,
+      blocker: 'Cancellation did not settle.',
+    });
+  });
+
   it('binds a resumed waiting-confirmation task to the successor request', () => {
     const policy = {
       allowedTools: ['desktop_write_text_file'],

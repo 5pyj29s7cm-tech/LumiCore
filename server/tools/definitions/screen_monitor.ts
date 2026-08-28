@@ -157,7 +157,7 @@ export function registerScreenMonitorTools(registry: ToolRegistry): void {
   registry.register({
     name: 'get_running_processes',
     description:
-      'Get a bounded snapshot of running process entries on the user\'s desktop, sorted by CPU usage. Includes process name, PID, normalized whole-machine CPU share (0-100), and memory usage. Multiple entries may belong to one app, and the bounded snapshot is not a count of all open applications or windows.',
+      'Get a bounded snapshot of running process entries on the user\'s desktop. Includes process name, PID, normalized whole-machine CPU share (0-100), and memory usage. Supported WPS/Microsoft Office authoring processes are prioritized and may also include window_title/window_titles for their visible top-level document windows; other application titles are intentionally omitted. Multiple entries may belong to one app, and the bounded snapshot is not a count of all open applications or windows.',
     parameters: {
       type: 'object',
       properties: {
@@ -173,7 +173,7 @@ export function registerScreenMonitorTools(registry: ToolRegistry): void {
   registry.register({
     name: 'desktop_running_processes',
     description:
-      'Alias for get_running_processes. Get a bounded running-process snapshot from the user desktop to verify whether a named external app is running. Do not treat the number of returned process entries as the total number of open apps or windows.',
+      'Alias for get_running_processes. Get a bounded running-process snapshot from the user desktop. For current-document work, use its visible WPS/Microsoft Office window_title/window_titles as background candidates only when exactly one supported document title is present; otherwise ask the user to focus the intended document. Do not treat the number of process entries as the total number of open apps or windows.',
     parameters: {
       type: 'object',
       properties: {

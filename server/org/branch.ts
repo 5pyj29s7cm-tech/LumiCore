@@ -35,7 +35,6 @@ export interface BranchState {
 export interface SyncPayload {
   memories: any[];
   interactions: any[];
-  agents: any[];
 }
 
 interface BranchSyncRequest extends SyncPayload {
@@ -45,7 +44,7 @@ interface BranchSyncRequest extends SyncPayload {
 }
 
 interface BranchSyncItemReceipt {
-  kind: 'memory' | 'interaction' | 'agent';
+  kind: 'memory' | 'interaction';
   sourceId: string;
   targetId: string;
   digest: string;
@@ -67,7 +66,7 @@ interface BranchSyncReceipt {
 
 interface OfflineAction {
   id: string;
-  type: 'sync' | 'agent_action' | 'kb_query';
+  type: 'sync' | 'kb_query';
   payload: any;
   state: 'pending' | 'unknown' | 'blocked';
   attempts: number;
@@ -193,9 +192,9 @@ function itemKey(kind: BranchSyncItemReceipt['kind'], sourceId: string): string 
 function getOfflineQueue(): OfflineAction[] {
   const queue = readSetting<unknown>(OFFLINE_QUEUE_SETTING, []);
   if (!Array.isArray(queue)) return [];
-  return queue.filter(isObject).map((item: any) => ({
+  return queue.filter(isObject).filter((item: any) => ['sync', 'kb_query'].includes(String(item.type))).map((item: any) => ({
     id: String(item.id || randomUUID()),
-    type: ['sync', 'agent_action', 'kb_query'].includes(String(item.type)) ? item.type : 'agent_action',
+    type: item.type,
     payload: item.payload,
     state: ['pending', 'unknown', 'blocked'].includes(String(item.state)) ? item.state : 'pending',
     attempts: Math.max(0, Math.trunc(Number(item.attempts) || 0)),
@@ -324,7 +323,6 @@ function receiptMatches(request: BranchSyncRequest, receipt: unknown): receipt i
   const expected = [
     ...request.memories.map(item => ({ kind: 'memory' as const, sourceId: String(item.id), digest: digest(item) })),
     ...request.interactions.map(item => ({ kind: 'interaction' as const, sourceId: String(item.id), digest: digest(item) })),
-    ...request.agents.map(item => ({ kind: 'agent' as const, sourceId: String(item.id), digest: digest(item) })),
   ];
   if (Number(receipt.accepted) !== expected.length || !Array.isArray(receipt.items) || receipt.items.length !== expected.length) {
     return false;
@@ -448,7 +446,6 @@ function unsyncedPayload(orgId: string): SyncPayload {
   return {
     memories: select('memory', db.memories),
     interactions: select('interaction', db.interactions),
-    agents: select('agent', db.agents),
   };
 }
 
@@ -463,7 +460,6 @@ function createSyncAction(orgId: string, branchId: string, payload: SyncPayload)
       batchId: `batch_${randomUUID()}`,
       memories: payload.memories,
       interactions: payload.interactions,
-      agents: payload.agents,
     } satisfies BranchSyncRequest,
     state: 'pending',
     attempts: 0,
@@ -558,7 +554,7 @@ async function runSyncWorkData(): Promise<{ synced: number; errors: string[] }> 
   if (queued) return executeSyncAction(queued);
 
   const payload = unsyncedPayload(state.orgId);
-  const total = payload.memories.length + payload.interactions.length + payload.agents.length;
+  const total = payload.memories.length + payload.interactions.length;
   if (total === 0) return { synced: 0, errors: [] };
   const action = createSyncAction(state.orgId, state.branchId, payload);
   saveOfflineQueue([...getOfflineQueue(), action]);
@@ -659,8 +655,6 @@ export async function flushOfflineQueue(): Promise<{ flushed: number; errors: st
       flushed += 1;
       continue;
     }
-    errors.push('[agent_action] No durable organization agent-action executor is registered');
-    updateQueuedAction(action, { state: 'blocked', lastError: errors.at(-1) || '' });
   }
   return { flushed, errors };
 }

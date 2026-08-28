@@ -249,9 +249,10 @@ describe('Lumi learning interface', () => {
 
     expect(taskSource).toContain('const persistTaskLearning');
     expect(taskSource).toContain('persistLumiPostTurnLearning');
+    expect(taskSource).toContain('task confirmation');
     expect(taskSource).toContain('task direct cognition');
-    expect(taskSource).toContain('task orchestrated');
     expect(taskSource).toContain('task cancelled');
+    expect(taskSource).toContain("logLabel: 'task'");
     expect(taskSource.match(/persistTaskLearning\(/g)?.length || 0).toBeGreaterThanOrEqual(4);
   });
 });

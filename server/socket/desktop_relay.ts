@@ -65,6 +65,12 @@ export type DesktopRelayOptions = {
 export type DesktopRelay = ((toolName: string, args?: Record<string, any>) => Promise<string>) & {
   releaseControlLease: (reason?: string) => void;
   getControlLease: () => DesktopControlLeaseSnapshot | null;
+  /**
+   * A user-activity pause is a turn boundary, not a transient lease conflict.
+   * Callers use this read-only latch to stop their model/tool loop without
+   * aborting or cancelling the durable task that can be resumed later.
+   */
+  getControlPauseReason: () => string | null;
 };
 
 const pendingDesktopRelays = new Map<string, PendingDesktopRelay>();
@@ -506,5 +512,6 @@ export function createDesktopRelay(options: DesktopRelayOptions): DesktopRelay {
     controlLease = null;
   };
   typedRelay.getControlLease = () => controlLease?.snapshot() || null;
+  typedRelay.getControlPauseReason = () => controlPausedReason || null;
   return typedRelay;
 }

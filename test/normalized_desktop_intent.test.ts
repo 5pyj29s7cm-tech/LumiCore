@@ -375,6 +375,22 @@ describe('normalized desktop intent priority', () => {
     }))).toBe('已打开聊天界面。');
   });
 
+  it('parses an actionable restatement as a correction of the same client action', () => {
+    const intent = normalizeActionIntent('我说的是切换客户端聊天模式');
+    expect(intent).toMatchObject({
+      kind: 'client_navigation',
+      operation: 'navigate',
+      target: 'chat',
+      clientAction: 'set_client_mode',
+      clientActionArguments: { mode: 'chat' },
+      relation: 'correction',
+    });
+    expect(buildDeterministicClientNavigationCommand(intent)?.toolCall).toEqual({
+      name: 'client_action',
+      arguments: { action: 'set_client_mode', mode: 'chat' },
+    });
+  });
+
   it('treats the spoken wallpaper-state imperative as native wallpaper activation', () => {
     const intent = normalizeActionIntent('打开壁纸状态。');
     expect(intent).toMatchObject({
@@ -698,6 +714,36 @@ describe('normalized desktop intent priority', () => {
       sideEffectClass: 'local_write',
       relation: 'new',
       rule: 'explicit-artifact-create',
+    });
+  });
+
+  it('preserves relative artifact basenames through the linear filename scanner', () => {
+    expect(normalizeActionIntent('请分析 交付总结.md')).toMatchObject({
+      kind: 'desktop_operation',
+      operation: 'read',
+      target: '交付总结.md',
+      sideEffectClass: 'none',
+    });
+    expect(normalizeActionIntent('请创建 交付总结.md，并写入今天的结论')).toMatchObject({
+      kind: 'desktop_operation',
+      operation: 'create',
+      target: '交付总结.md',
+      sideEffectClass: 'local_write',
+    });
+  });
+
+  it.each([
+    ['帮我分析一下 WPS 当前打开的文件，先告诉我它主要讲了什么。', 'WPS'],
+    ['请总结 Microsoft Word 当前打开的文档。', 'Microsoft Word'],
+    ['Analyze the presentation currently open in Microsoft PowerPoint.', 'Microsoft PowerPoint'],
+  ])('classifies current WPS/Office document inspection as a read-only desktop operation: %s', (text, target) => {
+    expect(normalizeActionIntent(text)).toMatchObject({
+      kind: 'desktop_operation',
+      operation: 'read',
+      target,
+      sideEffectClass: 'none',
+      relation: 'new',
+      rule: 'current-authoring-document-read',
     });
   });
 

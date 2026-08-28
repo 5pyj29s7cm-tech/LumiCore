@@ -285,8 +285,8 @@ describe('chat execution registry', () => {
 
     expect(persistence.rows[0].payload.completionFeedback).toEqual({
       status: 'completed',
-      completed: ['Foreground task completed.'],
-      evidence: ['Verified tool receipt: desktop_active_window'],
+      completed: ['The task is complete.'],
+      evidence: ['The current execution result was recorded.'],
       incomplete: [],
       blockers: [],
       nextSteps: [],
@@ -297,7 +297,7 @@ describe('chat execution registry', () => {
     resetChatExecutionRegistryForTests();
     await initializeChatExecutionRegistryPersistence(persistence.adapter, Date.now());
     expect(getChatExecution(scope, 'strict-terminal-feedback')?.terminalEvent?.payload.completionFeedback)
-      .toMatchObject({ status: 'completed', evidence: ['Verified tool receipt: desktop_active_window'] });
+      .toMatchObject({ status: 'completed', evidence: ['The current execution result was recorded.'] });
   });
 
   it('quarantines a failed strict terminal as persistence_unknown and never exposes or rebinds its success', async () => {

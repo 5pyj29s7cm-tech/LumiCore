@@ -6,11 +6,6 @@ import {
   recordDesktopPlanCreated,
   recordKnowledgeCoverageEvaluation,
   recordKnowledgeRetrievalEvaluation,
-  recordModelArbitration,
-  recordModelFallback,
-  recordModelFallbackSuppressedAfterSideEffect,
-  recordModelGraphCompilation,
-  recordModelNodeRecovery,
   recordRoutingShadowComparison,
   resetCapabilityRuntimeMetricsForTests,
 } from '../server/runtime/capability_metrics';
@@ -45,47 +40,6 @@ describe('capability runtime metrics', () => {
     });
     expect(metrics.routing).toEqual({ comparisons: 1, divergences: 1, externalCommitBlocks: 1 });
     expect(JSON.stringify(metrics)).not.toContain('task-1');
-  });
-
-  it('reports model graph recovery, fallback and arbitration outcomes', () => {
-    recordModelGraphCompilation(false);
-    recordModelFallback();
-    recordModelFallbackSuppressedAfterSideEffect();
-    recordModelNodeRecovery();
-    recordModelArbitration({
-      graphId: 'graph-1',
-      taskId: 'task-1',
-      policy: 'majority_vote',
-      status: 'blocked',
-      verification: 'unverified',
-      selectedNodeIds: [],
-      verifiedNodeIds: [],
-      consideredNodeIds: [],
-      outputDigest: '',
-      completedAt: new Date(0).toISOString(),
-    });
-    recordModelArbitration({
-      graphId: 'graph-reasoning',
-      taskId: 'task-reasoning',
-      policy: 'first_verified',
-      status: 'succeeded',
-      verification: 'unverified',
-      selectedNodeIds: ['reasoning-node'],
-      verifiedNodeIds: [],
-      consideredNodeIds: ['reasoning-node'],
-      outputDigest: 'reasoning-only',
-      completedAt: new Date(1).toISOString(),
-    });
-
-    expect(getCapabilityRuntimeMetrics().modelGraph).toEqual({
-      compilations: 1,
-      invalidGraphs: 1,
-      fallbacks: 1,
-      fallbackSuppressedAfterSideEffect: 1,
-      recoveredNodes: 1,
-      arbitrations: 2,
-      blockedArbitrations: 2,
-    });
   });
 
   it('reports the latest knowledge acceptance coverage', () => {

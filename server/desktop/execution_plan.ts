@@ -11,6 +11,7 @@ export type DesktopApplicationFamily =
   | 'browser'
   | 'office'
   | 'messaging'
+  | 'media'
   | 'cad'
   | 'desktop_ai'
   | 'utility'
@@ -273,6 +274,11 @@ const CERTIFICATION_POLICIES = {
     publisherPatterns: ['tencent', 'tencent technology'],
     productNamePatterns: ['wechat', 'weixin'],
   }),
+  neteaseMusic: certificationPolicy({
+    requiredSignals: ['process_name'],
+    requireValidSignature: false,
+    versionPolicy: 'unconstrained',
+  }),
   autocad: certificationPolicy({
     publisherPatterns: ['autodesk'],
     productNamePatterns: ['autocad'],
@@ -479,6 +485,22 @@ export const DESKTOP_APPLICATION_REGISTRY: readonly ApplicationIdentity[] = [
     certification: 'conditional',
     certificationPolicy: CERTIFICATION_POLICIES.wechat,
     controlLayers: ['dedicated_adapter', 'windows_uia', 'vision'],
+  },
+  {
+    id: 'netease-cloud-music',
+    family: 'media',
+    displayName: 'NetEase Cloud Music',
+    // i18n-allow: Reviewed multilingual application aliases for exact target matching.
+    aliases: ['netease cloud music', 'netease music', 'cloudmusic', '网易云音乐', '网易云'],
+    processPatterns: ['cloudmusic'],
+    // A playing track may replace the product name in the window title, so
+    // the native process identity is the authoritative signal.
+    // i18n-allow: Reviewed multilingual application fingerprints for exact target matching.
+    windowTitlePatterns: ['netease cloud music', 'cloudmusic', '网易云音乐'],
+    executablePatterns: ['cloudmusic.exe'],
+    certification: 'conditional',
+    certificationPolicy: CERTIFICATION_POLICIES.neteaseMusic,
+    controlLayers: ['windows_uia', 'vision'],
   },
   {
     id: 'autocad-desktop',
@@ -855,7 +877,7 @@ function toolsForLayer(layer: DesktopControlLayer, family: DesktopApplicationFam
   if (family === 'cad') return ['cad_prepare_autocad_operations', 'cad_draw_floorplan_in_autocad', 'mcp_cad-drafting_autocad_new_document', 'mcp_cad-drafting_autocad_playback_file'];
   if (family === 'office') return ['wps_create_document_with_text', 'desktop_ui_snapshot', 'desktop_ui_type'];
   if (family === 'messaging') return ['wechat_read_recent_chat', 'wechat_send_message'];
-  if (family === 'desktop_ai') return ['external_ai_collaborate', 'external_ai_collect_answers', 'external_ai_session_status'];
+  if (family === 'desktop_ai') return ['desktop_ai_ask', 'desktop_ai_collect_answer'];
   return [];
 }
 

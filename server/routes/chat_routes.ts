@@ -17,9 +17,8 @@ import {
   type ExecutionGuardRecoveryRunInput,
 } from "../cognition/execution_guard_recovery";
 import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
-import { buildLumiExecutionDecision } from "../cognition/execution_decision";
+import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
 import {
-  buildModelCapabilityPolicy,
   buildModelToolProjection,
 } from "../cognition/capability_selection";
 import {
@@ -319,20 +318,36 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       operationMode: 'assistant',
       targetIsLumi: true,
     });
-    const restExecutionDecision = buildLumiExecutionDecision({
-      flow: restTurnDispatch.flow,
-      text: routeText,
-      toolDeclarations: toolRegistry.getToolDeclarations(),
-      toolRegistry,
+    const restExecutionPipeline = buildLumiExecutionPipeline({
+      dispatch: {
+        userId,
+        text: routeText,
+        channel: 'chat',
+        source: 'rest_chat',
+        category: 'command',
+        domain,
+        orgId,
+        operationMode: 'assistant',
+        targetIsLumi: true,
+      },
+      prebuiltDispatch: restTurnDispatch,
+      registry: toolRegistry,
       isSanctuary: !req.user,
     });
+    const restExecutionDecision = restExecutionPipeline.execution;
     const restModelToolPolicy = restrictToolPolicyForExecutionBoundary(
-      buildModelCapabilityPolicy(restExecutionDecision),
+      restExecutionPipeline.authorizationPolicy,
       executionBoundary,
     );
-    const restModelToolProjection = buildModelToolProjection(restExecutionDecision);
+    restExecutionDecision.baseToolPolicy = restModelToolPolicy;
+    const restModelToolProjection = buildModelToolProjection(restExecutionDecision, {
+      lane: restExecutionPipeline.capabilityPlan.lane,
+      preferredTools: restExecutionPipeline.capabilityPlan.preferredTools,
+    });
+    const restToolSessionActive = restExecutionPipeline.executionRequested
+      && restModelToolProjection.toolNames.length > 0;
     const deferRestStream =
-      restExecutionDecision.allowToolUse
+      restToolSessionActive
       || shouldDeferModelOutputUntilFinalized({
         taskText: routeText,
         flow: restTurnDispatch.flow,
@@ -439,6 +454,13 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
           llm.getQwen,
           onChunk,
           { ...toolContext, source },
+          llm.getOllama,
+          llm.getLmStudio,
+          llm.getArk,
+          llm.getXiaomi,
+          llm.getKimi,
+          llm.getGlm,
+          llm.getRelay,
         );
 
         const finalizeRestToolResult = async (
@@ -453,7 +475,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
             toolRecords: result.toolCalls,
             source,
             flow: restTurnDispatch.flow,
-            allowToolUse: restExecutionDecision.allowToolUse,
+            allowToolUse: restToolSessionActive,
             attempt: async ({ instruction, recordTool }) => {
               const recovery = await runRestToolTurn(
                 [

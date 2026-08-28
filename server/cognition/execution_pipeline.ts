@@ -9,6 +9,8 @@ import {
 } from './normalized_action_intent';
 import {
   buildLumiCapabilitySelection,
+  buildModelCapabilityPolicy,
+  buildModelToolProjection,
   type LumiCapabilitySelection,
 } from './capability_selection';
 import {
@@ -50,6 +52,10 @@ export interface LumiExecutionPipeline {
   capabilityPlan: LumiCapabilityPlan;
   executionPlan: CapabilityExecutionPlan;
   execution: LumiExecutionDecision;
+  authorizationPolicy: ToolPolicy;
+  modelToolProjection: ReturnType<typeof buildModelToolProjection>;
+  /** True only when this turn has a concrete, authorized capability to run. */
+  executionRequested: boolean;
   intentTrace: LumiIntentTrace;
   shadowComparison: LumiRoutingShadowComparison;
 }
@@ -72,7 +78,7 @@ export interface BuildLumiExecutionPipelineInput {
   decisionText?: string;
   traceText?: string;
   source?: string;
-  /** Durable task identity supplied by non-conversation entrances such as scheduler/agent execution. */
+  /** Durable task identity supplied by non-conversation entrances such as scheduler/autonomy execution. */
   taskId?: string;
   pendingAssistantOfferContext?: PendingAssistantOfferContext;
 }
@@ -187,6 +193,15 @@ function applyCurrentTurnNoMutationConstraint(
   };
 }
 
+function hasTrustedActionContinuation(input: BuildLumiExecutionPipelineInput): boolean {
+  const state = input.actionTaskState;
+  const context = String(input.dispatch.continuationContext || '');
+  if (!state?.unfinished || !state.taskId || !context) return false;
+  const followup = context.match(/(?:^|\n)-\s*followupIntent:\s*([^\r\n]+)/i)?.[1]?.trim().toLowerCase();
+  const taskId = context.match(/(?:^|\n)-\s*taskId:\s*([^\r\n]+)/i)?.[1]?.trim();
+  return followup === 'execute' && taskId === state.taskId;
+}
+
 function applySelectedWorkflowAdapterPolicy(
   execution: LumiExecutionDecision,
   turnIntent: LumiTurnDispatch,
@@ -267,6 +282,7 @@ export function buildLumiExecutionPipeline(
   const turnIntent = input.prebuiltDispatch || buildLumiTurnDispatch(input.dispatch);
   const decisionText = input.decisionText || turnIntent.flow.routeText;
   const normalizedIntent = normalizeActionIntent(decisionText);
+  const trustedActionContinuation = hasTrustedActionContinuation(input);
   const legacyExecution = buildLumiExecutionDecision({
     flow: turnIntent.flow,
     text: decisionText,
@@ -274,6 +290,7 @@ export function buildLumiExecutionPipeline(
     toolRegistry: input.registry,
     personalityToolPolicy: input.personalityToolPolicy,
     actionTaskState: input.actionTaskState,
+    trustedActionContinuation,
     pendingAssistantOfferContext: input.pendingAssistantOfferContext,
     isSanctuary: input.isSanctuary,
   });
@@ -313,13 +330,25 @@ export function buildLumiExecutionPipeline(
       .map(toolName => manifest.find(entry => entry.toolName === toolName)?.capabilityId)
       .filter(Boolean) as string[],
   ));
+  const authorizationPolicy = buildModelCapabilityPolicy(execution);
+  const modelToolProjection = buildModelToolProjection(execution, {
+    lane: selection.lane,
+    preferredTools: selection.preferredTools,
+  });
+  // Operation modes define the authorization ceiling. They must not create a
+  // task or tool loop on their own. A turn becomes executable only after the
+  // shared semantic route exposes at least one concrete authorized capability.
+  const executionRequested = Boolean(
+    execution.allowToolUse
+    && modelToolProjection.toolNames.length > 0,
+  );
   const capabilityPlan: LumiCapabilityPlan = {
     ...selection,
     schemaVersion: 1,
     capabilityIds,
     taskLedgerRequired: Boolean(
       turnIntent.flow.completionEvidenceNeeded
-      || turnIntent.flow.allowToolUseForTurn
+      || executionRequested
       || turnIntent.boundary === 'task_center'
       || turnIntent.boundary === 'work_takeover',
     ),
@@ -356,6 +385,9 @@ export function buildLumiExecutionPipeline(
     capabilityPlan,
     executionPlan,
     execution,
+    authorizationPolicy,
+    modelToolProjection,
+    executionRequested,
     intentTrace,
     shadowComparison,
   };

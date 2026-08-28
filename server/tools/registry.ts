@@ -319,7 +319,6 @@ export function getToolExecutionTimeoutMs(name: string): number {
   if (/^cad_prepare_autocad_operations$/i.test(name)) return 5 * 60_000;
   if (/^(web_login_|url_fetch_logged_in)/i.test(name)) return 5 * 60_000;
   if (name === 'legal_refresh_authoritative_sources') return 3 * 60_000;
-  if (name === 'desktop_ai_roundtable' || name === 'external_ai_collaborate') return 15 * 60_000;
   if (name === 'self_improvement_stage_patch' || name === 'self_improvement_activate') return 60 * 60_000;
   if (/^(wechat_|desktop_ai_|external_ai_)/i.test(name)) return 3 * 60_000;
   if (/^(work_takeover_|capability_gap_autofix|generate_skill|install_skill)/i.test(name)) return 10 * 60_000;
@@ -585,7 +584,7 @@ export class ToolRegistry {
 
   /**
    * Generic lexical capability discovery. Domain vocabulary lives in each
-   * tool description; the orchestrator does not need a branch per tool.
+   * tool description; LumiCore does not need a branch per tool.
    */
   findRelevant(text: string, options?: {
     limit?: number;
@@ -888,6 +887,7 @@ export class ToolRegistry {
     // adapter-start barrier may yield; later mutation of the registry object
     // must not swap the reviewed implementation for this execution.
     const pinnedHandler = tool.handler;
+    const pinnedPreflight = tool.preflight;
     const pinnedReconcileExternalCommit = tool.reconcileExternalCommit;
     const pinnedLocalIdempotencyReplay = tool.localIdempotencyReplay || 'cached_result';
 
@@ -918,6 +918,19 @@ export class ToolRegistry {
     if (constitutional.level === 'forbidden') {
       finishMetric('forbidden');
       throw new Error(`Tool "${name}" is forbidden: ${constitutional.reason}.`);
+    }
+
+    // Validate the frozen input before asking the user to approve it. This
+    // prevents an impossible command (wrong platform, raw shell chaining, or
+    // a non-allowlisted executable) from creating a confirmation that can only
+    // fail when resumed. Handlers retain the same checks as defence in depth.
+    if (pinnedPreflight) {
+      try {
+        await pinnedPreflight(args, context);
+      } catch (error) {
+        finishMetric('forbidden');
+        throw error;
+      }
     }
 
     let userConfirmed = false;

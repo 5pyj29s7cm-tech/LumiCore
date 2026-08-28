@@ -80,6 +80,23 @@ function parsedToolCalls(value: unknown): any[] {
   return Array.isArray(current) ? current : [];
 }
 
+function verifiedRuntimeStatusResult(record: any): any | null {
+  const candidates = [record?.receipt, record?.result, record?.envelope?.result];
+  for (const candidate of candidates) {
+    let current = candidate;
+    for (let depth = 0; depth < 2 && typeof current === 'string' && current.trim(); depth += 1) {
+      try { current = JSON.parse(current); } catch {
+        current = null;
+        break;
+      }
+    }
+    if (current && typeof current === 'object' && current.ok === true && Array.isArray(current.items)) {
+      return current;
+    }
+  }
+  return null;
+}
+
 /**
  * Recover the frozen target set only from the adjacent assistant turn's
  * verified runtime status receipt. A prose-only offer has no mutation
@@ -96,11 +113,12 @@ export function runtimeCleanupTargetTaskIdsFromAssistantTurn(
     const verified = record.terminalVerification?.status === 'verified'
       || record.envelope?.status === 'verified_success';
     if (!verified) continue;
-    let result: any = record.result;
-    if (typeof result === 'string') {
-      try { result = JSON.parse(result); } catch { continue; }
-    }
-    if (!result || typeof result !== 'object' || result.ok !== true || !Array.isArray(result.items)) continue;
+    // Persisted display results are size-bounded and may therefore end in the
+    // middle of JSON. The canonical verified envelope retains the structured
+    // result used by execution; prefer any intact receipt/result and fall back
+    // to that envelope instead of silently losing the frozen cancellation set.
+    const result = verifiedRuntimeStatusResult(record);
+    if (!result) continue;
     return normalizeTargetTaskIds(result.items
       .filter((item: any) => item?.controls?.canCancel === true)
       .map((item: any) => item?.id));
@@ -110,9 +128,9 @@ export function runtimeCleanupTargetTaskIdsFromAssistantTurn(
 
 // A cleanup offer must explicitly propose acting on Lumi's active/background
 // work. Merely mentioning cleanup is not enough to create an executable offer.
-const RUNTIME_CLEANUP_PROPOSAL_RE = /(?:(?:\u8981\u4e0d\u8981|\u662f\u5426|\u9700\u4e0d\u9700\u8981|\u9700\u8981|\u53ef\u4ee5|\u6211\u53ef\u4ee5|\u5e2e\u4f60).{0,24}(?:\u6e05\u7406|\u53d6\u6d88|\u505c\u6b62|\u7ed3\u675f).{0,24}(?:\u540e\u53f0|\u5f53\u524d|\u8fd9\u4e9b|\u5b83\u4eec|\u4efb\u52a1|\u5de5\u4f5c))|(?:(?:\u540e\u53f0|\u5f53\u524d|\u8fd9\u4e9b|\u5b83\u4eec|\u4efb\u52a1|\u5de5\u4f5c).{0,24}(?:\u6e05\u7406|\u53d6\u6d88|\u505c\u6b62|\u7ed3\u675f).{0,16}(?:\u5417|\u4e48|\u5462|\?|\uff1f))|\b(?:shall|should|would)\s+i\s+(?:clear|cancel|stop)\s+(?:the\s+)?(?:active|background|running)\s+(?:tasks?|work|jobs?)\b/iu;
+const RUNTIME_CLEANUP_PROPOSAL_RE = /(?:(?:\u8981\u4e0d\u8981|\u662f\u5426|\u9700\u4e0d\u9700\u8981|\u9700\u8981|\u53ef\u4ee5|\u6211\u53ef\u4ee5|\u5e2e\u4f60|(?:\u4f60)?\u60f3).{0,24}(?:\u6e05\u7406|\u6e05\u6389|\u53d6\u6d88|\u505c\u6b62|\u7ed3\u675f).{0,24}(?:\u540e\u53f0|\u5f53\u524d|\u8fd9\u4e9b|\u90a3\u4e9b|\u5b83\u4eec|\u65e7\u4efb\u52a1|\u4efb\u52a1|\u5de5\u4f5c))|(?:(?:\u540e\u53f0|\u5f53\u524d|\u8fd9\u4e9b|\u90a3\u4e9b|\u5b83\u4eec|\u65e7\u4efb\u52a1|\u4efb\u52a1|\u5de5\u4f5c).{0,24}(?:\u6e05\u7406|\u6e05\u6389|\u53d6\u6d88|\u505c\u6b62|\u7ed3\u675f).{0,16}(?:\u5417|\u4e48|\u5462|\?|\uff1f))|\b(?:shall|should|would)\s+i\s+(?:clear|cancel|stop)\s+(?:the\s+)?(?:active|background|running)\s+(?:tasks?|work|jobs?)\b/iu;
 
-const RUNTIME_CLEANUP_ACCEPTANCE_RE = /^(?:(?:\u5e2e\u6211)?(?:\u6e05\u7406|\u6e05\u6389|\u6e05\u4e86)(?:\u4e00\u4e0b|\u6389|\u8fd9\u4e9b|\u5b83\u4eec|\u5168\u90e8|\u6240\u6709)?|(?:\u628a)?(?:\u8fd9\u4e9b|\u5b83\u4eec|\u5168\u90e8|\u6240\u6709)(?:\u4efb\u52a1|\u5de5\u4f5c)?(?:\u90fd)?(?:\u53d6\u6d88|\u505c\u6389|\u7ed3\u675f)|(?:clear|cancel|stop)\s+(?:them|those|all)(?:\s+(?:tasks?|jobs?))?)[\u3002\uff01\uff1f.!?\s]*$/iu;
+const RUNTIME_CLEANUP_ACCEPTANCE_RE = /^(?:(?:\u5e2e\u6211)?(?:\u6e05\u7406|\u6e05\u6389|\u6e05\u4e86)(?:\u4e00\u4e0b|\u6389)?(?:\u8fd9\u4e9b|\u90a3\u4e9b|\u4e0a\u8ff0|\u5b83\u4eec|\u5168\u90e8|\u6240\u6709)?(?:\u65e7)?(?:\u4efb\u52a1|\u5de5\u4f5c)?|(?:\u628a)?(?:\u8fd9\u4e9b|\u90a3\u4e9b|\u4e0a\u8ff0|\u5b83\u4eec|\u5168\u90e8|\u6240\u6709)(?:\u4efb\u52a1|\u5de5\u4f5c)?(?:\u90fd)?(?:\u53d6\u6d88|\u505c\u6389|\u7ed3\u675f)|(?:clear|cancel|stop)\s+(?:them|those|all)(?:\s+(?:tasks?|jobs?))?)[\u3002\uff01\uff1f.!?\s]*$/iu;
 
 export function isRuntimeCleanupOfferAcceptanceText(text: string): boolean {
   return RUNTIME_CLEANUP_ACCEPTANCE_RE.test(compact(text));

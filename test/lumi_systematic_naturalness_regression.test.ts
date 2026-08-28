@@ -1,12 +1,11 @@
 import './helpers';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { initDatabase } from '../db_layer';
-import { shouldAttemptOrchestration } from '../server/agents/orchestrator';
 import {
   buildActionContract,
   hasCoreActionEvidence,
-  requiresDesktopAiAnswerCollection,
-  requiresDesktopAiCollaboration,
+  requiresDesktopAiAnswerReadback,
+  requiresDesktopAiRequest,
 } from '../server/cognition/action_contract';
 import {
   resolveRecentActionOpenTarget,
@@ -41,57 +40,6 @@ const verifiedDesktopReceipt = {
 describe('systematic naturalness regressions', () => {
   beforeAll(async () => {
     await initDatabase();
-  });
-
-  it('keeps an ordinary moderate action in Lumi instead of a worker team', () => {
-    expect(shouldAttemptOrchestration({
-      channel: 'voice',
-      text: '打开浏览器并放到主屏幕',
-      complexity: 'moderate',
-      allowToolUse: true,
-      clientActionOnly: false,
-      selfRepair: false,
-      directDesktop: true,
-    })).toBe(false);
-    expect(shouldAttemptOrchestration({
-      channel: 'voice',
-      text: '打开 WPS，读取文档，再把结论写入当前页面',
-      complexity: 'complex',
-      allowToolUse: true,
-      clientActionOnly: false,
-      selfRepair: false,
-      directDesktop: true,
-    })).toBe(false);
-    expect(shouldAttemptOrchestration({
-      channel: 'chat',
-      text: '分析桌面上的一份报告',
-      complexity: 'moderate',
-      allowToolUse: true,
-      clientActionOnly: false,
-      selfRepair: false,
-      cognitionCategory: 'analysis',
-    })).toBe(false);
-  });
-
-  it('uses the same orchestration gate for task sockets', () => {
-    expect(shouldAttemptOrchestration({
-      channel: 'task',
-      text: 'open WPS, read the document, and update the current page',
-      complexity: 'complex',
-      allowToolUse: true,
-      clientActionOnly: false,
-      selfRepair: false,
-      directDesktop: true,
-      capabilityLane: 'desktop_control',
-    })).toBe(false);
-    expect(shouldAttemptOrchestration({
-      channel: 'task',
-      text: 'use a team of agents to research, compare, and independently verify three technical options',
-      complexity: 'complex',
-      allowToolUse: true,
-      clientActionOnly: false,
-      selfRepair: false,
-    })).toBe(true);
   });
 
   it('recognizes a natural running-software count and answers from one process receipt', () => {
@@ -245,31 +193,27 @@ describe('systematic naturalness regressions', () => {
     expect(result).toMatchObject({ opened: true, browser: 'Google Chrome' });
   });
 
-  it('requires a real submission and visible answer for desktop AI conversation', () => {
+  it('requires a real submission and visible answer from one desktop AI tool', () => {
     const text = '我让你跟 ChatGPT 聊天，把它的回答告诉我';
-    expect(requiresDesktopAiCollaboration(text)).toBe(true);
-    expect(requiresDesktopAiAnswerCollection(text)).toBe(true);
+    expect(requiresDesktopAiRequest(text)).toBe(true);
+    expect(requiresDesktopAiAnswerReadback(text)).toBe(true);
     const contract = buildActionContract(text);
-    expect(contract.label).toBe('Verified external AI collaboration');
+    expect(contract.label).toBe('Verified external AI tool request');
     expect(hasCoreActionEvidence(contract, [{
       name: 'desktop_open',
       arguments: { target: 'ChatGPT' },
       result: '{"ok":true}',
     }], text)).toBe(false);
     const submitted = {
-      name: 'external_ai_collaborate',
-      arguments: { question: '你怎么看？', targets: ['chatgpt'] },
-      result: '{"ok":true,"verified":true,"sessionId":"session-1","counts":{"submitted":1,"answered":0},"results":[{"targetId":"chatgpt","status":"submitted"}]}',
+      name: 'desktop_ai_ask',
+      arguments: { question: '你怎么看？', target: 'chatgpt' },
+      result: '{"ok":true,"status":"prepared","results":[{"targetId":"chatgpt","status":"prepared"}]}',
     };
     expect(hasCoreActionEvidence(contract, [submitted], text)).toBe(false);
     expect(hasCoreActionEvidence(contract, [submitted, {
-      name: 'external_ai_collect_answers',
-      arguments: { sessionId: 'session-1' },
-      result: '{"status":"collected","answerText":"这是可见回答。"}',
-    }, {
-      name: 'external_ai_collect_answers',
-      arguments: { sessionId: 'session-1' },
-      result: '{"ok":true,"verified":true,"sessionId":"session-1","counts":{"answered":1},"answers":[{"targetId":"chatgpt","answerText":"visible answer","sourceEvidence":{"route":"api"}}]}',
+      name: 'desktop_ai_collect_answer',
+      arguments: { target: 'chatgpt' },
+      result: '{"ok":true,"status":"collected","answerText":"这是可见回答。"}',
     }], text)).toBe(true);
   });
 

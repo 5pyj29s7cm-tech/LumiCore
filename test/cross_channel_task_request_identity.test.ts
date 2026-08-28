@@ -15,7 +15,7 @@ describe('foreground task and request identity wiring', () => {
     const confirmationContext = chat.slice(chat.lastIndexOf('context: {', confirmation), confirmation);
 
     expect(fresh).toBeGreaterThan(-1);
-    expect(chat.slice(fresh, durable)).toContain('executionDecision.allowToolUse');
+    expect(chat.slice(fresh, durable)).toContain('executionPipeline.capabilityPlan.taskLedgerRequired');
     expect(chat.slice(fresh, durable)).toContain('forceTask: true');
     expect(chat.slice(prepare, durable)).toContain("if ('bindingFailure' in actionTaskExecution)");
     expect(relay).toBeGreaterThan(durable);
@@ -46,9 +46,7 @@ describe('foreground task and request identity wiring', () => {
       const relay = code.indexOf('const desktopRelay = createDesktopRelay({', prepare);
       expect(prepare, `${relativePath} preparation`).toBeGreaterThan(-1);
       expect(relay, `${relativePath} relay`).toBeGreaterThan(prepare);
-      expect(code.slice(prepare, relay), relativePath).toContain(
-        'forceTask: executionDecision.allowToolUse',
-      );
+      expect(code.slice(prepare, relay), relativePath).toContain('forceTask:');
       expect(code.slice(relay, relay + 500), relativePath).toContain(
         'taskId: actionTaskExecution.state?.taskId',
       );

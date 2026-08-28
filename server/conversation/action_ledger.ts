@@ -6,6 +6,7 @@ import {
   type ConversationActionContinuationState,
 } from '../cognition/action_continuation';
 import { normalizeActionIntent, type NormalizedActionIntent } from '../cognition/normalized_action_intent';
+import { buildActionEvidenceContract } from '../cognition/action_contract';
 import {
   mergeTaskReceipts,
   taskCompletionFromReceipts,
@@ -17,17 +18,13 @@ import {
   type ConversationTaskStatus,
 } from '../cognition/task_execution_ledger';
 import { buildToolExecutionEnvelope, toolRecordIdempotencyKey } from '../tools/execution_envelope';
+import { parseReceiptObject } from '../tools/receipt_payload';
 import { inspectPersistedToolExecutionReceipt } from '../tools/persisted_execution_receipt';
 import { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
 import type { ToolExecutionRecord } from '../tools/types';
 import type { CapabilityExecutionPlan } from '../cognition/capability_execution_plan';
 import { CN_ACTION_LEDGER_MESSAGES } from '../regions/packs/cn/action_ledger_messages';
 import { detectLanguage } from '../utils/language';
-import type {
-  ModelExecutionGraph,
-  ModelGraphArbitrationReceipt,
-  ModelGraphNodeReceipt,
-} from '../agents/model_execution_graph';
 import { reconcileConversationFocusThread } from './focus_threads';
 
 export interface ConversationActionTaskRow {
@@ -102,11 +99,6 @@ export interface PersistedCapabilityExecutionPlan {
   persistedAt: string;
 }
 
-export interface ConversationModelExecutionRecovery {
-  graph: ModelExecutionGraph;
-  receipts: ModelGraphNodeReceipt[];
-}
-
 function stableValue(value: unknown, depth = 0): unknown {
   if (depth > 5) return '[nested]';
   if (Array.isArray(value)) return value.slice(0, 50).map(item => stableValue(item, depth + 1));
@@ -122,14 +114,29 @@ function digest(value: unknown): string {
 }
 
 function parseObject(value: unknown): Record<string, any> {
-  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
-  if (typeof value === 'string' && value.trim()) {
-    try {
-      const parsed = JSON.parse(value);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
-    } catch {}
-  }
-  return {};
+  return parseReceiptObject(value) || {};
+}
+
+function conservativeFallbackLedgerOperation(
+  state: ConversationActionContinuationState,
+  cancellationContract: boolean,
+): string {
+  if (cancellationContract) return 'mutate';
+  const operations = (state.receipts || [])
+    .map(receipt => receipt.capability?.operation)
+    .filter(Boolean);
+  if (operations.some(operation => (
+    operation === 'mutate' || operation === 'communicate'
+  ))) return 'mutate';
+  if (operations.some(operation => operation === 'create')) return 'create';
+  if (
+    operations.length > 0
+    && operations.every(operation => operation === 'observe' || operation === 'test')
+  ) return 'read';
+  // An unclassified durable task is an audit boundary. Under-reporting an
+  // unknown side effect as read-only is worse than conservatively labelling it
+  // as a mutation until a capability receipt proves otherwise.
+  return 'mutate';
 }
 
 function taskPersistenceUnknownMarker(
@@ -461,7 +468,18 @@ export function syncConversationActionTaskLedger(
   const state = normalizeConversationActionState(input.state);
   if (!state?.taskId) return null;
   const now = input.now || state.updatedAt || new Date().toISOString();
-  const intent = normalizeActionIntent(input.userText || state.latestInstruction || state.goal);
+  const taskText = input.userText || state.latestInstruction || state.goal;
+  const intent = normalizeActionIntent(taskText);
+  const evidenceContract = intent.kind === 'none'
+    ? buildActionEvidenceContract(taskText)
+    : null;
+  const fallbackIntentKind = evidenceContract?.applies
+    ? evidenceContract.kind
+    : 'none';
+  const fallbackOperation = conservativeFallbackLedgerOperation(
+    state,
+    evidenceContract?.preferredTools.includes('runtime_work_cancel') === true,
+  );
   const tasks = db.conversationActionTasks as ConversationActionTaskRow[];
   let task = tasks.find(candidate => candidate.id === state.taskId);
   const currentContext = parseObject(task?.context);
@@ -536,6 +554,12 @@ export function syncConversationActionTaskLedger(
   }, now);
   const correctedTarget = currentTaskCorrectionTarget(state);
   const durableTarget = durableTaskCapsuleTarget(state);
+  // Status/recheck turns may add evidence to an existing mutation task, but
+  // they must not rewrite the task's semantic identity into a read-only status
+  // query. The task remains the exact operation the receipts are proving.
+  const preservesExistingTaskIntent = Boolean(
+    task && intent.kind === 'status_query' && intent.relation === 'status'
+  );
   const values: ConversationActionTaskRow = {
     id: state.taskId,
     conversationId: input.conversation.id,
@@ -544,8 +568,16 @@ export function syncConversationActionTaskLedger(
     orgId: input.conversation.orgId || '',
     parentTaskId: parent?.id || task?.parentTaskId || '',
     rootUserMessageId,
-    intentKind: intent.kind === 'none' ? task?.intentKind || 'desktop_operation' : intent.kind,
-    operation: intent.kind === 'none' ? task?.operation || 'mutate' : intent.operation,
+    intentKind: preservesExistingTaskIntent
+      ? task!.intentKind
+      : intent.kind === 'none'
+        ? task?.intentKind || fallbackIntentKind
+        : intent.kind,
+    operation: preservesExistingTaskIntent
+      ? task!.operation
+      : intent.kind === 'none'
+        ? task?.operation || fallbackOperation
+        : intent.operation,
     goal: redactGoal(state.goal, intent),
     target: correctedTarget || intent.target || durableTarget || state.appTarget || task?.target || '',
     status: taskStatus,
@@ -1096,7 +1128,7 @@ export function appendConversationActionReceipts(
 /**
  * Create the durable action row owned by a scheduled/background plan before
  * it enters the runtime queue. The deterministic task id is also the restart
- * and idempotency boundary for the downstream orchestration.
+ * and idempotency boundary for downstream execution.
  */
 export function ensureBackgroundConversationActionTask(
   db: any,
@@ -1637,162 +1669,6 @@ export function attachConversationExecutionPlan(
   });
   task.updatedAt = now;
   return task;
-}
-
-/** Stores the compiled graph and digest-only node receipts for restart recovery. */
-export function attachConversationModelExecutionGraph(
-  db: any,
-  input: {
-    conversationId: string;
-    userId: string;
-    taskId: string;
-    graph: ModelExecutionGraph;
-    receipts: ModelGraphNodeReceipt[];
-    arbitrationReceipt?: ModelGraphArbitrationReceipt;
-    now?: string;
-  },
-): ConversationActionTaskRow | null {
-  ensureTables(db);
-  const task = (db.conversationActionTasks as ConversationActionTaskRow[]).find(candidate => (
-    candidate.id === input.taskId
-    && candidate.conversationId === input.conversationId
-    && candidate.userId === input.userId
-  ));
-  if (!task || input.graph.taskId !== task.id) return null;
-  const now = input.now || new Date().toISOString();
-  const context = parseObject(task.context);
-  const persistedGraph = {
-    ...input.graph,
-    nodes: input.graph.nodes.map(node => ({
-      ...node,
-      candidates: node.candidates.map(candidate => ({ ...candidate })),
-      dependsOn: [...node.dependsOn],
-      inputRefs: [...node.inputRefs],
-      outputSchema: { ...node.outputSchema },
-    })),
-    edges: input.graph.edges.map(edge => ({ ...edge })),
-    budgets: { ...input.graph.budgets },
-    persistedAt: now,
-  };
-  const graphHistory = (Array.isArray(context.modelExecutionGraphs) ? context.modelExecutionGraphs : [])
-    .filter((candidate: any) => candidate?.graphId !== persistedGraph.graphId)
-    .slice(-7);
-  graphHistory.push(persistedGraph);
-  const priorReceipts = Array.isArray(context.modelNodeReceipts) ? context.modelNodeReceipts : [];
-  const receiptKeys = new Set(input.receipts.map(receipt => `${receipt.graphId}:${receipt.nodeId}`));
-  const modelNodeReceipts = [
-    ...priorReceipts.filter((receipt: any) => !receiptKeys.has(`${receipt?.graphId}:${receipt?.nodeId}`)),
-    ...input.receipts.map(receipt => ({
-      graphId: receipt.graphId,
-      taskId: receipt.taskId,
-      nodeId: receipt.nodeId,
-      status: receipt.status,
-      ...(receipt.selectedCandidate ? { selectedCandidate: { ...receipt.selectedCandidate } } : {}),
-      ...(receipt.agentId ? { agentId: receipt.agentId } : {}),
-      dependencyReceiptIds: [...receipt.dependencyReceiptIds],
-      startedAt: receipt.startedAt,
-      completedAt: receipt.completedAt,
-      durationMs: receipt.durationMs,
-      nodeFingerprint: receipt.nodeFingerprint,
-      outputDigest: receipt.outputDigest,
-      evidenceKind: receipt.evidenceKind,
-      evidenceRefs: [...receipt.evidenceRefs],
-      verified: receipt.verified,
-      ...(receipt.estimatedInputTokens !== undefined
-        ? { estimatedInputTokens: receipt.estimatedInputTokens }
-        : {}),
-      ...(receipt.estimatedCostUsd !== undefined
-        ? { estimatedCostUsd: receipt.estimatedCostUsd }
-        : {}),
-      ...(receipt.reusedFromReceipt ? { reusedFromReceipt: receipt.reusedFromReceipt } : {}),
-      // Model output and free-form errors can contain user data. Durable recovery
-      // intentionally stores only digests and bounded structural metadata.
-      ...(receipt.error ? { error: 'model_node_execution_failed' } : {}),
-    })),
-  ].slice(-120);
-  task.context = JSON.stringify({
-    ...context,
-    modelExecutionGraph: persistedGraph,
-    modelExecutionGraphs: graphHistory,
-    modelNodeReceipts,
-    ...(input.arbitrationReceipt ? {
-      modelArbitrationReceipt: {
-        ...input.arbitrationReceipt,
-        selectedNodeIds: [...input.arbitrationReceipt.selectedNodeIds],
-        consideredNodeIds: [...input.arbitrationReceipt.consideredNodeIds],
-      },
-    } : {}),
-  });
-  task.updatedAt = now;
-  return task;
-}
-
-/**
- * Loads restart state only from the exact scoped task. Legacy receipts without
- * a semantic node fingerprint are excluded and therefore cannot be replayed.
- */
-export function loadConversationModelExecutionRecovery(
-  db: any,
-  input: { conversationId: string; userId: string; taskId: string },
-): ConversationModelExecutionRecovery | null {
-  ensureTables(db);
-  const task = (db.conversationActionTasks as ConversationActionTaskRow[]).find(candidate => (
-    candidate.id === input.taskId
-    && candidate.conversationId === input.conversationId
-    && candidate.userId === input.userId
-  ));
-  if (!task) return null;
-  const context = parseObject(task.context);
-  const graph = context.modelExecutionGraph as ModelExecutionGraph | undefined;
-  if (!graph || graph.taskId !== task.id || !Array.isArray(graph.nodes)) return null;
-  const receipts = (Array.isArray(context.modelNodeReceipts) ? context.modelNodeReceipts : [])
-    .filter((receipt: any) => (
-      receipt
-      && receipt.taskId === task.id
-      && receipt.graphId === graph.graphId
-      && typeof receipt.nodeId === 'string'
-      && /^[a-f0-9]{64}$/.test(String(receipt.nodeFingerprint || ''))
-      && /^[a-f0-9]{64}$/.test(String(receipt.outputDigest || ''))
-      && receipt.status === 'succeeded'
-      && receipt.verified === true
-      && Array.isArray(receipt.evidenceRefs)
-      && receipt.evidenceRefs.length > 0
-      && (
-        (receipt.evidenceKind === 'tool_terminal_verification'
-          && receipt.evidenceRefs.every((value: unknown) => /^tool:[A-Za-z0-9._:-]{1,240}$/.test(String(value || ''))))
-        || (receipt.evidenceKind === 'validated_model_output'
-          && receipt.evidenceRefs.length === 1
-          && receipt.evidenceRefs[0] === `model_output:${receipt.outputDigest}`
-          && /^model_output:[a-f0-9]{64}$/.test(String(receipt.evidenceRefs[0] || '')))
-      )
-    ))
-    .map((receipt: any): ModelGraphNodeReceipt => ({
-      graphId: receipt.graphId,
-      taskId: receipt.taskId,
-      nodeId: receipt.nodeId,
-      status: 'succeeded',
-      ...(receipt.selectedCandidate ? { selectedCandidate: { ...receipt.selectedCandidate } } : {}),
-      ...(receipt.agentId ? { agentId: String(receipt.agentId) } : {}),
-      dependencyReceiptIds: Array.isArray(receipt.dependencyReceiptIds)
-        ? receipt.dependencyReceiptIds.map(String)
-        : [],
-      startedAt: String(receipt.startedAt || ''),
-      completedAt: String(receipt.completedAt || ''),
-      durationMs: Math.max(0, Number(receipt.durationMs) || 0),
-      nodeFingerprint: receipt.nodeFingerprint,
-      outputDigest: receipt.outputDigest,
-      evidenceKind: receipt.evidenceKind,
-      evidenceRefs: receipt.evidenceRefs.map(String),
-      verified: true,
-      ...(receipt.estimatedInputTokens !== undefined
-        ? { estimatedInputTokens: Math.max(0, Number(receipt.estimatedInputTokens) || 0) }
-        : {}),
-      ...(receipt.estimatedCostUsd !== undefined
-        ? { estimatedCostUsd: Math.max(0, Number(receipt.estimatedCostUsd) || 0) }
-        : {}),
-      ...(receipt.reusedFromReceipt ? { reusedFromReceipt: String(receipt.reusedFromReceipt) } : {}),
-    }));
-  return { graph, receipts };
 }
 
 export function findConversationActionTask(

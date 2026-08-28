@@ -2,12 +2,7 @@ import crypto from 'node:crypto';
 import { isConfirmationBlockedToolRecord } from './confirmation_block';
 import type { ToolExecutionEnvelope, ToolExecutionRecord } from './types';
 import { toolRecordSucceeded } from '../cognition/task_execution_ledger';
-
-function parseResult(value: string): unknown {
-  const raw = String(value || '').trim();
-  if (!raw) return undefined;
-  try { return JSON.parse(raw); } catch { return raw; }
-}
+import { toolRecordTerminalPayload } from './receipt_payload';
 
 function stableValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stableValue);
@@ -46,7 +41,7 @@ function verifiedObservedWindowTarget(record: ToolExecutionRecord): string {
     record.terminalVerification?.status !== 'verified'
     || !toolRecordSucceeded(record)
   ) return '';
-  const parsed = record.receipt !== undefined ? record.receipt : parseResult(record.result);
+  const parsed = toolRecordTerminalPayload(record);
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return '';
   const payload = parsed as Record<string, any>;
   const currentDocument = payload.currentDocument
@@ -127,7 +122,7 @@ export function buildToolExecutionEnvelope(
     durationMs?: number;
   } = {},
 ): ToolExecutionEnvelope {
-  const parsed = record.receipt !== undefined ? record.receipt : parseResult(record.result);
+  const parsed = toolRecordTerminalPayload(record);
   const payload = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
     ? parsed as Record<string, any>
     : {};

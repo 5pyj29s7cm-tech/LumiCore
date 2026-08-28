@@ -40,22 +40,10 @@ function syncPayload(content = 'Remember the verified organization decision') {
     orgId,
     branchId,
     batchId,
-    agents: [{
-      id: 'local-agent-1',
-      userId,
-      ownerUid: userId,
-      name: 'Branch Designer',
-      category: 'design',
-      config: { tools: ['cad'] },
-      externalCommand: 'must-not-cross-branch-boundary',
-      domain: 'work',
-      orgId,
-      createdAt: timestamp,
-    }],
     interactions: [{
       id: 'local-interaction-1',
       userId,
-      agentId: 'local-agent-1',
+      agentId: 'lumi',
       message: 'Create the organization drawing',
       response: 'Created with a verified receipt',
       conversationId: 'local-conversation-1',
@@ -69,7 +57,7 @@ function syncPayload(content = 'Remember the verified organization decision') {
       content,
       keywords: ['organization', 'verified'],
       sourceInteractionId: 'local-interaction-1',
-      agentId: 'local-agent-1',
+      agentId: 'lumi',
       domain: 'work',
       orgId,
       createdAt: timestamp,
@@ -154,39 +142,28 @@ describe('durable organization branch sync', () => {
       branchId,
       batchId,
       verified: true,
-      accepted: 3,
-      inserted: 3,
+      accepted: 2,
+      inserted: 2,
       rejected: 0,
       replayed: false,
     });
-    expect(body.receipt.items).toHaveLength(3);
+    expect(body.receipt.items).toHaveLength(2);
 
     const db = readDB();
-    const agentReceipt = body.receipt.items.find((item: any) => item.kind === 'agent');
     const interactionReceipt = body.receipt.items.find((item: any) => item.kind === 'interaction');
     const memoryReceipt = body.receipt.items.find((item: any) => item.kind === 'memory');
-    const importedAgent = db.agents.find((item: any) => item.id === agentReceipt.targetId);
     const importedInteraction = db.interactions.find((item: any) => item.id === interactionReceipt.targetId);
     const importedMemory = db.memories.find((item: any) => item.id === memoryReceipt.targetId);
 
-    expect(importedAgent).toMatchObject({
-      userId,
-      ownerUid: userId,
-      orgId,
-      domain: 'work',
-      runtime: 'internal',
-      externalCommand: '',
-    });
     expect(importedInteraction).toMatchObject({ userId, orgId, domain: 'work' });
     expect(importedMemory).toMatchObject({ userId, orgId, domain: 'work' });
-    expect(importedInteraction.agentId).toBe(agentReceipt.targetId);
-    expect(importedMemory.agentId).toBe(agentReceipt.targetId);
+    expect(importedInteraction.agentId).toBe('lumi');
+    expect(importedMemory.agentId).toBe('lumi');
     expect(importedMemory.sourceInteractionId).toBe(interactionReceipt.targetId);
   });
 
   it('replays the same immutable batch without duplicating records', async () => {
     const before = {
-      agents: readDB().agents.length,
       interactions: readDB().interactions.length,
       memories: readDB().memories.length,
     };
@@ -195,7 +172,6 @@ describe('durable organization branch sync', () => {
     const body: any = await response.json();
     expect(body.receipt.replayed).toBe(true);
     expect({
-      agents: readDB().agents.length,
       interactions: readDB().interactions.length,
       memories: readDB().memories.length,
     }).toEqual(before);
@@ -227,13 +203,12 @@ describe('durable organization branch sync', () => {
     await initDatabase();
 
     const db = readDB();
-    expect(db.agents.some((item: any) => item.orgId === orgId && item.domain === 'work')).toBe(true);
     expect(db.interactions.some((item: any) => item.orgId === orgId && item.domain === 'work')).toBe(true);
     expect(db.memories.some((item: any) => item.orgId === orgId && item.domain === 'work')).toBe(true);
     const ledgerSetting = db.settings.find((item: any) => item.key === 'org.branch.sync.ledger.v1');
     expect(ledgerSetting).toBeTruthy();
     const ledger = JSON.parse(ledgerSetting.value);
-    expect(ledger.batches[`${orgId}:${branchId}:${batchId}`]).toMatchObject({ verified: true, accepted: 3 });
+    expect(ledger.batches[`${orgId}:${branchId}:${batchId}`]).toMatchObject({ verified: true, accepted: 2 });
     const registrySetting = db.settings.find((item: any) => item.key === 'org.branch.registry.v1');
     expect(JSON.parse(registrySetting.value)[branchId]).toMatchObject({ orgId, userId, status: 'active' });
   });

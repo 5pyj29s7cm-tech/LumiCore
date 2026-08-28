@@ -82,26 +82,6 @@ export interface KbEmbedding {
   createdAt: string;
 }
 
-export type TemplateStatus = 'draft' | 'pending_review' | 'approved' | 'rejected' | 'published';
-
-export interface AgentTemplate {
-  id: string;
-  orgId: string;
-  name: string;
-  description: string;
-  category: string;
-  config: string; // JSON
-  icon: string;
-  version: number;
-  status: TemplateStatus;
-  authorId: string;
-  reviewedBy: string | null;
-  reviewComment: string | null;
-  downloadCount: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface AuditEntry {
   id: string;
   orgId: string;
@@ -521,82 +501,6 @@ export function deleteKbEmbeddings(articleId: string): void {
   entWrite();
 }
 
-// ── Agent Templates ──────────────────────────────────────────────────────
-
-export function listTemplates(orgId: string, filters?: { status?: TemplateStatus; category?: string; authorId?: string }): AgentTemplate[] {
-  let templates = (entDB().agentTemplates || []).filter((t: AgentTemplate) => t.orgId === orgId);
-  if (filters?.status) templates = templates.filter((t: AgentTemplate) => t.status === filters.status);
-  if (filters?.category) templates = templates.filter((t: AgentTemplate) => t.category === filters.category);
-  if (filters?.authorId) templates = templates.filter((t: AgentTemplate) => t.authorId === filters.authorId);
-  return templates;
-}
-
-export function getTemplate(orgId: string, templateId: string): AgentTemplate | undefined {
-  return entDB().agentTemplates?.find(
-    (t: AgentTemplate) => t.orgId === orgId && t.id === templateId
-  );
-}
-
-export function createTemplate(
-  orgId: string,
-  authorId: string,
-  data: { name: string; description: string; category: string; config: any; icon?: string }
-): AgentTemplate {
-  const db = entDB();
-  const template: AgentTemplate = {
-    id: genId(),
-    orgId,
-    name: data.name,
-    description: data.description,
-    category: data.category,
-    config: JSON.stringify(data.config),
-    icon: data.icon || 'Bot',
-    version: 1,
-    status: 'draft',
-    authorId,
-    reviewedBy: null,
-    reviewComment: null,
-    downloadCount: 0,
-    createdAt: now(),
-    updatedAt: now(),
-  };
-  if (!db.agentTemplates) db.agentTemplates = [];
-  db.agentTemplates.push(template);
-  entWrite();
-  return template;
-}
-
-export function updateTemplateStatus(
-  orgId: string,
-  templateId: string,
-  status: TemplateStatus,
-  reviewerId?: string,
-  comment?: string
-): AgentTemplate | null {
-  const db = entDB();
-  const t = db.agentTemplates?.find(
-    (t: AgentTemplate) => t.orgId === orgId && t.id === templateId
-  );
-  if (!t) return null;
-  t.status = status;
-  t.updatedAt = now();
-  if (reviewerId) t.reviewedBy = reviewerId;
-  if (comment !== undefined) t.reviewComment = comment;
-  entWrite();
-  return t;
-}
-
-export function incrementTemplateDownloads(orgId: string, templateId: string): void {
-  const db = entDB();
-  const t = db.agentTemplates?.find(
-    (t: AgentTemplate) => t.orgId === orgId && t.id === templateId
-  );
-  if (t) {
-    t.downloadCount = (t.downloadCount || 0) + 1;
-    entWrite();
-  }
-}
-
 // ── Audit Log ────────────────────────────────────────────────────────────
 
 export function logAudit(entry: {
@@ -634,8 +538,8 @@ export function listAuditLog(orgId: string, limit: number = 50, offset: number =
 
 // ── Domain helpers ───────────────────────────────────────────────────────
 
-/** Set domain on existing memories/interactions/agents in bulk */
-export function setDomain(collection: 'memories' | 'interactions' | 'agents', ids: string[], domain: 'personal' | 'work', orgId: string | null): void {
+/** Set domain on existing memories/interactions in bulk. */
+export function setDomain(collection: 'memories' | 'interactions', ids: string[], domain: 'personal' | 'work', orgId: string | null): void {
   const db = entDB();
   const items = db[collection] as any[] | undefined;
   if (!items) return;

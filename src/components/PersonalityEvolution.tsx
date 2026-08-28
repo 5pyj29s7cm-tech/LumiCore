@@ -6,7 +6,7 @@ import { useSocket } from '@/hooks/useSocket';
 import { useApp } from '@/contexts/AppContext';
 import { useT } from '../lib/useT';
 import { uiMessage } from '../i18n/uiMessages';
-import { memoryAvatarCopy } from '../i18n/locales/memoryAvatar';
+import { personalityEvolutionCopy } from '../i18n/locales/personalityEvolution';
 
 interface OwnerProfile {
   synthesizedAt: string;
@@ -123,7 +123,7 @@ export function PersonalityEvolution({ personalityId = 'lumi' }: Props) {
   const { addNotification } = useApp();
   const isZh = t.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
-  const DIM_LABELS = memoryAvatarCopy(isZh ? 'zh' : 'en').dimensions as Record<string, string>;
+  const DIM_LABELS = personalityEvolutionCopy(isZh ? 'zh' : 'en').dimensions as Record<string, string>;
 
   const [data, setData] = useState<EvolutionData | null>(null);
   const [loading, setLoading] = useState(true);

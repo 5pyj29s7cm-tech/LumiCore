@@ -35,7 +35,7 @@ type WindowFingerprint = DesktopWindowFingerprint & {
   displayId?: string;
 };
 
-const CONTROL_TOOL_RE = /^(?:client_(?:get_state|action)|desktop_(?:open|show_lumi_window|window_control|active_window|list_apps|ui_|capture_screen|mouse_|keyboard_|run_command)|mouse_(?:move|click|drag)|keyboard_(?:type|press)|computer_use|run_command|powershell|shell_exec|terminal_exec|wechat_(?:read_recent_chat|send_message)|cad_(?:prepare_autocad_operations|draw_floorplan_in_autocad)|mcp_cad-drafting_autocad_|wps_create_document_with_text|desktop_ai_(?:ask|roundtable))/i;
+const CONTROL_TOOL_RE = /^(?:client_(?:get_state|action)|desktop_(?:open|show_lumi_window|window_control|active_window|list_apps|ui_|capture_screen|mouse_|keyboard_|run_command)|mouse_(?:move|click|drag)|keyboard_(?:type|press)|computer_use|run_command|powershell|shell_exec|terminal_exec|wechat_(?:read_recent_chat|send_message)|cad_(?:prepare_autocad_operations|draw_floorplan_in_autocad)|mcp_cad-drafting_autocad_|wps_create_document_with_text|desktop_ai_ask)/i;
 
 function digest(value: unknown): string {
   return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');

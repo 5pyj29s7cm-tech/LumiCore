@@ -1,4 +1,3 @@
-import type { ModelGraphArbitrationReceipt } from '../agents/model_execution_graph';
 import type { DesktopExecutionReceipt } from '../desktop/execution_plan';
 import type { KnowledgeCoverageReport, KnowledgeIngestionStatus } from '../knowledge/ingestion_manifest';
 
@@ -22,15 +21,6 @@ interface CapabilityRuntimeCounters {
     comparisons: number;
     divergences: number;
     externalCommitBlocks: number;
-  };
-  modelGraph: {
-    compilations: number;
-    invalidGraphs: number;
-    fallbacks: number;
-    fallbackSuppressedAfterSideEffect: number;
-    recoveredNodes: number;
-    arbitrations: number;
-    blockedArbitrations: number;
   };
   knowledge: {
     evaluations: number;
@@ -70,15 +60,6 @@ function emptyCounters(): CapabilityRuntimeCounters {
       unauthorizedToolBlocks: 0,
     },
     routing: { comparisons: 0, divergences: 0, externalCommitBlocks: 0 },
-    modelGraph: {
-      compilations: 0,
-      invalidGraphs: 0,
-      fallbacks: 0,
-      fallbackSuppressedAfterSideEffect: 0,
-      recoveredNodes: 0,
-      arbitrations: 0,
-      blockedArbitrations: 0,
-    },
     knowledge: {
       evaluations: 0,
       verified: 0,
@@ -131,31 +112,6 @@ export function recordRoutingShadowComparison(aligned: boolean, externalCommitBl
   if (externalCommitBlocked) counters.routing.externalCommitBlocks += 1;
 }
 
-export function recordModelGraphCompilation(ok: boolean): void {
-  counters.modelGraph.compilations += 1;
-  if (!ok) counters.modelGraph.invalidGraphs += 1;
-}
-
-export function recordModelFallback(): void {
-  counters.modelGraph.fallbacks += 1;
-}
-
-export function recordModelFallbackSuppressedAfterSideEffect(): void {
-  counters.modelGraph.fallbackSuppressedAfterSideEffect += 1;
-}
-
-export function recordModelNodeRecovery(): void {
-  counters.modelGraph.recoveredNodes += 1;
-}
-
-export function recordModelArbitration(receipt: ModelGraphArbitrationReceipt): void {
-  counters.modelGraph.arbitrations += 1;
-  // A useful reasoning result is still not a verified completion sample.
-  if (receipt.status !== 'succeeded' || receipt.verification !== 'verified') {
-    counters.modelGraph.blockedArbitrations += 1;
-  }
-}
-
 export function recordKnowledgeCoverageEvaluation(
   status: KnowledgeIngestionStatus,
   coverage: KnowledgeCoverageReport,
@@ -196,7 +152,6 @@ export function getCapabilityRuntimeMetrics() {
     generatedAt: new Date().toISOString(),
     desktop: { ...counters.desktop },
     routing: { ...counters.routing },
-    modelGraph: { ...counters.modelGraph },
     knowledge: { ...counters.knowledge },
   };
 }

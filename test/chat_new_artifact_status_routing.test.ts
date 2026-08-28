@@ -308,13 +308,14 @@ describe('Chat new artifact routing after a completed task', () => {
       requestId,
       conversationId,
       finalized: true,
-      blocked: true,
-      reason: 'execution_recovery_incomplete',
+      blocked: false,
+      reason: '',
       taskRelation: {
         taskRelation: 'new',
         feedback: 'new_task',
       },
     });
+    expect(String(response.text || '')).toContain(targetPath);
     expect(response.reason).not.toBe('task_status');
     expect(response.taskRelation?.taskId).not.toBe(priorTaskId);
     expect(mocks.runWithTools).toHaveBeenCalledTimes(2);

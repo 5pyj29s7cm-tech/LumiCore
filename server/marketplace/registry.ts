@@ -49,12 +49,6 @@ export interface MarketplaceSkill {
   apiKeyUrl?: string;
   requiresSetup?: boolean;
   setupNote?: string;
-  /** 'external' = CLI tool like OpenClaw/Hermes — install creates agent, not MCP server */
-  runtime?: 'internal' | 'external';
-  /** CLI command template for external-runtime skills */
-  externalCommand?: string;
-  externalAgentId?: string;
-  externalHealthStatus?: string;
 }
 
 export interface SkillRating {
@@ -72,7 +66,7 @@ export interface MarketplaceAgentScope {
 }
 
 /** Scan bundled directory to discover available skills */
-function discoverBundledSkills(scope?: MarketplaceAgentScope): MarketplaceSkill[] {
+function discoverBundledSkills(_scope?: MarketplaceAgentScope): MarketplaceSkill[] {
   const skills: MarketplaceSkill[] = [];
   if (!fs.existsSync(BUNDLED_DIR)) return skills;
 
@@ -85,11 +79,7 @@ function discoverBundledSkills(scope?: MarketplaceAgentScope): MarketplaceSkill[
     try {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
       const lumi = pkg.lumi || {};
-      const runtime = lumi.runtime || 'internal';
-      const teamAgent = runtime === 'external' ? findSkillTeamAgent(entry.name, lumi.displayName, scope) : undefined;
-      const installed = runtime === 'external'
-        ? isInstalledSkill(entry.name, lumi.displayName) || !!teamAgent
-        : isInstalledSkill(entry.name, lumi.displayName);
+      const installed = isInstalledSkill(entry.name, lumi.displayName);
       skills.push({
         id: `skill-${entry.name}`,
         name: lumi.displayName || toDisplayName(entry.name),
@@ -109,10 +99,6 @@ function discoverBundledSkills(scope?: MarketplaceAgentScope): MarketplaceSkill[
         apiKeyUrl: lumi.apiKeyUrl,
         requiresSetup: lumi.requiresSetup || false,
         setupNote: lumi.setupNote,
-        runtime,
-        externalCommand: lumi.externalCommand,
-        externalAgentId: teamAgent?.id,
-        externalHealthStatus: teamAgent?.healthStatus,
       });
     } catch { /* skip invalid packages */ }
   }
@@ -138,48 +124,18 @@ function isInstalledSkill(dirName: string, displayName?: string): boolean {
   return false;
 }
 
-function agentMatchesMarketplaceScope(agent: any, scope?: MarketplaceAgentScope): boolean {
-  if (!scope) return true;
-  if (scope.domain === 'work') {
-    return (agent.orgId || '') === (scope.orgId || '') && (agent.domain || 'work') === 'work';
-  }
-  return (!agent.orgId || agent.orgId === '') && agent.domain !== 'work' && (!agent.ownerUid || agent.ownerUid === scope.ownerUid);
-}
-
-function findSkillTeamAgent(dirName: string, displayName?: string, scope?: MarketplaceAgentScope): any | undefined {
-  try {
-    const db = readDB();
-    const names = [displayName, toDisplayName(dirName), dirName].filter(Boolean) as string[];
-    const ids = new Set(names.map(name => `skill_${toSkillSlug(name)}`));
-    const slugs = new Set(names.map(name => toSkillSlug(name)));
-    if (!Array.isArray(db.agents)) return undefined;
-    return db.agents.find((agent: any) => {
-      if (agent?.runtime !== 'external') return false;
-      if (!agentMatchesMarketplaceScope(agent, scope)) return false;
-      return ids.has(String(agent.id || '')) || slugs.has(toSkillSlug(agent.name));
-    });
-  } catch {
-    return undefined;
-  }
-}
-
 /** Get community registry from DB */
-function getCommunityRegistry(scope?: MarketplaceAgentScope): MarketplaceSkill[] {
+function getCommunityRegistry(_scope?: MarketplaceAgentScope): MarketplaceSkill[] {
   const db = readDB();
   if (!db.communitySkills) return [];
   return db.communitySkills.map((s: any) => {
     const dirName = s.id.replace('skill-', '');
-    const teamAgent = s.runtime === 'external' ? findSkillTeamAgent(dirName, s.name, scope) : undefined;
-    const installed = s.runtime === 'external'
-      ? isInstalledSkill(dirName, s.name) || !!teamAgent
-      : isInstalledSkill(dirName, s.name);
+    const installed = isInstalledSkill(dirName, s.name);
     return {
       ...s,
       installSource: 'community' as const,
       installPath: s.installPath,
       installed,
-      externalAgentId: teamAgent?.id,
-      externalHealthStatus: teamAgent?.healthStatus,
     };
   });
 }

@@ -21,6 +21,23 @@ describe('desktop execution plan', () => {
       taskId: 'wps-multi-step',
     }).application.id).toBe('wps-writer');
     expect(resolveDesktopApplicationIdentity('查看微信消息').id).toBe('wechat-desktop');
+    expect(resolveDesktopApplicationIdentity('打开网易云并播放音乐').id).toBe('netease-cloud-music');
+  });
+
+  it('binds NetEase Cloud Music to cloudmusic.exe even when the song replaces the window title', () => {
+    const netease = resolveDesktopApplicationIdentity('网易云音乐');
+    expect(desktopFingerprintMatchesApplication({
+      processName: 'cloudmusic.exe',
+      title: '月牙儿 - Ice Paper',
+    }, netease)).toBe(true);
+    expect(desktopFingerprintMatchesRequestedTarget({
+      processName: 'cloudmusic.exe',
+      title: '月牙儿 - Ice Paper',
+    }, '网易云音乐')).toBe(true);
+    expect(desktopFingerprintMatchesRequestedTarget({
+      processName: 'chrome.exe',
+      title: '网易云音乐 - Google Chrome',
+    }, '网易云音乐')).toBe(false);
   });
 
   it('does not confuse a Lumi-named document or directory with the Lumi client', () => {

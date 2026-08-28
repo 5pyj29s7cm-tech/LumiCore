@@ -3,7 +3,6 @@ import { motion, AnimatePresence, useMotionValue, useTransform } from 'motion/re
 import { 
   Smartphone, 
   Orbit, 
-  MessageSquare, 
   Globe, 
   Settings, 
   User, 
@@ -25,7 +24,6 @@ import {
   Cpu,
   Radio,
   Mic,
-  Shield
 } from 'lucide-react';
 import { sounds } from '../../services/soundService';
 
@@ -44,7 +42,7 @@ interface MobilePlatformProps {
 }
 
 export function MobilePlatform({ t, user, lang, setLang, onLogin, onExit, renderTabContent }: MobilePlatformProps) {
-  const [activeScreen, setActiveScreen] = useState<'home' | 'core' | 'factory' | 'agents' | 'profile'>('home');
+  const [activeScreen, setActiveScreen] = useState<'home' | 'core' | 'factory' | 'skills' | 'profile'>('home');
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isControlCenterOpen, setIsControlCenterOpen] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
@@ -86,7 +84,7 @@ export function MobilePlatform({ t, user, lang, setLang, onLogin, onExit, render
     { id: 'home', icon: LayoutGrid, label: t.navHome || 'Home' },
     { id: 'factory', icon: Cpu, label: t.navFactory || 'Factory' },
     { id: 'core', icon: Orbit, label: t.navCore || 'Core' },
-    { id: 'agents', icon: MessageSquare, label: t.navAgents || 'Agents' },
+    { id: 'skills', icon: Zap, label: t.skills || 'Skills' },
     { id: 'profile', icon: User, label: t.navProfile || 'Profile' },
   ];
 
@@ -141,16 +139,16 @@ export function MobilePlatform({ t, user, lang, setLang, onLogin, onExit, render
                       <Radio size={20} />
                     </div>
                     <div>
-                      <div className="text-xs font-black uppercase">{t.meshBridge || 'Mesh Bridge'}</div>
-                      <div className="text-xs text-white/40 uppercase font-mono">LATENCY: 12ms</div>
+                      <div className="text-xs font-black uppercase">LumiCore Runtime</div>
+                      <div className="text-xs text-white/40 uppercase font-mono">SINGLE CORE</div>
                     </div>
                   </div>
                   <div className="px-3 py-1 bg-purple-500/10 border border-purple-500/20 rounded-full text-xs font-black text-purple-500 uppercase">{t.activeStatus || 'Active'}</div>
                 </div>
                 <div className="space-y-1.5">
                    <div className="flex justify-between text-xs font-bold text-white/20 uppercase tracking-widest">
-                     <span>{t.globalTraffic || 'Global Traffic'}</span>
-                     <span>4.2 PB/S</span>
+                     <span>{t.taskContinuity || 'Task Continuity'}</span>
+                     <span>{t.activeStatus || 'Active'}</span>
                    </div>
                    <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden">
                       <motion.div initial={{ width: 0 }} animate={{ width: '42%' }} className="h-full bg-purple-500" />
@@ -203,7 +201,7 @@ export function MobilePlatform({ t, user, lang, setLang, onLogin, onExit, render
                   <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,200,80,0.1)_0%,transparent_75%)]" />
                   <div className="text-center z-10 pointer-events-none">
                      <Orbit size={100} className="text-celestial-saturn opacity-20 animate-spin-slow mb-4" />
-                     <div className="text-xs font-black text-white/40 uppercase tracking-widest">Shard_K_001</div>
+                     <div className="text-xs font-black text-white/40 uppercase tracking-widest">LUMICORE</div>
                   </div>
                </div>
             </motion.div>
@@ -246,22 +244,20 @@ export function MobilePlatform({ t, user, lang, setLang, onLogin, onExit, render
             {renderTabContent('generate')}
           </motion.div>
         );
-      case 'agents':
+      case 'skills':
         return (
           <motion.div 
-            key="agents"
+            key="skills"
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
             className="h-full pt-4 space-y-8"
           >
             <div className="flex justify-between items-end px-2">
-              <h2 className="text-3xl font-black italic tracking-tighter uppercase whitespace-pre-line leading-none">{t.neuralEntities || <>Neural <br/> <span className="text-purple-500">Entities</span></>}</h2>
-              <div className="w-10 h-10 rounded-2xl bg-white/5 flex items-center justify-center text-white/40">
-                 <Shield size={18} />
-              </div>
+              <h2 className="text-3xl font-black italic tracking-tighter uppercase whitespace-pre-line leading-none">{t.skills || 'Skills'}</h2>
+              <div className="w-10 h-10 rounded-2xl bg-white/5 flex items-center justify-center text-white/40"><Zap size={18} /></div>
             </div>
-            {renderTabContent('ecosystem')}
+            {renderTabContent('skills')}
           </motion.div>
         );
       case 'profile':

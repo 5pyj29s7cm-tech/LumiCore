@@ -31,7 +31,6 @@ import {
 } from '@/lib/chatProgress';
 import {
   normalizeTaskCompletionFeedback,
-  type BackgroundWorkflowTask,
   type WorkflowStep,
 } from './workflowTypes';
 import { TaskCompletionFeedbackDetails } from './TaskCompletionFeedbackDetails';
@@ -454,7 +453,7 @@ export function AgentChatPage({
 }) {
   const prefersReducedMotion = useReducedMotion();
   const [messages, setMessages] = useState<any[]>([]);
-  const isOfficeCommandCenter = layout === 'command-center' && (commandCenterView === 'office' || commandCenterView === 'team');
+  const isOfficeCommandCenter = layout === 'command-center' && commandCenterView === 'office';
   const isCommandCenterUtility = layout === 'command-center' && !isOfficeCommandCenter;
   const chatExecutionSource = layout === 'command-center' ? 'command-center-chat' : 'chat';
   const isZh = t?.langCode !== 'en';
@@ -760,13 +759,11 @@ export function AgentChatPage({
   const [restoringConversationId, setRestoringConversationId] = useState('');
   const [workflowStatus, setWorkflowStatus] = useState<WorkflowStatus>('idle');
   const [workflowSteps, setWorkflowSteps] = useState<WorkflowStep[]>([]);
-  const [backgroundWorkflowTasks, setBackgroundWorkflowTasks] = useState<BackgroundWorkflowTask[]>([]);
   const [chatProgressLines, setChatProgressLines] = useState<ChatProgressLine[]>([]);
   const recognition = useRef<any>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const agentNameRef = useRef<string>('Lumi');
   const seenWorkflowToolEvents = useRef<Set<string>>(new Set());
-  const backgroundTaskStatusRef = useRef<Map<string, string>>(new Map());
   const lastChatProgressTextRef = useRef('');
   const chatProgressClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentRequestHadToolRef = useRef(false);
@@ -796,25 +793,6 @@ export function AgentChatPage({
       setIsListening(false);
     }
   }, [endLocalVoiceSession, localCallState]);
-
-  const upsertBackgroundWorkflowTask = useCallback((task: BackgroundWorkflowTask) => {
-    if (!task?.id) return;
-    setBackgroundWorkflowTasks(prev => {
-      const existing = prev.findIndex(item => item.id === task.id);
-      const nextTask = { ...prev[existing], ...task };
-      const next = existing >= 0
-        ? prev.map(item => item.id === task.id ? nextTask : item)
-        : [nextTask, ...prev];
-      return next.slice(0, 6);
-    });
-
-    if (['completed', 'failed', 'cancelled'].includes(task.status)) {
-      window.setTimeout(() => {
-        setBackgroundWorkflowTasks(prev => prev.filter(item => item.id !== task.id));
-        backgroundTaskStatusRef.current.delete(task.id);
-      }, 12000);
-    }
-  }, []);
 
   const clearChatProgress = useCallback(() => {
     if (chatProgressClearTimerRef.current) {
@@ -867,24 +845,6 @@ export function AgentChatPage({
     if (chatProgressClearTimerRef.current) clearTimeout(chatProgressClearTimerRef.current);
     chatTurnTimerGuardRef.current.dispose();
   }, []);
-
-  const cancelBackgroundWorkflowTask = useCallback((taskId: string) => {
-    socket?.emit('agent:background_cancel', { taskId });
-    setBackgroundWorkflowTasks(prev => prev.map(task =>
-      task.id === taskId ? { ...task, status: 'cancelling' } : task
-    ));
-  }, [socket]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    fetch('/api/autonomy/background-tasks', { credentials: 'include' })
-      .then(res => res.ok ? res.json() : null)
-      .then(data => {
-        if (!Array.isArray(data?.tasks)) return;
-        data.tasks.slice(0, 6).forEach((task: BackgroundWorkflowTask) => upsertBackgroundWorkflowTask(task));
-      })
-      .catch(() => {});
-  }, [isOpen, upsertBackgroundWorkflowTask]);
 
   const updateDraftText = useCallback((value: string) => {
     draftTextRef.current = value;
@@ -1981,58 +1941,6 @@ export function AgentChatPage({
         .catch(() => {});
     };
 
-    const normalizeBackgroundTask = (data: any): BackgroundWorkflowTask | null => {
-      const raw = data?.task || data;
-      const id = String(raw?.id || data?.taskId || '');
-      if (!id) return null;
-      const workerNames = Array.isArray(raw?.workerNames)
-        ? raw.workerNames
-        : Array.isArray(raw?.workers)
-          ? raw.workers.map((worker: any) => worker?.name || worker?.id).filter(Boolean)
-          : [];
-      return {
-        id,
-        title: raw?.title || data?.title || id,
-        status: (raw?.status || 'queued') as BackgroundWorkflowTask['status'],
-        workerNames,
-        toolCallsCount: Number(raw?.toolCallsCount || 0),
-        error: raw?.error,
-        resultPreview: raw?.resultPreview,
-        updatedAt: raw?.updatedAt,
-        completionFeedback: normalizeTaskCompletionFeedback(raw?.completionFeedback || data?.completionFeedback),
-      };
-    };
-
-    const recordBackgroundTaskStep = (task: BackgroundWorkflowTask) => {
-      const previousStatus = backgroundTaskStatusRef.current.get(task.id);
-      if (previousStatus === task.status) return;
-      backgroundTaskStatusRef.current.set(task.id, task.status);
-      const isActive = task.status === 'queued' || task.status === 'running' || task.status === 'cancelling';
-      const isFailed = task.status === 'failed';
-      setWorkflowStatus(isActive ? 'background' : isFailed ? 'error' : 'done');
-      setWorkflowSteps(prev => [...prev, {
-        id: `chat-background-task-${task.id}-${task.status}-${Date.now()}`,
-        type: isFailed ? 'error' : task.status === 'completed' ? 'response' : 'background',
-        text: `${t.workflowBackgroundTask || 'Background task'}: ${task.status}`,
-        detail: task.title || task.id,
-        time: Date.now(),
-      }]);
-    };
-
-    const onDelegation = (data: any) => {
-      const task = normalizeBackgroundTask(data);
-      if (!task) return;
-      upsertBackgroundWorkflowTask(task);
-      recordBackgroundTaskStep(task);
-    };
-
-    const onBackgroundTaskUpdate = (data: any) => {
-      const task = normalizeBackgroundTask(data);
-      if (!task) return;
-      upsertBackgroundWorkflowTask(task);
-      recordBackgroundTaskStep(task);
-    };
-
     const onDesktopControlState = (data: any) => {
       const id = `desktop-control-${String(data?.leaseId || data?.taskId || 'current')}`;
       const status = String(data?.status || '');
@@ -2048,8 +1956,6 @@ export function AgentChatPage({
     };
 
     socket.on("agent:proactive", onProactive);
-    socket.on("agent:delegation", onDelegation);
-    socket.on("agent:background_task_update", onBackgroundTaskUpdate);
     socket.on("agent:desktop_control_state", onDesktopControlState);
     socket.on("agent:chunk", onChunk);
     socket.on("agent:progress", onProgress);
@@ -2063,8 +1969,6 @@ export function AgentChatPage({
 
     return () => {
       socket.off("agent:proactive", onProactive);
-      socket.off("agent:delegation", onDelegation);
-      socket.off("agent:background_task_update", onBackgroundTaskUpdate);
       socket.off("agent:desktop_control_state", onDesktopControlState);
       socket.off("agent:chunk", onChunk);
       socket.off("agent:progress", onProgress);
@@ -2098,12 +2002,10 @@ export function AgentChatPage({
     t.failedToRouteNeuralMesh,
     t.requestFailed,
     t.workflowAnalyzing,
-    t.workflowBackgroundTask,
     t.workflowCalling,
     t.workflowError,
     t.workflowResponseReady,
     t.workflowToolFailed,
-    upsertBackgroundWorkflowTask,
   ]);
 
   useEffect(() => {
@@ -3398,7 +3300,7 @@ export function AgentChatPage({
             <ActiveTaskWidget
               status={runtimeStatus}
               focusThreads={focusThreads}
-              backgroundTasks={backgroundWorkflowTasks}
+              tasks={[]}
               workflowActive={workflowTaskActive}
               workflowStatus={workflowStatus}
               progressText={chatProgressStatusText}
@@ -3580,7 +3482,7 @@ export function AgentChatPage({
               <div className="h-full flex flex-col items-center justify-center text-center space-y-8 px-4">
                 <div className="space-y-3 opacity-20">
                   <Sparkles size={64} className="text-celestial-saturn mx-auto" />
-                  <p className="text-lg font-medium">{t.awakePrompt || 'Your agent has awakened.'}<br/>{t.awakePromptSub || 'Begin the first conversation.'}</p>
+                  <p className="text-lg font-medium">{t.awakePrompt || 'LumiCore is ready.'}<br/>{t.awakePromptSub || 'Begin the first conversation.'}</p>
                 </div>
                 {visibleSuggestions.length > 0 && (
                   <div className="space-y-3 max-w-md w-full">
@@ -3710,7 +3612,7 @@ export function AgentChatPage({
                       <TaskCompletionFeedbackDetails
                         feedback={msg.completionFeedback}
                         locale={isZh ? 'zh' : 'en'}
-                        compact
+                        variant="chat"
                         className="mt-3"
                       />
                     )}
@@ -4067,7 +3969,7 @@ export function AgentChatPage({
 
           <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, ease: [0.25, 0.1, 0.25, 1], delay: 0.36 }}>
           <GlassCard className="p-6 rounded-[2.5rem] space-y-4" hoverEffect={false}>
-            <h4 className="text-xs font-bold uppercase tracking-widest text-white/40">{t.agentStats || 'Agent Stats'}</h4>
+            <h4 className="text-xs font-bold uppercase tracking-widest text-white/40">{t.agentStats || 'LumiCore Stats'}</h4>
             <div className="space-y-4">
               <div className="flex justify-between items-center">
                 <span className="text-sm text-white/60 flex items-center gap-2"><Cpu size={14}/> {t.logicEngine || 'Logic Engine'}</span>
@@ -4089,7 +3991,7 @@ export function AgentChatPage({
               <span className="text-sm font-bold">{t.encryptedLinkActive || 'Encrypted Link Active'}</span>
             </div>
             <p className="text-xs text-white/40 leading-relaxed">
-              {t.agentSyncDesc || 'Your agent is currently synchronized with the local node. All interactions are stored in your private neural cloud.'}
+              {t.agentSyncDesc || 'LumiCore is synchronized with the local node. All interactions remain in your private memory store.'}
             </p>
           </GlassCard>
           </motion.div>

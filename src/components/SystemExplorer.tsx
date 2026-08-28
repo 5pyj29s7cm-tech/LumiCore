@@ -147,7 +147,7 @@ interface EcosystemStats {
   enabledSkillCount?: number;
   connectedSkillCount?: number;
   toolCount?: number;
-  agentCount?: number;
+  conversationCount?: number;
 }
 
 interface ProviderStatus {
@@ -638,18 +638,6 @@ export function SystemExplorer({ t, onSectionChange, onAsk }: {
     .filter(item => item.ready)
     .sort((left, right) => right.confidence - left.confidence);
 
-  const installProfessionAgents = async () => {
-    try {
-      const res = await fetch('/api/explore/profession/install', { method: 'POST', credentials: 'include' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || uiMessage('system-explorer.failed-to-install-profession-agents.781aeed1b4', (isZh) ? 'zh' : 'en'));
-      setProfiles(data.profiles || profiles);
-      toast.success(formatUiMessage('system-explorer.installed-value0-profession-agent-s.d405e4517e', { value0: data.installed || 0 }, (isZh) ? 'zh' : 'en'));
-    } catch (err: any) {
-      toast.error(err?.message || uiMessage('system-explorer.failed-to-install-profession-agents.781aeed1b4', (isZh) ? 'zh' : 'en'));
-    }
-  };
-
   const report = useMemo(
     () => buildReport(latest, permissions, ecosystem, providers, isDesktop, desktopCapabilities, knowledgeHealth, isZh),
     [desktopCapabilities, ecosystem, isDesktop, isZh, knowledgeHealth, latest, permissions, providers],
@@ -839,7 +827,7 @@ export function SystemExplorer({ t, onSectionChange, onAsk }: {
           rows={[
             [uiMessage('system-explorer.skills.2a98e03d13', (isZh) ? 'zh' : 'en'), formatUiMessage('system-explorer.value0-value1-enabled.39a43397ce', { value0: ecosystem?.enabledSkillCount || 0, value1: ecosystem?.skillCount || 0 }, (isZh) ? 'zh' : 'en')],
             [uiMessage('system-explorer.tools.f622b4dd19', (isZh) ? 'zh' : 'en'), String(ecosystem?.toolCount || 0)],
-            [uiMessage('system-explorer.agents.8039b1040e', (isZh) ? 'zh' : 'en'), String(ecosystem?.agentCount || 0)],
+            [uiMessage('system-explorer.conversations.5e19d226fb', isZh ? 'zh' : 'en'), String(ecosystem?.conversationCount || 0)],
             [uiMessage('system-explorer.last-scan.9d09d06882', (isZh) ? 'zh' : 'en'), formatTime(latest?.timestamp, isZh)],
           ]}
         />
@@ -1061,12 +1049,6 @@ export function SystemExplorer({ t, onSectionChange, onAsk }: {
                 })}
               </div>
             </div>
-            <button
-              onClick={installProfessionAgents}
-              className="h-10 rounded-xl border border-amber-300/25 bg-amber-300/10 px-4 text-xs font-black uppercase tracking-widest text-amber-100 transition-colors hover:bg-amber-300/16"
-            >
-              {uiMessage('system-explorer.install-agents.1f1acb3e5d', (isZh) ? 'zh' : 'en')}
-            </button>
           </div>
         </section>
       )}

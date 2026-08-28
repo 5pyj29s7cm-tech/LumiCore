@@ -640,7 +640,7 @@ describe('formal Stage 9 file-backed producer bridge', () => {
         acceptancePassed: false,
         fullAcceptance: false,
       });
-      expect(assembledPackage.bundle.evidenceManifest.entryCount).toBe(90);
+      expect(assembledPackage.bundle.evidenceManifest.entryCount).toBe(84);
       expect(assembledPackage.bundle).not.toHaveProperty('bundleSignature');
       expect(assembledPackage).not.toHaveProperty('evidenceRoot');
     } finally {

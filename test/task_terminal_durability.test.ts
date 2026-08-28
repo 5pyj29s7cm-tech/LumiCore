@@ -12,10 +12,6 @@ import {
   type ChatExecutionScope,
   type PersistedChatExecutionReceipt,
 } from '../server/socket/chat_execution_registry';
-import {
-  persistTaskWorkflowCheckpointDurably,
-  TaskWorkflowCheckpointError,
-} from '../server/socket/task';
 
 const taskScope: ChatExecutionScope = {
   userId: 'task-user',
@@ -27,9 +23,7 @@ function memoryPersistence() {
   const rows: PersistedChatExecutionReceipt[] = [];
   const adapter: ChatExecutionPersistenceAdapter = {
     async loadRecoverable(nowIso) {
-      return rows
-        .filter(row => row.expiresAt > nowIso)
-        .map(row => structuredClone(row));
+      return rows.filter(row => row.expiresAt > nowIso).map(row => structuredClone(row));
     },
     async upsert(receipt) {
       const index = rows.findIndex(row => row.requestId === receipt.requestId);
@@ -94,13 +88,7 @@ describe('task terminal durability', () => {
     });
 
     expect(committed).toBe(false);
-    expect(order).toEqual([
-      'state',
-      'message',
-      'flush_failed',
-      'unknown_receipt',
-      'publish_unknown',
-    ]);
+    expect(order).toEqual(['state', 'message', 'flush_failed', 'unknown_receipt', 'publish_unknown']);
   });
 
   it('recovers the exact durable task terminal after a registry restart', async () => {
@@ -128,114 +116,14 @@ describe('task terminal durability', () => {
       },
     });
   });
-});
 
-describe('foreground task workflow checkpoints', () => {
-  const graph = {
-    graphId: 'graph-1',
-    taskId: 'task-1',
-    nodes: [],
-    arbitration: 'first_verified',
-  } as any;
-  const recoveredReceipt = { graphId: 'graph-1', taskId: 'task-1', nodeId: 'old' } as any;
-  const waveReceipt = { graphId: 'graph-1', taskId: 'task-1', nodeId: 'wave' } as any;
-
-  it('persists and flushes every checkpoint before the workflow can continue', async () => {
-    const order: string[] = [];
-    await persistTaskWorkflowCheckpointDurably({
-      conversationId: 'conversation-1',
-      userId: 'task-user',
-      taskId: 'task-1',
-      checkpoint: {
-        phase: 'wave_completed',
-        executionGraph: graph,
-        nodeReceipts: [waveReceipt],
-        privateNodeHandoffs: [],
-        completedNodeIds: ['wave'],
-      },
-    }, {
-      persist: input => {
-        order.push(`persist:${input.nodeReceipts[0]?.nodeId}`);
-        return true;
-      },
-      flush: async () => { order.push('flush'); },
-    });
-
-    expect(order).toEqual(['persist:wave', 'flush']);
-  });
-
-  it('fails closed before flush when the task-owned checkpoint is rejected', async () => {
-    const flush = vi.fn(async () => undefined);
-    await expect(persistTaskWorkflowCheckpointDurably({
-      conversationId: 'conversation-1',
-      userId: 'task-user',
-      taskId: 'task-1',
-      checkpoint: {
-        phase: 'compiled',
-        executionGraph: graph,
-        nodeReceipts: [],
-        privateNodeHandoffs: [],
-        completedNodeIds: [],
-      },
-    }, {
-      persist: () => false,
-      flush,
-    })).rejects.toBeInstanceOf(TaskWorkflowCheckpointError);
-    expect(flush).not.toHaveBeenCalled();
-  });
-
-  it('preserves restart receipts at the compiled fence, then replaces them with the completed wave', async () => {
-    const persisted: any[] = [];
-    const dependencies = {
-      persist: (input: any) => {
-        persisted.push(input);
-        return true;
-      },
-      flush: async () => undefined,
-    };
-    await persistTaskWorkflowCheckpointDurably({
-      conversationId: 'conversation-1',
-      userId: 'task-user',
-      taskId: 'task-1',
-      resumeNodeReceipts: [recoveredReceipt],
-      checkpoint: {
-        phase: 'compiled',
-        executionGraph: graph,
-        nodeReceipts: [],
-        privateNodeHandoffs: [],
-        completedNodeIds: [],
-      },
-    }, dependencies);
-    await persistTaskWorkflowCheckpointDurably({
-      conversationId: 'conversation-1',
-      userId: 'task-user',
-      taskId: 'task-1',
-      resumeNodeReceipts: [recoveredReceipt],
-      checkpoint: {
-        phase: 'wave_completed',
-        executionGraph: graph,
-        nodeReceipts: [waveReceipt],
-        privateNodeHandoffs: [],
-        completedNodeIds: ['wave'],
-      },
-    }, dependencies);
-
-    expect(persisted[0].nodeReceipts).toEqual([recoveredReceipt]);
-    expect(persisted[0].privateNodeHandoffs).toBeUndefined();
-    expect(persisted[1].nodeReceipts).toEqual([waveReceipt]);
-  });
-
-  it('wires all task terminals through the strict helper and checkpoints executeWorkflow', () => {
-    const source = readFileSync(
-      path.join(process.cwd(), 'server/socket/task.ts'),
-      'utf8',
-    );
-    expect(source.match(/await commitTaskTerminal\(\{/g)?.length || 0).toBeGreaterThanOrEqual(12);
+  it('wires all task terminals through the strict durability boundary', () => {
+    const source = readFileSync(path.join(process.cwd(), 'server/socket/task.ts'), 'utf8');
+    expect(source.match(/await commitTaskTerminal\(\{/g)?.length || 0).toBeGreaterThanOrEqual(10);
     expect(source).not.toMatch(/emitAgent\(["']agent:response["']/);
     expect(source).not.toMatch(/emitAgent\(["']agent:error["']/);
     expect(source).toContain('beginChatExecutionDurably(');
-    expect(source).toContain('await persistTaskWorkflowCheckpointDurably({');
-    expect(source).toContain('if (orchErr instanceof TaskWorkflowCheckpointError || workflowCheckpointed) throw orchErr;');
-    expect(source).toContain('await flush();');
+    expect(source).toContain('flush: flushDBOrThrow');
+    expect(source).not.toContain('executeWorkflow(');
   });
 });

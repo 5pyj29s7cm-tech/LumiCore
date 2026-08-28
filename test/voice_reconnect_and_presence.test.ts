@@ -282,15 +282,17 @@ describe('voice reconnect and perception continuity', () => {
     expect(isEchoText('嗯')).toBe(false);
   });
 
-  it('advances the same latest-turn generation from chat, voice, and task surfaces', () => {
+  it('binds accepted turns to durable request ownership across chat, voice, and task surfaces', () => {
     const root = process.cwd();
     const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
     const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
     const task = readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8');
 
-    expect(chat).toContain('markLatestUserTurn(executionScope, requestId)');
-    expect(voice).toContain('markLatestUserTurn({');
-    expect(voice).toContain('domain: voiceScope.domain');
-    expect(task).toContain('markLatestUserTurn(executionScope, requestId)');
+    expect(chat).toContain('const chatAdmission = await admitAcceptedUserTurnDurably({');
+    expect(chat).toContain('() => beginChatExecutionDurably(executionScope, requestId');
+    expect(voice).toContain('const voiceAdmission = await admitAcceptedUserTurnDurably({');
+    expect(voice).toContain('() => beginChatExecutionDurably(');
+    expect(task).toContain('const taskAdmission = await admitAcceptedUserTurnDurably({');
+    expect(task).toContain('() => beginChatExecutionDurably(');
   });
 });

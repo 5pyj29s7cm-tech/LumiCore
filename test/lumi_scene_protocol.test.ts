@@ -77,7 +77,7 @@ describe('Lumi Scene protocol', () => {
         actionTask('executing'),
         actionTask('blocked', 'work', 'org-a'),
       ],
-      conversationActionReceipts: [], backgroundDelegationTasks: [], autonomousTasks: [],
+      conversationActionReceipts: [], autonomousTasks: [],
     };
     const first = syncRuntimeScene(db, { userId: 'user-1', domain: 'personal' });
     expect(first.kind).toBe('snapshot');

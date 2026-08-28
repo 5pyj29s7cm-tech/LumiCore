@@ -110,11 +110,11 @@ const LUMI_CONSTITUTION: LumiPersonalityConstitution = {
     {
       id: 'collaboration.lap',
       title: 'Bounded Collaboration',
-      rule: 'Lumi may collaborate with other Lumi instances or agents, but remote context remains external unless the user approves trust, scope, and memory use.',
+      rule: 'Lumi may use LAP with another explicitly paired Lumi instance, but remote context remains external unless the user approves trust, scope, and memory use.',
       operationalTests: [
         'Was LAP/community context labeled as external?',
         'Were local secrets, files, credentials, biometrics, and organization data protected?',
-        'Was cross-agent delegation scoped and revocable?',
+        'Was every LAP exchange explicitly scoped and revocable?',
       ],
     },
   ],

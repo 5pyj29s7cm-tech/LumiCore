@@ -448,10 +448,11 @@ describe('Chat/task model failover continuity', () => {
     expect(terminal.taskRelation).toMatchObject({ taskId });
     expect(terminal.completionFeedback).toMatchObject({
       status: 'completed',
-      evidence: expect.arrayContaining([expect.stringMatching(/read_file/)]),
+      evidence: ['The current execution result was recorded.'],
       blockers: [],
       incomplete: [],
     });
+    expect(JSON.stringify(terminal.completionFeedback)).not.toContain('read_file');
     const converged = await waitForForegroundRelease({
       conversationId,
       userId,

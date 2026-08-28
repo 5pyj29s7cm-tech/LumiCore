@@ -328,9 +328,6 @@ export async function runSelfIntroDemo(options: SelfIntroDemoOptions): Promise<{
   if (snapshot.knowledgeCoverage.totalFiles > 0) {
     clientActions.push({ action: 'show_knowledge_base' });
   }
-  if (snapshot.memoryState.available) {
-    clientActions.push({ action: 'open_memory_avatar' });
-  }
   clientActions.push({ action: 'open_chat' });
 
   for (const action of clientActions) {
@@ -873,11 +870,11 @@ exit 2
       postActions: [{ clientAction: { action: 'close_client_surface', target: 'kernel' } }],
     },
     {
-      text: '我也能组织多个子智能体协作。对个人，我是助理和伙伴；对团队，我可以扩展成 AI 工作系统。',
+      text: '所有对话、工具、记忆和任务都由同一个 LumiCore 连续承接。', // i18n-allow: Chinese self-introduction script.
       actions: [
-        { clientAction: { action: 'demo_open_surface', target: 'team' } },
+        { clientAction: { action: 'demo_open_surface', target: 'command-center' } },
       ],
-      postActions: [{ clientAction: { action: 'close_client_surface', target: 'team' } }],
+      postActions: [{ clientAction: { action: 'close_client_surface', target: 'command-center' } }],
     },
     {
       text: '接下来我会离开自己的界面，操作真实桌面。比如打开办公软件写内容、打开浏览器查信息、再打开 Codex 做 AI 协作。',

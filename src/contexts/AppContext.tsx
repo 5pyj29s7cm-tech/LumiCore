@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { toast } from 'sonner';
 import * as authService from '../services/authService';
-import * as agentService from '../services/agentService';
 import * as notificationService from '../services/notificationService';
 import { socketService } from '../services/socketService';
 import { saveServerKeys } from '../services/settingsKeys';
@@ -20,16 +19,6 @@ interface UserProfile {
   role: string;
   phone?: string;
   provider: 'custom' | 'google';
-}
-
-interface Agent {
-  id: string;
-  ownerUid: string;
-  name: string;
-  category: string;
-  data: string;
-  createdAt: string;
-  status: 'active' | 'inactive';
 }
 
 interface AIConfig {
@@ -145,7 +134,6 @@ export interface DomainSwitchResult {
 interface AppContextType {
   user: UserProfile | null;
   loading: boolean;
-  agents: Agent[];
   aiConfig: AIConfig;
   visionConfig: VisionConfig;
   // Voice
@@ -177,9 +165,6 @@ interface AppContextType {
   // Core
   login: () => Promise<void>;
   logout: () => Promise<void>;
-  createAgent: (name: string, category: string, data: any) => Promise<any>;
-  updateAgent: (id: string, updates: Partial<Agent>) => Promise<any>;
-  deleteAgent: (id: string) => Promise<void>;
   updateBalance: (amount: number) => Promise<void>;
   refreshUser: () => Promise<void>;
   updateAIConfig: (config: Partial<AIConfig>) => void;
@@ -196,7 +181,6 @@ try {
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserProfile | null>(null);
-  const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
   const [aiConfig, setAiConfig] = useState<AIConfig>(() => {
     const saved = localStorage.getItem('lumi_ai_config');
@@ -647,7 +631,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setOrgConnection(conn);
           localStorage.setItem('lumi_org_connection', JSON.stringify(conn));
         }
-        try { setAgents(await agentService.listAgents()); } catch {}
         // Load persisted notifications from server
         try {
           const notifData = await notificationService.fetchNotifications();
@@ -673,29 +656,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         } catch {}
       } else {
         setUser(null);
-        setAgents([]);
       }
     } catch (error) {
       console.error('Error refreshing user:', error);
     }
   };
-
-  useEffect(() => {
-    const handleAgentsChanged = async (event: Event) => {
-      const agent = (event as CustomEvent).detail?.agent;
-      if (agent?.id) {
-        setAgents(prev => {
-          const exists = prev.some(a => a.id === agent.id);
-          return exists ? prev.map(a => a.id === agent.id ? { ...a, ...agent } : a) : [...prev, agent];
-        });
-        return;
-      }
-      try { setAgents(await agentService.listAgents()); } catch {}
-    };
-
-    window.addEventListener('lumi:agents-changed', handleAgentsChanged);
-    return () => window.removeEventListener('lumi:agents-changed', handleAgentsChanged);
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -770,52 +735,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       await authService.logout();
       setUser(null);
-      setAgents([]);
       toast.info('Returned to the mortal realm');
     } catch (error: any) {
       toast.error('Logout failed: ' + error.message);
-    }
-  };
-
-  const createAgent = async (name: string, category: string, data: any): Promise<any> => {
-    if (!user) {
-      toast.error('You must be authenticated to synthesize agents');
-      return null;
-    }
-    try {
-      const newAgent = await agentService.createAgent({ name, category, data: JSON.stringify(data) });
-      setAgents(prev => [...prev, newAgent]);
-      addNotification({ type: 'success', title: 'Agent Synthesized', message: `${name} (${category}) has been created and is ready for use.` });
-      toast.success(`${name} has been synthesized`);
-      return newAgent;
-    } catch (error: any) {
-      console.error('Synthesis error:', error);
-      toast.error('Synthesis failed: ' + error.message);
-    }
-  };
-
-  const updateAgent = async (id: string, updates: Partial<Agent>) => {
-    try {
-      const updated = await agentService.updateAgent(id, updates);
-      setAgents(prev => prev.map(a => a.id === id ? { ...a, ...updated } : a));
-      toast.success(`Agent "${updated.name || id}" updated`);
-      return updated;
-    } catch (error: any) {
-      console.error('Update error:', error);
-      toast.error('Update failed: ' + error.message);
-    }
-  };
-
-  const deleteAgent = async (id: string) => {
-    try {
-      await agentService.deleteAgent(id);
-      const deleted = agents.find(a => a.id === id);
-      setAgents(prev => prev.filter(a => a.id !== id));
-      addNotification({ type: 'info', title: 'Agent Released', message: `"${deleted?.name || id}" has been dissolved.` });
-      toast.success('Agent essence has been released');
-    } catch (error: any) {
-      console.error('Deletion error:', error);
-      toast.error('Deletion failed: ' + error.message);
     }
   };
 
@@ -893,7 +815,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     <AppContext.Provider value={{
       user,
       loading,
-      agents,
       aiConfig,
       visionConfig,
       selectedVoiceId,
@@ -918,9 +839,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setAppearanceMode,
       login,
       logout,
-      createAgent,
-      updateAgent,
-      deleteAgent,
       updateBalance,
       refreshUser,
       updateAIConfig,

@@ -22,7 +22,7 @@ interface UseWakeWordOptions {
   voiceId?: string;
   /** Personality ID to pass to startCall */
   personalityId?: string;
-  /** Agent ID to pass to startCall */
+  /** Stable Lumi identity to pass to startCall */
   agentId?: string;
   /** Domain scope to pass to the voice call when wake word starts it */
   startCallOptions?: { domain?: 'personal' | 'work'; orgId?: string };

@@ -65,14 +65,13 @@ export interface StructuredRuntimeStatus {
     verifiedReceipts: number;
     failedReceipts: number;
     unknownReceipts: number;
-    backgroundActive: number;
     autonomousActive: number;
     durableBlocked: number;
   };
   tasks: RuntimeTaskProjection[];
   durableWork: Array<{
     taskId: string;
-    runtime: 'background' | 'autonomous';
+    runtime: 'autonomous';
     status: string;
     title: string;
     checkpoint: string;
@@ -215,19 +214,6 @@ export function buildStructuredRuntimeStatus(
     .map(task => projectTask(task, actionReceipts));
   const tasks = allTaskProjections.slice(0, 12);
 
-  const background = (Array.isArray(db?.backgroundDelegationTasks) ? db.backgroundDelegationTasks : [])
-    .filter((task: any) => task.userId === input.userId)
-    .filter((task: any) => input.domain === 'work'
-      ? task.context?.domain === 'work' && task.context?.orgId === orgId
-      : task.context?.domain !== 'work' && !task.context?.orgId)
-    .map((task: any) => ({
-      taskId: compact(task.id, 180),
-      runtime: 'background' as const,
-      status: compact(task.status, 60),
-      title: compact(task.title, 500),
-      checkpoint: compact(task.checkpoint?.phase, 120),
-      updatedAt: compact(task.updatedAt || task.createdAt, 80),
-    }));
   const autonomous = input.domain === 'personal'
     ? (Array.isArray(db?.autonomousTasks) ? db.autonomousTasks : [])
       .filter((task: any) => task.userId === input.userId)
@@ -240,7 +226,7 @@ export function buildStructuredRuntimeStatus(
         updatedAt: compact(task.updatedAt || task.createdAt, 80),
       }))
     : [];
-  const durableWork = [...background, ...autonomous]
+  const durableWork = autonomous
     .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))
     .slice(0, 12);
 
@@ -250,7 +236,6 @@ export function buildStructuredRuntimeStatus(
   const verifiedReceipts = allTaskProjections.reduce((sum, task) => sum + task.evidence.verified, 0);
   const failedReceipts = allTaskProjections.reduce((sum, task) => sum + task.evidence.failed, 0);
   const unknownReceipts = allTaskProjections.reduce((sum, task) => sum + task.evidence.unknown, 0);
-  const backgroundActive = background.filter(task => isDurableActiveStatus(task.status)).length;
   const autonomousActive = autonomous.filter(task => isDurableActiveStatus(task.status)).length;
   const durableBlocked = durableWork.filter(task => task.status === 'blocked' || task.status === 'failed').length;
   const attentionReasons = [
@@ -262,7 +247,7 @@ export function buildStructuredRuntimeStatus(
   ];
   const level: RuntimeAttentionLevel = attentionReasons.length > 0
     ? 'attention'
-    : activeTasks + backgroundActive + autonomousActive > 0
+    : activeTasks + autonomousActive > 0
       ? 'working'
       : 'ready';
   const structuralState = {
@@ -287,7 +272,6 @@ export function buildStructuredRuntimeStatus(
       verifiedReceipts,
       failedReceipts,
       unknownReceipts,
-      backgroundActive,
       autonomousActive,
       durableBlocked,
     },

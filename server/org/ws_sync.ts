@@ -3,7 +3,7 @@
  *
  * Attaches to the existing Socket.IO server and adds org-scoped rooms.
  * Branches join their org room on connect; the company server broadcasts
- * events (member changes, template status, KB updates) to all branches in the org.
+ * events (member changes and knowledge updates) to all branches in the org.
  */
 
 import { Server as SocketIOServer, Socket } from 'socket.io';
@@ -134,14 +134,6 @@ export function emitMemberLeft(orgId: string, userId: string) {
   broadcastToOrg(orgId, 'member:left', { userId, orgId });
 }
 
-export function emitTemplateSubmitted(orgId: string, templateId: string, authorId: string) {
-  broadcastToOrg(orgId, 'template:submitted', { templateId, authorId, orgId });
-}
-
-export function emitTemplateStatusChange(orgId: string, templateId: string, status: string) {
-  broadcastToOrg(orgId, 'template:status', { templateId, status, orgId });
-}
-
 export function emitKbUpdated(orgId: string, articleId: string, action: 'created' | 'updated' | 'deleted') {
   broadcastToOrg(orgId, 'kb:article', { articleId, action, orgId });
 }
@@ -152,7 +144,6 @@ function countSyncItems(payload: any): number {
   let count = 0;
   if (payload?.memories) count += payload.memories.length;
   if (payload?.interactions) count += payload.interactions.length;
-  if (payload?.agents) count += payload.agents.length;
   return count;
 }
 

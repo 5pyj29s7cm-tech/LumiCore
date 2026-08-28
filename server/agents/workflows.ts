@@ -6,7 +6,6 @@
  * pattern is discovered. They can be run by name: "run my morning routine".
  */
 import { readDB, writeDB } from '../../db_layer';
-import { SubTask } from './orchestrator';
 import {
   createWorkflowDefinitionDraft,
   getWorkflowDefinition as getVersionedWorkflowDefinition,
@@ -36,7 +35,6 @@ export interface WorkflowDefinition {
     reconciliationCapabilityId?: string;
     attachedReconciliation?: WorkflowStepDefinition['attachedReconciliation'];
   }>;
-  agentAssignments?: Record<string, string>; // subTaskId -> agentId
   category?: string;
   createdAt: string;
   lastRunAt?: string;
@@ -158,7 +156,6 @@ export function saveWorkflow(
   name: string,
   description: string,
   steps: WorkflowDefinition['steps'],
-  agentAssignments?: Record<string, string>,
   category?: string,
   scope: WorkflowScope = {},
 ): WorkflowDefinition {
@@ -173,7 +170,6 @@ export function saveWorkflow(
   if (existing) {
     existing.description = description;
     existing.steps = steps;
-    existing.agentAssignments = agentAssignments || existing.agentAssignments;
     existing.category = category || existing.category;
     persistWorkflows(db, workflows);
     return existing;
@@ -185,7 +181,6 @@ export function saveWorkflow(
     name,
     description,
     steps,
-    agentAssignments,
     category,
     createdAt: new Date().toISOString(),
     runCount: 0,
@@ -242,7 +237,6 @@ export function saveWorkflowDraftCandidate(
   description: string,
   steps: WorkflowDefinition['steps'],
   provenance: VersionedWorkflowDefinition['provenance'],
-  agentAssignments?: Record<string, string>,
   category?: string,
   scope: WorkflowScope = {},
 ): WorkflowDefinition {
@@ -260,7 +254,7 @@ export function saveWorkflowDraftCandidate(
         : redactedArgs) as Record<string, any>,
     };
   });
-  const legacy = saveWorkflow(userId, name, description, redactedSteps, agentAssignments, category, scope);
+  const legacy = saveWorkflow(userId, name, description, redactedSteps, category, scope);
   const draft = createWorkflowDefinitionDraft({
     workflowId: legacy.runtimeWorkflowId || legacy.id,
     userId,
@@ -407,35 +401,6 @@ export function recordWorkflowRun(userId: string, name: string, scope: WorkflowS
 }
 
 /**
- * Convert an orchestrator task decomposition into a named workflow.
- * Called when the user says "remember this" after a successful orchestration run.
- */
-export function captureFromOrchestration(
-  userId: string,
-  name: string,
-  taskDescription: string,
-  subTasks: SubTask[],
-  agentAssignments: Record<string, string>,
-  scope: WorkflowScope = {},
-): WorkflowDefinition {
-  const steps = subTasks.map(st => ({
-    description: st.description,
-    requiredSkill: st.requiredSkill,
-    executionMode: st.executionMode,
-  }));
-  return saveWorkflowDraftCandidate(
-    userId,
-    name,
-    taskDescription,
-    steps,
-    { source: 'captured_draft', sourceRefs: subTasks.map(task => task.id), reviewedByUser: false },
-    agentAssignments,
-    'captured',
-    scope,
-  );
-}
-
-/**
  * Auto-detect repeated behavior patterns from the worklog and create named workflows.
  * Called periodically by the scheduler. When Lumi notices the user doing the same
  * thing 3+ times, she auto-creates a workflow so the user can say "run my X routine".
@@ -487,7 +452,6 @@ export async function autoGenerateWorkflows(userId: string, scope: WorkflowScope
           sourceRefs: cluster.workflows.map(item => item.id),
           reviewedByUser: false,
         },
-        undefined,
         'auto',
         normalized,
       );
@@ -545,7 +509,6 @@ export function captureRecentAsWorkflow(
     description,
     steps,
     { source: 'captured_draft', reviewedByUser: false },
-    undefined,
     'manual',
     scope,
   );

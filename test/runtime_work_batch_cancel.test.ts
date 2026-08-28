@@ -2,9 +2,9 @@ import './helpers';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase } from '../db_layer';
 import {
-  registerBackgroundTask,
-  resetBackgroundTasksForTest,
-} from '../server/agents/background_tasks';
+  enqueue,
+  resetAutonomousTaskQueueForTest,
+} from '../server/autonomy/task_queue';
 import {
   cancelRuntimeWork,
   getRuntimeWorkSnapshot,
@@ -16,18 +16,20 @@ describe('runtime work exact batch cancellation', () => {
   });
 
   afterEach(() => {
-    resetBackgroundTasksForTest({ markHydrated: true });
+    resetAutonomousTaskQueueForTest({ markHydrated: true });
   });
 
   it('treats an explicit empty target set as cancel-zero, never cancel-all', () => {
-    resetBackgroundTasksForTest({ markHydrated: true });
+    resetAutonomousTaskQueueForTest({ markHydrated: true });
     const userId = `runtime-empty-batch-${Date.now()}-${Math.random()}`;
-    const task = registerBackgroundTask({
+    const task = enqueue({
       userId,
       title: 'must remain queued',
-      prompt: 'isolated',
-      context: { domain: 'personal' },
-    });
+      description: 'isolated',
+      source: 'user_request',
+      priority: 5,
+      mode: 'analysis',
+    })!;
     expect(cancelRuntimeWork({
       userId,
       taskIds: [],
@@ -40,25 +42,29 @@ describe('runtime work exact batch cancellation', () => {
       cancelledCount: 0,
       targetResults: [],
     });
-    expect(getRuntimeWorkSnapshot(userId, ['delegation'], { domain: 'personal' }).items)
+    expect(getRuntimeWorkSnapshot(userId, ['autonomy'], { domain: 'personal' }).items)
       .toEqual([expect.objectContaining({ id: task.id, phase: 'queued' })]);
   });
 
   it('returns per-target cancelled/not_found/already_terminal facts without repeating success', () => {
-    resetBackgroundTasksForTest({ markHydrated: true });
+    resetAutonomousTaskQueueForTest({ markHydrated: true });
     const userId = `runtime-exact-batch-${Date.now()}-${Math.random()}`;
-    const selected = registerBackgroundTask({
+    const selected = enqueue({
       userId,
       title: 'selected',
-      prompt: 'isolated',
-      context: { domain: 'personal' },
-    });
-    const unselected = registerBackgroundTask({
+      description: 'isolated',
+      source: 'user_request',
+      priority: 5,
+      mode: 'analysis',
+    })!;
+    const unselected = enqueue({
       userId,
       title: 'unselected',
-      prompt: 'must remain queued',
-      context: { domain: 'personal' },
-    });
+      description: 'must remain queued',
+      source: 'user_request',
+      priority: 5,
+      mode: 'analysis',
+    })!;
     const missing = 'missing-runtime-task';
     expect(cancelRuntimeWork({
       userId,
@@ -106,7 +112,7 @@ describe('runtime work exact batch cancellation', () => {
         { taskId: missing, status: 'not_found' },
       ],
     });
-    expect(getRuntimeWorkSnapshot(userId, ['delegation'], { domain: 'personal' }).items
+    expect(getRuntimeWorkSnapshot(userId, ['autonomy'], { domain: 'personal' }).items
       .find(item => item.id === unselected.id)).toMatchObject({ phase: 'queued' });
   });
 });

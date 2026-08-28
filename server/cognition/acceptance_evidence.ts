@@ -1,32 +1,31 @@
 import crypto from 'node:crypto';
-import {
-  hasVerifiedModelGraphNodeEvidence,
-  type ModelGraphArbitrationReceipt,
-  type ModelGraphNodeReceipt,
-} from '../agents/model_execution_graph';
 import { getJwtSecret } from '../config/local_identity';
 import type { CapabilityManifestEntry, ToolExecutionRecord } from '../tools/types';
 import {
   inspectPersistedToolExecutionReceipt,
   type PersistedToolExecutionReceiptExpectation,
 } from '../tools/persisted_execution_receipt';
+import {
+  parseReceiptObject,
+  toolRecordHasTerminalPayload,
+} from '../tools/receipt_payload';
+import { buildActionEvidenceContract, hasCoreActionEvidence } from './action_contract';
 
 export type AcceptanceStage = 'registered' | 'available' | 'exercised' | 'verified';
 export type RuntimeSampleStatus = 'not_exercised' | 'unknown' | 'degraded' | 'verified';
-export type TaskRuntimeKind = 'background' | 'autonomous' | 'conversation' | 'scheduler';
+export type TaskRuntimeKind = 'autonomous' | 'conversation' | 'scheduler';
 export type TaskTerminalOutcome = 'completed' | 'failed' | 'blocked' | 'cancelled';
 
 export interface TaskTerminalReceipt {
-  schemaVersion: 2;
+  schemaVersion: 3;
   receiptId: string;
   taskId: string;
   runtime: TaskRuntimeKind;
   outcome: TaskTerminalOutcome;
   verification: 'verified' | 'unverified' | 'failed';
-  evidenceKind: 'tool' | 'model_graph' | 'mixed' | 'none';
+  evidenceKind: 'tool' | 'none';
   evidenceRefs: string[];
   toolNames: string[];
-  workerIds: string[];
   reasonCode: string;
   reason: string;
   createdAt: string;
@@ -98,22 +97,11 @@ export interface AcceptanceEvidenceSnapshot {
       completedWithoutTerminalReceipt: number;
       blockedOrFailed: number;
     };
-    modelGraph: RuntimeSampleStatus;
     knowledgeQuality: RuntimeSampleStatus;
   };
   capabilities: CapabilityAcceptanceProjection[];
   tasks: TaskAcceptanceProjection[];
   subsystems: {
-    modelGraph: {
-      status: RuntimeSampleStatus;
-      sampleScope: 'current_process';
-      compilations: number;
-      invalidGraphs: number;
-      arbitrations: number;
-      verifiedArbitrations: number;
-      blockedArbitrations: number;
-      diagnosticCode: string;
-    };
     knowledgeQuality: {
       status: RuntimeSampleStatus;
       sampleScope: 'current_process';
@@ -151,7 +139,6 @@ const TASK_TERMINAL_RECEIPT_KEYS = [
   'taskId',
   'toolNames',
   'verification',
-  'workerIds',
 ] as const;
 
 function compact(value: unknown, limit = 700): string {
@@ -178,7 +165,7 @@ function digest(value: unknown): string {
 
 function terminalReceiptSignature(value: Record<string, unknown>): string {
   return crypto.createHmac('sha256', getJwtSecret())
-    .update('lumi:task-terminal-receipt:v2\0')
+    .update('lumi:task-terminal-receipt:v3\0')
     .update(JSON.stringify(stableValue(value)))
     .digest('hex');
 }
@@ -192,7 +179,7 @@ function hasValidTerminalReceiptSignature(receipt: unknown): receipt is TaskTerm
       keys.length !== TASK_TERMINAL_RECEIPT_KEYS.length
       || keys.some((key, index) => key !== TASK_TERMINAL_RECEIPT_KEYS[index])
     ) return false;
-    if (candidate.schemaVersion !== 2 || !/^[a-f0-9]{64}$/.test(String(candidate.signature || ''))) {
+    if (candidate.schemaVersion !== 3 || !/^[a-f0-9]{64}$/.test(String(candidate.signature || ''))) {
       return false;
     }
     const { signature, ...unsigned } = candidate;
@@ -205,14 +192,7 @@ function hasValidTerminalReceiptSignature(receipt: unknown): receipt is TaskTerm
 }
 
 function parseObject(value: unknown): Record<string, any> {
-  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
-  if (typeof value !== 'string' || !value.trim()) return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
+  return parseReceiptObject(value) || {};
 }
 
 function boundedUnique(values: unknown[], limit = 80): string[] {
@@ -221,7 +201,7 @@ function boundedUnique(values: unknown[], limit = 80): string[] {
 
 function verifiedToolRecord(record: ToolExecutionRecord): boolean {
   return !record.error
-    && Boolean(String(record.result || '').trim())
+    && toolRecordHasTerminalPayload(record)
     && record.terminalVerification?.status === 'verified';
 }
 
@@ -233,61 +213,11 @@ function toolEvidenceRef(record: ToolExecutionRecord): string | null {
     : `tool:sha256-${digest(id).slice(0, 32)}`;
 }
 
-function verifiedModelGraphEvidence(input: {
-  taskId: string;
-  arbitrationReceipt?: ModelGraphArbitrationReceipt;
-  nodeReceipts?: ModelGraphNodeReceipt[];
-}): { verified: boolean; evidenceRefs: string[]; workerIds: string[]; reason: string } {
-  const arbitration = input.arbitrationReceipt;
-  if (
-    !arbitration
-    || arbitration.taskId !== input.taskId
-    || arbitration.status !== 'succeeded'
-    || arbitration.verification !== 'verified'
-    || !Array.isArray(arbitration.selectedNodeIds)
-    || !Array.isArray(arbitration.verifiedNodeIds)
-    || arbitration.selectedNodeIds.length === 0
-    || arbitration.selectedNodeIds.some(nodeId => !arbitration.verifiedNodeIds.includes(nodeId))
-  ) {
-    return {
-      verified: false,
-      evidenceRefs: [],
-      workerIds: [],
-      reason: compact(arbitration?.reason || 'No successful model-graph arbitration receipt was recorded.'),
-    };
-  }
-  const nodes = input.nodeReceipts || [];
-  const verifiedNodes = arbitration.verifiedNodeIds.map(nodeId => nodes.find(receipt => (
-    receipt.graphId === arbitration.graphId
-    && receipt.taskId === arbitration.taskId
-    && receipt.nodeId === nodeId
-  )));
-  if (verifiedNodes.some(receipt => !hasVerifiedModelGraphNodeEvidence(receipt))) {
-    return {
-      verified: false,
-      evidenceRefs: [],
-      workerIds: [],
-      reason: 'Model-graph arbitration selected a node without a matching verified terminal receipt.',
-    };
-  }
-  return {
-    verified: true,
-    evidenceRefs: [
-      `model-graph:${arbitration.graphId}:arbitration`,
-      ...verifiedNodes.map(receipt => `model-graph:${receipt!.graphId}:${receipt!.nodeId}`),
-    ],
-    workerIds: boundedUnique(verifiedNodes.map(receipt => receipt?.agentId || receipt?.selectedCandidate?.agentId || '')),
-    reason: 'Successful arbitration selected only model nodes with verified terminal receipts.',
-  };
-}
-
 export function buildTaskTerminalReceipt(input: {
   taskId: string;
   runtime: TaskRuntimeKind;
   outcome: TaskTerminalOutcome;
   toolRecords?: ToolExecutionRecord[];
-  nodeReceipts?: ModelGraphNodeReceipt[];
-  arbitrationReceipt?: ModelGraphArbitrationReceipt;
   /** Existing durable receipt ids may diagnose non-completion, but never prove completion by themselves. */
   evidenceRefs?: string[];
   reasonCode?: string;
@@ -299,25 +229,10 @@ export function buildTaskTerminalReceipt(input: {
   const terminalTools = (input.toolRecords || []).filter(record => record.result !== undefined || record.error !== undefined);
   const verifiedTools = terminalTools.filter(record => verifiedToolRecord(record) && toolEvidenceRef(record));
   const toolEvidenceRefs = verifiedTools.map(record => toolEvidenceRef(record)!);
-  const graphEvidence = verifiedModelGraphEvidence({
-    taskId,
-    arbitrationReceipt: input.arbitrationReceipt,
-    nodeReceipts: input.nodeReceipts,
-  });
-  const graphWasAttempted = Boolean(input.arbitrationReceipt || input.nodeReceipts?.length);
-  // An orchestration graph is one completion unit. A single verified tool from
-  // one node cannot conceal an unverified reasoning/external node selected by
-  // that graph. Standalone tasks without a graph may still close on tool proof.
-  const acceptedStandaloneToolEvidence = !graphWasAttempted && toolEvidenceRefs.length > 0;
-  const verified = input.outcome === 'completed'
-    && (acceptedStandaloneToolEvidence || graphEvidence.verified);
+  const verified = input.outcome === 'completed' && toolEvidenceRefs.length > 0;
   const evidenceRefs = input.outcome === 'completed'
     ? verified
-      ? boundedUnique([
-          ...(graphEvidence.verified ? toolEvidenceRefs : []),
-          ...(acceptedStandaloneToolEvidence ? toolEvidenceRefs : []),
-          ...graphEvidence.evidenceRefs,
-        ])
+      ? boundedUnique(toolEvidenceRefs)
       : []
     : boundedUnique([
         ...(input.evidenceRefs || []),
@@ -325,34 +240,22 @@ export function buildTaskTerminalReceipt(input: {
           `tool:${compact(record.id, 180) || digest({ taskId, name: record.name, index }).slice(0, 24)}`
         )),
       ]);
-  const evidenceKind: TaskTerminalReceipt['evidenceKind'] = toolEvidenceRefs.length > 0 && graphEvidence.verified
-    ? 'mixed'
-    : acceptedStandaloneToolEvidence
-      ? 'tool'
-      : graphEvidence.verified
-        ? 'model_graph'
-        : 'none';
+  const evidenceKind: TaskTerminalReceipt['evidenceKind'] = verified ? 'tool' : 'none';
   const reasonCode = compact(input.reasonCode, 100) || (
     input.outcome !== 'completed'
       ? `task_${input.outcome}`
-      : acceptedStandaloneToolEvidence
+      : verified
         ? 'verified_tool_terminal_receipt'
-        : graphEvidence.verified
-          ? 'verified_model_graph_arbitration'
-          : 'missing_verified_terminal_evidence'
+        : 'missing_verified_terminal_evidence'
   );
   const reason = compact(input.reason, 700) || (
     input.outcome !== 'completed'
       ? `Task ended with status ${input.outcome}.`
-      : acceptedStandaloneToolEvidence
+      : verified
         ? `${verifiedTools.length} tool execution(s) produced verified terminal receipts.`
-        : graphEvidence.verified
-          ? 'Successful arbitration selected only model nodes with verified terminal receipts.'
-          : graphWasAttempted
-            ? graphEvidence.reason
-          : terminalTools.length > 0
-            ? `${terminalTools.length} terminal tool execution(s) lacked verified terminal evidence.`
-            : graphEvidence.reason
+        : terminalTools.length > 0
+          ? `${terminalTools.length} terminal tool execution(s) lacked verified terminal evidence.`
+          : 'No verified terminal tool receipt was recorded.'
   );
   const receiptIdentity = {
     taskId,
@@ -364,7 +267,7 @@ export function buildTaskTerminalReceipt(input: {
     createdAt,
   };
   const unsignedReceipt: Omit<TaskTerminalReceipt, 'signature'> = {
-    schemaVersion: 2 as const,
+    schemaVersion: 3 as const,
     receiptId: `task_receipt_${digest(receiptIdentity).slice(0, 32)}`,
     taskId,
     runtime: input.runtime,
@@ -372,11 +275,10 @@ export function buildTaskTerminalReceipt(input: {
     verification: verified ? 'verified' : input.outcome === 'cancelled' ? 'unverified' : 'failed',
     evidenceKind,
     evidenceRefs,
-    toolNames: boundedUnique(terminalTools.map(record => record.name)),
-    // Worker evidence is derived only from selected, verified graph-node
-    // receipts. Assigned worker ids are scheduling metadata, not proof that a
-    // worker actually ran or contributed to the accepted result.
-    workerIds: graphEvidence.workerIds,
+    // A verified completion summary must never present failed or merely
+    // observed tools as verified evidence. Non-completed receipts retain the
+    // full attempted set for diagnosis.
+    toolNames: boundedUnique((verified ? verifiedTools : terminalTools).map(record => record.name)),
     reasonCode,
     reason,
     createdAt,
@@ -408,11 +310,10 @@ export function validateCompletionTerminalReceipt(
   if (
     !Array.isArray(receipt.evidenceRefs)
     || !Array.isArray(receipt.toolNames)
-    || !Array.isArray(receipt.workerIds)
-    || !['background', 'autonomous', 'conversation', 'scheduler'].includes(receipt.runtime)
+    || !['autonomous', 'conversation', 'scheduler'].includes(receipt.runtime)
     || !['completed', 'failed', 'blocked', 'cancelled'].includes(receipt.outcome)
     || !['verified', 'unverified', 'failed'].includes(receipt.verification)
-    || !['tool', 'model_graph', 'mixed', 'none'].includes(receipt.evidenceKind)
+    || !['tool', 'none'].includes(receipt.evidenceKind)
   ) {
     return {
       accepted: false,
@@ -448,7 +349,7 @@ function nextStepForReceipt(receipt: TaskTerminalReceipt | null | undefined): st
   const code = String(receipt?.reasonCode || '');
   if (/confirmation/i.test(code)) return 'Obtain the required user confirmation, then resume from the preserved receipt ledger.';
   if (/policy|forbidden/i.test(code)) return 'Resolve the policy boundary or select an allowed capability before retrying.';
-  if (/runtime|provider|dependency|worker|unavailable/i.test(code)) return 'Restore the unavailable runtime dependency, then resume without replaying verified side effects.';
+  if (/runtime|provider|dependency|unavailable/i.test(code)) return 'Restore the unavailable runtime dependency, then resume without replaying verified side effects.';
   if (/missing.*(?:receipt|evidence)|unverified/i.test(code)) return 'Run the missing verification step and produce a terminal machine receipt.';
   if (receipt?.outcome === 'failed' || receipt?.outcome === 'blocked') return 'Inspect the preserved blocker and retry only the unverified portion of the plan.';
   return '';
@@ -487,10 +388,6 @@ export function buildTaskCompletionFeedback(
           ? `Verified tool receipts: ${trustedReceipt.toolNames.join(', ')}`
           : `Observed terminal tool receipts: ${trustedReceipt.toolNames.join(', ')}`]
       : []),
-    ...(trustedReceipt?.workerIds?.length ? [`Worker receipts: ${trustedReceipt.workerIds.length}`] : []),
-    ...(trustedReceipt?.evidenceKind === 'model_graph' || trustedReceipt?.evidenceKind === 'mixed'
-      ? ['Model-graph arbitration selected verified node receipts.']
-      : []),
     ...(!receipt && fallback?.accepted ? ['A verified terminal action receipt was recorded.'] : []),
   ];
   const nextStep = nextStepForReceipt(trustedReceipt);
@@ -502,16 +399,6 @@ export function buildTaskCompletionFeedback(
     blockers: status === 'blocked' || status === 'failed' ? boundedUnique([reason || trustedReceipt?.reasonCode || 'Unknown blocker.'], 10) : [],
     nextSteps: nextStep ? [nextStep] : [],
   };
-}
-
-function isRegisteredBackgroundDelegation(record: ToolExecutionRecord): boolean {
-  if (record.name !== 'agent_delegate_background' || record.error) return false;
-  try {
-    const result = JSON.parse(String(record.result || '{}'));
-    return result?.ok === true && result?.status === 'registered' && Boolean(result?.task?.id);
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -529,9 +416,8 @@ export function buildForegroundTaskCompletionFeedback(input: {
 }): TaskCompletionFeedback | undefined {
   const records = input.toolRecords || [];
   const label = compact(input.taskLabel, 200) || 'Task';
-  // Transport-owned lifecycle state outranks a registration-shaped tool
-  // payload. A late/duplicated delegation receipt must not turn cancellation,
-  // persistence uncertainty, or a confirmation wait back into "working".
+  // Transport-owned lifecycle state outranks any late or duplicated tool
+  // payload when confirmation, cancellation, or persistence is unresolved.
   if (input.status === 'waiting_confirmation') {
     return {
       status: 'working',
@@ -542,30 +428,23 @@ export function buildForegroundTaskCompletionFeedback(input: {
       nextSteps: ['Approve or reject the pending action to continue.'],
     };
   }
-  if (input.status !== 'cancelled' && input.status !== 'persistence_unknown') {
-    const registeredDelegation = records.find(isRegisteredBackgroundDelegation);
-    if (registeredDelegation) {
-      const verified = registeredDelegation.terminalVerification?.status === 'verified';
-      return {
-        status: 'working',
-        completed: [verified
-          ? 'Background delegation was registered with a verified durable task identity.'
-          : 'Background delegation registration was observed but is not machine-verified.'],
-        evidence: [verified
-          ? 'Verified tool receipt: agent_delegate_background'
-          : 'Observed unverified tool receipt: agent_delegate_background'],
-        incomplete: [`${label} is still running in the background.`],
-        blockers: [],
-        nextSteps: ['Track the delegated task until it publishes a verified terminal receipt.'],
-      };
-    }
-  }
   if (records.length === 0 && !input.blocked && !input.status) return undefined;
+  const contract = buildActionEvidenceContract(label);
+  // Runtime task control has a single exact ledger contract. Do not allow a
+  // successful file/process observation to promote a failed cancellation or
+  // status probe into completed foreground feedback. Broader action kinds are
+  // adjudicated by the result finalizer, whose target rules are richer than
+  // this compact cross-runtime summary layer.
+  const missingRequestedActionEvidence = contract.kind === 'task_control'
+    && !hasCoreActionEvidence(contract, records, label);
   const outcome: TaskTerminalOutcome = input.status === 'cancelled'
     ? 'cancelled'
-    : input.blocked || input.status === 'persistence_unknown'
+    : input.blocked || input.status === 'persistence_unknown' || missingRequestedActionEvidence
       ? 'blocked'
       : 'completed';
+  const terminalReason = input.reason || (missingRequestedActionEvidence
+    ? `The tool receipts do not verify the requested ${contract.label.toLowerCase()}.`
+    : undefined);
   const receipt = buildTaskTerminalReceipt({
     taskId: input.taskId,
     runtime: 'conversation',
@@ -578,11 +457,11 @@ export function buildForegroundTaskCompletionFeedback(input: {
         : input.blocked
           ? 'foreground_execution_blocked'
           : undefined,
-    reason: input.reason,
+    reason: terminalReason,
   });
   return buildTaskCompletionFeedback(receipt, label, {
     status: outcome,
-    reason: input.reason,
+    reason: terminalReason,
     accepted: outcome === 'completed' && receipt.verification === 'verified',
   });
 }
@@ -700,7 +579,8 @@ function latestDurableReason(task: any): string {
   );
 }
 
-function projectDurableTask(task: any, runtime: 'background' | 'autonomous'): TaskAcceptanceProjection {
+function projectDurableTask(task: any): TaskAcceptanceProjection {
+  const runtime = 'autonomous' as const;
   const status = compact(task?.status || 'unknown', 60);
   const terminalReceipt = task?.terminalReceipt as TaskTerminalReceipt | undefined;
   const terminalReceiptIntegrityValid = hasValidTerminalReceiptSignature(terminalReceipt);
@@ -737,9 +617,7 @@ function projectDurableTask(task: any, runtime: 'background' | 'autonomous'): Ta
     updatedAt: compact(task?.updatedAt || task?.completedAt || task?.createdAt, 80),
     continuity: {
       goalPreserved: Boolean(compact(task?.prompt || task?.description || task?.title, 20)),
-      planPreserved: runtime === 'background'
-        ? Boolean(task?.context?.actionTaskId || task?.checkpoint?.completedNodeIds?.length)
-        : Boolean(task?.executionPlan?.planId || task?.planId),
+      planPreserved: Boolean(task?.executionPlan?.planId || task?.planId),
       receiptLedgerPreserved: Boolean(
         (terminalReceiptIntegrityValid && terminalReceipt.evidenceRefs.length)
         || task?.checkpoint?.receiptIds?.length
@@ -965,42 +843,14 @@ export function buildTaskAcceptanceProjections(db: any, input: {
         ? projectCompactSchedulerTask(task, actionReceipts, context)
         : projectConversationTask(task, actionReceipts);
     });
-  const background = (Array.isArray(db?.backgroundDelegationTasks) ? db.backgroundDelegationTasks : [])
+  const autonomous = (Array.isArray(db?.autonomousTasks) ? db.autonomousTasks : [])
     .filter((task: any) => scopeMatches(task, input))
-    .map((task: any) => projectDurableTask(task, 'background'));
-  const autonomous = input.domain === 'work'
-    ? []
-    : (Array.isArray(db?.autonomousTasks) ? db.autonomousTasks : [])
-      .filter((task: any) => scopeMatches(task, input))
-      .map((task: any) => projectDurableTask(task, 'autonomous'));
-  return [...conversation, ...background, ...autonomous]
+    .map((task: any) => projectDurableTask(task));
+  return [...conversation, ...autonomous]
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
 export function evaluateRuntimeAcceptanceSubsystems(capabilityMetrics: any): AcceptanceEvidenceSnapshot['subsystems'] {
-  const graph = capabilityMetrics?.modelGraph || {};
-  const compilations = Math.max(0, Number(graph.compilations) || 0);
-  const invalidGraphs = Math.max(0, Number(graph.invalidGraphs) || 0);
-  const arbitrations = Math.max(0, Number(graph.arbitrations) || 0);
-  const blockedArbitrations = Math.max(0, Number(graph.blockedArbitrations) || 0);
-  const verifiedArbitrations = Math.max(0, arbitrations - blockedArbitrations);
-  const modelGraphStatus: RuntimeSampleStatus = compilations === 0 && arbitrations === 0
-    ? 'not_exercised'
-    : arbitrations === 0
-      ? 'unknown'
-      : verifiedArbitrations > 0
-        ? invalidGraphs > 0 || blockedArbitrations > 0 ? 'degraded' : 'verified'
-        : 'degraded';
-  const modelGraphDiagnostic = modelGraphStatus === 'not_exercised'
-    ? 'no_current_process_model_graph_sample'
-    : arbitrations === 0
-      ? 'compiled_without_arbitration_sample'
-      : verifiedArbitrations === 0
-        ? 'no_successful_arbitration_sample'
-        : modelGraphStatus === 'degraded'
-          ? 'successful_and_failed_graph_samples_present'
-          : 'successful_arbitration_sample_present';
-
   const knowledge = capabilityMetrics?.knowledge || {};
   const evaluations = Math.max(0, Number(knowledge.evaluations) || 0);
   const verifiedEvaluations = Math.max(0, Number(knowledge.verified) || 0);
@@ -1035,16 +885,6 @@ export function evaluateRuntimeAcceptanceSubsystems(capabilityMetrics: any): Acc
             : 'knowledge_quality_samples_degraded';
 
   return {
-    modelGraph: {
-      status: modelGraphStatus,
-      sampleScope: 'current_process',
-      compilations,
-      invalidGraphs,
-      arbitrations,
-      verifiedArbitrations,
-      blockedArbitrations,
-      diagnosticCode: modelGraphDiagnostic,
-    },
     knowledgeQuality: {
       status: knowledgeStatus,
       sampleScope: 'current_process',
@@ -1114,7 +954,6 @@ export function buildAcceptanceEvidenceSnapshot(input: {
         completedWithoutTerminalReceipt: completed.filter(task => !task.terminalReceiptPresent).length,
         blockedOrFailed: tasks.filter(task => task.status === 'blocked' || task.status === 'failed').length,
       },
-      modelGraph: subsystems.modelGraph.status,
       knowledgeQuality: subsystems.knowledgeQuality.status,
     },
     capabilities,
@@ -1129,19 +968,12 @@ export function buildAcceptanceEvidenceSnapshot(input: {
   };
 }
 
-/** Public health projection: no user/task counts, tool names, workers or diagnostic details. */
+/** Public health projection: no user/task counts, tool names, or diagnostic details. */
 export function buildPublicAcceptanceSummary(snapshot: AcceptanceEvidenceSnapshot) {
   return {
     schemaVersion: snapshot.schemaVersion,
     generatedAt: snapshot.generatedAt,
     capabilities: { ...snapshot.summary.capabilities },
-    modelGraph: {
-      status: snapshot.subsystems.modelGraph.status,
-      sampleScope: snapshot.subsystems.modelGraph.sampleScope,
-      compilations: snapshot.subsystems.modelGraph.compilations,
-      arbitrations: snapshot.subsystems.modelGraph.arbitrations,
-      verifiedArbitrations: snapshot.subsystems.modelGraph.verifiedArbitrations,
-    },
     knowledgeQuality: {
       status: snapshot.subsystems.knowledgeQuality.status,
       sampleScope: snapshot.subsystems.knowledgeQuality.sampleScope,

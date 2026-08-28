@@ -75,6 +75,90 @@ function actionReceipt(
 }
 
 describe('unified acceptance and evidence state', () => {
+  it('lists only successful verified tools as completion evidence', () => {
+    const receipt = buildTaskTerminalReceipt({
+      taskId: 'mixed-tool-outcome',
+      runtime: 'conversation',
+      outcome: 'completed',
+      toolRecords: [{
+        id: 'failed-core-tool',
+        name: 'runtime_work_cancel',
+        arguments: {},
+        result: '',
+        error: 'Cancellation failed.',
+        terminalVerification: {
+          status: 'failed',
+          strategy: 'terminal_receipt',
+          reason: 'Cancellation failed.',
+        },
+      }, terminalToolRecord('verified-observation')],
+    });
+    const feedback = buildTaskCompletionFeedback(receipt, 'Mixed tool task');
+
+    expect(receipt.toolNames).toEqual(['controlled_probe']);
+    expect(feedback.evidence).toEqual(['Verified tool receipts: controlled_probe']);
+    expect(feedback.evidence.join(' ')).not.toContain('runtime_work_cancel');
+  });
+
+  it('accepts an explicitly verified receipt-only tool record as terminal evidence', () => {
+    const receipt = buildTaskTerminalReceipt({
+      taskId: 'receipt-only-task',
+      runtime: 'conversation',
+      outcome: 'completed',
+      toolRecords: [{
+        id: 'receipt-only-tool',
+        name: 'runtime_work_status',
+        arguments: {},
+        result: '',
+        receipt: JSON.stringify(JSON.stringify({ ok: true, status: 'idle', activeCount: 0 })),
+        terminalVerification: {
+          status: 'verified',
+          strategy: 'terminal_receipt',
+          reason: 'The runtime ledger was read.',
+        },
+      }],
+    });
+
+    expect(receipt).toMatchObject({
+      verification: 'verified',
+      toolNames: ['runtime_work_status'],
+    });
+  });
+
+  it('does not report task cancellation complete from unrelated verified reads', () => {
+    const feedback = buildForegroundTaskCompletionFeedback({
+      taskId: 'failed-cleanup-task',
+      taskLabel: '\u6e05\u6389\u8fd9\u4e9b\u4efb\u52a1',
+      toolRecords: [{
+        id: 'cancel-failed',
+        name: 'runtime_work_cancel',
+        arguments: {},
+        result: '',
+        error: 'Cancellation failed.',
+        terminalVerification: {
+          status: 'failed',
+          strategy: 'terminal_receipt',
+          reason: 'Cancellation failed.',
+        },
+      }, {
+        id: 'directory-read-succeeded',
+        name: 'list_directory',
+        arguments: { path: '.' },
+        result: JSON.stringify({ ok: true, entries: ['entry.cjs'] }),
+        terminalVerification: {
+          status: 'verified',
+          strategy: 'terminal_receipt',
+          reason: 'Directory listing returned.',
+        },
+      }],
+    });
+
+    expect(feedback).toMatchObject({
+      status: 'blocked',
+      completed: [],
+    });
+    expect(feedback?.evidence.join(' ')).not.toContain('Verified tool receipts');
+  });
   it('separates registered, available, exercised, and verified capability states', () => {
     const states = buildCapabilityAcceptanceProjections({
       manifest: [
@@ -160,9 +244,8 @@ describe('unified acceptance and evidence state', () => {
     });
   });
 
-  it('reports zero model-graph and knowledge-quality samples as not exercised, never healthy', () => {
+  it('reports zero knowledge-quality samples as not exercised, never healthy', () => {
     const zero = evaluateRuntimeAcceptanceSubsystems({
-      modelGraph: { compilations: 0, invalidGraphs: 0, arbitrations: 0, blockedArbitrations: 0 },
       knowledge: {
         evaluations: 0,
         verified: 0,
@@ -173,10 +256,6 @@ describe('unified acceptance and evidence state', () => {
         aggregateCitationAccuracy: null,
       },
     });
-    expect(zero.modelGraph).toMatchObject({
-      status: 'not_exercised',
-      diagnosticCode: 'no_current_process_model_graph_sample',
-    });
     expect(zero.knowledgeQuality).toMatchObject({
       status: 'not_exercised',
       diagnosticCode: 'no_current_process_knowledge_quality_sample',
@@ -185,7 +264,6 @@ describe('unified acceptance and evidence state', () => {
     });
 
     const measuredZero = evaluateRuntimeAcceptanceSubsystems({
-      modelGraph: { compilations: 1, invalidGraphs: 0, arbitrations: 1, blockedArbitrations: 0 },
       knowledge: {
         evaluations: 1,
         verified: 1,
@@ -196,7 +274,6 @@ describe('unified acceptance and evidence state', () => {
         aggregateCitationAccuracy: 0,
       },
     });
-    expect(measuredZero.modelGraph.status).toBe('verified');
     expect(measuredZero.knowledgeQuality.status).toBe('verified');
     expect(measuredZero.knowledgeQuality.recallAt5).toMatchObject({ status: 'measured', value: 0 });
     expect(measuredZero.knowledgeQuality.citationAccuracy).toMatchObject({ status: 'measured', value: 0 });
@@ -291,15 +368,15 @@ describe('unified acceptance and evidence state', () => {
   it('requires task-bound machine evidence for a completion receipt', () => {
     const receipt = buildTaskTerminalReceipt({
       taskId: 'task-accepted',
-      runtime: 'background',
+      runtime: 'autonomous',
       outcome: 'completed',
       toolRecords: [terminalToolRecord()],
     });
     expect(validateCompletionTerminalReceipt(receipt, {
       taskId: 'task-accepted',
-      runtime: 'background',
+      runtime: 'autonomous',
     })).toMatchObject({ accepted: true });
-    expect(receipt).toMatchObject({ schemaVersion: 2 });
+    expect(receipt).toMatchObject({ schemaVersion: 3 });
     expect(receipt.signature).toMatch(/^[a-f0-9]{64}$/);
 
     const tampered = {
@@ -308,7 +385,7 @@ describe('unified acceptance and evidence state', () => {
     };
     expect(validateCompletionTerminalReceipt(tampered, {
       taskId: 'task-accepted',
-      runtime: 'background',
+      runtime: 'autonomous',
     })).toMatchObject({
       accepted: false,
       diagnosticCode: 'terminal_receipt_integrity_invalid',
@@ -321,7 +398,7 @@ describe('unified acceptance and evidence state', () => {
     } as any;
     expect(validateCompletionTerminalReceipt(withForgedField, {
       taskId: 'task-accepted',
-      runtime: 'background',
+      runtime: 'autonomous',
     })).toMatchObject({
       accepted: false,
       diagnosticCode: 'terminal_receipt_integrity_invalid',
@@ -334,25 +411,25 @@ describe('unified acceptance and evidence state', () => {
     delete legacyUnsigned.signature;
     expect(validateCompletionTerminalReceipt(legacyUnsigned, {
       taskId: 'task-accepted',
-      runtime: 'background',
+      runtime: 'autonomous',
     })).toMatchObject({
       accepted: false,
       diagnosticCode: 'terminal_receipt_integrity_invalid',
     });
     expect(validateCompletionTerminalReceipt(receipt, {
       taskId: 'different-task',
-      runtime: 'background',
+      runtime: 'autonomous',
     })).toMatchObject({ accepted: false, diagnosticCode: 'terminal_receipt_identity_mismatch' });
 
     const proseOnly = buildTaskTerminalReceipt({
       taskId: 'task-prose-only',
-      runtime: 'background',
+      runtime: 'autonomous',
       outcome: 'completed',
       reason: 'The model said it was done.',
     });
     expect(validateCompletionTerminalReceipt(proseOnly, {
       taskId: 'task-prose-only',
-      runtime: 'background',
+      runtime: 'autonomous',
     })).toMatchObject({ accepted: false, diagnosticCode: 'missing_verified_terminal_evidence' });
 
     const observedOnly = buildTaskTerminalReceipt({
@@ -380,8 +457,8 @@ describe('unified acceptance and evidence state', () => {
 
   it('projects durable continuity and explicit completion feedback without raw payloads', () => {
     const acceptedReceipt = buildTaskTerminalReceipt({
-      taskId: 'background-accepted',
-      runtime: 'background',
+      taskId: 'autonomy-accepted',
+      runtime: 'autonomous',
       outcome: 'completed',
       toolRecords: [terminalToolRecord('safe-evidence-id')],
     });
@@ -396,36 +473,42 @@ describe('unified acceptance and evidence state', () => {
     const db = {
       conversationActionTasks: [],
       conversationActionReceipts: [],
-      backgroundDelegationTasks: [{
-        id: 'background-accepted',
-        userId: 'owner',
-        title: 'Accepted task',
-        prompt: 'Preserved goal',
-        status: 'completed',
-        context: { actionTaskId: 'action-plan-1', domain: 'personal' },
-        checkpoint: { receiptIds: ['safe-evidence-id'] },
-        terminalReceipt: acceptedReceipt,
-        updatedAt: '2026-08-23T00:00:02.000Z',
-      }, {
-        id: 'legacy-complete',
-        userId: 'owner',
-        title: 'Legacy task',
-        prompt: 'Legacy goal',
-        status: 'completed',
-        updatedAt: '2026-08-23T00:00:01.000Z',
-      }],
-      autonomousTasks: [{
-        id: 'autonomy-blocked',
-        userId: 'owner',
-        title: 'Blocked task',
-        description: 'Preserved autonomous goal',
-        status: 'blocked',
-        executionPlan: { planId: 'plan-1' },
-        checkpoint: { receiptIds: ['prior-safe-receipt'] },
-        terminalReceipt: blockedReceipt,
-        error: 'The controlled runtime is unavailable.',
-        updatedAt: '2026-08-23T00:00:03.000Z',
-      }],
+      autonomousTasks: [
+        {
+          id: 'autonomy-accepted',
+          userId: 'owner',
+          title: 'Accepted task',
+          description: 'Preserved goal',
+          status: 'completed',
+          domain: 'personal',
+          executionPlan: { planId: 'action-plan-1' },
+          checkpoint: { receiptIds: ['safe-evidence-id'] },
+          terminalReceipt: acceptedReceipt,
+          updatedAt: '2026-08-23T00:00:02.000Z',
+        },
+        {
+          id: 'legacy-complete',
+          userId: 'owner',
+          title: 'Legacy task',
+          description: 'Legacy goal',
+          status: 'completed',
+          domain: 'personal',
+          updatedAt: '2026-08-23T00:00:01.000Z',
+        },
+        {
+          id: 'autonomy-blocked',
+          userId: 'owner',
+          title: 'Blocked task',
+          description: 'Preserved autonomous goal',
+          status: 'blocked',
+          domain: 'personal',
+          executionPlan: { planId: 'plan-1' },
+          checkpoint: { receiptIds: ['prior-safe-receipt'] },
+          terminalReceipt: blockedReceipt,
+          error: 'The controlled runtime is unavailable.',
+          updatedAt: '2026-08-23T00:00:03.000Z',
+        },
+      ],
     };
     const snapshot = buildAcceptanceEvidenceSnapshot({
       db,
@@ -433,7 +516,7 @@ describe('unified acceptance and evidence state', () => {
       capabilityMetrics: {},
       scope: { userId: 'owner', domain: 'personal' },
     });
-    const accepted = snapshot.tasks.find(task => task.taskId === 'background-accepted');
+    const accepted = snapshot.tasks.find(task => task.taskId === 'autonomy-accepted');
     expect(accepted).toMatchObject({
       accepted: true,
       terminalReceiptPresent: true,
@@ -460,8 +543,7 @@ describe('unified acceptance and evidence state', () => {
 
     const publicSummary = buildPublicAcceptanceSummary(snapshot);
     const serialized = JSON.stringify(publicSummary);
-    expect(serialized).not.toContain('background-accepted');
-    expect(serialized).not.toContain('worker-a');
+    expect(serialized).not.toContain('autonomy-accepted');
     expect(serialized).not.toContain('controlled runtime');
     expect((publicSummary as any).tasks).toBeUndefined();
     expect(buildTaskCompletionFeedback(blockedReceipt, 'Blocked task').incomplete).toHaveLength(1);
@@ -638,20 +720,6 @@ describe('unified acceptance and evidence state', () => {
   });
 
   it('builds foreground feedback only from a real task lifecycle or tool receipt', () => {
-    const delegationRecord = (verification?: 'verified' | 'unverified'): ToolExecutionRecord => ({
-      id: `delegation-${verification || 'legacy'}`,
-      name: 'agent_delegate_background',
-      arguments: {},
-      result: JSON.stringify({ ok: true, status: 'registered', task: { id: 'background-task-1' } }),
-      ...(verification ? {
-        terminalVerification: {
-          status: verification,
-          strategy: 'terminal_receipt',
-          reason: verification === 'verified' ? 'Registration was durably verified.' : 'Registration was observed only.',
-        },
-      } : {}),
-    });
-
     expect(buildForegroundTaskCompletionFeedback({
       taskId: 'plain-chat',
       taskLabel: 'How are you?',
@@ -690,29 +758,9 @@ describe('unified acceptance and evidence state', () => {
     });
 
     expect(buildForegroundTaskCompletionFeedback({
-      taskId: 'foreground-delegation-verified',
+      taskId: 'foreground-cancelled',
       taskLabel: 'Research the topic',
-      toolRecords: [delegationRecord('verified')],
-    })).toMatchObject({
-      status: 'working',
-      completed: ['Background delegation was registered with a verified durable task identity.'],
-      evidence: ['Verified tool receipt: agent_delegate_background'],
-    });
-
-    expect(buildForegroundTaskCompletionFeedback({
-      taskId: 'foreground-delegation-observed',
-      taskLabel: 'Research the topic',
-      toolRecords: [delegationRecord()],
-    })).toMatchObject({
-      status: 'working',
-      completed: ['Background delegation registration was observed but is not machine-verified.'],
-      evidence: ['Observed unverified tool receipt: agent_delegate_background'],
-    });
-
-    expect(buildForegroundTaskCompletionFeedback({
-      taskId: 'foreground-delegation-cancelled',
-      taskLabel: 'Research the topic',
-      toolRecords: [delegationRecord('verified')],
+      toolRecords: [terminalToolRecord('cancelled-before-completion')],
       status: 'cancelled',
       reason: 'Cancelled by the user.',
     })).toMatchObject({
@@ -722,9 +770,9 @@ describe('unified acceptance and evidence state', () => {
     });
 
     expect(buildForegroundTaskCompletionFeedback({
-      taskId: 'foreground-delegation-persistence-unknown',
+      taskId: 'foreground-persistence-unknown',
       taskLabel: 'Research the topic',
-      toolRecords: [delegationRecord('verified')],
+      toolRecords: [terminalToolRecord('unflushed-result')],
       status: 'persistence_unknown',
       reason: 'The terminal state could not be persisted.',
     })).toMatchObject({
@@ -733,16 +781,5 @@ describe('unified acceptance and evidence state', () => {
       blockers: ['The terminal state could not be persisted.'],
     });
 
-    expect(buildForegroundTaskCompletionFeedback({
-      taskId: 'foreground-delegation-confirmation',
-      taskLabel: 'Send the message',
-      toolRecords: [delegationRecord('verified')],
-      status: 'waiting_confirmation',
-    })).toMatchObject({
-      status: 'working',
-      completed: ['The requested action was prepared and recorded.'],
-      evidence: ['Observed tool receipt: agent_delegate_background'],
-      incomplete: ['Send the message is waiting for confirmation.'],
-    });
   });
 });

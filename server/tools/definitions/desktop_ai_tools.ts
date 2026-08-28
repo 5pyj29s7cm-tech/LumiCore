@@ -810,13 +810,13 @@ export async function desktopAiAsk(args: Record<string, any>, context?: ToolCont
   if (!question) throw new Error('question is required.');
   const desktopRelay = requireDesktopRelay(context);
   const customTargets = runtimeTargetsFromContext(args, context);
-  const { targets, selection } = await resolveExecutionTargets(args.targets || args.target, customTargets, desktopRelay);
+  const { targets, selection } = await resolveExecutionTargets(args.target, customTargets, desktopRelay);
   if (targets.length === 0) return JSON.stringify({
     ok: false,
     status: 'blocked',
     error: 'No available desktop AI targets matched.',
     targetSelection: selection,
-    next: 'Name one or more targets explicitly, start an installed desktop AI app, or register a local target.',
+    next: 'Name one target explicitly, start an installed desktop AI app, or register a local target.',
   }, null, 2);
 
   const openIfNeeded = args.openIfNeeded !== false;
@@ -826,7 +826,7 @@ export async function desktopAiAsk(args: Record<string, any>, context?: ToolCont
   const collectAfterMs = Math.max(0, Math.min(Number(args.collectAfterMs) || 0, 30_000));
   const results: DesktopAiTargetRun[] = [];
 
-  for (const target of targets) {
+  for (const target of targets.slice(0, 1)) {
     const actions: string[] = [];
     let focus = await focusTarget(desktopRelay, target, openIfNeeded);
     if (!focus.ok) {
@@ -926,7 +926,7 @@ export async function desktopAiAsk(args: Record<string, any>, context?: ToolCont
     targetSelection: selection,
     results,
     next: send
-      ? 'Submission actions are unverified until visible answers are collected. Run desktop_ai_collect_answer for each target, or use desktop_ai_roundtable to collect all answers and synthesize them.'
+      ? 'Submission is unverified until the visible answer is read back from this same target with desktop_ai_collect_answer.'
       : 'Review the prepared messages, then press send manually or re-run with send=true.',
   }, null, 2);
 }
@@ -934,7 +934,7 @@ export async function desktopAiAsk(args: Record<string, any>, context?: ToolCont
 export async function desktopAiCollectAnswer(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const desktopRelay = requireDesktopRelay(context);
   const customTargets = runtimeTargetsFromContext(args, context);
-  const { targets } = await resolveExecutionTargets(args.targets || args.target, customTargets, desktopRelay);
+  const { targets } = await resolveExecutionTargets(args.target, customTargets, desktopRelay);
   const target = targets[0];
   if (!target) return 'Error: no available target was detected. Pass an explicit target id or start/register a desktop AI app.';
 
@@ -1028,108 +1028,10 @@ export async function desktopAiCollectAnswer(args: Record<string, any>, context?
   }, null, 2);
 }
 
-async function desktopAiRoundtable(args: Record<string, any>, context?: ToolContext): Promise<string> {
-  const question = String(args.question || args.prompt || args.message || '').trim();
-  if (!question) throw new Error('question is required.');
-  const desktopRelay = requireDesktopRelay(context);
-  const customTargets = runtimeTargetsFromContext(args, context);
-  const { targets, selection } = await resolveExecutionTargets(args.targets || args.target, customTargets, desktopRelay);
-  if (targets.length === 0) return JSON.stringify({
-    ok: false,
-    status: 'blocked',
-    error: 'No available desktop AI targets matched.',
-    targetSelection: selection,
-    next: 'Name one or more targets explicitly, start an installed desktop AI app, or register a local target.',
-  }, null, 2);
-
-  const ask = JSON.parse(await desktopAiAsk({
-    ...args,
-    question,
-    targets: targets.map(target => target.id),
-    send: true,
-    collectAfterMs: 0,
-  }, context));
-  const submitted = new Set(
-    (ask.results || [])
-      .filter((result: DesktopAiTargetRun) => result.status === 'submitted_unverified')
-      .map((result: DesktopAiTargetRun) => result.target),
-  );
-  const initialWaitMs = Math.max(0, Math.min(Number(args.initialWaitMs ?? 4000), 60_000));
-  const pollIntervalMs = Math.max(500, Math.min(Number(args.pollIntervalMs ?? 2500), 30_000));
-  const pollAttempts = Math.max(1, Math.min(Number(args.pollAttempts ?? 2), 5));
-  const answers: any[] = [];
-
-  let first = true;
-  for (const target of targets) {
-    if (!submitted.has(target.id)) {
-      const blocked = (ask.results || []).find((result: DesktopAiTargetRun) => result.target === target.id);
-      answers.push({
-        target: target.id,
-        label: target.label,
-        status: 'blocked',
-        answerText: null,
-        note: blocked?.note || 'Question was not submitted to this target.',
-      });
-      continue;
-    }
-
-    let collected: any = null;
-    for (let attempt = 0; attempt < pollAttempts; attempt++) {
-      const waitMs = first && attempt === 0 ? initialWaitMs : attempt > 0 ? pollIntervalMs : 0;
-      first = false;
-      collected = JSON.parse(await desktopAiCollectAnswer({
-        ...args,
-        question,
-        target: target.id,
-        targets: undefined,
-        waitMs,
-      }, context));
-      if (collected.status === 'collected' || collected.status === 'blocked' || collected.status === 'needs_vision_setup') break;
-    }
-    answers.push(collected || {
-      target: target.id,
-      label: target.label,
-      status: 'pending',
-      answerText: null,
-      note: 'No visible answer was collected.',
-    });
-  }
-
-  const collectedAnswers = answers.filter(answer => answer?.status === 'collected' && String(answer?.answerText || '').trim());
-  const pendingCount = answers.filter(answer => answer?.status === 'pending').length;
-  const blockedCount = answers.filter(answer => answer?.status === 'blocked').length;
-  const needsVisionSetupCount = answers.filter(answer => answer?.status === 'needs_vision_setup').length;
-  const status = collectedAnswers.length > 0
-    ? 'collected'
-    : pendingCount > 0
-      ? 'waiting_for_answers'
-      : needsVisionSetupCount > 0 ? 'needs_vision_setup' : 'blocked';
-  return JSON.stringify({
-    ok: collectedAnswers.length > 0,
-    status,
-    question,
-    targets: targets.map(target => ({ id: target.id, label: target.label })),
-    targetSelection: selection,
-    ask,
-    answers,
-    collectedCount: collectedAnswers.length,
-    pendingCount,
-    blockedCount,
-    needsVisionSetupCount,
-    synthesisInput: collectedAnswers.map(answer => ({
-      target: answer.label || answer.target,
-      answer: answer.answerText,
-    })),
-    next: collectedAnswers.length > 0
-      ? 'Synthesize the collected answers: agreements, disagreements, strongest evidence, and a final recommendation. Clearly name targets that are still pending or blocked.'
-      : 'No verified visible answer was collected. Configure vision if needed, wait for pending targets, and collect again.',
-  }, null, 2);
-}
-
 export function registerDesktopAiTools(registry: ToolRegistry): void {
   registry.register({
     name: 'desktop_ai_list_targets',
-    description: 'List supported local desktop AI collaboration targets such as WorkBuddy, Codex, registered user targets, and common browser/local AI tools.',
+    description: 'List supported local AI tool targets such as WorkBuddy, Codex, registered user targets, and common browser/local AI tools.',
     parameters: {
       type: 'object',
       properties: {
@@ -1298,12 +1200,12 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'desktop_ai_ask',
-    description: 'Deprecated low-level desktop compatibility adapter. New external-AI requests must use external_ai_collaborate so API/MCP, CLI, structured browser, and desktop visual routes share one persistent idempotent session.',
+    description: 'Prepare or submit one question to exactly one named local AI tool target. LumiCore remains the task owner and must read back visible answer evidence before claiming a result.',
     parameters: {
       type: 'object',
       properties: {
-        question: { type: 'string', description: 'Question or task to send to the desktop AI targets.' },
-        targets: { type: 'array', items: { type: 'string' }, description: 'Desktop AI target ids or names. Supported built-ins include workbuddy, codex, chatgpt, claude, gemini, deepseek, kimi, doubao, tongyi, wenxin, perplexity, cursor, copilot, lmstudio, ollama, cherry-studio, anythingllm. When omitted, Lumi selects up to two targets detected in running processes or the local app index.' },
+        question: { type: 'string', description: 'Question or task to send to one desktop AI target.' },
+        target: { type: 'string', description: 'One desktop AI target id or name. When omitted, LumiCore selects the first detected target.' },
         customTargets: {
           type: 'array',
           items: { type: 'object' },
@@ -1327,9 +1229,9 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
       operation: 'communicate',
       risk: 'medium',
       sideEffects: [
-        { type: 'desktop_control', scope: 'selected desktop AI target windows', reversible: true },
+        { type: 'desktop_control', scope: 'one selected desktop AI target window', reversible: true },
         { type: 'local_state_change', scope: 'system clipboard question text', reversible: true },
-        { type: 'external_communication', scope: 'question submitted to selected AI targets when send=true', reversible: false },
+        { type: 'external_communication', scope: 'question submitted to one selected AI target when send=true', reversible: false },
       ],
       verification: {
         strategy: 'terminal_receipt',
@@ -1341,8 +1243,6 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
         successSignals: ['target remained foreground while the question was pasted', 'submission is explicitly unverified until visible answer evidence is collected'],
         limitations: ['submitted_unverified proves only that the shortcut was pressed; it does not prove provider receipt or answer generation.'],
       },
-      deprecated: true,
-      replacedBy: 'external-ai.collaboration.execute',
     }),
     evidence: capabilityEvidence({
       id: 'desktop-ai.question.prepare-or-submit',
@@ -1353,65 +1253,12 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
   });
 
   registry.register({
-    name: 'desktop_ai_roundtable',
-    description: 'Deprecated low-level desktop roundtable compatibility adapter. New multi-AI work must use external_ai_collaborate and external_ai_collect_answers for fixed route priority, durable binding, and source evidence.',
-    parameters: {
-      type: 'object',
-      properties: {
-        question: { type: 'string', description: 'Question or task to send to every selected AI target.' },
-        targets: { type: 'array', items: { type: 'string' }, description: 'Target ids or names. When omitted, Lumi selects up to two targets detected in running processes or the local app index.' },
-        customTargets: { type: 'array', items: { type: 'object' }, description: 'Optional one-off custom desktop AI targets.' },
-        submitShortcut: { type: 'string', description: 'Submit shortcut, default enter.' },
-        openIfNeeded: { type: 'boolean', description: 'Open/focus targets when needed. Defaults true.' },
-        useVirtualCursor: { type: 'boolean', description: 'Focus likely prompt areas with the virtual cursor. Defaults true.' },
-        initialWaitMs: { type: 'number', description: 'Initial wait before the first answer collection. Defaults 4000, max 60000.' },
-        pollIntervalMs: { type: 'number', description: 'Wait between retries for pending answers. Defaults 2500, max 30000.' },
-        pollAttempts: { type: 'number', description: 'Collection attempts per target, default 2, max 5.' },
-      },
-      required: ['question'],
-    },
-    handler: desktopAiRoundtable,
-    permission: 'user',
-    securityLevel: 'confirm',
-    capability: capabilityContract({
-      id: 'desktop-ai.roundtable.run',
-      family: 'desktop-ai',
-      lane: 'desktop',
-      operation: 'communicate',
-      risk: 'medium',
-      sideEffects: [
-        { type: 'desktop_control', scope: 'multiple desktop AI target windows', reversible: true },
-        { type: 'local_state_change', scope: 'system clipboard question text', reversible: true },
-        { type: 'external_communication', scope: 'question submitted to selected AI targets', reversible: false },
-      ],
-      verification: {
-        strategy: 'visual',
-        required: true,
-        requiredFields: ['ok', 'status', 'question', 'ask.status', 'answers', 'collectedCount', 'pendingCount', 'blockedCount'],
-        successStatuses: ['collected', 'waiting_for_answers'],
-        failureStatuses: ['blocked', 'needs_vision_setup', 'failed'],
-        successSignals: ['collected answers include visible-screen evidence', 'waiting state remains explicit and cannot be summarized as completed'],
-        limitations: ['A waiting_for_answers receipt is a resumable pause, not a completed roundtable.', 'Visible answers may be partial when content is off-screen.'],
-      },
-      deprecated: true,
-      replacedBy: 'external-ai.collaboration.execute',
-    }),
-    evidence: capabilityEvidence({
-      id: 'desktop-ai.roundtable.run',
-      operation: 'communicate',
-      subjectArgument: 'question',
-      limitations: ['Only entries with status=collected may be used as answer evidence.'],
-    }),
-  });
-
-  registry.register({
     name: 'desktop_ai_collect_answer',
-    description: 'Deprecated low-level desktop answer reader retained for persisted continuations. New work must use external_ai_collect_answers with a bound collaboration session.',
+    description: 'Read visible answer evidence from the same single AI tool target used by desktop_ai_ask.',
     parameters: {
       type: 'object',
       properties: {
         target: { type: 'string', description: 'Desktop AI target id or name, e.g. workbuddy or codex.' },
-        targets: { type: 'array', items: { type: 'string' }, description: 'Optional target list; the first supported target is used.' },
         customTargets: {
           type: 'array',
           items: { type: 'object' },
@@ -1442,14 +1289,12 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
         successSignals: ['visible response text is attributed to the requested target'],
         limitations: ['Visible response text can be incomplete when content is off-screen.'],
       },
-      deprecated: true,
-      replacedBy: 'external-ai.answers.collect',
     }),
     evidence: capabilityEvidence({
       id: 'desktop-ai.answer.collect',
       operation: 'observe',
       subjectArgument: 'target',
-      limitations: ['This compatibility reader does not create or bind a collaboration session.'],
+      limitations: ['This reads only the visible response from one target and may be partial when content is off-screen.'],
     }),
   });
 }

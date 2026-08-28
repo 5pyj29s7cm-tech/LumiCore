@@ -143,9 +143,6 @@ function buildReasons(input: {
   if (flow.executionGovernance.verificationIntent !== 'none') {
     reasons.push(`verification:${flow.executionGovernance.verificationIntent}`);
   }
-  if (flow.executionGovernance.delegationIntent !== 'none') {
-    reasons.push(`delegation:${flow.executionGovernance.delegationIntent}`);
-  }
   if (flow.executionGovernance.capabilityLearningIntent !== 'none') {
     reasons.push(`capability:${flow.executionGovernance.capabilityLearningIntent}`);
   }

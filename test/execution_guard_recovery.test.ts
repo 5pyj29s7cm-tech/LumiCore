@@ -463,6 +463,93 @@ describe('execution guard recovery', () => {
     expect(serialized.length).toBeLessThan(12_000);
   });
 
+  it('keeps long desktop inventory receipts as valid bounded JSON with document and window evidence', () => {
+    const targetPath = 'C:\\Users\\Administrator\\Desktop\\Lumi_路演.pptx';
+    const files = Array.from({ length: 180 }, (_, index) => ({
+      name: `ordinary-${index}.cache`,
+      path: `C:\\Users\\Administrator\\Desktop\\ordinary-${index}.cache`,
+      type: 'file',
+      modifiedMs: index,
+    }));
+    files[137] = {
+      name: 'Lumi_路演.pptx',
+      path: targetPath,
+      type: 'file',
+      modifiedMs: 137,
+    };
+    const processes = Array.from({ length: 140 }, (_, index) => ({
+      pid: 10_000 + index,
+      name: `ordinary-${index}.exe`,
+      window_title: '',
+      window_titles: [],
+    }));
+    processes[121] = {
+      pid: 88_712,
+      name: 'wpp.exe',
+      window_title: 'Lumi_路演.pptx - WPS Office',
+      window_titles: ['Lumi_路演.pptx - WPS Office'],
+    };
+    const records = sanitizeToolRecordsForPersistence([record({
+      name: 'desktop_list_files',
+      arguments: { path: '~/Desktop', limit: 1_000 },
+      result: JSON.stringify(files),
+      envelope: {
+        version: 1,
+        status: 'verified_success',
+        toolName: 'desktop_list_files',
+        taskId: 'inventory-task',
+        turnId: 'inventory-turn',
+        requestId: 'inventory-request',
+        idempotencyKey: 'inventory-files',
+        targetIdentity: '~/Desktop',
+        completedAt: '2026-08-28T12:00:00.000Z',
+        result: files,
+        verification: { status: 'verified', reason: 'Directory listing returned.' },
+      },
+    }), record({
+      name: 'desktop_running_processes',
+      arguments: { top: 200 },
+      result: JSON.stringify(processes),
+      envelope: {
+        version: 1,
+        status: 'verified_success',
+        toolName: 'desktop_running_processes',
+        taskId: 'inventory-task',
+        turnId: 'inventory-turn',
+        requestId: 'inventory-request',
+        idempotencyKey: 'inventory-processes',
+        targetIdentity: 'desktop:local',
+        completedAt: '2026-08-28T12:00:01.000Z',
+        result: processes,
+        verification: { status: 'verified', reason: 'Process list returned.' },
+      },
+    })]);
+
+    const persistedFiles = JSON.parse(records?.[0].result || '{}');
+    const persistedProcesses = JSON.parse(records?.[1].result || '{}');
+    expect(persistedFiles).toMatchObject({
+      kind: 'desktop_files_summary',
+      originalCount: 180,
+      truncated: true,
+    });
+    expect(persistedProcesses).toMatchObject({
+      kind: 'running_processes_summary',
+      originalCount: 140,
+      truncated: true,
+    });
+    expect(persistedFiles.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: targetPath }),
+    ]));
+    expect(persistedProcesses.processes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ window_title: 'Lumi_路演.pptx - WPS Office' }),
+    ]));
+    expect(records?.[0].result.length).toBeLessThanOrEqual(4_000);
+    expect(records?.[1].result.length).toBeLessThanOrEqual(4_000);
+    expect(JSON.stringify(records)).not.toContain('stored result truncated');
+    expect(records?.[0].envelope.result).toEqual(persistedFiles);
+    expect(records?.[1].envelope.result).toEqual(persistedProcesses);
+  });
+
   it('stores a bounded client state summary instead of duplicating the full self model', () => {
     const fullState = {
       detail: 'full',
@@ -759,8 +846,7 @@ describe('execution guard recovery', () => {
     expect(chatSource).not.toContain('const guardRecovery = decideExecutionGuardRecovery');
     expect(taskSource).toContain("source: 'task_guard_recovery'");
     expect(taskSource).toContain('normalizeTaskHistory(recentMsgs)');
-    expect(taskSource).toContain('if (!pendingConfirmation && !runtimeOwnedDeterministicRecoveryCall &&');
-    expect(chatSource).toContain('if (!responseText && !runtimeOwnedDeterministicRecoveryCall && legacyDelegationHint.shouldDelegate)');
+    expect(taskSource).toContain('isPendingConfirmation: () => Boolean(pendingConfirmationCreatedThisTurn)');
     expect(voiceSource).toContain("source: 'voice_guard_recovery'");
     expect(voiceSource).toContain('isAborted: () => !isCurrentTurn()');
 

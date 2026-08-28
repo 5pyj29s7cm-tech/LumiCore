@@ -66,7 +66,7 @@ export const LUMI_TECHNICAL_ARCHITECTURE: LumiTechnicalArchitecture = {
     {
       id: 'runtime.node',
       layer: 'runtime',
-      label: 'Local agent runtime',
+      label: 'Local LumiCore runtime',
       technologies: ['Node.js', 'TypeScript', 'Express'],
       responsibility: 'Hosts cognition, tools, skills, memory, task execution, adapters, model routing, and local APIs.',
       sourcePaths: ['server.ts', 'server/'],

@@ -1,8 +1,8 @@
 import './helpers';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { closeDatabase, flushDBOrThrow, initDatabase, readDB, writeDB } from '../db_layer';
+import { closeDatabase, flushDBOrThrow, initDatabase, readDB } from '../db_layer';
 import { addMember, createDepartment, createOrg } from '../server/org/db';
-import { createOrganizationPosition, routeOrganizationWork } from '../server/org/work_routing';
+import { createOrganizationPosition } from '../server/org/work_routing';
 import {
   authorizeOrganizationDevice,
   authorizeOrganizationResource,
@@ -126,59 +126,6 @@ describe('organization resource ACL, credential references, and devices', () => 
       .toThrow(/not active/);
     expect(() => registerOrganizationDevice({ orgId, branchId, userId: memberA }))
       .toThrow(/revoked/);
-  });
-
-  it('prevents business routing from executing a restricted organization agent', () => {
-    const agentId = `acl-agent-${suffix}`;
-    const db = readDB();
-    db.agents.push({
-      id: agentId,
-      ownerUid: ownerId,
-      userId: ownerId,
-      name: 'Restricted Worker',
-      category: 'restricted-work',
-      data: '{}',
-      config: '{}',
-      status: 'active',
-      domain: 'work',
-      orgId,
-      runtime: 'internal',
-      createdAt: new Date().toISOString(),
-      skillTags: ['restricted-work'],
-    });
-    writeDB(db);
-    setOrganizationResourcePolicy({
-      orgId,
-      actorUserId: ownerId,
-      resourceType: 'agent',
-      resourceId: agentId,
-      ownerUserId: ownerId,
-      classification: 'restricted',
-      grants: [{ subjectType: 'member', subjectId: memberA, permissions: ['read', 'execute'] }],
-    });
-
-    expect(() => routeOrganizationWork({
-      orgId,
-      requesterUserId: memberB,
-      source: 'chat',
-      requestId: `acl-agent-denied-${suffix}`,
-      text: 'Run restricted-work.',
-      intentKind: 'none',
-      operation: 'read',
-      sideEffectClass: 'none',
-      targetAgentIds: [agentId],
-    })).toThrow(/not allowed to execute/);
-    expect(routeOrganizationWork({
-      orgId,
-      requesterUserId: memberA,
-      source: 'chat',
-      requestId: `acl-agent-allowed-${suffix}`,
-      text: 'Run restricted-work.',
-      intentKind: 'none',
-      operation: 'read',
-      sideEffectClass: 'none',
-      targetAgentIds: [agentId],
-    }).workItem.assignedAgentIds).toEqual([agentId]);
   });
 
   it('enforces the same ACL below REST for knowledge and legal-case service calls', () => {

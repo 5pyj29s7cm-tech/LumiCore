@@ -16,7 +16,7 @@ function select(input: Record<string, unknown> = {}) {
   return selectActiveTaskWidgetState({
     status: null,
     focusThreads: [],
-    backgroundTasks: [],
+    tasks: [],
     workflowActive: false,
     workflowStatus: 'idle',
     progressText: '',
@@ -58,9 +58,9 @@ describe('active task widget', () => {
     });
   });
 
-  it('shows active background work without keeping completed work visible', () => {
-    expect(select({ backgroundTasks: [{ id: 'bg-1', title: 'Research', status: 'running' }] }).visible).toBe(true);
-    expect(select({ backgroundTasks: [{ id: 'bg-1', title: 'Research', status: 'completed' }] }).visible).toBe(false);
+  it('shows active autonomous work without keeping completed work visible', () => {
+    expect(select({ tasks: [{ id: 'task-1', title: 'Research', status: 'running' }] }).visible).toBe(true);
+    expect(select({ tasks: [{ id: 'task-1', title: 'Research', status: 'completed' }] }).visible).toBe(false);
   });
 
   it('deduplicates the same durable task across ledger and focus projections', () => {

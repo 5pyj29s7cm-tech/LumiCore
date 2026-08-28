@@ -148,7 +148,7 @@ describe('Lumi core integrity pressure', () => {
     expect(kernel).toContain('one local desktop AI subject');
     expect(kernel).toContain('same Lumi body/capability graph');
     expect(kernel).toContain('For voice, keep spoken output short while work continues');
-    expect(kernel).toContain('Use tools and agents as Lumi\'s hands');
+    expect(kernel).toContain('LumiCore remains the execution owner');
     expectCleanCorePrompt(kernel);
   });
 
@@ -181,24 +181,17 @@ describe('Lumi core integrity pressure', () => {
 
     const externalAi = evaluateTurn({
       userId: 'core_integrity_external_ai',
-      text: 'Ask WorkBuddy, Codex, ChatGPT, and Claude this question, collect their answers, and summarize the differences.',
+      text: 'Ask ChatGPT this question and collect its visible answer.',
       channel: 'chat',
       operationMode: 'assistant',
     });
     expect(externalAi.selection.lane).toBe('external_tool');
     expect(externalAi.selection.preferredTools.slice(0, 8)).toEqual(expect.arrayContaining([
-      'external_ai_collaborate',
-      'external_ai_collect_answers',
-      'external_ai_session_status',
-      'external_ai_route_plan',
+      'desktop_ai_ask',
+      'desktop_ai_collect_answer',
       'desktop_ai_list_targets',
     ]));
-    expect(externalAi.execution.toolRoute?.toolNames).not.toEqual(expect.arrayContaining([
-      'desktop_ai_ask',
-      'desktop_ai_roundtable',
-      'desktop_ai_collect_answer',
-    ]));
-    expect(externalAi.execution.toolRoute?.toolNames.indexOf('external_ai_collaborate')).toBeLessThan(
+    expect(externalAi.execution.toolRoute?.toolNames.indexOf('desktop_ai_ask')).toBeLessThan(
       externalAi.execution.toolRoute?.toolNames.indexOf('computer_use') ?? Number.POSITIVE_INFINITY,
     );
 
@@ -263,7 +256,7 @@ describe('Lumi core integrity pressure', () => {
     });
 
     expect(context).toContain('Lumi Runtime Capability Context');
-    expect(context).toContain('Lumi is the subject');
+    expect(context).toContain('Lumi is the single execution subject');
     expect(context).toContain('tools=available');
     expect(context).toContain('Capability families available:');
     expect(context).toContain('desktop=');
@@ -314,7 +307,7 @@ describe('Lumi core integrity pressure', () => {
     expect(list.boundary).toContain('Desktop-only targets are controlled through visible windows');
 
     const planRaw = await registry.execute('desktop_ai_discovery_plan', {
-      focus: 'desktop AI and coding agents',
+      focus: 'desktop AI and coding tools',
     }, {
       userId: 'core_integrity_desktop_ai_user',
     });
@@ -339,7 +332,7 @@ describe('Lumi core integrity pressure', () => {
     const calls: Array<{ name: string; args: Record<string, any> }> = [];
     const askRaw = await registry.execute('desktop_ai_ask', {
       question: 'Summarize the risk in one sentence.',
-      targets: ['test-ai'],
+      target: 'test-ai',
       send: false,
     }, {
       userId,

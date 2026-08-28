@@ -1,6 +1,5 @@
 import { Router, Request, Response, NextFunction } from "express";
 import path from "path";
-import { readDB, writeDB } from "../../db_layer";
 import { mcpManager, getMCPConfig, updateMCPConfig, normalizeSkillInstallName } from "../mcp";
 import {
   generateSkill,
@@ -10,7 +9,6 @@ import {
 import { getRecentWorkflows } from "../skills/worklog";
 import { loadKeys } from "../config/keys";
 import { requireAdmin, requireAuth, requireLocalRequest, resolveDomain } from "../middleware/auth";
-import { createAgentForSkill } from "../agents/skill_agent";
 import { isLoopbackAddress } from "../config/local_identity";
 
 const asyncHandler = (fn: (req: Request, res: Response, next?: NextFunction) => Promise<any>) =>
@@ -45,32 +43,6 @@ export function mountSkillRoutes(
   },
   io: { emit: (event: string, data: any) => void },
 ) {
-  const skillAgentScope = (req: Request) => {
-    const user = req.user!;
-    const dc = resolveDomain(user);
-    return {
-      ownerUid: user.uid,
-      userId: user.uid,
-      domain: dc.domain,
-      orgId: dc.orgId,
-    };
-  };
-
-  const removeAutoAgentForSkill = (name: string) => {
-    const agentId = `skill_${name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
-    try {
-      const db = readDB();
-      if (db.agents) {
-        const removed = db.agents.filter((a: any) => a.autoCreated && (a.id === agentId || String(a.id || '').startsWith(`${agentId}_`)));
-        if (removed.length > 0) {
-          db.agents = db.agents.filter((a: any) => !removed.includes(a));
-          writeDB(db);
-          for (const agent of removed) io.emit('agent:removed', { id: agent.id });
-        }
-      }
-    } catch {}
-  };
-
   const activateOrRollback = async (name: string) => {
     try {
       return await mcpManager.restartServer(name);
@@ -172,7 +144,6 @@ export function mountSkillRoutes(
         const destDir = await mcpManager.installFromGitHub(String(url));
         const skillName = path.basename(destDir);
         await activateOrRollback(skillName);
-        createAgentForSkill(skillName, { description: `Git install: ${url}`, category: 'general', installSource: 'git', scope: skillAgentScope(req) }, io);
         res.json({ success: true, name: skillName, directory: destDir });
       } else if (source === 'local' && localPath) {
         const generatedDraft = readGeneratedSkillDraft(localPath);
@@ -205,26 +176,18 @@ export function mountSkillRoutes(
             : undefined,
         );
         await activateOrRollback(skillName);
-        createAgentForSkill(skillName, {
-          description: generatedDraft ? `Approved generated draft: ${localPath}` : `Local install: ${localPath}`,
-          category: 'general',
-          installSource: generatedDraft ? 'generated' : 'local',
-          scope: skillAgentScope(req),
-        }, io);
         res.json({ success: true, name: skillName, directory: destDir });
       } else if (source === 'npm' && pkgName) {
         const npmDir = await mcpManager.installFromNpm(pkgName);
         const npmName = path.basename(npmDir);
         await activateOrRollback(npmName);
         io.emit('skill:installed', { name: npmName, source: 'npm' });
-        createAgentForSkill(npmName, { description: `npm package: ${pkgName}`, category: 'general', installSource: 'npm', scope: skillAgentScope(req) }, io);
         res.json({ success: true, name: npmName, directory: npmDir });
       } else if (source === 'github' && url) {
         const ghDir = await mcpManager.installFromGitHub(url);
         const ghName = path.basename(ghDir);
         await activateOrRollback(ghName);
         io.emit('skill:installed', { name: ghName, source: 'github' });
-        createAgentForSkill(ghName, { description: `GitHub repo: ${url}`, category: 'general', installSource: 'github', scope: skillAgentScope(req) }, io);
         res.json({ success: true, name: ghName, directory: ghDir });
       } else {
         res.status(400).json({ error: 'Invalid source. Use: github/git (with a GitHub HTTPS URL), local (with path), or npm (with package)' });
@@ -252,7 +215,6 @@ export function mountSkillRoutes(
       const removed = mcpManager.cleanupBrokenSkills();
       for (const name of removed) {
         io.emit('skill:uninstalled', { name });
-        removeAutoAgentForSkill(name);
       }
       res.json({ success: true, removed });
     } catch (err: any) {
@@ -265,7 +227,6 @@ export function mountSkillRoutes(
     try {
       mcpManager.uninstallSkill(req.params.name);
       io.emit('skill:uninstalled', { name: req.params.name });
-      removeAutoAgentForSkill(req.params.name);
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });

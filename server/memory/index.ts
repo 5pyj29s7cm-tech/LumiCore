@@ -1,4 +1,4 @@
-export { queryMemories, queryMemoriesVector, backfillEmbeddings, addMemory, removeMemory, updateMemoryLifecycle, resolveMemoryConflict, decayMemories, dynamicDecayMemories, computeMemoryValue, promoteMemories, formatMemoriesForContext, classifyMemoryEvidence, addReminder, upsertPendingReminder, getDueReminders, fireReminder, getUnconsolidatedEpisodic, markConsolidated, decayMemoryAssociations, initMemoryAssociations, getAssociatedMemories, borrowAgentMemories, autoMarkCrossAgentShare } from './store';
+export { queryMemories, queryMemoriesVector, backfillEmbeddings, addMemory, removeMemory, updateMemoryLifecycle, resolveMemoryConflict, decayMemories, dynamicDecayMemories, computeMemoryValue, promoteMemories, formatMemoriesForContext, classifyMemoryEvidence, addReminder, upsertPendingReminder, getDueReminders, fireReminder, getUnconsolidatedEpisodic, markConsolidated, decayMemoryAssociations, initMemoryAssociations, getAssociatedMemories } from './store';
 export { CONVERSATIONAL_MEMORY_EVIDENCE } from './types';
 export type { Reminder } from './store';
 export { extractMemories } from './extractor';

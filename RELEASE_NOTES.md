@@ -4,9 +4,9 @@
 
 - Renamed the user-facing product, desktop binary, installers, public source repository, and website from LumiOS to LumiCore while preserving the stable application identity and explicit legacy upgrade fallbacks.
 - Added lease-protected, integrity-checked in-place migration from the legacy user data root so conversations, settings, voice preferences, and credentials are not copied or discarded during the rename.
-- Made chat, task, voice, tool, adapter, and multi-agent terminal outcomes durable before they are presented as complete, with restart-safe checkpoints and receipt-bound arbitration.
+- Made chat, task, voice, tool, adapter, and autonomous task outcomes durable before they are presented as complete, with restart-safe checkpoints and receipt-bound verification.
 - Added scoped model failover, bounded request context, clearer failure state, conversation/task continuity, and removal of the false “no current-turn tool execution” response replacement.
-- Replaced the command-center office with a live receipt-driven agent cosmos and added consent-based computer capability discovery with explicit privacy boundaries.
+- Replaced the command-center office with a live receipt-driven LumiCore cosmos and added consent-based computer capability discovery with explicit privacy boundaries.
 
 ## v3.0.3 stability and release candidate hardening
 

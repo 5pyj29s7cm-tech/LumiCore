@@ -1,8 +1,8 @@
 // ── API contract types — request/response shapes for all key routes ──
 // Used by both frontend services and server route handlers via `import type`
 
-import type { User, UserProfile, Agent, Conversation, NotificationItem, Memory, Reminder, VoicePreference, LLMPreference } from './models';
-export type { User, UserProfile, Agent, Conversation, NotificationItem, Memory, Reminder, VoicePreference, LLMPreference };
+import type { User, UserProfile, Conversation, NotificationItem, Memory, Reminder, VoicePreference, LLMPreference } from './models';
+export type { User, UserProfile, Conversation, NotificationItem, Memory, Reminder, VoicePreference, LLMPreference };
 
 // ── Auth ──
 
@@ -39,69 +39,6 @@ export interface AuthSwitchOrgRequest {
 
 export interface AuthSwitchOrgResponse {
   connection: { orgId: string; orgRole: string; orgName: string; connected: boolean } | null;
-}
-
-// ── Agents ──
-
-export interface AgentCreateRequest {
-  name: string;
-  category: string;
-  data?: string;
-  personalityId?: string;
-  modelPreference?: string;
-  memoryScope?: 'private' | 'shared';
-  autonomyLevel?: 'reactive' | 'semi' | 'full';
-  territory?: 'open' | 'sanctuary';
-  distilledFrom?: string;
-  evidenceMap?: any[];
-  relationshipType?: string;
-  isFrozen?: boolean;
-  seedMemoryIds?: string[];
-  executionMode?: string;
-  runtime?: 'internal' | 'external';
-  externalCommand?: string;
-  skillTags?: string[];
-  knowledgeDomains?: string[];
-  runtimeConfig?: string;
-}
-
-export interface AgentUpdateRequest {
-  name?: string;
-  category?: string;
-  data?: string;
-  personalityId?: string;
-  modelPreference?: string;
-  memoryScope?: 'private' | 'shared';
-  autonomyLevel?: 'reactive' | 'semi' | 'full';
-  executionMode?: string;
-  skillTags?: string[];
-  knowledgeDomains?: string[];
-  allowCrossPollination?: boolean;
-  isFrozen?: boolean;
-  territory?: 'open' | 'sanctuary';
-  relationshipType?: string;
-  runtimeConfig?: string;
-}
-
-export interface AgentListResponse extends Array<Agent> {}
-
-export interface AgentSanctuaryResponse {
-  sanctuaries: Array<{
-    id: string;
-    name: string;
-    relationshipType: string;
-    isFrozen: boolean;
-    memoryCount: number;
-    createdAt: string;
-    lastActiveAt?: string;
-  }>;
-}
-
-export interface AgentHistoryMessage {
-  role: string;
-  content: string;
-  createdAt: string;
-  mode?: string;
 }
 
 // ── Voice ──
@@ -177,7 +114,7 @@ export interface SettingsSetRequest {
 export interface SystemHealthResponse {
   status: 'ok' | 'degraded';
   timestamp: string;
-  database: { users: number; agents: number; interactions: number; dirty: boolean };
+  database: { users: number; interactions: number; dirty: boolean };
 }
 
 export interface SystemStatsResponse {

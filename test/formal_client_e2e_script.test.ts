@@ -18,7 +18,6 @@ import {
   isVerifiedForcedFailoverProbe,
   isPathInside,
   isLoopbackBaseUrl,
-  parseWorkerReceiptCount,
   parseScenarioScreenshotBinding,
   prepareOwnedArtifactLayout,
   runtimeReceiptSignature,
@@ -135,7 +134,6 @@ describe('formal native-client E2E safety helpers', () => {
       physical_microphone_20_turns: true,
       confirmation_waiting: true,
       task_status_query: true,
-      multi_agent_durable_completion: true,
     });
     expect(partial.stage9Complete).toBe(false);
     expect(partial.missingChecks).toEqual(expect.arrayContaining([
@@ -202,11 +200,6 @@ describe('formal native-client E2E safety helpers', () => {
     expect(containsInternalExecutionBlock('这一轮没有记录到成功的真实工具执行。')).toBe(true);
     expect(containsInternalExecutionBlock('No successful current-turn tool execution was recorded.')).toBe(true);
     expect(containsInternalExecutionBlock('已经帮你看完了。')).toBe(false);
-  });
-
-  it('counts only durable worker evidence', () => {
-    expect(parseWorkerReceiptCount({ evidence: ['Worker receipts: 3'] })).toBe(3);
-    expect(parseWorkerReceiptCount({ evidence: ['Assigned workers: 5'] })).toBe(0);
   });
 
   it('requires selected successful route attempts and a fallback reason', () => {

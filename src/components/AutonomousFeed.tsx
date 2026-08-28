@@ -151,7 +151,7 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
 
   useEffect(() => {
     // The autonomous executor is personal-only today. Work-domain data comes
-    // from scoped background delegation; accepting these unscoped legacy
+    // from an older unscoped runtime; accepting these legacy
     // socket events here would leak personal task cards into an organization.
     if (!socket || isWork) return;
     const eventToken = { scopeKey, generation: scopeGenerationRef.current };

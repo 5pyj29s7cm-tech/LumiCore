@@ -9,7 +9,7 @@ const MAX_LEDGER_BATCHES = 1_000;
 const MAX_LEDGER_ITEMS = 20_000;
 const MAX_TEXT_BYTES = 512 * 1024;
 
-type BranchSyncKind = 'memory' | 'interaction' | 'agent';
+type BranchSyncKind = 'memory' | 'interaction';
 
 export interface BranchSyncPayload {
   orgId: string;
@@ -17,7 +17,6 @@ export interface BranchSyncPayload {
   batchId: string;
   memories?: unknown[];
   interactions?: unknown[];
-  agents?: unknown[];
 }
 
 export interface BranchSyncItemReceipt {
@@ -195,7 +194,7 @@ function normalizeMemory(
     perspective: optionalString(raw.perspective, 80) || 'owner_trait',
     importance: Math.max(0, Math.min(Number(raw.importance) || 0.3, 1)),
     parentId: referenceId(context.branchId, 'memory', raw.parentId) || null,
-    agentId: referenceId(context.branchId, 'agent', raw.agentId),
+    agentId: 'lumi',
     nodeType: optionalString(raw.nodeType, 40) || 'leaf',
     location: optionalString(raw.location, 300),
     domain: 'work',
@@ -217,7 +216,7 @@ function normalizeInteraction(
   const value = {
     id: targetId(context.branchId, 'interaction', sourceId),
     userId: context.userId,
-    agentId: referenceId(context.branchId, 'agent', raw.agentId) || null,
+    agentId: 'lumi',
     module: optionalString(raw.module || raw.personality, 120),
     content,
     message: content,
@@ -239,45 +238,6 @@ function normalizeInteraction(
     timestamp,
   };
   return { kind: 'interaction', sourceId, targetId: value.id, digest: digest(raw), value };
-}
-
-function normalizeAgent(
-  raw: unknown,
-  index: number,
-  context: { orgId: string; branchId: string; userId: string },
-): NormalizedItem {
-  if (!isObject(raw)) throw new BranchSyncValidationError(`agent[${index}] must be an object`);
-  assertItemScope(raw, { ...context, kind: 'agent', index });
-  const sourceId = validateStableId(raw.id, `agent[${index}].id`);
-  const rawConfig = raw.data ?? raw.config ?? {};
-  const config = typeof rawConfig === 'string' ? rawConfig : JSON.stringify(canonicalize(rawConfig));
-  if (Buffer.byteLength(config, 'utf8') > MAX_TEXT_BYTES) {
-    throw new BranchSyncValidationError(`agent[${index}].config exceeds the size limit`);
-  }
-  const value = {
-    id: targetId(context.branchId, 'agent', sourceId),
-    ownerUid: context.userId,
-    userId: context.userId,
-    name: boundedString(raw.name, `agent[${index}].name`, 160),
-    category: optionalString(raw.category, 120) || 'organization',
-    data: config || '{}',
-    config: config || '{}',
-    createdAt: optionalString(raw.createdAt, 80) || new Date().toISOString(),
-    status: raw.status === 'offline' ? 'offline' : 'active',
-    personalityId: optionalString(raw.personalityId, 120) || 'lumi',
-    modelPreference: optionalString(raw.modelPreference, 240),
-    memoryScope: raw.memoryScope === 'private' ? 'private' : 'shared',
-    autonomyLevel: ['reactive', 'scheduled', 'autonomous'].includes(String(raw.autonomyLevel))
-      ? raw.autonomyLevel
-      : 'reactive',
-    runtimeConfig: '{}',
-    // A branch must never upload an executable command for the company server.
-    runtime: 'internal',
-    externalCommand: '',
-    domain: 'work',
-    orgId: context.orgId,
-  };
-  return { kind: 'agent', sourceId, targetId: value.id, digest: digest(raw), value };
 }
 
 function parseSetting<T>(db: any, key: string, fallback: T): T {
@@ -386,7 +346,6 @@ function upsertById(values: any[], item: NormalizedItem): 'inserted' | 'updated'
 function restoreSnapshot(db: any, snapshot: Record<string, any>): void {
   db.memories = snapshot.memories;
   db.interactions = snapshot.interactions;
-  db.agents = snapshot.agents;
   db.settings = snapshot.settings;
   db.auditLog = snapshot.auditLog;
   writeDB(db);
@@ -413,15 +372,13 @@ export async function persistBranchSyncBatch(input: {
 
   const memories = Array.isArray(input.payload.memories) ? input.payload.memories : [];
   const interactions = Array.isArray(input.payload.interactions) ? input.payload.interactions : [];
-  const agents = Array.isArray(input.payload.agents) ? input.payload.agents : [];
-  const total = memories.length + interactions.length + agents.length;
+  const total = memories.length + interactions.length;
   if (total > MAX_BATCH_ITEMS) {
     throw new BranchSyncValidationError(`Branch sync batch exceeds ${MAX_BATCH_ITEMS} items`);
   }
 
   const context = { orgId, branchId, userId: input.authenticatedUserId };
   const normalized = [
-    ...agents.map((item, index) => normalizeAgent(item, index, context)),
     ...interactions.map((item, index) => normalizeInteraction(item, index, context)),
     ...memories.map((item, index) => normalizeMemory(item, index, context)),
   ];
@@ -440,13 +397,11 @@ export async function persistBranchSyncBatch(input: {
   const snapshot = {
     memories: db.memories,
     interactions: db.interactions,
-    agents: db.agents,
     settings: db.settings,
     auditLog: db.auditLog,
   };
   db.memories = [...(db.memories || [])];
   db.interactions = [...(db.interactions || [])];
-  db.agents = [...(db.agents || [])];
   db.settings = (db.settings || []).map((item: any) => ({ ...item }));
   db.auditLog = [...(db.auditLog || [])];
 
@@ -459,11 +414,7 @@ export async function persistBranchSyncBatch(input: {
     if (previous?.digest === item.digest && previous.targetId === item.targetId) {
       outcome = 'unchanged';
     } else {
-      const collection = item.kind === 'memory'
-        ? db.memories
-        : item.kind === 'interaction'
-          ? db.interactions
-          : db.agents;
+      const collection = item.kind === 'memory' ? db.memories : db.interactions;
       outcome = upsertById(collection, item);
     }
     ledger.items[itemKey] = { digest: item.digest, targetId: item.targetId, updatedAt: persistedAt };

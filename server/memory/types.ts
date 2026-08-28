@@ -84,14 +84,10 @@ export interface Memory {
   importance: number;
   /** Points to parent node in the memory tree, null if root */
   parentId: string | null;
-  /** Agent ID for agent-private memories. Empty string = shared */
+  /** Stable Lumi scope ID for private memories. Empty string = shared. */
   agentId: string;
   /** Tree node type: 'branch' = topic container, 'leaf' = content memory. Default 'leaf' */
   nodeType: MemoryNodeType;
-  /** Whether this memory can be borrowed by other agents (cross-agent sharing) */
-  crossAgentShare?: boolean;
-  /** Specific agent IDs this memory is shared with. Empty = all agents can borrow. */
-  sharedToAgentIds?: string[];
   /** Location where this memory was formed (e.g. 'home', 'office', 'cafe', 'mobile') */
   location?: string;
   /** 1536-dimension embedding vector from text-embedding-3-small for semantic search */
@@ -140,7 +136,7 @@ export interface MemoryQuery {
   minImportance?: number;
   /** Only return memories without parentId (unconsolidated originals) */
   unconsolidatedOnly?: boolean;
-  /** Filter by agent ID (empty string matches shared memories) */
+  /** Filter by stable Lumi scope ID (empty string matches shared memories). */
   agentId?: string;
   /** Filter by parent node — null = root only, string = children of that node */
   parentId?: string | null;

@@ -92,7 +92,7 @@ export interface DurableResumeSafety {
 }
 
 const TRANSIENT_RE = /timed?\s*out|timeout|econnreset|econnrefused|epipe|socket|connection|disconnect|temporar|try again|rate.?limit|429|502|503|504|service unavailable|transport closed|broken pipe|network/i;
-const DEPENDENCY_RE = /provider|model|mcp|adapter|sidecar|worker|runtime|service|dependency|no worker agent|not ready|not configured|process exited|crash|unavailable/i;
+const DEPENDENCY_RE = /provider|model|mcp|adapter|sidecar|runtime|service|dependency|not ready|not configured|process exited|crash|unavailable/i;
 const CONFIRMATION_RE = /confirm|confirmation|approval|user consent|requires?\s+user|\u786e\u8ba4|\u6279\u51c6|\u6388\u6743/i;
 const POLICY_RE = /forbidden|denied|not allowed|policy|safety gate|permission|unauthori[sz]ed|\u7981\u6b62|\u62d2\u7edd|\u65e0\u6743/i;
 const PRECONDITION_RE = /missing input|precondition|requires? setup|not configured|not found|invalid target|missing target|missing credential|\u7f3a\u5c11|\u672a\u627e\u5230/i;

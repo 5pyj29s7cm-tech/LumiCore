@@ -23,34 +23,6 @@ export interface UserProfile {
   provider: 'custom' | 'google';
 }
 
-export interface Agent {
-  id: string;
-  ownerUid: string;
-  name: string;
-  category: string;
-  data: string; // JSON string of agent config
-  status: 'active' | 'inactive';
-  createdAt: string;
-  lastActiveAt?: string;
-  personalityId: string;
-  modelPreference: string;
-  memoryScope: 'private' | 'shared';
-  autonomyLevel: 'reactive' | 'semi' | 'full';
-  runtimeConfig: string;
-  territory?: 'open' | 'sanctuary';
-  distilledFrom?: string;
-  evidenceMap?: any[];
-  relationshipType?: string;
-  isFrozen?: boolean;
-  seedMemoryIds?: string[];
-  executionMode?: string;
-  skillTags: string[];
-  knowledgeDomains: string[];
-  allowCrossPollination: boolean;
-  domain?: 'personal' | 'work';
-  orgId?: string;
-}
-
 export interface Interaction {
   id: string;
   userId: string;

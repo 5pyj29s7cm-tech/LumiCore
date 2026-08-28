@@ -21,7 +21,7 @@ export { selectFormalNativeClientEvidence };
 
 const INTERNAL_BLOCK_RE = /(?:No (?:successful|verified) current[- ]turn tool execution|这一轮没有记录到成功的真实工具执行|我还不能说正在执行|我需要先真正调用对应工具)/iu;
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
-const TERMINAL_BACKGROUND_STATUSES = new Set(['completed', 'blocked', 'failed', 'cancelled']);
+const TERMINAL_TASK_STATUSES = new Set(['completed', 'blocked', 'failed', 'cancelled']);
 
 export const FORMAL_STAGE9_REQUIREMENTS = Object.freeze([
   'task_correction_three_times',
@@ -36,7 +36,6 @@ export const FORMAL_STAGE9_REQUIREMENTS = Object.freeze([
   'active_wps_document_workflow',
   'task_status_query',
   'batch_cleanup',
-  'multi_agent_durable_completion',
   'four_variant_business_loops',
   'client_window_chat_voice_settings',
   'screenshots_receipts_timeline_routing_artifacts_feedback',
@@ -168,15 +167,6 @@ export function parseScenarioScreenshotBinding(value) {
 
 export function containsInternalExecutionBlock(value) {
   return INTERNAL_BLOCK_RE.test(String(value || ''));
-}
-
-export function parseWorkerReceiptCount(feedback) {
-  const evidence = Array.isArray(feedback?.evidence) ? feedback.evidence : [];
-  for (const item of evidence) {
-    const match = String(item || '').match(/Worker receipts:\s*(\d+)/i);
-    if (match) return Math.max(0, Number.parseInt(match[1], 10) || 0);
-  }
-  return 0;
 }
 
 export function evidenceTextHash(value) {
@@ -639,7 +629,7 @@ export function validateVoiceToTextContinuationEvidence({
   if (!taskId || taskId !== String(afterTask?.taskId || '')) {
     return { ok: false, code: 'cross_channel_task_identity_changed' };
   }
-  if (TERMINAL_BACKGROUND_STATUSES.has(String(beforeTask?.status || ''))) {
+  if (TERMINAL_TASK_STATUSES.has(String(beforeTask?.status || ''))) {
     return { ok: false, code: 'cross_channel_source_task_already_terminal' };
   }
   if (Number(afterTask?.revision) <= Number(beforeTask?.revision)) {
@@ -904,10 +894,8 @@ function usage() {
     '  --base-url <url>              API base; default http://127.0.0.1:3000/api',
     '  --expected-build-id <sha>     Exact runtime build; default current git HEAD',
     '  --timeout-ms <ms>             Foreground turn timeout; default 180000',
-    '  --background-timeout-ms <ms>  Background terminal timeout; default 600000',
     '  --manual-gate-timeout-ms <ms>  Human microphone gate timeout; default 1200000',
     '  --skip-desktop                Skip native desktop observation',
-    '  --skip-multi-agent            Skip durable multi-Agent acceptance',
     '  --manual-voice-turns <count>  Wait for at least 20 real microphone conversation turns',
     '  --manual-voice-to-text        Start a task by microphone and continue it by typed confirmation',
     '  --manual-voice-confirmation   Wait for a human to say the confirmation in the real client',
@@ -931,10 +919,8 @@ function parseArgs(argv) {
   const args = {
     baseUrl: 'http://127.0.0.1:3000/api',
     timeoutMs: 180_000,
-    backgroundTimeoutMs: 600_000,
     manualGateTimeoutMs: 1_200_000,
     skipDesktop: false,
-    skipMultiAgent: false,
     keepConversation: false,
     manualVoiceTurns: 0,
     manualVoiceToText: false,
@@ -957,7 +943,6 @@ function parseArgs(argv) {
     '--data-root',
     '--expected-build-id',
     '--timeout-ms',
-    '--background-timeout-ms',
     '--manual-gate-timeout-ms',
     '--manual-voice-turns',
     '--evidence-root',
@@ -979,7 +964,6 @@ function parseArgs(argv) {
       if (flag === '--data-root') args.dataRoot = value;
       if (flag === '--expected-build-id') args.expectedBuildId = value;
       if (flag === '--timeout-ms') args.timeoutMs = Number.parseInt(value, 10);
-      if (flag === '--background-timeout-ms') args.backgroundTimeoutMs = Number.parseInt(value, 10);
       if (flag === '--manual-gate-timeout-ms') args.manualGateTimeoutMs = Number.parseInt(value, 10);
       if (flag === '--manual-voice-turns') args.manualVoiceTurns = Number.parseInt(value, 10);
       if (flag === '--evidence-root') args.evidenceRoot = value;
@@ -994,7 +978,6 @@ function parseArgs(argv) {
     }
     if (flag === '--confirm-live-e2e') args.confirmed = true;
     else if (flag === '--skip-desktop') args.skipDesktop = true;
-    else if (flag === '--skip-multi-agent') args.skipMultiAgent = true;
     else if (flag === '--manual-voice-to-text') args.manualVoiceToText = true;
     else if (flag === '--manual-voice-confirmation') args.manualVoiceConfirmation = true;
     else if (flag === '--keep-conversation') args.keepConversation = true;
@@ -1006,7 +989,6 @@ function parseArgs(argv) {
   if (!args.dataRoot || !path.isAbsolute(args.dataRoot)) throw new E2EError('absolute_data_root_required');
   if (!isLoopbackBaseUrl(args.baseUrl)) throw new E2EError('loopback_api_required');
   if (!Number.isFinite(args.timeoutMs) || args.timeoutMs < 10_000 || args.timeoutMs > 900_000) throw new E2EError('invalid_timeout');
-  if (!Number.isFinite(args.backgroundTimeoutMs) || args.backgroundTimeoutMs < 30_000 || args.backgroundTimeoutMs > 1_800_000) throw new E2EError('invalid_background_timeout');
   if (!Number.isFinite(args.manualGateTimeoutMs) || args.manualGateTimeoutMs < 30_000 || args.manualGateTimeoutMs > 1_800_000) throw new E2EError('invalid_manual_gate_timeout');
   if (!Number.isFinite(args.manualVoiceTurns) || args.manualVoiceTurns < 0 || args.manualVoiceTurns > 100
     || (args.manualVoiceTurns > 0 && args.manualVoiceTurns < 20)) {
@@ -1138,7 +1120,6 @@ function emitChatAck(socket, payload, timeoutMs) {
 
 export async function runTurn(socket, input) {
   const toolEvents = [];
-  const delegations = [];
   let settled = false;
   const responsePromise = new Promise((resolve, reject) => {
     const timer = setTimeout(() => finish(new E2EError('chat_terminal_timeout')), input.timeoutMs);
@@ -1148,7 +1129,6 @@ export async function runTurn(socket, input) {
       socket.off('agent:error', onError);
       socket.off('agent:tool_call', onTool);
       socket.off('agent:tool', onTool);
-      socket.off('agent:delegation', onDelegation);
     };
     const finish = (error, value) => {
       if (settled) return;
@@ -1166,13 +1146,6 @@ export async function runTurn(socket, input) {
         hasError: Boolean(payload?.error),
       });
     };
-    const onDelegation = payload => {
-      if (!matches(payload)) return;
-      delegations.push({
-        taskId: String(payload?.taskId || payload?.task?.id || ''),
-        workerCount: Array.isArray(payload?.workers) ? payload.workers.length : 0,
-      });
-    };
     const onError = payload => {
       if (matches(payload)) finish(new E2EError('chat_agent_error'));
     };
@@ -1183,7 +1156,6 @@ export async function runTurn(socket, input) {
     socket.on('agent:error', onError);
     socket.on('agent:tool_call', onTool);
     socket.on('agent:tool', onTool);
-    socket.on('agent:delegation', onDelegation);
   });
   const ackPromise = emitChatAck(socket, {
     text: input.text,
@@ -1197,7 +1169,7 @@ export async function runTurn(socket, input) {
   }, input.timeoutMs);
   try {
     const [response] = await Promise.all([responsePromise, ackPromise]);
-    return { response, toolEvents, delegations };
+    return { response, toolEvents };
   } catch (error) {
     if (!settled) settled = true;
     throw error;
@@ -1468,20 +1440,6 @@ async function routingReceiptsForConversation(baseUrl, token, conversationId) {
     query: { conversationId, limit: 500 },
   });
   return Array.isArray(body?.receipts) ? body.receipts : [];
-}
-
-async function pollBackground(baseUrl, token, taskId, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const body = await fetchJson(baseUrl, '/autonomy/background-tasks', {
-      token,
-      query: { domain: 'personal', limit: 200 },
-    });
-    const task = (Array.isArray(body?.tasks) ? body.tasks : []).find(candidate => candidate?.id === taskId);
-    if (task && TERMINAL_BACKGROUND_STATUSES.has(String(task.status || ''))) return task;
-    await new Promise(resolve => setTimeout(resolve, 2_000));
-  }
-  throw new E2EError('background_terminal_timeout');
 }
 
 export function requireCondition(condition, code) {
@@ -2097,17 +2055,6 @@ async function finalizeFormalAcceptanceEvidence({
     bindIdentity(requestScenarios, requestId, 'voice_to_text_same_task_continuation');
   }
   bindIdentity(taskScenarios, crossChannel?.taskId, 'voice_to_text_same_task_continuation');
-  bindIdentity(
-    requestScenarios,
-    summary?.checks?.multiAgent?.requestId,
-    'multi_agent_durable_completion',
-  );
-  bindIdentity(
-    taskScenarios,
-    summary?.checks?.multiAgent?.taskId,
-    'multi_agent_durable_completion',
-  );
-
   if (token && conversationId) {
     const [runtime, messages, routingReceipts] = await Promise.all([
       runtimeStatus(baseUrl, token),
@@ -2329,7 +2276,6 @@ async function runFormalE2E(args) {
     },
     cleanup: {
       conversationDeleted: false,
-      backgroundAuditRetained: false,
       ownedArtifactFilesRemoved: false,
       ownedArtifactCleanupFailedCount: 0,
     },
@@ -2341,7 +2287,6 @@ async function runFormalE2E(args) {
   let desktopSessionProof = '';
   let conversationId = '';
   let socket = null;
-  let backgroundCreated = false;
   let evidenceRun = null;
   let evidenceFinalized = false;
   let nativeClientEvidence = null;
@@ -2557,59 +2502,6 @@ async function runFormalE2E(args) {
       summary.checks.desktopObservation = { passed: true, verifiedReceipt: true };
     }
 
-    if (!args.skipMultiAgent) {
-      const multiId = requestId('multi-agent');
-      const multi = await runTurn(socket, {
-        requestId: multiId,
-        conversationId,
-        timeoutMs: args.timeoutMs,
-        text: `[${runMarker}] 请把下面完全虚构、只读、禁止文件/网络/桌面工具的文本交给至少两个子 Agent 并行处理：甲说蓝色方块在圆形左边；乙说圆形在蓝色方块右边。一个子 Agent 提炼等价关系，另一个检查是否矛盾，最后合并为三条简短结论。只分析这段文本，不修改任何数据。`,
-      });
-      const delegation = multi.delegations.find(item => item.taskId);
-      requireCondition(delegation?.taskId, 'multi_agent_delegation_missing');
-      requireCondition(multi.response?.completionFeedback?.status === 'working', 'multi_agent_working_feedback_missing');
-      backgroundCreated = true;
-      const task = await pollBackground(args.baseUrl, token, delegation.taskId, args.backgroundTimeoutMs);
-      requireCondition(task?.status === 'completed', 'multi_agent_not_completed');
-      requireCondition(Array.isArray(task?.workerNames) && task.workerNames.length >= 2, 'multi_agent_assignments_missing');
-      const verifiedWorkers = parseWorkerReceiptCount(task?.completionFeedback);
-      requireCondition(verifiedWorkers >= 2, 'multi_agent_worker_receipts_missing');
-      requireCondition(task?.completionFeedback?.status === 'completed', 'multi_agent_feedback_not_persisted');
-      requireCondition((task?.completionFeedback?.evidence || []).some(item => /model-graph arbitration/i.test(String(item))), 'multi_agent_graph_receipt_missing');
-
-      const runtime = await fetchJson(args.baseUrl, '/runtime/status', { token, query: { domain: 'personal' } });
-      const accepted = (Array.isArray(runtime?.acceptance?.tasks) ? runtime.acceptance.tasks : []).find(item => (
-        item?.runtime === 'background' && item?.taskId === delegation.taskId
-      ));
-      requireCondition(accepted?.accepted === true, 'multi_agent_acceptance_failed');
-      requireCondition(accepted?.terminalReceiptPresent === true && accepted?.terminalVerification === 'verified', 'multi_agent_terminal_receipt_invalid');
-      requireCondition(Object.values(accepted?.continuity || {}).every(Boolean), 'multi_agent_continuity_incomplete');
-      const actionTask = (Array.isArray(runtime?.tasks) ? runtime.tasks : []).find(item => (
-        String(item?.goal || '').includes(runMarker)
-      ));
-      requireCondition(actionTask && actionTask.activeRequest === false, 'terminal_action_lease_not_released');
-      const durable = (Array.isArray(runtime?.durableWork) ? runtime.durableWork : []).find(item => (
-        item?.runtime === 'background' && item?.taskId === delegation.taskId
-      ));
-      requireCondition(durable?.status === 'completed', 'terminal_background_not_persisted');
-      summary.checks.multiAgent = {
-        passed: true,
-        requestId: multiId,
-        taskId: delegation.taskId,
-        assignedWorkers: task.workerNames.length,
-        verifiedWorkerReceipts: verifiedWorkers,
-        terminalReceipt: true,
-        accepted: true,
-      };
-      summary.checks.terminalPersistence = {
-        passed: true,
-        activeLease: false,
-        completionFeedback: true,
-      };
-      summary.stage9Checks.multi_agent_durable_completion = true;
-      summary.cleanup.backgroundAuditRetained = true;
-    }
-
     if (args.manualVoiceTurns >= 20) {
       const evidence = await runManualVoiceConversationGate({
         baseUrl: args.baseUrl,
@@ -2741,7 +2633,6 @@ async function runFormalE2E(args) {
       }
     }
     if (args.keepConversation) summary.cleanup.conversationDeleted = false;
-    if (backgroundCreated) summary.cleanup.backgroundAuditRetained = true;
     const artifactCleanup = cleanOwnedArtifactLayout(artifactLayout);
     summary.cleanup.ownedArtifactFilesRemoved = artifactCleanup.ok;
     summary.cleanup.ownedArtifactCleanupFailedCount = artifactCleanup.failedCount;
@@ -2757,7 +2648,7 @@ async function runFormalE2E(args) {
 }
 
 async function main() {
-  let summary = { ok: false, failedCheck: 'unknown', cleanup: { conversationDeleted: false, backgroundAuditRetained: false } };
+  let summary = { ok: false, failedCheck: 'unknown', cleanup: { conversationDeleted: false } };
   try {
     const args = parseArgs(process.argv.slice(2));
     if (args.help) {
@@ -2785,7 +2676,6 @@ async function main() {
       ...(retainedFailure ? { primaryFailure } : {}),
       cleanup: retained.cleanup || {
         conversationDeleted: false,
-        backgroundAuditRetained: false,
         ownedArtifactFilesRemoved: false,
         ownedArtifactCleanupFailedCount: 0,
       },

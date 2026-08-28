@@ -178,10 +178,10 @@ export function buildLumiRuntimeCapabilityContext(input: LumiRuntimeCapabilityCo
 
   return [
     '## Lumi Runtime Capability Context',
-    'This is the compact runtime map for this turn. Lumi is the subject; tools, skills, task center, sub-agents, browser, desktop, and external software are capabilities Lumi may choose after understanding the user.',
+    'This is the compact runtime map for this turn. Lumi is the single execution subject; tools, skills, task center, browser, desktop, and external software are capabilities LumiCore may choose after understanding the user.',
     `Input surface=${input.flow.surface}; mode=${input.flow.operationMode}->${input.flow.effectiveOperationMode}; tools=${input.flow.allowToolUseForTurn ? 'available' : 'not for this turn'}; taskSignal=${input.flow.workTakeover.intent || 'none'}/${input.flow.workTakeover.strength}.`,
     'Per-turn tool access is a mode gate, not an installation inventory. Never claim a capability is absent only because its tools are hidden for this turn; an explicit action in Chat should move the turn to Assistant, while Autonomy remains the continuous 24-hour mode.',
-    `Execution governance: verify=${input.flow.executionGovernance.verificationIntent}; delegation=${input.flow.executionGovernance.delegationIntent}; capabilityLearning=${input.flow.executionGovernance.capabilityLearningIntent}; inspectCapabilitiesFirst=${input.flow.executionGovernance.shouldInspectCapabilitiesFirst ? 'yes' : 'no'}.`,
+    `Execution governance: verify=${input.flow.executionGovernance.verificationIntent}; capabilityLearning=${input.flow.executionGovernance.capabilityLearningIntent}; inspectCapabilitiesFirst=${input.flow.executionGovernance.shouldInspectCapabilitiesFirst ? 'yes' : 'no'}.`,
     `Capability manifest: ${manifest.length} registered tools; ${manifest.filter(entry => entry.hasEvidenceContract).length} have declared evidence contracts (${manifest.filter(entry => entry.evidence?.declarationSource === 'tool_definition').length} tool-specific, remainder conservative manifest policy).`,
     `Capability families available: ${capabilityGroups.join(', ') || 'none'}.`,
     ...mcpLines,

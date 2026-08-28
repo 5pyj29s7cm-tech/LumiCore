@@ -40,7 +40,6 @@ import {
   buildLumiExecutionPipeline,
   type LumiExecutionPipeline,
 } from '../cognition/execution_pipeline';
-import { buildModelToolProjection } from '../cognition/capability_selection';
 import { sanitizeCapabilityExecutionPlan } from '../conversation/action_ledger';
 import { snapshotDurableToolRecords } from '../cognition/durable_task_recovery';
 import {
@@ -59,6 +58,9 @@ interface LLMGetters {
   getOpenAI?: () => any;
   getAnthropic?: () => any;
   getQwen?: () => any;
+  getOllama?: () => any;
+  getLmStudio?: () => any;
+  getArk?: () => any;
   getXiaomi?: () => any;
   getKimi?: () => any;
   getGlm?: () => any;
@@ -157,7 +159,7 @@ export function buildAutonomousCapabilityPipeline(
     dispatch: {
       userId: task.userId,
       text: task.description || task.title,
-      channel: task.source === 'scheduler' ? 'scheduler' : 'agent',
+      channel: task.source === 'scheduler' ? 'scheduler' : 'autonomy',
       source: `autonomous:${task.source}`,
       operationMode: 'autonomous',
       targetIsLumi: true,
@@ -422,7 +424,12 @@ function upsertToolLedger(ledger: ToolExecutionRecord[], record: ToolExecutionRe
 }
 
 function planScopeForTask(task: AutonomousTask): PlanScope {
-  return { userId: task.userId, domain: 'personal', orgId: '' };
+  const domain = task.domain === 'work' ? 'work' : 'personal';
+  return {
+    userId: task.userId,
+    domain,
+    orgId: domain === 'work' ? String(task.orgId || '') : '',
+  };
 }
 
 function markLinkedPlanRunning(task: AutonomousTask) {
@@ -529,7 +536,11 @@ export async function executeNextAutonomousTask(
   const toolLedger: ToolExecutionRecord[] = [];
   let sideEffectClass = running.executionPlan?.risk.sideEffectClass;
 
-  io.to(`user:${task.userId}:personal`).emit('autonomous:task_started', {
+  const taskScope = planScopeForTask(running);
+  const taskRoom = taskScope.domain === 'work' && taskScope.orgId
+    ? `user:${task.userId}:org:${taskScope.orgId}`
+    : `user:${task.userId}:personal`;
+  io.to(taskRoom).emit('autonomous:task_started', {
     taskId: task.id,
     title: task.title,
     mode: task.mode,
@@ -543,8 +554,8 @@ export async function executeNextAutonomousTask(
     const desktopRelay = createDesktopRelay({
       io,
       userId: task.userId,
-      domain: 'personal',
-      orgId: '',
+      domain: taskScope.domain,
+      orgId: taskScope.orgId,
       source: 'autonomous',
       taskId: task.id,
       onControlPaused: () => {
@@ -569,16 +580,19 @@ export async function executeNextAutonomousTask(
     if (executionPipeline.executionPlan.risk.sideEffectClass === 'external_commit') {
       throw new Error('Autonomous external commit blocked: an action-time immutable user confirmation is required.');
     }
-    const toolPolicy = executionPipeline.execution.toolPolicy;
+    const toolPolicy = executionPipeline.authorizationPolicy;
 
     const context: ToolContext = {
       userId: task.userId,
+      domain: taskScope.domain,
+      orgId: taskScope.orgId,
+      conversationId: running.conversationId,
       taskId: running.id,
       desktopRelay: task.mode === 'desktop' ? desktopRelay : undefined,
       requestConfirmation: async (toolName, args) => {
         if (toolName === 'self_improvement_stage_patch') {
           return canUseQueuedSelfImprovementStageAuthorization(
-            { userId: task.userId, domain: 'personal', orgId: '' },
+            taskScope,
             String(args.proposalId || ''),
             running.id,
           );
@@ -588,14 +602,14 @@ export async function executeNextAutonomousTask(
       actionIntent: task.description,
       routedTaskText: executionPipeline.turnIntent.flow.routeText,
       toolPolicy,
-      modelToolProjection: buildModelToolProjection(executionPipeline.execution),
+      modelToolProjection: executionPipeline.modelToolProjection,
       isCancelled: () => isTaskCancellationRequested(task.id, task.userId)
         || isTaskPauseRequested(task.id, task.userId)
         || isRealtimeUserActive(task.userId)
         || leaseLost,
       autonomous: true,
       localExecution: isLocalAdminAuthorizedSelfImprovementTask(
-        { userId: task.userId, domain: 'personal', orgId: '' },
+        taskScope,
         running.id,
         running.idempotencyKey,
       ),
@@ -648,8 +662,9 @@ export async function executeNextAutonomousTask(
       getters.getQwen || (() => null),
       undefined, // onStreamChunk
       context,
-      undefined, undefined, // ollama, lmstudio
-      undefined, // ark
+      getters.getOllama,
+      getters.getLmStudio,
+      getters.getArk,
       getters.getXiaomi, getters.getKimi, getters.getGlm, getters.getRelay,
     );
 
@@ -660,7 +675,7 @@ export async function executeNextAutonomousTask(
 
     if (isTaskPauseRequested(task.id, task.userId)) {
       markPaused(task.id);
-      io.to(`user:${task.userId}:personal`).emit('autonomous:task_paused', {
+      io.to(taskRoom).emit('autonomous:task_paused', {
         taskId: task.id,
         title: task.title,
         timestamp: new Date().toISOString(),
@@ -673,7 +688,7 @@ export async function executeNextAutonomousTask(
         : 'Cancelled by user';
       const cancelled = markCancelled(task.id, reason);
       markLinkedPlanCancelled(task);
-      io.to(`user:${task.userId}:personal`).emit('autonomous:task_cancelled', {
+      io.to(taskRoom).emit('autonomous:task_cancelled', {
         taskId: task.id,
         title: task.title,
         completionFeedback: buildTaskCompletionFeedback(cancelled?.terminalReceipt, task.title, {
@@ -734,7 +749,7 @@ export async function executeNextAutonomousTask(
       }
       const willRetry = settled.status === 'pending';
       if (!willRetry) markLinkedPlanFailed(task, failureReason);
-      io.to(`user:${task.userId}:personal`).emit(willRetry ? 'autonomous:task_retry_scheduled' : 'autonomous:task_failed', {
+      io.to(taskRoom).emit(willRetry ? 'autonomous:task_retry_scheduled' : 'autonomous:task_failed', {
         taskId: task.id,
         title: task.title,
         error: publicOutcome.text,
@@ -788,7 +803,7 @@ export async function executeNextAutonomousTask(
     }
     markLinkedPlanCompleted(task, summary);
 
-    io.to(`user:${task.userId}:personal`).emit('autonomous:task_completed', {
+    io.to(taskRoom).emit('autonomous:task_completed', {
       taskId: task.id,
       title: task.title,
       result: summary,
@@ -812,7 +827,7 @@ export async function executeNextAutonomousTask(
     const errorMsg = err.message || 'Unknown error';
     if (isTaskPauseRequested(task.id, task.userId)) {
       markPaused(task.id);
-      io.to(`user:${task.userId}:personal`).emit('autonomous:task_paused', {
+      io.to(taskRoom).emit('autonomous:task_paused', {
         taskId: task.id,
         title: task.title,
         timestamp: new Date().toISOString(),
@@ -825,7 +840,7 @@ export async function executeNextAutonomousTask(
         : errorMsg;
       const cancelled = markCancelled(task.id, reason);
       markLinkedPlanCancelled(task);
-      io.to(`user:${task.userId}:personal`).emit('autonomous:task_cancelled', {
+      io.to(taskRoom).emit('autonomous:task_cancelled', {
         taskId: task.id,
         title: task.title,
         completionFeedback: buildTaskCompletionFeedback(cancelled?.terminalReceipt, task.title, {
@@ -863,7 +878,7 @@ export async function executeNextAutonomousTask(
     const willRetry = settled.status === 'pending';
     if (!willRetry) markLinkedPlanFailed(task, errorMsg);
 
-    io.to(`user:${task.userId}:personal`).emit(willRetry ? 'autonomous:task_retry_scheduled' : 'autonomous:task_failed', {
+    io.to(taskRoom).emit(willRetry ? 'autonomous:task_retry_scheduled' : 'autonomous:task_failed', {
       taskId: task.id,
       title: task.title,
       error: errorMsg,

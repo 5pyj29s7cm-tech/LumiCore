@@ -182,7 +182,7 @@ export function registerInputTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'desktop_keyboard_press',
-    description: 'Press a key or keyboard shortcut only if the foreground PID still matches a fresh desktop observation.',
+    description: 'Press a key or keyboard shortcut only if the foreground PID still matches a fresh desktop observation. Media keys include playpause/media_play_pause, media_next, media_previous, volume_up, volume_down, and volume_mute.',
     parameters: {
       type: 'object',
       properties: {
@@ -375,7 +375,7 @@ export function registerInputTools(registry: ToolRegistry): void {
   registry.register({
     name: 'keyboard_press',
     description:
-      'Press a keyboard key or key combination. For single keys use names like "enter", "escape", "tab", "space", "backspace", "delete", "home", "end", "pageup", "pagedown", "up", "down", "left", "right", "f1".."f12", or a single character. For combos use "ctrl+c", "ctrl+shift+t", "alt+tab", "ctrl+v" etc. Supported modifiers: ctrl, shift, alt, meta (Windows key / Cmd).',
+      'Press a keyboard key or key combination. For single keys use names like "enter", "escape", "tab", "space", "backspace", "delete", "home", "end", "pageup", "pagedown", "up", "down", "left", "right", "f1".."f12", or a single character. Cross-platform media keys include "playpause"/"media_play_pause", "media_next", "media_previous", "volume_up", "volume_down", and "volume_mute". For combos use "ctrl+c", "ctrl+shift+t", "alt+tab", "ctrl+v" etc. Supported modifiers: ctrl, shift, alt, meta (Windows key / Cmd).',
     parameters: {
       type: 'object',
       properties: {

@@ -29,7 +29,6 @@ describe('durable organization business routing', () => {
   let orgId = '';
   let departmentId = '';
   let positionId = '';
-  let legalAgentId = '';
 
   beforeAll(async () => {
     await initDatabase();
@@ -45,33 +44,10 @@ describe('durable organization business routing', () => {
     const membershipB = db.orgMemberships.find((item: any) => item.orgId === orgId && item.userId === memberB);
     membershipA.departmentId = departmentId;
     membershipB.departmentId = departmentId;
-    legalAgentId = `legal-agent-${suffix}`;
-    db.agents.push({
-      id: legalAgentId,
-      ownerUid: ownerId,
-      userId: ownerId,
-      name: 'Legal Worker',
-      category: 'analysis',
-      data: '{}',
-      config: '{}',
-      status: 'active',
-      personalityId: 'lumi',
-      modelPreference: '',
-      memoryScope: 'shared',
-      autonomyLevel: 'reactive',
-      runtimeConfig: '{}',
-      runtime: 'internal',
-      domain: 'work',
-      orgId,
-      createdAt: new Date().toISOString(),
-      skillTags: ['legal', 'contract-review'],
-      knowledgeDomains: ['contract-review'],
-      healthStatus: 'online',
-    });
     writeDB(db);
   });
 
-  it('routes a Feishu request to a department, position, multiple members, skills, and an exact organization agent', () => {
+  it('routes a Feishu request to a department, position, multiple members, and skills', () => {
     const position = createOrganizationPosition({
       orgId,
       actorUserId: ownerId,
@@ -80,7 +56,6 @@ describe('durable organization business routing', () => {
       description: 'Owns contract review work.',
       skillTags: ['contract-review'],
       memberIds: [memberA, memberB],
-      agentIds: [legalAgentId],
       isManager: true,
     });
     positionId = position.id;
@@ -132,8 +107,7 @@ describe('durable organization business routing', () => {
       departmentId,
       positionId,
       assignedMemberId: memberA,
-      assignedAgentIds: [legalAgentId],
-      status: 'assigned',
+      status: 'waiting_human',
     });
     expect(first.workItem.collaboratorMemberIds).toContain(memberB);
     expect(first.workItem.skillTags).toContain('contract-review');
@@ -151,11 +125,11 @@ describe('durable organization business routing', () => {
       operation: 'mutate',
       sideEffectClass: 'external_commit',
       taskId: `task-${suffix}:default-no-approval`,
-      targetAgentIds: [legalAgentId],
+      targetMemberId: memberB,
     });
 
     expect(routed.approval).toBeNull();
-    expect(routed.workItem).toMatchObject({ status: 'assigned', approvalId: null });
+    expect(routed.workItem).toMatchObject({ status: 'waiting_human', approvalId: null });
   });
 
   it('binds explicitly configured approvals to an immutable work item and resumes without duplication', () => {
@@ -166,7 +140,7 @@ describe('durable organization business routing', () => {
       priority: 100,
       platforms: ['feishu'],
       keywords: ['approval-required'],
-      agentIds: [legalAgentId],
+      positionId,
       approvalMode: 'admin',
     });
     const routed = routeOrganizationWork({
@@ -198,7 +172,7 @@ describe('durable organization business routing', () => {
       decision: 'approve',
       reason: 'Approved for execution.',
     });
-    expect(decision?.workItem.status).toBe('assigned');
+    expect(decision?.workItem.status).toBe('waiting_human');
 
     const continued = routeOrganizationWork({
       orgId,
@@ -214,7 +188,7 @@ describe('durable organization business routing', () => {
     });
     expect(continued.created).toBe(false);
     expect(continued.workItem.id).toBe(routed.workItem.id);
-    expect(continued.workItem.status).toBe('assigned');
+    expect(continued.workItem.status).toBe('waiting_human');
     expect(listOrganizationWorkItems(orgId, { taskId: `task-${suffix}:approval` })).toHaveLength(1);
   });
 
@@ -236,7 +210,7 @@ describe('durable organization business routing', () => {
     expect(routed.approval).toBeNull();
     expect(routed.workItem).toMatchObject({
       requesterUserId: ownerId,
-      status: 'assigned',
+      status: 'waiting_human',
       approvalId: null,
     });
     expect(listOrganizationWorkApprovals(orgId).some(item => item.workItemId === routed.workItem.id)).toBe(false);
@@ -274,11 +248,11 @@ describe('durable organization business routing', () => {
     });
 
     expect(continued.created).toBe(false);
-    expect(continued.workItem).toMatchObject({ id: routed.workItem.id, status: 'assigned' });
+    expect(continued.workItem).toMatchObject({ id: routed.workItem.id, status: 'waiting_human' });
     expect(continued.approval).toMatchObject({ status: 'approved', decidedBy: legacyAdminId });
   });
 
-  it('stops agents for accepted human takeover and can explicitly return the item to an agent', () => {
+  it('moves an accepted human takeover to the exact organization member', () => {
     const routed = routeOrganizationWork({
       orgId,
       requesterUserId: memberA,
@@ -289,7 +263,7 @@ describe('durable organization business routing', () => {
       operation: 'read',
       sideEffectClass: 'none',
       taskId: `task-${suffix}:handoff`,
-      targetAgentIds: [legalAgentId],
+      targetMemberId: memberA,
     });
     const takeover = requestOrganizationWorkHandoff({
       orgId,
@@ -309,7 +283,7 @@ describe('durable organization business routing', () => {
     expect(accepted?.workItem).toMatchObject({
       status: 'waiting_human',
       humanOwnerUserId: memberB,
-      assignedAgentIds: [],
+      assignedMemberId: memberB,
     });
     expect(() => setOrganizationWorkItemExecutionStatus({
       orgId,
@@ -318,48 +292,15 @@ describe('durable organization business routing', () => {
       actorUserId: memberA,
     })).toThrow(/owned by a human/i);
 
-    const returnHandoff = requestOrganizationWorkHandoff({
-      orgId,
-      workItemId: routed.workItem.id,
-      actorUserId: memberB,
-      type: 'return_to_agent',
-      targetAgentIds: [legalAgentId],
-      reason: 'Human review finished; return automation to the verified worker.',
-    });
-    const returned = decideOrganizationWorkHandoff({
-      orgId,
-      handoffId: returnHandoff!.id,
-      actorUserId: ownerId,
-      decision: 'accept',
-    });
-    expect(returned?.workItem).toMatchObject({
-      status: 'assigned',
-      humanOwnerUserId: null,
-      assignedAgentIds: [legalAgentId],
-    });
-    expect(listOrganizationWorkHandoffs(orgId, routed.workItem.id)).toHaveLength(2);
+    expect(listOrganizationWorkHandoffs(orgId, routed.workItem.id)).toHaveLength(1);
   });
 
-  it('rejects cross-organization agent targets', () => {
+  it('rejects cross-organization member targets', () => {
     const otherOwner = `other-owner-${suffix}`;
     const otherOrg = createOrg(`Other Org ${suffix}`, `other-routing-${suffix}`, otherOwner);
     addMember(otherOrg.id, otherOwner, 'owner');
-    const db = readDB();
-    const foreignAgentId = `foreign-agent-${suffix}`;
-    db.agents.push({
-      id: foreignAgentId,
-      ownerUid: otherOwner,
-      name: 'Foreign Worker',
-      category: 'analysis',
-      data: '{}',
-      status: 'active',
-      domain: 'work',
-      orgId: otherOrg.id,
-      runtime: 'internal',
-      createdAt: new Date().toISOString(),
-      skillTags: ['legal'],
-    });
-    writeDB(db);
+    const foreignMemberId = `foreign-member-${suffix}`;
+    addMember(otherOrg.id, foreignMemberId, 'member');
 
     expect(() => routeOrganizationWork({
       orgId,
@@ -370,8 +311,8 @@ describe('durable organization business routing', () => {
       intentKind: 'none',
       operation: 'read',
       sideEffectClass: 'none',
-      targetAgentIds: [foreignAgentId],
-    })).toThrow(/outside this organization/i);
+      targetMemberId: foreignMemberId,
+    })).toThrow(/does not belong to this organization/i);
   });
 
   it('expires an old approval when a handoff changes the immutable work-item target', () => {
@@ -411,25 +352,20 @@ describe('durable organization business routing', () => {
     })).toThrow(/terminal decision/i);
   });
 
-  it('persists routing records and organization agent skill metadata to SQLite', async () => {
+  it('persists routing records and position skill metadata to SQLite', async () => {
     await flushDBOrThrow();
     const workRows = await querySQL<any>(
       'SELECT * FROM org_work_items WHERE orgId = ? ORDER BY createdAt ASC',
       [orgId],
     );
     const positionRows = await querySQL<any>('SELECT * FROM org_positions WHERE orgId = ?', [orgId]);
-    const agentRows = await querySQL<any>('SELECT skillTags, knowledgeDomains FROM agents WHERE id = ?', [legalAgentId]);
     expect(workRows.length).toBeGreaterThanOrEqual(3);
-    expect(positionRows.some(row => row.id === positionId)).toBe(true);
-    expect(JSON.parse(agentRows[0].skillTags)).toContain('contract-review');
-    expect(JSON.parse(agentRows[0].knowledgeDomains)).toContain('contract-review');
+    const persistedPosition = positionRows.find(row => row.id === positionId);
+    expect(persistedPosition).toBeTruthy();
+    expect(JSON.parse(persistedPosition.payload).skillTags).toContain('contract-review');
     await closeDatabase();
     await initDatabase();
     expect(listOrganizationWorkApprovals(orgId).some(item => item.status === 'approved')).toBe(true);
     expect(getOrganizationWorkItem(orgId, workRows[0].id)?.orgId).toBe(orgId);
-    expect(readDB().agents.find((item: any) => item.id === legalAgentId)).toMatchObject({
-      skillTags: expect.arrayContaining(['contract-review']),
-      knowledgeDomains: expect.arrayContaining(['contract-review']),
-    });
   });
 });

@@ -125,12 +125,10 @@ describe('frontend agent response finalization gate', () => {
 });
 
 describe('frontend dynamic output path audit', () => {
-  it('gates every non-desktop agent response consumer in scope', () => {
+  it('gates every non-desktop response consumer in scope', () => {
     const displayGated = [
       'src/components/AgentChatPage.tsx',
       'src/components/ChatPanel.tsx',
-      'src/components/UnifiedAgent.tsx',
-      'src/components/Sanctuary.tsx',
       'src/components/org/CentralLumiChat.tsx',
       'src/components/ProactiveNotifications.tsx',
       'src/hooks/useVoiceCall.ts',
@@ -151,7 +149,8 @@ describe('frontend dynamic output path audit', () => {
 
   it('does not keep a browser system-voice fallback in chat surfaces', () => {
     for (const relativePath of [
-      'src/components/UnifiedAgent.tsx',
+      'src/components/AgentChatPage.tsx',
+      'src/components/ChatPanel.tsx',
     ]) {
       const source = read(relativePath);
       expect(source, relativePath).not.toContain('useTTS');

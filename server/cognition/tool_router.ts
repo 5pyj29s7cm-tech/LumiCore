@@ -41,6 +41,7 @@ import {
   isRuntimeCleanupOfferAcceptanceText,
   type PendingAssistantOfferContext,
 } from './pending_assistant_offer';
+import { toolRecordTerminalPayload } from '../tools/receipt_payload';
 
 type ToolDeclaration = ReturnType<ToolRegistry['getToolDeclarations']>[number];
 
@@ -70,10 +71,67 @@ export interface ToolRouteOptions {
   pendingAssistantOfferContext?: PendingAssistantOfferContext;
   /** Trusted server-owned durable task state for terse continuation turns. */
   actionTaskState?: ConversationActionContinuationState | null;
+  /** True only when the transport bound this turn to that exact durable task. */
+  trustedActionContinuation?: boolean;
+}
+
+type AuthoringApplication = 'wps' | 'word' | 'excel' | 'powerpoint';
+
+function authoringApplication(value: unknown): AuthoringApplication | null {
+  const text = String(value || '');
+  // i18n-allow: Product/process recognition for trusted machine receipts; not user-visible copy.
+  if (/(?:^|\b)(?:WPS|wps\.exe|wpp\.exe|et\.exe)(?:\b|$)|金山(?:文字|表格|演示|WPS)/iu.test(text)) return 'wps';
+  if (/(?:Microsoft\s+Word|WINWORD\.EXE)/iu.test(text)) return 'word';
+  if (/(?:Microsoft\s+Excel|EXCEL\.EXE)/iu.test(text)) return 'excel';
+  if (/(?:Microsoft\s+PowerPoint|POWERPNT\.EXE)/iu.test(text)) return 'powerpoint';
+  return null;
+}
+
+/**
+ * File discovery for a deictic "current document" request is a second-stage
+ * capability.  It may only be exposed after the server-owned task capsule has
+ * retained an authoring-window target and advanced past active-window
+ * inspection.  Assistant prose and injected continuation text are not enough
+ * to widen the route.
+ */
+function hasTrustedCurrentDocumentReadAnchor(
+  state: ConversationActionContinuationState | null | undefined,
+): boolean {
+  if (!state?.unfinished || !state.taskCapsule) return false;
+  const target = state.taskCapsule.target;
+  const nextAction = String(state.taskCapsule.nextAction || '');
+  if (!['search_bounded_roots', 'analyze'].includes(nextAction)) return false;
+  const targetApplication = authoringApplication([
+    state.appTarget,
+    target.application,
+    target.window,
+  ].filter(Boolean).join(' '));
+  if (!targetApplication) return false;
+  return Boolean(state.receipts?.some(receipt => {
+    if (!['desktop_active_window', 'get_active_window_info'].includes(receipt.name)) return false;
+    if (receipt.outcome !== 'success' || receipt.error) return false;
+    if (receipt.terminalVerification?.status !== 'verified') return false;
+    const observedApplication = authoringApplication(JSON.stringify(toolRecordTerminalPayload(receipt)));
+    return observedApplication === targetApplication;
+  }));
 }
 
 function unique(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
+}
+
+const INJECTED_ROUTING_CONTEXT_RE = /(?:^|\r?\n)\s*##\s+(?:Current Turn Attachments|Recent action continuation context|Internal client-surface continuation context)\b/i;
+
+/**
+ * Capability intent comes from the user's instruction, never from text
+ * extracted from an attachment or a server-owned continuation block. The
+ * complete text remains available only to bounded target resolvers.
+ */
+function primaryRoutingInstruction(input: string): string {
+  const raw = String(input || '').trim();
+  const marker = INJECTED_ROUTING_CONTEXT_RE.exec(raw);
+  if (!marker) return raw;
+  return raw.slice(0, marker.index).trim();
 }
 
 function routeMatches(route: RouteDefinition, text: string): boolean {
@@ -199,7 +257,7 @@ function isMessagingRead(text: string): boolean {
   return /(?:wechat|weixin|\u5fae\u4fe1|\u804a\u5929|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9|\u6d88\u606f).*(?:\u770b\u770b|\u67e5\u770b|\u770b\u4e00\u4e0b|\u8bfb\u53d6|\u8bfb|\u6700\u8fd1|\u804a\u5929\u5185\u5bb9|\u804a\u5929\u8bb0\u5f55|\u603b\u7ed3)|(?:\u770b\u770b|\u67e5\u770b|\u770b\u4e00\u4e0b|\u8bfb\u53d6|\u8bfb|\u6700\u8fd1|\u603b\u7ed3).*(?:wechat|weixin|\u5fae\u4fe1|\u804a\u5929|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9|\u6d88\u606f)/iu.test(text);
 }
 
-function isDesktopAiCollaboration(text: string): boolean {
+function isDesktopAiRequest(text: string): boolean {
   if (requiresExternalAiHistory(text)) return false;
   return /(?:WorkBuddy|Codex|ChatGPT|Claude|Gemini|DeepSeek|Kimi|豆包|通义|文心|Perplexity|Cursor|Copilot|Ollama|LM Studio|Cherry Studio|AnythingLLM|外部AI|外部 AI|桌面AI|桌面 AI|其它AI|其他AI|AI工具|AI客户端|AI\s*app)/iu.test(text)
     || /(?:问|发给|发送给|交给|询问)[\s\S]{0,80}(?:AI|模型|agent|智能体)/iu.test(text)
@@ -282,6 +340,10 @@ function isCadGeometryExtractionAllowedTool(name: string): boolean {
 
 const STRICT_DESKTOP_OBSERVATION_TOOLS = new Set([
   'desktop_active_window',
+  'desktop_running_processes',
+  'desktop_idle_time',
+  'desktop_system_info',
+  'desktop_list_apps',
   'desktop_list_files',
 ]);
 
@@ -342,13 +404,17 @@ function requestsExplicitCadFileExport(text: string): boolean {
 
 function priorityToolsForRoute(categories: string[], text: string): string[] {
   const priorities: string[] = [];
-  if (requestsBlankAutoCadDocument(text)) {
+  const instructionText = primaryRoutingInstruction(text);
+  if (requestsBlankAutoCadDocument(instructionText)) {
     priorities.push('mcp_cad-drafting_autocad_new_document');
   }
   if (categories.includes('desktop_observation')) {
-    priorities.push(...buildDesktopObservationPlan(text).map(call => call.name));
+    priorities.push(...buildDesktopObservationPlan(instructionText).map(call => call.name));
   }
-  if (isRecoveredCurrentAppEditingContinuation(text)) {
+  if (
+    isRecoveredCurrentAppEditingContinuation(instructionText)
+    || requiresCurrentAppUiMutation(instructionText)
+  ) {
     priorities.push(
       'desktop_active_window',
       'desktop_ui_snapshot',
@@ -364,16 +430,13 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
       'desktop_open',
     );
   }
-  if (isDirectAutocadOperationsPlayback(text)) {
+  if (isDirectAutocadOperationsPlayback(instructionText)) {
     priorities.push('mcp_cad-drafting_autocad_playback_file');
   }
-  if (isDesktopAiCollaboration(text)) {
-    const wantsCollectedComparison = /(?:\u603b\u7ed3|\u6c47\u603b|\u5bf9\u6bd4|\u90fd\u62ff\u56de\u6765|\u6240\u6709\u56de\u7b54|summari[sz]e|compare|collect\s+all|all\s+answers)/iu.test(text);
+  if (isDesktopAiRequest(instructionText)) {
     priorities.push(
-      'external_ai_collaborate',
-      ...(wantsCollectedComparison ? ['external_ai_collect_answers'] : []),
-      'external_ai_session_status',
-      'external_ai_route_plan',
+      'desktop_ai_ask',
+      'desktop_ai_collect_answer',
       'desktop_ai_list_targets',
       'desktop_ai_discovery_plan',
       'desktop_ai_register_target',
@@ -385,7 +448,7 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
     );
   }
   if (categories.includes('messaging')) {
-    const isFileTransfer = /(?:文件|附件|材料|文书|图纸|file|attachment).*(?:发送|发给|转发|传到|传给|send|forward|transfer)|(?:发送|发给|转发|传到|传给|send|forward|transfer).*(?:文件|附件|材料|文书|图纸|file|attachment)/iu.test(text);
+    const isFileTransfer = /(?:文件|附件|材料|文书|图纸|file|attachment).*(?:发送|发给|转发|传到|传给|send|forward|transfer)|(?:发送|发给|转发|传到|传给|send|forward|transfer).*(?:文件|附件|材料|文书|图纸|file|attachment)/iu.test(instructionText);
     if (isFileTransfer) {
       priorities.push(
         'messaging_list_file_targets',
@@ -394,7 +457,7 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
         'desktop_open',
         'desktop_active_window',
       );
-    } else if (isMessagingRead(text)) {
+    } else if (isMessagingRead(instructionText)) {
       priorities.push(
         'wechat_read_recent_chat',
         'desktop_open',
@@ -403,7 +466,7 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
         'desktop_capture_screen',
         'ocr_screen',
       );
-    } else if (isDirectMessagingSend(text)) {
+    } else if (isDirectMessagingSend(instructionText)) {
       priorities.push(
         'wechat_send_message',
         'desktop_open',
@@ -523,8 +586,8 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
     );
   }
   if (categories.includes('cad_design')) {
-    if (isLocalCadSourceRequest(text)) {
-      const localCadSourceTools = requiresVisibleAutoCadExecution(text)
+    if (isLocalCadSourceRequest(instructionText)) {
+      const localCadSourceTools = requiresVisibleAutoCadExecution(instructionText)
         ? [
             'desktop_list_files',
             'desktop_path_info',
@@ -565,7 +628,7 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
     );
   }
   if (categories.includes('legal')) {
-    if (/现行有效|法源|法条核验|引用核验|法律版本|司法解释版本|current\s+law|authority\s+source|citation\s+verification/i.test(text)) {
+    if (/现行有效|法源|法条核验|引用核验|法律版本|司法解释版本|current\s+law|authority\s+source|citation\s+verification/i.test(instructionText)) {
       priorities.push(
         'legal_authority_source_status',
         'legal_refresh_authoritative_sources',
@@ -574,7 +637,7 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
         'legal_finalize_delivery_package',
       );
     }
-    if (/案件文件夹|材料文件夹|文件夹.*(?:代理词|证据目录|委托书|起诉状|答辩状)|读取.*(?:案件|材料).*文件夹|case\s*folder|legal\s*folder/i.test(text)) {
+    if (/案件文件夹|材料文件夹|文件夹.*(?:代理词|证据目录|委托书|起诉状|答辩状)|读取.*(?:案件|材料).*文件夹|case\s*folder|legal\s*folder/i.test(instructionText)) {
       priorities.push(
         'mcp_legal-casework_legal_case_folder_workflow',
         'legal_analyze_folder_and_draft_argument',
@@ -584,7 +647,7 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
         'url_fetch_logged_in',
       );
     }
-    if (/(?:飞书|微信|企业微信|企微|短信|远程消息|Lumi\s*bot|机器人).*(?:入案|归档|保存|案件|案号|材料|法院|通知|短信链接|通知链接|链接)|(?:入案|归档|保存).*(?:飞书|微信|企业微信|企微|短信|远程消息|案件材料|法院通知|短信链接|通知链接)|(?:court\s+notice|notice\s+link|sms\s+link|message\s+intake)/i.test(text)) {
+    if (/(?:飞书|微信|企业微信|企微|短信|远程消息|Lumi\s*bot|机器人).*(?:入案|归档|保存|案件|案号|材料|法院|通知|短信链接|通知链接|链接)|(?:入案|归档|保存).*(?:飞书|微信|企业微信|企微|短信|远程消息|案件材料|法院通知|短信链接|通知链接)|(?:court\s+notice|notice\s+link|sms\s+link|message\s+intake)/i.test(instructionText)) {
       priorities.push(
         'legal_message_intake_to_case',
         'legal_process_notice_link',
@@ -594,27 +657,27 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
         'legal_import_materials_to_kb',
       );
     }
-    if (/合同审查|合同模板|合同起草|审查合同|起草合同|标书|投标|招标|bid|tender|contract\s+(review|draft)/i.test(text)) {
+    if (/合同审查|合同模板|合同起草|审查合同|起草合同|标书|投标|招标|bid|tender|contract\s+(review|draft)/i.test(instructionText)) {
       priorities.push(
         'legal_review_contract',
         'legal_draft_contract',
         'legal_generate_bid',
       );
     }
-    if (/财产线索|被执行人|执行线索|财产保全|诉前保全|股权穿透|实际控制人|关联企业|失信|限制消费|asset|enforcement|equity|shareholder/i.test(text)) {
+    if (/财产线索|被执行人|执行线索|财产保全|诉前保全|股权穿透|实际控制人|关联企业|失信|限制消费|asset|enforcement|equity|shareholder/i.test(instructionText)) {
       priorities.push(
         'legal_trace_assets',
         'legal_equity_penetration',
         'legal_company_database_lookup',
       );
     }
-    if (/下一步|下.?一步|缺什么|还缺|完成度|闭环|状态|进度|能不能.*(交付|立案|起草)|case\s*(status|progress|next)|what.*next/i.test(text)) {
+    if (/下一步|下.?一步|缺什么|还缺|完成度|闭环|状态|进度|能不能.*(交付|立案|起草)|case\s*(status|progress|next)|what.*next/i.test(instructionText)) {
       priorities.push(
         'legal_case_workflow_status',
         'legal_case_workspace',
       );
     }
-    if (/\u4ee3\u7406\u8bcd|\u8d77\u8bc9\u72b6|\u7b54\u8fa9\u72b6|\u8d28\u8bc1|\u6cd5\u5f8b\u610f\u89c1|\u8bc9\u72b6|\u6587\u4e66|\u8bc9\u8bbc\u6750\u6599|argument|opinion|complaint|defense|pleading/i.test(text)) {
+    if (/\u4ee3\u7406\u8bcd|\u8d77\u8bc9\u72b6|\u7b54\u8fa9\u72b6|\u8d28\u8bc1|\u6cd5\u5f8b\u610f\u89c1|\u8bc9\u72b6|\u6587\u4e66|\u8bc9\u8bbc\u6750\u6599|argument|opinion|complaint|defense|pleading/i.test(instructionText)) {
       priorities.push(
         'legal_analyze_folder_and_draft_argument',
         'legal_generate_argument_or_opinion',
@@ -702,6 +765,23 @@ export function routeToolsForTurn(
 ): ToolRoute {
   const maxTools = Math.max(8, Math.min(options?.maxTools ?? 64, 80));
   const text = String(userText || '').trim();
+  const primaryInstructionText = primaryRoutingInstruction(text);
+  const currentInstructionContract = buildActionContract(primaryInstructionText);
+  const trustedTaskGoal = options?.trustedActionContinuation
+    && options.actionTaskState?.unfinished
+    ? primaryRoutingInstruction(String(options.actionTaskState.goal || ''))
+    : '';
+  // Terse continuation words do not name a capability family. Restore that
+  // family from the server-bound root goal, never from an injected prose
+  // block. A self-contained correction/new action remains authoritative.
+  const restoredTrustedTaskRoute = Boolean(
+    trustedTaskGoal
+    && (!currentInstructionContract.applies || currentInstructionContract.kind === 'none'),
+  );
+  const instructionText = restoredTrustedTaskRoute
+    ? trustedTaskGoal
+    : primaryInstructionText;
+  const hasCurrentTurnAttachments = /(?:^|\r?\n)\s*##\s+Current Turn Attachments\b/i.test(text);
   const availableNames = declarations.map(d => d.function.name);
   const available = new Set(
     availableNames.filter(name => !name.startsWith('mcp_filesystem_')),
@@ -712,48 +792,69 @@ export function routeToolsForTurn(
   const selected = new Set<string>();
   const categories: string[] = [];
   const reasons: string[] = [];
+  if (restoredTrustedTaskRoute) {
+    reasons.push('the exact server-bound durable task restored its original capability family for this terse continuation');
+  }
   const manifestPriorities: string[] = [];
   const runtimeWorkIntent = classifyRuntimeWorkIntent(
-    text,
+    instructionText,
     options?.pendingAssistantOfferContext,
   );
-  const actionContract = buildActionContract(text);
-  const explicitArtifactCreation = isExplicitArtifactCreationText(text);
-  const readOnlyKnowledgeInspection = isReadOnlyKnowledgeBaseInspectionRequest(text);
+  const actionContract = buildActionContract(instructionText);
+  const explicitArtifactCreation = isExplicitArtifactCreationText(instructionText);
+  const readOnlyKnowledgeInspection = isReadOnlyKnowledgeBaseInspectionRequest(instructionText);
   const confirmationOnlyExternalCommit = actionContract.kind === 'messaging_send'
-    && isExternalCommitConfirmationOnlyRequest(text);
-  const recoveredApplicationContinuation = isRecoveredApplicationContinuation(text);
-  const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(text);
+    && isExternalCommitConfirmationOnlyRequest(instructionText);
+  const recoveredApplicationContinuation = isRecoveredApplicationContinuation(instructionText);
+  const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(instructionText);
   const currentAppEdit = recoveredCurrentAppEdit
-    || (actionContract.kind === 'desktop_operation' && requiresCurrentAppUiMutation(text));
-  const requestedMode = detectRequestedOperationMode(text);
+    || (actionContract.kind === 'desktop_operation' && requiresCurrentAppUiMutation(instructionText));
+  const requestedMode = detectRequestedOperationMode(instructionText);
   const compoundModeAction = Boolean(
-    requestedMode && !isPureOperationModeSwitchRequest(text, requestedMode),
+    requestedMode && !isPureOperationModeSwitchRequest(instructionText, requestedMode),
   );
-  const localCadSourceRequest = isLocalCadSourceRequest(text);
-  const localCadImageSourceRequest = isLocalCadImageSourceRequest(text);
-  const cadGeometryExtractionOnly = requiresCadGeometryExtractionOnly(text);
-  const currentAuthoringDocumentInspection = requiresCurrentAuthoringDocumentInspection(text)
+  const directCadCapabilityRequested = ROUTES.some(route => (
+    route.category === 'cad_design' && routeMatches(route, instructionText)
+  )) || ['cad_document', 'design_delivery'].includes(actionContract.kind);
+  const trustedCadContinuation = Boolean(
+    options?.actionTaskState?.unfinished
+    && ROUTES.some(route => (
+      route.category === 'cad_design'
+      && routeMatches(route, String(options.actionTaskState?.goal || ''))
+    )),
+  );
+  const cadCapabilityRequested = directCadCapabilityRequested || trustedCadContinuation;
+  // Attachment metadata may identify a local image/path after the user has
+  // explicitly requested CAD work, but it may never grant CAD capability by
+  // itself.
+  const localCadSourceRequest = cadCapabilityRequested && isLocalCadSourceRequest(text);
+  const localCadImageSourceRequest = cadCapabilityRequested && isLocalCadImageSourceRequest(text);
+  const cadGeometryExtractionOnly = requiresCadGeometryExtractionOnly(instructionText);
+  const currentAuthoringDocumentInspection = (!hasCurrentTurnAttachments
+    && requiresCurrentAuthoringDocumentInspection(instructionText))
     || Boolean(
-      options?.actionTaskState?.unfinished
+      instructionText
+      && options?.actionTaskState?.unfinished
       && requiresCurrentAuthoringDocumentInspection(options.actionTaskState.goal)
       && ['inspect_active_document', 'search_bounded_roots', 'analyze', 'clarify_target'].includes(
         String(options.actionTaskState.taskCapsule?.nextAction || ''),
       ),
     );
+  const trustedCurrentDocumentReadAnchor = currentAuthoringDocumentInspection
+    && hasTrustedCurrentDocumentReadAnchor(options?.actionTaskState);
   const documentOpenAndReview = !currentAuthoringDocumentInspection
     && !localCadSourceRequest
     && actionContract.kind !== 'design_delivery'
-    && isDocumentOpenAndReviewRequest(text);
+    && isDocumentOpenAndReviewRequest(instructionText);
   const desktopObservationToolNames = currentAppEdit
     ? []
-    : strictDesktopObservationToolNames(text, actionContract.kind);
+    : strictDesktopObservationToolNames(instructionText, actionContract.kind);
   const desktopObservationOnly = desktopObservationToolNames.length > 0;
   const desktopLaunchRequest =
     actionContract.kind === 'desktop_operation'
     && Boolean(extractDesktopLaunchTarget(text))
     && !documentOpenAndReview
-    && !isDirectAutocadOperationsPlayback(text);
+    && !isDirectAutocadOperationsPlayback(instructionText);
   const extensionRegistryOnly = actionContract.kind === 'extension_registry';
   const forbiddenToolNames = new Set<string>();
 
@@ -763,7 +864,9 @@ export function routeToolsForTurn(
 
   for (const route of ROUTES) {
     if (currentAppEdit) continue;
-    if (!routeMatches(route, text)) continue;
+    const matchesTrustedCadContinuation = route.category === 'cad_design'
+      && trustedCadContinuation;
+    if (!routeMatches(route, instructionText) && !matchesTrustedCadContinuation) continue;
     if (
       explicitArtifactCreation
       && ['messaging', 'client_surface', 'desktop_launch'].includes(route.category)
@@ -771,21 +874,21 @@ export function routeToolsForTurn(
     if (
       route.category === 'work_takeover'
       && recoveredApplicationContinuation
-      && !hasPersistentTaskCenterEvidence(text)
+      && !hasPersistentTaskCenterEvidence(instructionText)
     ) continue;
     if (
       route.category === 'messaging' &&
-      !hasNamedMessagingSurface(text) &&
+      !hasNamedMessagingSurface(instructionText) &&
       !['messaging_read', 'messaging_send'].includes(actionContract.kind)
     ) continue;
-    if (route.category === 'messaging' && hasNegatedMessagingSendIntent(text) && !hasNamedMessagingSurface(text) && !confirmationOnlyExternalCommit) continue;
-    if (route.category === 'messaging' && isDesktopAiCollaboration(text) && !hasNamedMessagingSurface(text)) continue;
+    if (route.category === 'messaging' && hasNegatedMessagingSendIntent(instructionText) && !hasNamedMessagingSurface(instructionText) && !confirmationOnlyExternalCommit) continue;
+    if (route.category === 'messaging' && isDesktopAiRequest(instructionText) && !hasNamedMessagingSurface(instructionText)) continue;
     if (
       route.category === 'documents' &&
-      isDesktopAiCollaboration(text) &&
-      !/(?:文件|文档|表格|幻灯片|导出|保存|PPT|PDF|DOCX|XLSX|document|file|spreadsheet|presentation|export|save)/iu.test(text)
+      isDesktopAiRequest(instructionText) &&
+      !/(?:文件|文档|表格|幻灯片|导出|保存|PPT|PDF|DOCX|XLSX|document|file|spreadsheet|presentation|export|save)/iu.test(instructionText)
     ) continue;
-    if (route.category === 'documents' && isDirectAutocadOperationsPlayback(text)) continue;
+    if (route.category === 'documents' && isDirectAutocadOperationsPlayback(instructionText)) continue;
     categories.push(route.category);
     reasons.push(route.reason);
 
@@ -860,24 +963,17 @@ export function routeToolsForTurn(
     reasons.push('explicit open request requires the same launch tool used by the deterministic fast path');
   }
 
-  if (actionContract.kind === 'external_ai_collaboration' && !currentAppEdit) {
+  if (actionContract.kind === 'external_ai_request' && !currentAppEdit) {
     for (const name of actionContract.preferredTools) addIfAvailable(selected, available, name);
     if (!categories.includes('external_control')) categories.push('external_control');
-    reasons.push('external AI collaboration uses one persistent route-priority and receipt pipeline');
-    if (available.has('external_ai_collaborate')) {
-      for (const legacy of ['desktop_ai_ask', 'desktop_ai_roundtable', 'desktop_ai_collect_answer']) {
-        selected.delete(legacy);
-        forbiddenToolNames.add(legacy);
-      }
-      reasons.push('deprecated desktop AI submit/read shortcuts are hidden from new plans');
-    }
+    reasons.push('external AI is exposed as one bounded LumiCore tool target');
   }
 
   if (actionContract.kind === 'external_ai_history' && !currentAppEdit) {
     for (const name of actionContract.preferredTools) addIfAvailable(selected, available, name);
     if (!categories.includes('external_control')) categories.push('external_control');
     reasons.push('external AI history uses only the persistent authorization, synchronization, and local query pipeline');
-    for (const submitTool of ['external_ai_collaborate', 'desktop_ai_ask', 'desktop_ai_roundtable']) {
+    for (const submitTool of ['desktop_ai_ask']) {
       selected.delete(submitTool);
       forbiddenToolNames.add(submitTool);
     }
@@ -886,8 +982,13 @@ export function routeToolsForTurn(
 
   if (currentAuthoringDocumentInspection && !currentAppEdit) {
     selected.clear();
+    addIfAvailable(selected, available, 'desktop_running_processes');
+    addIfAvailable(selected, available, 'desktop_active_window');
+    // Discovery/read tools are visible up front so one model turn can finish
+    // after a unique native window observation. The shared target-anchor
+    // preflight still blocks every file call until that exact observation is
+    // present, and then binds reads to the one bounded search result.
     for (const name of [
-      'desktop_active_window',
       'desktop_list_files',
       'search_files',
       'desktop_path_info',
@@ -898,7 +999,13 @@ export function routeToolsForTurn(
       'read_xlsx',
     ]) addIfAvailable(selected, available, name);
     categories.splice(0, categories.length, 'current_document_inspection');
-    reasons.splice(0, reasons.length, 'current authoring-document analysis uses visible app evidence plus read-only document extraction');
+    reasons.splice(
+      0,
+      reasons.length,
+      trustedCurrentDocumentReadAnchor
+        ? 'a server-owned authoring-window anchor permits bounded discovery and read-only document extraction'
+        : 'current-document inspection first observes native background WPS/Office document candidates; shared preflight permits bounded discovery and reading only after one exact candidate is anchored',
+    );
     for (const name of availableNames) {
       if (!selected.has(name)) forbiddenToolNames.add(name);
     }
@@ -974,9 +1081,9 @@ export function routeToolsForTurn(
     }
   }
 
-  if (categories.length === 0 && text) {
+  if (categories.length === 0 && instructionText) {
     const ranked = declarations
-      .map(declaration => ({ name: declaration.function.name, score: scoreDeclaration(text, declaration) }))
+      .map(declaration => ({ name: declaration.function.name, score: scoreDeclaration(instructionText, declaration) }))
       .filter(item => item.score > 0)
       .sort((a, b) => b.score - a.score)
       .slice(0, 16);
@@ -987,7 +1094,7 @@ export function routeToolsForTurn(
     }
   }
 
-  if (!currentAppEdit && isDirectAutocadOperationsPlayback(text)) {
+  if (!currentAppEdit && isDirectAutocadOperationsPlayback(instructionText)) {
     for (const entry of routingManifest) {
       if (entry.lane === 'office') selected.delete(entry.toolName);
     }
@@ -995,12 +1102,12 @@ export function routeToolsForTurn(
     reasons.push('existing AutoCAD operations are played only through MCP/COM');
   }
 
-  if (!currentAppEdit && requestsBlankAutoCadDocument(text)) {
+  if (!currentAppEdit && requestsBlankAutoCadDocument(instructionText)) {
     selected.clear();
     addIfAvailable(selected, available, 'mcp_cad-drafting_autocad_new_document');
     reasons.push('blank AutoCAD document requests use the dedicated COM document tool and never synthesize geometry');
-  } else if (!currentAppEdit && requiresVisibleAutoCadExecution(text)) {
-    if (!requestsExplicitCadFileExport(text)) selected.delete('cad_generate_dxf');
+  } else if (!currentAppEdit && requiresVisibleAutoCadExecution(instructionText)) {
+    if (!requestsExplicitCadFileExport(instructionText)) selected.delete('cad_generate_dxf');
     selected.delete('mcp_cad-drafting_cad_renovation_folder_workflow');
     addIfAvailable(selected, available, 'desktop_list_apps');
     addIfAvailable(selected, available, 'desktop_open');
@@ -1022,7 +1129,7 @@ export function routeToolsForTurn(
     addIfAvailable(selected, available, 'floorplan_extract_geometry');
     addIfAvailable(selected, available, 'ocr_image_file');
     reasons.push('local desktop CAD images must use the built-in desktop discovery and image OCR/geometry path; project-scoped MCP filesystem and shell/base64 fallbacks are excluded');
-    if (requiresVisibleAutoCadExecution(text) && available.has('cad_draw_floorplan_in_autocad')) {
+    if (requiresVisibleAutoCadExecution(instructionText) && available.has('cad_draw_floorplan_in_autocad')) {
       selected.clear();
       addIfAvailable(selected, available, 'cad_draw_floorplan_in_autocad');
       reasons.push('one composite CAD skill owns discovery, calibration, verified geometry, AutoCAD playback, resume, and acceptance for local floor-plan drawing');
@@ -1077,7 +1184,7 @@ export function routeToolsForTurn(
 
   if (
     runtimeWorkIntent === 'none'
-    && isRuntimeCleanupOfferAcceptanceText(text)
+    && isRuntimeCleanupOfferAcceptanceText(instructionText)
   ) {
     // A referential "clean them" utterance has no cancellation authority on
     // its own. Without a validated adjacent offer it may be clarified by the
@@ -1090,6 +1197,9 @@ export function routeToolsForTurn(
   const orderedBeforeHealthGate = applyRoutePriority(
     availableNames.filter(name => selected.has(name)),
     unique([
+      ...(currentAuthoringDocumentInspection
+        ? ['desktop_running_processes', 'desktop_active_window']
+        : []),
       ...priorityToolsForRoute(categories, text),
       ...manifestPriorities,
     ]),
@@ -1196,6 +1306,8 @@ export function formatToolRouteForPrompt(route: ToolRoute): string {
         ? 'This route is a hard allowlist for launching or focusing the exact requested target and verifying the resulting window/process. Do not start unrelated work inside the application.'
         : route.categories.includes('desktop_observation')
         ? 'This route is a hard allowlist for read-only desktop observation. Call only the selected window/directory observation tools. Do not write files or substitute list_directory, search_files, grep_files, filesystem MCP, shell, or Python tools.'
+        : route.categories.includes('current_document_inspection')
+        ? 'For current-document inspection, call desktop_running_processes first and inspect only its supported WPS/Microsoft Office window titles. If exactly one document candidate exists, resolve that exact filename only through bounded Desktop/Documents/Downloads discovery and read only the one matching path. If the background result is empty, untitled, or ambiguous, call desktop_active_window once; continue only when it identifies one exact supported document, otherwise ask the user to focus the intended document. Never guess from process presence, unrelated windows, or multiple candidates.'
         : route.categories.includes('extension_registry')
         ? 'This route is a hard allowlist for the signed extension registry. Do not substitute skill generation, package installation, shell execution, or arbitrary plugin code.'
         : 'This route is a hard allowlist. Do not generate files, prepare CAD operations, open or operate AutoCAD, or substitute any filesystem MCP, shell, or Python fallback.'

@@ -77,8 +77,6 @@ interface MarketplaceSkill {
   requiresApiKey?: boolean; apiKeyEnv?: string; apiKeyUrl?: string;
   requiresSetup?: boolean; setupNote?: string;
   npmPackage?: string; repoUrl?: string;
-  runtime?: 'internal' | 'external'; externalCommand?: string;
-  externalAgentId?: string; externalHealthStatus?: string;
 }
 
 interface InstalledSkill {
@@ -186,13 +184,6 @@ function getSkillAvailability(
       installedSkill,
     };
   }
-  if (skill.runtime === 'external') {
-    return {
-      label: uiMessage('skill-center.external-agent.cacb5d8950', (lang === 'zh') ? 'zh' : 'en'),
-      detail: uiMessage('skill-center.requires-the-matching-cli-on.4f5d160185', (lang === 'zh') ? 'zh' : 'en'),
-      tone: 'cyan',
-    };
-  }
   if (skill.requiresApiKey && skill.apiKeyEnv && !savedKeys[skill.apiKeyEnv]) {
     return {
       label: uiMessage('skill-center.needs-api-key.2e4a04bc58', (lang === 'zh') ? 'zh' : 'en'),
@@ -254,26 +245,10 @@ function getDisplayAvailability(
     };
   }
   if (skill.installed) {
-    if (skill.runtime === 'external' && skill.externalHealthStatus === 'online') {
-      return {
-        label: uiMessage('skill-center.callable.b5f5a3c5c6', (lang === 'zh') ? 'zh' : 'en'),
-        detail: uiMessage('skill-center.in-team-with-a-passing.b0a37c89c7', (lang === 'zh') ? 'zh' : 'en'),
-        tone: 'green',
-      };
-    }
     return {
       label: uiMessage('skill-center.installed-not-connected.7f99bc5091', (lang === 'zh') ? 'zh' : 'en'),
-      detail: skill.runtime === 'external'
-        ? (uiMessage('skill-center.added-to-team-run-a.d549d0bba1', (lang === 'zh') ? 'zh' : 'en'))
-        : (uiMessage('skill-center.installed-but-it-has-not.61d5e176ff', (lang === 'zh') ? 'zh' : 'en')),
+      detail: uiMessage('skill-center.installed-but-it-has-not.61d5e176ff', (lang === 'zh') ? 'zh' : 'en'),
       tone: 'amber',
-    };
-  }
-  if (skill.runtime === 'external') {
-    return {
-      label: uiMessage('skill-center.external-agent.21bea16d09', (lang === 'zh') ? 'zh' : 'en'),
-      detail: uiMessage('skill-center.install-adds-it-to-team.7c572fcec9', (lang === 'zh') ? 'zh' : 'en'),
-      tone: 'cyan',
     };
   }
   if ((skill.requiresApiKey && skill.apiKeyEnv && !savedKeys[skill.apiKeyEnv]) || skill.requiresSetup) {
@@ -325,13 +300,9 @@ function getInstalledSkillAvailability(skill: InstalledSkill, lang: 'en' | 'zh')
   };
 }
 
-function isExternalRuntimeSkill(skill?: Partial<MarketplaceSkill | ExternalResult>): boolean {
-  return Boolean(skill && 'runtime' in skill && skill.runtime === 'external');
-}
-
 function getInstallActionText(skill: Partial<MarketplaceSkill | ExternalResult>, installed: boolean, lang: 'en' | 'zh', t: any): string {
-  if (installed) return isExternalRuntimeSkill(skill) ? (uiMessage('skill-center.in-team.e4e63f3860', (lang === 'zh') ? 'zh' : 'en')) : (t.installedStatus || 'Installed');
-  return isExternalRuntimeSkill(skill) ? (uiMessage('skill-center.add-to-team.43275073fd', (lang === 'zh') ? 'zh' : 'en')) : (t.installBtn || 'Install');
+  if (installed) return t.installedStatus || uiMessage('skill-center.installed.7730eadf9a', lang);
+  return t.installBtn || uiMessage('skill-center.install.8a47f50b4d', lang);
 }
 
 function SkillStatusCallout({ availability, compact = false }: { availability: SkillAvailability; compact?: boolean }) {
@@ -596,7 +567,6 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
 
   const handleInstall = async (skill: MarketplaceSkill | ExternalResult) => {
     if ('installed' in skill && skill.installed) return;
-    const externalRuntime = isExternalRuntimeSkill(skill);
     setInstalling(skill.id);
     try {
       const body: any = { skillId: skill.id, skillName: skill.name, installSource: skill.installSource };
@@ -611,13 +581,7 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
       });
       const data = await res.json();
       if (data.success) {
-        if (externalRuntime || data.agentId) {
-          toast.success(data.message || `"${skill.name}" ${uiMessage('skill-center.added-to-team.27578c1a67', (lang === 'zh') ? 'zh' : 'en')}`);
-          window.dispatchEvent(new CustomEvent('lumi:agents-changed', { detail: { agentId: data.agentId, name: skill.name } }));
-          window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'team', agentId: data.agentId } }));
-        } else {
-          toast.success(`"${skill.name}" ${t.skillInstalledToast}`);
-        }
+        toast.success(data.message || `"${skill.name}" ${t.skillInstalledToast}`);
         if (socket) socket.emit('skill:installed', { skillId: skill.id, name: skill.name });
         fetchInstalled(); fetchMarketplace();
         // Clear external results after successful install
@@ -728,8 +692,8 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
     } catch {}
   };
 
-  // Filter & sort. External-runtime agents live in Team, not the Skill Hall.
-  const skillHallMarketSkills = marketSkills.filter(s => s.runtime !== 'external');
+  // Filter and sort installable LumiCore skills.
+  const skillHallMarketSkills = marketSkills;
   const skillHallCategories = categories.filter(cat => skillHallMarketSkills.some(s => s.category === cat));
   const installedSkillRows = useMemo(() => (
     installedSkills
@@ -1270,7 +1234,7 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
                         ) : installing === skill.id ? (
                           <><RefreshCw size={12} className="mr-1 animate-spin" /> {t.installingStatus || 'Installing...'}</>
                         ) : (
-                          <>{isExternalRuntimeSkill(skill) ? <ExternalLink size={12} className="mr-1" /> : <Download size={12} className="mr-1" />} {getInstallActionText(skill, false, lang, t)}</>
+                          <><Download size={12} className="mr-1" /> {getInstallActionText(skill, false, lang, t)}</>
                         )}
                       </Button>
                     </div>
@@ -1661,20 +1625,6 @@ function SkillDetailPane({ detailSkill, setDetailSkill, t, lang, marketSkills, i
       {marketAvailability && <SkillStatusCallout availability={marketAvailability} />}
       {!marketAvailability && installedAvailability && <SkillStatusCallout availability={installedAvailability} />}
 
-      {mSkill?.runtime === 'external' && (
-        <div className="p-4 bg-cyan-500/5 border border-cyan-500/10 rounded-2xl space-y-2">
-          <span className="flex items-center gap-1.5 text-xs font-bold uppercase text-cyan-400">
-            <ExternalLink size={12} /> External Runtime
-          </span>
-          {mSkill.externalCommand && (
-            <p className="text-sm font-mono text-cyan-300/70 break-all">{mSkill.externalCommand}</p>
-          )}
-          <p className="text-[12px] text-cyan-400/60">
-            {uiMessage('skill-center.this-skill-runs-as-a.86927e998c', (lang === 'zh') ? 'zh' : 'en')}
-          </p>
-        </div>
-      )}
-
       {mSkill?.requiresSetup && mSkill.setupNote && (
         <div className="p-4 bg-purple-500/5 border border-purple-500/10 rounded-2xl">
           <span className="flex items-center gap-1.5 text-xs font-bold uppercase text-purple-400 mb-2">
@@ -1793,7 +1743,7 @@ function SkillDetailPane({ detailSkill, setDetailSkill, t, lang, marketSkills, i
             ) : installing === mSkill.id ? (
               <><RefreshCw size={14} className="mr-1 animate-spin" /> {t.installingStatus || 'Installing...'}</>
             ) : (
-              <>{isExternalRuntimeSkill(mSkill) ? <ExternalLink size={14} className="mr-1" /> : <Download size={14} className="mr-1" />} {getInstallActionText(mSkill, false, lang, t)}</>
+              <><Download size={14} className="mr-1" /> {getInstallActionText(mSkill, false, lang, t)}</>
             )}
           </Button>
         ) : detailSkill ? (

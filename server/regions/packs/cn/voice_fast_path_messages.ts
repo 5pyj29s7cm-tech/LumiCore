@@ -1,4 +1,4 @@
-const INTERNAL_EXECUTION_DETAIL_RE = /(?:No successful (?:current-turn )?tool execution|No worker agent accepted|Worker (?:agent )?(?:failed|blocked|succeeded)|Coordinating worker agents|这一轮没有.{0,40}(?:真实)?工具执行|我还不能说正在执行|先真正调用对应工具|\bsubTask(?:Id)?\b|\bworkerAgentId\b|\baggregatedOutput\b|\bprerequisite\s+sub[_-]|\bsub[_-]\d+\b|\ballowedTools\b|\bappTarget\b|\bUI\s*evidence\b|work product guard|action contract|Required completion evidence|Preferred tools|Verification tools|tool route|tool protocol|Maximum tool call iterations|<\/?function_calls?>|<invoke\b)/i;
+const INTERNAL_EXECUTION_DETAIL_RE = /(?:No successful (?:current-turn )?tool execution|这一轮没有.{0,40}(?:真实)?工具执行|我还不能说正在执行|先真正调用对应工具|\ballowedTools\b|\bappTarget\b|\bUI\s*evidence\b|work product guard|action contract|Required completion evidence|Preferred tools|Verification tools|tool route|tool protocol|Maximum tool call iterations|<\/?function_calls?>|<invoke\b)/i;
 
 export function isInternalExecutionDetail(value: string): boolean {
   return INTERNAL_EXECUTION_DETAIL_RE.test(String(value || ''));
@@ -35,7 +35,6 @@ export function formatCnToolFailureDetail(error: string): string {
 const CLIENT_ACTION_LABELS: Readonly<Record<string, string>> = {
   open_chat: '聊天界面',
   open_command_center: '指挥中心',
-  open_team: '指挥中心',
   open_nexus: 'OS 核心',
   open_skills: '技能大厅',
   show_knowledge_base: '知识库',
@@ -200,6 +199,7 @@ export const CN_TASK_EXECUTION_MESSAGES = {
 } as const;
 
 export const CN_RESULT_GROUNDING_MESSAGES = {
+  desktopObservationLabel: '桌面状态读取',
   priorDiagnosticUnsupported: '刚才没有可核实的客户端自检工具回执。我不能把延迟解释成“在跑自检”；只能确认那一轮没有记录到客户端自检。',
   clientStateProtocolBlocked: '我还没有读取到当前客户端状态，不能把内部工具请求当作回答。',
   toolProtocolBlocked: '这轮工具请求没有被执行，内部协议文本已拦截。',

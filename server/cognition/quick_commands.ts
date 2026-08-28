@@ -1033,24 +1033,6 @@ const patterns: QuickPattern[] = [
           lines.push('**记忆**: 暂时无法读取');
         }
 
-        // Agent team
-        try {
-          const db = readDB();
-          const agents = ((db as any).agents || []).filter((agent: any) => {
-            if (domain === 'work') {
-              return (agent.domain || 'work') === 'work' && (agent.orgId || '') === orgId;
-            }
-            return agent.domain !== 'work'
-              && !agent.orgId
-              && (!agent.ownerUid || agent.ownerUid === userId);
-          });
-          const internal = agents.filter((a: any) => a.runtime !== 'external');
-          const external = agents.filter((a: any) => a.runtime === 'external');
-          lines.push(`**团队**: ${agents.length} 个 Agent (${internal.length} 内置, ${external.length} 外部)`);
-        } catch {
-          lines.push('**团队**: 暂时无法读取');
-        }
-
         // Workflow count
         try {
           const wfs = listWorkflows(userId, undefined, { domain, orgId });

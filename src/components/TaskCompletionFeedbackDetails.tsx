@@ -38,19 +38,87 @@ function statusTone(status: TaskCompletionFeedback['status']): string {
   return 'border-amber-200/16 bg-amber-300/[0.06] text-amber-100/65';
 }
 
+function statusTextTone(status: TaskCompletionFeedback['status']): string {
+  if (status === 'completed') return 'text-emerald-100/78';
+  if (status === 'blocked' || status === 'failed') return 'text-rose-100/80';
+  if (status === 'cancelled') return 'text-white/48';
+  if (status === 'working') return 'text-cyan-100/78';
+  return 'text-amber-100/65';
+}
+
+// i18n-allow: Multilingual execution-state recognition; not user-visible copy.
+const CONFIRMATION_DETAIL_RE = /(?:confirm|confirmation|approval|approve|authorize|authorization|waiting[_\s-]*confirmation|确认|批准|授权|待确认|等待确认)/i;
+
+function feedbackNeedsConfirmation(feedback: TaskCompletionFeedback): boolean {
+  return [...feedback.blockers, ...feedback.incomplete, ...feedback.nextSteps]
+    .some(item => CONFIRMATION_DETAIL_RE.test(item));
+}
+
+function ChatTaskCompletionFeedback({
+  feedback,
+  locale,
+  className,
+}: {
+  feedback: TaskCompletionFeedback;
+  locale: Locale;
+  className: string;
+}) {
+  const copy = taskCompletionFeedbackCopy(locale);
+  const waitingForConfirmation = feedbackNeedsConfirmation(feedback);
+  const attention = waitingForConfirmation
+    ? copy.confirmationHint
+    : feedback.status === 'working'
+      ? copy.workingHint
+      : copy.attentionHint;
+  const SummaryIcon = feedback.status === 'completed'
+    ? CheckCircle2
+    : feedback.status === 'blocked' || feedback.status === 'failed'
+      ? ShieldAlert
+      : CircleDashed;
+  return (
+    <div
+      data-task-completion-feedback={feedback.status}
+      data-task-feedback-presentation="chat-attention"
+      className={`flex min-h-8 items-center gap-2 rounded-lg border border-white/[0.07] bg-black/10 px-2.5 py-1.5 text-[10px] text-white/52 ${className}`}
+    >
+      <SummaryIcon
+        size={12}
+        className={feedback.status === 'blocked' || feedback.status === 'failed'
+          ? 'shrink-0 text-rose-200/75'
+          : 'shrink-0 text-amber-100/65'}
+      />
+      <span className={`shrink-0 font-semibold ${statusTextTone(feedback.status)}`}>
+        {waitingForConfirmation ? copy.awaitingConfirmation : copy.status[feedback.status]}
+      </span>
+      <span data-task-feedback-attention className="min-w-0 flex-1 truncate text-white/48">
+        {attention}
+      </span>
+    </div>
+  );
+}
+
 export function TaskCompletionFeedbackDetails({
   feedback,
   locale,
   compact = false,
+  variant = 'default',
   className = '',
 }: {
   feedback?: TaskCompletionFeedback | null;
   locale: Locale;
   compact?: boolean;
+  variant?: 'default' | 'chat';
   className?: string;
 }) {
   const normalized = normalizeTaskCompletionFeedback(feedback);
   if (!normalized) return null;
+  if (variant === 'chat') {
+    // A normal completed/cancelled task should read like an ordinary assistant
+    // reply. Keep the full audit evidence in the task center and reserve an
+    // inline disclosure for states that actually need the user's attention.
+    if (normalized.status === 'completed' || normalized.status === 'cancelled') return null;
+    return <ChatTaskCompletionFeedback feedback={normalized} locale={locale} className={className} />;
+  }
   const copy = taskCompletionFeedbackCopy(locale);
   const sections: Array<{ key: FeedbackSectionKey; items: string[] }> = [
     { key: 'completed', items: normalized.completed },

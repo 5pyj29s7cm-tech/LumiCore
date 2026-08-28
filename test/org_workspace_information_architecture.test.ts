@@ -33,18 +33,14 @@ describe('organization workspace information architecture', () => {
     expect(designHub).toContain("new Set<DesignView>(['space', 'interior', 'architecture'])");
   });
 
-  it('combines template review with the marketplace and hides duplicate dashboard destinations from navigation', () => {
+  it('hides duplicate dashboard destinations from organization navigation', () => {
     const orgHub = source('src/components/org/OrgHub.tsx');
-    const templateWorkspace = source('src/components/org/AgentTemplateWorkspace.tsx');
 
-    for (const id of ['kb', 'chat', 'templates', 'members']) {
+    for (const id of ['kb', 'chat', 'members']) {
       expect(orgHub).toContain(`id: '${id}'`);
     }
-    expect(orgHub.match(/showInNav: false/g)?.length).toBeGreaterThanOrEqual(5);
-    expect(orgHub).toContain("case 'templates': return <AgentTemplateWorkspace />");
-    expect(orgHub).toContain('initialTab="review"');
-    expect(templateWorkspace).toContain('<TemplateMarketplace />');
-    expect(templateWorkspace).toContain('<TemplateReviewQueue />');
+    expect(orgHub.match(/showInNav: false/g)?.length).toBeGreaterThanOrEqual(4);
+    expect(orgHub).not.toContain("id: 'templates'");
   });
 
   it('combines organization settings with branch connection without duplicating the branch navigation item', () => {

@@ -267,9 +267,9 @@ describe('Lumi requirement matrix pressure', () => {
     expect(handoff.blocked).toBe(false);
   });
 
-  it('keeps desktop AI delegation generic instead of tied to WorkBuddy and Codex only', () => {
+  it('keeps one desktop AI target bounded as a LumiCore tool', () => {
     const result = evaluateTurn({
-      text: '把这个问题发给 WorkBuddy、Codex、ChatGPT、Claude、Gemini 和其它桌面 AI，把回答都拿回来总结',
+      text: '把这个问题发给 ChatGPT，再把可见回答拿回来',
       userId: 'requirement_matrix_desktop_ai',
     });
 
@@ -277,18 +277,11 @@ describe('Lumi requirement matrix pressure', () => {
     expect(result.selection.lane).toBe('external_tool');
     expect(result.route?.categories).toContain('external_control');
     expect(result.route?.toolNames.slice(0, 8)).toEqual(expect.arrayContaining([
-      'external_ai_collaborate',
-      'external_ai_collect_answers',
-      'external_ai_session_status',
-      'external_ai_route_plan',
+      'desktop_ai_ask',
+      'desktop_ai_collect_answer',
       'desktop_ai_list_targets',
     ]));
-    expect(result.route?.toolNames).not.toEqual(expect.arrayContaining([
-      'desktop_ai_ask',
-      'desktop_ai_roundtable',
-      'desktop_ai_collect_answer',
-    ]));
-    expect(result.route?.toolNames.indexOf('external_ai_collaborate')).toBeLessThan(
+    expect(result.route?.toolNames.indexOf('desktop_ai_ask')).toBeLessThan(
       result.route?.toolNames.indexOf('computer_use') ?? Number.POSITIVE_INFINITY,
     );
   });

@@ -136,7 +136,7 @@ describe('complete personal-client surface contract', () => {
     expect(desktop).toContain('getPersonalClientSurfaceByAction(action)');
     expect(desktop).toContain('appLauncherOpen: isSearchOpen');
     expect(desktop).toContain('notificationsOpen: isNotificationPanelOpen');
-    expect(desktop).toContain('memoryAvatarOpen: memoryLabOpen');
+    expect(desktop).toContain('memoryAvatarOpen: memoryLabOpen || sanctuaryOpen');
     expect(desktop).toContain('activeSection: settingsSection');
   });
 
@@ -250,7 +250,6 @@ describe('complete personal-client surface contract', () => {
       'open personality lab',
       'open token dashboard',
       'open voice forge',
-      'open agent ecosystem',
     ]) {
       expect(hasClientActionOnlyIntent(command), command).toBe(true);
     }

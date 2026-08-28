@@ -2,11 +2,17 @@ import crypto from 'node:crypto';
 import type { ToolPolicy } from '../personality/types';
 import type { ToolExecutionRecord } from '../tools/types';
 import {
-  buildActionContract,
+  buildActionEvidenceContract,
   hasCoreActionEvidence,
   requiresCurrentAppUiMutation,
 } from './action_contract';
 import type { TaskCapsuleV1 } from '../conversation/task_capsule';
+import {
+  parseNestedJson,
+  toolRecordHasTerminalPayload,
+  toolRecordTerminalPayload,
+  toolRecordTerminalText,
+} from '../tools/receipt_payload';
 
 export type ConversationTaskStatus =
   | 'created'
@@ -279,29 +285,19 @@ export function normalizeConversationTaskReceipt(value: unknown): ConversationTa
 }
 
 function parseResult(value: unknown): unknown {
-  let parsed = value;
-  for (let depth = 0; depth < 3 && typeof parsed === 'string' && parsed.trim(); depth += 1) {
-    try {
-      parsed = JSON.parse(parsed);
-    } catch {
-      break;
-    }
-  }
-  return parsed;
+  return parseNestedJson(value);
 }
 
 function structuredRecordPayload(record: ToolExecutionRecord): unknown {
-  const receipt = record.receipt !== undefined ? parseResult(record.receipt) : undefined;
-  if (receipt && typeof receipt === 'object') return receipt;
-  const result = parseResult(record.result);
-  return result && typeof result === 'object' ? result : null;
+  const payload = toolRecordTerminalPayload(record);
+  return payload && typeof payload === 'object' ? payload : null;
 }
 
 export function toolRecordSucceeded(record: ToolExecutionRecord): boolean {
   if (!record?.name || compact(record.error, 600)) return false;
   if (record.terminalVerification?.status === 'failed') return false;
-  const result = compact(record.result, 4000);
-  if (!result) return false;
+  if (!toolRecordHasTerminalPayload(record)) return false;
+  const result = compact(toolRecordTerminalText(record), 4000);
   const structuredPayload = structuredRecordPayload(record);
   if (structuredPayload && !Array.isArray(structuredPayload)) {
     const payload = structuredPayload as Record<string, any>;
@@ -573,7 +569,7 @@ export function taskCompletionFromReceipts(
   taskCapsule?: TaskCapsuleV1 | null,
 ): { complete: boolean; blocker: string; records: ToolExecutionRecord[] } {
   const records = coalesceToolExecutionRecords(taskReceiptsToRecords(receipts));
-  const contract = buildActionContract(goal);
+  const contract = buildActionEvidenceContract(goal);
   // Legacy desktop builds emitted this terminal adapter name before the
   // verified `wps_create_document_with_text` receipt was introduced. Keep
   // already-persisted tasks resumable without weakening generic UI evidence.

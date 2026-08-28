@@ -172,7 +172,7 @@ export function AuditLogViewer() {
               <FilterInput
                 label={uiMessage('audit-log-viewer.resource-type.9c659dd26c')}
                 value={filters.resourceType}
-                placeholder="agent_template"
+                placeholder="document"
                 onChange={value => setFilters(prev => ({ ...prev, resourceType: value }))}
               />
               <button

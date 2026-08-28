@@ -4,7 +4,6 @@ import {
   hasExplicitNoToolInstruction,
   traceToolIntentDecision,
 } from '../server/cognition/tool_intent';
-import { shouldDelegateWorkInBackground } from '../server/agents/background_delegation';
 import { guardCompletionClaims } from '../server/work_product/completion_guard';
 
 describe('Lumi client action routing', () => {
@@ -68,27 +67,6 @@ describe('Lumi client action routing', () => {
   it('does not treat external app chat surfaces as Lumi client navigation', () => {
     expect(hasClientActionOnlyIntent('\u6253\u5f00\u5fae\u4fe1\u770b\u770b\u6211\u548c\u963f\u9646\u6700\u8fd1\u7684\u804a\u5929\u5185\u5bb9')).toBe(false);
     expect(hasClientActionOnlyIntent('open Chrome and log in')).toBe(false);
-  });
-
-  it('keeps client surface continuations in the foreground instead of background agents', () => {
-    const decision = shouldDelegateWorkInBackground({
-      text: '查',
-      category: 'analysis',
-      complexity: 'moderate',
-      allowToolUse: true,
-      clientActionOnly: false,
-      clientSurfaceRequest: true,
-      selfRepair: false,
-      sanctuary: false,
-      directDesktop: false,
-      prefersSequentialWorkflow: false,
-      availableAgentCount: 3,
-    });
-
-    expect(decision).toEqual({
-      shouldDelegate: false,
-      reason: 'client_surface_foreground',
-    });
   });
 
   it('blocks claims that a client surface opened without tool evidence', () => {

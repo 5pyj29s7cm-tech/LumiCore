@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from 'crypto';
 import { readDB, writeDB } from '../../db_layer';
 import { getMember, listDepartments, listMembers, logAudit } from './db';
-import { authorizeOrganizationResource } from './resource_acl';
 
 export type OrganizationPositionStatus = 'active' | 'archived';
 export type OrganizationWorkApprovalMode = 'none' | 'admin';
@@ -15,7 +14,7 @@ export type OrganizationWorkItemStatus =
   | 'cancelled';
 export type OrganizationWorkApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired';
 export type OrganizationWorkHandoffStatus = 'pending' | 'accepted' | 'declined' | 'cancelled';
-export type OrganizationWorkHandoffType = 'transfer' | 'human_takeover' | 'return_to_agent';
+export type OrganizationWorkHandoffType = 'transfer' | 'human_takeover';
 
 export interface OrganizationPosition {
   id: string;
@@ -25,7 +24,6 @@ export interface OrganizationPosition {
   description: string;
   skillTags: string[];
   memberIds: string[];
-  agentIds: string[];
   isManager: boolean;
   status: OrganizationPositionStatus;
   createdBy: string;
@@ -45,7 +43,6 @@ export interface OrganizationWorkRoutingRule {
   departmentId: string | null;
   positionId: string | null;
   memberId: string | null;
-  agentIds: string[];
   approvalMode: OrganizationWorkApprovalMode;
   requireApprovalForExternalCommit: boolean;
   createdBy: string;
@@ -72,7 +69,6 @@ export interface OrganizationWorkItem {
   positionId: string | null;
   assignedMemberId: string | null;
   collaboratorMemberIds: string[];
-  assignedAgentIds: string[];
   skillTags: string[];
   routingRuleId: string | null;
   approvalId: string | null;
@@ -102,7 +98,6 @@ export interface OrganizationWorkHandoffTarget {
   departmentId: string | null;
   positionId: string | null;
   memberId: string | null;
-  agentIds: string[];
 }
 
 export interface OrganizationWorkHandoff {
@@ -140,7 +135,6 @@ export interface RouteOrganizationWorkInput {
   targetPositionId?: string;
   targetMemberId?: string;
   targetMemberIds?: string[];
-  targetAgentIds?: string[];
 }
 
 export interface RouteOrganizationWorkResult {
@@ -175,12 +169,43 @@ function digest(value: unknown): string {
   return createHash('sha256').update(String(value || ''), 'utf8').digest('hex');
 }
 
+function retainFields(record: any, fields: readonly string[]): void {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return;
+  const allowed = new Set(fields);
+  for (const key of Object.keys(record)) if (!allowed.has(key)) delete record[key];
+}
+
 function ensureTables(db: any): void {
   if (!Array.isArray(db.orgPositions)) db.orgPositions = [];
   if (!Array.isArray(db.orgWorkRoutingRules)) db.orgWorkRoutingRules = [];
   if (!Array.isArray(db.orgWorkItems)) db.orgWorkItems = [];
   if (!Array.isArray(db.orgWorkApprovals)) db.orgWorkApprovals = [];
   if (!Array.isArray(db.orgWorkHandoffs)) db.orgWorkHandoffs = [];
+  for (const position of db.orgPositions) retainFields(position, [
+    'id', 'orgId', 'departmentId', 'name', 'description', 'skillTags', 'memberIds',
+    'isManager', 'status', 'createdBy', 'createdAt', 'updatedAt',
+  ]);
+  for (const rule of db.orgWorkRoutingRules) retainFields(rule, [
+    'id', 'orgId', 'name', 'enabled', 'priority', 'platforms', 'keywords', 'skillTags',
+    'departmentId', 'positionId', 'memberId', 'approvalMode', 'requireApprovalForExternalCommit',
+    'createdBy', 'revision', 'createdAt', 'updatedAt',
+  ]);
+  for (const item of db.orgWorkItems) retainFields(item, [
+    'id', 'orgId', 'idempotencyKey', 'requestId', 'source', 'requesterUserId',
+    'conversationId', 'taskId', 'textDigest', 'intentKind', 'operation', 'sideEffectClass',
+    'status', 'departmentId', 'positionId', 'assignedMemberId', 'collaboratorMemberIds',
+    'skillTags', 'routingRuleId', 'approvalId', 'humanOwnerUserId', 'revision', 'lastBlocker',
+    'createdAt', 'updatedAt',
+  ]);
+  for (const handoff of db.orgWorkHandoffs) {
+    retainFields(handoff, [
+      'id', 'orgId', 'workItemId', 'workItemRevision', 'type', 'status', 'actorUserId',
+      'from', 'to', 'reason', 'decidedBy', 'createdAt', 'decidedAt', 'updatedAt',
+    ]);
+    retainFields(handoff.from, ['departmentId', 'positionId', 'memberId']);
+    retainFields(handoff.to, ['departmentId', 'positionId', 'memberId']);
+    if (handoff.type !== 'human_takeover') handoff.type = 'transfer';
+  }
 }
 
 function assertActiveMember(orgId: string, userId: string, writable = false) {
@@ -201,16 +226,6 @@ function assertAdministrator(orgId: string, userId: string): void {
   }
 }
 
-function organizationAgents(db: any, orgId: string): any[] {
-  return (db.agents || []).filter((agent: any) => (
-    String(agent.orgId || '') === orgId
-    && (agent.domain || 'work') === 'work'
-    && !['offline', 'terminated'].includes(String(agent.status || 'active'))
-    && agent.isFrozen !== true
-    && (agent.runtime !== 'external' || agent.healthStatus === 'online')
-  ));
-}
-
 function validateDepartment(orgId: string, departmentId?: string | null): string | null {
   const id = normalizeText(departmentId, 180);
   if (!id) return null;
@@ -223,18 +238,17 @@ function validateDepartment(orgId: string, departmentId?: string | null): string
 function validateMember(orgId: string, memberId?: string | null): string | null {
   const id = normalizeText(memberId, 180);
   if (!id) return null;
-  assertActiveMember(orgId, id, true);
-  return id;
-}
-
-function validateAgents(db: any, orgId: string, agentIds: unknown): string[] {
-  const ids = normalizeIds(agentIds);
-  if (ids.length === 0) return [];
-  const allowed = new Set(organizationAgents(db, orgId).map(agent => String(agent.id)));
-  if (ids.some(id => !allowed.has(id))) {
-    throw new Error('One or more target agents are unavailable or outside this organization');
+  const membership = getMember(orgId, id);
+  if (!membership) {
+    throw new Error('The target member does not belong to this organization');
   }
-  return ids;
+  if (membership.status !== 'active') {
+    throw new Error('The target organization member is not active');
+  }
+  if (membership.role === 'viewer') {
+    throw new Error('The target organization member has read-only access');
+  }
+  return id;
 }
 
 function getPositionFromDb(db: any, orgId: string, positionId?: string | null): OrganizationPosition | null {
@@ -257,7 +271,7 @@ export function listOrganizationPositions(orgId: string, includeArchived = false
   ensureTables(db);
   return (db.orgPositions as OrganizationPosition[])
     .filter(position => position.orgId === orgId && (includeArchived || position.status === 'active'))
-    .map(position => ({ ...position, skillTags: [...position.skillTags], memberIds: [...position.memberIds], agentIds: [...position.agentIds] }));
+    .map(position => ({ ...position, skillTags: [...position.skillTags], memberIds: [...position.memberIds] }));
 }
 
 export function createOrganizationPosition(input: {
@@ -268,7 +282,6 @@ export function createOrganizationPosition(input: {
   description?: string;
   skillTags?: string[];
   memberIds?: string[];
-  agentIds?: string[];
   isManager?: boolean;
 }): OrganizationPosition {
   assertAdministrator(input.orgId, input.actorUserId);
@@ -279,7 +292,6 @@ export function createOrganizationPosition(input: {
   const departmentId = validateDepartment(input.orgId, input.departmentId);
   const memberIds = normalizeIds(input.memberIds);
   for (const memberId of memberIds) validateMember(input.orgId, memberId);
-  const agentIds = validateAgents(db, input.orgId, input.agentIds);
   if ((db.orgPositions as OrganizationPosition[]).some(position => (
     position.orgId === input.orgId
     && position.status === 'active'
@@ -297,7 +309,6 @@ export function createOrganizationPosition(input: {
     description: normalizeText(input.description, 500),
     skillTags: normalizeList(input.skillTags),
     memberIds,
-    agentIds,
     isManager: input.isManager === true,
     status: 'active',
     createdBy: input.actorUserId,
@@ -312,7 +323,7 @@ export function createOrganizationPosition(input: {
     action: 'work.position.create',
     resourceType: 'organization_position',
     resourceId: position.id,
-    details: { departmentId, memberIds, agentIds, skillTags: position.skillTags, isManager: position.isManager },
+    details: { departmentId, memberIds, skillTags: position.skillTags, isManager: position.isManager },
   });
   return position;
 }
@@ -326,7 +337,6 @@ export function updateOrganizationPosition(input: {
   departmentId?: string | null;
   skillTags?: string[];
   memberIds?: string[];
-  agentIds?: string[];
   isManager?: boolean;
   status?: OrganizationPositionStatus;
 }): OrganizationPosition | null {
@@ -348,7 +358,6 @@ export function updateOrganizationPosition(input: {
     for (const memberId of memberIds) validateMember(input.orgId, memberId);
     position.memberIds = memberIds;
   }
-  if (input.agentIds !== undefined) position.agentIds = validateAgents(db, input.orgId, input.agentIds);
   if (input.isManager !== undefined) position.isManager = input.isManager === true;
   if (input.status !== undefined) position.status = input.status === 'archived' ? 'archived' : 'active';
   position.updatedAt = now();
@@ -359,7 +368,7 @@ export function updateOrganizationPosition(input: {
     action: 'work.position.update',
     resourceType: 'organization_position',
     resourceId: position.id,
-    details: { status: position.status, departmentId: position.departmentId, memberIds: position.memberIds, agentIds: position.agentIds },
+    details: { status: position.status, departmentId: position.departmentId, memberIds: position.memberIds },
   });
   return position;
 }
@@ -370,7 +379,7 @@ export function listOrganizationWorkRoutingRules(orgId: string, includeDisabled 
   return (db.orgWorkRoutingRules as OrganizationWorkRoutingRule[])
     .filter(rule => rule.orgId === orgId && (includeDisabled || rule.enabled))
     .sort((a, b) => b.priority - a.priority || b.updatedAt.localeCompare(a.updatedAt))
-    .map(rule => ({ ...rule, platforms: [...rule.platforms], keywords: [...rule.keywords], skillTags: [...rule.skillTags], agentIds: [...rule.agentIds] }));
+    .map(rule => ({ ...rule, platforms: [...rule.platforms], keywords: [...rule.keywords], skillTags: [...rule.skillTags] }));
 }
 
 export function createOrganizationWorkRoutingRule(input: {
@@ -385,7 +394,6 @@ export function createOrganizationWorkRoutingRule(input: {
   departmentId?: string | null;
   positionId?: string | null;
   memberId?: string | null;
-  agentIds?: string[];
   approvalMode?: OrganizationWorkApprovalMode;
   requireApprovalForExternalCommit?: boolean;
 }): OrganizationWorkRoutingRule {
@@ -400,9 +408,8 @@ export function createOrganizationWorkRoutingRule(input: {
     throw new Error('The target position does not belong to the target department');
   }
   const memberId = validateMember(input.orgId, input.memberId);
-  const agentIds = validateAgents(db, input.orgId, input.agentIds);
-  if (!departmentId && !position && !memberId && agentIds.length === 0) {
-    throw new Error('A routing rule must target a department, position, member, or agent');
+  if (!departmentId && !position && !memberId) {
+    throw new Error('A routing rule must target a department, position, or member');
   }
   const timestamp = now();
   const rule: OrganizationWorkRoutingRule = {
@@ -417,7 +424,6 @@ export function createOrganizationWorkRoutingRule(input: {
     departmentId,
     positionId: position?.id || null,
     memberId,
-    agentIds,
     approvalMode: input.approvalMode === 'admin' ? 'admin' : 'none',
     requireApprovalForExternalCommit: input.requireApprovalForExternalCommit === true,
     createdBy: input.actorUserId,
@@ -433,7 +439,7 @@ export function createOrganizationWorkRoutingRule(input: {
     action: 'work.routing_rule.create',
     resourceType: 'organization_work_routing_rule',
     resourceId: rule.id,
-    details: { priority: rule.priority, departmentId, positionId: rule.positionId, memberId, agentIds, approvalMode: rule.approvalMode },
+    details: { priority: rule.priority, departmentId, positionId: rule.positionId, memberId, approvalMode: rule.approvalMode },
   });
   return rule;
 }
@@ -467,11 +473,10 @@ export function updateOrganizationWorkRoutingRule(input: {
     throw new Error('The target position does not belong to the target department');
   }
   if (next.memberId !== undefined) rule.memberId = validateMember(input.orgId, next.memberId);
-  if (next.agentIds !== undefined) rule.agentIds = validateAgents(db, input.orgId, next.agentIds);
   if (next.approvalMode !== undefined) rule.approvalMode = next.approvalMode === 'admin' ? 'admin' : 'none';
   if (next.requireApprovalForExternalCommit !== undefined) rule.requireApprovalForExternalCommit = next.requireApprovalForExternalCommit === true;
-  if (!rule.departmentId && !rule.positionId && !rule.memberId && rule.agentIds.length === 0) {
-    throw new Error('A routing rule must target a department, position, member, or agent');
+  if (!rule.departmentId && !rule.positionId && !rule.memberId) {
+    throw new Error('A routing rule must target a department, position, or member');
   }
   rule.revision += 1;
   rule.updatedAt = now();
@@ -487,18 +492,9 @@ export function updateOrganizationWorkRoutingRule(input: {
   return rule;
 }
 
-function inferSkillTags(text: string, requested: unknown, agents: any[]): string[] {
+function inferSkillTags(requested: unknown): string[] {
   const explicit = normalizeList(requested, 50);
-  if (explicit.length > 0) return explicit;
-  const haystack = normalizeText(text, 8000).toLowerCase();
-  const candidates = new Set<string>();
-  for (const agent of agents) {
-    for (const tag of [...(agent.skillTags || []), ...(agent.knowledgeDomains || [])]) {
-      const normalized = normalizeText(tag, 120).toLowerCase();
-      if (normalized && haystack.includes(normalized)) candidates.add(normalized);
-    }
-  }
-  return Array.from(candidates).slice(0, 20);
+  return explicit;
 }
 
 function ruleScore(rule: OrganizationWorkRoutingRule, text: string, platform: string, skills: string[]): number | null {
@@ -511,7 +507,7 @@ function ruleScore(rule: OrganizationWorkRoutingRule, text: string, platform: st
   if (rule.keywords.length > 0 && matchedKeywords.length === 0) return null;
   if (rule.skillTags.length > 0 && matchedSkills.length === 0) return null;
   return rule.priority * 1000 + matchedKeywords.length * 100 + matchedSkills.length * 50
-    + (rule.memberId ? 25 : 0) + rule.agentIds.length * 10 + (rule.positionId ? 5 : 0);
+    + (rule.memberId ? 25 : 0) + (rule.positionId ? 5 : 0);
 }
 
 function selectRule(
@@ -524,44 +520,6 @@ function selectRule(
     .map(rule => ({ rule, score: ruleScore(rule, text, platform, skills) }))
     .filter((candidate): candidate is { rule: OrganizationWorkRoutingRule; score: number } => candidate.score !== null)
     .sort((a, b) => b.score - a.score || b.rule.updatedAt.localeCompare(a.rule.updatedAt))[0]?.rule || null;
-}
-
-function chooseAgents(input: {
-  db: any;
-  orgId: string;
-  requesterUserId: string;
-  text: string;
-  skillTags: string[];
-  explicitAgentIds?: string[];
-  position?: OrganizationPosition | null;
-  rule?: OrganizationWorkRoutingRule | null;
-}): string[] {
-  const agents = organizationAgents(input.db, input.orgId).filter(agent => authorizeOrganizationResource({
-    orgId: input.orgId,
-    actorUserId: input.requesterUserId,
-    resourceType: 'agent',
-    resourceId: String(agent.id),
-    permission: 'execute',
-    ownerUserId: String(agent.ownerUid || agent.userId || ''),
-  }).allowed);
-  const allowedIds = new Set(agents.map(agent => String(agent.id)));
-  const explicit = normalizeIds(input.explicitAgentIds);
-  if (explicit.length > 0) {
-    const validated = validateAgents(input.db, input.orgId, explicit);
-    if (validated.some(id => !allowedIds.has(id))) {
-      throw new Error('The requester is not allowed to execute one or more target organization agents');
-    }
-    return validated;
-  }
-  const constrained = normalizeIds(input.rule?.agentIds?.length ? input.rule.agentIds : input.position?.agentIds);
-  if (constrained.length > 0) return validateAgents(input.db, input.orgId, constrained).filter(id => allowedIds.has(id));
-  const text = input.text.toLowerCase();
-  const scored = agents.map(agent => {
-    const tags = normalizeList([...(agent.skillTags || []), ...(agent.knowledgeDomains || []), agent.category]);
-    const matches = tags.filter(tag => input.skillTags.includes(tag) || text.includes(tag)).length;
-    return { id: String(agent.id), score: matches * 100 + (agent.status === 'idle' ? 5 : 0) };
-  }).filter(candidate => candidate.score > 0).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
-  return scored.slice(0, 3).map(candidate => candidate.id);
 }
 
 function createApproval(db: any, workItem: OrganizationWorkItem): OrganizationWorkApproval {
@@ -578,7 +536,6 @@ function createApproval(db: any, workItem: OrganizationWorkItem): OrganizationWo
       positionId: workItem.positionId,
       assignedMemberId: workItem.assignedMemberId,
       collaboratorMemberIds: workItem.collaboratorMemberIds,
-      assignedAgentIds: workItem.assignedAgentIds,
       textDigest: workItem.textDigest,
       sideEffectClass: workItem.sideEffectClass,
     })),
@@ -672,11 +629,10 @@ export function routeOrganizationWork(input: RouteOrganizationWorkInput): RouteO
     return { workItem, approval, routingRule, created: false };
   }
 
-  const agents = organizationAgents(db, input.orgId);
-  const skillTags = inferSkillTags(input.text, input.skillTags, agents);
+  const skillTags = inferSkillTags(input.skillTags);
   const rules = (db.orgWorkRoutingRules as OrganizationWorkRoutingRule[]).filter(rule => rule.orgId === input.orgId);
   const explicitTarget = Boolean(
-    input.targetDepartmentId || input.targetPositionId || input.targetMemberId || input.targetMemberIds?.length || input.targetAgentIds?.length,
+    input.targetDepartmentId || input.targetPositionId || input.targetMemberId || input.targetMemberIds?.length,
   );
   const routingRule = explicitTarget ? null : selectRule(rules, input.text, input.platform || source, skillTags);
   const position = validatePosition(db, input.orgId, input.targetPositionId || routingRule?.positionId);
@@ -705,16 +661,6 @@ export function routeOrganizationWork(input: RouteOrganizationWorkInput): RouteO
     ...(position?.memberIds || []),
     ...departmentMemberIds,
   ].filter(memberId => memberId && memberId !== assignedMemberId)));
-  const assignedAgentIds = chooseAgents({
-    db,
-    orgId: input.orgId,
-    requesterUserId: input.requesterUserId,
-    text: input.text,
-    skillTags: normalizeList([...skillTags, ...(routingRule?.skillTags || []), ...(position?.skillTags || [])]),
-    explicitAgentIds: input.targetAgentIds,
-    position,
-    rule: routingRule,
-  });
   const timestamp = now();
   const workItem: OrganizationWorkItem = {
     id: randomUUID(),
@@ -729,16 +675,15 @@ export function routeOrganizationWork(input: RouteOrganizationWorkInput): RouteO
     intentKind: normalizeText(input.intentKind, 80),
     operation: normalizeText(input.operation, 40),
     sideEffectClass: normalizeText(input.sideEffectClass, 40),
-    status: assignedMemberId && assignedAgentIds.length === 0 ? 'waiting_human' : 'assigned',
+    status: assignedMemberId ? 'waiting_human' : 'assigned',
     departmentId,
     positionId: position?.id || null,
     assignedMemberId,
     collaboratorMemberIds,
-    assignedAgentIds,
     skillTags: normalizeList([...skillTags, ...(routingRule?.skillTags || []), ...(position?.skillTags || [])]),
     routingRuleId: routingRule?.id || null,
     approvalId: null,
-    humanOwnerUserId: assignedMemberId && assignedAgentIds.length === 0 ? assignedMemberId : null,
+    humanOwnerUserId: assignedMemberId || null,
     revision: 1,
     lastBlocker: '',
     createdAt: timestamp,
@@ -765,7 +710,6 @@ export function routeOrganizationWork(input: RouteOrganizationWorkInput): RouteO
       positionId: workItem.positionId,
       assignedMemberId,
       collaboratorMemberIds,
-      assignedAgentIds,
       routingRuleId: workItem.routingRuleId,
       approvalId: workItem.approvalId,
       approvalBypassed: approvalPolicyMatched && requesterIsAdministrator,
@@ -795,7 +739,6 @@ export function listOrganizationWorkItems(orgId: string, filters: {
     .map(item => ({
       ...item,
       collaboratorMemberIds: [...(item.collaboratorMemberIds || [])],
-      assignedAgentIds: [...item.assignedAgentIds],
       skillTags: [...item.skillTags],
     }));
 }
@@ -849,7 +792,7 @@ export function setOrganizationWorkItemExecutionStatus(input: {
     throw new Error('The work item is still waiting for organization approval');
   }
   if (item.status === 'waiting_human' && input.status === 'executing') {
-    throw new Error('The work item is owned by a human and cannot be started by an agent');
+    throw new Error('The work item is owned by a human and cannot be started by LumiCore');
   }
   item.status = input.status;
   item.lastBlocker = input.status === 'blocked' ? normalizeText(input.blocker, 500) : '';
@@ -931,7 +874,6 @@ function handoffTarget(item: OrganizationWorkItem): OrganizationWorkHandoffTarge
     departmentId: item.departmentId,
     positionId: item.positionId,
     memberId: item.humanOwnerUserId || item.assignedMemberId,
-    agentIds: [...item.assignedAgentIds],
   };
 }
 
@@ -943,7 +885,6 @@ export function requestOrganizationWorkHandoff(input: {
   targetDepartmentId?: string | null;
   targetPositionId?: string | null;
   targetMemberId?: string | null;
-  targetAgentIds?: string[];
   reason: string;
 }): OrganizationWorkHandoff | null {
   assertActiveMember(input.orgId, input.actorUserId, true);
@@ -962,10 +903,8 @@ export function requestOrganizationWorkHandoff(input: {
   const position = validatePosition(db, input.orgId, input.targetPositionId);
   const departmentId = validateDepartment(input.orgId, input.targetDepartmentId ?? position?.departmentId);
   const memberId = validateMember(input.orgId, input.targetMemberId);
-  const agentIds = validateAgents(db, input.orgId, input.targetAgentIds);
   if (type === 'human_takeover' && !memberId) throw new Error('Human takeover requires a target member');
-  if (type === 'return_to_agent' && agentIds.length === 0) throw new Error('Returning work to agents requires at least one target agent');
-  if (!departmentId && !position && !memberId && agentIds.length === 0) throw new Error('A handoff target is required');
+  if (!departmentId && !position && !memberId) throw new Error('A handoff target is required');
   const timestamp = now();
   const handoff: OrganizationWorkHandoff = {
     id: randomUUID(),
@@ -976,7 +915,7 @@ export function requestOrganizationWorkHandoff(input: {
     status: 'pending',
     actorUserId: input.actorUserId,
     from: handoffTarget(item),
-    to: { departmentId, positionId: position?.id || null, memberId, agentIds },
+    to: { departmentId, positionId: position?.id || null, memberId },
     reason: normalizeText(input.reason, 500),
     decidedBy: null,
     createdAt: timestamp,
@@ -1034,10 +973,7 @@ export function decideOrganizationWorkHandoff(input: {
     item.positionId = handoff.to.positionId;
     item.assignedMemberId = handoff.to.memberId;
     item.collaboratorMemberIds = [];
-    item.assignedAgentIds = [...handoff.to.agentIds];
-    item.humanOwnerUserId = handoff.type === 'human_takeover' || (handoff.to.memberId && handoff.to.agentIds.length === 0)
-      ? handoff.to.memberId
-      : null;
+    item.humanOwnerUserId = handoff.to.memberId || null;
     item.status = item.humanOwnerUserId ? 'waiting_human' : 'assigned';
     item.revision += 1;
     item.lastBlocker = '';
@@ -1054,10 +990,9 @@ export function decideOrganizationWorkHandoff(input: {
     item.positionId = handoff.from.positionId;
     item.assignedMemberId = handoff.from.memberId;
     item.collaboratorMemberIds = [];
-    item.assignedAgentIds = [...handoff.from.agentIds];
-    item.humanOwnerUserId = null;
-    item.status = item.assignedAgentIds.length > 0 ? 'assigned' : item.assignedMemberId ? 'waiting_human' : 'blocked';
-    item.lastBlocker = item.status === 'blocked' ? 'The requested handoff was declined and no executor remains assigned' : '';
+    item.humanOwnerUserId = item.assignedMemberId || null;
+    item.status = item.assignedMemberId ? 'waiting_human' : 'assigned';
+    item.lastBlocker = '';
   }
   item.updatedAt = timestamp;
   writeDB(db);
@@ -1078,11 +1013,7 @@ export function listOrganizationWorkHandoffs(orgId: string, workItemId?: string)
   return (db.orgWorkHandoffs as OrganizationWorkHandoff[])
     .filter(item => item.orgId === orgId && (!workItemId || item.workItemId === workItemId))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    .map(item => ({
-      ...item,
-      from: { ...item.from, agentIds: [...item.from.agentIds] },
-      to: { ...item.to, agentIds: [...item.to.agentIds] },
-    }));
+    .map(item => ({ ...item, from: { ...item.from }, to: { ...item.to } }));
 }
 
 export function resolveMentionedOrganizationMemberIds(input: {

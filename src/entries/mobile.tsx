@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { motion } from 'motion/react';
 import { Rocket } from 'lucide-react';
 import { Toaster } from 'sonner';
@@ -8,15 +7,11 @@ import { ProactiveNotifications } from '../components/ProactiveNotifications';
 import { LoginModal, LoginRequired } from '../core/components/Auth';
 import { MobilePlatform } from '../platforms/mobile/MobilePlatform';
 import { SkillHall } from '../components/SkillHall';
-import { LumiEcosystem } from '../components/LumiEcosystem';
-import { AgentChatPage } from '../components/AgentChatPage';
 import { Profile } from '../components/Profile';
 import { useAppShell } from './useAppShell';
 
 export function MobileApp() {
   const shell = useAppShell();
-  const [selectedAgent, setSelectedAgent] = useState<any>(null);
-
   if (shell.loading) {
     return (
       <div className="flex items-center justify-center h-screen bg-black">
@@ -32,10 +27,8 @@ export function MobileApp() {
     switch (tab) {
       case 'generate':
         return !shell.user ? <LoginRequired t={shell.t} onLogin={shell.handleLogin} /> : <SkillHall t={shell.t} lang={shell.lang} initialTab="generate" />;
-      case 'ecosystem':
-        return selectedAgent
-          ? <AgentChatPage t={shell.t} user={shell.user} agent={selectedAgent} isOpen={true} onClose={() => setSelectedAgent(null)} />
-          : <div className="space-y-8"><LumiEcosystem t={shell.t} onChatAgent={(agent: any) => setSelectedAgent(agent)} /><SkillHall t={shell.t} lang={shell.lang} /></div>;
+      case 'skills':
+        return <SkillHall t={shell.t} lang={shell.lang} />;
       case 'profile':
         return !shell.user ? <LoginRequired t={shell.t} onLogin={shell.handleLogin} /> : <Profile t={shell.t} />;
       default:

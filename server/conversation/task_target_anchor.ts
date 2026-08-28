@@ -9,6 +9,7 @@ export type TaskTargetAnchorSource =
   | 'tool_receipt'
   | 'user_correction'
   | 'active_window'
+  | 'running_window'
   | 'document_interface'
   | 'unknown';
 
@@ -36,6 +37,10 @@ export interface TaskTargetEvidenceRecord {
 export interface TaskTargetAnchorProjectionV1 {
   target: TaskTargetAnchorV1;
   allowedSearchRoots: string[];
+  /** A trusted foreground or unique background authoring window matches the anchored object. */
+  windowVerified: boolean;
+  /** The anchored object has one concrete filesystem path. */
+  pathResolved: boolean;
   analysisReady: boolean;
   nextAction: 'analyze' | 'inspect_active_document' | 'search_bounded_roots' | 'clarify_target';
   clarification: string;
@@ -88,9 +93,13 @@ const FILE_TASK_RE = /(?:分析|读取|读一下|查看|检查|总结|提取|处
 const FILE_ACTION_RE = /(?:分析|读取|读一下|查看|检查|总结|提取|处理|打开|资料)|\b(?:analy[sz]e|read|inspect|review|summari[sz]e|extract|process|open)\b/iu;
 // i18n-allow: multilingual current-document reference recognition; not user-visible copy.
 const CURRENT_DOCUMENT_RE = /(?:当前|现在|正在|刚才|刚刚)(?:\s*(?:打开|前台|活动))?(?:\s*的)?(?:\s*(?:这份|这个))?(?:\s*(?:文件|文档|PPT|演示文稿|表格|资料))|(?:当前|活动|前台)窗口|\b(?:current|currently\s+open|active|foreground|opened)\b.{0,24}\b(?:file|document|presentation|sheet|window)\b/iu;
+// i18n-allow: deictic current-document input recognition; not user-visible copy.
+const IMPLICIT_CURRENT_DOCUMENT_RE = /(?:(?:(?:当前|现在|正在|刚才|刚刚).{0,12}打开(?:着|的)?|打开(?:着|的)).{0,8}(?:这份|这个|该)?(?:文件|文档|PPT|演示文稿|表格|资料)|\b(?:currently?\s+open|opened|active|foreground)\b.{0,24}\b(?:file|document|presentation|sheet)\b)/iu;
 // i18n-allow: WPS product/process recognition; not user-visible copy.
 const WPS_RE = /(?:^|\b)(?:WPS|wps\.exe|wpp\.exe|et\.exe)(?:\b|$)|金山(?:文字|表格|演示|WPS)/iu;
+const AUTHORING_APPLICATION_RE = /(?:^|\b)(?:WPS|wps\.exe|wpp\.exe|et\.exe|Microsoft\s+Word|WINWORD\.EXE|Microsoft\s+Excel|EXCEL\.EXE|Microsoft\s+PowerPoint|POWERPNT\.EXE)(?:\b|$)|金山(?:文字|表格|演示|WPS)/iu;
 const ACTIVE_WINDOW_TOOLS = new Set(['desktop_active_window', 'get_active_window_info']);
+const RUNNING_PROCESS_TOOLS = new Set(['desktop_running_processes', 'get_running_processes']);
 const DISCOVERY_TOOLS = new Set(['search_files', 'desktop_list_files', 'list_directory']);
 const DOCUMENT_INTERFACE_RE = /^(?:extract_document_text|read_file|read_files_batch|read_pdf|read_docx|read_xlsx|pdf_to_text|ocr_image_file|(?:desktop_|filesystem_|mcp_[^_]+_)?read_(?:text_)?file|wps_.*(?:read|extract|inspect|analy)|document_.*(?:read|extract|inspect|analy))/i;
 const CURRENT_DOCUMENT_INTERFACE_RE = /^wps_.*(?:read|extract|inspect|analy)/i;
@@ -355,6 +364,13 @@ export function prefersCurrentWpsDocument(text: string, applicationHint = ''): b
   return WPS_RE.test(clean) && CURRENT_DOCUMENT_RE.test(clean);
 }
 
+export function prefersCurrentAuthoringDocument(text: string, applicationHint = ''): boolean {
+  const task = `${primaryTaskText(text)} ${capsuleTaskText(text)}`;
+  const clean = `${task} ${compact(applicationHint, 160)}`;
+  return (CURRENT_DOCUMENT_RE.test(task) || IMPLICIT_CURRENT_DOCUMENT_RE.test(task))
+    && (AUTHORING_APPLICATION_RE.test(clean) || IMPLICIT_CURRENT_DOCUMENT_RE.test(task));
+}
+
 function pathMentionedByUser(candidate: string, taskText: string): boolean {
   const target = normalizedIdentity(candidate);
   if (!target) return false;
@@ -457,7 +473,7 @@ function recordSucceeded(record: TaskTargetEvidenceRecord): boolean {
 }
 
 interface EvidenceCandidate extends TaskTargetAnchorV1 {
-  kind: 'active_window' | 'document_interface' | 'tool_receipt' | 'discovery';
+  kind: 'active_window' | 'running_window' | 'document_interface' | 'tool_receipt' | 'discovery';
 }
 
 function activeWindowCandidate(record: TaskTargetEvidenceRecord): EvidenceCandidate | null {
@@ -483,6 +499,100 @@ function activeWindowCandidate(record: TaskTargetEvidenceRecord): EvidenceCandid
     source: 'active_window',
     kind: 'active_window',
   };
+}
+
+type SupportedAuthoringApplication = 'WPS' | 'Microsoft Word' | 'Microsoft Excel' | 'Microsoft PowerPoint';
+
+function supportedAuthoringApplication(processName: string): SupportedAuthoringApplication | '' {
+  const executable = compact(processName, 160).split(/[\\/]/).pop()?.trim() || '';
+  if (/^(?:wps|wpp|et|wpsoffice)(?:\.exe)?$/i.test(executable) || /^WPS Office$/i.test(executable)) return 'WPS';
+  if (/^(?:winword(?:\.exe)?|Microsoft Word)$/i.test(executable)) return 'Microsoft Word';
+  if (/^(?:excel(?:\.exe)?|Microsoft Excel)$/i.test(executable)) return 'Microsoft Excel';
+  if (/^(?:powerpnt(?:\.exe)?|Microsoft PowerPoint)$/i.test(executable)) return 'Microsoft PowerPoint';
+  return '';
+}
+
+function requestedAuthoringApplication(taskText: string, applicationHint = ''): SupportedAuthoringApplication | 'any' {
+  const task = `${primaryTaskText(taskText)} ${capsuleTaskText(taskText)} ${compact(applicationHint, 160)}`;
+  if (WPS_RE.test(task)) return 'WPS';
+  if (/(?:Microsoft\s+)?PowerPoint|POWERPNT\.EXE/iu.test(task)) return 'Microsoft PowerPoint';
+  if (/(?:Microsoft\s+)?Excel|EXCEL\.EXE/iu.test(task)) return 'Microsoft Excel';
+  if (/(?:Microsoft\s+)?Word|WINWORD\.EXE/iu.test(task)) return 'Microsoft Word';
+  return 'any';
+}
+
+function candidateMatchesRequestedAuthoringApplication(
+  candidate: EvidenceCandidate,
+  taskText: string,
+  applicationHint = '',
+): boolean {
+  const actual = supportedAuthoringApplication(candidate.application);
+  if (!actual) return false;
+  const requested = requestedAuthoringApplication(taskText, applicationHint);
+  return requested === 'any' || actual === requested;
+}
+
+function runningAuthoringWindowCandidates(
+  record: TaskTargetEvidenceRecord,
+  taskText: string,
+  applicationHint = '',
+): EvidenceCandidate[] {
+  const name = compact(record.name, 160).toLowerCase();
+  if (
+    !RUNNING_PROCESS_TOOLS.has(name)
+    || !recordSucceeded(record)
+    || record.terminalVerification?.status !== 'verified'
+  ) return [];
+  const parsed = parseNestedJson(record.receipt ?? record.result);
+  const items = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === 'object'
+      ? (['processes', 'items', 'results']
+          .map(key => (parsed as Record<string, unknown>)[key])
+          .find(Array.isArray) as unknown[] | undefined) || []
+      : [];
+  const candidates: EvidenceCandidate[] = [];
+  const seen = new Set<string>();
+  for (const rawItem of items.slice(0, 100)) {
+    if (!rawItem || typeof rawItem !== 'object' || Array.isArray(rawItem)) continue;
+    const item = rawItem as Record<string, unknown>;
+    const processName = firstString(item, ['name', ...APPLICATION_KEYS], 160);
+    const application = supportedAuthoringApplication(processName);
+    if (!application) continue;
+    const requested = requestedAuthoringApplication(taskText, applicationHint);
+    if (requested !== 'any' && requested !== application) continue;
+    const rawTitles = Array.isArray(item.window_titles)
+      ? item.window_titles
+      : Array.isArray(item.windowTitles)
+        ? item.windowTitles
+        : [];
+    const titles = [
+      ...rawTitles,
+      firstString(item, ['window_title', 'windowTitle'], 300),
+    ];
+    for (const rawTitle of titles) {
+      if (typeof rawTitle !== 'string') continue;
+      const window = compact(rawTitle, 300);
+      const object = displayableFileName(window.match(FILE_NAME_RE)?.[1]);
+      if (!window || !object) continue;
+      const identity = normalizedIdentity(`${application}|${object}`);
+      if (!identity || seen.has(identity)) continue;
+      seen.add(identity);
+      candidates.push({
+        label: object,
+        application,
+        window,
+        object,
+        path: '',
+        location: '',
+        status: 'confirmed',
+        source: 'running_window',
+        kind: 'running_window',
+      });
+      if (candidates.length >= 16) return candidates;
+    }
+  }
+  return candidates;
 }
 
 function documentCandidate(record: TaskTargetEvidenceRecord): EvidenceCandidate | null {
@@ -627,7 +737,7 @@ function capsuleTarget(taskText: string): Partial<TaskTargetAnchorV1> | null {
     location: field('targetLocation') || field('location'),
     status: ['unresolved', 'candidate', 'confirmed', 'rejected'].includes(status) ? status : undefined,
     source: [
-      'durable_state', 'tool_receipt', 'user_correction', 'active_window', 'document_interface', 'unknown',
+      'durable_state', 'tool_receipt', 'user_correction', 'active_window', 'running_window', 'document_interface', 'unknown',
     ].includes(source) ? source : undefined,
   };
 }
@@ -645,26 +755,71 @@ export function buildTaskTargetAnchorProjection(
   const previous = input.previousTarget || capsuleTarget(taskText);
   const userFile = explicitFile(taskText);
   const currentWps = prefersCurrentWpsDocument(taskText, input.applicationHint || previous?.application || '');
-  const latestActive = [...activeCandidates].reverse().find(candidate => (
-    !currentWps || WPS_RE.test(`${candidate.application} ${candidate.window}`)
-  ));
+  const currentAuthoringDocument = prefersCurrentAuthoringDocument(
+    taskText,
+    input.applicationHint || previous?.application || '',
+  );
+  const verifiedActiveCandidates = evidence
+    .filter(record => record.terminalVerification?.status === 'verified')
+    .map(activeWindowCandidate)
+    .filter((item): item is EvidenceCandidate => Boolean(item));
+  const latestActive = currentAuthoringDocument
+    ? [...verifiedActiveCandidates].reverse().find(candidate => (
+        Boolean(candidate.object)
+        && candidateMatchesRequestedAuthoringApplication(
+          candidate,
+          taskText,
+          input.applicationHint || previous?.application || '',
+        )
+      ))
+    : [...activeCandidates].reverse().find(candidate => (
+        !currentWps || WPS_RE.test(`${candidate.application} ${candidate.window}`)
+      ));
+  const backgroundCandidates = evidence
+    .flatMap(record => runningAuthoringWindowCandidates(
+      record,
+      taskText,
+      input.applicationHint || previous?.application || '',
+    ))
+    .filter((candidate, index, all) => all.findIndex(item => (
+      normalizedIdentity(`${item.application}|${item.object}`)
+      === normalizedIdentity(`${candidate.application}|${candidate.object}`)
+    )) === index);
+  // The actual foreground authoring document is authoritative when present.
+  // Background enumeration is a fallback and must yield exactly one distinct
+  // supported document; choosing from two visible documents would guess.
+  const backgroundCandidate = !latestActive && backgroundCandidates.length === 1
+    ? backgroundCandidates[0]
+    : null;
+  const currentWindowCandidate = latestActive || backgroundCandidate;
+  const ambiguousBackgroundCandidates = Boolean(
+    currentAuthoringDocument
+    && !latestActive
+    && backgroundCandidates.length > 1,
+  );
   const preferredName = displayableFileName(userFile)
     || displayableFileName(previous?.object || previous?.label || previous?.path)
-    || displayableFileName(latestActive?.object || latestActive?.label)
+    || displayableFileName(currentWindowCandidate?.object || currentWindowCandidate?.label)
     || displayableFileName(safePaths.at(-1));
   const preferredReference = userFile
     || previous?.path
     || previous?.object
     || previous?.label
-    || latestActive?.path
-    || latestActive?.object
-    || latestActive?.label
+    || currentWindowCandidate?.path
+    || currentWindowCandidate?.object
+    || currentWindowCandidate?.label
     || safePaths.at(-1)
     || preferredName;
   const discoveryCandidates = evidence
     .map(record => discoveryCandidate(record, taskText, preferredName, preferredReference, sourcePaths))
     .filter((item): item is EvidenceCandidate => Boolean(item));
-  const latestDiscovery = discoveryCandidates.at(-1);
+  const distinctDiscoveryCandidates = discoveryCandidates.filter((candidate, index, all) => all.findIndex(item => (
+    canonicalPathIdentity(item.path) === canonicalPathIdentity(candidate.path)
+  )) === index);
+  const latestDiscovery = distinctDiscoveryCandidates.length === 1
+    ? distinctDiscoveryCandidates[0]
+    : undefined;
+  const ambiguousDiscoveryCandidates = distinctDiscoveryCandidates.length > 1;
   const latestDocument = [...documentCandidates].reverse().find(candidate => (
     !preferredName
     || !candidate.object
@@ -685,26 +840,56 @@ export function buildTaskTargetAnchorProjection(
     : priorCorrection
       ? mergeTarget(priorCorrection)
       : null;
-  const activeMatchesCorrection = Boolean(
+  const windowMatchesCorrection = Boolean(
     authoritativeCorrection
-    && latestActive?.object
+    && currentWindowCandidate?.object
     && targetReferenceMatches(
-      latestActive.path || latestActive.object,
+      currentWindowCandidate.path || currentWindowCandidate.object,
       authoritativeCorrection.path || authoritativeCorrection.object || authoritativeCorrection.label,
     ),
   );
   if (authoritativeCorrection) {
-    const matchingReceipt = latestDiscovery || latestDocument || (activeMatchesCorrection ? latestActive : null);
+    const matchingReceipt = latestDiscovery || latestDocument || (windowMatchesCorrection ? currentWindowCandidate : null);
     target = matchingReceipt
       ? mergeTarget(matchingReceipt, authoritativeCorrection)
       : authoritativeCorrection;
     target.application = target.application || (currentWps ? 'WPS' : '');
-    if (activeMatchesCorrection && latestActive) target.window = latestActive.window;
-  } else if (currentWps && latestActive) {
-    target = mergeTarget(latestDiscovery || latestDocument || latestActive, latestActive);
-    target.application = 'WPS';
-    target.window = latestActive.window || target.window;
-    target.source = latestDiscovery?.source || latestDocument?.source || 'active_window';
+    if (windowMatchesCorrection && currentWindowCandidate) target.window = currentWindowCandidate.window;
+  } else if (currentAuthoringDocument && currentWindowCandidate) {
+    const durableExactTarget = previous
+      && concreteTargetPath(previous.path || '')
+      && targetReferenceMatches(
+        previous.path || previous.object || previous.label || '',
+        currentWindowCandidate.object,
+      )
+      ? previous
+      : null;
+    target = mergeTarget(
+      latestDiscovery || latestDocument || durableExactTarget || currentWindowCandidate,
+      currentWindowCandidate,
+    );
+    target.application = currentWindowCandidate.application;
+    target.window = currentWindowCandidate.window || target.window;
+    target.source = latestDiscovery?.source || latestDocument?.source || currentWindowCandidate.source;
+  } else if (
+    currentAuthoringDocument
+    && previous
+    && concreteTargetPath(previous.path || '')
+    && !isUnconfirmedRuntimeCandidate(previous.path || previous.label || '', taskText)
+  ) {
+    target = mergeTarget(previous);
+  } else if (currentAuthoringDocument) {
+    const requestedApplication = requestedAuthoringApplication(
+      taskText,
+      input.applicationHint || previous?.application || '',
+    );
+    target = mergeTarget({
+      application: requestedApplication === 'any'
+        ? input.applicationHint || previous?.application || ''
+        : requestedApplication,
+      status: 'unresolved',
+      source: 'unknown',
+    });
   } else if (latestDiscovery || latestDocument) {
     target = mergeTarget(latestDiscovery || latestDocument!, previous);
   } else if (previous && !isUnconfirmedRuntimeCandidate(previous.path || previous.label || '', taskText)) {
@@ -733,7 +918,7 @@ export function buildTaskTargetAnchorProjection(
     ignoredCandidates.push(target.path || target.object || target.label);
     target = mergeTarget({
       application: target.application || (currentWps ? 'WPS' : ''),
-      window: latestActive?.window || '',
+      window: currentWindowCandidate?.window || '',
       status: 'unresolved',
       source: 'unknown',
     });
@@ -743,21 +928,44 @@ export function buildTaskTargetAnchorProjection(
   if (!finalName && target.status !== 'rejected' && isFileTargetTask(taskText)) {
     target.status = 'unresolved';
   }
-  const activeDocumentUsable = currentWps
-    && target.application === 'WPS'
-    && Boolean(target.window)
-    && target.source === 'active_window';
+  // Window provenance and path provenance are independent. Once bounded
+  // discovery resolves a path, target.source legitimately changes to the
+  // discovery receipt; that must not erase the already verified native
+  // window. Conversely, a concrete path alone cannot prove that it is the
+  // document currently open in the requested authoring application.
+  const windowVerified = Boolean(
+    currentAuthoringDocument
+    && currentWindowCandidate
+    && supportedAuthoringApplication(currentWindowCandidate.application)
+    && supportedAuthoringApplication(target.application) === supportedAuthoringApplication(currentWindowCandidate.application)
+    && targetReferenceMatches(
+      target.path || target.object || target.label,
+      currentWindowCandidate.object || currentWindowCandidate.label,
+    )
+    && !ambiguousDiscoveryCandidates
+    && !(currentWindowCandidate.source === 'running_window' && ambiguousBackgroundCandidates)
+    && target.status !== 'rejected',
+  );
+  const pathResolved = Boolean(
+    target.status !== 'rejected'
+    && concreteTargetPath(target.path)
+    && !ambiguousDiscoveryCandidates,
+  );
   const analysisReady = target.status !== 'rejected'
     && Boolean(finalName)
-    && Boolean(concreteTargetPath(target.path) || activeDocumentUsable || target.source === 'document_interface');
-  const hasActiveWps = activeCandidates.some(candidate => WPS_RE.test(`${candidate.application} ${candidate.window}`));
+    && !ambiguousDiscoveryCandidates
+    && Boolean(pathResolved || target.source === 'document_interface');
   const nextAction: TaskTargetAnchorProjectionV1['nextAction'] = analysisReady
     ? 'analyze'
-    : currentWps && !hasActiveWps
-      ? 'inspect_active_document'
-      : finalName
+    : windowVerified
+      ? 'search_bounded_roots'
+      : finalName && target.source === 'user_correction'
         ? 'search_bounded_roots'
-        : 'clarify_target';
+      : currentAuthoringDocument
+        ? 'inspect_active_document'
+        : finalName
+          ? 'search_bounded_roots'
+          : 'clarify_target';
   // This is returned as structured preflight data; channels may localize it later.
   const clarification = nextAction === 'inspect_active_document'
     ? CN_TASK_TARGET_ANCHOR_MESSAGES.inspectActiveDocument
@@ -768,6 +976,8 @@ export function buildTaskTargetAnchorProjection(
   return {
     target: { ...target, label: finalName || target.label, object: finalName || target.object },
     allowedSearchRoots: allowedTaskSearchRoots(taskText, sourcePaths),
+    windowVerified,
+    pathResolved,
     analysisReady,
     nextAction,
     clarification,
@@ -817,6 +1027,15 @@ function targetMatchesAnchor(candidate: string, anchor: TaskTargetAnchorV1): boo
     .some(value => targetReferenceMatches(candidate, value));
 }
 
+function targetKeepsAnchoredObjectIdentity(candidate: string, anchor: TaskTargetAnchorV1): boolean {
+  if (!candidate) return true;
+  const anchoredReference = anchor.path || anchor.object || anchor.label;
+  return Boolean(
+    anchoredReference
+    && fileNamesMatchByPathFlavor(candidate, anchoredReference),
+  );
+}
+
 function blocked(
   code: NonNullable<TaskTargetToolCallGuardResult['code']>,
   reason: string,
@@ -857,9 +1076,30 @@ export function guardTaskTargetToolCall(input: {
   });
   const target = callTarget(args);
   const currentWps = prefersCurrentWpsDocument(input.taskText, projection.target.application);
-  const hasActiveWps = (input.toolRecords || [])
+  const currentAuthoringDocument = prefersCurrentAuthoringDocument(
+    input.taskText,
+    projection.target.application,
+  );
+  const hasVerifiedActiveAuthoringDocument = (input.toolRecords || [])
+    .filter(record => record.terminalVerification?.status === 'verified')
     .map(activeWindowCandidate)
-    .some(candidate => Boolean(candidate && WPS_RE.test(`${candidate.application} ${candidate.window}`)));
+    .some(candidate => Boolean(
+      candidate
+      && candidate.object
+      && candidateMatchesRequestedAuthoringApplication(
+        candidate,
+        input.taskText,
+        projection.target.application,
+      ),
+    ));
+  const hasVerifiedAuthoringDocumentWindow = projection.windowVerified;
+  const hasTrustedCurrentAuthoringPath = Boolean(
+    currentAuthoringDocument
+    && projection.windowVerified
+    && projection.pathResolved
+    && projection.analysisReady
+    && concreteTargetPath(projection.target.path),
+  );
 
   if (input.forbidUnstructuredExecution || UNSTRUCTURED_FILE_ACCESS_TOOL_RE.test(toolName)) {
     return blocked(
@@ -871,10 +1111,10 @@ export function guardTaskTargetToolCall(input: {
   }
 
   if (DISCOVERY_TOOLS.has(toolName.toLowerCase())) {
-    if (currentWps && !hasActiveWps) {
+    if (currentAuthoringDocument && !hasVerifiedAuthoringDocumentWindow) {
       return blocked(
         'active_document_required',
-        `Target anchor blocked ${toolName}: observe desktop_active_window before searching for a file described as the current WPS document.`,
+        `Target anchor blocked ${toolName}: verify exactly one supported WPS/Office document window with desktop_running_processes or desktop_active_window before searching for a file described as the current document.`,
         projection,
         projection.clarification,
       );
@@ -900,7 +1140,7 @@ export function guardTaskTargetToolCall(input: {
     return { allowed: true, reason: '', anchor: projection };
   }
 
-  if (toolName === 'desktop_capture_screen' && currentWps && !hasActiveWps) {
+  if (toolName === 'desktop_capture_screen' && currentWps && !hasVerifiedActiveAuthoringDocument) {
     return blocked(
       'active_document_required',
       'Observe desktop_active_window and verify the current WPS document before capturing or interpreting its screen.',
@@ -909,14 +1149,61 @@ export function guardTaskTargetToolCall(input: {
     );
   }
 
+  if (toolName === 'desktop_path_info' && currentAuthoringDocument) {
+    const anchoredPath = projection.target.path;
+    if (!concreteTargetPath(anchoredPath)) {
+      return blocked(
+        'target_unresolved',
+        'Path verification is blocked until bounded discovery resolves the one anchored WPS/Office document to an exact path.',
+        projection,
+        projection.clarification,
+      );
+    }
+    if (target && !targetMatchesAnchor(target, projection.target) && !(
+      hasTrustedCurrentAuthoringPath
+      && targetKeepsAnchoredObjectIdentity(target, projection.target)
+    )) {
+      return blocked(
+        'target_mismatch',
+        `Path verification target does not match the anchored file ${projection.target.object}: ${target}`,
+        projection,
+        projection.clarification,
+      );
+    }
+    return {
+      allowed: true,
+      reason: '',
+      normalizedArguments: { ...args, target: anchoredPath },
+      anchor: projection,
+    };
+  }
+
   if (input.enforceStructuredFileRead || DOCUMENT_INTERFACE_RE.test(toolName)) {
-    if (!projection.analysisReady) {
+    const directVerifiedWpsDocumentRead = Boolean(
+      currentWps
+      && projection.target.source === 'active_window'
+      && projection.target.object
+      && CURRENT_DOCUMENT_INTERFACE_RE.test(toolName),
+    );
+    if (!projection.analysisReady && !directVerifiedWpsDocumentRead) {
       return blocked(
         projection.nextAction === 'inspect_active_document' ? 'active_document_required' : 'target_unresolved',
         `Document analysis is blocked until the target has a displayable final filename and trusted application/window/object/path anchor. ${projection.clarification}`,
         projection,
         projection.clarification,
       );
+    }
+    const trustedAnchoredArguments = hasTrustedCurrentAuthoringPath
+      && targetKeepsAnchoredObjectIdentity(target, projection.target)
+      ? argumentsWithAnchoredDocumentPath(toolName, args, projection.target.path)
+      : null;
+    if (trustedAnchoredArguments) {
+      return {
+        allowed: true,
+        reason: '',
+        normalizedArguments: trustedAnchoredArguments,
+        anchor: projection,
+      };
     }
     if (target) {
       if (isUnconfirmedRuntimeCandidate(target, input.taskText)) {
@@ -960,11 +1247,7 @@ export function guardTaskTargetToolCall(input: {
           anchor: projection,
         };
       }
-      if (!(
-        currentWps
-        && projection.target.source === 'active_window'
-        && CURRENT_DOCUMENT_INTERFACE_RE.test(toolName)
-      )) {
+      if (!directVerifiedWpsDocumentRead) {
         return blocked(
           'target_unresolved',
           `Document analysis requires the anchored path ${projection.target.path || projection.target.object || projection.target.label}.`,

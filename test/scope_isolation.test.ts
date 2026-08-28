@@ -39,8 +39,8 @@ describe('personal and organization scope isolation', () => {
 
   it('allows the same workflow name in personal and organization scopes', () => {
     const userId = `scope-workflow-${Date.now()}`;
-    const personal = saveWorkflow(userId, 'Daily review', 'Personal', [], undefined, undefined, { domain: 'personal', orgId: '' });
-    const work = saveWorkflow(userId, 'Daily review', 'Organization', [], undefined, undefined, { domain: 'work', orgId: 'org-scope-test' });
+    const personal = saveWorkflow(userId, 'Daily review', 'Personal', [], undefined, { domain: 'personal', orgId: '' });
+    const work = saveWorkflow(userId, 'Daily review', 'Organization', [], undefined, { domain: 'work', orgId: 'org-scope-test' });
 
     expect(work.id).not.toBe(personal.id);
     expect(getWorkflow(userId, 'Daily review', { domain: 'personal', orgId: '' })?.id).toBe(personal.id);

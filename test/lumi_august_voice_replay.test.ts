@@ -62,15 +62,25 @@ describe('August 7-8 real voice replay', () => {
     expectTools('帮我检查下桌面的文件。', ['desktop_list_files']);
   });
 
-  it('routes analysis of the currently open WPS file through exact foreground observation and document reading', () => {
+  it('routes an unanchored current WPS file through background observation with a foreground fallback', () => {
     expectTools('帮我分析一下WPS现在打开的这份文件。', [
+      'desktop_running_processes',
       'desktop_active_window',
-      'search_files',
-      'extract_document_text',
     ]);
     for (const channel of ['chat', 'voice'] as const) {
       const pipeline = build('帮我分析一下WPS现在打开的这份文件。', channel);
-      expect(pipeline.execution.toolPolicy.allowedTools).not.toContain('desktop_running_processes');
+      expect(pipeline.execution.toolPolicy.allowedTools.slice(0, 2)).toEqual([
+        'desktop_running_processes',
+        'desktop_active_window',
+      ]);
+      expect(pipeline.execution.toolPolicy.maxIterations)
+        .toBe(pipeline.execution.toolPolicy.allowedTools.length);
+      expect(pipeline.execution.toolPolicy.allowedTools).toEqual(expect.arrayContaining([
+        'search_files',
+        'desktop_list_files',
+        'desktop_path_info',
+        'extract_document_text',
+      ]));
       expect(pipeline.execution.toolPolicy.allowedTools).not.toContain('desktop_capture_screen');
     }
   });

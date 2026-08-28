@@ -48,12 +48,10 @@ import { getUserPreferredLLMConfig } from '../../../llm/user_preferences';
 import {
   addMessageIdempotent,
   getConversationActionStatus,
-  getConversationModelExecutionRecovery,
   getMessagesByTokenBudget,
   getMessagesThroughExternalMessage,
   getOrCreateActiveConversation,
   persistConversationExecutionPlan,
-  persistConversationModelExecutionResult,
   prepareConversationActionExecution,
   settleConversationActionExecutionRequest,
   setConversationActionExecutionStatus,
@@ -88,10 +86,6 @@ import {
 } from '../../../messaging/personal_org_scope';
 import { buildLumiTurnDispatch, type LumiTurnDispatch } from '../../../cognition/turn_dispatch';
 import { buildLumiExecutionPipeline, type LumiExecutionPipeline } from '../../../cognition/execution_pipeline';
-import {
-  buildModelCapabilityPolicy,
-  buildModelToolProjection,
-} from '../../../cognition/capability_selection';
 import { buildLumiRuntimeCapabilityContext } from '../../../cognition/capability_context';
 import { buildInteractionModeOverlay } from '../../../cognition/turn_flow';
 import type { LumiTurnFlow } from '../../../cognition/turn_flow';
@@ -105,12 +99,6 @@ import { formatOperationModeSwitchResponse } from '../../../i18n/operation_mode_
 import { formatClientSelfPromptForTurn } from '../../../client/self_model';
 import { buildResponseLanguageInstruction } from '../../../utils/language';
 import { canAutoApproveAction } from '../../../tools/action_constitution';
-import {
-  classifyComplexity,
-  isTerminalOrchestrationToolEvent,
-  runOrchestratedTask,
-  shouldAttemptOrchestration,
-} from '../../../agents/orchestrator';
 import { classifyConversationActionFollowupIntent } from '../../../cognition/action_continuation';
 import { coalesceToolExecutionRecords, taskReceiptsToRecords } from '../../../cognition/task_execution_ledger';
 import {
@@ -2103,9 +2091,10 @@ export async function processWithPersonality(
   const turnDispatch = executionPlan.dispatch;
   const turnFlow = turnDispatch.flow;
   const executionDecision = executionPlan.execution;
-  const modelToolPolicy = buildModelCapabilityPolicy(executionDecision);
-  const modelToolProjection = buildModelToolProjection(executionDecision);
   const capabilitySelection = executionPlan.capabilityPlan;
+  const modelToolPolicy = executionPlan.authorizationPolicy;
+  const modelToolProjection = executionPlan.modelToolProjection;
+  const toolSessionActive = executionPlan.executionRequested;
   const actionFollowupIntent = classifyConversationActionFollowupIntent(
     requestText,
     conversation?.actionContinuationState,
@@ -2190,6 +2179,7 @@ export async function processWithPersonality(
       executionPlan.capabilityPlan.taskLedgerRequired
       || requestsOrganizationScope(requestText)
       || actionTaskExecution.kind === 'resume'
+      || Boolean(options?.onMessage)
     )
     && !directlyAppliedMode
     && executionPlan.normalizedIntent.operation !== 'status'
@@ -2227,15 +2217,14 @@ export async function processWithPersonality(
         `Work item: ${route.id}. Status: ${route.status}.`,
         `Department: ${route.departmentId || 'organization-default'}. Position: ${route.positionId || 'none'}.`,
         `Primary member: ${route.assignedMemberId || 'none'}. Collaborators: ${(route.collaboratorMemberIds || []).join(', ') || 'none'}.`,
-        `Allowed organization worker agents for orchestration: ${route.assignedAgentIds.join(', ') || 'central Lumi only'}.`,
         `Required skill tags: ${route.skillTags.join(', ') || 'none'}.`,
-        'Do not claim another department, member, position, skill, or worker handled the task unless this durable route or a later handoff receipt says so.',
+        'Do not claim another department, member, position, or skill handled the task unless this durable route or a later handoff receipt says so.',
       ].join('\n');
     } catch (error: any) {
       const blocker = `Organization work routing failed: ${error?.message || error}`;
       setConversationActionExecutionStatus(conversation!.id, effectiveUserId, 'blocked', { blocker, requestId });
       settleConversationActionExecutionRequest(conversation!.id, effectiveUserId, requestId, blocker);
-      const response = `组织任务没有开始执行：${error?.message || '业务路由校验失败'}。请由组织管理员检查部门、岗位、成员、技能或智能体配置。`;
+      const response = `组织任务没有开始执行：${error?.message || '业务路由校验失败'}。请由组织管理员检查部门、岗位、成员或技能配置。`;
       const correlated = correlateMessagingReply(msg, response);
       if (!correlated.superseded) persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
       await flushTerminalReply();
@@ -2258,7 +2247,7 @@ export async function processWithPersonality(
     const blocker = `Organization work item is owned by human member ${owner}.`;
     setConversationActionExecutionStatus(conversation!.id, effectiveUserId, 'blocked', { blocker, requestId });
     settleConversationActionExecutionRequest(conversation!.id, effectiveUserId, requestId, blocker);
-    const response = `任务已转交给组织成员 ${owner}，Lumi 已停止自动执行。工作项：${organizationWorkRoute.workItem.id}。后续只有收到转派或退回智能体的持久回执后才会恢复。`;
+    const response = `任务已转交给组织成员 ${owner}，LumiCore 已停止自动执行。工作项：${organizationWorkRoute.workItem.id}。后续只有收到新的持久转派回执后才会恢复。`;
     const correlated = correlateMessagingReply(msg, response);
     if (!correlated.superseded) persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
     await flushTerminalReply();
@@ -2266,7 +2255,7 @@ export async function processWithPersonality(
   }
   if (
     conversation
-    && (executionDecision.allowToolUse || Boolean(directlyAppliedMode))
+    && (toolSessionActive || Boolean(directlyAppliedMode))
     && (actionTaskExecution.kind === 'new' || actionTaskExecution.kind === 'resume')
   ) {
     setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'executing', { requestId });
@@ -2556,99 +2545,7 @@ export async function processWithPersonality(
     }
     if (deterministicEntryReply && !responseText) responseText = deterministicEntryReply;
 
-    const orchestrationContext = {
-      userId: effectiveUserId,
-      personalityId: personality?.id || 'lumi',
-      domain,
-      orgId,
-      conversationId: conversation?.id,
-      turnId: msg.messageId,
-      requestId,
-      availableAgentIds: organizationWorkRoute?.workItem.assignedAgentIds.length
-        ? organizationWorkRoute.workItem.assignedAgentIds
-        : undefined,
-      desktopRelay,
-      personalDesktopRelay,
-      toolPolicy: modelToolPolicy,
-      rootTaskText: routingText,
-      taskId: actionTaskExecution.state?.taskId,
-      desktopExecutionTracker,
-      requestConfirmation: requestToolConfirmation,
-      supervisedExternalCommits: isIdentityBound,
-      isCancelled: actionWasCancelled,
-    };
-    const complexity = classifyComplexity(routingText, orchestrationContext);
-    const shouldOrchestrate = isIdentityBound && shouldAttemptOrchestration({
-      channel: 'chat',
-      text: turnFlow.routeText,
-      complexity,
-      allowToolUse: executionDecision.allowToolUse,
-      clientActionOnly: turnFlow.clientActionOnlyTurn,
-      selfRepair: turnFlow.selfRepairTurn,
-      artifactFirst: turnFlow.workSurfaceRoute.artifactFirst,
-      directDesktop: turnFlow.workSurfaceRoute.directDesktop,
-      prefersSequentialWorkflow: turnFlow.workSurfaceRoute.artifactFirst
-        && !turnFlow.workSurfaceRoute.directDesktop,
-      capabilityLane: capabilitySelection.lane,
-      cognitionCategory: executionPlan.normalizedIntent.kind,
-    });
-    let usedOrchestrator = Boolean(deterministicEntryReply);
-    if (shouldOrchestrate && !usedOrchestrator) {
-      const recovery = conversation && actionTaskExecution.state?.taskId
-        ? getConversationModelExecutionRecovery({
-            conversationId: conversation.id,
-            userId: effectiveUserId,
-            taskId: actionTaskExecution.state.taskId,
-          })
-        : null;
-      const orchestrated = await runOrchestratedTask(
-        routingText,
-        {
-          ...orchestrationContext,
-          resumeNodeReceipts: recovery?.receipts,
-          resumeExecutionGraph: recovery?.graph,
-        },
-        {
-          ...userLLMPrefs,
-          conversationId: conversation?.id,
-          requestId,
-          interactionId: usageInteractionId,
-          source,
-        },
-        {
-          getDeepSeek: llm?.getDeepSeek || (() => null),
-          getGemini: llm?.getGemini || (() => null),
-          getOpenAI: llm?.getOpenAI,
-          getAnthropic: llm?.getAnthropic,
-          getQwen: llm?.getQwen,
-          getOllama: llm?.getOllama,
-          getLmStudio: llm?.getLmStudio,
-          getArk: llm?.getArk,
-          getXiaomi: llm?.getXiaomi,
-          getKimi: llm?.getKimi,
-          getGlm: llm?.getGlm,
-          getRelay: llm?.getRelay,
-        },
-        undefined,
-        record => {
-          if (!isTerminalOrchestrationToolEvent(record)) return;
-          toolRecords.push({ ...record, result: record.result || '' });
-        },
-      );
-      if (orchestrated) {
-        usedOrchestrator = true;
-        responseText = orchestrated.responseText;
-        if (conversation && actionTaskExecution.state?.taskId) {
-          persistConversationModelExecutionResult({
-            conversationId: conversation.id,
-            userId: effectiveUserId,
-            taskId: actionTaskExecution.state.taskId,
-            workflowResult: orchestrated.workflowResult,
-          });
-        }
-      }
-    }
-
+    const entryHandled = Boolean(deterministicEntryReply);
     const runMessagingToolTurn = (
       turnMessages: NormalizedMessage[],
       onToolRecord?: (record: ToolExecutionRecord) => void,
@@ -2695,7 +2592,7 @@ export async function processWithPersonality(
       llm?.getRelay,
     );
 
-    if (!usedOrchestrator && !executionDecision.allowToolUse) {
+    if (!entryHandled && !toolSessionActive) {
       const response = await makeLLMCall(
         messages,
         [],
@@ -2717,7 +2614,7 @@ export async function processWithPersonality(
       if (response.usage) {
         recordTokenUsage(effectiveUserId, userLLMPrefs.provider, userLLMPrefs.model, response.usage, usageInteractionId, 'chat');
       }
-    } else if (!usedOrchestrator) {
+    } else if (!entryHandled) {
       const result = await runMessagingToolTurn(messages);
       responseText = result.text || '';
       toolRecords.push(...(result.toolCalls || []));
@@ -2769,7 +2666,7 @@ export async function processWithPersonality(
       source,
       flow: turnFlow,
       initialFinalization,
-      allowToolUse: executionDecision.allowToolUse
+      allowToolUse: toolSessionActive
         && !callbackReply
         && !missingOrganizationExternalCommitReceipt,
       pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn),

@@ -1,5 +1,5 @@
 /**
- * Computer Use Agent — autonomous desktop interaction loop
+ * Computer Use Loop — autonomous desktop interaction runtime
  *
  * Architecture:
  *   1. Screenshot (PNG → JPEG via Canvas in WebView2)

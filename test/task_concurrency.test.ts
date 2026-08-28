@@ -4,6 +4,7 @@ import {
   formatActiveTaskRelationContext,
   resolveActiveTaskMessageRelation,
 } from '../server/cognition/task_concurrency';
+import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
 import type { ConversationActionContinuationState } from '../server/cognition/action_continuation';
 
 const activeState: ConversationActionContinuationState = {
@@ -29,6 +30,85 @@ describe('active task message relation', () => {
     expect(classifyActiveTaskMessage('怎么样了', activeState)).toBe('status');
     expect(classifyActiveTaskMessage('确认', activeState)).toBe('continue');
     expect(classifyActiveTaskMessage('继续执行', activeState)).toBe('continue');
+  });
+
+  it('keeps a global runtime-work query independent from the adjacent action', () => {
+    for (const state of [activeState, null]) {
+      expect(resolveActiveTaskMessageRelation('\u4f60\u73b0\u5728\u6709\u5728\u6267\u884c\u7684\u4efb\u52a1\u5417', state, {
+        activeRequestId: state ? 'request-7' : undefined,
+      })).toMatchObject({
+        relation: 'queue',
+        taskRelation: 'new',
+        feedback: 'new_task',
+        binding: 'new_task',
+        operation: 'enqueue',
+        reason: 'independent_instruction',
+      });
+    }
+  });
+
+  it('binds an actionable client-mode correction to the same unfinished task', () => {
+    const correction = '\u6211\u8bf4\u7684\u662f\u5207\u6362\u5ba2\u6237\u7aef\u804a\u5929\u6a21\u5f0f';
+    const clientTask: ConversationActionContinuationState = {
+      ...activeState,
+      taskId: 'task-client-mode',
+      status: 'blocked',
+      goal: '\u5207\u6362\u5ba2\u6237\u7aef\u6a21\u5f0f',
+      latestInstruction: '\u5207\u6362\u5230\u6307\u6325\u4e2d\u5fc3',
+      latestBlocker: 'client_action receipt missing',
+      activeRequestId: 'request-client-mode',
+      revision: 4,
+      unfinished: true,
+    };
+
+    expect(normalizeActionIntent(correction)).toMatchObject({
+      kind: 'client_navigation',
+      target: 'chat',
+      clientAction: 'set_client_mode',
+      relation: 'correction',
+    });
+    expect(resolveActiveTaskMessageRelation(correction, clientTask, {
+      activeRequestId: 'request-client-mode',
+    })).toMatchObject({
+      relation: 'continue',
+      taskRelation: 'correct',
+      feedback: 'correction',
+      binding: 'active_task',
+      operation: 'replan',
+      taskId: 'task-client-mode',
+      revision: 4,
+      targetRequestId: 'request-client-mode',
+      preservesRootGoal: true,
+    });
+  });
+
+  it('starts actionable corrections without a task as new work and detaches unrelated work', () => {
+    const correction = '\u6211\u8bf4\u7684\u662f\u5207\u6362\u5ba2\u6237\u7aef\u804a\u5929\u6a21\u5f0f';
+    expect(resolveActiveTaskMessageRelation(correction, null)).toMatchObject({
+      relation: 'queue',
+      taskRelation: 'new',
+      feedback: 'new_task',
+      binding: 'new_task',
+      operation: 'enqueue',
+      preservesRootGoal: false,
+    });
+
+    const clientTask: ConversationActionContinuationState = {
+      ...activeState,
+      taskId: 'task-client-mode',
+      status: 'blocked',
+      goal: '\u5207\u6362\u5ba2\u6237\u7aef\u6a21\u5f0f',
+      latestInstruction: '\u5207\u6362\u5230\u6307\u6325\u4e2d\u5fc3',
+      unfinished: true,
+    };
+    expect(resolveActiveTaskMessageRelation('\u4eca\u5929\u5929\u6c14\u600e\u4e48\u6837', clientTask)).toMatchObject({
+      relation: 'queue',
+      taskRelation: 'new',
+      feedback: 'new_task',
+      binding: 'new_task',
+      operation: 'enqueue',
+      preservesRootGoal: false,
+    });
   });
 
   it('cancels only an explicit cancellation or replacement', () => {
@@ -361,6 +441,52 @@ describe('active task message relation', () => {
     }
   });
 
+  it('keeps a bare acknowledgement conversational when no action is pending', () => {
+    const completed = {
+      ...activeState,
+      status: 'completed' as const,
+      unfinished: false,
+      activeRequestId: undefined,
+      revision: 8,
+    };
+    expect(resolveActiveTaskMessageRelation('\u597d\u7684', completed, {
+      controlTargetRequestId: 'request-7',
+    })).toMatchObject({
+      relation: 'queue',
+      taskRelation: 'new',
+      feedback: 'new_task',
+      binding: 'new_task',
+      operation: 'enqueue',
+      reason: 'independent_instruction',
+    });
+
+    expect(resolveActiveTaskMessageRelation('\u597d\u7684', {
+      ...activeState,
+      status: 'blocked' as const,
+      activeRequestId: undefined,
+    }, {
+      controlTargetRequestId: 'request-7',
+    })).toMatchObject({
+      feedback: 'new_task',
+      binding: 'new_task',
+    });
+  });
+
+  it('still binds a bare acknowledgement to an action waiting for confirmation', () => {
+    expect(resolveActiveTaskMessageRelation('\u597d\u7684', {
+      ...activeState,
+      status: 'waiting_confirmation' as const,
+      activeRequestId: undefined,
+    })).toMatchObject({
+      relation: 'continue',
+      taskRelation: 'confirm',
+      feedback: 'accept',
+      binding: 'active_task',
+      operation: 'verify',
+      taskId: 'task-1',
+    });
+  });
+
   it('gives the planner root-level continuity and verification invariants', () => {
     const relation = resolveActiveTaskMessageRelation('不对，图纸单位应该是毫米', activeState, {
       activeRequestId: 'request-7',
@@ -373,7 +499,7 @@ describe('active task message relation', () => {
     expect(context).toContain('- taskId: task-1');
     expect(context).toContain('- taskRevision: 7');
     expect(context).toContain('- rootGoal: 读取桌面平面图并在 AutoCAD 里绘制');
-    expect(context).toContain('worker or sub-step completion as evidence only');
-    expect(context).toContain('root coordinator alone may report terminal completion');
+    expect(context).toContain('an individual step completing as evidence only');
+    expect(context).toContain('LumiCore may report terminal completion only after checking the whole goal');
   });
 });

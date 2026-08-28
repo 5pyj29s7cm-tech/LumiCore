@@ -79,7 +79,7 @@ export function runHealthAudit(
     orgId,
   });
   const installed = marketplace.filter(s => s.installed);
-  const uninstalled = marketplace.filter(s => !s.installed && s.runtime !== 'external');
+  const uninstalled = marketplace.filter(s => !s.installed);
   checks.push({
     name: 'Skills',
     status: installed.length >= 3 ? 'ok' : installed.length >= 1 ? 'warn' : 'warn',
@@ -114,25 +114,7 @@ export function runHealthAudit(
     checks.push({ name: 'Personality Evolution', status: 'warn', detail: 'Unknown' });
   }
 
-  // 6. Agent ecosystem
-  try {
-    const db = readDB();
-    const agentCount = ((db as any).agents || []).filter((agent: any) => {
-      if (domain === 'work') {
-        return (agent.domain || 'work') === 'work' && (agent.orgId || '') === orgId;
-      }
-      return (agent.ownerUid || agent.userId) === userId && agent.domain !== 'work' && !agent.orgId;
-    }).length;
-    checks.push({
-      name: 'Agent Team',
-      status: agentCount > 0 ? 'ok' : 'warn',
-      detail: `${agentCount} team agents`,
-    });
-  } catch {
-    checks.push({ name: 'Agent Team', status: 'warn', detail: 'Unknown' });
-  }
-
-  // 7. Durable task recovery and blockers
+  // 6. Durable task recovery and blockers
   const durableTasks = getDurableTaskHealthSnapshot(userId, { domain, orgId });
   checks.push({
     name: 'Durable Task Runtime',

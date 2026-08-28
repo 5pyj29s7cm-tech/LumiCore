@@ -8,10 +8,229 @@ import {
   getRecoveredApplicationContinuationTarget,
   isRecoveredCurrentAppEditingContinuation,
   needsRecentActionContinuationContext,
+  pendingRuntimeCancellationRecheck,
   prepareConversationActionTaskState,
 } from '../server/cognition/action_continuation';
 
 describe('recent action continuation', () => {
+  it('resumes the same unfinished client task for an actionable correction', () => {
+    const correction = '\u6211\u8bf4\u7684\u662f\u5207\u6362\u5ba2\u6237\u7aef\u804a\u5929\u6a21\u5f0f';
+    const clientTask = {
+      version: 2 as const,
+      taskId: 'task-client-mode',
+      status: 'blocked' as const,
+      goal: '\u5207\u6362\u5ba2\u6237\u7aef\u6a21\u5f0f',
+      latestInstruction: '\u5207\u6362\u5230\u6307\u6325\u4e2d\u5fc3',
+      appTarget: '',
+      sourcePaths: [],
+      latestBlocker: 'client_action receipt missing',
+      unfinished: true,
+      evidenceTools: [],
+      assistantState: '',
+      toolSummaries: [],
+      revision: 4,
+      activeRequestId: undefined,
+      updatedAt: '2026-08-28T10:00:00.000Z',
+    };
+    const policy = {
+      allowedTools: ['client_get_state', 'client_action'],
+      requireConfirmation: [],
+      forbiddenTools: [],
+      maxIterations: 4,
+    };
+
+    expect(classifyConversationActionFollowupIntent(correction, clientTask)).toBe('execute');
+    const prepared = prepareConversationActionTaskState(clientTask, {
+      userText: correction,
+      requestId: 'request-client-correction',
+      toolPolicy: policy,
+      now: '2026-08-28T10:01:00.000Z',
+    });
+    expect(prepared.kind).toBe('resume');
+    expect(prepared.state).toMatchObject({
+      taskId: 'task-client-mode',
+      goal: '\u5207\u6362\u5ba2\u6237\u7aef\u6a21\u5f0f',
+      latestInstruction: correction,
+      status: 'planning',
+      unfinished: true,
+      revision: 5,
+      activeRequestId: 'request-client-correction',
+    });
+  });
+
+  it('creates new client work without durable state instead of inventing continuity', () => {
+    const correction = '\u6211\u8bf4\u7684\u662f\u5207\u6362\u5ba2\u6237\u7aef\u804a\u5929\u6a21\u5f0f';
+    const prepared = prepareConversationActionTaskState(null, {
+      userText: correction,
+      requestId: 'request-client-new',
+      toolPolicy: {
+        allowedTools: ['client_get_state', 'client_action'],
+        requireConfirmation: [],
+        forbiddenTools: [],
+        maxIterations: 4,
+      },
+      now: '2026-08-28T10:02:00.000Z',
+    });
+
+    expect(classifyConversationActionFollowupIntent(correction, null)).toBe('none');
+    expect(prepared.kind).toBe('new');
+    expect(prepared.state).toMatchObject({
+      goal: correction,
+      latestInstruction: correction,
+      revision: 1,
+      activeRequestId: 'request-client-new',
+    });
+    expect(prepared.state?.taskId).toMatch(/^task_/);
+  });
+
+  it('keeps a verified receipt-only terminal record in the conversation task state', () => {
+    const state = buildConversationActionContinuationState({
+      userText: '\u505c\u6b62\u540e\u53f0\u4efb\u52a1',
+      assistantText: '\u540e\u53f0\u4efb\u52a1\u5df2\u53d6\u6d88\u3002',
+      toolCalls: [{
+        id: 'receipt-only-runtime-cancel',
+        name: 'runtime_work_cancel',
+        arguments: {},
+        result: '',
+        receipt: JSON.stringify(JSON.stringify({
+          ok: true,
+          status: 'cancelled',
+          matchedCount: 1,
+          cancelledCount: 1,
+          cancellingCount: 0,
+          failedCount: 0,
+        })),
+        terminalVerification: {
+          status: 'verified',
+          strategy: 'terminal_receipt',
+          reason: 'The unified runtime ledger confirmed cancellation.',
+        },
+      }],
+      requestId: 'receipt-only-runtime-cancel-request',
+    });
+
+    expect(state).toMatchObject({
+      status: 'completed',
+      unfinished: false,
+      completionSource: 'tool_receipt',
+      evidenceTools: ['runtime_work_cancel'],
+    });
+    expect(state?.receipts).toHaveLength(1);
+    expect(state?.receipts?.[0]).toMatchObject({
+      name: 'runtime_work_cancel',
+      outcome: 'success',
+    });
+  });
+
+  it('keeps a failed receipt-only terminal record as an explicit blocker', () => {
+    const state = buildConversationActionContinuationState({
+      userText: '\u505c\u6b62\u540e\u53f0\u4efb\u52a1',
+      assistantText: '\u53d6\u6d88\u672a\u5b8c\u6210\u3002',
+      toolCalls: [{
+        id: 'receipt-only-runtime-cancel-failed',
+        name: 'runtime_work_cancel',
+        arguments: {},
+        result: '',
+        receipt: JSON.stringify({
+          ok: false,
+          status: 'failed',
+          matchedCount: 1,
+          cancelledCount: 0,
+          cancellingCount: 0,
+          failedCount: 1,
+          reason: 'The runtime task did not accept cancellation.',
+        }),
+        terminalVerification: {
+          status: 'failed',
+          strategy: 'terminal_receipt',
+          reason: 'Cancellation was rejected.',
+        },
+      }],
+      requestId: 'receipt-only-runtime-cancel-failed-request',
+    });
+
+    expect(state).toMatchObject({
+      status: 'blocked',
+      unfinished: true,
+    });
+    expect(state?.latestBlocker).toContain('did not accept cancellation');
+    expect(state?.receipts).toHaveLength(1);
+    expect(state?.receipts?.[0]).toMatchObject({ outcome: 'failure' });
+  });
+
+  it('exposes only an exact previously accepted cancellation for server-owned recheck', () => {
+    const state = buildConversationActionContinuationState({
+      userText: '\u505c\u6b62\u540e\u53f0\u4efb\u52a1',
+      assistantText: '\u6b63\u5728\u53d6\u6d88\u3002',
+      toolCalls: [{
+        id: 'runtime-cancel-accepted',
+        name: 'runtime_work_cancel',
+        arguments: { taskIds: ['runtime-a', 'runtime-b'] },
+        result: '',
+        receipt: JSON.stringify({
+          ok: true,
+          status: 'cancelling',
+          requestedTaskIds: ['runtime-a', 'runtime-b'],
+          cancellingTaskIds: ['runtime-a', 'runtime-b'],
+          matchedCount: 2,
+          cancelledCount: 0,
+          cancellingCount: 2,
+          failedCount: 0,
+        }),
+        terminalVerification: {
+          status: 'unverified',
+          strategy: 'terminal_receipt',
+          reason: 'Cancellation was accepted but has not settled.',
+        },
+      }],
+      requestId: 'runtime-cancel-accepted-request',
+    });
+
+    expect(pendingRuntimeCancellationRecheck(state)).toEqual({
+      taskId: state?.taskId,
+      taskIds: ['runtime-a', 'runtime-b'],
+      priorReceiptId: 'runtime-cancel-accepted',
+      priorStatus: 'cancelling',
+    });
+    const withReportedTargets = (requestedTaskIds: string[]) => ({
+      ...state!,
+      receipts: state?.receipts?.map(receipt => ({
+        ...receipt,
+        result: '',
+        receipt: JSON.stringify({
+          ok: true,
+          status: 'cancelling',
+          requestedTaskIds,
+          failedCount: 0,
+        }),
+      })),
+    });
+    expect(pendingRuntimeCancellationRecheck(
+      withReportedTargets(['runtime-b']),
+    )).toBeNull();
+    expect(pendingRuntimeCancellationRecheck(
+      withReportedTargets(['runtime-a', 'runtime-injected']),
+    )).toBeNull();
+    expect(pendingRuntimeCancellationRecheck(
+      withReportedTargets([
+        ...Array.from({ length: 64 }, () => 'runtime-a'),
+        'runtime-injected-after-limit',
+      ]),
+    )).toBeNull();
+    expect(pendingRuntimeCancellationRecheck(
+      withReportedTargets([]),
+    )).toBeNull();
+    expect(pendingRuntimeCancellationRecheck({
+      ...state!,
+      receipts: state?.receipts?.map(receipt => ({
+        ...receipt,
+        arguments: {},
+        result: '',
+        receipt: JSON.stringify({ ok: true, status: 'cancelling', failedCount: 0 }),
+      })),
+    })).toBeNull();
+  });
+
   it('never treats an explicit persistent-task creation as status for an older task', () => {
     const text = '\u8bf7\u521b\u5efa\u4e00\u4e2a\u53ef\u8de8\u91cd\u542f\u7ee7\u7eed\u7684\u6301\u4e45\u4efb\u52a1\u3002\u6807\u9898\u201c\u9752\u7a79\u5ba2\u6237\u8ddf\u8fdb\u95ed\u73af\u201d\u3002\u5b8c\u6210\u540e\u544a\u8bc9\u6211\u4efb\u52a1\u7f16\u53f7\u3001\u72b6\u6001\u548c\u4e0b\u4e00\u6b65\u3002';
     expect(classifyConversationActionFollowupIntent(text, {
@@ -124,6 +343,50 @@ describe('recent action continuation', () => {
     expect(classifyConversationActionFollowupIntent('怎么回事？', unfinished)).toBe('status');
     expect(classifyConversationActionFollowupIntent('怎么回事？', completed)).toBe('none');
     expect(buildRecentActionContinuationBridge('怎么回事？', [], unfinished)).toContain('- followupIntent: status');
+  });
+
+  it('treats a readiness acknowledgement as continuation only for the blocked task that requested it', () => {
+    const blocked = {
+      version: 2 as const,
+      taskId: 'task-wps-current-document',
+      status: 'blocked' as const,
+      goal: '帮我分析一下wps当前打开的文件',
+      latestInstruction: '帮我分析一下wps当前打开的文件',
+      appTarget: 'WPS',
+      sourcePaths: [],
+      latestBlocker: 'desktop_execution_plan_receipt: target_mismatch',
+      unfinished: true,
+      evidenceTools: ['desktop_active_window'],
+      assistantState: '请先把要分析的文档切到前台，或直接把文件发给我。',
+      toolSummaries: [],
+      receipts: [],
+      revision: 2,
+      updatedAt: '2026-08-28T10:15:41.044Z',
+    };
+
+    for (const text of ['已经切到前台', '已打开', '准备好了', '可以了']) {
+      expect(classifyConversationActionFollowupIntent(text, blocked), text).toBe('execute');
+      const prepared = prepareConversationActionTaskState(blocked, {
+        userText: text,
+        requestId: `request-${text}`,
+        toolPolicy: {
+          allowedTools: ['desktop_active_window'],
+          requireConfirmation: [],
+          forbiddenTools: [],
+          maxIterations: 4,
+        },
+      });
+      expect(prepared.kind, text).toBe('resume');
+      expect(prepared.state?.taskId, text).toBe(blocked.taskId);
+      expect(prepared.state?.goal, text).toBe(blocked.goal);
+    }
+
+    expect(classifyConversationActionFollowupIntent('已经切到前台', {
+      ...blocked,
+      status: 'completed',
+      unfinished: false,
+    })).toBe('none');
+    expect(classifyConversationActionFollowupIntent('可以了')).toBe('none');
   });
 
   it('executes a mixed status check and affirmative resume clause for an unfinished durable task', () => {

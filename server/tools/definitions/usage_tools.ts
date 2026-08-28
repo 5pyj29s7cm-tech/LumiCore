@@ -55,7 +55,7 @@ export function registerUsageTools(registry: ToolRegistry): void {
         },
         mode: {
           type: 'string',
-          description: 'Optional usage mode filter, e.g. chat, voice, vision, task, meeting, orchestrator.',
+          description: 'Optional usage mode filter, e.g. chat, voice, vision, task, meeting, autonomy.',
         },
         startDate: {
           type: 'string',

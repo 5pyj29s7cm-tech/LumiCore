@@ -3,11 +3,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   runWithTools: vi.fn(),
   synthesizeSpeech: vi.fn(),
-  classifyComplexity: vi.fn(),
-  decomposeTask: vi.fn(),
-  matchWorkers: vi.fn(),
-  executeWorkflow: vi.fn(),
-  aggregateWithLLM: vi.fn(),
 }));
 
 vi.mock('../server/llm/adapter', () => ({
@@ -19,7 +14,6 @@ vi.mock('../server/memory', () => ({
   addMemory: vi.fn(),
   getDueReminders: vi.fn(() => []),
   buildNarrativeChain: vi.fn(() => ''),
-  borrowAgentMemories: vi.fn(() => []),
 }));
 
 vi.mock('../server/personality', () => {
@@ -76,21 +70,8 @@ vi.mock('../server/tts/adapter', () => ({
   synthesizeSpeech: mocks.synthesizeSpeech,
 }));
 
-vi.mock('../server/agents/orchestrator', () => ({
-  classifyComplexity: mocks.classifyComplexity,
-  decomposeTask: mocks.decomposeTask,
-  matchWorkers: mocks.matchWorkers,
-  executeWorkflow: mocks.executeWorkflow,
-  aggregateWithLLM: mocks.aggregateWithLLM,
-  getRoutingCacheStats: vi.fn(() => ({})),
-}));
-
 vi.mock('../db_layer', () => ({
   readDB: vi.fn(() => ({
-    agents: [
-      { id: 'worker-1', name: 'Worker 1', status: 'idle', userId: 'mcp_remote', domain: 'personal', orgId: '' },
-      { id: 'work-worker', name: 'Work Worker', status: 'idle', domain: 'work', orgId: 'scoped-route-org' },
-    ],
     memories: [],
     interactions: [],
     conversations: [],
@@ -112,7 +93,6 @@ vi.mock('../logger', () => ({
 import { createLumiMcpServer } from '../server/mcp/lumi_server';
 import {
   addMemory,
-  borrowAgentMemories,
   getDueReminders,
   queryMemories,
 } from '../server/memory';
@@ -150,7 +130,6 @@ beforeEach(() => {
     audioBuffer: Buffer.from('safe-audio'),
     format: 'wav',
   });
-  mocks.classifyComplexity.mockReturnValue('simple');
 });
 
 describe('MCP finalized output delivery', () => {
@@ -224,12 +203,6 @@ describe('MCP finalized output delivery', () => {
       orgId: scope.orgId,
     });
 
-    await getHandler(server, 'lumi_agent_share')({
-      requestingAgentId: 'worker-1',
-      topic: 'scoped',
-      limit: 2,
-    });
-    expect(borrowAgentMemories).toHaveBeenCalledWith('worker-1', 'scoped', scope.userId, 8);
   });
 
   it('buffers raw chat chunks and speaks only the finalized blocked result', async () => {
@@ -409,7 +382,7 @@ describe('MCP finalized output delivery', () => {
     const payload = JSON.parse(response.content[0].text);
 
     expect(payload).toMatchObject({
-      complexity: 'simple',
+      handledBy: 'LumiCore',
       finalized: true,
       blocked: true,
       toolCalls: 1,
@@ -431,85 +404,4 @@ describe('MCP finalized output delivery', () => {
     expect(context.toolPolicy.allowedTools).toEqual(['web_search']);
   });
 
-  it('does not package an evidence-free orchestrator aggregate as completed', async () => {
-    mocks.classifyComplexity.mockReturnValue('complex');
-    const subTask = {
-      id: 'sub-1',
-      description: wpsContinuationTask(),
-      requiredSkill: 'general',
-      executionMode: 'lumi',
-      assignedAgentId: 'worker-1',
-    };
-    const assignment = {
-      subTask,
-      agent: { id: 'worker-1', name: 'Worker 1', status: 'idle' },
-    };
-    mocks.decomposeTask.mockResolvedValue([subTask]);
-    mocks.matchWorkers.mockReturnValue([assignment]);
-    mocks.executeWorkflow.mockResolvedValue({
-      subTaskResults: [{ subTaskId: 'sub-1', output: 'No execution receipt.', agentId: 'worker-1' }],
-      aggregatedOutput: 'No execution receipt.',
-      totalAgentsUsed: 1,
-    });
-    mocks.aggregateWithLLM.mockResolvedValue('\u540e\u53f0\u4efb\u52a1\u5df2\u5b8c\u6210\uff0cWPS \u6587\u6863\u5df2\u5199\u597d\u3002');
-    mocks.runWithTools.mockResolvedValue({
-      text: '\u4ecd\u672a\u62ff\u5230\u53ef\u9a8c\u8bc1\u7684\u5ba2\u6237\u7aef\u64cd\u4f5c\u7ed3\u679c\u3002',
-      toolCalls: [],
-      usageRecords: [],
-    });
-    const workScope = {
-      userId: 'scoped-route-user',
-      username: 'scoped-route-user',
-      role: 'user',
-      authenticated: true,
-      domain: 'work' as const,
-      orgId: 'scoped-route-org',
-    };
-    const server = createLumiMcpServer(undefined, {} as any, vi.fn(), workScope);
-
-    const response = await getHandler(server, 'lumi_route_task')({ task: wpsContinuationTask() });
-    const payload = JSON.parse(response.content[0].text);
-
-    expect(mocks.decomposeTask).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        userId: workScope.userId,
-        domain: workScope.domain,
-        orgId: workScope.orgId,
-      }),
-      expect.objectContaining({
-        userId: workScope.userId,
-        domain: workScope.domain,
-        orgId: workScope.orgId,
-      }),
-      expect.any(Object),
-    );
-    expect(mocks.executeWorkflow.mock.calls[0][1]).toMatchObject({
-      userId: workScope.userId,
-      authenticated: true,
-      localExecution: false,
-      executionBoundary: 'remote_restricted',
-      toolPolicy: expect.objectContaining({ allowedTools: ['web_search'] }),
-    });
-    expect(mocks.executeWorkflow).toHaveBeenCalledWith(
-      expect.any(Array),
-      expect.objectContaining({
-        userId: workScope.userId,
-        domain: workScope.domain,
-        orgId: workScope.orgId,
-      }),
-      expect.any(Object),
-      expect.any(Object),
-      expect.any(Array),
-      expect.any(Function),
-    );
-
-    expect(payload).toMatchObject({
-      complexity: 'complex',
-      finalized: true,
-      blocked: true,
-      toolCalls: 0,
-    });
-    expect(payload.result).not.toContain('\u540e\u53f0\u4efb\u52a1\u5df2\u5b8c\u6210');
-  });
 });

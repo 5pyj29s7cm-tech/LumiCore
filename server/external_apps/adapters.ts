@@ -45,7 +45,7 @@ const FALLBACK_EXTERNAL_APP_ADAPTERS: ExternalAppAdapter[] = [
   },
   {
     id: 'ai_apps',
-    label: 'Other local AI agents',
+    label: 'Other local AI tools',
     status: 'requires_setup',
     actions: ['external_app_list_adapters', 'external_control_candidates', 'desktop_ui_snapshot', 'desktop_ui_focus', 'desktop_ui_click', 'desktop_ui_invoke', 'desktop_ui_type', 'capability_research', 'computer_use'],
     safety: 'Use explicit tool or MCP integrations when available. Full UI control needs desktop automation confirmation.',

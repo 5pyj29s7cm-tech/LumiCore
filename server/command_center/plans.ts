@@ -1,12 +1,11 @@
 import crypto from 'node:crypto';
 import { readDB, writeDB } from '../../db_layer';
 import {
-  listBackgroundTasks,
-  registerBackgroundTask,
-  type BackgroundDelegationTask,
-} from '../agents/background_tasks';
-import { ensureBackgroundConversationActionTask } from '../conversation/action_ledger';
-import { isStrictPrivacy } from '../config/privacy';
+  enqueue,
+  getTaskHistory,
+  getTaskQueue,
+  type AutonomousTask,
+} from '../autonomy/task_queue';
 
 export type CommandCenterPlanKind = 'daily_task' | 'long_term_goal' | 'periodic_report';
 export type CommandCenterPlanCadence = 'none' | 'daily' | 'weekly' | 'monthly';
@@ -46,7 +45,7 @@ export interface CommandCenterPlanInput {
 
 const KINDS = new Set<CommandCenterPlanKind>(['daily_task', 'long_term_goal', 'periodic_report']);
 const CADENCES = new Set<CommandCenterPlanCadence>(['none', 'daily', 'weekly', 'monthly']);
-const ACTIVE_RUNTIME_STATUSES = new Set(['queued', 'running', 'pausing', 'paused', 'cancelling']);
+const ACTIVE_RUNTIME_STATUSES = new Set(['pending', 'running', 'pausing', 'paused']);
 
 function plans(db: any): CommandCenterPlan[] {
   if (!Array.isArray(db.commandCenterPlans)) db.commandCenterPlans = [];
@@ -219,28 +218,29 @@ function runSlot(plan: CommandCenterPlan, at: Date): string {
     .slice(0, 24);
 }
 
-function actionTaskId(planId: string, slot: string): string {
-  return `cc_plan_${crypto.createHash('sha256').update(`${planId}:${slot}`).digest('hex').slice(0, 24)}`;
-}
-
-function activeManualRun(plan: CommandCenterPlan): BackgroundDelegationTask | null {
+function activeManualRun(plan: CommandCenterPlan): AutonomousTask | null {
   const prefix = `command-center-plan:${plan.id}:`;
-  const candidates = listBackgroundTasks(plan.userId).filter(task => {
-    if (!ACTIVE_RUNTIME_STATUSES.has(task.status) || !task.idempotencyKey.startsWith(prefix)) return false;
-    const domain = task.context?.domain === 'work' ? 'work' : 'personal';
-    const orgId = domain === 'work' ? String(task.context?.orgId || '') : '';
+  const byId = new Map<string, AutonomousTask>();
+  for (const task of [...getTaskQueue(plan.userId), ...getTaskHistory(100, 0, plan.userId)]) {
+    if (!byId.has(task.id)) byId.set(task.id, task);
+  }
+  const candidates = Array.from(byId.values()).filter(task => {
+    if (!ACTIVE_RUNTIME_STATUSES.has(task.status) || !String(task.idempotencyKey || '').startsWith(prefix)) {
+      return false;
+    }
+    const domain = task.domain === 'work' ? 'work' : 'personal';
+    const orgId = domain === 'work' ? String(task.orgId || '') : '';
     return domain === plan.domain && orgId === plan.orgId;
   });
   return candidates.find(task => task.id === plan.lastRuntimeTaskId) || candidates[0] || null;
 }
-
 export function runCommandCenterPlan(input: {
   id: string;
   userId: string;
   domain: 'personal' | 'work';
   orgId: string;
   manual?: boolean;
-}, at = new Date()): { plan: CommandCenterPlan; task: BackgroundDelegationTask; reused: boolean } | null {
+}, at = new Date()): { plan: CommandCenterPlan; task: AutonomousTask; reused: boolean } | null {
   const db = readDB();
   const plan = plans(db).find(candidate => candidate.id === input.id
     && candidate.userId === input.userId
@@ -250,10 +250,6 @@ export function runCommandCenterPlan(input: {
   if (input.manual) {
     const active = activeManualRun(plan);
     if (active) {
-      // A prior dispatch may have persisted the background task before the
-      // plan row was updated (process interruption, client retry, another
-      // window). Repair that link while returning the existing run so the UI
-      // and future retries converge on the same durable task.
       if (plan.lastRuntimeTaskId !== active.id) {
         plan.lastRuntimeTaskId = active.id;
         plan.lastRunAt = active.createdAt;
@@ -263,42 +259,23 @@ export function runCommandCenterPlan(input: {
       return { plan: { ...plan }, task: active, reused: true };
     }
   }
+
   const slot = input.manual ? crypto.randomUUID() : runSlot(plan, at);
-  const durableTaskId = actionTaskId(plan.id, slot);
-  const durableConversationId = plan.conversationId || `command-center-plan:${plan.id}`;
-  const requestId = `command-center:${plan.id}:${slot}`;
-  ensureBackgroundConversationActionTask(db, {
-    taskId: durableTaskId,
-    conversationId: durableConversationId,
-    userId: plan.userId,
-    domain: plan.domain,
-    orgId: plan.orgId,
-    goal: plan.instruction,
-    target: plan.title,
-    requestId,
-    source: 'command_center_plan',
-    context: { planId: plan.id, planKind: plan.kind, cadence: plan.cadence },
-    now: at.toISOString(),
-  });
-  const task = registerBackgroundTask({
-    id: durableTaskId,
+  const task = enqueue({
     userId: plan.userId,
     title: plan.title,
-    prompt: planPrompt(plan),
-    reason: input.manual ? 'command_center_manual_run' : 'command_center_scheduled_plan',
+    description: planPrompt(plan),
+    source: input.manual ? 'user_request' : 'scheduler',
+    domain: plan.domain,
+    orgId: plan.orgId,
+    conversationId: plan.conversationId || `command-center-plan:${plan.id}`,
+    planId: plan.id,
+    priority: plan.kind === 'daily_task' ? 7 : 6,
+    mode: 'analysis',
     idempotencyKey: `command-center-plan:${plan.id}:${slot}`,
-    context: {
-      conversationId: durableConversationId,
-      conversationAgentId: 'lumi',
-      personalityId: 'lumi',
-      domain: plan.domain,
-      orgId: plan.orgId,
-      sourceRequestId: requestId,
-      actionTaskId: durableTaskId,
-      dataRoutingPolicy: isStrictPrivacy() ? 'local_only' : 'policy_scoped',
-      forceOrchestration: true,
-    },
   });
+  if (!task) return null;
+
   const timestamp = at.toISOString();
   plan.lastRunAt = timestamp;
   plan.lastRuntimeTaskId = task.id;
@@ -307,7 +284,6 @@ export function runCommandCenterPlan(input: {
   writeDB(db);
   return { plan: { ...plan }, task, reused: false };
 }
-
 export function dispatchDueCommandCenterPlans(at = new Date()): number {
   const db = readDB();
   const due = plans(db)

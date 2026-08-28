@@ -11,7 +11,7 @@ import { ToolRegistry } from '../registry';
 function kindsFromArgs(value: unknown): RuntimeWorkKind[] | undefined {
   if (!Array.isArray(value)) return undefined;
   return value.filter((kind): kind is RuntimeWorkKind => (
-    kind === 'delegation' || kind === 'autonomy' || kind === 'takeover'
+    kind === 'autonomy' || kind === 'takeover'
   ));
 }
 
@@ -34,7 +34,7 @@ function scopeFromContext(context: { domain?: string; orgId?: string } | undefin
 export function registerRuntimeWorkTools(registry: ToolRegistry): void {
   registry.register({
     name: 'runtime_work_status',
-    description: 'Read the real active Lumi work ledger across delegated background work, autonomous tasks, and work-takeover tasks. Use this for task progress, what Lumi is doing, or whether background work is still active. Do not substitute process lists or client health checks.',
+    description: 'Read the real active LumiCore work ledger across autonomous tasks and work-takeover tasks. Use this for task progress, what Lumi is doing, or whether autonomous work is still active. Do not substitute process lists or client health checks.',
     // i18n-allow: Chinese input-recognition vocabulary; not user-visible copy.
     routingHints: ['后台任务', '任务进度', '正在做什么', '还在执行吗', 'active work', 'task progress', 'background task status'],
     parameters: {
@@ -42,7 +42,7 @@ export function registerRuntimeWorkTools(registry: ToolRegistry): void {
       properties: {
         kinds: {
           type: 'array',
-          items: { type: 'string', enum: ['delegation', 'autonomy', 'takeover'] },
+          items: { type: 'string', enum: ['autonomy', 'takeover'] },
           description: 'Optional work-ledger categories. Omit to inspect all Lumi work.',
         },
       },
@@ -83,7 +83,7 @@ export function registerRuntimeWorkTools(registry: ToolRegistry): void {
         },
         kinds: {
           type: 'array',
-          items: { type: 'string', enum: ['delegation', 'autonomy', 'takeover'] },
+          items: { type: 'string', enum: ['autonomy', 'takeover'] },
           description: 'Optional work-ledger categories. Omit to cancel all Lumi work categories.',
         },
       },
@@ -101,7 +101,7 @@ export function registerRuntimeWorkTools(registry: ToolRegistry): void {
     capability: {
       id: 'runtime.work.cancel',
       family: 'runtime_work',
-      lane: 'agents',
+      lane: 'system',
       operation: 'mutate',
       risk: 'medium',
       sideEffects: [{ type: 'local_write', scope: 'active Lumi task state', reversible: false }],
@@ -125,14 +125,14 @@ export function registerRuntimeWorkTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'runtime_work_pause',
-    description: 'Pause checkpoint-capable delegated or autonomous Lumi work without discarding its task identity, execution checkpoint, or receipts. Use only when the user explicitly asks to pause or temporarily suspend work.',
+    description: 'Pause checkpoint-capable autonomous LumiCore work without discarding its task identity, execution checkpoint, or receipts. Use only when the user explicitly asks to pause or temporarily suspend work.',
     // i18n-allow: Chinese input-recognition vocabulary; not user-visible copy.
     routingHints: ['\u6682\u505c\u540e\u53f0\u4efb\u52a1', '\u5148\u505c\u4e00\u4e0b', 'pause background work', 'suspend current task'],
     parameters: {
       type: 'object',
       properties: {
         taskId: { type: 'string', description: 'Optional exact runtime task id. Omit to pause all matching checkpoint-capable work.' },
-        kinds: { type: 'array', items: { type: 'string', enum: ['delegation', 'autonomy'] } },
+        kinds: { type: 'array', items: { type: 'string', enum: ['autonomy'] } },
       },
       required: [],
     },
@@ -147,7 +147,7 @@ export function registerRuntimeWorkTools(registry: ToolRegistry): void {
     capability: {
       id: 'runtime.work.pause',
       family: 'runtime_work',
-      lane: 'agents',
+      lane: 'system',
       operation: 'mutate',
       risk: 'low',
       sideEffects: [{ type: 'local_write', scope: 'active Lumi task state', reversible: true }],
@@ -171,14 +171,14 @@ export function registerRuntimeWorkTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'runtime_work_resume',
-    description: 'Resume paused delegated or autonomous Lumi work from its durable checkpoint and existing receipt ledger. Use only when the user explicitly asks to continue paused work.',
+    description: 'Resume paused autonomous LumiCore work from its durable checkpoint and existing receipt ledger. Use only when the user explicitly asks to continue paused work.',
     // i18n-allow: Chinese input-recognition vocabulary; not user-visible copy.
     routingHints: ['\u7ee7\u7eed\u540e\u53f0\u4efb\u52a1', '\u6062\u590d\u4efb\u52a1', 'resume background work', 'continue paused task'],
     parameters: {
       type: 'object',
       properties: {
         taskId: { type: 'string', description: 'Optional exact runtime task id. Omit to resume all matching paused work.' },
-        kinds: { type: 'array', items: { type: 'string', enum: ['delegation', 'autonomy'] } },
+        kinds: { type: 'array', items: { type: 'string', enum: ['autonomy'] } },
       },
       required: [],
     },
@@ -193,7 +193,7 @@ export function registerRuntimeWorkTools(registry: ToolRegistry): void {
     capability: {
       id: 'runtime.work.resume',
       family: 'runtime_work',
-      lane: 'agents',
+      lane: 'system',
       operation: 'mutate',
       risk: 'low',
       sideEffects: [{ type: 'local_write', scope: 'paused Lumi task state', reversible: true }],

@@ -116,7 +116,6 @@ export type IntentCategory =
   | 'web'           // Web: search, fetch URL
   | 'file'          // File operations: read, list, find
   | 'system'        // System info, status
-  | 'agent'         // Agent management: create, configure, list
   | 'analysis'      // Deep analysis: compare, evaluate, summarize, research
   | 'unknown';      // Fallback — needs LLM
 
@@ -228,8 +227,9 @@ const SYSTEM_PATTERNS = [
   /(版本|version|升级|update|更新)/i,
 ];
 
-// ── Agent Patterns ──
-const AGENT_PATTERNS = [
+// Requests that assume multiple locally managed assistants stay conversational.
+// They must never fall through to the generic file/folder creation command.
+const PARALLEL_ASSISTANT_MANAGEMENT_RE = [
   /(代理|agent|角色|personality|人格|助手)\s*(列表|list|创建|create|切换|switch|删除|delete|管理|manage)/i,
   /(create|make|new)\s*(agent|代理|助手|角色)/i,
 ];
@@ -315,6 +315,16 @@ export function classifyIntent(input: string): IntentResult {
       confidence: 0.9,
       entities: {},
       subIntent: 'explain_prior_behavior',
+      needsLLM: true,
+    };
+  }
+
+  if (PARALLEL_ASSISTANT_MANAGEMENT_RE.some(pattern => pattern.test(text))) {
+    return {
+      category: 'question',
+      confidence: 0.9,
+      entities: {},
+      subIntent: 'single_core_boundary',
       needsLLM: true,
     };
   }
@@ -415,20 +425,7 @@ export function classifyIntent(input: string): IntentResult {
     }
   }
 
-  // 8. Agent management
-  for (const pattern of AGENT_PATTERNS) {
-    if (pattern.test(text)) {
-      return {
-        category: 'agent',
-        confidence: 0.75,
-        entities: {},
-        subIntent: 'manage',
-        needsLLM: true,
-      };
-    }
-  }
-
-  // 9. Analysis — deep reasoning tasks
+  // 8. Analysis — deep reasoning tasks
   const ANALYSIS_PATTERNS = [
     /(分析|对比|评估|总结|归纳|调研|复盘|深入|思考|权衡|比较|解析)/,
   ];
@@ -443,14 +440,14 @@ export function classifyIntent(input: string): IntentResult {
     }
   }
 
-  // 10. Questions
+  // 9. Questions
   for (const pattern of QUESTION_PATTERNS) {
     if (pattern.test(text)) {
       return { category: 'question', confidence: 0.6, entities: {}, needsLLM: true };
     }
   }
 
-  // 11. Default: unknown, needs LLM
+  // 10. Default: unknown, needs LLM
   // Short messages are likely conversational
   if (text.length < 20) {
     return { category: 'conversation', confidence: 0.4, entities: {}, needsLLM: true };
@@ -466,7 +463,7 @@ const INTENT_CACHE_MAX = 200;
 
 const CLASSIFIER_PROMPT = `Classify this user input into exactly one category. Return ONLY a JSON object.
 
-Categories: command, question, conversation, code, web, file, system, agent, analysis
+Categories: command, question, conversation, code, web, file, system, analysis
 
 Rules:
 - command: action requests (open, create, run, delete, start, stop, set, toggle)
@@ -476,7 +473,6 @@ Rules:
 - web: web search, fetch URL, browse
 - file: file reading, writing, listing, finding
 - system: OS info, settings, status
-- agent: AI agent management, creation, configuration
 - analysis: deep reasoning, comparison, evaluation, summarization, research
 
 Return: {"category":"...","confidence":0.X,"subIntent":"...","entities":{}}`;
@@ -497,8 +493,13 @@ export async function classifyIntentLLM(
     const response = await llmCall(CLASSIFIER_PROMPT, text);
     const parsed = JSON.parse(response.trim());
     // Merge: prefer LLM category but don't lose regex direct tool calls
+    const parsedCategory = [
+      'command', 'question', 'conversation', 'code', 'web', 'file', 'system', 'analysis', 'unknown',
+    ].includes(String(parsed.category || ''))
+      ? parsed.category as IntentCategory
+      : regexResult.category;
     const result: IntentResult = {
-      category: parsed.category || regexResult.category,
+      category: parsedCategory,
       confidence: Math.max(parsed.confidence || 0.5, regexResult.confidence),
       entities: { ...regexResult.entities, ...(parsed.entities || {}) },
       subIntent: parsed.subIntent || regexResult.subIntent,

@@ -66,32 +66,22 @@ describe('finalized output paths', () => {
     expect(task).toContain('if (!taskLease.signal.aborted && !deferTaskModelOutput)');
     expect(task).toContain('const safeText = taskTextGate.push(chunk)');
     expect(task).toContain('taskTextGate.finish()');
-    expect(task).toContain('const orchestratedToolRecords: ToolExecutionRecord[] = []');
-    expect(task).toContain('const finalOrchestratedToolRecords = attachDesktopReceipt(orchestratedToolRecords)');
-    expect(task).toContain('toolRecords: taskAwareRecords(finalOrchestratedToolRecords)');
     expect(task).toMatch(/(?:const|let) finalTaskToolRecords = attachDesktopReceipt\(result\.toolCalls\)/);
     expect(task).toContain('toolRecords: taskAwareRecords(finalTaskToolRecords)');
     expect(task).toContain('finalized: true');
     expect(task).toContain('blocked: finalTaskResponse.blocked');
   });
 
-  it('does not announce orchestrator completion before shared final validation', () => {
-    const orchestrator = source('server/agents/orchestrator.ts');
-
-    expect(orchestrator).toContain('Workflow result ready for final validation');
-    expect(orchestrator).not.toContain('[Orchestrator] Workflow complete');
-  });
-
   it('keeps ordinary REST streaming but buffers action output until the final SSE event', () => {
     const rest = source('server/routes/chat_routes.ts');
 
-    expect(rest).toContain('restExecutionDecision.allowToolUse');
+    expect(rest).toContain('const restToolSessionActive = restExecutionPipeline.executionRequested');
     expect(rest).toContain('shouldDeferModelOutputUntilFinalized');
     expect(rest).toContain('createPreFinalizationTextGate');
     expect(rest).toContain('restTextGate.push(chunk)');
     expect(rest).toContain('if (!deferRestStream)');
     expect(rest).toContain('const restModelToolPolicy = restrictToolPolicyForExecutionBoundary(');
-    expect(rest).toContain('buildModelCapabilityPolicy(restExecutionDecision)');
+    expect(rest).toContain('restExecutionPipeline.authorizationPolicy');
     expect(rest).toContain("'remote_restricted'");
     expect(rest).toContain('toolPolicy: restModelToolPolicy');
     expect(rest).toContain('restModelToolPolicy.maxIterations || 3');
@@ -138,12 +128,11 @@ describe('finalized output paths', () => {
     expectFinalizationMetadataOnEveryAgentResponse('server/socket/task.ts');
   });
 
-  it('keeps heuristic background execution out of model-owned main chat', () => {
+  it('keeps parallel heuristic execution out of model-owned main chat', () => {
     const chat = source('server/socket/chat.ts');
     expect(chat).not.toContain('const completionCandidate = `');
     expect(chat).not.toContain('const finalizedBackground = finalizeLumiResponse({');
     expect(chat).not.toContain('registerBackgroundTask');
-    expect(chat).toContain('## Advisory execution candidates');
     expect(chat).toContain('responseText = finalResponse.text;');
   });
 
@@ -180,13 +169,11 @@ describe('finalized output paths', () => {
     expect(speakPath).toContain('finalized: true');
   });
 
-  it('finalizes both direct and orchestrated MCP route-task results with real tool ledgers', () => {
+  it('finalizes the single LumiCore MCP route-task result with its real tool ledger', () => {
     const mcp = source('server/mcp/lumi_server.ts');
 
     expect(mcp).toContain("source: 'mcp_route_task'");
     expect(mcp).toContain('toolRecords: result.toolCalls');
-    expect(mcp).toContain('const workflowToolRecords: ToolExecutionRecord[] = [];');
-    expect(mcp).toContain('toolRecords: workflowToolRecords');
     expect(mcp).toContain('result: finalized.text');
     expect(mcp).not.toContain("action: 'route_task', status: 'completed'");
   });
@@ -208,22 +195,19 @@ describe('finalized output paths', () => {
     );
   });
 
-  it('never queues model or orchestrator candidate speech before the shared voice finalizer', () => {
+  it('never queues model candidate speech before the shared voice finalizer', () => {
     const voice = source('server/socket/voice.ts');
     const terminalBoundaryStart = voice.indexOf('const commitVoiceTerminal = async');
     const terminalBoundaryEnd = voice.indexOf('const maxIterations =', terminalBoundaryStart);
     const terminalBoundary = voice.slice(terminalBoundaryStart, terminalBoundaryEnd);
-    const orchestratorStart = voice.indexOf('if (shouldOrchestrate) {');
-    const singleModelStart = voice.indexOf('if (!usedOrchestrator) {', orchestratorStart);
+    const singleModelStart = voice.indexOf('const streamResult = await makeLLMCallStreaming(');
     const finalizerStart = voice.indexOf('let finalResponse: ReturnType<typeof finalizeLumiResponse>', singleModelStart);
     const finalCommitStart = voice.indexOf('mainTerminalCommitted = await commitVoiceTerminal({', finalizerStart);
-    const orchestratorCandidatePath = voice.slice(orchestratorStart, singleModelStart);
     const modelCandidatePath = voice.slice(singleModelStart, finalizerStart);
     const finalCommitPath = voice.slice(finalCommitStart, finalCommitStart + 1_000);
 
     expect(terminalBoundaryStart).toBeGreaterThan(0);
-    expect(orchestratorStart).toBeGreaterThan(0);
-    expect(singleModelStart).toBeGreaterThan(orchestratorStart);
+    expect(singleModelStart).toBeGreaterThan(0);
     expect(finalizerStart).toBeGreaterThan(singleModelStart);
     expect(finalCommitStart).toBeGreaterThan(finalizerStart);
     expect(terminalBoundary.indexOf('recordChatExecutionTerminalEventDurably(')).toBeGreaterThan(0);
@@ -233,9 +217,6 @@ describe('finalized output paths', () => {
     expect(terminalBoundary.indexOf('queueFinalizedSpeech(input.speechText!)')).toBeGreaterThan(
       terminalBoundary.indexOf('publishCommitted:'),
     );
-    expect(orchestratorCandidatePath).not.toContain('flushSentence(s)');
-    expect(orchestratorCandidatePath).not.toContain('queueFinalizedSpeech(');
-    expect(orchestratorCandidatePath).toContain('shouldForwardPreFinalizationProgress(msg)');
     expect(modelCandidatePath).not.toContain('flushSentence(');
     expect(modelCandidatePath).not.toContain('queueFinalizedSpeech(');
     expect(finalCommitPath).toContain('speechText: responseText');
@@ -300,8 +281,8 @@ describe('finalized output paths', () => {
     const misc = source('server/routes/misc_routes.ts');
 
     expect(chat).toContain('buildLumiTurnDispatch({');
-    expect(chat).toContain('buildLumiExecutionDecision({');
-    expect(chat).toContain('buildModelCapabilityPolicy(restExecutionDecision)');
+    expect(chat).toContain('buildLumiExecutionPipeline({');
+    expect(chat).toContain('restExecutionPipeline.authorizationPolicy');
     expect(chat).toContain('toolPolicy: restModelToolPolicy');
     expect(chat).toContain('finalizeRestChatResponse({');
     expect(chat).toContain("source: 'rest_chat'");
@@ -432,6 +413,5 @@ describe('finalized output paths', () => {
     expect(voice.slice(voiceHistoryStart, voiceHistoryEnd)).not.toContain('persistVoiceTakeoverExecution(');
 
     expect(chat).not.toContain('const terminalBackgroundRecords: ToolExecutionRecord[] = backgroundToolRecords.length > 0');
-    expect(chat).not.toContain("name: 'background_delegation'");
   });
 });

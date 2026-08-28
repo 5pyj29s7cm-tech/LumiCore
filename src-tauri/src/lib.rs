@@ -4263,7 +4263,13 @@ $publisher = if ($signature.SignerCertificate) {{ [string]$signature.SignerCerti
 pub struct ProcessInfo {
     pub pid: u32,
     pub name: String,
+    /// First visible document window kept for legacy desktop consumers.
     pub window_title: String,
+    /// All visible top-level document windows owned by this supported
+    /// authoring process. The list is deliberately empty for other apps so a
+    /// generic process snapshot does not become a broad window-title scrape.
+    #[serde(default)]
+    pub window_titles: Vec<String>,
     pub cpu_percent: f32,
     pub memory_mb: f32,
 }
@@ -4273,6 +4279,184 @@ pub struct ProcessInfo {
 /// share instead because that is the percentage users expect in conversation.
 fn normalize_process_cpu_percent(raw_percent: f32, logical_cpu_count: usize) -> f32 {
     (raw_percent / logical_cpu_count.max(1) as f32).clamp(0.0, 100.0)
+}
+
+fn is_supported_authoring_process_name(value: &str) -> bool {
+    let normalized = value
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or(value)
+        .trim()
+        .to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "wps"
+            | "wps.exe"
+            | "wpp"
+            | "wpp.exe"
+            | "et"
+            | "et.exe"
+            | "wpsoffice"
+            | "wpsoffice.exe"
+            | "wps office"
+            | "winword"
+            | "winword.exe"
+            | "microsoft word"
+            | "excel"
+            | "excel.exe"
+            | "microsoft excel"
+            | "powerpnt"
+            | "powerpnt.exe"
+            | "microsoft powerpoint"
+    )
+}
+
+fn normalize_visible_window_titles(values: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for value in values {
+        let clean = value
+            .replace(['\r', '\n', '\t'], " ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if clean.is_empty()
+            || normalized
+                .iter()
+                .any(|existing: &String| existing.eq_ignore_ascii_case(&clean))
+        {
+            continue;
+        }
+        normalized.push(clean);
+        if normalized.len() >= 12 {
+            break;
+        }
+    }
+    normalized
+}
+
+#[cfg(target_os = "windows")]
+fn visible_window_titles_by_pid() -> HashMap<u32, Vec<String>> {
+    #[link(name = "user32")]
+    extern "system" {
+        fn EnumWindows(callback: extern "system" fn(isize, isize) -> i32, parameter: isize) -> i32;
+        fn IsWindowVisible(hwnd: isize) -> i32;
+        fn GetWindowTextLengthW(hwnd: isize) -> i32;
+        fn GetWindowTextW(hwnd: isize, text: *mut u16, max_count: i32) -> i32;
+        fn GetWindowThreadProcessId(hwnd: isize, process_id: *mut u32) -> u32;
+    }
+
+    extern "system" fn collect_window(hwnd: isize, parameter: isize) -> i32 {
+        unsafe {
+            if hwnd == 0 || parameter == 0 || IsWindowVisible(hwnd) == 0 {
+                return 1;
+            }
+            let title_length = GetWindowTextLengthW(hwnd);
+            if title_length <= 0 {
+                return 1;
+            }
+            let capacity = (title_length as usize).min(1023) + 1;
+            let mut title_buffer = vec![0u16; capacity];
+            let copied = GetWindowTextW(hwnd, title_buffer.as_mut_ptr(), capacity as i32);
+            if copied <= 0 {
+                return 1;
+            }
+            let mut process_id = 0u32;
+            GetWindowThreadProcessId(hwnd, &mut process_id);
+            if process_id == 0 {
+                return 1;
+            }
+            let title = String::from_utf16_lossy(&title_buffer[..copied as usize]);
+            if title.trim().is_empty() {
+                return 1;
+            }
+            let output = &mut *(parameter as *mut HashMap<u32, Vec<String>>);
+            output.entry(process_id).or_default().push(title);
+            1
+        }
+    }
+
+    let mut output = HashMap::<u32, Vec<String>>::new();
+    unsafe {
+        EnumWindows(
+            collect_window,
+            &mut output as *mut HashMap<u32, Vec<String>> as isize,
+        );
+    }
+    output
+}
+
+#[cfg(target_os = "macos")]
+fn visible_window_titles_by_pid() -> HashMap<u32, Vec<String>> {
+    // System Events exposes only user-visible accessibility windows. Failure
+    // (including missing Accessibility permission) is a safe empty snapshot;
+    // callers then ask the user to focus the document instead of guessing.
+    let script = r#"
+tell application "System Events"
+  set outputText to ""
+  repeat with targetProcess in application processes
+    try
+      set processName to name of targetProcess
+      if processName is in {"WPS Office", "Microsoft Word", "Microsoft Excel", "Microsoft PowerPoint"} then
+        set processPid to unix id of targetProcess
+        repeat with targetWindow in windows of targetProcess
+          try
+            set windowTitle to name of targetWindow
+            if windowTitle is not "" then set outputText to outputText & processPid & tab & windowTitle & linefeed
+          end try
+        end repeat
+      end if
+    end try
+  end repeat
+  return outputText
+end tell
+"#;
+    let mut output = HashMap::<u32, Vec<String>>::new();
+    if let Ok(result) = Command::new("osascript").args(["-e", script]).output() {
+        if result.status.success() {
+            for line in String::from_utf8_lossy(&result.stdout).lines() {
+                let Some((pid, title)) = line.split_once('\t') else {
+                    continue;
+                };
+                let Ok(pid) = pid.trim().parse::<u32>() else {
+                    continue;
+                };
+                if !title.trim().is_empty() {
+                    output.entry(pid).or_default().push(title.to_string());
+                }
+            }
+        }
+    }
+    output
+}
+
+#[cfg(target_os = "linux")]
+fn visible_window_titles_by_pid() -> HashMap<u32, Vec<String>> {
+    let mut output = HashMap::<u32, Vec<String>>::new();
+    let Ok(result) = Command::new("wmctrl").arg("-lp").output() else {
+        return output;
+    };
+    if !result.status.success() {
+        return output;
+    }
+    for line in String::from_utf8_lossy(&result.stdout).lines() {
+        let fields: Vec<&str> = line.splitn(5, char::is_whitespace).collect();
+        let Some(pid) = fields
+            .get(2)
+            .and_then(|value| value.trim().parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let title = fields.get(4).map(|value| value.trim()).unwrap_or_default();
+        if !title.is_empty() {
+            output.entry(pid).or_default().push(title.to_string());
+        }
+    }
+    output
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+fn visible_window_titles_by_pid() -> HashMap<u32, Vec<String>> {
+    HashMap::new()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -4700,6 +4884,7 @@ fn get_running_processes() -> Vec<ProcessInfo> {
     sys.refresh_all();
 
     let logical_cpu_count = sys.cpus().len().max(1);
+    let mut visible_windows = visible_window_titles_by_pid();
 
     let mut processes: Vec<ProcessInfo> = Vec::new();
     for (pid, proc) in sys.processes() {
@@ -4707,24 +4892,79 @@ fn get_running_processes() -> Vec<ProcessInfo> {
         let cpu = normalize_process_cpu_percent(raw_cpu, logical_cpu_count);
         let mem = proc.memory() as f32 / 1024.0 / 1024.0; // bytes -> MB
         let name = proc.name().to_string_lossy().to_string();
-        // Only include processes using >0.1% CPU or >10MB memory (reduce noise)
-        if raw_cpu > 0.1 || mem > 10.0 {
+        let window_titles = if is_supported_authoring_process_name(&name) {
+            normalize_visible_window_titles(
+                visible_windows.remove(&pid.as_u32()).unwrap_or_default(),
+            )
+        } else {
+            Vec::new()
+        };
+        // Retain every supported authoring process with a visible document
+        // window even when it is idle; ordinary process noise remains bounded
+        // by the historical CPU/memory filter.
+        if raw_cpu > 0.1 || mem > 10.0 || !window_titles.is_empty() {
             processes.push(ProcessInfo {
                 pid: pid.as_u32(),
                 name,
-                window_title: String::new(),
+                window_title: window_titles.first().cloned().unwrap_or_default(),
+                window_titles,
                 cpu_percent: cpu,
                 memory_mb: mem,
             });
         }
     }
     processes.sort_by(|a, b| {
+        let by_visible_authoring_window =
+            (!b.window_titles.is_empty()).cmp(&(!a.window_titles.is_empty()));
+        if by_visible_authoring_window != std::cmp::Ordering::Equal {
+            return by_visible_authoring_window;
+        }
         b.cpu_percent
             .partial_cmp(&a.cpu_percent)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     processes.truncate(50); // top 50
     processes
+}
+
+#[cfg(test)]
+mod authoring_window_snapshot_tests {
+    use super::{is_supported_authoring_process_name, normalize_visible_window_titles};
+
+    #[test]
+    fn recognizes_only_supported_office_and_wps_processes() {
+        for process in [
+            "wps.exe",
+            "wpp.exe",
+            "et.exe",
+            "C:\\Program Files\\WPS Office\\wpsoffice.exe",
+            "WINWORD.EXE",
+            "EXCEL.EXE",
+            "POWERPNT.EXE",
+            "Microsoft Word",
+            "Microsoft Excel",
+            "Microsoft PowerPoint",
+        ] {
+            assert!(is_supported_authoring_process_name(process), "{process}");
+        }
+        for process in ["chrome.exe", "Code.exe", "lumi-core.exe", "explorer.exe"] {
+            assert!(!is_supported_authoring_process_name(process), "{process}");
+        }
+    }
+
+    #[test]
+    fn sanitizes_deduplicates_and_bounds_visible_window_titles() {
+        let mut titles = vec![
+            " Quarterly Review.pptx - WPS Office ".to_string(),
+            "Quarterly\tReview.pptx  -  WPS Office".to_string(),
+            "quarterly review.pptx - wps office".to_string(),
+            "\r\n".to_string(),
+        ];
+        titles.extend((0..20).map(|index| format!("Document-{index}.docx - Microsoft Word")));
+        let normalized = normalize_visible_window_titles(titles);
+        assert_eq!(normalized[0], "Quarterly Review.pptx - WPS Office");
+        assert_eq!(normalized.len(), 12);
+    }
 }
 
 // ── Clipboard Commands ──
@@ -5374,37 +5614,10 @@ fn keyboard_type(text: String) -> Result<String, String> {
     Ok(format!("Typed {} characters", text.len()))
 }
 
-#[tauri::command]
-fn keyboard_press(key: String) -> Result<String, String> {
-    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| format!("enigo init: {}", e))?;
-
-    let parts: Vec<&str> = key.split('+').map(|s| s.trim()).collect();
-    // Parse modifiers first, then the main key
-    for &part in &parts[..parts.len().saturating_sub(1)] {
-        match part {
-            "ctrl" | "control" => enigo
-                .key(Key::Control, Direction::Press)
-                .map_err(|e| format!("ctrl press: {}", e))?,
-            "shift" => enigo
-                .key(Key::Shift, Direction::Press)
-                .map_err(|e| format!("shift press: {}", e))?,
-            "alt" => enigo
-                .key(Key::Alt, Direction::Press)
-                .map_err(|e| format!("alt press: {}", e))?,
-            "meta" | "win" | "cmd" | "super" => enigo
-                .key(Key::Meta, Direction::Press)
-                .map_err(|e| format!("meta press: {}", e))?,
-            _ => {
-                return Err(format!(
-                    "Unknown modifier: {}. Use ctrl/shift/alt/meta",
-                    part
-                ))
-            }
-        }
-    }
-
-    let main_key = *parts.last().unwrap_or(&"");
-    let key_enum = match main_key {
+fn keyboard_key_from_name(value: &str) -> Result<Key, String> {
+    let main_key = value.trim();
+    let normalized = main_key.to_ascii_lowercase();
+    let key = match normalized.as_str() {
         "enter" | "return" => Key::Return,
         "escape" | "esc" => Key::Escape,
         "tab" => Key::Tab,
@@ -5431,6 +5644,31 @@ fn keyboard_press(key: String) -> Result<String, String> {
         "f10" => Key::F10,
         "f11" => Key::F11,
         "f12" => Key::F12,
+        "mediaplaypause"
+        | "media_play_pause"
+        | "media-play-pause"
+        | "playpause"
+        | "play_pause"
+        | "play-pause" => Key::MediaPlayPause,
+        "medianexttrack"
+        | "media_next_track"
+        | "media-next-track"
+        | "medianext"
+        | "media_next"
+        | "media-next"
+        | "nexttrack"
+        | "next_track" => Key::MediaNextTrack,
+        "mediaprevtrack"
+        | "media_prev_track"
+        | "media-prev-track"
+        | "mediaprevious"
+        | "media_previous"
+        | "media-previous"
+        | "prevtrack"
+        | "previous_track" => Key::MediaPrevTrack,
+        "volumeup" | "volume_up" | "volume-up" => Key::VolumeUp,
+        "volumedown" | "volume_down" | "volume-down" => Key::VolumeDown,
+        "volumemute" | "volume_mute" | "volume-mute" | "mute" => Key::VolumeMute,
         _ if main_key.len() == 1 => {
             let ch = main_key.chars().next().unwrap();
             if ch.is_ascii_alphanumeric() || ",./;'[]\\-=".contains(ch) {
@@ -5444,11 +5682,45 @@ fn keyboard_press(key: String) -> Result<String, String> {
         }
         _ => {
             return Err(format!(
-                "Unknown key: {}. Use names (enter/escape/tab/up/down/etc) or a single character",
+                "Unknown key: {}. Use names (enter/escape/tab/up/down/media/volume) or a single character",
                 main_key
             ))
         }
     };
+    Ok(key)
+}
+
+#[tauri::command]
+fn keyboard_press(key: String) -> Result<String, String> {
+    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| format!("enigo init: {}", e))?;
+
+    let parts: Vec<&str> = key.split('+').map(|s| s.trim()).collect();
+    // Parse modifiers first, then the main key
+    for &part in &parts[..parts.len().saturating_sub(1)] {
+        match part.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => enigo
+                .key(Key::Control, Direction::Press)
+                .map_err(|e| format!("ctrl press: {}", e))?,
+            "shift" => enigo
+                .key(Key::Shift, Direction::Press)
+                .map_err(|e| format!("shift press: {}", e))?,
+            "alt" => enigo
+                .key(Key::Alt, Direction::Press)
+                .map_err(|e| format!("alt press: {}", e))?,
+            "meta" | "win" | "cmd" | "super" => enigo
+                .key(Key::Meta, Direction::Press)
+                .map_err(|e| format!("meta press: {}", e))?,
+            _ => {
+                return Err(format!(
+                    "Unknown modifier: {}. Use ctrl/shift/alt/meta",
+                    part
+                ))
+            }
+        }
+    }
+
+    let main_key = *parts.last().unwrap_or(&"");
+    let key_enum = keyboard_key_from_name(main_key)?;
 
     enigo
         .key(key_enum, Direction::Click)
@@ -5456,7 +5728,7 @@ fn keyboard_press(key: String) -> Result<String, String> {
 
     // Release modifiers in reverse order
     for &part in parts.iter().rev().skip(1) {
-        match part {
+        match part.to_ascii_lowercase().as_str() {
             "ctrl" | "control" => {
                 let _ = enigo.key(Key::Control, Direction::Release);
             }
@@ -5474,6 +5746,42 @@ fn keyboard_press(key: String) -> Result<String, String> {
     }
 
     Ok(format!("Pressed key: {}", key))
+}
+
+#[cfg(test)]
+mod keyboard_key_mapping_tests {
+    use super::keyboard_key_from_name;
+    use enigo::Key;
+
+    #[test]
+    fn maps_cross_platform_media_key_aliases() {
+        for alias in [
+            "mediaplaypause",
+            "playpause",
+            "media_play_pause",
+            "media-play-pause",
+        ] {
+            assert_eq!(keyboard_key_from_name(alias).unwrap(), Key::MediaPlayPause);
+        }
+        for alias in ["medianexttrack", "media_next", "next_track"] {
+            assert_eq!(keyboard_key_from_name(alias).unwrap(), Key::MediaNextTrack);
+        }
+        for alias in ["mediaprevtrack", "media_previous", "previous_track"] {
+            assert_eq!(keyboard_key_from_name(alias).unwrap(), Key::MediaPrevTrack);
+        }
+    }
+
+    #[test]
+    fn maps_cross_platform_volume_key_aliases() {
+        assert_eq!(keyboard_key_from_name("volume_up").unwrap(), Key::VolumeUp);
+        assert_eq!(
+            keyboard_key_from_name("volume-down").unwrap(),
+            Key::VolumeDown
+        );
+        for alias in ["volumemute", "volume_mute", "mute"] {
+            assert_eq!(keyboard_key_from_name(alias).unwrap(), Key::VolumeMute);
+        }
+    }
 }
 
 // ── Independent cursor: click at coordinates without stealing the user's mouse ──

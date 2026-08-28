@@ -86,6 +86,36 @@ describe('tool execution envelope terminal verification invariant', () => {
     });
   });
 
+  it('normalizes a receipt-only, multiply serialized runtime cancellation', () => {
+    const receipt = JSON.stringify(JSON.stringify({
+      ok: true,
+      status: 'cancelled',
+      matchedCount: 8,
+      cancelledCount: 8,
+      cancellingCount: 0,
+      failedCount: 0,
+    }));
+    const envelope = buildToolExecutionEnvelope(successfulRecord({
+      name: 'runtime_work_cancel',
+      arguments: { taskIds: ['task-a', 'task-b'] },
+      result: '',
+      receipt,
+      terminalVerification: {
+        status: 'verified',
+        strategy: 'terminal_receipt',
+        reason: 'Every matched runtime task was cancelled.',
+      },
+    }));
+
+    expect(envelope.status).toBe('verified_success');
+    expect(envelope.result).toMatchObject({
+      ok: true,
+      status: 'cancelled',
+      cancelledCount: 8,
+    });
+    expect(envelope.verification.status).toBe('verified');
+  });
+
   it('persists a verified active document identity when the observation has no target arguments', () => {
     const envelope = buildToolExecutionEnvelope(successfulRecord({
       name: 'desktop_active_window',

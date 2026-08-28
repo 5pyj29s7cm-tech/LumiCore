@@ -1,7 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { JWT_SECRET, makeApp } from './helpers';
-import { readDB, writeDB } from '../db_layer';
 import { addMember, createDepartment, createOrg } from '../server/org/db';
 import { mountOrgRoutes } from '../server/org/routes';
 import { routeOrganizationWork } from '../server/org/work_routing';
@@ -15,7 +14,6 @@ describe('organization work routing REST authorization', () => {
   const viewerId = `routing-api-viewer-${suffix}`;
   let orgId = '';
   let departmentId = '';
-  let agentId = '';
   let baseUrl = '';
   let cleanup = () => {};
 
@@ -37,22 +35,6 @@ describe('organization work routing REST authorization', () => {
     addMember(orgId, unrelatedMember, 'member');
     addMember(orgId, viewerId, 'viewer');
     departmentId = createDepartment(orgId, 'Operations').id;
-    const db = readDB();
-    agentId = `routing-api-agent-${suffix}`;
-    db.agents.push({
-      id: agentId,
-      ownerUid: ownerId,
-      name: 'Operations Worker',
-      category: 'analysis',
-      data: '{}',
-      status: 'active',
-      domain: 'work',
-      orgId,
-      runtime: 'internal',
-      createdAt: new Date().toISOString(),
-      skillTags: ['operations'],
-    });
-    writeDB(db);
   });
 
   afterAll(() => cleanup());
@@ -72,7 +54,6 @@ describe('organization work routing REST authorization', () => {
         name: 'Operations Lead',
         departmentId,
         memberIds: [memberA, memberB],
-        agentIds: [agentId],
         skillTags: ['operations'],
       }),
     });
@@ -137,7 +118,7 @@ describe('organization work routing REST authorization', () => {
       body: JSON.stringify({ decision: 'approve', reason: 'Approved by owner.' }),
     });
     expect(approved.status).toBe(200);
-    expect((await approved.json()).workItem.status).toBe('assigned');
+    expect((await approved.json()).workItem.status).toBe('waiting_human');
   });
 
   it('allows an assigned human to accept takeover while hiding unrelated handoffs', async () => {
@@ -150,7 +131,7 @@ describe('organization work routing REST authorization', () => {
       intentKind: 'none',
       operation: 'read',
       sideEffectClass: 'none',
-      targetAgentIds: [agentId],
+      targetMemberId: memberA,
     });
     const requested = await fetch(`${baseUrl}/api/org/org/${orgId}/work-items/${routed.workItem.id}/handoffs`, {
       method: 'POST',

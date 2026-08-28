@@ -12,7 +12,6 @@ import * as Org from './org';
 import * as EDB from './db';
 import * as KB from './kb';
 import * as LegalCases from './legal_cases';
-import * as Templates from './templates';
 import * as Audit from './audit';
 import * as WorkRouting from './work_routing';
 import * as ResourceACL from './resource_acl';
@@ -197,7 +196,6 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
       description: req.body?.description,
       skillTags: req.body?.skillTags,
       memberIds: req.body?.memberIds,
-      agentIds: req.body?.agentIds,
       isManager: req.body?.isManager,
     });
     res.status(201).json(position);
@@ -328,7 +326,6 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
       targetDepartmentId: req.body?.targetDepartmentId,
       targetPositionId: req.body?.targetPositionId,
       targetMemberId: req.body?.targetMemberId,
-      targetAgentIds: req.body?.targetAgentIds,
       reason: req.body?.reason,
     });
     if (!handoff) {
@@ -651,8 +648,6 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
     });
   });
 
-  // ── Agent Templates ───────────────────────────────────────────────────
-
   router.get('/org/legal/cases', requireAuth, requireOrgMember, (req: Request, res: Response) => {
     const query = String(req.query.query || '');
     const limit = Math.min(parseInt(String(req.query.limit || '50'), 10) || 50, 200);
@@ -780,96 +775,6 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
       return;
     }
     res.status(201).json(material);
-  });
-
-  router.get('/org/templates', requireAuth, requireOrgMember, (req: Request, res: Response) => {
-    const templates = Templates.listTemplates(req.user!.orgId!, {
-      status: req.query.status as EDB.TemplateStatus | undefined,
-      category: req.query.category as string | undefined,
-      authorId: req.query.authorId as string | undefined,
-    });
-    res.json(templates);
-  });
-
-  router.get('/org/templates/:templateId', requireAuth, requireOrgMember, (req: Request, res: Response) => {
-    const t = Templates.getTemplate(req.user!.orgId!, req.params.templateId);
-    if (!t) {
-      res.status(404).json({ error: 'Template not found' });
-      return;
-    }
-    res.json(t);
-  });
-
-  router.post('/org/templates', requireAuth, requireOrgMember, (req: Request, res: Response) => {
-    const { name, description, category, config, icon } = req.body;
-    if (!name || !description || !category || !config) {
-      res.status(400).json({ error: 'name, description, category, and config are required' });
-      return;
-    }
-    const t = Templates.createTemplate(req.user!.orgId!, req.user!.uid, { name, description, category, config, icon });
-    res.status(201).json(t);
-  });
-
-  router.post('/org/templates/:templateId/submit', requireAuth, requireOrgMember, (req: Request, res: Response) => {
-    const t = Templates.submitForReview(req.user!.orgId!, req.user!.uid, req.params.templateId);
-    if (!t) {
-      res.status(400).json({ error: 'Cannot submit this template (check status and ownership)' });
-      return;
-    }
-    if (io) {
-      io.to(`org:${req.user!.orgId}`).emit('template:submitted', { templateId: req.params.templateId, authorId: req.user!.uid });
-    }
-    res.json(t);
-  });
-
-  router.post('/org/templates/:templateId/approve', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
-    const t = Templates.approveTemplate(req.user!.orgId!, req.user!.uid, req.params.templateId, req.body.comment);
-    if (!t) {
-      res.status(400).json({ error: 'Cannot approve this template (must be pending_review)' });
-      return;
-    }
-    if (io) {
-      io.to(`org:${req.user!.orgId}`).emit('template:approved', { templateId: req.params.templateId, reviewerId: req.user!.uid });
-    }
-    res.json(t);
-  });
-
-  router.post('/org/templates/:templateId/reject', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
-    const { comment } = req.body;
-    if (!comment) {
-      res.status(400).json({ error: 'Rejection reason (comment) is required' });
-      return;
-    }
-    const t = Templates.rejectTemplate(req.user!.orgId!, req.user!.uid, req.params.templateId, comment);
-    if (!t) {
-      res.status(400).json({ error: 'Cannot reject this template (must be pending_review)' });
-      return;
-    }
-    if (io) {
-      io.to(`org:${req.user!.orgId}`).emit('template:rejected', { templateId: req.params.templateId, reviewerId: req.user!.uid });
-    }
-    res.json(t);
-  });
-
-  router.post('/org/templates/:templateId/publish', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
-    const t = Templates.publishTemplate(req.user!.orgId!, req.user!.uid, req.params.templateId);
-    if (!t) {
-      res.status(400).json({ error: 'Cannot publish this template (must be approved)' });
-      return;
-    }
-    if (io) {
-      io.to(`org:${req.user!.orgId}`).emit('template:published', { templateId: req.params.templateId });
-    }
-    res.json(t);
-  });
-
-  router.post('/org/templates/:templateId/install', requireAuth, requireOrgMember, (req: Request, res: Response) => {
-    const result = Templates.installTemplate(req.user!.orgId!, req.user!.uid, req.params.templateId);
-    if (!result) {
-      res.status(400).json({ error: 'Cannot install this template (must be published)' });
-      return;
-    }
-    res.json(result);
   });
 
   // ── Invitations ──────────────────────────────────────────────────────

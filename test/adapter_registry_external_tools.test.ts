@@ -32,7 +32,7 @@ describe('adapter registry external toolbox awareness', () => {
       const report = getAdapterRegistry({ includePlanned: false });
       const cadToolbox = report.adapters.find(adapter => adapter.id === 'cad_bim.local_toolchain');
       const nanoBanana = report.adapters.find(adapter => adapter.id === 'ai.nano_banana');
-      const externalAi = report.adapters.find(adapter => adapter.id === 'ai.external_agents');
+      const externalAi = report.adapters.find(adapter => adapter.id === 'ai.external_tools');
       const drafting = report.adapters.find(adapter => adapter.id === 'cad_bim.drafting');
 
       expect(cadToolbox?.status).toBe('available');
@@ -46,16 +46,10 @@ describe('adapter registry external toolbox awareness', () => {
       expect(nanoBanana?.status).toBe('requires_setup');
       expect(nanoBanana?.surfaces).toEqual(expect.arrayContaining(['Google AI Studio', 'Gemini app']));
       expect(externalAi?.actions).toEqual(expect.arrayContaining([
-        'external_ai_route_plan',
-        'external_ai_collaborate',
-        'external_ai_collect_answers',
-        'external_ai_session_status',
-        'desktop_ai_list_targets',
-      ]));
-      expect(externalAi?.actions).not.toEqual(expect.arrayContaining([
         'desktop_ai_ask',
-        'desktop_ai_roundtable',
         'desktop_ai_collect_answer',
+        'desktop_ai_list_targets',
+        'external_ai_history_sync',
       ]));
       expect(externalAi?.requiresConfirmation).toBe(true);
       expect(externalAi?.surfaces).toEqual(expect.arrayContaining(['WorkBuddy', 'Codex desktop', 'ChatGPT', 'Claude', 'local AI runtimes']));

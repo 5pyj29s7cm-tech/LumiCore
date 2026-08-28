@@ -68,12 +68,13 @@ import { useAmbientPoller } from '@/hooks/useAmbientPoller';
 import { useVoiceCall, type VoiceTranscriptMeta } from '@/hooks/useVoiceCall';
 import { useApp, type OperationMode } from '@/contexts/AppContext';
 import { describeAgentResponseDelivery } from '@/lib/agentResponseDelivery';
-const LocalAgentSphere = lazy(() => import('./LocalAgentSphere').then(m => ({ default: m.LocalAgentSphere })));
-const NexusGlobe = lazy(() => import('./NexusGlobe/NexusGlobe').then(m => ({ default: m.NexusGlobe })));
+const LumiCoreAvatar = lazy(() => import('./LumiCoreAvatar').then(m => ({ default: m.LumiCoreAvatar })));
+const MemoryAvatarLab = lazy(() => import('./MemoryAvatarLab').then(m => ({ default: m.MemoryAvatarLab })));
+const Sanctuary = lazy(() => import('./Sanctuary').then(m => ({ default: m.Sanctuary })));
 const InkWorldLazy = lazy(() => import('./InkWorld').then(m => ({ default: m.InkWorld })));
 import {
   normalizeTaskCompletionFeedback,
-  type BackgroundWorkflowTask,
+  type WorkflowTask,
   type WorkflowStep,
 } from './workflowTypes';
 import type { CommandCenterView } from './commandCenterTypes';
@@ -145,13 +146,11 @@ const ContributorNodePanel = lazy(() => import('./ContributorNodePanel').then(m 
 const DeviceSyncCenter = lazy(() => import('./DeviceSyncCenter').then(m => ({ default: m.DeviceSyncCenter })));
 const GitHubMCPBrowser = lazy(() => import('./GitHubMCPBrowser').then(m => ({ default: m.GitHubMCPBrowser })));
 const KnowledgeBase = lazy(() => import('./KnowledgeBase').then(m => ({ default: m.KnowledgeBase })));
-const MemoryAvatarLab = lazy(() => import('./MemoryAvatarLab').then(m => ({ default: m.MemoryAvatarLab })));
 const MeshSyncSelector = lazy(() => import('./MeshSyncSelector').then(m => ({ default: m.MeshSyncSelector })));
 const NotificationCenter = lazy(() => import('./NotificationCenter').then(m => ({ default: m.NotificationCenter })));
 const OrgPortal = lazy(() => import('./OrgPortal').then(m => ({ default: m.OrgPortal })));
 const PersonalityEditor = lazy(() => import('./PersonalityEditor').then(m => ({ default: m.PersonalityEditor })));
 const ReminderPanel = lazy(() => import('./ReminderPanel').then(m => ({ default: m.ReminderPanel })));
-const Sanctuary = lazy(() => import('./Sanctuary').then(m => ({ default: m.Sanctuary })));
 const Settings = lazy(() => import('./Settings').then(m => ({ default: m.Settings })));
 const SkillCenter = lazy(() => import('./SkillCenter').then(m => ({ default: m.SkillCenter })));
 const SystemExplorer = lazy(() => import('./SystemExplorer').then(m => ({ default: m.SystemExplorer })));
@@ -1543,7 +1542,7 @@ export function DesktopUI({
   const canCustomizeLumiAppearance = workDomain !== 'work'
     || ['owner', 'admin'].includes(String(orgConnection?.orgRole || ''));
 
-  const initialCommandCenterOpen = activeTab === 'chat' || activeTab === 'team' || activeTab === 'command-center';
+  const initialCommandCenterOpen = activeTab === 'chat' || activeTab === 'command-center';
   const initialWindowId = activeTab !== 'home' && activeTab !== 'knowledge' && !initialCommandCenterOpen ? activeTab : null;
   const [openWindows, setOpenWindows] = useState<string[]>(initialWindowId ? [initialWindowId] : []);
   const [minimizedWindows, setMinimizedWindows] = useState<string[]>([]);
@@ -1587,13 +1586,14 @@ export function DesktopUI({
   const [activePersonality, setActivePersonality] = useState('lumi');
   const petReactionTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const [memoryLabOpen, setMemoryLabOpen] = useState(false);
+
   const triggerPetReaction = (animation: string, ms: number = 1500) => {
     if (petReactionTimeout.current) clearTimeout(petReactionTimeout.current);
     setPetReaction({ animation, until: Date.now() + ms });
     petReactionTimeout.current = setTimeout(() => setPetReaction(null), ms);
   };
 
-  const [memoryLabOpen, setMemoryLabOpen] = useState(false);
   const [equippedAccessories, setEquippedAccessories] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem(petStorageKeys.accessories)
@@ -1719,11 +1719,11 @@ export function DesktopUI({
   }, [chatOpen]);
 
   const openCommandCenter = useCallback((view: CommandCenterView = 'office') => {
-    setCommandCenterView(view === 'team' ? 'office' : view);
-    setOpenWindows(previous => previous.filter(windowId => !['chat', 'team', 'command-center'].includes(windowId)));
-    setMinimizedWindows(previous => previous.filter(windowId => !['chat', 'team', 'command-center'].includes(windowId)));
-    setWindowOrder(previous => previous.filter(windowId => !['chat', 'team', 'command-center'].includes(windowId)));
-    setFocusedWindow(previous => ['chat', 'team', 'command-center'].includes(previous || '') ? null : previous);
+    setCommandCenterView(view);
+    setOpenWindows(previous => previous.filter(windowId => !['chat', 'command-center'].includes(windowId)));
+    setMinimizedWindows(previous => previous.filter(windowId => !['chat', 'command-center'].includes(windowId)));
+    setWindowOrder(previous => previous.filter(windowId => !['chat', 'command-center'].includes(windowId)));
+    setFocusedWindow(previous => ['chat', 'command-center'].includes(previous || '') ? null : previous);
     setChatLoaded(true);
     setChatOpen(true);
     setActiveTab('command-center');
@@ -1751,6 +1751,33 @@ export function DesktopUI({
       window.dispatchEvent(new CustomEvent('lumi:submit-command-input'));
     }, 120);
   }, [openCommandCenter]);
+
+  // Memory Avatar is a private, single-persona surface. It deliberately has
+  // no relationship to the removed Agent/team workspace.
+  const openMemoryAvatar = useCallback(async () => {
+    try { sounds.playClick(); } catch {}
+    try {
+      const res = await fetch('/api/memory-avatars', { credentials: 'include' });
+      if (res.ok) {
+        const data = await res.json();
+        const avatars = Array.isArray(data?.avatars) ? data.avatars : [];
+        if (avatars.length > 0) {
+          setSanctuaryAgent(avatars[0]);
+          setSanctuaryLoaded(true);
+          setSanctuaryOpen(true);
+          setMemoryLabOpen(false);
+          return;
+        }
+      }
+    } catch {}
+    setMemoryLabOpen(true);
+  }, []);
+
+  useEffect(() => {
+    const handler = () => { void openMemoryAvatar(); };
+    window.addEventListener('lumi:open-memory-lab', handler);
+    return () => window.removeEventListener('lumi:open-memory-lab', handler);
+  }, [openMemoryAvatar]);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -1937,7 +1964,7 @@ export function DesktopUI({
   const [workflowSteps, setWorkflowSteps] = useState<WorkflowStep[]>([]);
   const [pendingOperationMode, setPendingOperationMode] = useState<OperationMode | null>(null);
   const seenWorkflowToolEvents = useRef<Set<string>>(new Set());
-  const backgroundTaskStatusRef = useRef<Map<string, string>>(new Map());
+  const autonomousTaskStatusRef = useRef<Map<string, string>>(new Map());
   const readMeetingItem = useCallback((scopedKey: string, legacyKey: string): string | null => (
     localStorage.getItem(scopedKey)
       ?? (workDomain === 'personal' ? localStorage.getItem(legacyKey) : null)
@@ -2148,10 +2175,6 @@ export function DesktopUI({
   useEffect(() => {
     if (chatOpen) setChatLoaded(true);
   }, [chatOpen]);
-
-  useEffect(() => {
-    if (sanctuaryOpen) setSanctuaryLoaded(true);
-  }, [sanctuaryOpen]);
 
   const voiceprint = useVoiceprint({ socket });
   const loadVoiceprintTemplates = voiceprint.loadTemplates;
@@ -2961,8 +2984,8 @@ export function DesktopUI({
         if (detail.tab === 'org' && detail.sub) {
           queueOrganizationWorkspaceRoute(detail.sub, detail.articleId);
         }
-        if (detail.tab === 'chat' || detail.tab === 'command-center' || detail.tab === 'team') {
-          openCommandCenter(detail.tab === 'team' ? 'team' : 'office');
+        if (detail.tab === 'chat' || detail.tab === 'command-center') {
+          openCommandCenter('office');
           return;
         }
         // Anyone can open the org tab — join/create/connect handled by OrgPortal
@@ -2972,29 +2995,6 @@ export function DesktopUI({
     window.addEventListener('lumi:navigate', handler);
     return () => window.removeEventListener('lumi:navigate', handler);
   }, [openCommandCenter, setActiveTab]);
-
-  const openMemoryAvatar = useCallback(async () => {
-    try { sounds.playClick(); } catch {}
-    try {
-      const res = await fetch('/api/agents/sanctuaries');
-      if (res.ok) {
-        const data = await res.json();
-        if (data.agents && data.agents.length > 0) {
-          setSanctuaryAgent(data.agents[0]);
-          setSanctuaryOpen(true);
-          return;
-        }
-      }
-    } catch {}
-    setMemoryLabOpen(true);
-  }, []);
-
-  // Listen for Memory Avatar Lab open request from AgentGenerator
-  useEffect(() => {
-    const handler = () => openMemoryAvatar();
-    window.addEventListener('lumi:open-memory-lab', handler);
-    return () => window.removeEventListener('lumi:open-memory-lab', handler);
-  }, [openMemoryAvatar]);
 
   // Restore real system volume/brightness on mount
   useEffect(() => {
@@ -3151,7 +3151,7 @@ export function DesktopUI({
     const workflowStepId = (prefix: string, seed?: string) =>
       `${prefix}-${seed || Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const isDetachedBackgroundEvent = (data: { source?: string }) =>
-      /^(?:background|background_delegation|proactive|scheduler)/i.test(String(data.source || ''));
+      /^(?:background|proactive|scheduler)/i.test(String(data.source || ''));
     const acceptsForegroundEvent = (data: { requestId?: string; source?: string }, claim = false) => {
       if (isDetachedBackgroundEvent(data)) return false;
       const requestId = String(data.requestId || '').trim();
@@ -3359,55 +3359,48 @@ export function DesktopUI({
       }
     };
 
-    const normalizeBackgroundTask = (data: any): BackgroundWorkflowTask | null => {
+    const normalizeAutonomousTask = (data: any, status: WorkflowTask['status']): WorkflowTask | null => {
       const raw = data?.task || data;
       const id = String(raw?.id || data?.taskId || '');
       if (!id) return null;
-      const workerNames = Array.isArray(raw?.workerNames)
-        ? raw.workerNames
-        : Array.isArray(raw?.workers)
-          ? raw.workers.map((worker: any) => worker?.name || worker?.id).filter(Boolean)
-          : [];
       return {
         id,
         title: raw?.title || data?.title || id,
-        status: (raw?.status || 'queued') as BackgroundWorkflowTask['status'],
-        workerNames,
+        status: (raw?.status || status) as WorkflowTask['status'],
         toolCallsCount: Number(raw?.toolCallsCount || 0),
         error: raw?.error,
-        resultPreview: raw?.resultPreview,
-        updatedAt: raw?.updatedAt,
+        resultPreview: raw?.resultPreview || raw?.result,
+        updatedAt: raw?.updatedAt || raw?.timestamp,
         completionFeedback: normalizeTaskCompletionFeedback(raw?.completionFeedback || data?.completionFeedback),
       };
     };
 
-    const recordBackgroundTaskStep = (task: BackgroundWorkflowTask) => {
-      const previousStatus = backgroundTaskStatusRef.current.get(task.id);
+    const recordAutonomousTaskStep = (task: WorkflowTask) => {
+      const previousStatus = autonomousTaskStatusRef.current.get(task.id);
       if (previousStatus === task.status) return;
-      backgroundTaskStatusRef.current.set(task.id, task.status);
+      autonomousTaskStatusRef.current.set(task.id, task.status);
       const isActive = task.status === 'queued' || task.status === 'running' || task.status === 'cancelling';
       const isFailed = task.status === 'failed';
       setAgentStatus(isActive ? 'background' : isFailed ? 'error' : 'done');
       setWorkflowSteps(prev => [...prev, {
-        id: `background-task-${task.id}-${task.status}-${Date.now()}`,
+        id: `autonomous-task-${task.id}-${task.status}-${Date.now()}`,
         type: isFailed ? 'error' : task.status === 'completed' ? 'response' : 'background',
-        text: `${t.workflowBackgroundTask || 'Background task'}: ${task.status}`,
+        text: `${t.workflowAutonomousTask || 'Autonomous task'}: ${task.status}`,
         detail: task.title || task.id,
         time: Date.now(),
       }]);
     };
 
-    const onDelegation = (data: any) => {
-      const task = normalizeBackgroundTask(data);
-      if (!task) return;
-      recordBackgroundTaskStep(task);
+    const autonomousTaskListener = (status: WorkflowTask['status']) => (data: any) => {
+      const task = normalizeAutonomousTask(data, status);
+      if (task) recordAutonomousTaskStep(task);
     };
-
-    const onBackgroundTaskUpdate = (data: any) => {
-      const task = normalizeBackgroundTask(data);
-      if (!task) return;
-      recordBackgroundTaskStep(task);
-    };
+    const onAutonomousStarted = autonomousTaskListener('running');
+    const onAutonomousPaused = autonomousTaskListener('paused');
+    const onAutonomousRetry = autonomousTaskListener('queued');
+    const onAutonomousCompleted = autonomousTaskListener('completed');
+    const onAutonomousFailed = autonomousTaskListener('failed');
+    const onAutonomousCancelled = autonomousTaskListener('cancelled');
 
     const onDesktopControlState = (data: any) => {
       const id = `desktop-control-${String(data?.leaseId || data?.taskId || 'current')}`;
@@ -3430,8 +3423,12 @@ export function DesktopUI({
     };
 
     socket.on('agent:status', onStatus);
-    socket.on('agent:delegation', onDelegation);
-    socket.on('agent:background_task_update', onBackgroundTaskUpdate);
+    socket.on('autonomous:task_started', onAutonomousStarted);
+    socket.on('autonomous:task_paused', onAutonomousPaused);
+    socket.on('autonomous:task_retry_scheduled', onAutonomousRetry);
+    socket.on('autonomous:task_completed', onAutonomousCompleted);
+    socket.on('autonomous:task_failed', onAutonomousFailed);
+    socket.on('autonomous:task_cancelled', onAutonomousCancelled);
     socket.on('agent:desktop_control_state', onDesktopControlState);
     socket.on('agent:tool_call', onToolCall);
     socket.on('agent:tool', onToolCall);
@@ -3465,12 +3462,6 @@ export function DesktopUI({
         });
       }
     };
-    const onAgentPromoted = (data: { agentName: string; skillName?: string }) => {
-      const msg = data.skillName
-        ? `Agent "${data.agentName}" auto-promoted with skill "${data.skillName}"`
-        : `Agent "${data.agentName}" has been auto-created`;
-      addNotification({ type: 'system', title: 'Agent Promoted', message: msg });
-    };
     const onAgentNotification = (data: { type: string; level: string; message: string }) => {
       addNotification({ type: data.level === 'critical' ? 'warning' : data.level === 'warning' ? 'warning' : 'info', title: data.type || 'Lumi', message: data.message });
     };
@@ -3497,7 +3488,6 @@ export function DesktopUI({
       // Token usage updated — TokenDashboard handles REST polling, this is real-time supplement
     };
     socket.on('preferences:changed', onPreferencesChanged);
-    socket.on('agent:promoted', onAgentPromoted);
     socket.on('agent:notification', onAgentNotification);
     socket.on('wake:detected', onWakeDetected);
     socket.on('wake:error', onWakeError);
@@ -3506,8 +3496,12 @@ export function DesktopUI({
 
     return () => {
       socket.off('agent:status', onStatus);
-      socket.off('agent:delegation', onDelegation);
-      socket.off('agent:background_task_update', onBackgroundTaskUpdate);
+      socket.off('autonomous:task_started', onAutonomousStarted);
+      socket.off('autonomous:task_paused', onAutonomousPaused);
+      socket.off('autonomous:task_retry_scheduled', onAutonomousRetry);
+      socket.off('autonomous:task_completed', onAutonomousCompleted);
+      socket.off('autonomous:task_failed', onAutonomousFailed);
+      socket.off('autonomous:task_cancelled', onAutonomousCancelled);
       socket.off('agent:desktop_control_state', onDesktopControlState);
       socket.off('agent:tool_call', onToolCall);
       socket.off('agent:tool', onToolCall);
@@ -3515,7 +3509,6 @@ export function DesktopUI({
       socket.off('agent:error', onError);
       socket.off('agent:proactive', onProactive);
       socket.off('preferences:changed', onPreferencesChanged);
-      socket.off('agent:promoted', onAgentPromoted);
       socket.off('agent:notification', onAgentNotification);
       socket.off('wake:detected', onWakeDetected);
       socket.off('wake:error', onWakeError);
@@ -3531,7 +3524,7 @@ export function DesktopUI({
     socket,
     t.workflowAnalyzing,
     t.workflowBackgroundStep,
-    t.workflowBackgroundTask,
+    t.workflowAutonomousTask,
     t.workflowCalling,
     t.workflowError,
     t.workflowResponseReady,
@@ -3728,12 +3721,12 @@ export function DesktopUI({
       setKnowledgeOpen(prev => !prev);
       return;
     }
-    if (tab === 'chat' || tab === 'command-center' || tab === 'team') {
-      openCommandCenter(tab === 'team' ? 'team' : 'office');
+    if (tab === 'chat' || tab === 'command-center') {
+      openCommandCenter('office');
       return;
     }
     if (tab === 'memory-avatar') {
-      openMemoryAvatar();
+      void openMemoryAvatar();
       return;
     }
     if (openWindows.includes(tab)) {
@@ -3949,7 +3942,8 @@ export function DesktopUI({
         if (value === 'sync') return 'devices';
         if (value === 'avatar-studio' || value === 'sound') return 'personalization';
         if (value === 'world' || value === 'nexus' || value === 'nexus-view' || value === 'cloud-canvas') return 'nexus';
-        if (value === 'chat' || value === 'team' || value === 'command-center') return 'command-center';
+        if (value === 'chat' || value === 'command-center') return 'command-center';
+        if (value === 'memory' || value === 'memory-avatar' || value === 'memory-avatars' || value === 'sanctuary') return 'memory-avatar';
         return value;
       };
 
@@ -3967,7 +3961,6 @@ export function DesktopUI({
           setChatOpen(false);
           if (windowId !== 'knowledge') setKnowledgeOpen(false);
           if (windowId !== 'app-launcher') setIsSearchOpen(false);
-          if (windowId !== 'memory-avatar') setMemoryLabOpen(false);
           if (windowId !== 'nexus') setViewMode('personal');
         }
 
@@ -3980,7 +3973,6 @@ export function DesktopUI({
           setChatOpen(false);
           setIsNotificationPanelOpen(false);
           setIsSearchOpen(false);
-          setMemoryLabOpen(false);
           setViewMode('personal');
           setActiveTab('home');
           return;
@@ -4005,7 +3997,11 @@ export function DesktopUI({
           return;
         }
         if (windowId === 'command-center') {
-          openCommandCenter(value === 'team' ? 'team' : 'office');
+          openCommandCenter('office');
+          return;
+        }
+        if (windowId === 'memory-avatar') {
+          void openMemoryAvatar();
           return;
         }
         if (windowId === 'notifications') {
@@ -4014,10 +4010,6 @@ export function DesktopUI({
           setMinimizedWindows(prev => prev.filter(w => w !== 'notifications'));
           setWindowOrder(prev => prev.filter(w => w !== 'notifications'));
           if (focusedWindow === 'notifications') setFocusedWindow(null);
-          return;
-        }
-        if (windowId === 'memory-avatar') {
-          void openMemoryAvatar();
           return;
         }
         setOpenWindows(prev => prev.includes(windowId) ? prev : [...prev, windowId]);
@@ -4064,6 +4056,12 @@ export function DesktopUI({
           setActiveTab('home');
           return;
         }
+        if (windowId === 'memory-avatar') {
+          setMemoryLabOpen(false);
+          setSanctuaryOpen(false);
+          setSanctuaryAgent(null);
+          return;
+        }
         if (windowId === 'nexus') {
           setViewMode('personal');
           return;
@@ -4074,10 +4072,6 @@ export function DesktopUI({
         }
         if (windowId === 'notifications') {
           setIsNotificationPanelOpen(false);
-          return;
-        }
-        if (windowId === 'memory-avatar') {
-          setMemoryLabOpen(false);
           return;
         }
         if (windowId === 'org' && activeTab === 'org') {
@@ -4384,7 +4378,7 @@ export function DesktopUI({
         commandCenterOpen: chatOpen,
         commandCenterView,
         notificationsOpen: isNotificationPanelOpen,
-        memoryAvatarOpen: memoryLabOpen,
+        memoryAvatarOpen: memoryLabOpen || sanctuaryOpen,
         meetingOpen: meetingNotesOpen || operationMode === 'meeting',
         wallpaperMode: isWallpaperMode,
         widgetMode: isDesktopWidgetMode,
@@ -4431,7 +4425,7 @@ export function DesktopUI({
           commandCenterOpen: chatOpen,
           commandCenterView,
           notificationsOpen: isNotificationPanelOpen,
-          memoryAvatarOpen: memoryLabOpen,
+          memoryAvatarOpen: memoryLabOpen || sanctuaryOpen,
           runtimeLogOpen: openWindows.includes('kernel'),
           meetingOpen: meetingNotesOpen,
           wallpaperMode: isWallpaperMode,
@@ -4514,6 +4508,7 @@ export function DesktopUI({
     orgConnection?.orgRole,
     organizationWorkspaceView,
     reportedKnowledgeRuntimeState,
+    sanctuaryOpen,
     socket,
     settingsSection,
     viewMode,
@@ -5245,21 +5240,21 @@ export function DesktopUI({
               </div>
             )}
             <Suspense fallback={<div className="h-[210px] w-[210px] rounded-full border border-white/10 bg-white/[0.02] animate-pulse" />}>
-              <LocalAgentSphere
+              <LumiCoreAvatar
                 t={t}
+                lang={lang}
                 sentiment={sphereSentiment}
                 callState={callState}
                 audioLevel={audioLevel}
+                isMuted={isMuted}
                 highPerformance={isTauri}
                 isWallpaperMode={isWallpaperMode}
                 reaction={petReaction?.animation || null}
+                facePresent={faceRecognition.result.facePresent}
                 onStartCall={startStandardVoiceCall}
                 onEndCall={endVoiceCallFromUI}
                 onInterrupt={interrupt}
                 onToggleMute={toggleMute}
-                onMessage={() => {}}
-                facePresent={faceRecognition.result.facePresent}
-                gesturesDisabled={false}
                 isLightMode={resolvedAppearanceMode === 'light'}
               />
             </Suspense>
@@ -5877,7 +5872,7 @@ export function DesktopUI({
                     </div>
                   ) : windowId === 'terminal' ? (
                     <TerminalWindow t={t} onClose={() => closeWindow('terminal')} isActive={focusedWindow === 'terminal'} />
-                  ) : windowId === 'chat' || windowId === 'team' || windowId === 'command-center' ? (
+                  ) : windowId === 'chat' || windowId === 'command-center' ? (
                     // Chat is now fullscreen overlay — this case should not be reached
                     null
                   ) : renderTabContent(windowId)}
@@ -5974,7 +5969,7 @@ export function DesktopUI({
                     <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs leading-relaxed text-white/45">
                       {pendingOperationMode === 'meeting'
                         ? (t.modeMeetingConfirmNote || 'Meeting mode starts microphone speech-to-text, records notes, and can generate a report when you end it.')
-                        : (t.modeAutoConfirmNote || 'Autonomy can use tools, run logs, teams, commands, and desktop control with visible progress and confirmations for sensitive actions.')}
+                        : (t.modeAutoConfirmNote || 'Autonomy can use tools, run logs, commands, and desktop control with visible progress and confirmations for sensitive actions.')}
                     </div>
                   </div>
                 </div>
@@ -6019,11 +6014,12 @@ export function DesktopUI({
         )}
       </AnimatePresence>
 
-      {/* Sanctuary — fullscreen immersive memory avatar space */}
+      {/* Sanctuary — fullscreen private Memory Avatar conversation */}
       {sanctuaryLoaded && (
         <Suspense fallback={null}>
           <Sanctuary
             agent={sanctuaryAgent}
+            lang={lang}
             isOpen={sanctuaryOpen}
             onClose={() => { setSanctuaryOpen(false); setSanctuaryAgent(null); }}
           />
@@ -6052,9 +6048,11 @@ export function DesktopUI({
             <Suspense fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
               <MemoryAvatarLab
                 t={t}
-                onEnterSanctuary={(agent: any) => {
+                lang={lang}
+                onEnterSanctuary={(avatar: any) => {
                   setMemoryLabOpen(false);
-                  setSanctuaryAgent(agent);
+                  setSanctuaryAgent(avatar);
+                  setSanctuaryLoaded(true);
                   setSanctuaryOpen(true);
                 }}
               />

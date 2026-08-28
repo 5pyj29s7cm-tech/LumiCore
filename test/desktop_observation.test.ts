@@ -15,6 +15,74 @@ const verifiedTerminalReceipt = {
 };
 
 describe('desktop observation routing', () => {
+  it('turns an explicit local-computer audit into a bounded three-probe plan', () => {
+    expect(buildDesktopObservationPlan(
+      '不止这些吧，你不是会对我的电脑做一次盘查吗',
+    )).toEqual([{
+      name: 'desktop_system_info',
+      arguments: {},
+    }, {
+      name: 'desktop_list_apps',
+      arguments: { limit: 200 },
+    }, {
+      name: 'desktop_running_processes',
+      arguments: { top: 20 },
+    }]);
+  });
+
+  it('does not accept a capability manifest as completion evidence for a computer audit', () => {
+    const taskText = '不止这些吧，你不是会对我的电脑做一次盘查吗';
+    const manifestOnly = [{
+      name: 'client_capability_manifest',
+      arguments: { query: 'scan' },
+      result: '{"matched":3,"capabilities":[]}',
+      ...verifiedTerminalReceipt,
+    }];
+
+    const finalized = finalizeLumiResponse({
+      taskText,
+      responseText: '电脑盘查已经完成。',
+      toolRecords: manifestOnly,
+      source: 'chat',
+    });
+    expect(finalized.blocked).toBe(true);
+    expect(finalized.reason).toContain('Missing desktop evidence for the requested live observation');
+    expect(finalized.reason).toContain('desktop_system_info');
+    expect(finalized.reason).toContain('desktop_list_apps');
+    expect(finalized.reason).toContain('desktop_running_processes');
+  });
+
+  it('completes a computer audit only after all three native receipts exist', () => {
+    const taskText = '请对我的电脑做一次盘查';
+    const records = [{
+      name: 'desktop_system_info',
+      arguments: {},
+      result: '{"os":"Windows","cpu":"x64","memory_gb":32}',
+      ...verifiedTerminalReceipt,
+    }, {
+      name: 'desktop_list_apps',
+      arguments: { limit: 200 },
+      result: '[{"app_id":"wps","label":"WPS Office"}]',
+      ...verifiedTerminalReceipt,
+    }, {
+      name: 'desktop_running_processes',
+      arguments: { top: 20 },
+      result: '{"processes":[{"name":"lumi-core.exe"}]}',
+      ...verifiedTerminalReceipt,
+    }];
+
+    const finalized = finalizeLumiResponse({
+      taskText,
+      responseText: '盘查完成。',
+      toolRecords: records,
+      source: 'chat',
+    });
+    expect(finalized.blocked).toBe(false);
+    expect(finalized.text).toContain('系统信息已完成刷新');
+    expect(finalized.text).toContain('WPS Office');
+    expect(finalized.text).toContain('lumi-core.exe');
+  });
+
   it('targets a named installed application without turning the check into app control', () => {
     expect(buildDesktopObservationPlan(
       'Inspect the installed AutoCAD launch target and do not open anything.',

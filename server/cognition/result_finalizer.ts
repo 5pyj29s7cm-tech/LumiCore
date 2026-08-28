@@ -33,7 +33,9 @@ import {
 } from '../regions/packs/cn/messaging_messages';
 import {
   buildActionContract,
+  buildActionEvidenceContract,
   claimsCurrentAppSaveCompletion,
+  extractDesktopLaunchTarget,
   extractExplicitArtifactTextRequirements,
   extractSimpleDesktopOpenTarget,
   extractCurrentAppTarget,
@@ -43,19 +45,28 @@ import {
   hasCoreActionEvidence,
   hasCurrentAppSaveEvidence,
   hasCurrentAppUiMutationEvidence,
+  hasMediaPlaybackEvidence,
+  hasRequestedDesktopOpenEvidence,
+  hasVisualModelAvailabilityEvidence,
   hasVerifiedCadGeometryExtractionEvidence,
   hasVisibleAutoCadExecutionEvidence,
   requiresArtifactPostWriteReadback,
   requiresCadGeometryExtractionOnly,
+  requiresCurrentAuthoringDocumentInspection,
   requiresCurrentAppUiMutation,
+  requiresMediaPlaybackAction,
   requiresAuthenticatedWebResult,
+  requiresVisualModelAvailabilityCheck,
   requiresVisibleAutoCadExecution,
+  resolveVerifiedCurrentAuthoringDocumentEvidence,
   summarizeActionContractBlocker,
 } from './action_contract';
 import { CN_RESULT_GROUNDING_MESSAGES } from '../regions/packs/cn/voice_fast_path_messages';
 import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../regions/packs/cn/execution_evidence_messages';
+import { CN_TASK_TARGET_ANCHOR_MESSAGES } from '../regions/packs/cn/task_target_anchor_messages';
 import { CN_EXTERNAL_AI_MESSAGES } from '../regions/packs/cn/external_ai_messages';
 import { coalesceToolExecutionRecords, toolRecordSucceeded } from './task_execution_ledger';
+import { parseReceiptObject, toolRecordTerminalText } from '../tools/receipt_payload';
 import { sanitizeUserFacingExecutionOutput } from './user_output_protection';
 import {
   hasContinuousStockWatchIntent,
@@ -71,12 +82,13 @@ import {
   claimsExternalLegalPlatformResult,
   hasLegalExternalPlatformResultEvidence,
 } from './result_policy_evidence';
+import { normalizeActionIntent } from './normalized_action_intent';
 
 export interface LumiResultFinalizerInput {
   taskText: string;
   responseText: string;
   toolRecords?: ToolExecutionRecord[];
-  source: 'chat' | 'voice' | 'task' | 'workflow' | 'background_delegation' | string;
+  source: 'chat' | 'voice' | 'task' | 'workflow' | string;
   flow?: LumiTurnFlow;
 }
 
@@ -275,7 +287,7 @@ function unsupportedPriorDiagnosticClaim(input: LumiResultFinalizerInput): strin
 }
 
 function taskActionContract(input: LumiResultFinalizerInput) {
-  return buildActionContract(resultTaskText(input));
+  return buildActionEvidenceContract(resultTaskText(input));
 }
 
 function isChineseText(value: string): boolean {
@@ -285,7 +297,7 @@ function isChineseText(value: string): boolean {
 function sanitizeInternalExecutionText(value: string, chinese: boolean): string {
   const raw = String(value || '').trim();
   if (!raw) return raw;
-  const internalLine = /(?:No worker agent accepted|Worker (?:agent )?(?:failed|blocked|succeeded)|Coordinating worker agents|\bsubTask(?:Id)?\b|\bworkerAgentId\b|\baggregatedOutput\b|\bprerequisite\s+sub[_-]|\bsub[_-]\d+\b|\ballowedTools\b|\bappTarget\b|\bUI\s*evidence\b|work product guard|action contract|Required completion evidence|Preferred tools|Verification tools|tool route|tool protocol|Maximum tool call iterations|<\/?function_calls?>|<invoke\b|\[historical\s+source=[^\]]+\]|\[[^\]\r\n]{1,48}\]\s*[A-Za-z][A-Za-z0-9_.:-]{1,127}\s*\()/i;
+  const internalLine = /(?:No successful (?:current-turn )?tool execution|\ballowedTools\b|\bappTarget\b|\bUI\s*evidence\b|work product guard|action contract|Required completion evidence|Preferred tools|Verification tools|tool route|tool protocol|Maximum tool call iterations|execution_recovery_incomplete|desktop_control_paused_for_user_activity|target_mismatch|<\/?function_calls?>|<invoke\b|\[historical\s+source=[^\]]+\]|\[[^\]\r\n]{1,48}\]\s*[A-Za-z][A-Za-z0-9_.:-]{1,127}\s*\(|^\s*(?:\u72b6\u6001\s*[:\uff1a]\s*(?:\u5931\u8d25|\u53d7\u963b)|\u8bc1\u636e\s*[:\uff1a]|\u5177\u4f53\u963b\u585e\s*[:\uff1a]|\u6267\u884c\u53cd\u9988\s*$|\u5df2\u5b8c\u6210\u9879\s*$|\u673a\u5668\u8bc1\u636e\s*$|\u672a\u5b8c\u6210\u9879\s*$|\u963b\u585e\u9879\s*$|\u4e0b\u4e00\u6b65\s*$)|\u6211\u5df2\u4fdd\u7559\u539f\u76ee\u6807.{0,120}\u56de\u6267)/i;
   const withoutHistoryMarkers = raw.replace(/\[historical\s+source=[^\]]+\]\s*/gi, '');
   if (!internalLine.test(withoutHistoryMarkers) && withoutHistoryMarkers === raw) return raw;
   const cleaned = withoutHistoryMarkers
@@ -337,7 +349,6 @@ function summarizeWebAccountBlocker(records: ToolExecutionRecord[]): string {
 
 function shouldUseCompactActionBlockedResponse(input: LumiResultFinalizerInput): boolean {
   const records = input.toolRecords || [];
-  if (String(input.source || '').toLowerCase() === 'background_delegation') return true;
   const actionText = resultTaskText(input);
   const contract = taskActionContract(input);
   if (shouldEnforceCoreActionContract(contract, actionText)) return true;
@@ -351,13 +362,67 @@ function shouldUseCompactActionBlockedResponse(input: LumiResultFinalizerInput):
 
 function shouldEnforceCoreActionContract(contract: ReturnType<typeof buildActionContract>, text: string): boolean {
   if (!contract.applies) return false;
-  if (['messaging_read', 'messaging_send', 'browser_account', 'public_post', 'cad_drafting', 'customer_operations', 'ecommerce_operations', 'design_delivery', 'stock_monitor', 'task_control', 'desktop_operation'].includes(contract.kind)) {
+  if (['messaging_read', 'messaging_send', 'browser_account', 'public_post', 'cad_drafting', 'customer_operations', 'ecommerce_operations', 'design_delivery', 'stock_monitor', 'task_control', 'desktop_operation', 'artifact_work'].includes(contract.kind)) {
     return true;
   }
   if (contract.kind === 'legal_document') {
     return /\u4ee3\u7406\u8bcd|\u8d77\u8bc9\u72b6|\u7b54\u8fa9\u72b6|pleading/i.test(text);
   }
   return false;
+}
+
+function formatCurrentAuthoringDocumentClarification(
+  input: LumiResultFinalizerInput,
+): string | null {
+  const taskText = resultTaskText(input);
+  if (!requiresCurrentAuthoringDocumentInspection(taskText)) return null;
+  const activeWindowRecord = [...(input.toolRecords || [])].reverse().find(record => (
+    /^(?:desktop_active_window|get_active_window_info)$/i.test(String(record.name || ''))
+    && !record.error
+  ));
+  const payload = activeWindowRecord
+    ? parseReceiptObject(activeWindowRecord.receipt)
+      || parseReceiptObject(activeWindowRecord.result)
+      || {}
+    : {};
+  const nestedWindow = payload.activeWindow && typeof payload.activeWindow === 'object'
+    ? payload.activeWindow
+    : payload.window && typeof payload.window === 'object'
+      ? payload.window
+      : {};
+  const title = String(
+    payload.windowTitle
+    || payload.title
+    || nestedWindow.windowTitle
+    || nestedWindow.title
+    || '',
+  ).trim().slice(0, 180);
+  const processName = String(
+    payload.processName
+    || payload.process_name
+    || payload.executable
+    || nestedWindow.processName
+    || nestedWindow.process_name
+    || nestedWindow.executable
+    || '',
+  ).trim().replace(/^.*[\\/]/, '').slice(0, 120);
+  const visibleTarget = title || processName;
+  const authoringSurface = /(?:\bwps(?:\.exe)?\b|\bwpp(?:\.exe)?\b|\bet(?:\.exe)?\b|\bwinword(?:\.exe)?\b|\bexcel(?:\.exe)?\b|\bpowerpnt(?:\.exe)?\b|\bword\b|\bpowerpoint\b)/iu
+    .test(`${title}\n${processName}`);
+  const zh = isChineseText(taskText) || isChineseText(input.responseText);
+  if (authoringSurface) {
+    return zh
+      ? CN_EXECUTION_EVIDENCE_MESSAGES.currentAuthoringNeedsExactFile(visibleTarget)
+      : `I can see “${visibleTarget}” in the foreground, but I cannot yet bind it to one exact file. Save the document first or attach the file, and I can continue the analysis.`;
+  }
+  if (visibleTarget) {
+    return zh
+      ? CN_EXECUTION_EVIDENCE_MESSAGES.currentAuthoringWrongForeground(visibleTarget)
+      : `The foreground window is “${visibleTarget}”, not a readable WPS, Word, Excel, or PowerPoint document. Bring the document to the foreground or attach the file.`;
+  }
+  return zh
+    ? CN_EXECUTION_EVIDENCE_MESSAGES.currentAuthoringMissingForeground
+    : 'I cannot identify a foreground document window yet. Bring the document to the foreground or attach the file.';
 }
 
 function formatCompactBlockedResponse(input: LumiResultFinalizerInput, reason?: string): string {
@@ -431,42 +496,31 @@ function formatCompactBlockedResponse(input: LumiResultFinalizerInput, reason?: 
           'Missing legal document production evidence: generate or write the actual draft first, then run the current-law verification gate.',
         ].join('\n');
   }
-  if (source === 'background_delegation' || shouldUseCompactActionBlockedResponse(input)) {
+  if (shouldUseCompactActionBlockedResponse(input)) {
+    const safeFailure = failure && !/(?:[A-Za-z]:[\\/]|\b(?:sha(?:1|256)?|hash|taskId|requestId|receipt|tool)\b|[_-](?:receipt|task|request)|\{[\s\S]*\})/iu.test(failure)
+      ? failure.replace(/[\u3002.!?]+$/u, '')
+      : '';
     if (zh) {
-      return [
-        '\u8fd9\u6b21\u8fd8\u6ca1\u5b8c\u6210\u3002',
-        contractBlocker || (failure
-          ? `\u5361\u4f4f\u7684\u4f4d\u7f6e\uff1a${failure}\u3002`
-          : '\u539f\u56e0\uff1a\u8fd8\u6ca1\u6709\u62ff\u5230\u53ef\u9a8c\u8bc1\u7684\u5b8c\u6210\u8bc1\u636e\u3002'),
-        contract.kind === 'messaging_send'
-          ? CN_MESSAGING_MESSAGES.unverifiedDelivery
-          : contract.kind === 'messaging_read'
-            ? '\u6211\u4e0d\u4f1a\u628a\u53ea\u6253\u5f00\u6216\u805a\u7126\u5fae\u4fe1\u8bf4\u6210\u5df2\u8bfb\u5230\u804a\u5929\u5185\u5bb9\uff1b\u9700\u8981\u7ee7\u7eed\u8bfb\u53d6\u5e76\u9a8c\u8bc1\u53ef\u89c1\u5185\u5bb9\u3002'
-            : '\u6211\u4e0d\u4f1a\u628a\u8fd9\u79cd\u672a\u786e\u8ba4\u7684\u7ed3\u679c\u8bf4\u6210\u5df2\u5b8c\u6210\uff1b\u9700\u8981\u7ee7\u7eed\u524d\u53f0\u6267\u884c\u5e76\u9a8c\u8bc1\u7ed3\u679c\u3002',
-      ].join('\n');
+      if (contract.kind === 'messaging_read') {
+        return CN_EXECUTION_EVIDENCE_MESSAGES.compactMessagingReadNotCompleted;
+      }
+      const detail = contractBlocker || (safeFailure ? `${safeFailure}\u3002` : CN_EXECUTION_EVIDENCE_MESSAGES.compactUnconfirmedFinalResult);
+      return CN_EXECUTION_EVIDENCE_MESSAGES.compactNotCompleted(detail);
     }
     const hasSuccessfulEvidence = (input.toolRecords || []).some(record => (
       !record.error && String(record.result || '').trim().length > 0
     ));
-    return [
-      'This is not complete yet.',
-      failure
-        ? `Blocked at: ${failure}.`
-        : hasSuccessfulEvidence
-          ? 'The requested core action has not actually started: the successful tool evidence does not verify it.'
-          : 'The requested action has not actually started: there is no successful tool evidence for it.',
-      'I will not mark that as done until the real action is verified.',
-    ].join('\n');
+    if (safeFailure) return `This did not finish. ${safeFailure}.`;
+    return hasSuccessfulEvidence
+      ? 'I could not complete the requested action because the available result does not confirm it.'
+      : 'I could not complete the requested action because it never reached a successful execution.';
   }
 
-  if (reason && reason.length < 180) {
-    return zh
-      ? `\u8fd9\u6b21\u8fd8\u6ca1\u5b8c\u6210\uff1a${reason}\u3002`
-      : `This is not complete yet: ${reason}.`;
-  }
   return zh
-    ? '\u8fd9\u6b21\u8fd8\u6ca1\u5b8c\u6210\uff1a\u8fd8\u6ca1\u6709\u62ff\u5230\u53ef\u9a8c\u8bc1\u7684\u5b8c\u6210\u8bc1\u636e\u3002'
-    : 'This is not complete yet: I do not have verifiable completion evidence.';
+    ? CN_EXECUTION_EVIDENCE_MESSAGES.compactNotCompleted(
+        contractBlocker || CN_EXECUTION_EVIDENCE_MESSAGES.compactUnconfirmedFinalResult,
+      )
+    : 'This did not finish, and the final result is not confirmed yet.';
 }
 
 function formatGroundedDesktopEvidence(input: LumiResultFinalizerInput): string | null {
@@ -761,13 +815,24 @@ function formatGroundedClientActionResult(input: LumiResultFinalizerInput): stri
   // state-diff verification. A verified native navigation receipt is stronger
   // evidence than a model sentence that happens to claim the action failed.
   if (!input.flow?.clientActionOnlyTurn) return null;
+  const expectedIntent = normalizeActionIntent(resultTaskText(input));
+  if (
+    expectedIntent.kind !== 'client_navigation'
+    || !expectedIntent.clientAction
+  ) return null;
+  const expectedAction = expectedIntent.clientAction;
+  const expectedMode = String(expectedIntent.clientActionArguments?.mode || '').trim();
+  const expectedEnabled = expectedIntent.clientActionArguments?.enabled;
   const receipts = (input.toolRecords || [])
     .map(parseVerifiedClientActionReceipt)
     .filter((receipt): receipt is NonNullable<typeof receipt> => Boolean(receipt));
-  const actionable = receipts.filter(receipt => receipt.action !== 'refresh_client_state');
-  const receipt = [...actionable].reverse().find(item => item.action !== 'set_client_mode')
-    || actionable.at(-1)
-    || receipts.at(-1);
+  const receipt = [...receipts].reverse().find(item => (
+    item.action === expectedAction
+    && (expectedAction !== 'set_client_mode' || !expectedMode || item.mode === expectedMode)
+    && (expectedAction !== 'set_wallpaper_mode'
+      || typeof expectedEnabled !== 'boolean'
+      || item.enabled === expectedEnabled)
+  ));
   if (!receipt) return null;
 
   if (!isChineseText(resultTaskText(input))) {
@@ -834,6 +899,136 @@ function formatGroundedPartialActionResult(
   }
 
   return null;
+}
+
+function requestedMediaPlayerLabel(taskText: string, records: ToolExecutionRecord[]): string {
+  const named = String(taskText || '').match(/(?:\u7f51\u6613\u4e91(?:\u97f3\u4e50)?|QQ\s*\u97f3\u4e50|\u9177\u72d7(?:\u97f3\u4e50)?|Spotify|Apple\s+Music|NetEase(?:\s+Cloud\s+Music)?|CloudMusic)/iu)?.[0];
+  if (named) return named;
+  const invoked = records.find(record => /^(?:desktop_open|browser_open_task)$/i.test(String(record.name || '')));
+  return String(
+    invoked?.arguments?.target
+    || invoked?.arguments?.url
+    || extractDesktopLaunchTarget(taskText)
+    || CN_EXECUTION_EVIDENCE_MESSAGES.genericMusicPlayer,
+  ).trim().slice(0, 100);
+}
+
+function visualFailureCategory(records: ToolExecutionRecord[]): 'billing' | 'unconfigured' | 'paused' | 'generic' {
+  const details = records.map(record => [
+    record.error,
+    record.terminalVerification?.reason,
+    toolRecordTerminalText(record),
+  ].map(value => String(value || '').slice(0, 1200)).join('\n')).join('\n');
+  if (/(?:account is not in good standing|overdue(?:-payment)?|insufficient balance|\b402\b|\u6b20\u8d39|\u4f59\u989d\u4e0d\u8db3)/iu.test(details)) {
+    return 'billing';
+  }
+  if (/(?:No configured visual-perception model|no vision (?:reader|model)|visual perception.{0,32}not configured|\u672a\u914d\u7f6e.{0,16}\u89c6\u89c9\u6a21\u578b)/iu.test(details)) {
+    return 'unconfigured';
+  }
+  if (/(?:paused_for_user_activity|user activity|\u7528\u6237.{0,12}\u64cd\u4f5c.{0,12}\u6682\u505c)/iu.test(details)) {
+    return 'paused';
+  }
+  return 'generic';
+}
+
+/** User-visible terminal wording for the two composite desktop goals that
+ * previously accepted unrelated receipts. This consumes the existing action
+ * contract verdict; it does not invent a second execution state machine. */
+function formatGoalSpecificDesktopResult(
+  input: LumiResultFinalizerInput,
+): LumiResultFinalizerResult | null {
+  const taskText = resultTaskText(input);
+  const records = input.toolRecords || [];
+  const zh = isChineseText(taskText) || isChineseText(input.responseText);
+
+  if (requiresVisualModelAvailabilityCheck(taskText)) {
+    if (hasVisualModelAvailabilityEvidence(records)) {
+      return {
+        text: zh
+          ? CN_EXECUTION_EVIDENCE_MESSAGES.visualModelAvailable
+          : 'The visual model is available; the live probe returned usable visual analysis.',
+        blocked: false,
+        reason: zh ? CN_EXECUTION_EVIDENCE_MESSAGES.visualProbeSucceeded : 'The live visual probe succeeded.',
+      };
+    }
+    const category = visualFailureCategory(records);
+    const text = zh
+      ? category === 'billing'
+        ? CN_EXECUTION_EVIDENCE_MESSAGES.visualModelBillingUnavailable
+        : category === 'unconfigured'
+          ? CN_EXECUTION_EVIDENCE_MESSAGES.visualModelUnconfigured
+          : category === 'paused'
+            ? CN_EXECUTION_EVIDENCE_MESSAGES.visualProbeInterrupted
+            : CN_EXECUTION_EVIDENCE_MESSAGES.visualProbeUnconfirmed
+      : category === 'billing'
+        ? 'The visual model is unavailable because the provider rejected the account for billing or account-status reasons. Restore the account and try again.'
+        : category === 'unconfigured'
+          ? 'No usable visual model is configured. Select and save one in settings, then try again.'
+          : category === 'paused'
+            ? 'The live visual check was interrupted by foreground activity, so availability is not confirmed yet.'
+            : 'The visual model did not return a usable result, so it is not confirmed available yet.';
+    return {
+      text,
+      blocked: true,
+      reason: text,
+      notification: { type: 'work_product_guard', level: 'warning', message: text },
+    };
+  }
+
+  if (requiresMediaPlaybackAction(taskText)) {
+    const label = requestedMediaPlayerLabel(taskText, records);
+    const opened = hasRequestedDesktopOpenEvidence(records, taskText, label);
+    if (hasMediaPlaybackEvidence(records, taskText)) {
+      return {
+        text: zh
+          ? CN_EXECUTION_EVIDENCE_MESSAGES.mediaPlaybackActive(label)
+          : `Opened ${label}; music playback is active.`,
+        blocked: false,
+        reason: zh ? CN_EXECUTION_EVIDENCE_MESSAGES.mediaPlaybackConfirmed : 'Playback state was confirmed.',
+      };
+    }
+    const text = opened
+      ? zh
+        ? CN_EXECUTION_EVIDENCE_MESSAGES.mediaOpenedPlaybackUnconfirmed(label)
+        : `Opened ${label}, but playback is not confirmed. The key press proves only that input was delivered; it cannot distinguish play from pause.`
+      : zh
+        ? CN_EXECUTION_EVIDENCE_MESSAGES.mediaOpenAndPlaybackUnconfirmed(label)
+        : `${label} was not confirmed open, and playback was not confirmed.`;
+    return {
+      text,
+      blocked: true,
+      reason: text,
+      notification: { type: 'work_product_guard', level: 'warning', message: text },
+    };
+  }
+
+  return null;
+}
+
+function friendlyObservedOpenLabel(target: string): string {
+  const raw = String(target || '').trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    return parsed.hostname.replace(/^www\./i, '') || raw;
+  } catch {}
+  if (/[\\/]/u.test(raw)) return raw.split(/[\\/]/).pop() || raw;
+  return raw;
+}
+
+function formatObservedDesktopOpenResult(
+  input: LumiResultFinalizerInput,
+): LumiResultFinalizerResult | null {
+  const taskText = resultTaskText(input);
+  const target = extractDesktopLaunchTarget(taskText) || extractSimpleDesktopOpenTarget(taskText);
+  if (!target || !hasRequestedDesktopOpenEvidence(input.toolRecords || [], taskText, target)) return null;
+  const label = friendlyObservedOpenLabel(target);
+  const zh = isChineseText(taskText) || isChineseText(input.responseText);
+  return {
+    text: zh ? CN_EXECUTION_EVIDENCE_MESSAGES.desktopObservedOpen(label) : `Opened ${label}.`,
+    blocked: false,
+    reason: zh ? CN_EXECUTION_EVIDENCE_MESSAGES.desktopObservedOpenReason : 'The requested page or window was observed in the same turn.',
+  };
 }
 
 function formatCreatedArtifactWithoutInAppCompletion(input: LumiResultFinalizerInput): string | null {
@@ -1485,90 +1680,6 @@ function formatGroundedBlankAutoCadDocumentResult(
   };
 }
 
-function formatExternalAiCollaborationResult(
-  input: LumiResultFinalizerInput,
-): LumiResultFinalizerResult | null {
-  const record = [...(input.toolRecords || [])].reverse().find(item => (
-    !item.error
-    && /^(?:external_ai_collaborate|external_ai_collect_answers|external_ai_session_status)$/i.test(String(item.name || ''))
-    && String(item.result || '').trim()
-  ));
-  if (!record) return null;
-
-  let parsed: any;
-  try {
-    parsed = JSON.parse(String(record.result || ''));
-  } catch {
-    return null;
-  }
-  const sessionId = String(parsed?.sessionId || parsed?.session?.id || '').trim();
-  if (!sessionId) return null;
-  const dispatches = Array.isArray(parsed?.results)
-    ? parsed.results
-    : Array.isArray(parsed?.dispatches)
-      ? parsed.dispatches
-      : [];
-  const answers = Array.isArray(parsed?.answers) ? parsed.answers : [];
-  const answerByDispatch = new Map(answers.map((answer: any) => [String(answer?.dispatchId || ''), answer]));
-  const answerByTarget = new Map(answers.map((answer: any) => [String(answer?.targetId || ''), answer]));
-  const answeredCount = Number(parsed?.counts?.answered || dispatches.filter((item: any) => item?.status === 'answered').length);
-  const pendingCount = Number(parsed?.counts?.pending || dispatches.filter((item: any) => ['submitted', 'pending', 'unknown', 'submitting'].includes(String(item?.status || ''))).length);
-  const blockedCount = Number(parsed?.counts?.blocked || dispatches.filter((item: any) => item?.status === 'blocked').length);
-  const failedCount = Number(parsed?.counts?.failed || dispatches.filter((item: any) => item?.status === 'failed').length);
-  const lateCount = Number(parsed?.counts?.lateAnswers || answers.filter((answer: any) => answer?.late === true).length);
-  const status = String(parsed?.status || parsed?.session?.status || 'waiting');
-  const zh = isChineseText(resultTaskText(input));
-  const lines = [
-    zh
-      ? CN_EXTERNAL_AI_MESSAGES.sessionStatus(status, sessionId)
-      : `External AI collaboration: ${status} (session ${sessionId})`,
-  ];
-
-  for (const dispatch of dispatches) {
-    const targetId = String(dispatch?.targetId || 'unknown');
-    const targetLabel = String(dispatch?.targetLabel || targetId);
-    const answer = answerByDispatch.get(String(dispatch?.id || '')) as any
-      || answerByTarget.get(targetId) as any
-      || null;
-    const answerText = String(answer?.answerText || dispatch?.answerText || '').trim();
-    const evidence = answer?.sourceEvidence || dispatch?.sourceEvidence || {};
-    const route = String(evidence?.routeKind || dispatch?.routeKind || 'unknown');
-    const source = [evidence?.provider, evidence?.model, evidence?.toolName]
-      .map((value: unknown) => String(value || '').trim())
-      .filter(Boolean)
-      .join('/');
-    const sourceLabel = source ? `${route}:${source}` : route;
-    const dispatchStatus = String(dispatch?.status || (answerText ? 'answered' : 'unknown'));
-    const late = answer?.late === true ? (zh ? CN_EXTERNAL_AI_MESSAGES.lateArchiveSuffix : ', late receipt archived') : '';
-    if (dispatchStatus === 'answered' && answerText) {
-      lines.push(zh
-        ? CN_EXTERNAL_AI_MESSAGES.answeredTarget(targetLabel, sourceLabel, late, answerText.slice(0, 1600))
-        : `- ${targetLabel}: answered; source ${sourceLabel}${late}\n  ${answerText.slice(0, 1600)}`);
-      continue;
-    }
-    const detail = String(dispatch?.blocker || dispatch?.error || '').trim();
-    lines.push(zh
-      ? CN_EXTERNAL_AI_MESSAGES.targetState(targetLabel, dispatchStatus, sourceLabel, detail)
-      : `- ${targetLabel}: ${dispatchStatus}; source ${sourceLabel}${detail ? `; ${detail}` : ''}`);
-  }
-
-  lines.push(zh
-    ? CN_EXTERNAL_AI_MESSAGES.summary({
-        answered: answeredCount,
-        pending: pendingCount,
-        blocked: blockedCount,
-        failed: failedCount,
-        late: lateCount,
-      })
-    : `Summary: ${answeredCount} answered, ${pendingCount} pending/unknown, ${blockedCount} blocked, ${failedCount} failed${lateCount ? `, ${lateCount} late archived` : ''}. Unanswered targets are not represented as complete and are not automatically resent through another route.`);
-
-  return {
-    text: lines.join('\n'),
-    blocked: answeredCount === 0,
-    reason: `Grounded external AI collaboration receipt: status=${status}; session=${sessionId}.`,
-  };
-}
-
 function formatExternalAiHistoryResult(
   input: LumiResultFinalizerInput,
 ): LumiResultFinalizerResult | null {
@@ -1698,86 +1809,6 @@ function formatExternalAiHistoryResult(
     };
   }
   return null;
-}
-
-function formatDesktopAiRoundtableResult(input: LumiResultFinalizerInput): string | null {
-  const record = [...(input.toolRecords || [])].reverse().find(item => (
-    !item.error && /^desktop_ai_roundtable$/i.test(String(item.name || '')) && String(item.result || '').trim()
-  ));
-  if (!record) return null;
-
-  let parsed: any;
-  try {
-    parsed = JSON.parse(String(record.result || ''));
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(parsed?.targets) || !parsed?.ask || !Array.isArray(parsed?.answers)) return null;
-
-  const zh = isChineseText(resultTaskText(input));
-  const askByTarget = new Map((parsed.ask.results || []).map((item: any) => [String(item?.target || ''), item]));
-  const answerByTarget = new Map((parsed.answers || []).map((item: any) => [String(item?.target || ''), item]));
-  const lines: string[] = [zh ? '桌面 AI 协同实执行结果：' : 'Desktop AI collaboration result:'];
-  const collectedAnswers: string[] = [];
-  let pendingSubmittedCount = 0;
-  let blockedCount = 0;
-
-  for (const target of parsed.targets) {
-    const id = String(target?.id || target?.target || 'unknown');
-    const label = String(target?.label || id);
-    const ask = askByTarget.get(id) as any;
-    const answer = answerByTarget.get(id) as any;
-    const askStatus = String(ask?.status || '');
-    const answerStatus = String(answer?.status || '');
-    const answerText = String(answer?.answerText || '').trim();
-
-    if (answerStatus === 'collected' && answerText) {
-      collectedAnswers.push(answerText);
-      lines.push(zh
-        ? `- ${label}：已收集并验证可见回答：${answerText.slice(0, 1600)}`
-        : `- ${label}: visible answer collected and verified: ${answerText.slice(0, 1600)}`);
-      continue;
-    }
-
-    if (answerStatus === 'pending' && askStatus === 'submitted_unverified') {
-      pendingSubmittedCount += 1;
-      lines.push(zh
-        ? `- ${label}：问题已粘贴并提交，但尚未读到完整的可见回答。`
-        : `- ${label}: question pasted and submitted; a completed visible answer is still pending.`);
-      continue;
-    }
-
-    if (answerStatus === 'needs_vision_setup') {
-      lines.push(zh
-        ? `- ${label}：问题已提交，但缺少可用的视觉读取模型，无法验收回答。`
-        : `- ${label}: question submitted, but no vision reader was available to verify the answer.`);
-      continue;
-    }
-
-    blockedCount += 1;
-    const reason = String(answer?.note || answer?.blocker || ask?.note || ask?.inputEvidence?.reason || 'target execution was blocked').trim();
-    lines.push(zh ? `- ${label}：未提交，阻塞点：${reason}` : `- ${label}: not submitted; blocker: ${reason}`);
-  }
-
-  if (collectedAnswers.length === parsed.targets.length && parsed.targets.length > 0) {
-    const uniqueAnswers = new Set(collectedAnswers.map(answer => answer.trim().toLowerCase()));
-    lines.push(zh
-      ? `结论：已完成 ${collectedAnswers.length} 个目标的可见回答验收；${uniqueAnswers.size === 1 ? '各方回答一致。' : '各方回答存在差异，已在上方分别列出。'}`
-      : `Conclusion: verified visible answers were collected from all ${collectedAnswers.length} targets; ${uniqueAnswers.size === 1 ? 'the answers agree.' : 'the answers differ and are listed separately above.'}`);
-  } else if (collectedAnswers.length > 0) {
-    lines.push(zh
-      ? `结论：部分完成，已收集 ${collectedAnswers.length} 个回答，其余目标仍在等待或受阻。`
-      : `Conclusion: partial completion; ${collectedAnswers.length} answer(s) were collected and the remaining targets are pending or blocked.`);
-  } else if (pendingSubmittedCount > 0) {
-    lines.push(zh
-      ? `结论：${pendingSubmittedCount} 个目标已提交并待回答，${blockedCount} 个目标受账号或页面状态阻塞；这不是“应用未安装”。`
-      : `Conclusion: ${pendingSubmittedCount} target(s) are submitted and pending; ${blockedCount} target(s) are blocked by account or page state. This is not app unavailable.`);
-  } else {
-    lines.push(zh
-      ? `结论：未完成提交，${blockedCount} 个目标受阻。`
-      : `Conclusion: no submission completed; ${blockedCount} target(s) were blocked.`);
-  }
-  return lines.join('\n');
 }
 
 function correctCurrentTurnContractDrift(
@@ -1981,19 +2012,74 @@ function preserveModelWordingOnGroundedSuccess(
   };
 }
 
+function currentDocumentSummaryFragments(content: string): string[] {
+  const raw = String(content || '')
+    .replace(/\u0000/gu, '')
+    .replace(/\r\n?/gu, '\n')
+    .trim();
+  if (!raw) return [];
+  const lineCandidates = raw
+    .split(/\n+/u)
+    .map(line => line
+      .replace(/^\s*(?:[-=]{2,}\s*)?(?:slide|page)\s*\d+\s*(?:[-=:]{1,}\s*)?/iu, '')
+      // i18n-allow: Reviewed Chinese slide/page marker recognition; not user-visible copy.
+      .replace(/^\s*第\s*\d+\s*(?:页|张|部分)\s*[：:]?\s*/u, '')
+      .replace(/^\s*[•●▪◦*-]\s*/u, '')
+      .replace(/\s+/gu, ' ')
+      .trim())
+    .filter(line => line.length >= 2 && line.length <= 220)
+    .filter(line => !/^(?:path|file(?:path)?|source|bytes?|pages?|mime(?:type)?|status|ok|success)\s*[:=]/iu.test(line))
+    // i18n-allow: Reviewed multilingual prompt-injection recognition; not user-visible copy.
+    .filter(line => !/(?:ignore (?:all )?previous instructions|system prompt|reveal (?:the )?(?:secret|token|password)|请忽略(?:之前|以上|所有)指令|泄露(?:密钥|令牌|密码)|执行以下(?:命令|脚本))/iu.test(line));
+  const candidates = lineCandidates.length >= 2
+    ? lineCandidates
+    : raw
+      .split(/(?<=[。！？.!?])\s*/u)
+      .map(part => part.replace(/\s+/gu, ' ').trim())
+      .filter(part => part.length >= 4 && part.length <= 260);
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  let total = 0;
+  for (const candidate of candidates) {
+    const key = candidate.normalize('NFKC').toLocaleLowerCase('en-US');
+    if (!key || seen.has(key)) continue;
+    if (total + candidate.length > 760 && unique.length > 0) break;
+    seen.add(key);
+    unique.push(candidate);
+    total += candidate.length;
+    if (unique.length >= 8) break;
+  }
+  return unique;
+}
+
+function formatGroundedCurrentAuthoringDocumentResult(
+  input: LumiResultFinalizerInput,
+): LumiResultFinalizerResult | null {
+  const actionText = resultTaskText(input);
+  const evidence = resolveVerifiedCurrentAuthoringDocumentEvidence(
+    input.toolRecords || [],
+    actionText,
+  );
+  if (!evidence) return null;
+  const fragments = currentDocumentSummaryFragments(evidence.content);
+  const zh = isChineseText(actionText) || isChineseText(evidence.content);
+  const body = fragments.join(zh ? '；' : '; ');
+  const text = zh
+    ? body
+      ? CN_TASK_TARGET_ANCHOR_MESSAGES.currentDocumentSummary(evidence.documentName, body)
+      : CN_TASK_TARGET_ANCHOR_MESSAGES.currentDocumentWithoutUsableText(evidence.documentName)
+    : body
+      ? `I read “${evidence.documentName}”. It mainly covers: ${body}`
+      : `I read “${evidence.documentName}”, but it contains no usable text to summarize.`;
+  return {
+    text,
+    blocked: false,
+    reason: 'grounded_current_authoring_document',
+  };
+}
+
 function parseActionReceipt(value: unknown): Record<string, any> | null {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    return value as Record<string, any>;
-  }
-  if (typeof value !== 'string' || !value.trim()) return null;
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, any>
-      : null;
-  } catch {
-    return null;
-  }
+  return parseReceiptObject(value);
 }
 
 function isWorkTaskLedgerTool(name: unknown): boolean {
@@ -2058,7 +2144,15 @@ function unsupportedLedgerOnlyWorkTaskCompletion(
 export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResultFinalizerResult {
   input = {
     ...input,
-    toolRecords: coalesceToolExecutionRecords(input.toolRecords || []),
+    // Keep this projection local to finalization. Legacy/MCP adapters may put
+    // their only machine result in `receipt`; downstream completion guards and
+    // grounded formatters historically read `result`. A verified receipt must
+    // not become a failure merely because the display-result string is empty.
+    toolRecords: coalesceToolExecutionRecords(input.toolRecords || []).map(record => (
+      String(record.result || '').trim()
+        ? record
+        : { ...record, result: toolRecordTerminalText(record) }
+    )),
   };
   const actionText = resultTaskText(input);
   const protocolLeak = leakedLegacyToolProtocol(input);
@@ -2124,6 +2218,12 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     });
   }
   const actionContract = taskActionContract(input);
+  const groundedCurrentAuthoringDocument = formatGroundedCurrentAuthoringDocumentResult(input);
+  if (groundedCurrentAuthoringDocument) {
+    return preserveModelWordingOnGroundedSuccess(input, groundedCurrentAuthoringDocument);
+  }
+  const goalSpecificDesktopResult = formatGoalSpecificDesktopResult(input);
+  if (goalSpecificDesktopResult) return goalSpecificDesktopResult;
   const chatOnlyConversationTurn = Boolean(
     (input.toolRecords || []).length === 0
     && input.flow?.allowToolUseForTurn === false
@@ -2228,20 +2328,12 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   if (groundedCadGeometry) return preserveModelWordingOnGroundedSuccess(input, groundedCadGeometry);
   const groundedExternalAiHistory = formatExternalAiHistoryResult(input);
   if (groundedExternalAiHistory) return preserveModelWordingOnGroundedSuccess(input, groundedExternalAiHistory);
-  const groundedExternalAi = formatExternalAiCollaborationResult(input);
-  if (groundedExternalAi) return preserveModelWordingOnGroundedSuccess(input, groundedExternalAi);
-  const groundedDesktopAi = formatDesktopAiRoundtableResult(input);
-  if (groundedDesktopAi) {
-    return preserveModelWordingOnGroundedSuccess(input, {
-      text: groundedDesktopAi,
-      blocked: false,
-      reason: 'Grounded desktop AI collaboration summary from structured tool evidence.',
-    });
-  }
   const groundedSimpleOpen = formatGroundedSimpleDesktopOpenResult(input);
   if (groundedSimpleOpen) {
     return preserveModelWordingOnGroundedSuccess(input, groundedSimpleOpen);
   }
+  const observedDesktopOpen = formatObservedDesktopOpenResult(input);
+  if (observedDesktopOpen) return observedDesktopOpen;
   const groundedPartialAction = formatGroundedPartialActionResult(input);
   if (groundedPartialAction) return preserveModelWordingOnGroundedSuccess(input, groundedPartialAction);
   const groundedDriftCorrection = correctCurrentTurnContractDrift(input, actionContract);
@@ -2252,17 +2344,41 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       reason: 'Corrected current-turn action-contract drift using fresh desktop evidence.',
     };
   }
+  const currentAuthoringDocumentClarification = !hasCoreActionEvidence(
+    actionContract,
+    input.toolRecords || [],
+    actionText,
+  )
+    ? formatCurrentAuthoringDocumentClarification(input)
+    : null;
+  if (currentAuthoringDocumentClarification) {
+    const reason = 'The foreground evidence does not identify one exact readable authoring document.';
+    return {
+      text: currentAuthoringDocumentClarification,
+      blocked: true,
+      reason,
+      notification: {
+        type: 'work_product_guard',
+        level: 'warning',
+        message: reason,
+      },
+    };
+  }
   // A successful read-only desktop receipt is the result for an observation
-  // task. Do not let an unrelated auxiliary failure (for example a worker
-  // attempting write_file after the process list was already returned)
+  // task. Do not let an unrelated auxiliary failure (for example an extra
+  // write_file attempt after the process list was already returned)
   // overwrite that evidence with a generic incomplete-work guard.
   const desktopObservation = evaluateDesktopObservationEvidence(input.toolRecords || [], actionText);
   if (desktopObservation.complete && desktopObservation.text) {
-    return preserveModelWordingOnGroundedSuccess(input, {
+    // Observation tasks exist to return the sampled facts. A generic model
+    // acknowledgement such as "check complete" is not a useful result and
+    // must not hide the structured window/process/app/system evidence that
+    // actually completed the contract.
+    return {
       text: desktopObservation.text,
       blocked: false,
       reason: 'Grounded desktop observation from current-turn tool receipts.',
-    });
+    };
   }
   // A live desktop question is itself an execution contract. The model can
   // answer it in factual prose without saying "I checked", so claim-wording

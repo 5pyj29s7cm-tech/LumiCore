@@ -52,7 +52,7 @@ describe('operational memory trace filtering', () => {
     saveKeys({ SILICONFLOW_API_KEY: '' });
   });
 
-  it('excludes orchestrator traces from keyword and consolidation recall by default', () => {
+  it('excludes legacy execution traces from keyword and consolidation recall by default', () => {
     const token = `tracekeyword${Date.now()}${Math.random().toString(36).slice(2)}`;
     const userId = `memory-${token}`;
     const { normal, sourceTaggedTrace, contentTaggedTrace } = addTraceProbeMemories(userId, token);

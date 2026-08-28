@@ -3,7 +3,7 @@ import type { DurableTaskRecoveryState } from './durable_task_recovery';
 
 export interface DurableTaskDiagnosticItem {
   taskId: string;
-  runtime: 'autonomous' | 'background';
+  runtime: 'autonomous';
   status: string;
   attempt: number;
   recoveryCount: number;
@@ -69,13 +69,7 @@ export function getDurableTaskHealthSnapshot(
   const autonomous = (Array.isArray(db.autonomousTasks) ? db.autonomousTasks : [])
     .filter((task: any) => !isWork && task.userId === userId)
     .map((task: any) => toItem(task, 'autonomous'));
-  const background = (Array.isArray(db.backgroundDelegationTasks) ? db.backgroundDelegationTasks : [])
-    .filter((task: any) => task.userId === userId)
-    .filter((task: any) => isWork
-      ? task.context?.domain === 'work' && task.context?.orgId === scope.orgId
-      : task.context?.domain !== 'work' && !task.context?.orgId)
-    .map((task: any) => toItem(task, 'background'));
-  const items = [...autonomous, ...background];
+  const items = autonomous;
   return {
     active: items.filter(item => ['pending', 'queued', 'running', 'pausing', 'paused'].includes(item.status)).length,
     retryScheduled: items.filter(item => Boolean(item.nextAttemptAt) && ['pending', 'queued'].includes(item.status)).length,

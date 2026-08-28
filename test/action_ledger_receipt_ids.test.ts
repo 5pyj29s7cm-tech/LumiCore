@@ -53,6 +53,69 @@ function activeTurn(taskId: string, requestId: string) {
 }
 
 describe('conversation action receipt ids', () => {
+  it('does not audit an unclassified side-effecting task as read-only', () => {
+    const conversation: any = {
+      id: 'conversation-1',
+      userId: 'user-1',
+      domain: 'personal',
+      orgId: '',
+    };
+    const db: any = {
+      conversations: [conversation],
+      interactions: [],
+      conversationActionTasks: [],
+      conversationActionReceipts: [],
+    };
+    const state = normalizeConversationActionState({
+      version: 2,
+      taskId: 'task-unclassified-side-effect',
+      status: 'blocked',
+      receipts: [{
+        id: 'receipt-side-effect',
+        key: 'unknown_tool:{}',
+        name: 'unknown_tool',
+        arguments: {},
+        result: '{"ok":true}',
+        error: '',
+        outcome: 'success',
+        capability: {
+          capabilityId: 'unknown.side.effect',
+          lane: 'general',
+          operation: 'communicate',
+          risk: 'medium',
+          sideEffects: [{ type: 'external_communication', scope: 'unknown', reversible: false }],
+          verification: {
+            strategy: 'provider_ack',
+            required: true,
+            requiredFields: ['ok'],
+            successSignals: ['provider acknowledged'],
+            limitations: [],
+          },
+        },
+        recordedAt: '2026-08-28T08:00:00.000Z',
+      }],
+      revision: 1,
+      goal: 'perform the requested operation',
+      latestInstruction: 'perform the requested operation',
+      appTarget: '',
+      sourcePaths: [],
+      latestBlocker: 'awaiting verification',
+      unfinished: true,
+      evidenceTools: ['unknown_tool'],
+      assistantState: '',
+      toolSummaries: [],
+      updatedAt: '2026-08-28T08:00:00.000Z',
+    })!;
+
+    const row = syncConversationActionTaskLedger(db, {
+      conversation,
+      state,
+      userText: 'perform the requested operation',
+    });
+
+    expect(row).toMatchObject({ operation: 'mutate' });
+  });
+
   function contradictoryReceipt(
     basis: 'terminal_verification' | 'compatibility_inference' | undefined,
     mutateEnvelope?: (envelope: Record<string, any>) => void,
@@ -96,6 +159,38 @@ describe('conversation action receipt ids', () => {
       createdAt: '2026-08-16T00:00:01.000Z',
     };
   }
+
+  it('persists a receipt-only nested runtime result as verified success', () => {
+    const actionTask = task('task-receipt-only-runtime');
+    const rows = appendConversationActionReceipts({
+      conversationActionReceipts: [],
+    }, {
+      task: actionTask,
+      turnId: 'turn-receipt-only-runtime',
+      requestId: 'request-receipt-only-runtime',
+      now: '2026-08-28T07:00:00.000Z',
+      records: [{
+        id: 'receipt-only-runtime',
+        name: 'runtime_work_status',
+        arguments: {},
+        result: '',
+        receipt: JSON.stringify(JSON.stringify({ ok: true, status: 'idle', activeCount: 0 })),
+        terminalVerification: {
+          status: 'verified',
+          strategy: 'terminal_receipt',
+          reason: 'The runtime ledger was read.',
+        },
+      }],
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].outcome).toBe('verified_success');
+    expect(JSON.parse(rows[0].envelope)).toMatchObject({
+      status: 'verified_success',
+      result: { ok: true, status: 'idle', activeCount: 0 },
+      verification: { status: 'verified', basis: 'terminal_verification' },
+    });
+  });
 
   it('writes three corrected capsule targets back to one durable task row', () => {
     const taskId = 'task-corrected-target';

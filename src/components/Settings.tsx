@@ -3681,7 +3681,7 @@ function AutonomousSettingsPanel({ t, operationMode }: { t: any; operationMode: 
       {/* Scheduler Tasks */}
       <div className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-3">
         <button onClick={() => setTasksExpanded(!tasksExpanded)} className="w-full flex items-center justify-between">
-          <div className="text-xs font-black uppercase tracking-widest text-white/60">{uiMessage('settings.background-tasks.015be0a9ad')}</div>
+          <div className="text-xs font-black uppercase tracking-widest text-white/60">{uiMessage('settings.scheduled-routines.5f06751a14', t?.langCode === 'en' ? 'en' : 'zh')}</div>
           <ChevronDown size={14} className={`text-white/40 transition-transform ${tasksExpanded ? 'rotate-180' : ''}`} />
         </button>
 

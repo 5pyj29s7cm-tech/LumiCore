@@ -11,7 +11,7 @@ export interface PersonalClientSurfaceDefinition {
   navigationAliases?: readonly string[];
   organizationView?: string;
   organizationViewByAction?: Readonly<Record<string, string>>;
-  commandCenterViewByAction?: Readonly<Record<string, 'office' | 'team' | 'core'>>;
+  commandCenterViewByAction?: Readonly<Record<string, 'office' | 'core'>>;
 }
 
 export interface ClientSettingsSectionDefinition {
@@ -32,7 +32,7 @@ export interface PersonalClientSurfaceVisibilityState {
   knowledgeOpen?: boolean;
   chatOpen?: boolean;
   commandCenterOpen?: boolean;
-  commandCenterView?: 'office' | 'team' | 'core';
+  commandCenterView?: 'office' | 'core';
   notificationsOpen?: boolean;
   memoryAvatarOpen?: boolean;
   meetingOpen?: boolean;
@@ -60,9 +60,9 @@ export const CLIENT_SETTINGS_SECTIONS: readonly ClientSettingsSectionDefinition[
   },
   {
     id: 'neural',
-    label: 'Agent framework and autonomy',
-    aliases: ['neural', 'agent', 'agent-framework', 'autonomy', 'autonomous'],
-    useWhen: 'Inspect or configure the agent framework, operation modes, and autonomous execution policy.',
+    label: 'LumiCore and autonomy',
+    aliases: ['neural', 'lumicore', 'autonomy', 'autonomous'],
+    useWhen: 'Inspect or configure LumiCore, operation modes, and autonomous execution policy.',
   },
   {
     id: 'ai-providers',
@@ -182,13 +182,12 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
     label: 'Lumi command center',
     target: 'command-center',
     navigationAliases: ['指挥中心', 'Lumi 指挥中心', 'Lumi指挥中心'],
-    actions: ['open_command_center', 'open_chat', 'open_team'],
+    actions: ['open_command_center', 'open_chat'],
     commandCenterViewByAction: {
       open_command_center: 'office',
       open_chat: 'office',
-      open_team: 'office',
     },
-    useWhen: 'Converse with Lumi, inspect persistent tasks and receipts, coordinate the agent team, and enter the distributed core from one scoped workspace.',
+    useWhen: 'Converse with Lumi, inspect persistent tasks and receipts, and enter the LumiCore workspace.',
     // The command center is a permanent top-level navigation destination,
     // not a duplicated desktop/app-launcher icon.
     launcherIds: [],
@@ -200,6 +199,15 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
     actions: ['show_knowledge_base', 'open_files'],
     useWhen: 'Browse, import, absorb, search, and inspect indexing health for current-workspace knowledge.',
     launcherIds: ['knowledge', 'memory'],
+  },
+  {
+    id: 'memory-avatar',
+    label: 'Memory Avatar sanctuary',
+    target: 'memory-avatar',
+    navigationAliases: ['memory avatar', 'memory avatars', '记忆化身', '记忆头像', '记忆空间'],
+    actions: ['open_memory_avatar'],
+    useWhen: 'Open a private, frozen, tool-free Memory Avatar distilled from user-provided conversation records.',
+    launcherIds: ['memory-avatar'],
   },
   {
     id: 'personality',
@@ -276,14 +284,6 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
     launcherIds: ['tools'],
   },
   {
-    id: 'memory-avatar',
-    label: 'Memory avatar',
-    target: 'memory-avatar',
-    actions: ['open_memory_avatar'],
-    useWhen: 'Open the memory-avatar laboratory and embodied memory surface.',
-    launcherIds: ['memory-avatar'],
-  },
-  {
     id: 'personalization',
     label: 'Personalization',
     target: 'personalization',
@@ -348,14 +348,6 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
     launcherIds: [],
   },
   {
-    id: 'agent-ecosystem',
-    label: 'Agent ecosystem',
-    target: 'ecosystem',
-    actions: ['open_agent_ecosystem'],
-    useWhen: 'Browse Lumi agents, collaboration options, and the client ecosystem.',
-    launcherIds: [],
-  },
-  {
     id: 'docs',
     label: 'Documentation',
     target: 'docs',
@@ -414,16 +406,6 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
     actions: ['open_organization_messaging'],
     organizationView: 'messaging',
     useWhen: 'Manage role-authorized organization message connections and routed messages.',
-    launcherIds: [],
-  },
-  {
-    id: 'org-templates',
-    label: 'Agent templates and review',
-    target: 'org',
-    actions: ['open_organization_templates', 'open_organization_review'],
-    organizationView: 'templates',
-    organizationViewByAction: { open_organization_review: 'review' },
-    useWhen: 'Use organization templates and open the role-authorized review queue.',
     launcherIds: [],
   },
   {

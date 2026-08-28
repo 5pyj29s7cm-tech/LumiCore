@@ -9,7 +9,7 @@ function createRegistry() {
   return registry;
 }
 
-describe('desktop AI collaboration tools', () => {
+describe('single-target desktop AI tools', () => {
   beforeEach(async () => {
     const { initDatabase } = await import('../db_layer');
     await initDatabase();
@@ -38,7 +38,7 @@ describe('desktop AI collaboration tools', () => {
     expect(result.boundary).toContain('Desktop-only targets');
   });
 
-  it('selects default targets from running desktop AI apps instead of fixed names', async () => {
+  it('selects the first detected running desktop AI app instead of a fixed name', async () => {
     const registry = createRegistry();
     const calls: Array<{ name: string; args: Record<string, any> }> = [];
     let foreground = 'Lumi';
@@ -70,11 +70,11 @@ describe('desktop AI collaboration tools', () => {
       mode: 'detected',
       runningTargetIds: expect.arrayContaining(['chatgpt', 'claude']),
     });
-    expect(result.results.map((item: any) => item.target)).toEqual(['chatgpt', 'claude']);
+    expect(result.results.map((item: any) => item.target)).toEqual(['chatgpt']);
     expect(calls.some(call => call.name === 'desktop_open' && /workbuddy/i.test(String(call.args.target)))).toBe(false);
   });
 
-  it('uses the local app index when desktop AI apps are installed but not running', async () => {
+  it('uses the first matching local app when no desktop AI app is running', async () => {
     const registry = createRegistry();
     let foreground = 'Lumi';
 
@@ -107,7 +107,7 @@ describe('desktop AI collaboration tools', () => {
       mode: 'detected',
       installedTargetIds: expect.arrayContaining(['codex', 'lmstudio']),
     });
-    expect(result.results.map((item: any) => item.target)).toEqual(['codex', 'lmstudio']);
+    expect(result.results.map((item: any) => item.target)).toEqual(['codex']);
   });
 
   it('plans source-grounded discovery for missing desktop AI targets', async () => {
@@ -155,7 +155,7 @@ describe('desktop AI collaboration tools', () => {
     let foreground = 'Lumi';
     const askRaw = await registry.execute('desktop_ai_ask', {
       question: 'Give me a short implementation plan.',
-      targets: ['windsurf'],
+      target: 'windsurf',
       send: false,
     }, {
       userId,
@@ -180,14 +180,14 @@ describe('desktop AI collaboration tools', () => {
     });
   });
 
-  it('sends the same question to WorkBuddy and Codex through foreground windows', async () => {
+  it('sends one question to one foreground AI target', async () => {
     const registry = createRegistry();
     const calls: Array<{ name: string; args: Record<string, any> }> = [];
     let foreground = 'Lumi';
 
     const raw = await registry.execute('desktop_ai_ask', {
       question: 'Compare two product naming options.',
-      targets: ['workbuddy', 'codex'],
+      target: 'workbuddy',
       send: true,
     }, {
       requestConfirmation: async () => true,
@@ -208,12 +208,12 @@ describe('desktop AI collaboration tools', () => {
     const result = JSON.parse(raw);
 
     expect(result.ok).toBe(true);
-    expect(result.submittedCount).toBe(2);
+    expect(result.submittedCount).toBe(1);
     expect(result.sentCount).toBe(0);
     expect(result.results.every((item: any) => item.status === 'submitted_unverified')).toBe(true);
-    expect(result.results.map((item: any) => item.target)).toEqual(['workbuddy', 'codex']);
-    expect(calls.filter(call => call.name === 'desktop_clipboard_write')).toHaveLength(2);
-    expect(calls.filter(call => call.name === 'desktop_keyboard_press' && call.args.key === 'enter')).toHaveLength(2);
+    expect(result.results.map((item: any) => item.target)).toEqual(['workbuddy']);
+    expect(calls.filter(call => call.name === 'desktop_clipboard_write')).toHaveLength(1);
+    expect(calls.filter(call => call.name === 'desktop_keyboard_press' && call.args.key === 'enter')).toHaveLength(1);
   });
 
   it('does not paste into an unverified foreground app', async () => {
@@ -222,7 +222,7 @@ describe('desktop AI collaboration tools', () => {
 
     const raw = await registry.execute('desktop_ai_ask', {
       question: 'Please answer this.',
-      targets: ['codex'],
+      target: 'codex',
       openIfNeeded: false,
     }, {
       userConfirmed: true,
@@ -247,7 +247,7 @@ describe('desktop AI collaboration tools', () => {
 
     const raw = await registry.execute('desktop_ai_ask', {
       question: 'Give me three concise naming options.',
-      targets: ['chatgpt'],
+      target: 'chatgpt',
       send: false,
     }, {
       desktopRelay: async (name, args) => {
@@ -277,7 +277,7 @@ describe('desktop AI collaboration tools', () => {
 
     const raw = await registry.execute('desktop_ai_ask', {
       question: 'Prepare a concise question.',
-      targets: ['chatgpt'],
+      target: 'chatgpt',
       send: false,
       useVirtualCursor: false,
     }, {
@@ -310,7 +310,7 @@ describe('desktop AI collaboration tools', () => {
     const registry = createRegistry();
     const raw = await registry.execute('desktop_ai_ask', {
       question: 'Summarize the attached note.',
-      targets: ['my-ai'],
+      target: 'my-ai',
       customTargets: [{
         id: 'my-ai',
         label: 'My AI Tool',
@@ -350,34 +350,6 @@ describe('desktop AI collaboration tools', () => {
     expect(result.status).toBe('needs_vision_setup');
     expect(result.screenshotCaptured).toBe(true);
     expect(result.answerText).toBeNull();
-  });
-
-  it('runs a multi-AI roundtable without pretending unverified submissions are answers', async () => {
-    const registry = createRegistry();
-    let foreground = 'Lumi';
-    const raw = await registry.execute('desktop_ai_roundtable', {
-      question: 'Compare two implementation approaches.',
-      targets: ['workbuddy', 'codex'],
-      initialWaitMs: 0,
-      pollAttempts: 1,
-    }, {
-      userConfirmed: true,
-      desktopRelay: async (name, args) => {
-        if (name === 'desktop_active_window') return JSON.stringify({ title: foreground, process_name: foreground });
-        if (name === 'desktop_open') {
-          foreground = String(args.target || '');
-          return JSON.stringify({ ok: true, target: args.target });
-        }
-        if (name === 'desktop_capture_screen') return JSON.stringify({ image_base64: 'abc', width: 100, height: 100, format: 'jpeg' });
-        return 'ok';
-      },
-    });
-    const result = JSON.parse(raw);
-
-    expect(result.ask.submittedCount).toBe(2);
-    expect(result.collectedCount).toBe(0);
-    expect(result.needsVisionSetupCount).toBe(2);
-    expect(result.synthesisInput).toEqual([]);
   });
 
   it('parses only structured, confident desktop answer evidence', async () => {

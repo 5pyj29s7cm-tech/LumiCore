@@ -48,7 +48,7 @@ export const OPERATION_MODE_CONFIGS: Record<OperationMode, OperationModeConfig> 
     id: 'assistant',
     label: 'Assistant',
     labelCN: 'Assistant',
-    description: 'Foreground assisted execution. The user is present; Lumi has the same practical tool, browser, app, desktop, file, skill, and team permissions as Autonomy for requested work, but does not start 24h unattended loops or long background absorption by default.',
+    description: 'Foreground assisted execution. The user is present; LumiCore has the same practical tool, browser, app, desktop, file, and skill permissions as Autonomy for requested work, but does not start unattended loops or long autonomous absorption by default.',
     promptOverlay: [
       'You are in assistant mode.',
       'Assistant mode is high-permission foreground work: assume the user is present and wants Lumi to proceed when they ask for action.',
@@ -76,7 +76,7 @@ export const OPERATION_MODE_CONFIGS: Record<OperationMode, OperationModeConfig> 
     promptOverlay: [
       'You are in autonomy mode.',
       'Autonomy has the same practical permissions as assistant mode, plus permission to keep working across long horizons.',
-      'Use background queues, task center state, scheduled/continuous monitoring, memory consolidation, learning, folder sorting, research absorption, and multi-agent work when useful.',
+      'Use the single LumiCore task state, scheduled/continuous monitoring, memory consolidation, learning, folder sorting, and research absorption when useful.',
       'Ask proactive questions when a missing fact blocks progress, then continue once answered. Do not stop after one sub-step if a safe next step is available.',
       'For ultra-long tasks, keep durable state, checkpoints, artifacts, blockers, and next actions so Lumi can resume after sleep, restart, or window hiding.',
       'For visible desktop work, keep progress observable, inspect before acting, use the virtual cursor path when helpful, and verify results.',

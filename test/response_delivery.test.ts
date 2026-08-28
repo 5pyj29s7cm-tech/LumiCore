@@ -20,7 +20,6 @@ function flow(overrides: Partial<LumiTurnFlow> = {}): LumiTurnFlow {
     selfRepairTurn: false,
     clientActionOnlyTurn: false,
     visionIntent: false,
-    exposeAgentWork: false,
     workSurfaceRoute: resolveWorkSurfaceRoute('\u4f60\u597d'),
     workTakeover: {
       strength: 'none',
@@ -30,8 +29,6 @@ function flow(overrides: Partial<LumiTurnFlow> = {}): LumiTurnFlow {
     executionGovernance: {
       verificationIntent: 'none',
       verificationReason: '',
-      delegationIntent: 'none',
-      delegationReason: '',
       capabilityLearningIntent: 'none',
       capabilityLearningReason: '',
       shouldInspectCapabilitiesFirst: false,

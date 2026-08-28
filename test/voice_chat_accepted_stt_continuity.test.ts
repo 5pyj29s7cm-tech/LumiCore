@@ -503,7 +503,12 @@ describe('accepted STT Voice -> Chat task continuity', () => {
       adapterStarted: true,
       envelope: { status: 'verified_success' },
     });
-    expect(voiceSearch?.result).toBe('[]');
+    expect(JSON.parse(String(voiceSearch?.result || '{}'))).toMatchObject({
+      kind: 'desktop_files_summary',
+      originalCount: 0,
+      truncated: false,
+      entries: [],
+    });
     expect(failedVoiceRead).toMatchObject({
       requestId: voiceRequestId,
       turnId: voiceRequestId,

@@ -5,7 +5,6 @@ import { getMember, logAudit, type OrgMembership, type OrgRole } from './db';
 export type OrganizationResourceType =
   | 'knowledge_article'
   | 'legal_case'
-  | 'agent'
   | 'conversation'
   | 'credential_reference'
   | 'branch_device'
@@ -21,7 +20,7 @@ export type OrganizationResourcePermission =
   | 'admin'
   | 'credential_use'
   | 'sync_write';
-export type OrganizationResourceSubjectType = 'role' | 'department' | 'position' | 'member' | 'agent' | 'branch';
+export type OrganizationResourceSubjectType = 'role' | 'department' | 'position' | 'member' | 'branch';
 
 export interface OrganizationResourcePolicy {
   id: string;
@@ -74,7 +73,7 @@ export interface OrganizationCredentialReference {
   updatedAt: string;
 }
 
-export type OrganizationDevicePermission = 'sync_write' | 'kb_read' | 'template_read' | 'status_read';
+export type OrganizationDevicePermission = 'sync_write' | 'kb_read' | 'status_read';
 
 export interface OrganizationDeviceAccess {
   id: string;
@@ -102,7 +101,7 @@ export class OrganizationResourceAuthorizationError extends Error {
 const ALL_PERMISSIONS: OrganizationResourcePermission[] = [
   'read', 'write', 'execute', 'share', 'admin', 'credential_use', 'sync_write',
 ];
-const DEFAULT_DEVICE_PERMISSIONS: OrganizationDevicePermission[] = ['sync_write', 'kb_read', 'template_read', 'status_read'];
+const DEFAULT_DEVICE_PERMISSIONS: OrganizationDevicePermission[] = ['sync_write', 'kb_read', 'status_read'];
 const CREDENTIAL_REFERENCE_PATTERN = /^(?:web_login|settings|env|extension|session|vault|os_credential):[A-Za-z0-9._:/-]{1,220}$/;
 const FORBIDDEN_CREDENTIAL_INPUT = /password|passphrase|secret|token|api.?key|cookie|authorization|private.?key/i;
 
@@ -134,8 +133,12 @@ function normalizeDevicePermissions(value: unknown): OrganizationDevicePermissio
 function ensureTables(db: any): void {
   if (!Array.isArray(db.orgResourcePolicies)) db.orgResourcePolicies = [];
   if (!Array.isArray(db.orgResourceGrants)) db.orgResourceGrants = [];
+  db.orgResourceGrants = db.orgResourceGrants.filter((grant: any) => grant?.subjectType !== 'agent');
   if (!Array.isArray(db.orgCredentialReferences)) db.orgCredentialReferences = [];
   if (!Array.isArray(db.orgDevices)) db.orgDevices = [];
+  for (const device of db.orgDevices) {
+    device.permissions = normalizeDevicePermissions(device.permissions);
+  }
 }
 
 function activeMembership(orgId: string, userId: string): OrgMembership | null {
@@ -203,14 +206,6 @@ function defaultDecision(input: {
       matchedGrantIds: [],
     };
   }
-  if (input.permission === 'execute' && input.resourceType === 'agent') {
-    return {
-      allowed: roleCanWrite(input.membership.role),
-      reason: 'legacy_organization_agent_execute_default',
-      policy: null,
-      matchedGrantIds: [],
-    };
-  }
   return { allowed: false, reason: 'explicit_resource_policy_required', policy: null, matchedGrantIds: [] };
 }
 
@@ -218,7 +213,6 @@ function subjectMatches(input: {
   grant: OrganizationResourceGrant;
   membership: OrgMembership;
   actorUserId: string;
-  actorAgentId?: string;
   branchId?: string;
   positions: any[];
 }): boolean {
@@ -226,7 +220,6 @@ function subjectMatches(input: {
   if (grant.subjectType === 'member') return grant.subjectId === input.actorUserId;
   if (grant.subjectType === 'role') return grant.subjectId === membership.role;
   if (grant.subjectType === 'department') return Boolean(membership.departmentId && grant.subjectId === membership.departmentId);
-  if (grant.subjectType === 'agent') return Boolean(input.actorAgentId && grant.subjectId === input.actorAgentId);
   if (grant.subjectType === 'branch') return Boolean(input.branchId && grant.subjectId === input.branchId);
   if (grant.subjectType === 'position') {
     return input.positions.some(position => (
@@ -264,7 +257,6 @@ export function authorizeOrganizationResource(input: {
   resourceId: string;
   permission: OrganizationResourcePermission;
   ownerUserId?: string;
-  actorAgentId?: string;
   branchId?: string;
 }): OrganizationResourceAccessDecision {
   const membership = activeMembership(input.orgId, input.actorUserId);
@@ -288,7 +280,7 @@ export function authorizeOrganizationResource(input: {
 
   const positions = db.orgPositions || [];
   const matches = grantsFor(db, input.orgId, resourceType, resourceId)
-    .filter(grant => subjectMatches({ grant, membership, actorUserId: input.actorUserId, actorAgentId: input.actorAgentId, branchId: input.branchId, positions }))
+    .filter(grant => subjectMatches({ grant, membership, actorUserId: input.actorUserId, branchId: input.branchId, positions }))
     .filter(grant => grantCovers(grant, input.permission));
   const denied = matches.filter(grant => grant.effect === 'deny');
   if (denied.length > 0) {
@@ -396,7 +388,7 @@ export function setOrganizationResourcePolicy(input: {
     const subjectType = normalizeText(raw.subjectType, 40) as OrganizationResourceSubjectType;
     const subjectId = normalizeText(raw.subjectId);
     const permissions = normalizePermissions(raw.permissions);
-    if (!['role', 'department', 'position', 'member', 'agent', 'branch'].includes(subjectType) || !subjectId || permissions.length === 0) {
+    if (!['role', 'department', 'position', 'member', 'branch'].includes(subjectType) || !subjectId || permissions.length === 0) {
       throw new OrganizationResourceAuthorizationError('Every grant requires a valid subject and permission', 400);
     }
     if (subjectType === 'role' && !['owner', 'admin', 'member', 'viewer'].includes(subjectId)) {
@@ -410,9 +402,6 @@ export function setOrganizationResourcePolicy(input: {
     }
     if (subjectType === 'position' && !(db.orgPositions || []).some((item: any) => item.id === subjectId && item.orgId === input.orgId && item.status === 'active')) {
       throw new OrganizationResourceAuthorizationError('Grant position must be active in this organization', 400);
-    }
-    if (subjectType === 'agent' && !(db.agents || []).some((item: any) => item.id === subjectId && item.orgId === input.orgId && item.domain === 'work')) {
-      throw new OrganizationResourceAuthorizationError('Grant agent must belong to this organization', 400);
     }
     if (subjectType === 'branch' && !(db.orgDevices || []).some((item: any) => item.branchId === subjectId && item.orgId === input.orgId)) {
       throw new OrganizationResourceAuthorizationError('Grant branch must be registered to this organization', 400);
@@ -549,7 +538,6 @@ export function resolveOrganizationCredentialReference(input: {
   orgId: string;
   actorUserId: string;
   credentialId: string;
-  actorAgentId?: string;
 }): string {
   const db = readDB();
   ensureTables(db);
@@ -558,13 +546,13 @@ export function resolveOrganizationCredentialReference(input: {
   ));
   if (!item) throw new OrganizationResourceAuthorizationError('Credential reference not found', 404);
   assertOrganizationResourceAccess({
-    orgId: input.orgId, actorUserId: input.actorUserId, actorAgentId: input.actorAgentId,
+    orgId: input.orgId, actorUserId: input.actorUserId,
     resourceType: 'credential_reference', resourceId: item.id, permission: 'credential_use', ownerUserId: item.createdBy,
   });
   logAudit({
     orgId: input.orgId, userId: input.actorUserId, action: 'credential_reference.used',
     resourceType: 'credential_reference', resourceId: item.id,
-    details: { actorAgentId: input.actorAgentId || null, provider: item.provider },
+    details: { provider: item.provider },
   });
   return item.credentialRef;
 }

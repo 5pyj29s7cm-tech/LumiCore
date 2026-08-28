@@ -2,12 +2,18 @@ import type { CapabilityLane, CapabilityOperation, ToolExecutionRecord } from '.
 import { LEGAL_ENTRY_PREFERRED_TOOLS, isLegalEntryTurn, isRemoteLegalMessageTurn } from './legal_entry';
 import { isInformationOnlyQuestion } from './tool_intent';
 import {
+  buildDesktopObservationPlan,
+  evaluateDesktopObservationEvidence,
   requiresActiveWindowObservation,
   requiresDesktopFileListingObservation,
   requiresRunningProcessObservation,
 } from './desktop_observation';
 import { classifyRuntimeWorkIntent } from './runtime_work_intent';
-import { CN_ACTION_CONTRACT_BLOCKERS } from '../regions/packs/cn/voice_fast_path_messages';
+import { isRuntimeCleanupOfferAcceptanceText } from './pending_assistant_offer';
+import {
+  CN_ACTION_CONTRACT_BLOCKERS,
+  CN_RESULT_GROUNDING_MESSAGES,
+} from '../regions/packs/cn/voice_fast_path_messages';
 import {
   isExplicitArtifactCreationText,
   isExternalCommitConfirmationOnlyRequest,
@@ -15,6 +21,11 @@ import {
 } from './normalized_action_intent';
 import { isReadOnlyKnowledgeBaseInspectionRequest } from './knowledge_intent';
 import type { TaskCapsuleV1 } from '../conversation/task_capsule';
+import {
+  parseReceiptObject,
+  toolRecordHasTerminalPayload,
+  toolRecordTerminalPayload,
+} from '../tools/receipt_payload';
 
 export type LumiActionContractKind =
   | 'none'
@@ -31,7 +42,7 @@ export type LumiActionContractKind =
   | 'task_control'
   | 'work_task'
   | 'external_ai_history'
-  | 'external_ai_collaboration'
+  | 'external_ai_request'
   | 'extension_registry'
   | 'legal_document'
   | 'desktop_operation'
@@ -72,7 +83,7 @@ const ACTION_CAPABILITY_REQUIREMENTS: Partial<Record<LumiActionContractKind, Act
   task_control: [{ lanes: ['system', 'agents'], operations: ['observe', 'mutate'], terms: ['runtime', 'task', 'work', 'status', 'cancel'] }],
   work_task: [{ lanes: ['agents'], operations: ['create', 'observe', 'mutate'], terms: ['persistent', 'task', 'takeover', 'ledger', 'workflow'] }],
   external_ai_history: [{ lanes: ['agents'], operations: ['observe', 'create', 'mutate'], terms: ['external', 'ai', 'history', 'conversation', 'sync', 'authorization'] }],
-  external_ai_collaboration: [{ lanes: ['agents', 'web', 'desktop'], operations: ['communicate', 'observe'], terms: ['external', 'ai', 'collaboration', 'answer', 'session', 'route'] }],
+  external_ai_request: [{ lanes: ['web', 'desktop'], operations: ['communicate', 'observe'], terms: ['external', 'ai', 'tool', 'answer', 'target'] }],
   extension_registry: [{ lanes: ['system'], operations: ['observe', 'test', 'mutate'], terms: ['extension', 'registry', 'provider', 'plugin', 'compatibility', 'rollback'] }],
   legal_document: [{ lanes: ['industry', 'web', 'office'], terms: ['legal', 'law', 'case', 'citation', 'court', 'document'] }],
   desktop_operation: [{ lanes: ['desktop'], operations: ['observe', 'mutate', 'test'], terms: ['desktop', 'window', 'application', 'native', 'screen', 'open'] }],
@@ -142,6 +153,7 @@ function extensionRegistryToolForAction(text: string): string | null {
   return null;
 }
 
+const CURRENT_TURN_ATTACHMENTS_RE = /(?:^|\r?\n)\s*##\s+Current Turn Attachments\b/i;
 const INJECTED_TASK_CONTEXT_RE = /(?:^|\r?\n)\s*##\s+(?:Current Turn Attachments|Recent action continuation context|Internal client-surface continuation context)\b/i;
 
 function extractPrimaryTaskText(input: string): string {
@@ -201,11 +213,21 @@ export function requiresCurrentAuthoringDocumentInspection(input: string): boole
   const text = compact(extractPrimaryTaskText(input));
   if (!text) return false;
   const hasAuthoringApp = /(?:WPS|Microsoft\s+Word|Word|Excel|PowerPoint|Office)/iu.test(text);
+  const hasCurrentTurnAttachment = CURRENT_TURN_ATTACHMENTS_RE.test(String(input || ''));
+  // A deictic request such as "analyze the file that is open" still needs
+  // the foreground authoring-window + exact-document contract even when the
+  // user did not name WPS/Office. An attached file owns its own target and
+  // must never be replaced by foreground-window inference.
+  const hasImplicitAuthoringDocument = !hasCurrentTurnAttachment
+    && /(?:(?:(?:\u5f53\u524d|\u73b0\u5728|\u6b63\u5728|\u521a\u624d|\u521a\u521a).{0,12}\u6253\u5f00(?:\u7740|\u7684)?|\u6253\u5f00(?:\u7740|\u7684)).{0,8}(?:\u8fd9\u4efd|\u8fd9\u4e2a|\u8be5)?(?:\u6587\u4ef6|\u6587\u6863|PPT|\u6f14\u793a\u6587\u7a3f|\u8868\u683c|\u8d44\u6599)|\b(?:currently?\s+open|opened|active|foreground)\b.{0,24}\b(?:file|document|presentation|sheet)\b)/iu.test(text);
   // i18n-allow: Reviewed multilingual current-document input recognition; not user-visible copy.
   const hasCurrentDocument = /(?:现在|当前|正在).{0,18}(?:打开|编辑|显示).{0,18}(?:这份|这个|该)?(?:文件|文档|表格|幻灯片|演示文稿|PPT|PDF)|(?:打开|编辑|显示)(?:着|的).{0,12}(?:这份|这个|该)?(?:文件|文档|表格|幻灯片|演示文稿|PPT|PDF)|(?:现在|当前|正在).{0,24}(?:活动窗口|前台窗口|窗口里|窗口内).{0,18}(?:文件|文档|表格|幻灯片|演示文稿|PPT|PDF)/u.test(text);
   // i18n-allow: Reviewed multilingual document-inspection input recognition; not user-visible copy.
   const wantsInspection = /(?:分析|总结|介绍|讲解|读取|阅读|看看|看一下|看法|想法|检查)|\b(?:analy[sz]e|summari[sz]e|review|inspect|read|present)\b/iu.test(text);
-  return hasAuthoringApp && hasCurrentDocument && wantsInspection;
+  const wantsPlainInspection = /(?:\u5206\u6790|\u603b\u7ed3|\u4ecb\u7ecd|\u8bb2\u89e3|\u8bfb\u53d6|\u9605\u8bfb|\u67e5\u770b|\u68c0\u67e5)/u.test(text);
+  return (hasAuthoringApp || hasImplicitAuthoringDocument)
+    && (hasCurrentDocument || hasImplicitAuthoringDocument)
+    && (wantsInspection || wantsPlainInspection);
 }
 
 export function extractCurrentAppTarget(input: string): string {
@@ -251,16 +273,21 @@ export function claimsCurrentAppSaveCompletion(input: string): boolean {
 
 export function extractSimpleDesktopOpenTarget(input: string): string {
   const primary = extractPrimaryTaskText(input);
-  const normalizedIntent = normalizeActionIntent(primary);
-  if (
-    /(?:只|仅)(?:需要|要|是)?打开|(?:only|just)s+open/iu.test(primary)
-    &&
-    normalizedIntent.kind === 'desktop_operation'
-    && normalizedIntent.operation === 'navigate'
-    && normalizedIntent.sideEffectClass === 'none'
-    && compact(normalizedIntent.target)
-  ) {
-    return compact(normalizedIntent.target);
+  const onlyOpen = /(?:只|仅)(?:需要|要|是)?打开|\b(?:only|just)\s+open\b/iu.test(primary); // i18n-allow: Multilingual desktop-open input recognition; not user-visible copy.
+  // Normalization is useful for the special "only open" phrasing, but it is
+  // unnecessary for every other turn. In particular, do not run the full
+  // intent pipeline over long conversational context before we even know the
+  // turn contains an open command.
+  if (onlyOpen) {
+    const normalizedIntent = normalizeActionIntent(primary);
+    if (
+      normalizedIntent.kind === 'desktop_operation'
+      && normalizedIntent.operation === 'navigate'
+      && normalizedIntent.sideEffectClass === 'none'
+      && compact(normalizedIntent.target)
+    ) {
+      return compact(normalizedIntent.target);
+    }
   }
   const text = compact(primary);
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
@@ -293,6 +320,27 @@ export function extractDesktopLaunchTarget(input: string): string {
   return extractSimpleDesktopOpenTarget(primary);
 }
 
+/** A provider/model health question needs a real perception call. Directory
+ * discovery, settings reads, and ordinary model prose cannot prove that the
+ * configured visual path is usable right now. */
+export function requiresVisualModelAvailabilityCheck(input: string): boolean {
+  const text = compact(extractPrimaryTaskText(input));
+  if (!text) return false;
+  const visualRole = /(?:\u89c6\u89c9|\u56fe\u50cf|\u5c4f\u5e55)(?:\u6a21\u578b|\u8bc6\u522b|\u7406\u89e3|\u611f\u77e5)|(?:vision|visual)(?:\s+(?:model|provider|perception|recognition))?/iu.test(text);
+  const liveProbe = /(?:\u68c0\u67e5|\u68c0\u6d4b|\u6d4b\u8bd5|\u9a8c\u8bc1|\u53ef\u7528|\u80fd\u7528|\u6b63\u5e38|\u72b6\u6001|\u8d77\u98de|\u6062\u590d)|\b(?:check|probe|test|verify|available|availability|working|healthy|status|back\s+online)\b/iu.test(text);
+  return visualRole && liveProbe;
+}
+
+/** Positive music playback is a composite desktop goal: reaching the player
+ * is only preparation, and a generic key dispatch is not playback state. */
+export function requiresMediaPlaybackAction(input: string): boolean {
+  const text = compact(extractPrimaryTaskText(input));
+  if (!text || /(?:AutoCAD|\bCAD\b|\u56de\u653e\u56fe\u7eb8|\u7ed8\u56fe\u56de\u653e)/iu.test(text)) return false;
+  const mediaSurface = /(?:\u7f51\u6613\u4e91(?:\u97f3\u4e50)?|QQ\s*\u97f3\u4e50|\u9177\u72d7(?:\u97f3\u4e50)?|\u97f3\u4e50|\u6b4c\u66f2|\u6b4c\u5355)|\b(?:NetEase|CloudMusic|Spotify|Apple\s+Music|music|song|playlist|music\s+player)\b/iu.test(text);
+  const positivePlayback = /(?:\u64ad\u653e|\u653e\u4e00?\u9996|\u542c\u4e00?\u9996|\u7ee7\u7eed\u64ad\u653e)|\b(?:play|resume|listen\s+to|put\s+on)\b/iu.test(text);
+  return mediaSurface && positivePlayback;
+}
+
 /** Exact user-authored strings that a generated text artifact must preserve. */
 export function extractExplicitArtifactTextRequirements(input: string): string[] {
   const text = String(input || '');
@@ -311,7 +359,7 @@ export function extractExplicitArtifactTextRequirements(input: string): string[]
   return requirements.slice(0, 20);
 }
 
-export function requiresDesktopAiCollaboration(input: string): boolean {
+export function requiresDesktopAiRequest(input: string): boolean {
   const text = compact(extractPrimaryTaskText(input));
   const positiveText = text.replace(
     /(?:不要|不得|禁止|严禁|无需|不需要|不能|别|避免)[^。！？!?；;\n]{0,96}(?:AI|模型|agent|智能体)[^。！？!?；;\n]*/giu,
@@ -319,14 +367,14 @@ export function requiresDesktopAiCollaboration(input: string): boolean {
   );
   // i18n-allow: multilingual desktop-AI surface recognition; not user-visible copy.
   const hasNamedAiSurface = /(?:WorkBuddy|Codex|ChatGPT|Claude|Gemini|DeepSeek|Kimi|豆包|通义|文心|Perplexity|Cursor|Copilot|Ollama|LM\s*Studio|Cherry\s*Studio|AnythingLLM|外部\s*AI|桌面\s*AI|AI\s*(?:工具|客户端|app))/iu.test(positiveText);
-  // Generic words such as "模型" and "智能体" are collaboration targets
+  // Generic words such as "模型" and "智能体" can identify an external AI target
   // only when a positive sentence actually directs work to or requests an
   // answer from them. A safety boundary such as "禁止凭模型记忆编造" must
   // not divert an industry task into the external-AI lane.
-  const hasGenericAiCollaborationTarget = /(?:问(?!题)(?:一下|问)?|询问|发给|发送给|交给|让|跟|和).{0,48}(?:AI|模型|agent|智能体)|(?:AI|模型|agent|智能体).{0,48}(?:聊天|对话|讨论|回答|协同|合作|汇总|对比)/iu.test(positiveText);
-  // i18n-allow: multilingual collaboration-action recognition; not user-visible copy.
-  const hasCollaborationAction = /(?:问(?!题)(?:一下|问)?|询问|发给|发送给|交给|跟|和).{0,48}(?:聊天|聊|对话|说|问|讨论)|(?:聊天|对话|讨论|回答|结果|总结|对比|汇总)|\b(?:ask|send\s+to|hand\s+off|chat|talk|discuss|answer|collect|compare|summari[sz]e)\b/iu.test(positiveText);
-  return (hasNamedAiSurface || hasGenericAiCollaborationTarget) && hasCollaborationAction;
+  const hasGenericAiTarget = /(?:问(?!题)(?:一下|问)?|询问|发给|发送给|交给|让|跟|和).{0,48}(?:AI|模型|agent|智能体)|(?:AI|模型|agent|智能体).{0,48}(?:聊天|对话|讨论|回答|协同|合作|汇总|对比)/iu.test(positiveText);
+  // i18n-allow: multilingual external-AI request recognition; not user-visible copy.
+  const hasAskAction = /(?:问(?!题)(?:一下|问)?|询问|发给|发送给|交给|跟|和).{0,48}(?:聊天|聊|对话|说|问|讨论)|(?:聊天|对话|讨论|回答|结果|总结|对比|汇总)|\b(?:ask|send\s+to|hand\s+off|chat|talk|discuss|answer|collect|compare|summari[sz]e)\b/iu.test(positiveText);
+  return (hasNamedAiSurface || hasGenericAiTarget) && hasAskAction;
 }
 
 export function requiresExternalAiHistory(input: string): boolean {
@@ -340,8 +388,8 @@ export function requiresExternalAiHistory(input: string): boolean {
   return hasExternalAiTarget && hasHistoryAction && !explicitNewSubmission;
 }
 
-export function requiresDesktopAiAnswerCollection(input: string): boolean {
-  if (!requiresDesktopAiCollaboration(input)) return false;
+export function requiresDesktopAiAnswerReadback(input: string): boolean {
+  if (!requiresDesktopAiRequest(input)) return false;
   const text = compact(extractPrimaryTaskText(input));
   // i18n-allow: multilingual answer-collection intent recognition; not user-visible copy.
   return /(?:聊天|聊|对话|讨论|回答|结果|带回|拿回|告诉我|总结|对比|汇总)|\b(?:chat|talk|discuss|answer|bring\s+back|collect|compare|summari[sz]e)\b/iu.test(text);
@@ -372,6 +420,45 @@ function buildSimpleDesktopOpenContract(): LumiActionContract {
     verificationTools: ['desktop_active_window', 'desktop_running_processes'],
     nextStep: 'Resolve the exact requested target, open it once, and verify the matching process or active window when needed.',
     caution: 'Do not reinterpret a launch request as content creation, and do not substitute a different application unless the user explicitly asks for a fallback.',
+  });
+}
+
+function buildVisualModelAvailabilityContract(): LumiActionContract {
+  return withDefaults({
+    kind: 'desktop_operation',
+    label: 'Live visual-perception availability check',
+    coreAction: 'Run one real current-screen perception request through the configured visual model and report whether it returned usable visual analysis.',
+    preparationIsNotCompletion: [
+      'reading model settings',
+      'searching files or directories',
+      'capturing an image without obtaining visual analysis',
+    ],
+    requiredEvidence: ['a successful current-turn OCR or visual-analysis receipt containing usable analysis text'],
+    preferredTools: ['ocr_screen', 'ocr_region'],
+    verificationTools: ['ocr_screen', 'ocr_region'],
+    nextStep: 'Run one bounded visual probe and report the provider/account blocker naturally if it does not return analysis.',
+    caution: 'File discovery, screenshots, and unrelated successful tools do not prove that the visual model is available.',
+  });
+}
+
+function buildMediaPlaybackContract(): LumiActionContract {
+  return withDefaults({
+    kind: 'desktop_operation',
+    label: 'Verified music playback',
+    coreAction: 'Open or focus the requested music player and start playback in that exact player.',
+    preparationIsNotCompletion: [
+      'listing installed applications',
+      'opening or focusing the music player',
+      'dispatching a generic keyboard shortcut without observing playback state afterwards',
+    ],
+    requiredEvidence: [
+      'matching player window/open evidence',
+      'a verified playback receipt, or a playback action followed by visible playing-state evidence',
+    ],
+    preferredTools: ['desktop_list_apps', 'desktop_open', 'desktop_active_window', 'desktop_ui_snapshot', 'desktop_ui_invoke', 'desktop_keyboard_press', 'ocr_screen'],
+    verificationTools: ['desktop_active_window', 'desktop_ui_snapshot', 'ocr_screen'],
+    nextStep: 'Focus the exact player, perform the playback action once, then observe a playing state without toggling it again.',
+    caution: 'A successful Space/media-key dispatch proves input delivery only; it cannot distinguish play from pause.',
   });
 }
 
@@ -475,15 +562,7 @@ export function requiresAutoCadMcpPlayback(input: string): boolean {
 }
 
 function parseRecordJson(record: ToolExecutionRecord): Record<string, any> | null {
-  if (record.receipt && typeof record.receipt === 'object' && !Array.isArray(record.receipt)) {
-    return record.receipt as Record<string, any>;
-  }
-  try {
-    const parsed = JSON.parse(String(record.result || ''));
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, any> : null;
-  } catch {
-    return null;
-  }
+  return parseReceiptObject(toolRecordTerminalPayload(record));
 }
 
 function normalizeFileReference(value: unknown): string {
@@ -906,6 +985,10 @@ export function buildActionContract(input: string): LumiActionContract {
       primaryContract.applies
       && primaryContract.kind !== 'none'
       && !requiresCurrentAppUiMutation(rawInput)
+      && !(
+        CURRENT_TURN_ATTACHMENTS_RE.test(rawInput)
+        && primaryContract.label === 'Current authoring document inspection'
+      )
     ) return primaryContract;
   }
 
@@ -934,7 +1017,7 @@ export function buildActionContract(input: string): LumiActionContract {
         'saying work was stopped without a runtime cancellation receipt',
       ],
       requiredEvidence: [cancelling
-        ? 'runtime_work_cancel result with ok=true and an exact cancelled/cancelling/idle status'
+        ? 'runtime_work_cancel result with ok=true and cancelled/idle for completion; cancelling proves only that the request was accepted and must be rechecked'
         : 'runtime_work_status result with ok=true and the exact active item count'],
       preferredTools: [cancelling ? 'runtime_work_cancel' : 'runtime_work_status'],
       verificationTools: ['runtime_work_status'],
@@ -948,12 +1031,45 @@ export function buildActionContract(input: string): LumiActionContract {
   // question/status guards below. Domain-specific contracts still get first
   // refusal, and the candidate is materialized only near the artifact branch.
   const readOnlyArtifactInspection = requestsExactReadOnlyArtifactInspection(text);
+  const desktopObservationPlan = buildDesktopObservationPlan(text);
+  if (normalizedIntent.kind === 'client_navigation' && normalizedIntent.clientAction) {
+    return withDefaults({
+      kind: 'desktop_operation',
+      label: 'Verified Lumi client action',
+      coreAction: 'Apply the exact requested Lumi client navigation or mode change through the native client action router.',
+      preparationIsNotCompletion: [
+        'describing the intended client state',
+        'reading the current client state without applying the requested action',
+        'asking the user to expose a tool that is already authorized',
+      ],
+      requiredEvidence: [
+        `a client_action receipt for ${normalizedIntent.clientAction} with verification.status=verified or not_applicable`,
+      ],
+      preferredTools: ['client_get_state', 'client_action'],
+      verificationTools: ['client_get_state', 'client_action'],
+      nextStep: 'Read current client state when needed, run the exact client action once, and report only the verified native result.',
+      caution: 'Mode authorization and model schema projection are internal runtime facts. Never ask the user to enable a fictional tool mode or claim a UI change without a matching client_action receipt.',
+    });
+  }
+  if (normalizedIntent.kind === 'client_state') {
+    return withDefaults({
+      kind: 'desktop_operation',
+      label: 'Verified Lumi client state',
+      coreAction: 'Read the current native Lumi client state requested by the user.',
+      preparationIsNotCompletion: ['describing remembered or assumed client state'],
+      requiredEvidence: ['a successful current-turn client_get_state receipt'],
+      preferredTools: ['client_get_state'],
+      verificationTools: ['client_get_state'],
+      nextStep: 'Read the native client state and answer from that receipt.',
+      caution: 'Do not infer the current mode, surface, or client state from conversation history.',
+    });
+  }
   if (
     !readOnlyArtifactInspection
+    && desktopObservationPlan.length === 0
     && (
       normalizedIntent.kind === 'correction_explanation'
       || normalizedIntent.kind === 'client_navigation'
-      || normalizedIntent.kind === 'client_state'
       || normalizedIntent.kind === 'status_query'
     )
   ) return NONE_CONTRACT;
@@ -1001,6 +1117,9 @@ export function buildActionContract(input: string): LumiActionContract {
       caution: 'Never execute arbitrary plugin code, embed credentials in a manifest, widen signed permissions, or bypass the unified tool policy and receipt pipeline.',
     });
   }
+  if (requiresVisualModelAvailabilityCheck(text)) {
+    return buildVisualModelAvailabilityContract();
+  }
   if (isInformationOnlyQuestion(text) && !readOnlyArtifactInspection) return NONE_CONTRACT;
   if (isReadOnlyKnowledgeBaseInspectionRequest(text)) return NONE_CONTRACT;
   // Blank AutoCAD creation has a dedicated verified COM path. It remains a
@@ -1032,10 +1151,8 @@ export function buildActionContract(input: string): LumiActionContract {
   const confirmationOnlyExternalCommit = isExternalCommitConfirmationOnlyRequest(text);
   const negatedMessagingSend = hasNegatedMessagingSendIntent(text) && !confirmationOnlyExternalCommit;
   const appInventoryInspection = /\b(?:inspect|check|list|show|find|detect|inventory)\b.{0,64}\b(?:installed|launchable|available|local|app|application|software|program|launch\s+target)\b|(?:\u68c0\u67e5|\u67e5\u770b|\u5217\u51fa|\u8bc6\u522b|\u68c0\u6d4b|\u76d8\u70b9|\u67e5\u627e).{0,32}(?:\u5df2\u5b89\u88c5|\u53ef\u542f\u52a8|\u5e94\u7528|\u8f6f\u4ef6|\u7a0b\u5e8f|\u542f\u52a8\u5165\u53e3|\u5b89\u88c5\u72b6\u6001)/iu.test(text);
-  const activeWindowObservation = requiresActiveWindowObservation(text);
-  const desktopFileObservation = requiresDesktopFileListingObservation(text);
-  const desktopObservationInspection = activeWindowObservation || desktopFileObservation;
-  const currentAuthoringDocumentInspection = requiresCurrentAuthoringDocumentInspection(text);
+  const desktopObservationInspection = desktopObservationPlan.length > 0;
+  const currentAuthoringDocumentInspection = requiresCurrentAuthoringDocumentInspection(rawInput);
   const directedMessageSend = normalizedIntent.kind === 'messaging_send' || (
     normalizedIntent.kind !== 'messaging_read'
     && (
@@ -1091,22 +1208,22 @@ export function buildActionContract(input: string): LumiActionContract {
     });
   }
 
-  if (requiresDesktopAiCollaboration(text)) {
-    const collectAnswer = requiresDesktopAiAnswerCollection(text);
+  if (requiresDesktopAiRequest(text)) {
+    const collectAnswer = requiresDesktopAiAnswerReadback(text);
     return withDefaults({
-      kind: 'external_ai_collaboration',
-      label: 'Verified external AI collaboration',
-      coreAction: 'Bind the request to one persistent collaboration session, select each target through the fixed API/MCP to CLI to structured-browser to desktop-visual route, and archive attributable answers.',
+      kind: 'external_ai_request',
+      label: 'Verified external AI tool request',
+      coreAction: 'Send the request to exactly one named external AI tool and keep LumiCore responsible for verifying and presenting the result.',
       preparationIsNotCompletion: ['planning a route', 'opening an AI app', 'focusing its window', 'pasting without submitting', 'claiming an answer without an archived source receipt'],
       requiredEvidence: [
-        'external_ai_collaborate receipt with verified=true, a persistent sessionId/taskId, and at least one attributable submitted or answered target dispatch',
-        ...(collectAnswer ? ['external_ai_collaborate or external_ai_collect_answers receipt with counts.answered greater than zero and source evidence'] : []),
+        'desktop_ai_ask receipt for one named target with an explicit prepared or submitted state',
+        ...(collectAnswer ? ['desktop_ai_collect_answer receipt with visible answer text attributed to the same target'] : []),
       ],
-      preferredTools: ['external_ai_collaborate', 'external_ai_collect_answers', 'external_ai_session_status', 'external_ai_route_plan', 'desktop_ai_list_targets'],
-      verificationTools: collectAnswer ? ['external_ai_collect_answers', 'external_ai_session_status'] : ['external_ai_collaborate', 'external_ai_session_status'],
+      preferredTools: ['desktop_ai_ask', 'desktop_ai_collect_answer', 'desktop_ai_list_targets'],
+      verificationTools: collectAnswer ? ['desktop_ai_collect_answer'] : ['desktop_ai_ask'],
       nextStep: collectAnswer
-        ? 'Use read-only external_ai_collect_answers on the existing session; report pending, unknown, login, or vision blockers without resending.'
-        : 'Stop on unknown outcome and report the persistent per-target state; never fall through to another route after a possibly submitted request.',
+        ? 'Read the visible answer from the same target; report pending, login, or vision blockers without resending.'
+        : 'Stop on an unknown outcome and report the target state; never resend a possibly submitted request.',
       caution: 'External submission requires exact confirmation. A route plan, launched window, pressed shortcut, or unbound text is not proof of a provider answer.',
     });
   }
@@ -1172,6 +1289,10 @@ export function buildActionContract(input: string): LumiActionContract {
       nextStep: 'Use the text or file delivery path that matches the request, and require sent=true, a provider acknowledgement, or visible send evidence.',
       caution: 'Opening an app, finding a recipient, listing a file, or preparing clipboard content is not delivery.',
     });
+  }
+
+  if (requiresMediaPlaybackAction(text)) {
+    return buildMediaPlaybackContract();
   }
 
   if (isSimpleDesktopOpenRequest(text)) {
@@ -1251,7 +1372,7 @@ export function buildActionContract(input: string): LumiActionContract {
         ? ['one verified cad_draw_floorplan_in_autocad receipt, or source geometry plus an operation set and AutoCAD completion marker with exact operationCount, expectedEntityCount, and entitiesAdded equality']
         : ['created CAD/DXF file path with nonzero size and successful file verification'],
       preferredTools: visibleAutoCad
-        ? ['cad_draw_floorplan_in_autocad', 'desktop_list_apps', 'desktop_open', 'desktop_running_processes', 'desktop_active_window', 'floorplan_extract_geometry', 'cad_prepare_autocad_operations', 'mcp_cad-drafting_autocad_playback_file', 'desktop_path_info', 'desktop_capture_screen']
+        ? ['cad_draw_floorplan_in_autocad', 'desktop_list_files', 'desktop_path_info', 'desktop_list_apps', 'desktop_open', 'desktop_running_processes', 'desktop_active_window', 'floorplan_extract_geometry', 'cad_prepare_autocad_operations', 'mcp_cad-drafting_autocad_playback_file', 'desktop_capture_screen']
         : ['floorplan_extract_geometry', 'cad_generate_dxf', 'desktop_path_info', 'work_product_verify'],
       verificationTools: ['desktop_path_info', 'work_product_verify', 'desktop_capture_screen', 'desktop_active_window'],
       nextStep: visibleAutoCad
@@ -1315,19 +1436,23 @@ export function buildActionContract(input: string): LumiActionContract {
     return withDefaults({
       kind: 'desktop_operation',
       label: 'Current authoring document inspection',
-      coreAction: 'Anchor the named foreground authoring application, resolve one exact document target, and read its contents for the requested analysis.',
+      coreAction: 'Anchor exactly one visible WPS/Office document window (background or foreground), resolve one exact file path, and read its contents for the requested analysis.',
       preparationIsNotCompletion: [
-        'observing only the active window or process',
+        'observing only an application process without a document title',
+        'choosing one item from multiple visible authoring-document candidates',
         'guessing a document from a window title without resolving an exact target',
         'listing candidate files without reading the confirmed document',
       ],
       requiredEvidence: [
-        'verified active-window receipt for the named authoring application',
-        'successful content-reader receipt with a non-empty exact file target',
+        'verified native receipt identifying exactly one supported WPS/Office document title',
+        'one exact matching path from the native window receipt, durable target capsule, or unique bounded file discovery',
+        'successful content-reader receipt bound to that exact path',
       ],
       preferredTools: [
+        'desktop_running_processes',
         'desktop_active_window',
         'desktop_list_files',
+        'search_files',
         'desktop_path_info',
         'read_file',
         'extract_document_text',
@@ -1335,34 +1460,31 @@ export function buildActionContract(input: string): LumiActionContract {
         'read_docx',
         'read_xlsx',
       ],
-      verificationTools: ['desktop_active_window', 'desktop_path_info'],
-      nextStep: 'Observe the active authoring window, resolve the exact file inside bounded user locations, display the final filename, then read and analyze that file.',
-      caution: 'A window title is a candidate anchor, not proof that the correct document contents were analyzed.',
+      verificationTools: ['desktop_running_processes', 'desktop_active_window', 'desktop_path_info'],
+      nextStep: 'Inspect supported background document windows first; if exactly one title exists, resolve only that filename inside bounded user locations and read it. Otherwise inspect the foreground once and ask the user to focus the intended document if ambiguity remains.',
+      caution: 'A process name or one item chosen from multiple window titles is never a document anchor; a unique title still requires one exact matching path before completion.',
     });
   }
 
   if (desktopObservationInspection) {
-    const requiredEvidence = [
-      activeWindowObservation ? '\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\u7684\u5b9e\u65f6\u6807\u9898/\u8fdb\u7a0b\u56de\u6267' : '', // i18n-allow: reviewed Chinese desktop observation contract.
-      desktopFileObservation ? '\u7528\u6237\u684c\u9762\u76ee\u5f55\u7684\u5b9e\u65f6\u6587\u4ef6\u5217\u8868\u56de\u6267' : '', // i18n-allow: reviewed Chinese desktop observation contract.
-    ].filter(Boolean);
-    const preferredTools = [
-      activeWindowObservation ? 'desktop_active_window' : '',
-      desktopFileObservation ? 'desktop_list_files' : '',
-    ].filter(Boolean);
+    const preferredTools = desktopObservationPlan.map(call => call.name);
+    const requiredEvidence = preferredTools.map(toolName => (
+      `a verified current-turn ${toolName} receipt with structured native desktop data`
+    ));
     return withDefaults({
       kind: 'desktop_operation',
-      label: '\u684c\u9762\u72b6\u6001\u8bfb\u53d6', // i18n-allow: reviewed Chinese desktop observation contract.
-      coreAction: '\u4ece\u5f53\u524d\u684c\u9762\u5ba2\u6237\u7aef\u8bfb\u53d6\u7528\u6237\u8981\u6c42\u7684\u7a97\u53e3\u548c\u684c\u9762\u6587\u4ef6\u72b6\u6001', // i18n-allow: reviewed Chinese desktop observation contract.
+      label: CN_RESULT_GROUNDING_MESSAGES.desktopObservationLabel,
+      coreAction: 'Read every explicitly requested local system, application, process, window, idle-state, or Desktop-directory observation from the connected desktop client.',
       preparationIsNotCompletion: [
-        '\u53ea\u8bfb\u53d6\u5176\u4e2d\u4e00\u9879\u800c\u9057\u6f0f\u540c\u4e00\u8bf7\u6c42\u4e2d\u7684\u5176\u4ed6\u89c2\u5bdf\u9879', // i18n-allow: reviewed Chinese desktop observation contract.
-        '\u628a\u7528\u6237\u4e3b\u76ee\u5f55\u5f53\u6210\u684c\u9762\u76ee\u5f55', // i18n-allow: reviewed Chinese desktop observation contract.
+        'reading only one item while omitting another observation requested in the same turn',
+        'listing capability metadata without observing the computer',
+        'treating the user home directory as the Desktop directory',
       ],
       requiredEvidence,
       preferredTools,
       verificationTools: preferredTools,
-      nextStep: '\u9010\u9879\u6267\u884c\u684c\u9762\u53ea\u8bfb\u5de5\u5177\uff0c\u5e76\u76f4\u63a5\u6839\u636e\u5f53\u524d\u8f6e\u56de\u6267\u6c47\u62a5\u7a97\u53e3\u6807\u9898\u548c\u6587\u4ef6\u6570\u91cf\u3002', // i18n-allow: reviewed Chinese desktop observation contract.
-      caution: '\u4e0d\u80fd\u7528\u5386\u53f2\u8bb0\u5fc6\u3001\u7528\u6237\u4e3b\u76ee\u5f55\u6216\u5355\u4e00\u5de5\u5177\u7ed3\u679c\u4ee3\u66ff\u5f53\u524d\u8bf7\u6c42\u4e2d\u7684\u5168\u90e8\u684c\u9762\u8bc1\u636e\u3002', // i18n-allow: reviewed Chinese desktop observation contract.
+      nextStep: 'Run each planned read-only observation and summarize only the fresh structured receipts.',
+      caution: 'Do not use history, a capability manifest, or one partial receipt as a substitute for all requested machine evidence. A bounded computer inventory does not authorize recursively reading personal file contents.',
     });
   }
 
@@ -1379,12 +1501,27 @@ export function buildActionContract(input: string): LumiActionContract {
   return NONE_CONTRACT;
 }
 
+/**
+ * Completion truth is intentionally stricter than execution authority. A
+ * referential cleanup utterance without its adjacent frozen task-id offer is
+ * not allowed to route a cancel-all call, but it still cannot be marked done
+ * from directory/search receipts. Evidence adjudicators use this projection;
+ * planners and routers must continue using buildActionContract.
+ */
+export function buildActionEvidenceContract(input: string): LumiActionContract {
+  const contract = buildActionContract(input);
+  if (contract.applies || !isRuntimeCleanupOfferAcceptanceText(compact(input))) {
+    return contract;
+  }
+  return buildActionContract('Cancel all active background tasks');
+}
+
 function expandSuccessfulRecords(records: ToolExecutionRecord[]): ToolExecutionRecord[] {
   const expanded: ToolExecutionRecord[] = [];
   for (const record of records) {
     if (
       record.error
-      || !String(record.result || '').trim()
+      || !toolRecordHasTerminalPayload(record)
       || (record.terminalVerification && record.terminalVerification.status !== 'verified')
     ) continue;
     expanded.push(record);
@@ -1459,6 +1596,12 @@ function requestedDesktopTargetAliases(target: string): string[] {
   }
   if (/(?:googlechrome|chrome|\u8c37\u6b4c\u6d4f\u89c8\u5668)/u.test(normalized)) {
     add('Google Chrome', 'chrome', 'chrome.exe', '\u8c37\u6b4c\u6d4f\u89c8\u5668'); // i18n-allow: Application alias used only for evidence matching.
+  }
+  if (/(?:\u7f51\u6613\u4e91|netease|cloudmusic)/u.test(normalized)) {
+    add('\u7f51\u6613\u4e91', '\u7f51\u6613\u4e91\u97f3\u4e50', 'NetEase Cloud Music', 'cloudmusic', 'cloudmusic.exe'); // i18n-allow: Application aliases used only for evidence matching.
+  }
+  if (/(?:\u963f\u91cc\u4e91|aliyun)/u.test(normalized)) {
+    add('\u963f\u91cc\u4e91', '\u963f\u91cc\u4e91\u5b98\u7f51', 'Aliyun', 'aliyun.com', 'www.aliyun.com'); // i18n-allow: Public-site aliases used only for evidence matching.
   }
 
   return Array.from(aliases).filter(Boolean);
@@ -1552,6 +1695,14 @@ function hasMatchingDesktopObservationEvidence(record: ToolExecutionRecord, requ
 function requestedBrowserTargetAliases(target: string): string[] {
   const aliases = new Set(requestedDesktopTargetAliases(target));
   const add = (...values: string[]) => values.forEach(value => aliases.add(normalizeDesktopTarget(value)));
+  try {
+    const parsed = new URL(String(target || '').trim());
+    const hostname = parsed.hostname.replace(/^www\./i, '');
+    add(parsed.hostname, hostname, hostname.split('.')[0]);
+  } catch {}
+  // i18n-allow: Named public-site alias used only to match a page title with
+  // the exact URL/site requested by the user.
+  if (/(?:\u963f\u91cc\u4e91|aliyun)/iu.test(target)) add('\u963f\u91cc\u4e91', 'aliyun.com', 'aliyun');
   // i18n-allow: Named public-site aliases are used only to match tool evidence.
   if (/(?:中国)?裁判文书网/u.test(target)) add('wenshu.court.gov.cn');
   // i18n-allow: Named public-site aliases are used only to match tool evidence.
@@ -1592,6 +1743,148 @@ function hasMatchingBrowserOpenEvidence(record: ToolExecutionRecord, requestedTa
 
   const aliases = requestedBrowserTargetAliases(requestedTarget);
   return evidenceValues.some(value => matchesRequestedDesktopTarget(value, aliases));
+}
+
+function requestedMediaPlayerTarget(taskText: string): string {
+  const text = compact(extractPrimaryTaskText(taskText));
+  const named = text.match(/(?:\u7f51\u6613\u4e91(?:\u97f3\u4e50)?|QQ\s*\u97f3\u4e50|\u9177\u72d7(?:\u97f3\u4e50)?|Spotify|Apple\s+Music|NetEase(?:\s+Cloud\s+Music)?|CloudMusic)/iu)?.[0];
+  return compact(named || extractDesktopLaunchTarget(text) || extractSimpleDesktopOpenTarget(text));
+}
+
+function hasObservedMatchingTargetAfterOpenAttempt(
+  record: ToolExecutionRecord,
+  requestedTarget: string,
+): boolean {
+  if (
+    record.error
+    || !/^(?:desktop_open|browser_open_task)$/i.test(String(record.name || ''))
+    || !toolRecordHasTerminalPayload(record)
+  ) return false;
+  const payload = parseRecordJson(record);
+  const status = compact(payload?.status || record.envelope?.status).toLowerCase();
+  // The desktop relay can report target_mismatch when it compared a URL or
+  // localized application name with a browser/player process identity. Accept
+  // only that one false-negative shape, and only when the structured observed
+  // title/process itself matches the exact requested target.
+  if (status !== 'target_mismatch') return false;
+  const aliases = record.name === 'browser_open_task'
+    || /(?:https?:\/\/|www\.|\u5b98\u7f51|\u7f51\u7ad9|\u7f51\u9875)/iu.test(requestedTarget)
+      ? requestedBrowserTargetAliases(requestedTarget)
+      : requestedDesktopTargetAliases(requestedTarget);
+  const argumentTargets = [
+    record.arguments?.target,
+    record.arguments?.url,
+    record.arguments?.path,
+    payload?.target,
+    payload?.url,
+  ].filter(value => typeof value === 'string' && compact(value));
+  if (
+    argumentTargets.length === 0
+    || !argumentTargets.some(value => matchesRequestedDesktopTarget(value, aliases))
+  ) return false;
+  const observedTargets: string[] = [];
+  collectStructuredDesktopTargets(
+    payload?.actualTarget
+      || payload?.verification?.actualTarget
+      || payload?.postState
+      || payload?.observedTarget,
+    observedTargets,
+  );
+  return observedTargets.some(value => matchesRequestedDesktopTarget(value, aliases));
+}
+
+/** Fuse exact open attempts and same-turn target observations. This keeps a
+ * later auxiliary failure from erasing a page/player that the desktop relay
+ * already observed, while refusing an unrelated active window or process. */
+export function hasRequestedDesktopOpenEvidence(
+  records: ToolExecutionRecord[] = [],
+  taskText = '',
+  explicitTarget = '',
+): boolean {
+  const requestedTarget = compact(
+    explicitTarget
+    || extractDesktopLaunchTarget(taskText)
+    || extractSimpleDesktopOpenTarget(taskText)
+    || requestedMediaPlayerTarget(taskText),
+  );
+  if (!requestedTarget) return false;
+  const successful = expandSuccessfulRecords(records);
+  if (successful.some(record => (
+    hasMatchingDesktopOpenEvidence(record, requestedTarget)
+    || hasMatchingBrowserOpenEvidence(record, requestedTarget)
+    || hasMatchingDesktopObservationEvidence(record, requestedTarget)
+  ))) return true;
+  return records.some(record => hasObservedMatchingTargetAfterOpenAttempt(record, requestedTarget));
+}
+
+function terminalPayloadText(record: ToolExecutionRecord): string {
+  const payload = toolRecordTerminalPayload(record);
+  if (typeof payload === 'string') return payload.trim();
+  try { return JSON.stringify(payload); } catch { return String(payload || ''); }
+}
+
+export function hasVisualModelAvailabilityEvidence(
+  records: ToolExecutionRecord[] = [],
+): boolean {
+  return expandSuccessfulRecords(records).some(record => {
+    if (!/^(?:ocr_screen|ocr_region|computer_vision|vision_analyze|image_understanding)$/i.test(String(record.name || ''))) {
+      return false;
+    }
+    const payload = toolRecordTerminalPayload(record);
+    const text = terminalPayloadText(record);
+    if (!text || /^\s*(?:\{\s*\}|\[\s*\])\s*$/u.test(text)) return false;
+    if (
+      payload && typeof payload === 'object' && !Array.isArray(payload)
+      && (
+        compact((payload as Record<string, any>).error)
+        || compact((payload as Record<string, any>).note)
+        || (payload as Record<string, any>).format === 'screenshot_base64'
+      )
+    ) return false;
+    return !/(?:No configured visual-perception model|access denied|account is not in good standing|overdue|insufficient balance|\u6b20\u8d39|\u4f59\u989d\u4e0d\u8db3)/iu.test(text);
+  });
+}
+
+function containsVerifiedPlayingState(record: ToolExecutionRecord): boolean {
+  const text = terminalPayloadText(record);
+  if (!text) return false;
+  return /(?:"(?:isPlaying|playing|playbackStarted)"\s*:\s*true|"(?:playbackState|playerState|state|status)"\s*:\s*"(?:playing|started)"|\u6b63\u5728\u64ad\u653e|\u64ad\u653e\u4e2d|\u5df2\u5f00\u59cb\u64ad\u653e|\bnow\s+playing\b|\bplayback\s+(?:started|is\s+playing)\b)/iu.test(text);
+}
+
+function isPlaybackActuation(record: ToolExecutionRecord): boolean {
+  const name = String(record.name || '');
+  if (/^(?:desktop_keyboard_press|keyboard_press)$/i.test(name)) {
+    return /^(?:space|media_?play_?pause|mediaplaypause|play)$/i.test(compact(record.arguments?.key));
+  }
+  if (/^(?:desktop_ui_invoke|desktop_ui_click|computer_use)$/i.test(name)) {
+    return /(?:\u64ad\u653e|\u7ee7\u7eed|\bplay\b|\bresume\b)/iu.test(JSON.stringify(record.arguments || {}));
+  }
+  return /(?:^|_)(?:media|music|audio)(?:_|.*_)(?:play|resume|control)(?:_|$)/i.test(name);
+}
+
+export function hasMediaPlaybackEvidence(
+  records: ToolExecutionRecord[] = [],
+  taskText = '',
+): boolean {
+  const successful = records.map((record, index) => ({ record, index }))
+    .filter(({ record }) => expandSuccessfulRecords([record]).length > 0);
+  const explicitPlayback = successful.some(({ record }) => (
+    /(?:^|_)(?:media|music|audio)(?:_|.*_)(?:play|resume|control)(?:_|$)/i.test(String(record.name || ''))
+    && containsVerifiedPlayingState(record)
+  ));
+  if (explicitPlayback) return true;
+  if (!hasRequestedDesktopOpenEvidence(records, taskText, requestedMediaPlayerTarget(taskText))) return false;
+  for (const { record, index } of successful) {
+    if (!isPlaybackActuation(record)) continue;
+    if (containsVerifiedPlayingState(record)) return true;
+    const observedPlaying = successful.some(candidate => (
+      candidate.index > index
+      && /^(?:desktop_ui_snapshot|ocr_screen|ocr_region|desktop_capture_screen|computer_vision|desktop_active_window)$/i.test(String(candidate.record.name || ''))
+      && containsVerifiedPlayingState(candidate.record)
+    ));
+    if (observedPlaying) return true;
+  }
+  return false;
 }
 
 const CURRENT_APP_FOREGROUND_TOOL_RE =
@@ -1886,7 +2179,7 @@ function hasMeaningfulArguments(record: ToolExecutionRecord): boolean {
   });
 }
 
-type RequestedAuthoringApplication = 'wps' | 'word' | 'excel' | 'powerpoint' | 'microsoft_office';
+type RequestedAuthoringApplication = 'wps' | 'word' | 'excel' | 'powerpoint' | 'microsoft_office' | 'any_authoring';
 
 const CURRENT_DOCUMENT_READER_RE = /^(?:read_file|extract_document_text|read_pdf|read_docx|read_xlsx)$/i;
 const DOCUMENT_TARGET_EXTENSION_RE = /\.(?:pptx?|docx?|xlsx?|pdf|rtf|txt|md|csv|json|wps|et|dps)$/i;
@@ -1899,6 +2192,7 @@ function requestedAuthoringApplication(taskText: string): RequestedAuthoringAppl
   if (/\b(?:Microsoft\s+)?Excel\b/iu.test(primary)) return 'excel';
   if (/\b(?:Microsoft\s+)?Word\b/iu.test(primary)) return 'word';
   if (/\bMicrosoft\s+Office\b/iu.test(primary)) return 'microsoft_office';
+  if (requiresCurrentAuthoringDocumentInspection(taskText)) return 'any_authoring';
   return null;
 }
 
@@ -1908,11 +2202,12 @@ function processMatchesAuthoringApplication(
 ): boolean {
   const executable = processName.trim().split(/[\\/]/).pop()?.toLowerCase() || '';
   if (!executable) return false;
-  if (requested === 'wps') return /^(?:wps|wpp|et|wpsoffice)(?:\.exe)?$/i.test(executable);
-  if (requested === 'word') return /^(?:winword)(?:\.exe)?$/i.test(executable);
-  if (requested === 'excel') return /^(?:excel)(?:\.exe)?$/i.test(executable);
-  if (requested === 'powerpoint') return /^(?:powerpnt)(?:\.exe)?$/i.test(executable);
-  return /^(?:winword|excel|powerpnt|msoffice|office)(?:\.exe)?$/i.test(executable);
+  if (requested === 'wps') return /^(?:(?:wps|wpp|et|wpsoffice)(?:\.exe)?|wps office)$/i.test(executable);
+  if (requested === 'word') return /^(?:winword(?:\.exe)?|microsoft word)$/i.test(executable);
+  if (requested === 'excel') return /^(?:excel(?:\.exe)?|microsoft excel)$/i.test(executable);
+  if (requested === 'powerpoint') return /^(?:powerpnt(?:\.exe)?|microsoft powerpoint)$/i.test(executable);
+  if (requested === 'any_authoring') return /^(?:(?:wps|wpp|et|wpsoffice|winword|excel|powerpnt|msoffice|office)(?:\.exe)?|wps office|microsoft (?:word|excel|powerpoint))$/i.test(executable);
+  return /^(?:(?:winword|excel|powerpnt|msoffice|office)(?:\.exe)?|microsoft (?:word|excel|powerpoint))$/i.test(executable);
 }
 
 function labelMatchesAuthoringApplication(
@@ -1926,6 +2221,7 @@ function labelMatchesAuthoringApplication(
   if (requested === 'word') return /\b(?:microsoft\s+)?word\b/iu.test(value);
   if (requested === 'excel') return /\b(?:microsoft\s+)?excel\b/iu.test(value);
   if (requested === 'powerpoint') return /\b(?:microsoft\s+)?powerpoint\b/iu.test(value);
+  if (requested === 'any_authoring') return /(?:\bwps(?:\s+office|\s+writer)?\b|\b(?:microsoft\s+)?(?:word|excel|powerpoint)\b|\bmicrosoft\s+office\b)/iu.test(value);
   return /\b(?:microsoft\s+office|word|excel|powerpoint)\b/iu.test(value);
 }
 
@@ -1984,6 +2280,180 @@ function verifiedObservedDocumentPath(record: ToolExecutionRecord, taskText: str
   return DOCUMENT_TARGET_EXTENSION_RE.test(candidate) ? candidate : '';
 }
 
+function documentBasename(value: string): string {
+  const withoutQuery = compact(value)
+    .normalize('NFKC')
+    .split(/[?#]/, 1)[0]
+    .replace(/^[*\s'"`\u201c\u201d\u2018\u2019]+/gu, '')
+    .replace(/[\s'"`\u201c\u201d\u2018\u2019]+$/gu, '')
+    .replace(/\\/gu, '/');
+  const basename = withoutQuery.split('/').pop()?.trim() || '';
+  return DOCUMENT_TARGET_EXTENSION_RE.test(basename) ? basename : '';
+}
+
+function verifiedObservedDocumentName(record: ToolExecutionRecord, taskText: string): string {
+  if (!recordMatchesRequestedAuthoringWindow(record, taskText)) return '';
+  const payload = parseRecordJson(record);
+  const title = compact(payload?.windowTitle || payload?.title || '');
+  return documentNameFromWindowTitle(title);
+}
+
+function documentNameFromWindowTitle(title: string): string {
+  if (!title) return '';
+
+  const titleSegments = title.split(/\s+(?:-|\u2014|\u2013|\|)\s+/u);
+  for (const segment of titleSegments) {
+    const undecorated = segment
+      .replace(/\s+(?:\[[^\]\r\n]+\]|\([^()\r\n]+\))\s*$/u, '')
+      .trim();
+    const candidate = documentBasename(undecorated);
+    if (candidate) return candidate;
+  }
+  return '';
+}
+
+interface VerifiedAuthoringWindowCandidate {
+  source: 'active_window' | 'running_window';
+  documentName: string;
+  documentPath: string;
+}
+
+function runningAuthoringWindowCandidates(
+  record: ToolExecutionRecord,
+  taskText: string,
+): VerifiedAuthoringWindowCandidate[] {
+  if (
+    !/^(?:desktop_running_processes|get_running_processes)$/i.test(record.name)
+    || record.terminalVerification?.status !== 'verified'
+    || hasFailedDesktopReceipt(record)
+  ) return [];
+  const requested = requestedAuthoringApplication(taskText);
+  if (!requested) return [];
+  const payload = toolRecordTerminalPayload(record);
+  const items = Array.isArray(payload)
+    ? payload
+    : payload && typeof payload === 'object'
+      ? (['processes', 'items', 'results']
+          .map(key => (payload as Record<string, any>)[key])
+          .find(Array.isArray) as unknown[] | undefined) || []
+      : [];
+  const candidates: VerifiedAuthoringWindowCandidate[] = [];
+  for (const rawItem of items.slice(0, 100)) {
+    if (!rawItem || typeof rawItem !== 'object' || Array.isArray(rawItem)) continue;
+    const item = rawItem as Record<string, any>;
+    const processName = compact(
+      item.name
+      || item.processName
+      || item.process_name
+      || item.executable,
+    );
+    if (!processMatchesAuthoringApplication(processName, requested)) continue;
+    const rawTitles = Array.isArray(item.window_titles)
+      ? item.window_titles
+      : Array.isArray(item.windowTitles)
+        ? item.windowTitles
+        : [];
+    const titles = [
+      ...rawTitles,
+      item.window_title,
+      item.windowTitle,
+    ];
+    for (const rawTitle of titles) {
+      if (typeof rawTitle !== 'string') continue;
+      const documentName = documentNameFromWindowTitle(compact(rawTitle));
+      if (!documentName) continue;
+      candidates.push({
+        source: 'running_window',
+        documentName,
+        documentPath: '',
+      });
+    }
+  }
+  return candidates.filter((candidate, index, all) => all.findIndex(item => (
+    sameDocumentBasename(item.documentName, candidate.documentName)
+  )) === index);
+}
+
+function selectVerifiedAuthoringWindowCandidate(
+  records: ToolExecutionRecord[],
+  taskText: string,
+): VerifiedAuthoringWindowCandidate | null {
+  const latestActive = [...records].reverse().find(record => (
+    /^(?:desktop_active_window|get_active_window_info)$/i.test(record.name)
+  ));
+  if (latestActive && recordMatchesRequestedAuthoringWindow(latestActive, taskText)) {
+    const documentPath = verifiedObservedDocumentPath(latestActive, taskText);
+    const documentName = documentBasename(documentPath)
+      || verifiedObservedDocumentName(latestActive, taskText);
+    if (documentName) {
+      return { source: 'active_window', documentName, documentPath };
+    }
+  }
+
+  const latestRunning = [...records].reverse().find(record => (
+    /^(?:desktop_running_processes|get_running_processes)$/i.test(record.name)
+  ));
+  if (!latestRunning) return null;
+  const background = runningAuthoringWindowCandidates(latestRunning, taskText);
+  return background.length === 1 ? background[0] : null;
+}
+
+function discoveryResultItems(record: ToolExecutionRecord): Record<string, any>[] {
+  const payload = toolRecordTerminalPayload(record);
+  const values = Array.isArray(payload)
+    ? payload
+    : payload && typeof payload === 'object'
+      ? (['files', 'entries', 'items', 'results']
+          .map(key => (payload as Record<string, any>)[key])
+          .find(Array.isArray) as unknown[] | undefined) || []
+      : [];
+  return values.slice(0, 200).flatMap(value => {
+    if (typeof value === 'string') return [{ path: value }];
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? [value as Record<string, any>]
+      : [];
+  });
+}
+
+function uniquelyDiscoveredDocumentPath(
+  records: ToolExecutionRecord[],
+  documentName: string,
+): string {
+  const paths: string[] = [];
+  for (const record of records) {
+    if (
+      !/^(?:desktop_list_files|search_files)$/i.test(record.name)
+      || record.terminalVerification?.status !== 'verified'
+      || hasFailedDesktopReceipt(record)
+    ) continue;
+    const directory = compact(record.arguments?.directory || record.arguments?.path);
+    for (const item of discoveryResultItems(record)) {
+      const rawPath = compact(
+        item.path
+        || item.filePath
+        || item.file_path
+        || item.name
+        || item.fileName,
+      );
+      if (!rawPath || !sameDocumentBasename(rawPath, documentName)) continue;
+      const exactPath = /^(?:~[\\/]|[a-z]:[\\/]|\\\\|\/)/i.test(rawPath)
+        ? rawPath
+        : directory
+          ? `${directory.replace(/[\\/]+$/u, '')}/${rawPath}`
+          : '';
+      if (!exactPath || !documentBasename(exactPath)) continue;
+      if (!paths.some(existing => sameExactDocumentTarget(existing, exactPath))) paths.push(exactPath);
+    }
+  }
+  return paths.length === 1 ? paths[0] : '';
+}
+
+function sameDocumentBasename(left: string, right: string): boolean {
+  const normalizedLeft = documentBasename(left).toLocaleLowerCase('en-US');
+  const normalizedRight = documentBasename(right).toLocaleLowerCase('en-US');
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+}
+
 function sameExactDocumentTarget(left: string, right: string): boolean {
   const normalize = (value: string) => value
     .normalize('NFKC')
@@ -2023,9 +2493,9 @@ function exactDocumentReadTarget(record: ToolExecutionRecord): string {
   return DOCUMENT_TARGET_EXTENSION_RE.test(withoutQuery) ? target : '';
 }
 
-function hasActualDocumentReadContent(record: ToolExecutionRecord): boolean {
+function actualDocumentReadContent(record: ToolExecutionRecord): string {
   const rawResult = String(record.result || '').trim();
-  if (!rawResult) return false;
+  if (!rawResult) return '';
   // The durable receipt may carry byte-count/digest metadata alongside the
   // actual semantic result. Inspect the result itself here: generic
   // parseRecordJson intentionally prefers receipt metadata, which would hide
@@ -2057,7 +2527,7 @@ function hasActualDocumentReadContent(record: ToolExecutionRecord): boolean {
       || payload.verified === false
       || FAILED_DOCUMENT_READ_STATUS_RE.test(status)
       || compact(payload.error || verification.error)
-    ) return false;
+    ) return '';
     const structuredContent = [
       payload.content,
       payload.text,
@@ -2065,26 +2535,35 @@ function hasActualDocumentReadContent(record: ToolExecutionRecord): boolean {
       payload.bodyText,
       payload.data,
     ];
-    if (structuredContent.some(value => (
-      typeof value === 'string'
-        ? value.trim().length > 0
-        : Array.isArray(value)
-          ? value.length > 0
-          : Boolean(value && typeof value === 'object' && Object.keys(value).length > 0)
-    ))) return true;
+    for (const value of structuredContent) {
+      if (typeof value === 'string' && value.trim()) return value.trim();
+      if (Array.isArray(value) && value.length > 0) {
+        const rendered = value.map(item => (
+          typeof item === 'string' ? item : JSON.stringify(item)
+        )).filter(Boolean).join('\n').trim();
+        if (rendered) return rendered;
+      }
+      if (value && typeof value === 'object' && Object.keys(value).length > 0) {
+        return JSON.stringify(value);
+      }
+    }
     // A JSON object returned by a document reader is a receipt, not document
     // content, unless it carries one of the explicit content fields above.
-    return false;
+    return '';
   }
-  if (/^(?:error|failed|blocked|not found|permission denied|timed out)(?:\b|:)/iu.test(rawResult)) return false;
+  if (/^(?:error|failed|blocked|not found|permission denied|timed out)(?:\b|:)/iu.test(rawResult)) return '';
   if (record.name === 'read_pdf') {
     const withoutMetadata = rawResult
       .replace(/^Pages:\s*\d+\s*$/gimu, '')
       .replace(/^Info:\s*\{[^\r\n]*\}\s*$/gimu, '')
       .trim();
-    return withoutMetadata.length > 0;
+    return withoutMetadata;
   }
-  return true;
+  return rawResult;
+}
+
+function hasActualDocumentReadContent(record: ToolExecutionRecord): boolean {
+  return Boolean(actualDocumentReadContent(record));
 }
 
 function isSuccessfulExactDocumentRead(record: ToolExecutionRecord): boolean {
@@ -2093,6 +2572,86 @@ function isSuccessfulExactDocumentRead(record: ToolExecutionRecord): boolean {
     && record.terminalVerification?.status !== 'failed'
     && Boolean(exactDocumentReadTarget(record))
     && hasActualDocumentReadContent(record);
+}
+
+export interface VerifiedCurrentAuthoringDocumentEvidence {
+  windowSource: 'active_window' | 'running_window';
+  documentName: string;
+  documentPath: string;
+  content: string;
+  readRecord: ToolExecutionRecord;
+}
+
+/**
+ * Resolve the complete current-authoring-document proof once and reuse it at
+ * every execution boundary. Window identity, exact path, and semantic read
+ * content are independent facts; no caller may infer one of them from a
+ * lossy target-source label or from model narration.
+ */
+export function resolveVerifiedCurrentAuthoringDocumentEvidence(
+  records: ToolExecutionRecord[] = [],
+  taskText = '',
+  taskCapsule?: TaskCapsuleV1 | null,
+): VerifiedCurrentAuthoringDocumentEvidence | null {
+  if (!requiresCurrentAuthoringDocumentInspection(taskText)) return null;
+  const successful = expandSuccessfulRecords(records);
+  const observedWindow = selectVerifiedAuthoringWindowCandidate(successful, taskText);
+  if (!observedWindow) return null;
+
+  const capsuleCurrentTarget = compact(taskCapsule?.target?.path);
+  const capsuleCurrentName = compact(
+    taskCapsule?.target?.object
+    || taskCapsule?.target?.label
+    || capsuleCurrentTarget,
+  );
+  const capsuleRejectedTargets = (taskCapsule?.rejectedTargets || [])
+    .map(item => compact(item?.identity))
+    .filter(Boolean);
+  const capsuleHasUsableCurrentTarget = Boolean(
+    taskCapsule
+    && taskCapsule.schemaVersion === 1
+    && taskCapsule.target?.status !== 'rejected'
+    && capsuleCurrentTarget
+    && DOCUMENT_TARGET_EXTENSION_RE.test(capsuleCurrentTarget),
+  );
+  if (taskCapsule?.target?.status === 'rejected') return null;
+  if (
+    capsuleCurrentName
+    && !sameDocumentBasename(capsuleCurrentName, observedWindow.documentName)
+  ) return null;
+  if (
+    capsuleHasUsableCurrentTarget
+    && capsuleRejectedTargets.some(rejected => (
+      sameExactDocumentTarget(rejected, capsuleCurrentTarget)
+    ))
+  ) return null;
+
+  const resolvedTarget = capsuleHasUsableCurrentTarget
+    ? capsuleCurrentTarget
+    : observedWindow.documentPath
+      || uniquelyDiscoveredDocumentPath(successful, observedWindow.documentName);
+  if (
+    !resolvedTarget
+    || !sameDocumentBasename(resolvedTarget, observedWindow.documentName)
+    || capsuleRejectedTargets.some(rejected => sameExactDocumentTarget(rejected, resolvedTarget))
+  ) return null;
+
+  const readRecord = [...successful].reverse().find(record => {
+    if (!isSuccessfulExactDocumentRead(record)) return false;
+    const readTarget = exactDocumentReadTarget(record);
+    if (capsuleRejectedTargets.some(rejected => sameExactDocumentTarget(rejected, readTarget))) return false;
+    return sameExactDocumentTarget(resolvedTarget, readTarget);
+  });
+  if (!readRecord) return null;
+  const content = actualDocumentReadContent(readRecord);
+  if (!content) return null;
+  return {
+    windowSource: observedWindow.source,
+    documentName: observedWindow.documentName,
+    documentPath: resolvedTarget,
+    content,
+    readRecord,
+  };
 }
 
 function requestsExactReadOnlyArtifactInspection(taskText: string): boolean {
@@ -2400,20 +2959,31 @@ export function hasCoreActionEvidence(
 ): boolean {
   if (!contract.applies) return true;
   const successful = expandSuccessfulRecords(records);
-  if (successful.length === 0) return false;
+  const observedExactOpenWithoutVerifiedReceipt = contract.kind === 'desktop_operation'
+    && !requiresVisualModelAvailabilityCheck(taskText)
+    && !requiresMediaPlaybackAction(taskText)
+    && hasRequestedDesktopOpenEvidence(records, taskText);
+  if (successful.length === 0 && !observedExactOpenWithoutVerifiedReceipt) return false;
   const toolNames = successful.map(record => record.name);
   if (contract.kind === 'task_control') {
     const intent = classifyRuntimeWorkIntent(taskText);
-    const expectedTool = intent === 'cancel' ? 'runtime_work_cancel' : 'runtime_work_status';
+    const expectedTool = contract.preferredTools.includes('runtime_work_cancel')
+      ? 'runtime_work_cancel'
+      : intent === 'cancel'
+        ? 'runtime_work_cancel'
+        : 'runtime_work_status';
     return successful.some(record => {
       if (record.name !== expectedTool) return false;
       const payload = parseRecordJson(record);
       if (payload?.ok !== true) return false;
       if (expectedTool === 'runtime_work_cancel') {
-        return ['idle', 'cancelled', 'cancelling'].includes(String(payload.status || ''))
-          && Number.isFinite(Number(payload.matchedCount));
+        return ['idle', 'cancelled'].includes(String(payload.status || ''))
+          && Number.isFinite(Number(payload.matchedCount))
+          && Number.isFinite(Number(payload.cancelledCount))
+          && Number.isFinite(Number(payload.cancellingCount))
+          && Number(payload.failedCount || 0) === 0;
       }
-      return ['idle', 'active'].includes(String(payload.status || ''))
+      return ['idle', 'active', 'paused', 'attention'].includes(String(payload.status || ''))
         && Number.isFinite(Number(payload.activeCount));
     });
   }
@@ -2480,54 +3050,23 @@ export function hasCoreActionEvidence(
     return successful.some(record => /write_file|create_|desktop_path_info|work_product_verify/i.test(record.name))
       || hasVerifiedManifestCapabilityEvidence(contract, successful);
   }
-  if (contract.kind === 'external_ai_collaboration') {
-    const unifiedReceipts = successful.filter(record => /^(?:external_ai_collaborate|external_ai_collect_answers|external_ai_session_status)$/i.test(record.name));
-    const hasUnifiedSubmission = unifiedReceipts.some(record => {
+  if (contract.kind === 'external_ai_request') {
+    const hasSubmission = successful.some(record => {
       const payload = parseRecordJson(record);
-      if (payload?.verified !== true && record.name === 'external_ai_collaborate') return false;
-      const dispatches = Array.isArray(payload?.results)
-        ? payload.results
-        : Array.isArray(payload?.dispatches)
-          ? payload.dispatches
-          : [];
-      return Boolean(compact(payload?.sessionId)) && dispatches.some((dispatch: any) => (
-        ['submitted', 'pending', 'answered'].includes(String(dispatch?.status || ''))
-      ));
+      return record.name === 'desktop_ai_ask'
+        && payload?.ok === true
+        && ['prepared', 'submitted_unverified'].includes(String(payload?.status || ''))
+        && Array.isArray(payload?.results)
+        && payload.results.length === 1;
     });
-    const hasUnifiedAnswer = unifiedReceipts.some(record => {
+    const hasAnswer = successful.some(record => {
       const payload = parseRecordJson(record);
-      if (Number(payload?.counts?.answered || 0) <= 0) return false;
-      const answers = Array.isArray(payload?.answers) ? payload.answers : [];
-      const results = Array.isArray(payload?.results) ? payload.results : [];
-      return answers.some((answer: any) => Boolean(compact(answer?.answerText)) && Boolean(answer?.sourceEvidence || answer?.responseDigest))
-        || results.some((result: any) => (
-          result?.status === 'answered'
-          && Boolean(compact(result?.answerText))
-          && Boolean(result?.sourceEvidence || result?.responseDigest)
-        ));
+      return record.name === 'desktop_ai_collect_answer'
+        && payload?.status === 'collected'
+        && Boolean(compact(payload?.answerText));
     });
-
-    // One-version compatibility: persisted pre-migration continuations may
-    // still finish through the old desktop adapters, but new plans never see
-    // those deprecated capabilities.
-    const hasLegacySubmission = successful.some(record => {
-      if (!/^(?:desktop_ai_ask|desktop_ai_roundtable)$/i.test(record.name)) return false;
-      const payload = parseRecordJson(record);
-      return record.name === 'desktop_ai_roundtable'
-        ? Number(payload?.ask?.submittedCount || 0) > 0
-        : payload?.ok === true && Number(payload?.submittedCount || 0) > 0;
-    });
-    const hasLegacyAnswer = successful.some(record => {
-      const payload = parseRecordJson(record);
-      return (record.name === 'desktop_ai_collect_answer'
-          && payload?.status === 'collected'
-          && Boolean(compact(payload?.answerText)))
-        || (record.name === 'desktop_ai_roundtable'
-          && payload?.ok === true
-          && Number(payload?.collectedCount || 0) > 0);
-    });
-    if (requiresDesktopAiAnswerCollection(taskText)) return hasUnifiedAnswer || hasLegacyAnswer;
-    return hasUnifiedSubmission || hasUnifiedAnswer || hasLegacySubmission || hasLegacyAnswer;
+    if (requiresDesktopAiAnswerReadback(taskText)) return hasAnswer;
+    return hasSubmission || hasAnswer;
   }
   if (contract.kind === 'external_ai_history') {
     return successful.some(record => {
@@ -2558,6 +3097,30 @@ export function hasCoreActionEvidence(
     });
   }
   if (contract.kind === 'desktop_operation') {
+    const clientIntent = normalizeActionIntent(taskText);
+    if (clientIntent.kind === 'client_navigation' && clientIntent.clientAction) {
+      return successful.some(record => {
+        if (record.name !== 'client_action') return false;
+        const payload = parseRecordJson(record);
+        const status = String(payload?.verification?.status || payload?.status || '').toLowerCase();
+        const action = String(payload?.action || record.arguments?.action || '');
+        return action === clientIntent.clientAction
+          && payload?.ok !== false
+          && /^(?:verified|not_applicable)$/.test(status);
+      });
+    }
+    if (clientIntent.kind === 'client_state') {
+      return successful.some(record => (
+        record.name === 'client_get_state'
+        && Boolean(parseRecordJson(record))
+      ));
+    }
+    if (requiresVisualModelAvailabilityCheck(taskText)) {
+      return hasVisualModelAvailabilityEvidence(records);
+    }
+    if (requiresMediaPlaybackAction(taskText)) {
+      return hasMediaPlaybackEvidence(records, taskText);
+    }
     const windowAction = requestedDesktopWindowAction(taskText);
     if (windowAction) {
       return successful.some(record => {
@@ -2579,54 +3142,19 @@ export function hasCoreActionEvidence(
       return hasCurrentAppUiMutationEvidence(records, taskText);
     }
     if (requiresCurrentAuthoringDocumentInspection(taskText)) {
-      const observedAuthoringWindows = successful.filter(record => (
-        recordMatchesRequestedAuthoringWindow(record, taskText)
+      return Boolean(resolveVerifiedCurrentAuthoringDocumentEvidence(
+        records,
+        taskText,
+        taskCapsule,
       ));
-      const observedExactPaths = observedAuthoringWindows
-        .map(record => verifiedObservedDocumentPath(record, taskText))
-        .filter(Boolean);
-      const capsuleCurrentTarget = compact(taskCapsule?.target?.path);
-      const capsuleRejectedTargets = (taskCapsule?.rejectedTargets || [])
-        .map(item => compact(item?.identity))
-        .filter(Boolean);
-      const capsuleHasUsableCurrentTarget = Boolean(
-        taskCapsule
-        && taskCapsule.schemaVersion === 1
-        && taskCapsule.target?.status !== 'rejected'
-        && capsuleCurrentTarget
-        && DOCUMENT_TARGET_EXTENSION_RE.test(capsuleCurrentTarget),
-      );
-      const capsuleCurrentTargetWasRejected = capsuleHasUsableCurrentTarget
-        && capsuleRejectedTargets.some(rejected => (
-          sameExactDocumentTarget(rejected, capsuleCurrentTarget)
-        ));
-      const readExactDocument = !capsuleCurrentTargetWasRejected && successful.some(record => {
-        if (!isSuccessfulExactDocumentRead(record)) return false;
-        const readTarget = exactDocumentReadTarget(record);
-        if (taskCapsule) {
-          // The capsule is server-owned durable task state. Once present, its
-          // exact current path is authoritative: neither a same-basename file
-          // nor a receipt for a target rejected by a later user correction may
-          // satisfy completion. A missing/non-path capsule target fails closed.
-          if (!capsuleHasUsableCurrentTarget) return false;
-          if (capsuleRejectedTargets.some(rejected => (
-            sameExactDocumentTarget(rejected, readTarget)
-          ))) return false;
-          if (!sameExactDocumentTarget(capsuleCurrentTarget, readTarget)) return false;
-        }
-        return observedExactPaths.length === 0
-          || observedExactPaths.some(path => sameExactDocumentTarget(path, readTarget));
-      });
-      return observedAuthoringWindows.length > 0 && readExactDocument;
     }
+    const desktopObservation = evaluateDesktopObservationEvidence(records, taskText);
+    if (desktopObservation.requested) return desktopObservation.complete;
     const desktopLaunchTarget = extractDesktopLaunchTarget(taskText);
     const needsActiveWindow = requiresActiveWindowObservation(taskText);
     const needsDesktopFiles = requiresDesktopFileListingObservation(taskText);
     if (desktopLaunchTarget) {
-      const openedExactTarget = successful.some(record => (
-        hasMatchingDesktopOpenEvidence(record, desktopLaunchTarget)
-        || hasMatchingBrowserOpenEvidence(record, desktopLaunchTarget)
-      ));
+      const openedExactTarget = hasRequestedDesktopOpenEvidence(records, taskText, desktopLaunchTarget);
       if (!openedExactTarget) return false;
       if (needsActiveWindow && !successful.some(record => hasMatchingDesktopObservationEvidence(record, desktopLaunchTarget))) {
         return false;
@@ -2650,17 +3178,7 @@ export function hasCoreActionEvidence(
       return successful.some(record => /^(?:desktop_running_processes|get_running_processes)$/i.test(record.name));
     }
     if (isSimpleDesktopOpenRequest(taskText)) {
-      const target = extractSimpleDesktopOpenTarget(taskText).toLowerCase();
-      const targetTerms = target.includes('autocad') || /\bacad(?:\.exe)?\b/i.test(target)
-        ? ['autocad', 'acad']
-        : [target.replace(/\.exe$/i, '').trim()].filter(Boolean);
-      return successful.some(record => {
-        if (record.name === 'desktop_open') return hasMatchingDesktopOpenEvidence(record, target);
-        if (record.name === 'browser_open_task') return hasMatchingBrowserOpenEvidence(record, target);
-        if (!/^(?:desktop_active_window|desktop_running_processes|get_active_window_info|get_running_processes)$/i.test(record.name)) return false;
-        const evidence = recordText(record).toLowerCase();
-        return targetTerms.some(term => term.length >= 2 && evidence.includes(term));
-      });
+      return hasRequestedDesktopOpenEvidence(records, taskText, extractSimpleDesktopOpenTarget(taskText));
     }
     return hasVerifiedGenericDesktopMutation(successful)
       || hasVerifiedManifestCapabilityEvidence(contract, successful);

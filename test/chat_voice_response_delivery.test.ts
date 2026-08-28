@@ -24,10 +24,8 @@ describe('chat and voice finalized delivery paths', () => {
     expect(chat).not.toContain('finalizedWorkflowQuick');
   });
 
-  it('does not forward background orchestrator chunks before finalization', () => {
-    expect(chat).not.toContain(
-      '(message) => emitBackground("agent:chunk", { text: message, agentName: "Lumi Orchestrator" })',
-    );
+  it('does not expose a parallel background response stream before finalization', () => {
+    expect(chat).not.toContain('emitBackground(');
   });
 
   it('filters tool progress that carries terminal success wording', () => {

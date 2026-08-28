@@ -56,7 +56,7 @@ export function setupMcpServer(
   console.log('[MCP Server] Lumi MCP server ready at /mcp/sse + /mcp/ws');
 
   attachLAPWebSocket(server);
-  console.log('[LAP] Agent protocol ready at /lap');
+  console.log('[LAP] Protocol ready at /lap');
 
   // Connect to remote devices from the runtime MCP config in the user data dir.
   // Outbound devices keep a dedicated identity and therefore cannot inherit a

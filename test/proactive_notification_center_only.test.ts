@@ -28,16 +28,13 @@ describe('notification center-only delivery', () => {
     expect(proactive).not.toContain("socket.on('agent:tool_call'");
   });
 
-  it('keeps agent notifications in state while suppressing their paired transient toast', () => {
+  it('keeps Lumi notifications in state while suppressing their paired transient toast', () => {
     const desktop = source('src/components/DesktopUI.tsx');
-    const preferenceHandler = between(desktop, 'const onPreferencesChanged', 'const onAgentPromoted');
-    const promotedHandler = between(desktop, 'const onAgentPromoted', 'const onAgentNotification');
+    const preferenceHandler = between(desktop, 'const onPreferencesChanged', 'const onAgentNotification');
     const notificationHandler = between(desktop, 'const onAgentNotification', 'const onWakeDetected');
 
     expect(preferenceHandler).toContain('addNotification({');
     expect(preferenceHandler).not.toContain('toast');
-    expect(promotedHandler).toContain('addNotification({');
-    expect(promotedHandler).not.toContain('toast');
     expect(notificationHandler).toContain('addNotification({');
     expect(notificationHandler).not.toContain('toast');
   });
@@ -49,15 +46,6 @@ describe('notification center-only delivery', () => {
     expect(eventEffect).toContain("socket.on('personality:evolved', handler)");
     expect(eventEffect).toContain('addNotification({');
     expect(eventEffect).not.toContain('toast.');
-  });
-
-  it('does not duplicate global proactive popups from the sanctuary chat', () => {
-    const sanctuary = source('src/components/Sanctuary.tsx');
-    const socketEffect = between(sanctuary, '// Socket listeners', '// Auto-scroll');
-
-    expect(sanctuary).not.toContain("from 'sonner'");
-    expect(socketEffect).not.toContain("socket.on('agent:proactive'");
-    expect(socketEffect).toContain("type: 'error'");
   });
 
   it('does not auto-open MCP or desktop-takeover panels for background events', () => {

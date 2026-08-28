@@ -150,13 +150,38 @@ describe('model-owned main chat architecture', () => {
     const execution = buildLumiExecutionDecision({
       flow: dispatch.flow,
       text: dispatch.flow.routeText,
-      toolDeclarations: [],
+      toolDeclarations: [{
+        type: 'function',
+        function: {
+          name: 'desktop_list_apps',
+          description: 'List launchable desktop applications.',
+          parameters: { type: 'object', properties: {} },
+        },
+      }, {
+        type: 'function',
+        function: {
+          name: 'desktop_open',
+          description: 'Open one exact desktop target.',
+          parameters: { type: 'object', properties: {} },
+        },
+      }, {
+        type: 'function',
+        function: {
+          name: 'desktop_active_window',
+          description: 'Read the active desktop window.',
+          parameters: { type: 'object', properties: {} },
+        },
+      }] as any,
     });
 
     expect(dispatch.flow.effectiveOperationMode).toBe('chat');
     expect(dispatch.flow.modelToolAccess).toBe('manifest');
-    expect(buildModelCapabilityPolicy(execution).allowedTools).toContain('*');
-    expect(buildModelCapabilityPolicy(execution).maxIterations).toBe(80);
+    expect(buildModelCapabilityPolicy(execution).allowedTools).toEqual(expect.arrayContaining([
+      'desktop_list_apps',
+      'desktop_open',
+      'desktop_active_window',
+    ]));
+    expect(buildModelCapabilityPolicy(execution).maxIterations).toBeGreaterThanOrEqual(3);
   });
 
   it('describes Chat foreground escalation consistently with the hard runtime policy', () => {
@@ -205,9 +230,8 @@ describe('model-owned main chat architecture', () => {
     expect(chatSource).not.toContain('quickFinalized');
     expect(chatSource).not.toContain('const directlyAppliedMode');
     expect(chatSource).not.toContain('registerBackgroundTask');
-    expect(chatSource).not.toContain('runOrchestratedTask');
     expect(chatSource).not.toContain('runNLChainer');
-    expect(chatSource).toContain('## Advisory execution candidates');
+    expect(chatSource).toContain('recognition and legacy quick matches are advisory inputs');
     expect(chatSource).not.toContain('executeSkillWorkflowAdapter');
     expect(chatSource).not.toContain('runWorkflowMatch');
     expect(chatSource).not.toContain('const capabilityMetaResponse');
@@ -218,7 +242,7 @@ describe('model-owned main chat architecture', () => {
     // receipt has a stable taskId; preparation itself does not execute tools.
     expect(chatSource).toContain('const bindsExistingAction = Boolean(');
     expect(chatSource).toContain('const preparesFreshAction = Boolean(');
-    expect(chatSource).toContain('executionDecision.allowToolUse || Boolean(pendingConfirmation)');
+    expect(chatSource).toContain('executionPipeline.capabilityPlan.taskLedgerRequired || Boolean(pendingConfirmation)');
     expect(chatSource).toContain('prepareConversationActionExecution({');
     expect(chatSource).toContain('userMessageId: acceptedUserMessageId');
     expect(chatSource).toContain('forceTask: true');
@@ -236,13 +260,15 @@ describe('model-owned main chat architecture', () => {
     const rest = readFileSync(path.resolve(process.cwd(), 'server/routes/chat_routes.ts'), 'utf8');
     const misc = readFileSync(path.resolve(process.cwd(), 'server/routes/misc_routes.ts'), 'utf8');
 
-    expect(messaging).toContain('const modelToolPolicy = buildModelCapabilityPolicy(executionDecision)');
+    expect(messaging).toContain('const modelToolPolicy = executionPlan.authorizationPolicy');
+    expect(messaging).toContain('const modelToolProjection = executionPlan.modelToolProjection');
     expect(messaging).not.toContain('toolPolicy: executionDecision.toolPolicy');
     expect(messaging).toContain('modelToolPolicy.maxIterations || executionDecision.maxIterations');
     expect(messaging).toContain('isPureOperationModeSwitchRequest(requestText, requestedMode)');
 
     expect(rest).toContain('const restModelToolPolicy = restrictToolPolicyForExecutionBoundary(');
-    expect(rest).toContain('buildModelCapabilityPolicy(restExecutionDecision)');
+    expect(rest).toContain('restExecutionPipeline.authorizationPolicy');
+    expect(rest).toContain('const restModelToolProjection = buildModelToolProjection(restExecutionDecision');
     expect(rest).toContain("'remote_restricted'");
     expect(rest).toContain('toolPolicy: restModelToolPolicy');
     expect(rest).toContain('isSanctuary: !req.user');

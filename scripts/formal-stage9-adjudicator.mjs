@@ -42,7 +42,6 @@ export const FORMAL_STAGE9_SCENARIO_OWNERS = Object.freeze({
   active_wps_document_workflow: 'wps',
   task_status_query: 'main',
   batch_cleanup: 'wps',
-  multi_agent_durable_completion: 'main',
   four_variant_business_loops: 'variants',
   client_window_chat_voice_settings: 'main',
 });

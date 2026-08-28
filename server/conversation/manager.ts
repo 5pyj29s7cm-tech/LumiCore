@@ -43,8 +43,6 @@ import {
 import {
   formatConversationActionLedgerStatus,
   attachConversationExecutionPlan,
-  attachConversationModelExecutionGraph,
-  loadConversationModelExecutionRecovery,
   migrateLegacyConversationActionLedger,
   recoverConversationActionTaskLeases,
   repairTerminalConversationActionTaskLeases,
@@ -59,24 +57,6 @@ import {
   type ConversationActionLiveProjection,
 } from './action_ledger';
 import type { CapabilityExecutionPlan } from '../cognition/capability_execution_plan';
-import type { OrchestrationPrivateNodeHandoff, WorkflowResult } from '../agents/orchestrator';
-import {
-  hasVerifiedModelGraphNodeEvidence,
-  reuseVerifiedModelGraphNodeReceipt,
-  type ModelGraphNodeEvidenceKind,
-} from '../agents/model_execution_graph';
-import type {
-  ModelExecutionGraph,
-  ModelGraphArbitrationReceipt,
-  ModelGraphNodeReceipt,
-} from '../agents/model_execution_graph';
-import {
-  loadPrivateModelHandoff,
-  persistPrivateModelHandoffs,
-  PRIVATE_MODEL_HANDOFF_MAX_BATCH,
-  PRIVATE_MODEL_HANDOFF_MAX_CHARS,
-  type PrivateModelHandoffInput,
-} from './private_model_handoff_store';
 import {
   listConversationFocusThreads,
   updateConversationFocusThread,
@@ -505,7 +485,6 @@ export interface DeletedConversationData {
   actionTurns: number;
   actionReceipts: number;
   routingReceipts: number;
-  backgroundTasks: number;
 }
 
 /** Delete only records carrying the exact, already-authorized conversation id. */
@@ -529,7 +508,6 @@ export function deleteConversationData(
     actionTurns: (db.conversationActionTurns || []).length,
     actionReceipts: (db.conversationActionReceipts || []).length,
     routingReceipts: (db.modelRoutingReceipts || []).length,
-    backgroundTasks: (db.backgroundDelegationTasks || []).length,
   };
   const ownedTaskIds = new Set(
     (db.conversationActionTasks || [])
@@ -548,8 +526,6 @@ export function deleteConversationData(
     .filter((row: any) => row.conversationId !== conversationId && !ownedTaskIds.has(String(row.taskId || '')));
   db.modelRoutingReceipts = (db.modelRoutingReceipts || [])
     .filter((row: any) => row.conversationId !== conversationId);
-  db.backgroundDelegationTasks = (db.backgroundDelegationTasks || [])
-    .filter((row: any) => row.conversationId !== conversationId && row.context?.conversationId !== conversationId);
   writeDB(db);
 
   return {
@@ -559,7 +535,6 @@ export function deleteConversationData(
     actionTurns: before.actionTurns - db.conversationActionTurns.length,
     actionReceipts: before.actionReceipts - db.conversationActionReceipts.length,
     routingReceipts: before.routingReceipts - db.modelRoutingReceipts.length,
-    backgroundTasks: before.backgroundTasks - db.backgroundDelegationTasks.length,
   };
 }
 
@@ -1829,166 +1804,6 @@ export function persistConversationExecutionPlan(input: {
   if (!task) return false;
   writeDB(db);
   return true;
-}
-
-export function persistConversationModelExecutionResult(input: {
-  conversationId: string;
-  userId: string;
-  taskId: string;
-  workflowResult: WorkflowResult;
-}): boolean {
-  if (!input.workflowResult.executionGraph) return false;
-  return persistConversationModelExecutionCheckpoint({
-    conversationId: input.conversationId,
-    userId: input.userId,
-    taskId: input.taskId,
-    executionGraph: input.workflowResult.executionGraph,
-    nodeReceipts: input.workflowResult.nodeReceipts || [],
-    privateNodeHandoffs: input.workflowResult.privateNodeHandoffs,
-    arbitrationReceipt: input.workflowResult.arbitrationReceipt,
-  });
-}
-
-function compactPrivateModelHandoff(value: unknown): string {
-  return String(value || '')
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ')
-    .trim()
-    .slice(0, PRIVATE_MODEL_HANDOFF_MAX_CHARS);
-}
-
-function collectPrivateModelHandoffs(input: {
-  conversationId: string;
-  userId: string;
-  taskId: string;
-  executionGraph: ModelExecutionGraph;
-  nodeReceipts: ModelGraphNodeReceipt[];
-  privateNodeHandoffs?: OrchestrationPrivateNodeHandoff[];
-}): PrivateModelHandoffInput[] | null {
-  const graphNodeIds = new Set(input.executionGraph.nodes.map(node => node.nodeId));
-  if ((input.privateNodeHandoffs?.length || 0) > PRIVATE_MODEL_HANDOFF_MAX_BATCH) return null;
-  const supplied = input.privateNodeHandoffs === undefined
-    ? null
-    : new Map(input.privateNodeHandoffs.map(handoff => [
-        `${handoff.graphId}:${handoff.taskId}:${handoff.nodeId}`,
-        handoff,
-      ]));
-  if (supplied && supplied.size !== input.privateNodeHandoffs!.length) return null;
-  const consumedSupplied = new Set<string>();
-  const handoffs = new Map<string, PrivateModelHandoffInput>();
-  for (const receipt of input.nodeReceipts) {
-    const graphNode = input.executionGraph.nodes.find(node => node.nodeId === receipt.nodeId);
-    if (
-      receipt.graphId !== input.executionGraph.graphId
-      || receipt.taskId !== input.taskId
-      || input.executionGraph.taskId !== input.taskId
-      || !graphNodeIds.has(receipt.nodeId)
-      || !graphNode
-      || !hasVerifiedModelGraphNodeEvidence(receipt)
-      || (receipt.evidenceKind !== 'tool_terminal_verification'
-        && receipt.evidenceKind !== 'validated_model_output')
-    ) continue;
-    if (!reuseVerifiedModelGraphNodeReceipt({
-      graph: input.executionGraph,
-      node: graphNode,
-      prior: receipt,
-      recoveredAt: receipt.completedAt,
-    })) continue;
-    const key = `${receipt.graphId}:${receipt.taskId}:${receipt.nodeId}`;
-    const suppliedHandoff = supplied?.get(key);
-    const receiptSummary = compactPrivateModelHandoff(receipt.outputSummary);
-    if (!receiptSummary) {
-      if (suppliedHandoff) return null;
-      continue;
-    }
-    if (supplied && !suppliedHandoff) return null;
-    if (suppliedHandoff && (
-      suppliedHandoff.outputDigest !== receipt.outputDigest
-      || suppliedHandoff.evidenceKind !== receipt.evidenceKind
-    )) return null;
-    const outputSummary = compactPrivateModelHandoff(
-      suppliedHandoff?.outputSummary ?? receipt.outputSummary,
-    );
-    // The private copy must be the same bounded value that produced the verified
-    // in-memory receipt. A caller cannot attach unrelated plaintext to a digest.
-    if (!outputSummary || receiptSummary !== outputSummary) return null;
-    const handoff: PrivateModelHandoffInput = {
-      userId: input.userId,
-      conversationId: input.conversationId,
-      taskId: input.taskId,
-      graphId: receipt.graphId,
-      nodeId: receipt.nodeId,
-      outputDigest: receipt.outputDigest,
-      outputSummary,
-      evidenceKind: receipt.evidenceKind as ModelGraphNodeEvidenceKind,
-    };
-    handoffs.delete(key);
-    handoffs.set(key, handoff);
-    if (suppliedHandoff) consumedSupplied.add(key);
-  }
-  if (supplied && consumedSupplied.size !== supplied.size) return null;
-  return [...handoffs.values()].slice(-PRIVATE_MODEL_HANDOFF_MAX_BATCH);
-}
-
-export function persistConversationModelExecutionCheckpoint(input: {
-  conversationId: string;
-  userId: string;
-  taskId: string;
-  executionGraph: ModelExecutionGraph;
-  nodeReceipts: ModelGraphNodeReceipt[];
-  privateNodeHandoffs?: OrchestrationPrivateNodeHandoff[];
-  arbitrationReceipt?: ModelGraphArbitrationReceipt;
-}): boolean {
-  const db = readDB();
-  const ownsTask = (Array.isArray(db.conversationActionTasks) ? db.conversationActionTasks : [])
-    .some((candidate: any) => (
-      candidate?.id === input.taskId
-      && candidate?.conversationId === input.conversationId
-      && candidate?.userId === input.userId
-    ));
-  if (!ownsTask || input.executionGraph.taskId !== input.taskId) return false;
-  const privateHandoffs = collectPrivateModelHandoffs(input);
-  if (!privateHandoffs) return false;
-  if (privateHandoffs.length > 0 && !persistPrivateModelHandoffs(privateHandoffs)) return false;
-  const task = attachConversationModelExecutionGraph(db, {
-    conversationId: input.conversationId,
-    userId: input.userId,
-    taskId: input.taskId,
-    graph: input.executionGraph,
-    receipts: input.nodeReceipts,
-    arbitrationReceipt: input.arbitrationReceipt,
-  });
-  if (!task) return false;
-  writeDB(db);
-  return true;
-}
-
-export function getConversationModelExecutionRecovery(input: {
-  conversationId: string;
-  userId: string;
-  taskId?: string;
-}) {
-  if (!input.taskId) return null;
-  const recovery = loadConversationModelExecutionRecovery(readDB(), {
-    conversationId: input.conversationId,
-    userId: input.userId,
-    taskId: input.taskId,
-  });
-  if (!recovery) return null;
-  return {
-    ...recovery,
-    receipts: recovery.receipts.map(receipt => {
-      const outputSummary = loadPrivateModelHandoff({
-        userId: input.userId,
-        conversationId: input.conversationId,
-        taskId: input.taskId!,
-        graphId: receipt.graphId,
-        nodeId: receipt.nodeId,
-        outputDigest: receipt.outputDigest,
-        evidenceKind: receipt.evidenceKind,
-      });
-      return outputSummary ? { ...receipt, outputSummary } : receipt;
-    }),
-  };
 }
 
 interface FinalizeConversationActionRequestOptions {

@@ -5,8 +5,10 @@ import {
   hasCoreActionEvidence,
 } from '../server/cognition/action_contract';
 import {
+  buildConversationActionContinuationState,
   buildRecentActionContinuationBridge,
   extractRecentActionContinuationState,
+  type ConversationActionContinuationState,
 } from '../server/cognition/action_continuation';
 import { formatClientDiagnosticResult } from '../server/cognition/client_diagnostic_result';
 import { buildLumiCapabilitySelection } from '../server/cognition/capability_selection';
@@ -105,6 +107,7 @@ function decideFromContinuation(
   text: string,
   continuationContext: string,
   channel: 'chat' | 'voice' = 'voice',
+  actionTaskState?: ConversationActionContinuationState | null,
 ) {
   const dispatch = buildLumiTurnDispatch({
     userId,
@@ -119,6 +122,7 @@ function decideFromContinuation(
     flow: dispatch.flow,
     text: dispatch.flow.routeText,
     toolDeclarations: TOOL_NAMES,
+    actionTaskState,
   });
   const selection = buildLumiCapabilitySelection({
     dispatch,
@@ -285,7 +289,6 @@ describe('Lumi real failure-chain replay', () => {
     expect(dispatch.flow.workSurfaceRoute.directDesktop).toBe(true);
     expect(dispatch.flow.workSurfaceRoute.artifactFirst).toBe(false);
     expect(dispatch.flow.executionGovernance.capabilityLearningIntent).toBe('none');
-    expect(dispatch.flow.executionGovernance.delegationIntent).toBe('foreground_owned');
     expect(selection.lane).toBe('desktop_control');
     expect(decision.allowToolUse).toBe(true);
     expect(decision.toolRoute?.categories).toContain('external_control');
@@ -432,10 +435,19 @@ describe('Lumi real failure-chain replay', () => {
     '\u522b\u5149\u8bf4\u5feb\u505a',
   ])('resumes the recent unfinished CAD task for direct execution pressure: %s', text => {
     const bridge = buildRecentActionContinuationBridge(text, FAILED_CAD_HISTORY);
+    const actionTaskState = buildConversationActionContinuationState({
+      userText: CAD_TASK,
+      assistantText: String(FAILED_CAD_HISTORY[1]?.message || ''),
+      toolCalls: FAILED_CAD_HISTORY[1]?.toolCalls,
+      requestId: `real_replay_cad_anchor_${text.length}`,
+    });
+    expect(actionTaskState).not.toBeNull();
     const { dispatch, decision } = decideFromContinuation(
       `real_replay_execute_${text.length}`,
       text,
       bridge,
+      'voice',
+      actionTaskState,
     );
 
     expect(bridge).toContain('- followupIntent: execute');

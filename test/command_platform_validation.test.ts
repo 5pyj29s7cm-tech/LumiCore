@@ -73,6 +73,42 @@ describe('host-platform command validation', () => {
     });
   });
 
+  it('rejects a non-allowlisted executable before asking for confirmation', async () => {
+    const registry = new ToolRegistry();
+    registerSystemOpsTools(registry);
+    const requestConfirmation = vi.fn(async () => true);
+
+    await expect(registry.execute(
+      'run_command',
+      { command: 'tasklist' },
+      { userId: 'command-preflight-test', requestConfirmation },
+    )).rejects.toMatchObject({
+      name: 'CommandAllowlistValidationError',
+      code: 'command_not_allowlisted',
+    });
+    expect(requestConfirmation).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'tasklist | findstr node',
+    'echo ok > output.txt',
+    'where node & where npm',
+  ])('rejects an invalid command before creating a confirmation: %s', async command => {
+    const registry = new ToolRegistry();
+    registerSystemOpsTools(registry);
+    const requestConfirmation = vi.fn(async () => true);
+
+    await expect(registry.execute(
+      'run_command',
+      { command },
+      { userId: 'command-preflight-test', requestConfirmation },
+    )).rejects.toMatchObject({
+      name: 'CommandPlatformValidationError',
+      code: 'shell_control_operator',
+    });
+    expect(requestConfirmation).not.toHaveBeenCalled();
+  });
+
   it('fails closed before relaying an invalid Windows desktop command', async () => {
     const registry = new ToolRegistry();
     registerDesktopTools(registry);
@@ -91,6 +127,29 @@ describe('host-platform command validation', () => {
       name: 'CommandPlatformValidationError',
       code: 'unsupported_platform_command',
     });
+    expect(desktopRelay).not.toHaveBeenCalled();
+  });
+
+  it('preflights a desktop shell operator before asking for confirmation', async () => {
+    const registry = new ToolRegistry();
+    registerDesktopTools(registry);
+    const requestConfirmation = vi.fn(async () => true);
+    const desktopRelay = vi.fn(async () => 'must not run');
+
+    await expect(registry.execute(
+      'desktop_run_command',
+      { command: 'tasklist | findstr node' },
+      {
+        userId: 'desktop-command-preflight-test',
+        desktopPlatform: 'win32',
+        desktopRelay,
+        requestConfirmation,
+      },
+    )).rejects.toMatchObject({
+      name: 'CommandPlatformValidationError',
+      code: 'shell_control_operator',
+    });
+    expect(requestConfirmation).not.toHaveBeenCalled();
     expect(desktopRelay).not.toHaveBeenCalled();
   });
 });

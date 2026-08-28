@@ -79,7 +79,7 @@ async function mapWithConcurrency<T, R>(
 }
 
 /**
- * Ingest a document into an agent's private memory.
+ * Ingest a document into LumiCore-scoped private memory.
  * Each chunk becomes an internalized memory with source citation metadata.
  */
 export async function ingestDocument(
@@ -214,7 +214,7 @@ export async function ingestDocument(
     );
   }
 
-  console.log(`[RAG] Ingested "${documentTitle}" -> ${chunks.length} chunks for agent ${agentId}`);
+  console.log(`[RAG] Ingested "${documentTitle}" -> ${chunks.length} chunks for Lumi scope ${agentId}`);
   return { chunkCount: chunks.length, memoryIds, manifest };
 }
 
@@ -264,7 +264,7 @@ function buildSourceMetadataKeywords(metadata?: MarkdownKnowledgeMetadata): stri
 }
 
 /**
- * Retrieve relevant chunks for a query from agent-scoped knowledge.
+ * Retrieve relevant chunks for a query from LumiCore-scoped knowledge.
  * Each result includes a citation string tracking source document and chunk position.
  */
 export async function retrieveChunks(

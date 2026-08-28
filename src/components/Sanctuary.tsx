@@ -29,7 +29,6 @@ interface SanctuaryAgent {
 
 type RelationshipMeta = { color: string; bg: string; border: string; icon: React.ReactNode };
 
-const localize = (isZh: boolean, zh: string, en: string) => (isZh ? zh : en);
 const RELATIONSHIP_META: Record<string, RelationshipMeta> = {
   family: { color: 'text-amber-400', bg: 'from-amber-950/60 to-zinc-950', border: 'border-amber-500/20', icon: <Heart size={14} /> },
   close_friend: { color: 'text-emerald-400', bg: 'from-emerald-950/60 to-zinc-950', border: 'border-emerald-500/20', icon: <Users size={14} /> },
@@ -56,7 +55,7 @@ function checkDependencySignals(text: string): { detected: boolean; level: strin
   return { detected: false, level: '', matched: '' };
 }
 
-export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | null; isOpen: boolean; onClose: () => void }) {
+export function Sanctuary({ agent, lang, isOpen, onClose }: { agent: SanctuaryAgent | null; lang?: 'en' | 'zh'; isOpen: boolean; onClose: () => void }) {
   const [messages, setMessages] = useState<any[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -66,27 +65,36 @@ export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | 
   const scrollRef = useRef<HTMLDivElement>(null);
   const socket = useSocket();
   const { user } = useApp();
-  const isZh = t_s.langCode !== 'en';
-  const ui = (zh: string, en: string) => localize(isZh, zh, en);
+  // The desktop shell owns the active language; useT remains a fallback for
+  // standalone renders so a lazy-loaded Sanctuary cannot briefly fall back to
+  // English during a shell locale transition.
+  const isZh = (lang || t_s.langCode || 'zh') !== 'en';
+  const locale = isZh ? 'zh' : 'en';
+  // Bind lazy-loaded sanctuary labels to the shell locale.  The old calls
+  // relied on uiMessage's global default, which can still be English during
+  // the render immediately after switching the desktop language.
+  const message = (key: Parameters<typeof uiMessage>[0]) => uiMessage(key, locale);
   const memoryCopy = memoryAvatarCopy(isZh ? 'zh' : 'en');
 
   const relationshipType = agent?.relationshipType || '';
   const meta = RELATIONSHIP_META[relationshipType] || DEFAULT_META;
   const relationshipLabel = memoryCopy.relationships[relationshipType as keyof typeof memoryCopy.relationships]?.label || memoryCopy.memoryLabel;
   const agentId = agent?.id || '';
-  const agentName = agent?.name || t_s.defaultMemoryLabel || 'Memory';
+  // Prefer the explicitly selected locale for all generated/fallback labels.
+  // `useT()` can still contain the previous shell locale for one lazy render.
+  const agentName = agent?.name || memoryCopy.memoryLabel;
 
   // Load existing messages for this agent
   useEffect(() => {
     if (!agentId || !user) return;
-    fetch(`/api/agents/${agentId}/history`)
+    fetch(`/api/memory-avatars/${agentId}/history`, { credentials: 'include' })
       .then(r => r.json())
       .then(data => {
         if (Array.isArray(data)) {
           const history = data.map((m: any, idx: number) => ({
             id: `hist-${idx}`,
             text: m.content || m.message || '',
-            userName: m.role === 'assistant' ? agentName : (user.displayName || user.username),
+            userName: m.role === 'assistant' ? agentName : (user.displayName || user.username || memoryCopy.youLabel),
             timestamp: m.timestamp || new Date().toISOString(),
             type: m.role === 'assistant' ? 'agent' : 'user',
           }));
@@ -194,7 +202,7 @@ export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | 
     const userMsg = {
       id: Date.now().toString(),
       text,
-      userName: user?.displayName || user?.username || t_s.defaultYouLabel || 'You',
+      userName: user?.displayName || user?.username || memoryCopy.youLabel,
       timestamp: new Date().toISOString(),
       type: 'user',
     };
@@ -205,7 +213,7 @@ export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | 
     // Check for dependency signals
     const dep = checkDependencySignals(text);
     if (dep.detected && dep.level === 'high') {
-      setDependencyWarning(uiMessage('sanctuary.a-gentle-lumi-reminder-this.68e34eba16', (isZh) ? 'zh' : 'en'));
+      setDependencyWarning(message('sanctuary.a-gentle-lumi-reminder-this.68e34eba16'));
     }
 
     // Safety timeout
@@ -232,7 +240,7 @@ export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | 
     socket.once('agent:response', onResponse);
     socket.once('agent:error', onError);
     socket.once('agent:status', onStatus);
-  }, [newMessage, socket, messages, user, agentId, isZh, t_s.defaultYouLabel]);
+  }, [newMessage, socket, messages, user, agentId, isZh, memoryCopy.youLabel]);
 
   if (!agent) return null;
 
@@ -270,7 +278,7 @@ export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | 
               className="flex items-center gap-2 px-4 py-2 bg-white/5 border border-white/10 rounded-xl text-white/40 hover:text-white hover:border-white/20 transition-all text-xs font-bold"
             >
               <ArrowLeft size={14} />
-              {uiMessage('sanctuary.leave-sanctuary.52b6dd4924')}
+              {message('sanctuary.leave-sanctuary.52b6dd4924')}
             </button>
 
             <div className="flex items-center gap-3">
@@ -281,7 +289,7 @@ export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | 
                 <h2 className="text-sm font-black text-white/80 tracking-tight">{agentName}</h2>
                 <div className="flex items-center gap-2">
                   <span className={`text-[12px] font-bold uppercase tracking-wider ${meta.color}`}>{relationshipLabel}</span>
-                  <span className="text-xs text-white/40 font-mono">{t_s.sanctuaryLabel || uiMessage('sanctuary.sanctuary.d94722bbd1')}</span>
+                  <span className="text-xs text-white/40 font-mono">{message('sanctuary.sanctuary.d94722bbd1')}</span>
                 </div>
               </div>
             </div>
@@ -302,19 +310,19 @@ export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | 
                   <AlertTriangle size={16} className="text-amber-400/60 mt-0.5 flex-shrink-0" />
                   <div className="flex-1">
                     <p className="text-xs text-amber-300/70 leading-relaxed">
-                      {uiMessage('sanctuary.this-is-a-simulation-distilled.86cae03071')}
+                      {message('sanctuary.this-is-a-simulation-distilled.86cae03071')}
                     </p>
                     <div className="flex items-center gap-3 mt-2 text-[12px] text-white/45 font-mono">
-                      <span>{uiMessage('sanctuary.evidence.00759cc2ae')}<span className="text-emerald-400/60">{uiMessage('sanctuary.quote.fcb6e37e05')}</span>/<span className="text-blue-400/60">{uiMessage('sanctuary.fact.0dfbbdcfc8')}</span>/<span className="text-amber-400/60">{uiMessage('sanctuary.inferred.9b6e0e37e2')}</span></span>
-                      {agent.isFrozen !== false && <span>{uiMessage('sanctuary.evolution-frozen.d66cdb416b')}</span>}
-                      <span>{uiMessage('sanctuary.tools-disabled.4e1aaa0eb6')}</span>
+                      <span>{message('sanctuary.evidence.00759cc2ae')}<span className="text-emerald-400/60">{message('sanctuary.quote.fcb6e37e05')}</span>/<span className="text-blue-400/60">{message('sanctuary.fact.0dfbbdcfc8')}</span>/<span className="text-amber-400/60">{message('sanctuary.inferred.9b6e0e37e2')}</span></span>
+                      {agent.isFrozen !== false && <span>{message('sanctuary.evolution-frozen.d66cdb416b')}</span>}
+                      <span>{message('sanctuary.tools-disabled.4e1aaa0eb6')}</span>
                     </div>
                   </div>
                   <button
                     onClick={() => setShowGuardrail(false)}
                     className="text-white/40 hover:text-white/40 transition-colors text-xs font-bold uppercase tracking-wider flex-shrink-0 mt-0.5"
                   >
-                    {uiMessage('sanctuary.got-it.83aa55c237')}
+                    {message('sanctuary.got-it.83aa55c237')}
                   </button>
                 </div>
               </motion.div>
@@ -348,8 +356,8 @@ export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | 
                 <div className="h-full flex flex-col items-center justify-center text-center py-20 space-y-4 opacity-30">
                   <Castle size={48} className={meta.color.replace('text-', 'text-')} />
                   <div>
-                    <p className="text-sm font-medium text-white/60">{formatUiMessage('sanctuary.this-is-value0-s-sanctuary.b6612d3d3e', { value0: agentName })}</p>
-                    <p className="text-xs text-white/45 mt-1">{uiMessage('sanctuary.they-are-here-and-only.b927165289')}</p>
+                  <p className="text-sm font-medium text-white/60">{formatUiMessage('sanctuary.this-is-value0-s-sanctuary.b6612d3d3e', { value0: agentName }, locale)}</p>
+                    <p className="text-xs text-white/45 mt-1">{message('sanctuary.they-are-here-and-only.b927165289')}</p>
                   </div>
                 </div>
               )}
@@ -388,7 +396,7 @@ export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | 
                       />
                     ))}
                   </div>
-                  <span className="text-[12px] text-white/40 font-mono">{uiMessage('sanctuary.thinking.0bd67fc167')}</span>
+                  <span className="text-[12px] text-white/40 font-mono">{message('sanctuary.thinking.0bd67fc167')}</span>
                 </div>
               )}
             </div>
@@ -400,7 +408,7 @@ export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | 
               <input
                 value={newMessage}
                 onChange={e => setNewMessage(e.target.value)}
-                placeholder={formatUiMessage('sanctuary.say-something-to-value0.6793beb5ca', { value0: agentName })}
+                placeholder={formatUiMessage('sanctuary.say-something-to-value0.6793beb5ca', { value0: agentName }, locale)}
                 className="flex-1 bg-white/5 border border-white/10 rounded-2xl px-5 py-3.5 text-sm text-white/80 placeholder:text-white/40 focus:outline-none focus:border-fuchsia-500/20 transition-colors"
                 autoFocus
               />
@@ -413,7 +421,7 @@ export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | 
               </button>
             </form>
             <div className="max-w-3xl mx-auto mt-2 text-center">
-              <span className="text-xs text-white/35 font-mono">{uiMessage('sanctuary.esc-leave-sanctuary-no-tools.7937ac5393')}</span>
+              <span className="text-xs text-white/35 font-mono">{message('sanctuary.esc-leave-sanctuary-no-tools.7937ac5393')}</span>
             </div>
           </div>
         </motion.div>

@@ -1,6 +1,5 @@
 import './helpers';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { buildOrchestrationWorkerToolPolicy } from '../server/agents/orchestrator';
 import {
   buildActionContract,
   hasCoreActionEvidence,
@@ -306,20 +305,10 @@ describe('WPS current-app end-to-end regression', () => {
     expect(directDecision.toolPolicy.allowedTools).toContain(WPS_CREATE_DOCUMENT_TOOL);
   });
 
-  it('keeps both the foreground turn and an orchestrated worker on WPS UI tools', () => {
+  it('keeps the foreground LumiCore turn on WPS UI tools', () => {
     const { decision } = buildScenario();
-    const workerPolicy = buildOrchestrationWorkerToolPolicy(
-      `Use the currently open WPS document and type: ${CONTENT}`,
-      decision.toolPolicy,
-      TOOL_NAMES,
-    );
 
     expect(decision.toolPolicy.allowedTools).toEqual(expect.arrayContaining([
-      'desktop_active_window',
-      'desktop_ui_snapshot',
-      'desktop_ui_type',
-    ]));
-    expect(workerPolicy.allowedTools).toEqual(expect.arrayContaining([
       'desktop_active_window',
       'desktop_ui_snapshot',
       'desktop_ui_type',
@@ -341,7 +330,6 @@ describe('WPS current-app end-to-end regression', () => {
       'mouse_click',
     ]) {
       expect(decision.toolPolicy.allowedTools).not.toContain(forbiddenSubstitute);
-      expect(workerPolicy.allowedTools).not.toContain(forbiddenSubstitute);
     }
   });
 

@@ -50,7 +50,6 @@ export interface ToolIntentDecisionTrace {
     autonomousTask: boolean;
   };
 }
-
 const EXPLICIT_NO_TOOL_PATTERNS: RegExp[] = [
   /(?:\u4e0d\u8981|\u522b|\u65e0\u9700|\u4e0d\u7528)\s*(?:\u518d)?(?:\u6267\u884c|\u8fdb\u884c|\u505a)\s*(?:\u4efb\u4f55|\u65b0\u7684?|\u5176\u4ed6|\u5176\u5b83)?\s*(?:\u64cd\u4f5c|\u52a8\u4f5c|\u4efb\u52a1)/u,
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
@@ -87,9 +86,9 @@ export function hasExplicitNoMutationInstruction(text: string): boolean {
 }
 
 const CLIENT_NAVIGATION_VERBS = /(?:\u6253\u5f00|\u8fdb\u5165|\u53bb|\u770b\u770b|\u5207\u6362|\u5207\u5230|\u6362\u5230|\u542f\u52a8|\u5f00\u542f|\u5f00\u59cb|\u5c55\u5f00|\u9000\u51fa|\u6536\u8d77|\u5173\u95ed|\u5173\u6389|\u56de\u5230|\u8fd4\u56de|\b(?:open|show|enter|switch|start|expand|exit|hide|close|collapse|return|go back)\b)/iu;
-const CLIENT_SURFACES = /(?:\u4e2d\u67a2\u4e16\u754c|\u4e2d\u67a2|\u4e16\u754c\u89c6\u56fe|\u4e91\u7aef\u753b\u5e03|\u6280\u80fd\u5927\u5385|\u6280\u80fd|\u6587\u4ef6\u7ba1\u7406\u5668|\u6587\u4ef6\u4e2d\u5fc3|\u58c1\u7eb8\u6a21\u5f0f|\u8bbe\u7f6e|\u65e5\u5fd7|\u97f3\u4e50\u4e2d\u5fc3|\u77e5\u8bc6\u5e93|\u684c\u9762\u5c0f\u7ec4\u4ef6|\u5c0f\u7ec4\u4ef6|\u4e3b\u5c4f\u5e55|\u4e3b\u9875|\u9996\u9875|\u804a\u5929|\u804a\u5929\u7a97\u53e3|\u56e2\u961f|\u56e2\u961f\u9762\u677f|\u5de5\u5177|\u5de5\u5177\u9762\u677f|\u5f62\u8c61|\u5934\u50cf\u5de5\u4f5c\u5ba4|\u58f0\u97f3|\u58f0\u97f3\u5de5\u4f5c\u5ba4|\u8bb0\u5fc6\u5934\u50cf|\u7ec4\u7ec7|\u7ec4\u7ec7\u7a7a\u95f4|\u7ec4\u7ec7\u5de5\u4f5c\u533a|\u8ba1\u5212|\u8ba1\u5212\u9762\u677f|\u5de5\u4f5c\u961f\u5217|\u7535\u8111\u9002\u914d\u4e2d\u5fc3|\u8ba1\u7b97\u673a\u9002\u914d\u4e2d\u5fc3|\u8bbe\u5907\u540c\u6b65|\u8bbe\u5907|\u901a\u77e5\u9762\u677f|\u901a\u77e5\u7a97\u53e3|\u63d0\u9192\u9762\u677f|\u63d0\u9192\u7a97\u53e3|\b(?:home|main screen|chat|chat window|nexus|nexus view|cloud canvas|world view|skill center|skills?|file manager|files app|settings|logs?|wallpaper mode|music center|desktop widget|widget mode|team|tools?|avatar studio|sound studio|memory avatar|organization|org workspace|plans?|planner|work queue|computer adaptation|device sync|devices?|notifications?|notification panel|reminders?|reminder panel)\b)/iu;
-const EXTENDED_PERSONAL_CLIENT_SURFACES = /(?:\u4e2a\u4eba\u57df|\u4e2a\u4eba\u5de5\u4f5c\u533a|\u5e94\u7528\u542f\u52a8\u5668|\u5e94\u7528\u641c\u7d22|\u4eba\u683c\u5b9e\u9a8c\u5ba4|\u4eba\u683c|\u7ec8\u7aef|\u4ee4\u724c\u7528\u91cf|\u6a21\u578b\u7528\u91cf|\u4e2a\u4eba\u8d44\u6599|MCP\s*\u8bbe\u7f6e|\u8bed\u97f3\u5de5\u574a|\u58f0\u97f3\u514b\u9686|\u6280\u80fd\u751f\u6210\u5668?|\u667a\u80fd\u4f53\u751f\u6001|\u5e2e\u52a9\u6587\u6863|\u4ea7\u54c1\u6587\u6863|\u521b\u59cb\u4eba\u7a7a\u95f4|GitHub\s*MCP|\b(?:personal workspace|app launcher|spotlight|personality lab|terminal|token dashboard|usage dashboard|profile|mcp settings|voice forge|voice cloning|skill generator|agent ecosystem|documentation|docs|founder workspace|github mcp)\b)/iu;
-const ORGANIZATION_WORKSPACE_SURFACES = /(?:\u7ec4\u7ec7\u77e5\u8bc6\u5e93|\u516c\u53f8\s*lumi|\u7ec4\u7ec7\s*lumi|\u6d88\u606f\u63a5\u5165|\u667a\u80fd\u4f53\u6a21\u677f|\u6a21\u677f\u5ba1\u6838|\u6210\u5458\u4e0e\u6743\u9650|\u5ba1\u8ba1\u65e5\u5fd7|\u5f8b\u6240\u5de5\u4f5c\u53f0|\u7a7a\u95f4\u5efa\u7b51\u8bbe\u8ba1|\u54c1\u724c\u521b\u610f\u8bbe\u8ba1|\u7ec4\u7ec7\u8bbe\u7f6e|\u5206\u652f\u8fde\u63a5|\b(?:organization knowledge|company lumi|organization lumi|org lumi|message access|agent templates?|template review|members and permissions|audit log|law firm workspace|spatial and architecture|brand and creative|organization settings|branch connection)\b)/iu;
+const CLIENT_SURFACES = /(?:\u4e2d\u67a2\u4e16\u754c|\u4e2d\u67a2|\u4e16\u754c\u89c6\u56fe|\u4e91\u7aef\u753b\u5e03|\u6280\u80fd\u5927\u5385|\u6280\u80fd|\u6587\u4ef6\u7ba1\u7406\u5668|\u6587\u4ef6\u4e2d\u5fc3|\u58c1\u7eb8\u6a21\u5f0f|\u8bbe\u7f6e|\u65e5\u5fd7|\u97f3\u4e50\u4e2d\u5fc3|\u77e5\u8bc6\u5e93|\u684c\u9762\u5c0f\u7ec4\u4ef6|\u5c0f\u7ec4\u4ef6|\u4e3b\u5c4f\u5e55|\u4e3b\u9875|\u9996\u9875|\u804a\u5929|\u804a\u5929\u7a97\u53e3|\u5de5\u5177|\u5de5\u5177\u9762\u677f|\u5f62\u8c61|\u5934\u50cf\u5de5\u4f5c\u5ba4|\u58f0\u97f3|\u58f0\u97f3\u5de5\u4f5c\u5ba4|\u7ec4\u7ec7|\u7ec4\u7ec7\u7a7a\u95f4|\u7ec4\u7ec7\u5de5\u4f5c\u533a|\u8ba1\u5212|\u8ba1\u5212\u9762\u677f|\u5de5\u4f5c\u961f\u5217|\u7535\u8111\u9002\u914d\u4e2d\u5fc3|\u8ba1\u7b97\u673a\u9002\u914d\u4e2d\u5fc3|\u8bbe\u5907\u540c\u6b65|\u8bbe\u5907|\u901a\u77e5\u9762\u677f|\u901a\u77e5\u7a97\u53e3|\u63d0\u9192\u9762\u677f|\u63d0\u9192\u7a97\u53e3|\u8bb0\u5fc6\u5316\u8eab|\u8bb0\u5fc6\u5934\u50cf|\u8bb0\u5fc6\u7a7a\u95f4|\b(?:home|main screen|chat|chat window|nexus|nexus view|cloud canvas|world view|skill center|skills?|file manager|files app|settings|logs?|wallpaper mode|music center|desktop widget|widget mode|tools?|avatar studio|sound studio|memory avatar|memory avatars|memory sanctuary|organization|org workspace|plans?|planner|work queue|computer adaptation|device sync|devices?|notifications?|notification panel|reminders?|reminder panel)\b)/iu;
+const EXTENDED_PERSONAL_CLIENT_SURFACES = /(?:\u4e2a\u4eba\u57df|\u4e2a\u4eba\u5de5\u4f5c\u533a|\u5e94\u7528\u542f\u52a8\u5668|\u5e94\u7528\u641c\u7d22|\u4eba\u683c\u5b9e\u9a8c\u5ba4|\u4eba\u683c|\u7ec8\u7aef|\u4ee4\u724c\u7528\u91cf|\u6a21\u578b\u7528\u91cf|\u4e2a\u4eba\u8d44\u6599|\u8bb0\u5fc6\u5316\u8eab|\u8bb0\u5fc6\u5934\u50cf|\u8bb0\u5fc6\u7a7a\u95f4|MCP\s*\u8bbe\u7f6e|\u8bed\u97f3\u5de5\u574a|\u58f0\u97f3\u514b\u9686|\u6280\u80fd\u751f\u6210\u5668?|\u5e2e\u6211\u6587\u6863|\u4ea7\u54c1\u6587\u6863|\u521b\u59cb\u4eba\u7a7a\u95f4|GitHub\s*MCP|\b(?:personal workspace|app launcher|spotlight|personality lab|terminal|token dashboard|usage dashboard|profile|memory avatar|memory sanctuary|mcp settings|voice forge|voice cloning|skill generator|documentation|docs|founder workspace|github mcp)\b)/iu;
+const ORGANIZATION_WORKSPACE_SURFACES = /(?:\u7ec4\u7ec7\u77e5\u8bc6\u5e93|\u516c\u53f8\s*lumi|\u7ec4\u7ec7\s*lumi|\u6d88\u606f\u63a5\u5165|\u6210\u5458\u4e0e\u6743\u9650|\u5ba1\u8ba1\u65e5\u5fd7|\u5f8b\u6240\u5de5\u4f5c\u53f0|\u7a7a\u95f4\u5efa\u7b51\u8bbe\u8ba1|\u54c1\u724c\u521b\u610f\u8bbe\u8ba1|\u7ec4\u7ec7\u8bbe\u7f6e|\u5206\u652f\u8fde\u63a5|\b(?:organization knowledge|company lumi|organization lumi|org lumi|message access|members and permissions|audit log|law firm workspace|spatial and architecture|brand and creative|organization settings|branch connection)\b)/iu;
 const EXTERNAL_APP_CONTEXT = /(?:\u5fae\u4fe1|\u4f01\u4e1a\u5fae\u4fe1|\u98de\u4e66|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9|\u6d4f\u89c8\u5668|WPS|Word|Excel|PowerPoint|Office|\u7f51\u6613\u4e91\u97f3\u4e50|QQ\s*\u97f3\u4e50|\u9177\u72d7\u97f3\u4e50|Chrome|Edge|CAD|AutoCAD|Revit|\b(?:wechat|weixin|wecom|feishu|lark|browser|wps|word|excel|powerpoint|office|spotify|chrome|edge|autocad|revit)\b)/iu;
 const LUMI_CLIENT_CONTEXT = /(?:Lumi|\u5ba2\u6237\u7aef|\u4e2d\u67a2|\u4e16\u754c\u89c6\u56fe|\u4e91\u7aef\u753b\u5e03|\u6280\u80fd\u5927\u5385|\u8fd0\u884c\u65e5\u5fd7|\u8bbe\u7f6e|\u5c0f\u7ec4\u4ef6|\b(?:client|nexus|cloud canvas|world view|skill center|settings|runtime log|widget)\b)/iu;
 
@@ -133,8 +132,6 @@ const DESKTOP_AI_ACTION_VERBS = /\b(?:ask|query|send|forward|collect|gather|comp
 const DESKTOP_CONTROL_TERMS = /(?:\u7535\u8111|\u684c\u9762|\u5c4f\u5e55|\u7a97\u53e3|\u9f20\u6807|\u952e\u76d8|\b(?:computer|desktop|screen|window|mouse|keyboard)\b)/iu;
 const DESKTOP_CONTROL_VERBS = /(?:\u7528|\u4f7f\u7528|\u64cd\u4f5c|\u63a7\u5236|\u63a5\u7ba1|\u70b9\u51fb|\u8f93\u5165|\u6253\u5f00|\u805a\u7126|\b(?:use|operate|control|take\s+over|click|type|open|focus)\b)/iu;
 const EXTERNAL_DESKTOP_OBSERVATION_REQUEST = /(?:(?:(?:\u5f53\u524d)?(?:\u6d3b\u52a8|\u524d\u53f0)|\u6b63\u5728\u4f7f\u7528\u7684).{0,4}\u7a97\u53e3|\u5f53\u524d.{0,4}\u7a97\u53e3(?:\u6807\u9898|\u8fdb\u7a0b|\u5e94\u7528)|(?:\u684c\u9762|desktop).{0,12}(?:\u6587\u4ef6|\u6587\u4ef6\u5939|files?|folders?)|\b(?:current|active|foreground)\s+window\b)/iu;
-const TEAM_EXECUTION_REQUEST = /(?:(?:\u7ec4\u5efa|\u53ec\u96c6|\u521b\u5efa|\u7ec4\u7ec7|\u5b89\u6392|\u5206\u914d|\u8c03\u5ea6).{0,12}(?:\u56e2\u961f|\u667a\u80fd\u4f53|\bagents?\b|\bteam\b)|(?:\u7ec4\u961f|\u7ec4\u4e2a\u961f|\u7ec4\u4e2a\u56e2\u961f)(?:.{0,16}(?:\u6267\u884c|\u5904\u7406|\u5206\u5de5|\u534f\u4f5c|\u5b8c\u6210|\u4efb\u52a1))?|(?:\u8ba9|\u53eb|\u8bf7|\u4ea4\u7ed9).{0,8}(?:\u56e2\u961f|\u667a\u80fd\u4f53|\bagents?\b|\bteam\b).{0,16}(?:\u6267\u884c|\u5904\u7406|\u5206\u5de5|\u534f\u4f5c|\u5b8c\u6210|\u505a|\u5206\u6790|\u68c0\u67e5|\bexecute\b|\bhandle\b|\bdelegate\b|\bcollaborate\b)|(?:\u56e2\u961f|\u667a\u80fd\u4f53|\bagents?\b|\bteam\b).{0,16}(?:\u6267\u884c|\u5904\u7406|\u5206\u5de5|\u534f\u4f5c|\u5b8c\u6210|\bexecute\b|\bhandle\b|\bdelegate\b|\bcollaborate\b)|\b(?:assemble|form|create)\s+(?:a\s+)?team\b|\b(?:multi[-\s]?agent|agent\s+team)\b|(?:\u591a\u4e2a|\u591a\u4e2a\u5b50|\u591a)\s*(?:agent|\u667a\u80fd\u4f53).{0,12}(?:\u6267\u884c|\u5904\u7406|\u5206\u5de5|\u534f\u4f5c|\u5b8c\u6210))/iu;
-const TEAM_EXECUTION_CAPABILITY_QUESTION = /^(?:(?:\u600e\u4e48|\u5982\u4f55|\u80fd\u4e0d\u80fd|\u80fd\u5426|\u53ef\u4e0d\u53ef\u4ee5|\u662f\u5426\u53ef\u4ee5).{0,24}(?:\u7ec4\u961f|\u56e2\u961f|\u667a\u80fd\u4f53|\bagents?\b|\bteam\b)|\b(?:how|can|could|would)\b.{0,40}\b(?:team|agents?|multi[-\s]?agent)\b)/iu;
 const CONTINUE_VERBS = /(?:\u7ee7\u7eed|\u63a5\u7740|\u5f80\u4e0b|\b(?:continue|resume)\b)/iu;
 const TASK_TERMS = /(?:\u4efb\u52a1|\u5ba2\u6237|\u4ea4\u4ed8|\u63a5\u7ba1|\u5de5\u4f5c|\u9879\u76ee|\b(?:task|customer|delivery|takeover|project)\b)/iu;
 const CREATE_OR_DRAW_VERBS = /(?:\u521b\u5efa|\u65b0\u5efa|\u751f\u6210|\u5236\u4f5c|\u505a|\u753b|\u51fa|\b(?:create|generate|draw|make)\b)/iu;
@@ -157,7 +154,7 @@ const STRUCTURED_TOOL_INTENT_RULES: IntentGrammarRule[] = [
   { name: 'messaging-reply', all: [MESSAGE_TERMS, REPLY_VERBS] },
   { name: 'messaging-send-or-greeting', all: [MESSAGE_SEND_VERBS, GREETING_MESSAGE_TERMS] },
   { name: 'messaging-inquiry', all: [MESSAGE_TERMS, MESSAGE_INQUIRY_VERBS] },
-  { name: 'desktop-ai-collaboration', all: [DESKTOP_AI_TERMS, DESKTOP_AI_ACTION_VERBS] },
+  { name: 'desktop-ai-request', all: [DESKTOP_AI_TERMS, DESKTOP_AI_ACTION_VERBS] },
   { name: 'desktop-control', all: [DESKTOP_CONTROL_TERMS, DESKTOP_CONTROL_VERBS] },
   { name: 'task-continuation', all: [CONTINUE_VERBS, TASK_TERMS] },
   { name: 'visual-production', all: [CREATE_OR_DRAW_VERBS, VISUAL_OUTPUT_TERMS] },
@@ -220,6 +217,11 @@ const CLIENT_ACTION_ONLY_PATTERNS: RegExp[] = [
   /(?:\u5207\u6362|\u5207\u5230|\u6362\u5230|\u8fdb\u5165|\u6253\u5f00|\u5f00\u542f|\u542f\u52a8|\u5f00\u59cb|\u53bb|\u770b\u770b|\u68c0\u67e5|\u67e5|\u6478\u7d22).*(?:\u81ea\u5df1\u7684\u5ba2\u6237\u7aef|\u5ba2\u6237\u7aef|\u4e2d\u67a2\u4e16\u754c|\u4e2d\u67a2|\u4e16\u754c\u89c6\u56fe|\u4e91\u7aef\u753b\u5e03|\u804a\u5929|\u52a9\u624b|\u4f1a\u8bae|\u97f3\u4e50|\u81ea\u52a8\u6267\u884c|\u81ea\u4e3b\u6267\u884c|\u4f1a\u8bae\u6a21\u5f0f|\u97f3\u4e50\u6a21\u5f0f|\u52a9\u624b\u6a21\u5f0f|\u804a\u5929\u6a21\u5f0f|\u6c1b\u56f4\u5c42|\u97f3\u4e50\u4e2d\u5fc3|\u77e5\u8bc6\u5e93|\u8fd0\u884c\u65e5\u5fd7|\u65e5\u5fd7|\u8bbe\u7f6e|\u58c1\u7eb8\u6a21\u5f0f|\u7ec4\u7ec7|\u4e91\u7aef|\u6280\u80fd|\u6280\u80fd\u5927\u5385|\u5de5\u5177|\u5f62\u8c61|\u58f0\u97f3|\u8bbe\u5907|\u540c\u6b65|\u5185\u6838|\u76d1\u63a7|\u8ba1\u5212|\u56e2\u961f|\u6587\u4ef6\u7ba1\u7406\u5668|\u6587\u4ef6\u4e2d\u5fc3)/u,
   /(?:\u653e|\u64ad\u653e|\u542c).*(?:\u97f3\u4e50|\u6b4c|\u6b4c\u66f2|\u6b4c\u5355|\u4e13\u8f91)/u,
 ];
+
+// Memory Avatar is a personal surface, not an Agent/team action. Keep its
+// navigation explicit so opening it never activates the task/tool lane.
+CLIENT_ACTION_INTENT_PATTERNS.push(/(?:\u6253\u5f00|\u8fdb\u5165|\u53bb|\u770b\u770b|\u5207\u6362|\u542f\u52a8|\u5f00\u542f|\u9000\u51fa|\u5173\u95ed|\u8fd4\u56de|\b(?:open|show|enter|start|close|exit|return)\b).{0,24}(?:\u8bb0\u5fc6\u5316\u8eab|\u8bb0\u5fc6\u5934\u50cf|\u8bb0\u5fc6\u7a7a\u95f4|memory\s+avatar|memory\s+sanctuary)/iu);
+CLIENT_ACTION_ONLY_PATTERNS.push(/(?:\u6253\u5f00|\u8fdb\u5165|\u53bb|\u770b\u770b|\u5207\u6362|\u542f\u52a8|\u5f00\u542f|\u9000\u51fa|\u5173\u95ed|\u8fd4\u56de|\b(?:open|show|enter|start|close|exit|return)\b).{0,24}(?:\u8bb0\u5fc6\u5316\u8eab|\u8bb0\u5fc6\u5934\u50cf|\u8bb0\u5fc6\u7a7a\u95f4|memory\s+avatar|memory\s+sanctuary)/iu);
 
 // Questions that explicitly ask Lumi to inspect its live client structure are
 // informational in wording but still require the safe client_get_state tool.
@@ -426,17 +428,8 @@ function pushRule(out: ToolIntentMatchedRule[], layer: ToolIntentRuleLayer, name
   out.push({ layer, name });
 }
 
-export function hasExplicitTeamExecutionRequest(text: string): boolean {
-  const normalized = text.trim();
-  if (!normalized) return false;
-  if (TEAM_EXECUTION_CAPABILITY_QUESTION.test(normalized)) return false;
-  if (isInformationOnlyQuestion(normalized)) return false;
-  return TEAM_EXECUTION_REQUEST.test(normalized);
-}
-
-function hasExternalDesktopOrTeamExecutionIntent(text: string): boolean {
-  return EXTERNAL_DESKTOP_OBSERVATION_REQUEST.test(text)
-    || hasExplicitTeamExecutionRequest(text);
+function hasExternalDesktopExecutionIntent(text: string): boolean {
+  return EXTERNAL_DESKTOP_OBSERVATION_REQUEST.test(text);
 }
 
 export function hasExplicitToolIntent(text: string): boolean {
@@ -470,7 +463,7 @@ export function hasClientActionIntent(text: string): boolean {
   if (isInformationOnlyQuestion(normalized)) return false;
   if (isDesktopMusicControlRequest(normalized)) return false;
   if (detectRequestedOperationMode(normalized)) return true;
-  if (hasExternalDesktopOrTeamExecutionIntent(normalized)) return false;
+  if (hasExternalDesktopExecutionIntent(normalized)) return false;
   if (EXTERNAL_APP_CONTEXT.test(normalized) && !LUMI_CLIENT_CONTEXT.test(normalized) && !ORGANIZATION_WORKSPACE_SURFACES.test(normalized)) return false;
   if (matchesIntentGrammar(normalized, STRUCTURED_CLIENT_ACTION_RULES)) return true;
   return CLIENT_ACTION_INTENT_PATTERNS.some((pattern) => pattern.test(normalized));
@@ -487,7 +480,7 @@ export function hasClientActionOnlyIntent(text: string): boolean {
   if (canonicalIntentOwnsNonClientAction(canonical.kind, normalized)) return false;
   if (isInformationOnlyQuestion(normalized)) return false;
   if (isDesktopMusicControlRequest(normalized)) return false;
-  if (hasExternalDesktopOrTeamExecutionIntent(normalized)) return false;
+  if (hasExternalDesktopExecutionIntent(normalized)) return false;
   const requestedMode = detectRequestedOperationMode(normalized);
   if (requestedMode && isPureOperationModeSwitchRequest(normalized, requestedMode)) return true;
   if (EXTERNAL_APP_CONTEXT.test(normalized) && !LUMI_CLIENT_CONTEXT.test(normalized) && !ORGANIZATION_WORKSPACE_SURFACES.test(normalized)) return false;
@@ -553,10 +546,10 @@ export function traceToolIntentDecision(text: string, source?: string, operation
       || canonical.kind === 'status_query'
       || (isInformationOnlyQuestion(normalized) && !clientStateInspectionRequest && !externalAiHistoryAction)
     : false;
-  const externalDesktopOrTeamExecution = normalized
+  const externalDesktopExecution = normalized
     ? (
         canonicalIntentOwnsNonClientAction(canonical.kind, normalized)
-        || hasExternalDesktopOrTeamExecutionIntent(normalized)
+        || hasExternalDesktopExecutionIntent(normalized)
       )
     : false;
   const desktopMusicControl = normalized ? isDesktopMusicControlRequest(normalized) : false;
@@ -579,13 +572,13 @@ export function traceToolIntentDecision(text: string, source?: string, operation
   const legacyToolRules = !informationOnlyQuestion && normalized
     ? matchPatternRuleNames(normalized, TOOL_INTENT_PATTERNS, 'tool-pattern')
     : [];
-  const structuredClientRules = !informationOnlyQuestion && !externalDesktopOrTeamExecution && !desktopMusicControl && normalized
+  const structuredClientRules = !informationOnlyQuestion && !externalDesktopExecution && !desktopMusicControl && normalized
     ? matchIntentGrammarRuleNames(normalized, STRUCTURED_CLIENT_ACTION_RULES)
     : [];
-  const clientActionRules = !informationOnlyQuestion && !externalDesktopOrTeamExecution && !desktopMusicControl && normalized
+  const clientActionRules = !informationOnlyQuestion && !externalDesktopExecution && !desktopMusicControl && normalized
     ? matchPatternRuleNames(normalized, CLIENT_ACTION_INTENT_PATTERNS, 'client-action-pattern')
     : [];
-  const clientActionOnlyRules = !informationOnlyQuestion && !externalDesktopOrTeamExecution && !desktopMusicControl && normalized
+  const clientActionOnlyRules = !informationOnlyQuestion && !externalDesktopExecution && !desktopMusicControl && normalized
     ? matchPatternRuleNames(normalized, CLIENT_ACTION_ONLY_PATTERNS, 'client-action-only-pattern')
     : [];
   const autonomousTaskRules = mode === 'autonomous' && normalized
@@ -613,7 +606,7 @@ export function traceToolIntentDecision(text: string, source?: string, operation
   const pureOperationModeSwitch = Boolean(
     requestedMode && isPureOperationModeSwitchRequest(normalized, requestedMode),
   );
-  const clientActionOnlyIntent = !externalDesktopOrTeamExecution
+  const clientActionOnlyIntent = !externalDesktopExecution
     && (
       canonical.kind === 'client_navigation'
       || canonical.kind === 'client_state'
@@ -696,14 +689,4 @@ export function traceToolIntentDecision(text: string, source?: string, operation
       autonomousTask,
     },
   };
-}
-
-export function shouldExposeAgentWork(text: string): boolean {
-  const normalized = text.trim().toLowerCase();
-  if (!normalized) return false;
-  if (hasExplicitTeamExecutionRequest(normalized)) return true;
-  return [
-    /\b(team|teammate|sub-?agent|worker agent|multi-?agent|orchestrator|orchestration|delegate|assign|crew)\b/i,
-    /(?:\u56e2\u961f|\u5b50\s*agent|\u5b50\u667a\u80fd\u4f53|\u591a\s*agent|\u591a\u667a\u80fd\u4f53|\u7ec4\u5efa|\u7ec4\u961f|\u7f16\u6392|\u5206\u6d3e|\u5206\u914d|\u4ea4\u7ed9.*(?:\u5904\u7406|\u505a)|\u8c03\u5ea6|\u7ec4\u4ef6\u56e2\u961f)/u,
-  ].some((pattern) => pattern.test(normalized));
 }

@@ -50,14 +50,18 @@ export function normalizeServerTaskRelation(event: ServerTaskRelationEvent): Ser
   ) return null;
 
   const revision = Number(raw.revision);
+  const binding = raw.binding as ServerTaskRelation['binding'];
   return {
     relation: raw.relation as ServerTaskRelation['relation'],
     feedback: raw.feedback as ServerTaskRelation['feedback'],
-    binding: raw.binding as ServerTaskRelation['binding'],
+    binding,
     operation: raw.operation as ServerTaskRelation['operation'],
     ...(boundedString(raw.taskId, 180) ? { taskId: boundedString(raw.taskId, 180) } : {}),
     ...(Number.isFinite(revision) && revision >= 0 ? { revision: Math.trunc(revision) } : {}),
-    ...(boundedString(raw.targetRequestId, 120)
+    // A previous/terminal task no longer owns a request lease. Even a delayed
+    // or legacy frame must not make the client resend that obsolete request id
+    // as mutation authority on the next conversational turn.
+    ...(binding === 'active_task' && boundedString(raw.targetRequestId, 120)
       ? { targetRequestId: boundedString(raw.targetRequestId, 120) }
       : {}),
     preservesRootGoal: raw.preservesRootGoal === true,
@@ -93,6 +97,19 @@ export class ChatTaskRelationLedger {
       && relation.revision < current.revision
     ) return current;
 
+    if (relation.taskId && relation.binding === 'previous_task') {
+      for (const [key, candidate] of this.byRequest) {
+        if (candidate.taskId === relation.taskId) this.byRequest.delete(key);
+      }
+      if (current?.taskId === relation.taskId) {
+        this.latestByConversation.delete(conversationId);
+      }
+      // A terminal/previous relation is useful for rendering, but is not
+      // future mutation authority. Let the next read-only follow-up resolve
+      // from the server ledger instead of replaying a revision that may still
+      // advance while the terminal request releases its final lease.
+      return relation;
+    }
     if (requestId) this.byRequest.set(relationKey(conversationId, requestId), relation);
     // Only a server-issued durable task identity can become a future mutation
     // target. A conversational/new-task classification must not erase it.

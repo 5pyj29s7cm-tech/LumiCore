@@ -125,6 +125,13 @@ const CONTINUE_ONLY_RE =
 const ACCEPT_ONLY_RE =
   /^(?:(?:我)?(?:确认|同意|接受|批准|授权)(?:(?:这个|该|上述|当前|刚才的)?(?:操作|方案|修改|执行|权限扩张))?了?|(?:嗯|好|好的|可以|行|没问题|就这样|按这个做|开始吧)|(?:yes|ok|okay|confirmed?|approved?|accepted?|go\s+ahead|looks\s+good))[。！？.!?]*$/iu; // i18n-allow: multilingual task-feedback recognition; not user-visible copy.
 
+// A bare acknowledgement is conversational unless the durable state proves
+// that the immediately adjacent action is actually waiting for confirmation.
+// In particular, a terminal task plus an old client fence must not turn
+// “好的” into stale_task_control.
+const ORDINARY_ACK_ONLY_RE =
+  /^(?:\u55ef+|\u54e6+|\u597d|\u597d\u7684|\u53ef\u4ee5|\u884c|\u6ca1\u95ee\u9898|\u6536\u5230|\u660e\u767d\u4e86|\u77e5\u9053\u4e86|yes|ok|okay|got\s+it|alright)[\u3002\uff01\uff1f.!?]*$/iu; // i18n-allow: multilingual conversational acknowledgement recognition; not user-visible copy.
+
 // Corrections re-plan the same root task. Requiring either an explicit error
 // marker or a referential object prevents an unrelated concrete instruction
 // from being swallowed by an older task.
@@ -165,6 +172,23 @@ function feedbackKind(
     if (offeredConversationTaskId === currentConversationTaskId) return 'accept';
   }
   const normalizedIntent = normalizeActionIntent(normalized);
+  // A runtime-work status query asks about Lumi's global execution ledger,
+  // not the status of the adjacent conversation action. It must enter the
+  // deterministic runtime_work_status path as an independent read even when
+  // another request currently owns the foreground lease.
+  if (
+    normalizedIntent.kind === 'status_query'
+    && normalizedIntent.operation === 'status'
+    && normalizedIntent.target === 'runtime_work'
+  ) return 'new_task';
+  if (
+    normalizedIntent.relation === 'correction'
+    && normalizedIntent.kind !== 'none'
+    && normalizedIntent.kind !== 'correction_explanation'
+    && normalizedIntent.operation !== 'status'
+  ) {
+    return state?.unfinished ? 'correction' : 'new_task';
+  }
   // A fully specified normalized action cannot be feedback about an older
   // task. Bind this before status/continue heuristics so a new file, client
   // surface, read, or external action is not swallowed by an old task merely
@@ -176,7 +200,13 @@ function feedbackKind(
   ) return 'new_task';
   if (RETRY_ONLY_RE.test(normalized)) return 'retry';
   if (ACCEPT_ONLY_RE.test(normalized)) {
-    return conversationActionRequiresFreshConfirmationReview(state) ? 'status' : 'accept';
+    if (conversationActionRequiresFreshConfirmationReview(state)) return 'status';
+    const hasPendingAcceptance = Boolean(
+      acceptedCleanupOffer
+      || (state?.unfinished && state.status === 'waiting_confirmation'),
+    );
+    if (ORDINARY_ACK_ONLY_RE.test(normalized) && !hasPendingAcceptance) return 'new_task';
+    return 'accept';
   }
   if (CONTINUE_ONLY_RE.test(normalized)) return 'continue';
 
@@ -257,6 +287,9 @@ export function resolveActiveTaskMessageRelation(
   const feedback = normalized
     ? feedbackKind(normalized, state, options.pendingAssistantOfferContext)
     : 'new_task';
+  const acceptedRuntimeCleanupOffer = feedback === 'accept'
+    ? resolvePendingRuntimeCleanupOffer(normalized, options.pendingAssistantOfferContext)
+    : null;
   const relation = queueRelation(feedback);
   const taskRelation = deterministicTaskRelation(feedback);
   const terminalState = Boolean(
@@ -322,7 +355,12 @@ export function resolveActiveTaskMessageRelation(
   ) && !durableFenceOwnsIdleTask;
   const taskMismatch = Boolean(explicitTaskId && (!durableTaskId || explicitTaskId !== durableTaskId));
   const revisionMismatch = explicitRevision !== undefined && revision !== explicitRevision;
-  const stale = relationNeedsActiveTask(feedback) && (requestMismatch || taskMismatch || revisionMismatch);
+  // A validated adjacent cleanup offer is fenced by its server-owned
+  // assistant turn and immutable taskIds. Stale UI metadata left over from a
+  // previously rendered task must not override that newer exact authority.
+  const stale = relationNeedsActiveTask(feedback)
+    && !acceptedRuntimeCleanupOffer
+    && (requestMismatch || taskMismatch || revisionMismatch);
 
   if (stale) {
     return {
@@ -405,8 +443,8 @@ export function resolveActiveTaskMessageRelation(
 
 /**
  * Compact planner context. In addition to routing the turn, it fixes the
- * orchestration invariant that worker/sub-step completion is only evidence;
- * the root coordinator must verify the entire goal before reporting done.
+ * execution invariant that one step completing is only evidence; LumiCore must
+ * verify the entire goal before reporting done.
  */
 export function formatActiveTaskRelationContext(
   resolution: ActiveTaskMessageResolution | null | undefined,
@@ -427,7 +465,7 @@ export function formatActiveTaskRelationContext(
     resolution.targetRequestId ? `- targetRequestId: ${resolution.targetRequestId}` : '',
     rootGoal ? `- rootGoal: ${rootGoal}` : '',
     latestInstruction && latestInstruction !== rootGoal ? `- previousStep: ${latestInstruction}` : '',
-    '- Keep the stable root goal and task identity across this turn. Treat worker or sub-step completion as evidence only; the root coordinator alone may report terminal completion after checking the whole goal, success criteria, and receipts.',
+    '- Keep the stable root goal and task identity across this turn. Treat an individual step completing as evidence only; LumiCore may report terminal completion only after checking the whole goal, success criteria, and receipts.',
   ].filter(Boolean);
 
   if (resolution.feedback === 'correction') {

@@ -121,7 +121,7 @@ export interface ClientStateSnapshot {
     knowledgeOpen?: boolean;
     chatOpen?: boolean;
     commandCenterOpen?: boolean;
-    commandCenterView?: 'office' | 'team' | 'core';
+    commandCenterView?: 'office' | 'core';
     notificationsOpen?: boolean;
     memoryAvatarOpen?: boolean;
     runtimeLogOpen?: boolean;
@@ -377,7 +377,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Assistant mode',
     kind: 'mode',
     actions: ['set_client_mode(assistant)'],
-    notes: 'User-present high-permission execution. Lumi can use tools, files, browser, saved/authorized sessions, external apps, desktop control, skills, and teams for requested ordinary work without per-tool permission popups; hard boundaries stop for explicit confirmation or handoff.',
+    notes: 'User-present high-permission execution. LumiCore can use tools, files, browser, saved/authorized sessions, external apps, desktop control, and skills for requested ordinary work without per-tool permission popups; hard boundaries stop for explicit confirmation or handoff.',
     stateKeys: ['mode', 'tools'],
   },
   {
@@ -408,16 +408,16 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'workspace.command_center',
     label: 'Lumi command center',
     kind: 'workspace',
-    actions: ['open_command_center', 'open_chat', 'open_team', 'close_client_surface(command-center)'],
-    notes: 'One scoped workspace combines conversation, persistent task and receipt status, the real agent team, animated workstations, and the distributed core. Chat and Team are views of this workspace, not separate windows.',
+    actions: ['open_command_center', 'open_chat', 'close_client_surface(command-center)'],
+    notes: 'One scoped workspace combines conversation, persistent task and receipt status, and the LumiCore runtime.',
     stateKeys: ['surfaces.commandCenterOpen', 'surfaces.commandCenterView', 'tools'],
   },
   {
     id: 'workspace.org',
     label: 'Organization workspace',
     kind: 'organization',
-    actions: ['open_organization_workspace(section=dashboard|kb|chat|messaging|templates|review|members|audit|settings|branch|legal|spatial-design|brand-design)'],
-    notes: 'A work-space overlay for the same Lumi identity. It exposes role-scoped organization knowledge, company Lumi chat, messaging, templates, members, audit, settings/branch connection, legal, spatial architecture, and brand creative work without merging any member personal memory.',
+    actions: ['open_organization_workspace(section=dashboard|kb|chat|messaging|members|audit|settings|branch|legal|spatial-design|brand-design)'],
+    notes: 'A work-space overlay for the same Lumi identity. It exposes role-scoped organization knowledge, company Lumi chat, messaging, members, audit, settings/branch connection, legal, spatial architecture, and brand creative work without merging any member personal memory.',
     stateKeys: ['workDomain', 'org', 'orgWorkspace', 'knowledge'],
   },
   {
@@ -437,6 +437,14 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     stateKeys: ['surfaces.knowledgeOpen', 'knowledge'],
   },
   {
+    id: 'workspace.memory_avatar',
+    label: 'Memory Avatar sanctuary',
+    kind: 'workspace',
+    actions: ['open_memory_avatar', 'close_client_surface(memory-avatar)'],
+    notes: 'A private, tool-free Memory Avatar distilled from user-provided conversation records. It is a frozen personal reflection, not an execution worker or an autonomous task runner.',
+    stateKeys: ['surfaces.memoryAvatarOpen'],
+  },
+  {
     id: 'window.device_sync',
     label: 'Device sync center',
     kind: 'window',
@@ -448,8 +456,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'window.avatar_sound',
     label: 'Personalization surface',
     kind: 'window',
-    actions: ['open_personalization', 'open_avatar_studio', 'open_sound_studio', 'open_memory_avatar'],
-    notes: 'One personalization window contains avatar appearance and voice/sound controls; the memory avatar lab remains a separate surface.',
+    actions: ['open_personalization', 'open_avatar_studio', 'open_sound_studio'],
+    notes: 'One personalization window contains avatar appearance and voice/sound controls.',
     stateKeys: ['windows'],
   },
   {
@@ -558,10 +566,10 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
   },
   {
     id: 'network.lap',
-    label: 'LAP Inter-Lumi collaboration',
+    label: 'LAP secure inter-Lumi protocol',
     kind: 'collaboration',
     actions: ['lap.handshake', 'lap.task.delegate', 'lap.task.result', 'lap.context.share', 'lap.negotiate', 'lap.notify', 'lap.revoke'],
-    notes: 'Lumi Agent Protocol for secure collaboration with other user-owned Lumi instances and community Lumi peers. Incoming context is external by default and cannot mutate local personality or memory without user approval.',
+    notes: 'LAP remains an explicit, consent-scoped, and revocable protocol between separately owned Lumi instances.',
     requiresConfirmation: true,
     stateKeys: ['workDomain', 'org', 'permissions'],
   },
@@ -619,7 +627,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Desktop modes and autonomous work',
     kind: 'system',
     actions: ['open_plans', 'open_work_queue', 'open_settings(section=autonomy)', 'autonomy_get_policy', 'autonomy_update_policy', 'autonomy_list_workflows', 'autonomy_register_workflow', 'autonomy_set_workflow_enabled'],
-    notes: 'Lumi uses three visible desktop postures. Chat is conversational, but an explicit user-present task may use the ordinary foreground Assistant capability manifest for that turn without persistently switching the UI mode. Assistant is an explicit foreground execution posture with tools, browser, saved/authorized login sessions, files, desktop control, external apps, skills, and teams; hard boundaries still stop for confirmation or handoff. Autonomy has the same practical permissions plus 24h continuous/background operation, proactive questions, monitoring, sorting, absorption, local-machine body learning, industry-habit-aware public-source web learning, task checkpoints, and ultra-long continuation. The desktop client can launch at login, hide to tray/background, and supervise bundled backend processes. That is resident runtime, not permission to invent unrelated automatic work; background task generation still follows workflow/autonomy policy. There is no separate external-app automation gate.',
+    notes: 'Lumi uses three visible desktop postures. Chat is conversational, but an explicit user-present task may use the ordinary foreground Assistant capability manifest for that turn without persistently switching the UI mode. Assistant is an explicit foreground execution posture with tools, browser, saved/authorized login sessions, files, desktop control, external apps, and skills; hard boundaries still stop for confirmation or handoff. Autonomy has the same practical permissions plus continuous operation, proactive questions, monitoring, sorting, absorption, local-machine body learning, industry-habit-aware public-source web learning, task checkpoints, and ultra-long continuation. The desktop client can launch at login, hide to tray/background, and supervise bundled backend processes. That resident runtime does not permit unrelated automatic work; autonomous task generation still follows workflow policy. There is no separate external-app automation gate.',
     requiresConfirmation: false,
     stateKeys: ['mode', 'autonomy', 'runtime'],
   },
@@ -718,10 +726,10 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
   },
   {
     id: 'external.ai_apps',
-    label: 'Other local AI and agent tools',
+    label: 'Other local AI tools',
     kind: 'external_app',
-    actions: ['external_ai_route_plan', 'external_ai_collaborate', 'external_ai_collect_answers', 'external_ai_session_status', 'external_ai_history_source_register', 'external_ai_history_source_list', 'external_ai_history_source_revoke', 'external_ai_history_sync', 'external_ai_history_status', 'external_ai_history_query', 'desktop_ai_list_targets', 'desktop_ai_discovery_plan', 'desktop_ai_register_target', 'external_app_list_adapters'],
-    notes: 'Lumi coordinates external AI through one persistent task/session pipeline. Every new submission uses external_ai_collaborate with the fixed API/MCP, healthy CLI, structured-browser, then desktop-visual priority, exact user confirmation, per-target idempotency, independent failure isolation, late-answer archival, and source evidence. external_ai_collect_answers only reads an existing bound session and never resends. External AI history is a separate read-only authorization pipeline: Lumi can synchronize only an explicitly confirmed connector, local JSON export, authorized-session adapter, or current visible desktop viewport; it stores no credentials, enforces conversation/content/attachment scopes, resumes durable page cursors, and preserves message ids/source evidence. Desktop-visible history prefers local vision, never scrolls or submits, and is always marked partial_visible. Lumi cannot read arbitrary external AI account history without such an authorization source. Desktop AI tools remain discovery/catalog or one-version compatibility adapters and are not new planning entry points. Login/security, payment, installation, credentials, and destructive boundaries stop for handoff.',
+    actions: ['desktop_ai_ask', 'desktop_ai_collect_answer', 'external_ai_history_source_register', 'external_ai_history_source_list', 'external_ai_history_source_revoke', 'external_ai_history_sync', 'external_ai_history_status', 'external_ai_history_query', 'desktop_ai_list_targets', 'desktop_ai_discovery_plan', 'desktop_ai_register_target', 'external_app_list_adapters'],
+    notes: 'LumiCore may use one explicitly named external AI application as a bounded tool and remains responsible for the task, verification, and final answer. External AI history remains a separate read-only authorization pipeline with exact source scopes, durable cursors, and source evidence. Login, payment, installation, credentials, destructive actions, and ambiguous submissions stop at their normal confirmation boundaries.',
     requiresConfirmation: true,
     stateKeys: ['permissions', 'tools', 'windows'],
   },
@@ -1099,7 +1107,6 @@ export function normalizeClientActionTarget(value?: string): string {
     chat: 'command-center',
     'command-center': 'command-center',
     command: 'command-center',
-    team: 'command-center',
     tools: 'tools',
     tool: 'tools',
     plans: 'plans',
@@ -1144,6 +1151,10 @@ export function normalizeClientActionTarget(value?: string): string {
     'sound-studio': 'personalization',
     sound: 'personalization',
     'memory-avatar': 'memory-avatar',
+    'memory-avatars': 'memory-avatar',
+    '\u8bb0\u5fc6\u5316\u8eab': 'memory-avatar', // i18n-allow: Chinese client-surface input alias; not user-visible copy.
+    '\u8bb0\u5fc6\u5934\u50cf': 'memory-avatar', // i18n-allow: Chinese client-surface input alias; not user-visible copy.
+    '\u8bb0\u5fc6\u7a7a\u95f4': 'memory-avatar', // i18n-allow: Chinese client-surface input alias; not user-visible copy.
     files: 'knowledge',
     file: 'knowledge',
     sync: 'devices',
@@ -1172,8 +1183,6 @@ export function normalizeClientActionTarget(value?: string): string {
     '应用搜索': 'app-launcher',
     '人格': 'personality',
     '人格实验室': 'personality',
-    '团队': 'team',
-    '团队面板': 'team',
     '工具': 'tools',
     '工具面板': 'tools',
     '个性化': 'personalization', // i18n-allow: Chinese client-surface input alias; not user-visible copy.
@@ -1183,7 +1192,6 @@ export function normalizeClientActionTarget(value?: string): string {
     '形象设计室': 'personalization', // i18n-allow: Chinese legacy client-surface input alias; not user-visible copy.
     '声音': 'personalization',
     '声音工作室': 'personalization',
-    '记忆头像': 'memory-avatar',
     '组织': 'org',
     '组织空间': 'org',
     '组织工作区': 'org',
@@ -1205,7 +1213,7 @@ export function normalizeClientActionTarget(value?: string): string {
     '语音工坊': 'voice',
     '声音克隆': 'voice',
     '技能生成': 'generate',
-    '智能体生态': 'ecosystem',
+    '能力生态': 'ecosystem', // i18n-allow: Chinese client-surface input alias.
     '文档': 'docs',
     '创始人空间': 'founders',
     '电脑适配中心': 'kernel',
@@ -1408,7 +1416,6 @@ export function getClientActionExpectation(args: Record<string, any> = {}): Clie
       setSurface('tools', 'tools');
       break;
     case 'open_command_center':
-    case 'open_team':
     case 'open_chat':
       setSurface('command-center', 'Lumi command center');
       break;
@@ -1692,7 +1699,7 @@ export function getSelfModelSnapshot(
     limitations: [
       'Desktop certification applies only to registered application identities and tested versions; unknown applications use safe fallback control.',
       'Indexed knowledge is not called absorbed until extraction, embedding, retrieval, citation, and evaluation evidence pass.',
-      'Models and agents are dynamically orchestrated only inside privacy, permission, confirmation, budget, and receipt policies.',
+      'Models and tools are selected dynamically only inside privacy, permission, confirmation, budget, and receipt policies.',
       'Third-party extensions are limited to signed declarative OpenAI-compatible providers and sandboxed HTTP tools; Lumi does not load arbitrary extension code.',
       ...(awareness.level === 'live' ? [] : ['Live client state is unavailable or stale, so present-moment desktop claims require refresh.']),
     ],
@@ -1834,7 +1841,7 @@ function surfaceIsOpen(state: ClientStateSnapshot | null | undefined, surface: s
   if (target === 'org') return state.activeTab === 'org' || openWindows.includes('org') || state.windows?.focused === 'org';
   if (target === 'knowledge') return Boolean(state.surfaces?.knowledgeOpen) || openWindows.includes('knowledge');
   if (target === 'command-center') return Boolean(state.surfaces?.commandCenterOpen || state.surfaces?.chatOpen)
-    || openWindows.includes('command-center') || openWindows.includes('chat') || openWindows.includes('team');
+    || openWindows.includes('command-center') || openWindows.includes('chat');
   if (target === 'notifications') return Boolean(state.surfaces?.notificationsOpen) || openWindows.includes('notifications');
   if (target === 'memory-avatar') return Boolean(state.surfaces?.memoryAvatarOpen) || openWindows.includes('memory-avatar');
   if (target === 'meeting') return Boolean(state.surfaces?.meetingOpen || state.meeting?.active) || openWindows.includes('meeting');
@@ -1994,7 +2001,7 @@ export function shouldUseFullClientSelfPrompt(userText: string): boolean {
   const text = String(userText || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
   if (!text) return false;
   // i18n-allow -- bilingual self-audit target recognition; not user-visible copy.
-  const lumiTarget = /(?:\blumi\b|客户端|主程序|桌面端|运行时|任务调度|多\s*agent|智能体|模型路由|能力(?:清单|矩阵)|工具(?:清单|登记)|适配器|接口|权限边界|client|runtime|orchestrat|capabilit|tool registry|adapter|permission)/i;
+  const lumiTarget = /(?:\blumi\b|客户端|主程序|桌面端|运行时|任务调度|模型路由|能力(?:清单|矩阵)|工具(?:清单|登记)|适配器|接口|权限边界|client|runtime|orchestrat|capabilit|tool registry|adapter|permission)/i;
   // i18n-allow -- bilingual diagnostic-intent recognition; not user-visible copy.
   const diagnosticAction = /(?:全面|完整|整体|逐项|仔细)?\s*(?:审计|诊断|自检|体检|排查|核实|检查)|(?:audit|diagnos(?:e|is|tic)?|self[- ]?check|health check|inspect|troubleshoot|verify)\b/i;
   // i18n-allow -- bilingual exhaustive-inventory recognition; not user-visible copy.
@@ -2086,7 +2093,7 @@ export function formatClientSelfPrompt(
     `- Meeting: active=${Boolean(state.meeting?.active)}, notes=${state.meeting?.noteCount || 0}, report=${Boolean(state.meeting?.hasReport)}, reportGenerating=${Boolean(state.meeting?.reportGenerating)}`,
     `- Runtime log: open=${Boolean(state.runtimeLog?.open)}, status=${state.runtimeLog?.status || 'ready'}${state.runtimeLog?.lastError ? `, error=${state.runtimeLog.lastError}` : ''}`,
     `- Permissions: ${formatStateObject(state.permissions)}`,
-    `- Tools: agent=${state.tools?.agentStatus || 'idle'}, workflowSteps=${state.tools?.workflowStepCount || 0}, runningSteps=${state.tools?.runningWorkflowSteps || 0}`,
+    `- Tools: lumi=${state.tools?.agentStatus || 'idle'}, workflowSteps=${state.tools?.workflowStepCount || 0}, runningSteps=${state.tools?.runningWorkflowSteps || 0}`,
     `- Native runtime: autostartSupported=${Boolean(state.runtime?.autostartSupported)}, autostart=${Boolean(state.runtime?.autostartEnabled)}, closeToBackground=${Boolean(state.runtime?.closeToBackground)}, startedInBackground=${Boolean(state.runtime?.startedInBackground)}, backendNode=${state.runtime?.backendNodeRunning ? 'running' : 'dev/not-spawned'}, backendPython=${state.runtime?.backendPythonRunning ? 'running' : 'dev/not-spawned'}, nodeRestarts=${state.runtime?.nodeRestarts ?? 0}, pythonRestarts=${state.runtime?.pythonRestarts ?? 0}, shortcut=${state.runtime?.globalShortcut || 'Alt+Space'}${state.runtime?.lastError ? `, error=${state.runtime.lastError}` : ''}`,
     isWork
       ? '- The work workspace does not expose personal autonomy settings, autonomous workflows, private memories, or local learning records.'
@@ -2174,7 +2181,7 @@ export function formatClientSelfPrompt(
     'When a user asks whether you can learn/connect a new ecosystem, first check capability_learning_list and self_extension_plan. If existing coverage or a learned route exists, reuse it. If not, use capability_gap_autofix for a safe learning route or capability_research plus web/github tools to study candidates, licenses, setup requirements, and integration plans. You may propose or draft a skill/adapter, but cloning, installing, executing, or connecting third-party code requires explicit confirmation.',
     'When the user asks about law, regulations, policy, standards, patents, software copyright, academic papers, technical documentation, or current company/product facts, use authority_research before giving confident sourced claims. Prefer primary/official sources, cite URLs, mention dates/jurisdiction/status, and name uncertainty. Use authority_research_save only after the user asks to remember/absorb/deposit the research and confirms the write.',
     'For external apps such as WeChat, CAD, browsers, and other AI tools: use explicit adapters first. Prepare drafts/files/plans before controlling UI. Only claim a message/comment/post was sent when a supervised foreground action or confirmed integration actually completed it; never claim a production drawing was finalized unless reviewed evidence supports it.',
-    'Respect the global Memory Firewall: store personal, organization, meeting, LAP, community, and external-app memories with their source and privacy boundaries. Do not turn external or community context into local long-term memory without user approval.',
+    'Respect the global Memory Firewall: store personal, organization, meeting, LAP, and external-app memories with their source and privacy boundaries. Do not turn external context into local long-term memory without user approval.',
     'Respect the Action Constitution: reads/searches/analysis plus low- and medium-risk desktop, browser, clipboard, draft, external-app preparation, saved/authorized login session reuse, user-requested foreground social/content commits, and stock watch actions such as quotes, K-lines, sectors, news, watchlists, alerts, risk plans, and paper trading may run when the active desktop mode allows tools. Local writes need an explicit deliverable request or trusted policy. Payments, purchases, transfers, real brokerage buy/sell/cancel-order actions, order/price/inventory/ad-spend changes, ambiguous external submits, installs, shell/system changes, first-time login/security verification/credential storage/account switching/third-party authorization, legal filings/signatures, and destructive actions require confirmation or are forbidden.',
     'When the user reports a client failure, do not stop at repeating the error. First read client_get_state, inspect relevant status/log/config tools when available, try one safe recovery or retry if the cause is clear, verify the state changed, then explain the remaining blocker if it still fails.',
     'If a routed client action, meeting capture, runtime log, organization workspace, or file operation fails, treat that as a repairable client workflow: diagnose -> safe recovery -> verify -> concise report.',

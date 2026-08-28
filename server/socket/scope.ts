@@ -21,7 +21,7 @@ export type SocketToolSecurityContext = Pick<
 >;
 
 /**
- * Project the transport-owned socket identity into every tool/orchestrator
+ * Project the transport-owned socket identity into every tool/runtime
  * context.  Loopback is intentionally irrelevant: only a native session proof
  * verified by the Socket.IO authentication middleware can set
  * trustedLocalExecution.

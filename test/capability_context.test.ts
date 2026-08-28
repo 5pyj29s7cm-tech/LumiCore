@@ -80,8 +80,8 @@ describe('Lumi runtime capability context', () => {
     expect(prompt).toContain('builtin:web=1');
     expect(prompt).toContain('Execution governance:');
     expect(prompt).toContain('verify=');
-    expect(prompt).toContain('delegation=');
     expect(prompt).toContain('capabilityLearning=');
+    expect(prompt).toContain('Lumi is the single execution subject');
     expect(prompt).toContain('MCP health gate:');
     expect(prompt).toContain('Prefer connected MCP tools');
     expect(prompt).toContain('Skill workflows known');

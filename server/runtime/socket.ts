@@ -17,7 +17,6 @@ import { getSensory } from "../socket/shared";
 import { perceptionEvents } from "../socket/shared";
 import { deviceRegistry, projectPublicDevice } from "../devices";
 import { personalityRegistry } from "../personality";
-import { setOnAgentPromoted } from "../agents/orchestrator";
 import { initMemorySync, initMemoryAssociations } from "../memory";
 import { handleDesktopRelayResult } from "../socket/desktop_relay";
 import { getMember } from "../org/db";
@@ -103,21 +102,6 @@ export function initSocketRuntime({ io, jwtSecret, llm }: SocketContext) {
   personalityRegistry.setBroadcast((event, data) => {
     if (data?.orgId) io.to(`org:${data.orgId}`).emit(event, data);
     else if (data?.userId) io.to(`user:${data.userId}:personal`).emit(event, data);
-  });
-
-  // Wire up agent promotion notifications
-  setOnAgentPromoted((agent) => {
-    const payload = {
-      id: agent.id, name: agent.name,
-      skillTags: agent.skillTags, autoCreated: true,
-      domain: agent.domain === 'work' ? 'work' : 'personal',
-      orgId: agent.domain === 'work' ? (agent.orgId || '') : '',
-    };
-    if (payload.domain === 'work' && payload.orgId) {
-      io.to(`org:${payload.orgId}`).emit('agent:promoted', payload);
-    } else if (agent.ownerUid || agent.userId) {
-      io.to(`user:${agent.ownerUid || agent.userId}:personal`).emit('agent:promoted', payload);
-    }
   });
 
   // Initialize memory sync

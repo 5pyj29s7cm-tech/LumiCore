@@ -197,25 +197,6 @@ describe('explicit new conversation', () => {
       completedAt: now,
       durationMs: 0,
     });
-    afterRun.backgroundDelegationTasks.push({
-      id: `isolated-background-${userId}`,
-      userId,
-      title: 'isolated background',
-      prompt: 'isolated background',
-      status: 'completed',
-      workers: [],
-      workerNames: [],
-      context: { conversationId: isolated.id, domain: 'personal' },
-      idempotencyKey: `isolated-background-key-${userId}`,
-      toolCallsCount: 0,
-      cancelRequested: false,
-      pauseRequested: false,
-      attempt: 1,
-      recoveryCount: 0,
-      createdAt: now,
-      updatedAt: now,
-      completedAt: now,
-    });
     writeDB(afterRun);
 
     const deleted = deleteConversationData(isolated.id, userId, 'personal', '');
@@ -227,7 +208,6 @@ describe('explicit new conversation', () => {
       actionTurns: 1,
       actionReceipts: 1,
       routingReceipts: 1,
-      backgroundTasks: 1,
     });
     expect(afterCleanup.conversations.some((row: any) => row.id === isolated.id)).toBe(false);
     expect(afterCleanup.interactions.some((row: any) => row.conversationId === isolated.id)).toBe(false);

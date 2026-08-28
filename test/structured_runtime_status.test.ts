@@ -60,7 +60,6 @@ describe('structured runtime status', () => {
         task('other-org', { domain: 'work', orgId: 'org-2' }),
       ],
       conversationActionReceipts: [receipt('personal', 'waiting_confirmation', 'unverified')],
-      backgroundDelegationTasks: [],
       autonomousTasks: [],
     };
     const status = buildStructuredRuntimeStatus(db, {
@@ -95,11 +94,10 @@ describe('structured runtime status', () => {
     const status = buildStructuredRuntimeStatus({
       conversationActionTasks: [...completed, blocked],
       conversationActionReceipts: completed.map(item => receipt(item.id, 'verified_success')),
-      backgroundDelegationTasks: [{
-        id: 'background-blocked', userId: 'user-1', title: 'Background work', status: 'blocked',
-        context: { domain: 'personal' }, updatedAt: '2026-08-10T00:20:00.000Z',
+      autonomousTasks: [{
+        id: 'autonomous-blocked', userId: 'user-1', title: 'Autonomous work', status: 'blocked',
+        checkpoint: { phase: 'verification' }, updatedAt: '2026-08-10T00:20:00.000Z',
       }],
-      autonomousTasks: [],
     }, { userId: 'user-1', domain: 'personal' });
 
     expect(status.tasks).toHaveLength(12);
@@ -110,7 +108,7 @@ describe('structured runtime status', () => {
   });
 
   it('keeps the structural snapshot id stable across poll timestamps and metric timestamps', () => {
-    const db = { conversationActionTasks: [task('stable')], conversationActionReceipts: [], backgroundDelegationTasks: [], autonomousTasks: [] };
+    const db = { conversationActionTasks: [task('stable')], conversationActionReceipts: [], autonomousTasks: [] };
     const first = buildStructuredRuntimeStatus(db, {
       userId: 'user-1', domain: 'personal', now: '2026-08-10T00:00:00.000Z',
       runtime: { toolMetrics: { generatedAt: 'first' } },

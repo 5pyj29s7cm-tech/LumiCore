@@ -37,6 +37,9 @@ export interface AutonomousTask {
   description: string;
   status: AutonomousTaskStatus;
   source: 'scheduler' | 'curiosity' | 'pattern_detected' | 'user_request';
+  domain?: 'personal' | 'work';
+  orgId?: string;
+  conversationId?: string;
   workflowId?: string;
   planId?: string;
   priority: number;  // 0-10
@@ -125,7 +128,6 @@ function cloneTask(task: AutonomousTask): AutonomousTask {
       ...task.terminalReceipt,
       evidenceRefs: [...task.terminalReceipt.evidenceRefs],
       toolNames: [...task.terminalReceipt.toolNames],
-      workerIds: [...task.terminalReceipt.workerIds],
     } : undefined,
   };
 }
@@ -439,7 +441,6 @@ export function markCompleted(
     ...verification.terminalReceipt!,
     evidenceRefs: [...verification.terminalReceipt!.evidenceRefs],
     toolNames: [...verification.terminalReceipt!.toolNames],
-    workerIds: [...verification.terminalReceipt!.workerIds],
   };
   clearLease(task);
   moveToHistory(task);

@@ -8,7 +8,7 @@ import { GlassCard } from './SharedUI';
 import { apiFetch } from '../services/apiClient';
 
 export function Profile({ t }: { t: any }) {
-  const { user, agents } = useApp();
+  const { user } = useApp();
   const [health, setHealth] = useState<any>(null);
   const [passwords, setPasswords] = useState({ current: '', next: '' });
   const [status, setStatus] = useState<{ type: 'success' | 'error' | null, message: string }>({ type: null, message: '' });
@@ -203,8 +203,8 @@ export function Profile({ t }: { t: any }) {
                 <div className="text-white font-bold text-xs">{health.database?.users ?? (t.unavailable || 'Unavailable')}</div>
               </div>
               <div className="p-4 bg-white/5 rounded-2xl border border-white/5">
-                <div className="text-xs text-white/40 uppercase font-bold mb-1">{t.agents || 'Agents'}</div>
-                <div className="text-white font-bold text-xs">{health.database?.agents ?? (t.unavailable || 'Unavailable')}</div>
+                <div className="text-xs text-white/40 uppercase font-bold mb-1">LumiCore</div>
+                <div className="text-white font-bold text-xs">{healthOk ? (t.ready || 'Ready') : healthLabel}</div>
               </div>
               <div className="p-4 bg-white/5 rounded-2xl border border-white/5">
                 <div className="text-xs text-white/40 uppercase font-bold mb-1">{t.latency || 'Latency'}</div>

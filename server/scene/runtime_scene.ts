@@ -50,7 +50,7 @@ export function buildRuntimeSceneNodes(status: StructuredRuntimeStatus): LumiSce
         { id: 'runtime.metric.waiting', kind: 'metric', title: 'runtime.waiting', value: status.counts.waitingConfirmation, tone: status.counts.waitingConfirmation ? 'warning' : 'neutral' },
         { id: 'runtime.metric.blocked', kind: 'metric', title: 'runtime.blocked', value: status.counts.blockedTasks + status.counts.durableBlocked, tone: status.counts.blockedTasks + status.counts.durableBlocked ? 'danger' : 'neutral' },
         { id: 'runtime.metric.verified', kind: 'metric', title: 'runtime.verified', value: status.counts.verifiedReceipts, tone: 'success' },
-        { id: 'runtime.metric.background', kind: 'metric', title: 'runtime.background', value: status.counts.backgroundActive + status.counts.autonomousActive, tone: 'info' },
+        { id: 'runtime.metric.autonomous', kind: 'metric', title: 'runtime.autonomous', value: status.counts.autonomousActive, tone: 'info' },
       ],
     },
     {

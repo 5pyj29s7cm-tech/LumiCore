@@ -14,7 +14,7 @@ const CAPABILITY_OPERATION_BY_VERB: Record<string, CapabilityOperation> = {
   merge: 'create', split: 'create', convert: 'create', transcribe: 'create', plan: 'create',
   strategy: 'create', reasoning: 'create', discovery: 'create', to: 'create', from: 'create',
   minutes: 'create', send: 'communicate', reply: 'communicate', message: 'communicate',
-  post: 'communicate', publish: 'communicate', ask: 'communicate', roundtable: 'communicate',
+  post: 'communicate', publish: 'communicate', ask: 'communicate',
   write: 'mutate', save: 'mutate', edit: 'mutate', modify: 'mutate', update: 'mutate',
   set: 'mutate', open: 'mutate', close: 'mutate', run: 'mutate', execute: 'mutate',
   install: 'mutate', repair: 'mutate', remove: 'mutate', delete: 'mutate', move: 'mutate',

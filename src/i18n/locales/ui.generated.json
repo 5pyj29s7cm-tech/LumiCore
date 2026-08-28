@@ -803,14 +803,6 @@
     "en": "Voice is already active. End the current call first.",
     "zh": "语音通话正在进行，先结束当前通话"
   },
-  "agent-template-workspace.marketplace.448b7d9c5d": {
-    "en": "Marketplace",
-    "zh": "模板市场"
-  },
-  "agent-template-workspace.review-queue.576f13eaa1": {
-    "en": "Review Queue",
-    "zh": "模板审核"
-  },
   "audit-log-viewer.action.91069d1d41": {
     "en": "Action",
     "zh": "操作"
@@ -1187,133 +1179,9 @@
     "en": "Voiceprint Enrollment",
     "zh": "声纹录入"
   },
-  "branch-dashboard.agent-template-marketplace.f417d328f7": {
-    "en": "Agent Template Marketplace",
-    "zh": "智能体模板市场"
-  },
-  "branch-dashboard.agent-templates.9cc4c8c9d0": {
-    "en": "Agent Templates",
-    "zh": "智能体模板"
-  },
-  "branch-dashboard.ask-organization-level-questions-about.be4a518a8e": {
-    "en": "Ask organization-level questions about knowledge, policies, projects, and teams.",
-    "zh": "向组织知识、制度、项目和团队资料发起查询。"
-  },
-  "branch-dashboard.browse-search-and-edit-organization.ab59b8dfae": {
-    "en": "Browse, search, and edit organization knowledge. Work-domain uploads sync here.",
-    "zh": "查看、检索和编辑组织资料，工作域上传的文件会同步到这里。"
-  },
-  "branch-dashboard.connected.77956f6a16": {
-    "en": "Connected",
-    "zh": "已连接"
-  },
-  "branch-dashboard.failed-to-load-organization-status.d4517ef501": {
-    "en": "Failed to load organization status",
-    "zh": "组织状态加载失败"
-  },
-  "branch-dashboard.failed-to-load-organization-workspace.b1ad2b265e": {
-    "en": "Failed to load organization workspace",
-    "zh": "组织工作台加载失败"
-  },
-  "branch-dashboard.install-one-from-the-agent.ee355dd175": {
-    "en": "Install one from the agent template market, such as Contract Review, Case Analysis, or Litigation Strategy.",
-    "zh": "去智能体模板市场安装一个，比如合同审查师、类案分析师或诉讼策略师。"
-  },
-  "branch-dashboard.knowledge-base.e30b5fc119": {
-    "en": "Knowledge Base",
-    "zh": "组织知识库"
-  },
   "branch-dashboard.last-refreshed-value0.0140c57047": {
     "en": "Last refreshed: {value0}",
     "zh": "最近刷新：{value0}"
-  },
-  "branch-dashboard.local-organization-domain.707a7949c6": {
-    "en": "Local organization domain",
-    "zh": "本地组织域"
-  },
-  "branch-dashboard.lumi-work-workspace.1bd0a7273b": {
-    "en": "Lumi (Work Workspace)",
-    "zh": "工作域 Lumi"
-  },
-  "branch-dashboard.members-and-access.6ff72d328b": {
-    "en": "Members and Access",
-    "zh": "成员与权限"
-  },
-  "branch-dashboard.members.437a10e110": {
-    "en": "Members",
-    "zh": "成员"
-  },
-  "branch-dashboard.no-organization-sub-agent-installed.21910a6eef": {
-    "en": "No organization sub-agent installed yet",
-    "zh": "还没有安装组织子 agent"
-  },
-  "branch-dashboard.offline.921b60f32a": {
-    "en": "Offline",
-    "zh": "未连接"
-  },
-  "branch-dashboard.open-knowledge-base.c51d425f5e": {
-    "en": "Open Knowledge Base",
-    "zh": "进入组织知识库"
-  },
-  "branch-dashboard.open-lumi-team.e4e08bcaa7": {
-    "en": "Open Lumi Team",
-    "zh": "打开 Lumi 团队"
-  },
-  "branch-dashboard.organization-workspace.dbc27e701a": {
-    "en": "Organization Workspace",
-    "zh": "组织工作台"
-  },
-  "branch-dashboard.paused.cf54b602eb": {
-    "en": "Paused",
-    "zh": "已暂停"
-  },
-  "branch-dashboard.personal-domain-active.3b73f4f5a4": {
-    "en": "Personal domain active",
-    "zh": "当前在个人域"
-  },
-  "branch-dashboard.ready.761a3caa34": {
-    "en": "Ready",
-    "zh": "可调度"
-  },
-  "branch-dashboard.refresh.cba212b169": {
-    "en": "Refresh",
-    "zh": "刷新"
-  },
-  "branch-dashboard.review-and-publish-organization-templates.542d6a1cc5": {
-    "en": "Review and publish organization templates, then install needed sub-agents into Lumi Team.",
-    "zh": "审核、发布组织模板，并把需要的子 agent 安装到 Lumi 团队。"
-  },
-  "branch-dashboard.review-members-knowledge-installable-team.e395488c6e": {
-    "en": "Review members, knowledge, installable team sub-agents, and workspace health in one place. All organization capabilities remain available with clearer entry points and feedback.",
-    "zh": "集中查看组织成员、知识库、可安装的团队子 agent 和工作状态。这里保留所有组织能力，只把入口和反馈整理得更清楚。"
-  },
-  "branch-dashboard.review-members-roles-and-organization.73e7aea535": {
-    "en": "Review members, roles, and organization access state.",
-    "zh": "查看成员、角色和组织访问状态。"
-  },
-  "branch-dashboard.some-organization-data-failed-to.1601df32ce": {
-    "en": "Some organization data failed to load. Try refreshing.",
-    "zh": "部分组织数据加载失败，请刷新重试。"
-  },
-  "branch-dashboard.sub-agents-installed-from-the.3c8615f16a": {
-    "en": "Sub-agents installed from the organization agent template market appear here; they belong to Lumi Team and can be routed from chat, voice, and multi-step work.",
-    "zh": "从组织智能体模板市场安装的子 agent 会显示在这里；它们属于 Lumi 团队，可被聊天、语音和多步任务调度。"
-  },
-  "branch-dashboard.team-agents.4363c79c8f": {
-    "en": "Team Agents",
-    "zh": "团队助手"
-  },
-  "branch-dashboard.untitled-assistant.16370b0265": {
-    "en": "Untitled assistant",
-    "zh": "未命名助手"
-  },
-  "branch-dashboard.work-assistants-installed-to-lumi.83ef29b794": {
-    "en": "Work assistants installed to Lumi Team",
-    "zh": "已安装到 Lumi 团队的工作助手"
-  },
-  "branch-dashboard.work-domain-active.a7d1aced7d": {
-    "en": "Work domain active",
-    "zh": "当前在工作域"
   },
   "central-lumi-chat.ask-about-company-policies-knowledge.95b8a73f10": {
     "en": "Ask about company policies, knowledge base...",
@@ -5075,162 +4943,6 @@
     "en": "Restarting{value0}",
     "zh": "重启中{value0}"
   },
-  "memory-avatar-lab.8-d-personality-vector.7aae255fba": {
-    "en": "8-D Personality Vector",
-    "zh": "8 维人格向量"
-  },
-  "memory-avatar-lab.agent-generation-lab.4296093317": {
-    "en": "Agent Generation Lab",
-    "zh": "智能体生成实验室"
-  },
-  "memory-avatar-lab.back.5db5cac55e": {
-    "en": "Back",
-    "zh": "返回"
-  },
-  "memory-avatar-lab.chat-log-file.bb299f7d8a": {
-    "en": "Chat Log File",
-    "zh": "聊天记录文件"
-  },
-  "memory-avatar-lab.common-phrases.f7abfd0f03": {
-    "en": "Common Phrases",
-    "zh": "常用表达"
-  },
-  "memory-avatar-lab.create-another.e1f98b1538": {
-    "en": "Create Another",
-    "zh": "再创建一个"
-  },
-  "memory-avatar-lab.create-sanctuary.f2cde9d0b0": {
-    "en": "Create Sanctuary",
-    "zh": "创建领地"
-  },
-  "memory-avatar-lab.creating.ba147d5f24": {
-    "en": "Creating...",
-    "zh": "创建中..."
-  },
-  "memory-avatar-lab.data-upload.f8882ffe87": {
-    "en": "Data Upload",
-    "zh": "数据上传"
-  },
-  "memory-avatar-lab.distill-result.ae34ae3926": {
-    "en": "Distill Result",
-    "zh": "蒸馏结果"
-  },
-  "memory-avatar-lab.distilling.028f02afbb": {
-    "en": "Distilling...",
-    "zh": "蒸馏中..."
-  },
-  "memory-avatar-lab.enter-sanctuary.800a2ea891": {
-    "en": "Enter Sanctuary",
-    "zh": "进入领地"
-  },
-  "memory-avatar-lab.evolution-frozen-no-automatic-drift.92f93d919a": {
-    "en": "- Evolution: frozen (no automatic drift)",
-    "zh": "• 演化：冻结（不自动变化）"
-  },
-  "memory-avatar-lab.loaded-value0-lines-from-value1.f8752f8cd7": {
-    "en": "Loaded {value0} lines from {value1}",
-    "zh": "已从 {value0} 读取 {value1} 行"
-  },
-  "memory-avatar-lab.memory-isolation-private-not-shared.e99ab197a6": {
-    "en": "- Memory isolation: private (not shared)",
-    "zh": "• 记忆隔离：私有（不共享）"
-  },
-  "memory-avatar-lab.mp3-wav-ogg-used-to.a17b38b21d": {
-    "en": "MP3 / WAV / OGG - used to analyze tone and phrases",
-    "zh": "MP3 / WAV / OGG - 用于分析语气和口头禅"
-  },
-  "memory-avatar-lab.notifications-off-visible-only-inside.e2569b60ea": {
-    "en": "- Notifications: off (visible only inside sanctuary)",
-    "zh": "• 通知：关闭（只在领地内可见）"
-  },
-  "memory-avatar-lab.personality-distill.d018bf8865": {
-    "en": "Personality Distill",
-    "zh": "人格蒸馏"
-  },
-  "memory-avatar-lab.relationship-type.b9cd2f96c7": {
-    "en": "Relationship Type",
-    "zh": "关系类型"
-  },
-  "memory-avatar-lab.sanctuary-created.792e5da4c0": {
-    "en": "Sanctuary Created",
-    "zh": "领地已创建"
-  },
-  "memory-avatar-lab.sanctuary-name.432e121118": {
-    "en": "Sanctuary name...",
-    "zh": "领地名称..."
-  },
-  "memory-avatar-lab.sanctuary-settings.0498da5129": {
-    "en": "Sanctuary Settings",
-    "zh": "领地配置"
-  },
-  "memory-avatar-lab.sanctuary-setup.5a3c664734": {
-    "en": "Sanctuary Setup",
-    "zh": "领地创建"
-  },
-  "memory-avatar-lab.seed-memories.21492d3467": {
-    "en": "Seed Memories",
-    "zh": "种子记忆"
-  },
-  "memory-avatar-lab.start-personality-distill.3b5dc0a853": {
-    "en": "Start Personality Distill",
-    "zh": "开始人格蒸馏"
-  },
-  "memory-avatar-lab.supports-wechat-qq-txt-exports.cda5368eb6": {
-    "en": "Supports WeChat, QQ .txt exports, and plain text",
-    "zh": "支持微信、QQ 导出 .txt，纯文本"
-  },
-  "memory-avatar-lab.the-memory-avatar-for-value0.1eb3e87088": {
-    "en": "The memory avatar for \"{value0}\" has been placed in its private sanctuary. You can enter now and start talking.",
-    "zh": "\"{value0}\" 的记忆化身已安放在专属领地中。现在可以进入领地与 ta 对话。"
-  },
-  "memory-avatar-lab.this-memory-avatar-is-distilled.4692efbcd3": {
-    "en": "This memory avatar is distilled from data. It is not the person themselves. Please confirm you have the right to use the data and that the purpose is ethical.",
-    "zh": "这是从数据中蒸馏出的记忆化身，不是那个人本身。请确认您有权使用这些数据，且用途符合伦理。"
-  },
-  "memory-avatar-lab.tool-permission-none-chat-only.7cb2212746": {
-    "en": "- Tool permission: none (chat only)",
-    "zh": "• 工具权限：无（仅对话）"
-  },
-  "memory-avatar-lab.transcribed-about-value0-seconds-of.e79c9b7d86": {
-    "en": "Transcribed about {value0} seconds of audio",
-    "zh": "已转录 {value0} 秒语音"
-  },
-  "memory-avatar-lab.transcribed-voice-traits-will-be.838fb403af": {
-    "en": "Transcribed - voice traits will be included in analysis",
-    "zh": "已转录 - 语音特征将纳入人格分析"
-  },
-  "memory-avatar-lab.transcribing.c331c36c02": {
-    "en": "Transcribing...",
-    "zh": "转录中..."
-  },
-  "memory-avatar-lab.upload-exported-chat-logs.384bfeac0a": {
-    "en": "Upload exported chat logs",
-    "zh": "上传聊天记录导出文件"
-  },
-  "memory-avatar-lab.upload-voice-recording.d41cb378e2": {
-    "en": "Upload voice recording",
-    "zh": "上传语音录音"
-  },
-  "memory-avatar-lab.value0-lines-loaded.de56ef52af": {
-    "en": "{value0} lines loaded",
-    "zh": "{value0} 行已读取"
-  },
-  "memory-avatar-lab.value0-memories.1bea29c434": {
-    "en": "{value0} memories",
-    "zh": "{value0} 条记忆"
-  },
-  "memory-avatar-lab.value0-messages.1a2f7d0c60": {
-    "en": "{value0} messages",
-    "zh": "{value0} 条消息"
-  },
-  "memory-avatar-lab.voice-recording-optional.8e9886fb36": {
-    "en": "Voice Recording (optional)",
-    "zh": "语音记录（可选）"
-  },
-  "memory-avatar-lab.wechat.47409ec635": {
-    "en": "WeChat",
-    "zh": "微信"
-  },
   "music-center.analyze.20f8e3c435": {
     "en": "Analyze",
     "zh": "开始分析"
@@ -5550,10 +5262,6 @@
   "org-branch-panel.work.ff841818be": {
     "en": "Work",
     "zh": "工作域"
-  },
-  "org-hub.agent-templates.9cc4c8c9d0": {
-    "en": "Agent Templates",
-    "zh": "智能体模板"
   },
   "org-hub.branch-connection.9cecc72547": {
     "en": "Branch Connection",
@@ -5884,8 +5592,8 @@
     "zh": "查看者"
   },
   "org-settings.work-domain-chat-voice-and.f2a8ead336": {
-    "en": "Work-domain chat, voice, and agent orchestration apply the organization model policy without reading or changing any member's personal model preference.",
-    "zh": "组织域聊天、语音和子 agent 编排统一叠加组织模型策略，不读取或改写任何成员的个人模型偏好。"
+    "en": "Work-domain chat, voice, and LumiCore task execution use the shared model configuration without reading or changing any member's personal preference.",
+    "zh": "组织域聊天、语音和 LumiCore 任务执行使用统一模型配置，不读取或改写任何成员的个人偏好。"
   },
   "organization-settings-workspace.branch-connection.9cecc72547": {
     "en": "Branch Connection",
@@ -6271,70 +5979,6 @@
     "en": "Reminder created",
     "zh": "提醒已创建"
   },
-  "sanctuary.a-gentle-lumi-reminder-this.68e34eba16": {
-    "en": "A gentle Lumi reminder: this is a simulation distilled from memories. Real emotional connection is still waiting for you in the real world.",
-    "zh": "Lumi 温柔提醒：这是从记忆中蒸馏出的模拟。真实的情感连接在现实世界中等你。"
-  },
-  "sanctuary.esc-leave-sanctuary-no-tools.7937ac5393": {
-    "en": "ESC Leave sanctuary · No tools · No notifications · Private memory",
-    "zh": "ESC 离开领地 · 无工具 · 无通知 · 记忆私有"
-  },
-  "sanctuary.evidence.00759cc2ae": {
-    "en": "Evidence: ",
-    "zh": "证据分级："
-  },
-  "sanctuary.evolution-frozen.d66cdb416b": {
-    "en": "· Evolution frozen",
-    "zh": "· 演化冻结"
-  },
-  "sanctuary.fact.0dfbbdcfc8": {
-    "en": "Fact",
-    "zh": "事实"
-  },
-  "sanctuary.got-it.83aa55c237": {
-    "en": "Got it",
-    "zh": "知道了"
-  },
-  "sanctuary.inferred.9b6e0e37e2": {
-    "en": "Inferred",
-    "zh": "推测"
-  },
-  "sanctuary.leave-sanctuary.52b6dd4924": {
-    "en": "Leave Sanctuary",
-    "zh": "离开领地"
-  },
-  "sanctuary.quote.fcb6e37e05": {
-    "en": "Quote",
-    "zh": "原话"
-  },
-  "sanctuary.sanctuary.d94722bbd1": {
-    "en": "sanctuary",
-    "zh": "领地"
-  },
-  "sanctuary.say-something-to-value0.6793beb5ca": {
-    "en": "Say something to {value0}...",
-    "zh": "和 {value0} 说点什么..."
-  },
-  "sanctuary.they-are-here-and-only.b927165289": {
-    "en": "They are here, and only here. Start the conversation.",
-    "zh": "ta 在这里，也只在这里。开始对话吧。"
-  },
-  "sanctuary.thinking.0bd67fc167": {
-    "en": "Thinking...",
-    "zh": "ta 在思考..."
-  },
-  "sanctuary.this-is-a-simulation-distilled.86cae03071": {
-    "en": "This is a simulation distilled from memories, not the person themselves. Responses come from patterns extracted from data and may include inference. Please enter this space with care and awareness.",
-    "zh": "这是从记忆中蒸馏出的模拟，不是那个人本身。ta 的回应源自数据中的模式提取，可能包含推测成分。请带着温和与觉察进入这个空间。"
-  },
-  "sanctuary.this-is-value0-s-sanctuary.b6612d3d3e": {
-    "en": "This is \"{value0}\"'s sanctuary",
-    "zh": "这是属于 \"{value0}\" 的领地"
-  },
-  "sanctuary.tools-disabled.4e1aaa0eb6": {
-    "en": "· Tools disabled",
-    "zh": "· 工具禁用"
-  },
   "settings.active-model.774fc20779": {
     "en": "Active model",
     "zh": "当前模型"
@@ -6352,8 +5996,8 @@
     "zh": "可在下方服务商卡片中调整模型。"
   },
   "settings.agent-framework-lumi-protocol.2d0970720d": {
-    "en": "Agent Framework (Lumi Protocol)",
-    "zh": "智能体框架（Lumi 协议）"
+    "en": "LumiCore and Autonomous Execution",
+    "zh": "LumiCore 与自主执行"
   },
   "settings.ai-neural.253e6de004": {
     "en": "AI & Neural",
@@ -6434,10 +6078,6 @@
   "settings.backend.9c17db77f8": {
     "en": "Backend",
     "zh": "后端"
-  },
-  "settings.background-tasks.015be0a9ad": {
-    "en": "Background Tasks",
-    "zh": "后台任务"
   },
   "settings.biometric-lock.6e177df8a6": {
     "en": "Biometric Lock",
@@ -6552,8 +6192,8 @@
     "zh": "已开启"
   },
   "settings.encrypt-all-agent-data-stored.d88a575c31": {
-    "en": "Encrypt all Agent data stored on your local disk.",
-    "zh": "加密存储在本地磁盘上的所有智能体数据。"
+    "en": "Encrypt all LumiCore data stored on your local disk.",
+    "zh": "加密存储在本地磁盘上的所有 LumiCore 数据。"
   },
   "settings.english-us.265bc3cad7": {
     "en": "English (US)",
@@ -6741,7 +6381,7 @@
   },
   "settings.neural-engine.dd539ca320": {
     "en": "Neural Engine",
-    "zh": "智能体框架"
+    "zh": "LumiCore"
   },
   "settings.night.da11ed8a8e": {
     "en": "Night",
@@ -6812,8 +6452,8 @@
     "zh": "移除"
   },
   "settings.require-fingerprint-or-face-id.a9f1459524": {
-    "en": "Require fingerprint or face ID for Agent generation.",
-    "zh": "生成智能体时要求指纹或人脸验证。"
+    "en": "Require fingerprint or face ID for protected identity changes.",
+    "zh": "修改受保护的身份设置时要求指纹或人脸验证。"
   },
   "settings.restarts.04fb20829b": {
     "en": "Restarts",
@@ -7079,18 +6719,6 @@
     "en": "Your personal AI is live. Start talking and it will learn and grow with you.",
     "zh": "你的个人 AI 已经在线。开始对话吧，它会和你一起学习、成长。"
   },
-  "skill-center.add-to-team.43275073fd": {
-    "en": "Add to Team",
-    "zh": "加入 Team"
-  },
-  "skill-center.added-to-team-run-a.d549d0bba1": {
-    "en": "Added to Team. Run a Team connection test before Lumi schedules it.",
-    "zh": "已加入 Team，需要在 Team 里通过连接测试后才会参与调度。"
-  },
-  "skill-center.added-to-team.27578c1a67": {
-    "en": "added to Team",
-    "zh": "已加入 Team"
-  },
   "skill-center.available-capabilities.a150ef4d38": {
     "en": "Available capabilities",
     "zh": "已具备的能力"
@@ -7142,26 +6770,6 @@
   "skill-center.enable-disable-repair-publish-and.fa74468d2b": {
     "en": "Enable, disable, repair, publish, and uninstall local Skill packages here. Hall and Recommended only show status or install entry points.",
     "zh": "这里处理本地 Skill 包的启用、停用、修复、发布和卸载。大厅和推荐页只展示状态或安装入口。"
-  },
-  "skill-center.external-agent.21bea16d09": {
-    "en": "External Agent",
-    "zh": "外部 Agent"
-  },
-  "skill-center.external-agent.cacb5d8950": {
-    "en": "External agent",
-    "zh": "外部代理"
-  },
-  "skill-center.in-team-with-a-passing.b0a37c89c7": {
-    "en": "In Team with a passing connection test, so Lumi can schedule work to it.",
-    "zh": "已在 Team 且连接测试通过，Lumi 可以把任务调度给它。"
-  },
-  "skill-center.in-team.e4e63f3860": {
-    "en": "In Team",
-    "zh": "已在 Team"
-  },
-  "skill-center.install-adds-it-to-team.7c572fcec9": {
-    "en": "Install adds it to Team as a local CLI-backed agent, then a health test enables orchestration.",
-    "zh": "安装会把它加入 Team，通过本机 CLI 桥接，连接测试通过后再参与调度。"
   },
   "skill-center.installable.04d1cd9917": {
     "en": "Installable",
@@ -7275,10 +6883,6 @@
     "en": "Requires local dependencies or account setup before use.",
     "zh": "需要先完成本机依赖或账号配置。"
   },
-  "skill-center.requires-the-matching-cli-on.4f5d160185": {
-    "en": "Requires the matching CLI on this computer, then connects as a team agent.",
-    "zh": "需要本机先安装对应 CLI，安装后会作为团队成员接入。"
-  },
   "skill-center.retry.563171cfe4": {
     "en": "Retry",
     "zh": "重试"
@@ -7306,10 +6910,6 @@
   "skill-center.this-skill-package-has-no.f678ca8ea2": {
     "en": "This skill package has no runnable entry. Lumi will try npm, GitHub, or bundled reinstall sources first; otherwise clean it up and reinstall or regenerate it.",
     "zh": "这个技能包缺少可启动入口。Lumi 会先尝试从 npm、GitHub 或内置技能源重装；没有来源时需要清理后重新安装或重新生成。"
-  },
-  "skill-center.this-skill-runs-as-a.86927e998c": {
-    "en": "This skill runs as a Team external agent through a local CLI and joins orchestration after a passing test.",
-    "zh": "它会作为 Team 里的外部 Agent 运行，通过本机 CLI 连接，测试通过后再参与调度。"
   },
   "skill-center.value0-incomplete-skill-package-value1.880bdf7b48": {
     "en": "{value0} incomplete skill package{value1}",
@@ -7342,10 +6942,6 @@
   "system-explorer.add-provider.bf4c973279": {
     "en": "Add provider",
     "zh": "添加服务商"
-  },
-  "system-explorer.agents.8039b1040e": {
-    "en": "Agents",
-    "zh": "智能体"
   },
   "system-explorer.ai-providers.727eb47f14": {
     "en": "AI providers",
@@ -7475,10 +7071,6 @@
     "en": "Failed to copy report",
     "zh": "复制报告失败"
   },
-  "system-explorer.failed-to-install-profession-agents.781aeed1b4": {
-    "en": "Failed to install profession agents",
-    "zh": "职业智能体安装失败"
-  },
   "system-explorer.failed-to-load-adaptation-report.15e33730d2": {
     "en": "Failed to load adaptation report",
     "zh": "电脑适配报告加载失败"
@@ -7515,10 +7107,6 @@
     "en": "Host",
     "zh": "主机"
   },
-  "system-explorer.install-agents.1f1acb3e5d": {
-    "en": "Install Agents",
-    "zh": "安装智能体"
-  },
   "system-explorer.install-node-js-if-you.b5276aecd6": {
     "en": "Install Node.js if you want local MCP tools and generated skills to run smoothly.",
     "zh": "如果要让本地 MCP 工具和生成技能稳定运行，建议安装 Node.js。"
@@ -7538,10 +7126,6 @@
   "system-explorer.install-vs-code-git-node.d97529992b": {
     "en": "Install VS Code/Git/Node for stronger local dev workflows.",
     "zh": "安装 VS Code/Git/Node 后，本地开发工作流会更完整。"
-  },
-  "system-explorer.installed-value0-profession-agent-s.d405e4517e": {
-    "en": "Installed {value0} profession agent(s)",
-    "zh": "已安装 {value0} 个职业智能体"
   },
   "system-explorer.key-adaptation-prerequisites-are-still.9ee73a72cb": {
     "en": "Key adaptation prerequisites are still missing, so related workflows cannot be marked ready.",
@@ -7823,542 +7407,6 @@
     "en": "Workflow Environment",
     "zh": "工作流环境"
   },
-  "team-hub.activate.9833a04a2c": {
-    "en": "Activate",
-    "zh": "启用"
-  },
-  "team-hub.add-to-team.43275073fd": {
-    "en": "Add to Team",
-    "zh": "加入 Team"
-  },
-  "team-hub.agent-template-create-failed-value0.6d43c4ab3f": {
-    "en": "Agent template create failed ({value0})",
-    "zh": "智能体模板创建失败（{value0}）"
-  },
-  "team-hub.agent-template-created-without-a.b0a951d51a": {
-    "en": "Agent template created without a template ID.",
-    "zh": "智能体模板创建成功，但没有返回模板 ID。"
-  },
-  "team-hub.autonomy.0e19234b02": {
-    "en": "Autonomy",
-    "zh": "自主等级"
-  },
-  "team-hub.available.9bcfc20ee2": {
-    "en": "Available",
-    "zh": "可加入"
-  },
-  "team-hub.blocks-risky-shell-chaining.3bd802d965": {
-    "en": "Blocks risky shell chaining",
-    "zh": "拒绝危险 shell 串联"
-  },
-  "team-hub.callable.b5f5a3c5c6": {
-    "en": "Callable",
-    "zh": "可调用"
-  },
-  "team-hub.can-submit-as-org-template.e0b8d2cfe1": {
-    "en": "Can submit as org template",
-    "zh": "可提交为组织模板"
-  },
-  "team-hub.capabilities.4e049df422": {
-    "en": "Capabilities",
-    "zh": "能力标签"
-  },
-  "team-hub.checked.f55cce9399": {
-    "en": "Checked",
-    "zh": "检查"
-  },
-  "team-hub.click-for-connection-details-and.b83ea11e11": {
-    "en": "Click for connection details and profile",
-    "zh": "点击查看连接详情与介绍"
-  },
-  "team-hub.close.6cf4a7773a": {
-    "en": "Close",
-    "zh": "关闭"
-  },
-  "team-hub.command.656ca4b174": {
-    "en": "Command",
-    "zh": "命令模板"
-  },
-  "team-hub.connect-external-agent.439852dff9": {
-    "en": "Connect External Agent",
-    "zh": "连接外部 Agent"
-  },
-  "team-hub.connection-type.1b570a5d14": {
-    "en": "Connection Type",
-    "zh": "连接类型"
-  },
-  "team-hub.default-server-directory.2df5b5411e": {
-    "en": "Default server directory",
-    "zh": "默认服务目录"
-  },
-  "team-hub.duration.3cef05d945": {
-    "en": "Duration",
-    "zh": "耗时"
-  },
-  "team-hub.enabled-after-health-test.c007896b6d": {
-    "en": "Enabled after health test",
-    "zh": "健康测试通过才启用"
-  },
-  "team-hub.error.bc020bb15c": {
-    "en": "Error",
-    "zh": "异常"
-  },
-  "team-hub.external-agent-hall.b5876069c4": {
-    "en": "External Agent Hall",
-    "zh": "外部 Agent 大厅"
-  },
-  "team-hub.external-agent-is-reachable.aa7e195265": {
-    "en": "External agent is reachable",
-    "zh": "外部 agent 连接正常"
-  },
-  "team-hub.external-agent-test-failed.2d3cd373d7": {
-    "en": "External agent test failed",
-    "zh": "外部 agent 测试失败"
-  },
-  "team-hub.external-agents-are-local-cli.2ab80da501": {
-    "en": "External agents are local CLI bridges",
-    "zh": "外部 Agent 是本机 CLI 桥接"
-  },
-  "team-hub.external-cli-bridge-agents-cannot.b07b4faae1": {
-    "en": "External CLI bridge agents cannot be submitted as organization templates directly.",
-    "zh": "外部 CLI 桥接 agent 不直接提交为组织模板，请先做成内部 agent 配置。"
-  },
-  "team-hub.external-connection.6d0b83e6b0": {
-    "en": "External Connection",
-    "zh": "外部连接"
-  },
-  "team-hub.external.b2b5a43d91": {
-    "en": "External",
-    "zh": "外部"
-  },
-  "team-hub.from-org-template.3b28cdb23d": {
-    "en": "From org template",
-    "zh": "来自组织模板"
-  },
-  "team-hub.in-team.e4e63f3860": {
-    "en": "In Team",
-    "zh": "已在 Team"
-  },
-  "team-hub.internal.e5735e906c": {
-    "en": "Internal",
-    "zh": "内部"
-  },
-  "team-hub.join-an-organization-or-switch.56279ec1ac": {
-    "en": "Join an organization or switch to Work before submitting.",
-    "zh": "请先加入组织或切换到工作域，再提交审核。"
-  },
-  "team-hub.last-test-failed-it-will.14b0efea8f": {
-    "en": "Last test failed. It will not be scheduled until the command is fixed and tested again.",
-    "zh": "上次测试失败。修复命令并重新测试前，不会参与调度。"
-  },
-  "team-hub.loading-external-agents.7f52f6edef": {
-    "en": "Loading external agents...",
-    "zh": "正在读取外部 Agent..."
-  },
-  "team-hub.local-command-template.4371c51ef6": {
-    "en": "Local command template",
-    "zh": "本机命令模板"
-  },
-  "team-hub.lumi-s-working-team-internal.6cac06c430": {
-    "en": "Lumi's working team. Internal agents are dispatched directly; external agents connect through local CLI commands and should pass a health test before orchestration.",
-    "zh": "Lumi 的工作团队。内部 agent 可直接调度，外部 agent 通过本机 CLI 连接，先测试健康状态再交给 orchestrator。"
-  },
-  "team-hub.memory.4190d134d8": {
-    "en": "Memory",
-    "zh": "记忆范围"
-  },
-  "team-hub.must-include-one-task.ff2cc618d3": {
-    "en": "Must include one {task}",
-    "zh": "必须包含一次 {task}"
-  },
-  "team-hub.no-command-configured.a1507e0314": {
-    "en": "No command configured",
-    "zh": "未配置命令"
-  },
-  "team-hub.no-description-yet-use-its.35280e309e": {
-    "en": "No description yet. Use its category and skill tags to judge what work fits.",
-    "zh": "暂无介绍。可以通过技能标签和类别判断它适合处理的任务。"
-  },
-  "team-hub.no-skill-tags-yet.d07cb2dfbb": {
-    "en": "No skill tags yet",
-    "zh": "暂无能力标签"
-  },
-  "team-hub.online.1609b04bba": {
-    "en": "Online",
-    "zh": "可用"
-  },
-  "team-hub.org-installed.784a991b4e": {
-    "en": "Org installed",
-    "zh": "组织安装"
-  },
-  "team-hub.pause.c65f066ccd": {
-    "en": "Pause",
-    "zh": "暂停"
-  },
-  "team-hub.paused-not-scheduled.40da1d72b0": {
-    "en": "Paused, not scheduled",
-    "zh": "已暂停，不参与调度"
-  },
-  "team-hub.profile.672df170f1": {
-    "en": "Profile",
-    "zh": "介绍"
-  },
-  "team-hub.ready-for-orchestration.62e429c481": {
-    "en": "Ready for orchestration",
-    "zh": "可参与调度"
-  },
-  "team-hub.recent-run.77421480f4": {
-    "en": "Recent Run",
-    "zh": "最近运行"
-  },
-  "team-hub.remove-value0-its-memories-and.1bea61810d": {
-    "en": "Remove \"{value0}\"? Its memories and conversations will also be deleted.",
-    "zh": "确认移除「{value0}」？它的记忆、会话记录也会一起删除。"
-  },
-  "team-hub.remove.78190c6054": {
-    "en": "Remove",
-    "zh": "移除"
-  },
-  "team-hub.routing.26e94d02e2": {
-    "en": "Routing",
-    "zh": "调度条件"
-  },
-  "team-hub.runtime.0f23bdf4d4": {
-    "en": "Runtime",
-    "zh": "运行方式"
-  },
-  "team-hub.safety.bf82e1cf92": {
-    "en": "Safety",
-    "zh": "安全边界"
-  },
-  "team-hub.skill-tags-comma-separated-e.6bec6918fc": {
-    "en": "Skill tags, comma separated, e.g. analysis, code",
-    "zh": "能力标签，用逗号分隔，如 analysis, code"
-  },
-  "team-hub.status.b8f1474d96": {
-    "en": "Status",
-    "zh": "状态"
-  },
-  "team-hub.submit-for-review-failed-value0.79b49272b5": {
-    "en": "Submit for review failed ({value0})",
-    "zh": "提交审核失败（{value0}）"
-  },
-  "team-hub.submit-for-review-failed.7396eb5d0b": {
-    "en": "Submit for review failed",
-    "zh": "提交审核失败"
-  },
-  "team-hub.submit-to-org-review.6332d068c7": {
-    "en": "Submit to Org Review",
-    "zh": "提交到组织审核"
-  },
-  "team-hub.submit.94276c7246": {
-    "en": "Submit",
-    "zh": "提交审核"
-  },
-  "team-hub.submitted-to-organization-agent-review.f0be14bd75": {
-    "en": "Submitted to organization agent review",
-    "zh": "已提交到组织智能体审核队列"
-  },
-  "team-hub.terminated.d79c6596b0": {
-    "en": "Terminated",
-    "zh": "已终止"
-  },
-  "team-hub.test-connection.00a680a7b0": {
-    "en": "Test connection",
-    "zh": "测试连接"
-  },
-  "team-hub.test-connection.673175b37c": {
-    "en": "Test Connection",
-    "zh": "测试连接"
-  },
-  "team-hub.this-agent-already-came-from.63f320ac8d": {
-    "en": "This agent already came from an organization template.",
-    "zh": "这个 agent 已经来自组织模板，不需要重复提交。"
-  },
-  "team-hub.this-stores-a-command-template.3abe334065": {
-    "en": "This stores a command template, not an account binding. Lumi substitutes subtasks into {task}; only agents with a passing health test join orchestration.",
-    "zh": "这里保存的是命令模板，不是账号绑定。Lumi 会把子任务替换进 {task}，测试通过后才会让它参与团队调度。"
-  },
-  "team-hub.tools.72365cb955": {
-    "en": "tools",
-    "zh": "工具"
-  },
-  "team-hub.untested-it-will-only-join.ece61acb24": {
-    "en": "Untested. It will only join orchestration after a successful health test.",
-    "zh": "尚未测试。测试通过后才会参与任务调度。"
-  },
-  "team-hub.untested.de3b914270": {
-    "en": "Untested",
-    "zh": "未测试"
-  },
-  "team-hub.untitled-team-agent.a4df9163a3": {
-    "en": "Untitled team agent",
-    "zh": "未命名团队智能体"
-  },
-  "team-hub.value0-added-to-team.567d8fa826": {
-    "en": "\"{value0}\" added to Team",
-    "zh": "\"{value0}\" 已加入 Team"
-  },
-  "team-hub.value0-available.33e2a566a4": {
-    "en": "{value0} available",
-    "zh": "可加入 {value0}"
-  },
-  "team-hub.value0-internal.1e93b9ecac": {
-    "en": "{value0} internal",
-    "zh": "内部 {value0}"
-  },
-  "team-hub.value0-value1-external-ready.ec380f1d2a": {
-    "en": "{value0}/{value1} external ready",
-    "zh": "外部就绪 {value0}/{value1}"
-  },
-  "team-hub.waiting-for-a-passing-health.2a0c610a58": {
-    "en": "Waiting for a passing health test",
-    "zh": "等待连接测试通过"
-  },
-  "team-hub.working-directory.d970c13702": {
-    "en": "Working Directory",
-    "zh": "工作目录"
-  },
-  "template-creator.agent-configuration-json.dc265c3377": {
-    "en": "Agent Configuration JSON",
-    "zh": "智能体配置 JSON"
-  },
-  "template-creator.agent-template-submitted.5cf1d0ed15": {
-    "en": "Agent Template Submitted",
-    "zh": "智能体模板已提交"
-  },
-  "template-creator.back-to-agent-templates.0d44556c9d": {
-    "en": "Back to Agent Templates",
-    "zh": "返回智能体模板"
-  },
-  "template-creator.back.5db5cac55e": {
-    "en": "Back",
-    "zh": "返回"
-  },
-  "template-creator.brief-description.305c599dd8": {
-    "en": "Brief description",
-    "zh": "简短描述"
-  },
-  "template-creator.category.6744e11866": {
-    "en": "Category",
-    "zh": "分类"
-  },
-  "template-creator.creative.9195660fea": {
-    "en": "Creative",
-    "zh": "创意"
-  },
-  "template-creator.customer-support.0fa655031e": {
-    "en": "Customer Support",
-    "zh": "客户支持"
-  },
-  "template-creator.data-analysis.7f93838089": {
-    "en": "Data Analysis",
-    "zh": "数据分析"
-  },
-  "template-creator.describe-what-this-agent-does.d482e85f3d": {
-    "en": "Describe what this agent does and who should use it...",
-    "zh": "说明这个智能体能做什么、适合谁使用..."
-  },
-  "template-creator.design.6c5392efbf": {
-    "en": "Design",
-    "zh": "设计"
-  },
-  "template-creator.e-g-contract-review-assistant.f73bf8fe28": {
-    "en": "e.g. Contract Review Assistant",
-    "zh": "例如：合同审查助手"
-  },
-  "template-creator.engineering.d73b96c6c8": {
-    "en": "Engineering",
-    "zh": "工程研发"
-  },
-  "template-creator.finance.e8c4c462f6": {
-    "en": "Finance",
-    "zh": "财务"
-  },
-  "template-creator.invalid-json.4a8f882b83": {
-    "en": "Invalid JSON",
-    "zh": "JSON 格式错误"
-  },
-  "template-creator.json-is-validated-before-submit.6bc3766995": {
-    "en": "JSON is validated before submit",
-    "zh": "提交前会校验 JSON 格式"
-  },
-  "template-creator.legal.20218cb84a": {
-    "en": "Legal",
-    "zh": "法律"
-  },
-  "template-creator.name-and-description-are-required.eddc1f9c9f": {
-    "en": "Name and description are required",
-    "zh": "名称和描述不能为空"
-  },
-  "template-creator.other.71e98789be": {
-    "en": "Other",
-    "zh": "其他"
-  },
-  "template-creator.productivity.4514e0830e": {
-    "en": "Productivity",
-    "zh": "效率工具"
-  },
-  "template-creator.sales.90e639dd41": {
-    "en": "Sales",
-    "zh": "销售"
-  },
-  "template-creator.submit-a-mature-agent-configuration.9f7618547d": {
-    "en": "Submit a mature agent configuration for organization review so other members can install it.",
-    "zh": "把成熟的智能体配置提交给组织审核，通过后其他成员可以安装使用。"
-  },
-  "template-creator.submit-agent-template.e19dabf8b3": {
-    "en": "Submit Agent Template",
-    "zh": "提交智能体模板"
-  },
-  "template-creator.submit-for-review.85f5979c1d": {
-    "en": "Submit for Review",
-    "zh": "提交审核"
-  },
-  "template-creator.template-create-failed-value0.500c2e837c": {
-    "en": "Template create failed ({value0})",
-    "zh": "模板创建失败（{value0}）"
-  },
-  "template-creator.template-name.343459b148": {
-    "en": "Template name",
-    "zh": "模板名称"
-  },
-  "template-creator.template-submit-failed-value0.307766c0b4": {
-    "en": "Template submit failed ({value0})",
-    "zh": "模板提交失败（{value0}）"
-  },
-  "template-creator.your-agent-template-is-pending.15a06f6890": {
-    "en": "Your agent template is pending review. Once approved, members can install it into Lumi Team.",
-    "zh": "智能体模板已进入审核，通过后团队成员可安装到 Lumi 团队。"
-  },
-  "template-marketplace.agent-template-marketplace.f417d328f7": {
-    "en": "Agent Template Marketplace",
-    "zh": "智能体模板市场"
-  },
-  "template-marketplace.agent.252fc75cc3": {
-    "en": "Agent",
-    "zh": "智能体"
-  },
-  "template-marketplace.all-categories.d592b03960": {
-    "en": "All Categories",
-    "zh": "全部分类"
-  },
-  "template-marketplace.already-installed-in-team-value0.d2753e7997": {
-    "en": "Already installed in Team: {value0}",
-    "zh": "已安装过，团队里已有：{value0}"
-  },
-  "template-marketplace.failed-to-load-templates-value0.e91945cfaa": {
-    "en": "Failed to load templates ({value0})",
-    "zh": "模板加载失败（{value0}）"
-  },
-  "template-marketplace.in-team.d6238c0478": {
-    "en": "In Team",
-    "zh": "已在团队"
-  },
-  "template-marketplace.install-as-team-agent.1c97e9f4e0": {
-    "en": "Install as Team Agent",
-    "zh": "安装为团队智能体"
-  },
-  "template-marketplace.install-organization-approved-sub-agents.c11cf71519": {
-    "en": "Install organization-approved sub-agents into Lumi Team.",
-    "zh": "把组织审核通过的子 agent 安装到 Lumi 团队。"
-  },
-  "template-marketplace.installed-to-lumi-team-value0.96ffdcb7f2": {
-    "en": "Installed to Lumi Team: {value0}",
-    "zh": "已安装到 Lumi 团队：{value0}"
-  },
-  "template-marketplace.installing.80a6fa7d17": {
-    "en": "Installing...",
-    "zh": "安装中..."
-  },
-  "template-marketplace.installs.21bf1b481d": {
-    "en": "installs",
-    "zh": "次安装"
-  },
-  "template-marketplace.no-templates-found.7742312a83": {
-    "en": "No templates found",
-    "zh": "未找到模板"
-  },
-  "template-marketplace.search-templates.cadce8f679": {
-    "en": "Search templates...",
-    "zh": "搜索模板..."
-  },
-  "template-marketplace.submit-agent-template.e19dabf8b3": {
-    "en": "Submit Agent Template",
-    "zh": "提交智能体模板"
-  },
-  "template-marketplace.team-agent.1c58ff3fa8": {
-    "en": "Team agent",
-    "zh": "团队智能体"
-  },
-  "template-marketplace.template-install-failed-value0.6282358313": {
-    "en": "Template install failed ({value0})",
-    "zh": "模板安装失败（{value0}）"
-  },
-  "template-marketplace.view-in-team.8b7f9d6b70": {
-    "en": "View in Team",
-    "zh": "去团队查看"
-  },
-  "template-marketplace.view-team-agent.54e02ca3ef": {
-    "en": "View Team Agent",
-    "zh": "查看团队智能体"
-  },
-  "template-review-queue.agent-template-approved-and-published.597832a716": {
-    "en": "Agent template approved and published",
-    "zh": "智能体模板已通过并发布"
-  },
-  "template-review-queue.agent-template-rejected.8c277f6f2a": {
-    "en": "Agent template rejected",
-    "zh": "智能体模板已拒绝"
-  },
-  "template-review-queue.agent-template-review.a44cbbcf0a": {
-    "en": "Agent Template Review",
-    "zh": "智能体模板审核"
-  },
-  "template-review-queue.all-agent-templates-have-been.20ffa361fa": {
-    "en": "All agent templates have been reviewed.",
-    "zh": "所有智能体模板都已审核完成"
-  },
-  "template-review-queue.approve-publish.0528c0172e": {
-    "en": "Approve & Publish",
-    "zh": "通过并发布"
-  },
-  "template-review-queue.approved-but-publish-failed-value0.3166eeb423": {
-    "en": "Approved, but publish failed ({value0})",
-    "zh": "已通过审核，但发布失败（{value0}）"
-  },
-  "template-review-queue.cancel.998b9c48fb": {
-    "en": "Cancel",
-    "zh": "取消"
-  },
-  "template-review-queue.failed-to-load-agent-review.1e2f2f450e": {
-    "en": "Failed to load agent review queue ({value0})",
-    "zh": "智能体审核队列加载失败（{value0}）"
-  },
-  "template-review-queue.optional-for-approval-required-for.ea999311e2": {
-    "en": "Optional for approval, required for rejection...",
-    "zh": "通过可选填，拒绝必须填写原因..."
-  },
-  "template-review-queue.reject.52e8be4e72": {
-    "en": "Reject",
-    "zh": "拒绝"
-  },
-  "template-review-queue.rejecting-a-template-requires-a.ea89d43214": {
-    "en": "Rejecting a template requires a review comment.",
-    "zh": "拒绝模板必须填写审核意见。"
-  },
-  "template-review-queue.review-comment.024e24dedc": {
-    "en": "Review comment",
-    "zh": "审核意见"
-  },
-  "template-review-queue.review.3d8b9fb74e": {
-    "en": "Review",
-    "zh": "审核"
-  },
-  "template-review-queue.value0-agent-template-s-pending.59c4d58dda": {
-    "en": "{value0} agent template(s) pending review",
-    "zh": "{value0} 个智能体模板等待审核"
-  },
   "token-dashboard.api-calls.adf9b52346": {
     "en": "API calls",
     "zh": "次 API 调用"
@@ -8410,154 +7458,6 @@
   "token-dashboard.total-tokens.45e4cbe764": {
     "en": "Total Tokens",
     "zh": "Token 总量"
-  },
-  "unified-agent.agent-is-thinking.5f1dd108b4": {
-    "en": "Agent is thinking...",
-    "zh": "智能体正在思考..."
-  },
-  "unified-agent.anonymous.39c1bd4767": {
-    "en": "Anonymous",
-    "zh": "匿名用户"
-  },
-  "unified-agent.audio-input.6576a47986": {
-    "en": "Audio Input",
-    "zh": "音频输入"
-  },
-  "unified-agent.camera.b084bb3f31": {
-    "en": "Camera",
-    "zh": "摄像头"
-  },
-  "unified-agent.compute-power.820b0308d9": {
-    "en": "Compute Power",
-    "zh": "计算能力"
-  },
-  "unified-agent.disconnected.0065488a05": {
-    "en": "Disconnected",
-    "zh": "未连接"
-  },
-  "unified-agent.edge-sensors-on-standby.59037c03d6": {
-    "en": "Edge sensors on standby...",
-    "zh": "边缘传感器待命中..."
-  },
-  "unified-agent.edit-vision.f704aaa37a": {
-    "en": "Edit Vision",
-    "zh": "编辑愿景"
-  },
-  "unified-agent.enter-founder-sanctuary.503e7ea673": {
-    "en": "Enter Founder Sanctuary",
-    "zh": "进入创始人圣所"
-  },
-  "unified-agent.founder-mode.354f37c16b": {
-    "en": "Founder Mode",
-    "zh": "创始人模式"
-  },
-  "unified-agent.founder-s-vision.c0fa614a0e": {
-    "en": "Founder's Vision",
-    "zh": "创始愿景"
-  },
-  "unified-agent.haptic-feedback.1f62c7f820": {
-    "en": "Haptic Feedback",
-    "zh": "触觉反馈"
-  },
-  "unified-agent.holographic-output.b41d04feea": {
-    "en": "Holographic Output",
-    "zh": "全息输出"
-  },
-  "unified-agent.kill-switch.02bd0841f8": {
-    "en": "Kill-Switch",
-    "zh": "断开开关"
-  },
-  "unified-agent.local-npu-active.a60727058f": {
-    "en": "Local NPU Active",
-    "zh": "本地 NPU 活跃"
-  },
-  "unified-agent.lumi-core-agent.f03abbcc53": {
-    "en": "Lumi Core Agent",
-    "zh": "Lumi 核心智能体"
-  },
-  "unified-agent.lumiai-aims-to-build-a.ef32f8bf6c": {
-    "en": "LumiAI aims to build a decentralized intelligence protocol...",
-    "zh": "LumiAI 旨在构建一个去中心化的智能协议..."
-  },
-  "unified-agent.mesh-connected.b5eb8c66fb": {
-    "en": "Mesh Connected",
-    "zh": "网络已连接"
-  },
-  "unified-agent.mesh-synced.7075001361": {
-    "en": "Mesh Synced",
-    "zh": "网络已同步"
-  },
-  "unified-agent.neural-carrier.ff8509e4a3": {
-    "en": "Neural Carrier",
-    "zh": "神经载体"
-  },
-  "unified-agent.no-active-sensors.6be33346bb": {
-    "en": "No active sensors",
-    "zh": "没有活跃传感器"
-  },
-  "unified-agent.no-devices-connected.a663f62582": {
-    "en": "No devices connected",
-    "zh": "没有连接设备"
-  },
-  "unified-agent.no-interactions-yet.536ca35cec": {
-    "en": "No interactions yet",
-    "zh": "尚未有交互记录"
-  },
-  "unified-agent.node-sync.2761bbdeec": {
-    "en": "Node Sync",
-    "zh": "节点同步"
-  },
-  "unified-agent.online.ab9849070c": {
-    "en": "Online",
-    "zh": "上线"
-  },
-  "unified-agent.physical-isolation.9d64f9ccf2": {
-    "en": "Physical Isolation",
-    "zh": "物理隔离"
-  },
-  "unified-agent.real-time-node.b5eb7f62d7": {
-    "en": "Real-time Node",
-    "zh": "实时节点"
-  },
-  "unified-agent.response-latency.6bd0d2579c": {
-    "en": "Response Latency",
-    "zh": "响应延迟"
-  },
-  "unified-agent.sensor-api-unavailable.e1cde145cc": {
-    "en": "Sensor API unavailable",
-    "zh": "传感器 API 不可用"
-  },
-  "unified-agent.sensors.5d0ff4c71e": {
-    "en": "Sensors",
-    "zh": "传感器"
-  },
-  "unified-agent.spatial-tracking.00b02e47a0": {
-    "en": "Spatial Tracking",
-    "zh": "空间追踪"
-  },
-  "unified-agent.start-talking-with-your-local.83ee0df1d3": {
-    "en": "Start talking with your local agent",
-    "zh": "开始与您的本地智能体对话"
-  },
-  "unified-agent.stop.6864db7885": {
-    "en": "STOP",
-    "zh": "停止"
-  },
-  "unified-agent.type-a-command-or-message.ba53e37dab": {
-    "en": "Type a command or message...",
-    "zh": "输入指令或留言..."
-  },
-  "unified-agent.update-vision.04bb4e41be": {
-    "en": "Update Vision",
-    "zh": "更新愿景"
-  },
-  "unified-agent.user.d25ece72d0": {
-    "en": "User",
-    "zh": "用户"
-  },
-  "unified-agent.value0-cores.ab9c5a4a13": {
-    "en": "{value0} Cores",
-    "zh": "{value0} 核"
   },
   "user-switch-prompt.confidence.dc2fc3df56": {
     "en": "Confidence",
@@ -9259,14 +8159,6 @@
     "en": "Open Lumi Command Center",
     "zh": "\u6253\u5f00 Lumi \u6307\u6325\u4e2d\u5fc3"
   },
-  "command-center.office.26fdbd3a4a": {
-    "en": "Office",
-    "zh": "\u667a\u80fd\u4f53\u529e\u516c\u5ba4"
-  },
-  "command-center.team.081d69d2f4": {
-    "en": "Team",
-    "zh": "\u56e2\u961f"
-  },
   "command-center.network.e5d531b657": {
     "en": "Lumi Network",
     "zh": "Lumi \u7f51\u7edc"
@@ -9282,10 +8174,6 @@
   "command-center.organization-scope.7e5a629a21": {
     "en": "Organization domain",
     "zh": "\u7ec4\u7ec7\u57df"
-  },
-  "command-center.scope-boundary.09ef8aa52a": {
-    "en": "Chat, tasks, agents, and memory stay inside the active domain.",
-    "zh": "\u5bf9\u8bdd\u3001\u4efb\u52a1\u3001\u667a\u80fd\u4f53\u548c\u8bb0\u5fc6\u4ec5\u5728\u5f53\u524d\u6570\u636e\u57df\u5185\u6d41\u8f6c\u3002"
   },
   "command-center.lumi-desk.752fe2bcb1": {
     "en": "Lumi command desk",
@@ -9315,33 +8203,9 @@
     "en": "Waiting for confirmation",
     "zh": "\u7b49\u5f85\u786e\u8ba4"
   },
-  "command-center.no-workers.f27019b97a": {
-    "en": "No worker agents in this domain yet. Ask Lumi to create one or add one from Team.",
-    "zh": "\u5f53\u524d\u57df\u8fd8\u6ca1\u6709\u5458\u5de5\u667a\u80fd\u4f53\uff0c\u53ef\u4ee5\u8ba9 Lumi \u521b\u5efa\uff0c\u6216\u4ece\u56e2\u961f\u4e2d\u5f15\u5165\u3002"
-  },
-  "command-center.office-scene-aria.657e86c3da": {
-    "en": "Live Lumi agent office driven by real tasks and receipts",
-    "zh": "\u7531\u771f\u5b9e\u4efb\u52a1\u4e0e\u56de\u6267\u9a71\u52a8\u7684 Lumi \u667a\u80fd\u529e\u516c\u5ba4"
-  },
-  "command-center.office-floor.a59513a4eb": {
-    "en": "Floor",
-    "zh": "\u697c\u5c42"
-  },
-  "command-center.previous-floor.d0a3f3e6d8": {
-    "en": "Previous office floor",
-    "zh": "\u4e0a\u4e00\u4e2a\u529e\u516c\u697c\u5c42"
-  },
-  "command-center.next-floor.1caedfc76e": {
-    "en": "Next office floor",
-    "zh": "\u4e0b\u4e00\u4e2a\u529e\u516c\u697c\u5c42"
-  },
   "command-center.lumi-commander.32f6b27c0a": {
     "en": "Lumi command center",
     "zh": "Lumi \u6307\u6325\u4e2d\u67a2"
-  },
-  "command-center.real-state.33d73ad8c9": {
-    "en": "Every desk is driven by real agent, task, and receipt state.",
-    "zh": "\u6bcf\u4e2a\u5de5\u4f4d\u90fd\u7531\u771f\u5b9e\u667a\u80fd\u4f53\u3001\u4efb\u52a1\u548c\u56de\u6267\u72b6\u6001\u9a71\u52a8\u3002"
   },
   "command-center.local-lumi.11866c1402": {
     "en": "This Lumi",
@@ -9383,10 +8247,6 @@
     "en": "Active",
     "zh": "\u6267\u884c\u4e2d"
   },
-  "command-center.background-tasks.99e4258af0": {
-    "en": "Background",
-    "zh": "\u540e\u53f0"
-  },
   "command-center.confirmations.60da2ef07a": {
     "en": "Confirm",
     "zh": "\u5f85\u786e\u8ba4"
@@ -9402,18 +8262,6 @@
   "command-center.verified-receipts.02cc95eeba": {
     "en": "verified receipts",
     "zh": "\u5df2\u9a8c\u8bc1\u56de\u6267"
-  },
-  "command-center.external-runtime.09147c7e91": {
-    "en": "External runtime",
-    "zh": "\u5916\u90e8\u8fd0\u884c\u65f6"
-  },
-  "command-center.lumi-worker.1e9be8d08f": {
-    "en": "Lumi worker",
-    "zh": "Lumi \u5458\u5de5"
-  },
-  "command-center.marketplace-runtimes.52d43cf3bd": {
-    "en": "Marketplace and external runtimes",
-    "zh": "\u80fd\u529b\u5e02\u573a\u4e0e\u5916\u90e8\u8fd0\u884c\u65f6"
   },
   "command-center.authorized.4357a61fc6": {
     "en": "Authorized",
@@ -9623,16 +8471,241 @@
     "en": "Failed to load peer context",
     "zh": "\u5bf9\u7aef\u4e0a\u4e0b\u6587\u52a0\u8f7d\u5931\u8d25"
   },
-  "command-center.external-ai-collaboration.041cce3f7e": {
-    "en": "External AI collaboration",
-    "zh": "\u5916\u90e8 AI \u534f\u540c"
+  "settings.scheduled-routines.5f06751a14": {
+    "en": "Scheduled routines",
+    "zh": "\u5b9a\u65f6\u4efb\u52a1"
   },
-  "command-center.answers.2508a7e9d3": {
-    "en": "answers",
-    "zh": "\u4efd\u7b54\u590d"
+  "skill-center.installed.7730eadf9a": {
+    "en": "Installed",
+    "zh": "\u5df2\u5b89\u88c5"
   },
-  "command-center.no-external-ai-sessions.123849148a": {
-    "en": "No scoped external-AI collaboration session yet. Ask Lumi in chat to consult one or more external AI systems.",
-    "zh": "\u5f53\u524d\u5de5\u4f5c\u533a\u8fd8\u6ca1\u6709\u5916\u90e8 AI \u534f\u540c\u4f1a\u8bdd\u3002\u53ef\u5728\u5bf9\u8bdd\u4e2d\u8ba9 Lumi \u8c03\u7528\u4e00\u4e2a\u6216\u591a\u4e2a\u5916\u90e8 AI\u3002"
+  "skill-center.install.8a47f50b4d": {
+    "en": "Install",
+    "zh": "\u5b89\u88c5"
+  },
+  "system-explorer.conversations.5e19d226fb": {
+    "en": "Conversations",
+    "zh": "\u4f1a\u8bdd"
+  }
+,
+  "memory-avatar-lab.8-d-personality-vector.7aae255fba": {
+    "en": "8-D Personality Vector",
+    "zh": "8 维人格向量"
+  },
+  "memory-avatar-lab.agent-generation-lab.4296093317": {
+    "en": "Agent Generation Lab",
+    "zh": "智能体生成实验室"
+  },
+  "memory-avatar-lab.back.5db5cac55e": {
+    "en": "Back",
+    "zh": "返回"
+  },
+  "memory-avatar-lab.chat-log-file.bb299f7d8a": {
+    "en": "Chat Log File",
+    "zh": "聊天记录文件"
+  },
+  "memory-avatar-lab.common-phrases.f7abfd0f03": {
+    "en": "Common Phrases",
+    "zh": "常用表达"
+  },
+  "memory-avatar-lab.create-another.e1f98b1538": {
+    "en": "Create Another",
+    "zh": "再创建一个"
+  },
+  "memory-avatar-lab.create-sanctuary.f2cde9d0b0": {
+    "en": "Create Sanctuary",
+    "zh": "创建领地"
+  },
+  "memory-avatar-lab.creating.ba147d5f24": {
+    "en": "Creating...",
+    "zh": "创建中..."
+  },
+  "memory-avatar-lab.data-upload.f8882ffe87": {
+    "en": "Data Upload",
+    "zh": "数据上传"
+  },
+  "memory-avatar-lab.distill-result.ae34ae3926": {
+    "en": "Distill Result",
+    "zh": "蒸馏结果"
+  },
+  "memory-avatar-lab.distilling.028f02afbb": {
+    "en": "Distilling...",
+    "zh": "蒸馏中..."
+  },
+  "memory-avatar-lab.enter-sanctuary.800a2ea891": {
+    "en": "Enter Sanctuary",
+    "zh": "进入领地"
+  },
+  "memory-avatar-lab.evolution-frozen-no-automatic-drift.92f93d919a": {
+    "en": "- Evolution: frozen (no automatic drift)",
+    "zh": "• 演化：冻结（不自动变化）"
+  },
+  "memory-avatar-lab.loaded-value0-lines-from-value1.f8752f8cd7": {
+    "en": "Loaded {value0} lines from {value1}",
+    "zh": "已从 {value0} 读取 {value1} 行"
+  },
+  "memory-avatar-lab.memory-isolation-private-not-shared.e99ab197a6": {
+    "en": "- Memory isolation: private (not shared)",
+    "zh": "• 记忆隔离：私有（不共享）"
+  },
+  "memory-avatar-lab.mp3-wav-ogg-used-to.a17b38b21d": {
+    "en": "MP3 / WAV / OGG - used to analyze tone and phrases",
+    "zh": "MP3 / WAV / OGG - 用于分析语气和口头禅"
+  },
+  "memory-avatar-lab.notifications-off-visible-only-inside.e2569b60ea": {
+    "en": "- Notifications: off (visible only inside sanctuary)",
+    "zh": "• 通知：关闭（只在领地内可见）"
+  },
+  "memory-avatar-lab.personality-distill.d018bf8865": {
+    "en": "Personality Distill",
+    "zh": "人格蒸馏"
+  },
+  "memory-avatar-lab.relationship-type.b9cd2f96c7": {
+    "en": "Relationship Type",
+    "zh": "关系类型"
+  },
+  "memory-avatar-lab.sanctuary-created.792e5da4c0": {
+    "en": "Sanctuary Created",
+    "zh": "领地已创建"
+  },
+  "memory-avatar-lab.sanctuary-name.432e121118": {
+    "en": "Sanctuary name...",
+    "zh": "领地名称..."
+  },
+  "memory-avatar-lab.sanctuary-settings.0498da5129": {
+    "en": "Sanctuary Settings",
+    "zh": "领地配置"
+  },
+  "memory-avatar-lab.sanctuary-setup.5a3c664734": {
+    "en": "Sanctuary Setup",
+    "zh": "领地创建"
+  },
+  "memory-avatar-lab.seed-memories.21492d3467": {
+    "en": "Seed Memories",
+    "zh": "种子记忆"
+  },
+  "memory-avatar-lab.start-personality-distill.3b5dc0a853": {
+    "en": "Start Personality Distill",
+    "zh": "开始人格蒸馏"
+  },
+  "memory-avatar-lab.supports-wechat-qq-txt-exports.cda5368eb6": {
+    "en": "Supports WeChat, QQ .txt exports, and plain text",
+    "zh": "支持微信、QQ 导出 .txt，纯文本"
+  },
+  "memory-avatar-lab.the-memory-avatar-for-value0.1eb3e87088": {
+    "en": "The memory avatar for \"{value0}\" has been placed in its private sanctuary. You can enter now and start talking.",
+    "zh": "\"{value0}\" 的记忆化身已安放在专属领地中。现在可以进入领地与 ta 对话。"
+  },
+  "memory-avatar-lab.this-memory-avatar-is-distilled.4692efbcd3": {
+    "en": "This memory avatar is distilled from data. It is not the person themselves. Please confirm you have the right to use the data and that the purpose is ethical.",
+    "zh": "这是从数据中蒸馏出的记忆化身，不是那个人本身。请确认您有权使用这些数据，且用途符合伦理。"
+  },
+  "memory-avatar-lab.tool-permission-none-chat-only.7cb2212746": {
+    "en": "- Tool permission: none (chat only)",
+    "zh": "• 工具权限：无（仅对话）"
+  },
+  "memory-avatar-lab.transcribed-about-value0-seconds-of.e79c9b7d86": {
+    "en": "Transcribed about {value0} seconds of audio",
+    "zh": "已转录 {value0} 秒语音"
+  },
+  "memory-avatar-lab.transcribed-voice-traits-will-be.838fb403af": {
+    "en": "Transcribed - voice traits will be included in analysis",
+    "zh": "已转录 - 语音特征将纳入人格分析"
+  },
+  "memory-avatar-lab.transcribing.c331c36c02": {
+    "en": "Transcribing...",
+    "zh": "转录中..."
+  },
+  "memory-avatar-lab.upload-exported-chat-logs.384bfeac0a": {
+    "en": "Upload exported chat logs",
+    "zh": "上传聊天记录导出文件"
+  },
+  "memory-avatar-lab.upload-voice-recording.d41cb378e2": {
+    "en": "Upload voice recording",
+    "zh": "上传语音录音"
+  },
+  "memory-avatar-lab.value0-lines-loaded.de56ef52af": {
+    "en": "{value0} lines loaded",
+    "zh": "{value0} 行已读取"
+  },
+  "memory-avatar-lab.value0-memories.1bea29c434": {
+    "en": "{value0} memories",
+    "zh": "{value0} 条记忆"
+  },
+  "memory-avatar-lab.value0-messages.1a2f7d0c60": {
+    "en": "{value0} messages",
+    "zh": "{value0} 条消息"
+  },
+  "memory-avatar-lab.voice-recording-optional.8e9886fb36": {
+    "en": "Voice Recording (optional)",
+    "zh": "语音记录（可选）"
+  },
+  "memory-avatar-lab.wechat.47409ec635": {
+    "en": "WeChat",
+    "zh": "微信"
+  },
+  "sanctuary.a-gentle-lumi-reminder-this.68e34eba16": {
+    "en": "A gentle Lumi reminder: this is a simulation distilled from memories. Real emotional connection is still waiting for you in the real world.",
+    "zh": "Lumi 温柔提醒：这是从记忆中蒸馏出的模拟。真实的情感连接在现实世界中等你。"
+  },
+  "sanctuary.esc-leave-sanctuary-no-tools.7937ac5393": {
+    "en": "ESC Leave sanctuary · No tools · No notifications · Private memory",
+    "zh": "ESC 离开领地 · 无工具 · 无通知 · 记忆私有"
+  },
+  "sanctuary.evidence.00759cc2ae": {
+    "en": "Evidence: ",
+    "zh": "证据分级："
+  },
+  "sanctuary.evolution-frozen.d66cdb416b": {
+    "en": "· Evolution frozen",
+    "zh": "· 演化冻结"
+  },
+  "sanctuary.fact.0dfbbdcfc8": {
+    "en": "Fact",
+    "zh": "事实"
+  },
+  "sanctuary.got-it.83aa55c237": {
+    "en": "Got it",
+    "zh": "知道了"
+  },
+  "sanctuary.inferred.9b6e0e37e2": {
+    "en": "Inferred",
+    "zh": "推测"
+  },
+  "sanctuary.leave-sanctuary.52b6dd4924": {
+    "en": "Leave Sanctuary",
+    "zh": "离开领地"
+  },
+  "sanctuary.quote.fcb6e37e05": {
+    "en": "Quote",
+    "zh": "原话"
+  },
+  "sanctuary.sanctuary.d94722bbd1": {
+    "en": "sanctuary",
+    "zh": "领地"
+  },
+  "sanctuary.say-something-to-value0.6793beb5ca": {
+    "en": "Say something to {value0}...",
+    "zh": "和 {value0} 说点什么..."
+  },
+  "sanctuary.they-are-here-and-only.b927165289": {
+    "en": "They are here, and only here. Start the conversation.",
+    "zh": "ta 在这里，也只在这里。开始对话吧。"
+  },
+  "sanctuary.thinking.0bd67fc167": {
+    "en": "Thinking...",
+    "zh": "ta 在思考..."
+  },
+  "sanctuary.this-is-a-simulation-distilled.86cae03071": {
+    "en": "This is a simulation distilled from memories, not the person themselves. Responses come from patterns extracted from data and may include inference. Please enter this space with care and awareness.",
+    "zh": "这是从记忆中蒸馏出的模拟，不是那个人本身。ta 的回应源自数据中的模式提取，可能包含推测成分。请带着温和与觉察进入这个空间。"
+  },
+  "sanctuary.this-is-value0-s-sanctuary.b6612d3d3e": {
+    "en": "This is \"{value0}\"'s sanctuary",
+    "zh": "这是属于 \"{value0}\" 的领地"
+  },
+  "sanctuary.tools-disabled.4e1aaa0eb6": {
+    "en": "· Tools disabled",
+    "zh": "· 工具禁用"
   }
 }

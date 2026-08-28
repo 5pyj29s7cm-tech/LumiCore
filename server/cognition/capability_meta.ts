@@ -84,7 +84,7 @@ export function buildCapabilityMetaResponse(input: CapabilityMetaResponseInput):
   if (isSelfIntroductionMetaQuestion(input.text)) {
     if (!isChinese(input.text)) {
       return [
-        'Hello, I am Lumi, a privately deployed local intelligent agent that works with you through conversation, memory, models, skills, tools, desktop applications, and other authorized agents.',
+        'Hello, I am Lumi, a privately deployed local intelligence that works with you through conversation, memory, models, skills, tools, desktop applications, and explicitly authorized LAP peer Lumi systems.',
         'Within your authorization, I can understand and continue tasks, organize files and knowledge, create work products, call the relevant registered skills and tools, and operate identity-verified desktop applications. Whether a particular provider or application is available is checked at execution time; this answer does not claim that any specific service is connected now.',
         'I cannot promise that a model never makes mistakes, that a third-party service is always online, that every knowledge file has been fully absorbed, or that a changing desktop interface will always be recognized. External sending, publishing, submission, payment, and signing require final confirmation, and I do not report completion without a real receipt or visible verification.',
         'To assign work, state the goal, the exact object or material, the expected result, prohibited actions, and the acceptance standard. If information is missing, say what may remain pending instead of letting me guess.',
@@ -105,7 +105,7 @@ export function buildCapabilityMetaResponse(input: CapabilityMetaResponseInput):
   const commandCenter = input.source === 'command-center-chat';
   if (!isChinese(input.text)) {
     const modeLine = mode === 'assistant'
-      ? 'You are already in Assistant mode, which has the full foreground tool, skill, browser, app, file, desktop, and team permissions.'
+      ? 'You are already in Assistant mode, which has the full foreground tool, skill, browser, app, file, and desktop permissions.'
       : mode === 'autonomous'
         ? 'You are in Autonomous mode, which includes Assistant permissions plus continuous background execution.'
         : mode === 'chat'

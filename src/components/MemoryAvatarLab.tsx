@@ -86,10 +86,18 @@ function EvidenceBadge({ grade, isZh = true }: { grade: 'verbatim' | 'artifact' 
   return <span className={`text-xs font-bold uppercase px-2 py-0.5 rounded-full border ${c.bg} ${c.border} ${c.text}`}>{memoryAvatarCopy(isZh ? 'zh' : 'en').evidence[grade]}</span>;
 }
 
-export function MemoryAvatarLab({ t, onEnterSanctuary }: { t: any; onEnterSanctuary?: (agent: any) => void }) {
-  const { createAgent, user, login } = useApp();
-  const isZh = t?.langCode !== 'en';
-  const copy = memoryAvatarCopy(isZh ? 'zh' : 'en');
+export function MemoryAvatarLab({ t, lang, onEnterSanctuary }: { t: any; lang?: 'en' | 'zh'; onEnterSanctuary?: (agent: any) => void }) {
+  const { user, login } = useApp();
+  // `lang` is passed by DesktopUI as the authoritative shell locale.  Keep
+  // the `t.langCode` fallback for callers/tests that render the lab alone.
+  const isZh = (lang || t?.langCode || 'zh') !== 'en';
+  const locale = isZh ? 'zh' : 'en';
+  const copy = memoryAvatarCopy(locale);
+  // The legacy lab used uiMessage's global locale implicitly.  That could
+  // lag one render behind the desktop language switch, leaving this panel in
+  // English while the rest of the desktop was Chinese.  Bind every message
+  // in this surface to the same locale as the parent shell.
+  const message = (key: Parameters<typeof uiMessage>[0]) => uiMessage(key, locale);
   const [currentStep, setCurrentStep] = useState(1);
   const [distilling, setDistilling] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -98,6 +106,7 @@ export function MemoryAvatarLab({ t, onEnterSanctuary }: { t: any; onEnterSanctu
   const [fileName, setFileName] = useState('');
   const [relationshipType, setRelationshipType] = useState('close_friend');
   const [distillResult, setDistillResult] = useState<DistillResult | null>(null);
+  const [createdAvatar, setCreatedAvatar] = useState<any | null>(null);
   const [sanctuaryName, setSanctuaryName] = useState('');
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [audioTranscribing, setAudioTranscribing] = useState(false);
@@ -119,10 +128,10 @@ export function MemoryAvatarLab({ t, onEnterSanctuary }: { t: any; onEnterSanctu
       const text = ev.target?.result as string;
       setChatLog(text);
       const lineCount = text.split('\n').filter(l => l.trim()).length;
-      toast.success(formatUiMessage('memory-avatar-lab.loaded-value0-lines-from-value1.f8752f8cd7', { value0: { en: lineCount, zh: file.name }, value1: { en: file.name, zh: lineCount } }, (isZh) ? 'zh' : 'en'));
+      toast.success(formatUiMessage('memory-avatar-lab.loaded-value0-lines-from-value1.f8752f8cd7', { value0: lineCount, value1: file.name }, locale));
     };
     reader.readAsText(file);
-  }, [isZh]);
+  }, [locale]);
 
   const handleAudioUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -147,7 +156,7 @@ export function MemoryAvatarLab({ t, onEnterSanctuary }: { t: any; onEnterSanctu
           if (data.text) {
             setChatLog(prev => `${prev}\n\n[${copy.audioRecordHeader}]\n${data.text.split('\n').map((l: string) => `Target: ${l}`).join('\n')}`);
             const seconds = Math.round((data.text?.length || 0) / 20);
-            toast.success(formatUiMessage('memory-avatar-lab.transcribed-about-value0-seconds-of.e79c9b7d86', { value0: seconds }, (isZh) ? 'zh' : 'en'));
+            toast.success(formatUiMessage('memory-avatar-lab.transcribed-about-value0-seconds-of.e79c9b7d86', { value0: seconds }, locale));
           }
         } else {
           toast.error(copy.transcriptionFailed);
@@ -159,14 +168,14 @@ export function MemoryAvatarLab({ t, onEnterSanctuary }: { t: any; onEnterSanctu
       }
     };
     reader.readAsDataURL(file);
-  }, [isZh]);
+  }, [copy.audioRecordHeader, copy.transcriptionFailed, locale]);
 
   const handleDistill = async () => {
     if (!user) { login(); return; }
-    if (!chatLog.trim()) { toast.error(t?.uploadChatLogFirst || 'Please upload a chat log first'); return; }
+    if (!chatLog.trim()) { toast.error(copy.uploadChatLogFirst); return; }
     setDistilling(true);
     try {
-      const res = await fetch('/api/agents/distill', {
+      const res = await fetch('/api/memory-avatars/distill', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -177,14 +186,14 @@ export function MemoryAvatarLab({ t, onEnterSanctuary }: { t: any; onEnterSanctu
         }),
         credentials: 'include',
       });
-      if (!res.ok) throw new Error((await res.json()).error || 'Distillation failed');
+      if (!res.ok) throw new Error((await res.json()).error || copy.distillationFailed);
       const result: DistillResult = await res.json();
       setDistillResult(result);
       setSanctuaryName(result.inferredName);
       setCurrentStep(2);
-      toast.success(`Distilled personality for "${result.inferredName}" — ${result.seedMemories.length} memories extracted`);
+      toast.success(copy.distilledPersonality(result.inferredName, result.seedMemories.length));
     } catch (err: any) {
-      toast.error(err.message || 'Distillation failed');
+      toast.error(err.message || copy.distillationFailed);
     } finally {
       setDistilling(false);
     }
@@ -195,25 +204,30 @@ export function MemoryAvatarLab({ t, onEnterSanctuary }: { t: any; onEnterSanctu
     if (!distillResult) return;
     setCreating(true);
     try {
-      const agent = await createAgent(
-        sanctuaryName || distillResult.inferredName,
-        distillResult.relationshipType,
-        {
-          territory: 'sanctuary',
-          distilledFrom: 'chat_records',
-          evidenceMap: distillResult.evidenceMap,
+      const res = await fetch('/api/memory-avatars', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          name: sanctuaryName || distillResult.inferredName,
           relationshipType: distillResult.relationshipType,
-          isFrozen: true,
           personalityConfig: distillResult.personalityConfig,
+          evidenceMap: distillResult.evidenceMap,
           seedMemories: distillResult.seedMemories,
-        },
-      );
-      if (!agent) throw new Error('Agent creation failed');
-      toast.success(`Sanctuary created for "${agent.name}"`);
+          narrative: distillResult.narrative,
+        }),
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload.error || copy.memoryAvatarCreationFailed);
+      }
+      const avatar = await res.json();
+      setCreatedAvatar(avatar);
+      toast.success(copy.sanctuaryCreatedFor(avatar.name));
       setCurrentStep(3);
-      onEnterSanctuary?.(agent);
+      onEnterSanctuary?.(avatar);
     } catch (err: any) {
-      toast.error(err.message || 'Creation failed');
+      toast.error(err.message || copy.creationFailed);
     } finally {
       setCreating(false);
     }
@@ -224,13 +238,14 @@ export function MemoryAvatarLab({ t, onEnterSanctuary }: { t: any; onEnterSanctu
     setChatLog('');
     setFileName('');
     setDistillResult(null);
+    setCreatedAvatar(null);
     setSanctuaryName('');
   };
 
   const steps = [
-    { id: 1, title: uiMessage('memory-avatar-lab.data-upload.f8882ffe87'), icon: <Upload size={18} /> },
-    { id: 2, title: uiMessage('memory-avatar-lab.personality-distill.d018bf8865'), icon: <Zap size={18} /> },
-    { id: 3, title: uiMessage('memory-avatar-lab.sanctuary-setup.5a3c664734'), icon: <Castle size={18} /> },
+    { id: 1, title: message('memory-avatar-lab.data-upload.f8882ffe87'), icon: <Upload size={18} /> },
+    { id: 2, title: message('memory-avatar-lab.personality-distill.d018bf8865'), icon: <Zap size={18} /> },
+    { id: 3, title: message('memory-avatar-lab.sanctuary-setup.5a3c664734'), icon: <Castle size={18} /> },
   ];
 
   const relationshipLabel = (id: string) => {
@@ -245,8 +260,8 @@ export function MemoryAvatarLab({ t, onEnterSanctuary }: { t: any; onEnterSanctu
         <div className="flex items-center gap-3">
           <Castle size={18} className="text-fuchsia-400" />
           <div>
-            <h2 className="text-sm font-black text-white/90 uppercase tracking-wider">{uiMessage('memory-avatar-lab.agent-generation-lab.4296093317')}</h2>
-            <p className="text-xs text-white/55 font-mono">{t?.memoryAvatarLab || 'Memory Avatar Lab'}</p>
+            <h2 className="text-sm font-black text-white/90 uppercase tracking-wider">{copy.labTitle}</h2>
+            <p className="text-xs text-white/55 font-mono">{copy.labTitle}</p>
           </div>
         </div>
         <div className="flex items-center gap-1">
@@ -269,11 +284,11 @@ export function MemoryAvatarLab({ t, onEnterSanctuary }: { t: any; onEnterSanctu
             <motion.div key="s1" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="max-w-2xl mx-auto space-y-6">
               <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-xs text-amber-300/80 leading-relaxed">
                 <AlertTriangle size={14} className="inline mr-2" />
-                {uiMessage('memory-avatar-lab.this-memory-avatar-is-distilled.4692efbcd3')}
+                {message('memory-avatar-lab.this-memory-avatar-is-distilled.4692efbcd3')}
               </div>
 
               <div className="space-y-3">
-                <label className="text-xs font-bold uppercase tracking-wider text-white/55">{uiMessage('memory-avatar-lab.chat-log-file.bb299f7d8a')}</label>
+                <label className="text-xs font-bold uppercase tracking-wider text-white/55">{message('memory-avatar-lab.chat-log-file.bb299f7d8a')}</label>
                 <input ref={fileInputRef} type="file" accept=".txt,.json,.csv" onChange={handleFileLoad} className="hidden" />
                 <div
                   onClick={() => fileInputRef.current?.click()}
@@ -283,14 +298,14 @@ export function MemoryAvatarLab({ t, onEnterSanctuary }: { t: any; onEnterSanctu
                     <>
                       <FileText size={36} className="text-fuchsia-400" />
                       <span className="text-sm text-white/60 font-medium">{fileName}</span>
-                      <span className="text-xs text-white/45">{formatUiMessage('memory-avatar-lab.value0-lines-loaded.de56ef52af', { value0: chatLog.split('\n').filter(l => l.trim()).length })}</span>
+                      <span className="text-xs text-white/45">{formatUiMessage('memory-avatar-lab.value0-lines-loaded.de56ef52af', { value0: chatLog.split('\n').filter(l => l.trim()).length }, locale)}</span>
                     </>
                   ) : (
                     <>
                       <Upload size={36} className="text-white/40" />
                       <div className="text-center space-y-1">
-                        <p className="text-sm text-white/40">{uiMessage('memory-avatar-lab.upload-exported-chat-logs.384bfeac0a')}</p>
-                        <p className="text-xs text-white/40">{uiMessage('memory-avatar-lab.supports-wechat-qq-txt-exports.cda5368eb6')}</p>
+                        <p className="text-sm text-white/40">{message('memory-avatar-lab.upload-exported-chat-logs.384bfeac0a')}</p>
+                        <p className="text-xs text-white/40">{message('memory-avatar-lab.supports-wechat-qq-txt-exports.cda5368eb6')}</p>
                       </div>
                     </>
                   )}
@@ -302,7 +317,7 @@ export function MemoryAvatarLab({ t, onEnterSanctuary }: { t: any; onEnterSanctu
                       onClick={() => setFormat(f)}
                       className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase transition-all ${format === f ? 'bg-fuchsia-500/20 border border-fuchsia-500/30 text-fuchsia-400' : 'bg-white/5 border border-white/5 text-white/55 hover:bg-white/10'}`}
                     >
-                      {f === 'wechat' ? uiMessage('memory-avatar-lab.wechat.47409ec635') : f === 'qq' ? 'QQ' : 'Plain'}
+                      {f === 'wechat' ? message('memory-avatar-lab.wechat.47409ec635') : f === 'qq' ? copy.qq : copy.plain}
                     </button>
                   ))}
                 </div>
@@ -310,7 +325,7 @@ export function MemoryAvatarLab({ t, onEnterSanctuary }: { t: any; onEnterSanctu
 
               {/* Audio upload for voice recording */}
               <div className="space-y-3">
-                <label className="text-xs font-bold uppercase tracking-wider text-white/55">{uiMessage('memory-avatar-lab.voice-recording-optional.8e9886fb36')}</label>
+                <label className="text-xs font-bold uppercase tracking-wider text-white/55">{message('memory-avatar-lab.voice-recording-optional.8e9886fb36')}</label>
                 <input ref={audioInputRef} type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac" onChange={handleAudioUpload} className="hidden" />
                 <div
                   onClick={() => audioInputRef.current?.click()}
@@ -321,13 +336,13 @@ export function MemoryAvatarLab({ t, onEnterSanctuary }: { t: any; onEnterSanctu
                       {audioTranscribing ? (
                         <>
                           <Loader2 size={28} className="text-fuchsia-400 animate-spin" />
-                          <span className="text-xs text-white/40">{uiMessage('memory-avatar-lab.transcribing.c331c36c02')}</span>
+                          <span className="text-xs text-white/40">{message('memory-avatar-lab.transcribing.c331c36c02')}</span>
                         </>
                       ) : (
                         <>
                           <Headphones size={28} className="text-fuchsia-400" />
                           <span className="text-xs text-white/50">{audioFile.name}</span>
-                          <span className="text-xs text-white/45">{uiMessage('memory-avatar-lab.transcribed-voice-traits-will-be.838fb403af')}</span>
+                          <span className="text-xs text-white/45">{message('memory-avatar-lab.transcribed-voice-traits-will-be.838fb403af')}</span>
                         </>
                       )}
                     </>
@@ -335,8 +350,8 @@ export function MemoryAvatarLab({ t, onEnterSanctuary }: { t: any; onEnterSanctu
                     <>
                       <Mic size={28} className="text-white/40" />
                       <div className="text-center space-y-1">
-                        <p className="text-xs text-white/55">{uiMessage('memory-avatar-lab.upload-voice-recording.d41cb378e2')}</p>
-                        <p className="text-[12px] text-white/35">{uiMessage('memory-avatar-lab.mp3-wav-ogg-used-to.a17b38b21d')}</p>
+                        <p className="text-xs text-white/55">{message('memory-avatar-lab.upload-voice-recording.d41cb378e2')}</p>
+                        <p className="text-[12px] text-white/35">{message('memory-avatar-lab.mp3-wav-ogg-used-to.a17b38b21d')}</p>
                       </div>
                     </>
                   )}
@@ -344,7 +359,7 @@ export function MemoryAvatarLab({ t, onEnterSanctuary }: { t: any; onEnterSanctu
               </div>
 
               <div className="space-y-3">
-                <label className="text-xs font-bold uppercase tracking-wider text-white/55">{uiMessage('memory-avatar-lab.relationship-type.b9cd2f96c7')}</label>
+                <label className="text-xs font-bold uppercase tracking-wider text-white/55">{message('memory-avatar-lab.relationship-type.b9cd2f96c7')}</label>
                 <div className="grid grid-cols-5 gap-2">
                   {RELATIONSHIP_TYPES.map(rel => (
                     <button
@@ -366,7 +381,7 @@ export function MemoryAvatarLab({ t, onEnterSanctuary }: { t: any; onEnterSanctu
                   className="flex items-center gap-2 px-8 py-3 bg-fuchsia-500/20 border border-fuchsia-500/30 rounded-xl text-sm font-bold text-fuchsia-400 hover:bg-fuchsia-500/30 disabled:opacity-30 transition-all"
                 >
                   {distilling ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} />}
-                  {distilling ? uiMessage('memory-avatar-lab.distilling.028f02afbb') : uiMessage('memory-avatar-lab.start-personality-distill.3b5dc0a853')}
+                  {distilling ? message('memory-avatar-lab.distilling.028f02afbb') : message('memory-avatar-lab.start-personality-distill.3b5dc0a853')}
                   <ArrowRight size={14} />
                 </button>
               </div>
@@ -380,12 +395,12 @@ export function MemoryAvatarLab({ t, onEnterSanctuary }: { t: any; onEnterSanctu
               <div className="p-6 bg-white/5 border border-white/10 rounded-2xl space-y-3">
                 <div className="flex items-center gap-2">
                   <Eye size={14} className="text-fuchsia-400" />
-                  <span className="text-xs font-bold uppercase tracking-wider text-white/55">{uiMessage('memory-avatar-lab.distill-result.ae34ae3926')} - {distillResult.inferredName}</span>
+                  <span className="text-xs font-bold uppercase tracking-wider text-white/55">{message('memory-avatar-lab.distill-result.ae34ae3926')} - {distillResult.inferredName}</span>
                 </div>
                 <p className="text-sm text-white/60 leading-relaxed italic">"{distillResult.narrative}"</p>
                 <div className="flex gap-3 text-xs text-white/55 font-mono">
-                  <span>{formatUiMessage('memory-avatar-lab.value0-messages.1a2f7d0c60', { value0: distillResult.summary.messageCount })}</span>
-                  <span>{formatUiMessage('memory-avatar-lab.value0-memories.1bea29c434', { value0: distillResult.seedMemories.length })}</span>
+                  <span>{formatUiMessage('memory-avatar-lab.value0-messages.1a2f7d0c60', { value0: distillResult.summary.messageCount }, locale)}</span>
+                  <span>{formatUiMessage('memory-avatar-lab.value0-memories.1bea29c434', { value0: distillResult.seedMemories.length }, locale)}</span>
                   <span>{relationshipLabel(distillResult.relationshipType)}</span>
                   <span className="text-fuchsia-400">{distillResult.personalityConfig.expressionStyle.tone}</span>
                 </div>
@@ -393,14 +408,14 @@ export function MemoryAvatarLab({ t, onEnterSanctuary }: { t: any; onEnterSanctu
 
               {/* Radar */}
               <div className="p-6 bg-white/5 border border-white/10 rounded-2xl">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-white/55 mb-3">{uiMessage('memory-avatar-lab.8-d-personality-vector.7aae255fba')}</h3>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-white/55 mb-3">{message('memory-avatar-lab.8-d-personality-vector.7aae255fba')}</h3>
                 <MiniRadar cognitiveStyle={distillResult.summary.cognitiveStyle} socialStyle={distillResult.summary.socialStyle} isZh={isZh} />
               </div>
 
               {/* Common phrases */}
               {distillResult.summary.topPhrases && distillResult.summary.topPhrases.length > 0 && (
                 <div className="p-4 bg-white/5 border border-white/10 rounded-2xl space-y-2">
-                  <span className="text-xs font-bold uppercase tracking-wider text-white/55">{uiMessage('memory-avatar-lab.common-phrases.f7abfd0f03')}</span>
+                  <span className="text-xs font-bold uppercase tracking-wider text-white/55">{message('memory-avatar-lab.common-phrases.f7abfd0f03')}</span>
                   <div className="flex flex-wrap gap-2">
                     {distillResult.summary.topPhrases.map((p, i) => (
                       <span key={i} className="px-3 py-1 bg-fuchsia-500/10 border border-fuchsia-500/20 rounded-full text-xs text-fuchsia-300">{p}</span>
@@ -411,7 +426,7 @@ export function MemoryAvatarLab({ t, onEnterSanctuary }: { t: any; onEnterSanctu
 
               {/* Seed Memories with Evidence */}
               <div className="p-4 bg-white/5 border border-white/10 rounded-2xl space-y-3">
-                <span className="text-xs font-bold uppercase tracking-wider text-white/55">{uiMessage('memory-avatar-lab.seed-memories.21492d3467')} ({distillResult.seedMemories.length})</span>
+                <span className="text-xs font-bold uppercase tracking-wider text-white/55">{message('memory-avatar-lab.seed-memories.21492d3467')} ({distillResult.seedMemories.length})</span>
                 <div className="space-y-2 max-h-64 overflow-auto">
                   {distillResult.seedMemories.slice(0, 10).map((mem, i) => (
                     <div key={i} className="flex items-start gap-3 p-3 bg-white/[0.02] rounded-xl border border-white/5">
@@ -428,28 +443,28 @@ export function MemoryAvatarLab({ t, onEnterSanctuary }: { t: any; onEnterSanctu
 
               {/* Sanctuary config */}
               <div className="p-4 bg-white/5 border border-white/10 rounded-2xl space-y-3">
-                <span className="text-xs font-bold uppercase tracking-wider text-white/55">{uiMessage('memory-avatar-lab.sanctuary-settings.0498da5129')}</span>
+                <span className="text-xs font-bold uppercase tracking-wider text-white/55">{message('memory-avatar-lab.sanctuary-settings.0498da5129')}</span>
                 <input
                   value={sanctuaryName}
                   onChange={(e) => setSanctuaryName(e.target.value)}
-                  placeholder={uiMessage('memory-avatar-lab.sanctuary-name.432e121118')}
+                  placeholder={message('memory-avatar-lab.sanctuary-name.432e121118')}
                   className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white/80 placeholder:text-white/40 focus:outline-none focus:border-fuchsia-500/30"
                 />
                 <div className="text-[12px] text-white/45 font-mono space-y-1">
-                  <p>{uiMessage('memory-avatar-lab.tool-permission-none-chat-only.7cb2212746')}</p>
-                  <p>{uiMessage('memory-avatar-lab.memory-isolation-private-not-shared.e99ab197a6')}</p>
-                  <p>{uiMessage('memory-avatar-lab.evolution-frozen-no-automatic-drift.92f93d919a')}</p>
-                  <p>{uiMessage('memory-avatar-lab.notifications-off-visible-only-inside.e2569b60ea')}</p>
+                  <p>{message('memory-avatar-lab.tool-permission-none-chat-only.7cb2212746')}</p>
+                  <p>{message('memory-avatar-lab.memory-isolation-private-not-shared.e99ab197a6')}</p>
+                  <p>{message('memory-avatar-lab.evolution-frozen-no-automatic-drift.92f93d919a')}</p>
+                  <p>{message('memory-avatar-lab.notifications-off-visible-only-inside.e2569b60ea')}</p>
                 </div>
               </div>
 
               <div className="flex justify-between pt-2">
                 <button onClick={() => setCurrentStep(1)} className="flex items-center gap-2 px-6 py-3 bg-white/5 border border-white/10 rounded-xl text-sm text-white/40 hover:bg-white/10 transition-all">
-                  <ArrowLeft size={14} /> {uiMessage('memory-avatar-lab.back.5db5cac55e')}
+                  <ArrowLeft size={14} /> {message('memory-avatar-lab.back.5db5cac55e')}
                 </button>
                 <button onClick={handleCreateSanctuary} disabled={creating} className="flex items-center gap-2 px-8 py-3 bg-fuchsia-500/20 border border-fuchsia-500/30 rounded-xl text-sm font-bold text-fuchsia-400 hover:bg-fuchsia-500/30 disabled:opacity-30 transition-all">
                   {creating ? <Loader2 size={16} className="animate-spin" /> : <Castle size={16} />}
-                  {creating ? uiMessage('memory-avatar-lab.creating.ba147d5f24') : uiMessage('memory-avatar-lab.create-sanctuary.f2cde9d0b0')}
+                  {creating ? message('memory-avatar-lab.creating.ba147d5f24') : message('memory-avatar-lab.create-sanctuary.f2cde9d0b0')}
                   <ArrowRight size={14} />
                 </button>
               </div>
@@ -463,17 +478,21 @@ export function MemoryAvatarLab({ t, onEnterSanctuary }: { t: any; onEnterSanctu
                 <CheckCircle size={48} className="text-fuchsia-400" />
               </div>
               <div className="space-y-2">
-                <h2 className="text-2xl font-black tracking-tighter text-white/90">{uiMessage('memory-avatar-lab.sanctuary-created.792e5da4c0')}</h2>
+                <h2 className="text-2xl font-black tracking-tighter text-white/90">{message('memory-avatar-lab.sanctuary-created.792e5da4c0')}</h2>
                 <p className="text-sm text-white/40 max-w-sm mx-auto">
-                  {formatUiMessage('memory-avatar-lab.the-memory-avatar-for-value0.1eb3e87088', { value0: sanctuaryName || distillResult.inferredName })}
+                  {formatUiMessage('memory-avatar-lab.the-memory-avatar-for-value0.1eb3e87088', { value0: sanctuaryName || distillResult.inferredName }, locale)}
                 </p>
               </div>
               <div className="flex gap-4 justify-center">
                 <button onClick={reset} className="px-6 py-3 bg-white/5 border border-white/10 rounded-xl text-sm text-white/40 hover:bg-white/10 transition-all">
-                  {uiMessage('memory-avatar-lab.create-another.e1f98b1538')}
+                  {message('memory-avatar-lab.create-another.e1f98b1538')}
                 </button>
-                <button className="px-6 py-3 bg-fuchsia-500/20 border border-fuchsia-500/30 rounded-xl text-sm font-bold text-fuchsia-400 hover:bg-fuchsia-500/30 transition-all">
-                  {uiMessage('memory-avatar-lab.enter-sanctuary.800a2ea891')} <ArrowRight size={14} className="inline ml-1" />
+                <button
+                  onClick={() => createdAvatar && onEnterSanctuary?.(createdAvatar)}
+                  disabled={!createdAvatar}
+                  className="px-6 py-3 bg-fuchsia-500/20 border border-fuchsia-500/30 rounded-xl text-sm font-bold text-fuchsia-400 hover:bg-fuchsia-500/30 disabled:opacity-40 transition-all"
+                >
+                  {message('memory-avatar-lab.enter-sanctuary.800a2ea891')} <ArrowRight size={14} className="inline ml-1" />
                 </button>
               </div>
             </motion.div>

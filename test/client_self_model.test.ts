@@ -259,7 +259,6 @@ describe('Lumi client self model', () => {
     expect(normalizeClientActionTarget('个性化')).toBe('personalization');
     expect(normalizeClientActionTarget('头像工作室')).toBe('personalization');
     expect(normalizeClientActionTarget('声音工作室')).toBe('personalization');
-    expect(normalizeClientActionTarget('记忆头像')).toBe('memory-avatar');
     expect(normalizeClientActionTarget('工作队列')).toBe('plans');
     expect(normalizeClientActionTarget('通知面板')).toBe('notifications');
     expect(normalizeClientActionTarget('提醒面板')).toBe('reminders');

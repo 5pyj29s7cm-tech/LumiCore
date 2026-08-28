@@ -57,11 +57,6 @@ export function registerAmbientHandlers(socket: Socket, getUserId: (s: Socket) =
       console.warn(`[IdleProcessing] Summarize failed: ${err.message}`);
     }
 
-    try {
-      const { cleanupEphemeralAgents } = await import('../agents/orchestrator');
-      const cleaned = cleanupEphemeralAgents(6);
-      if (cleaned > 0) console.log(`[IdleProcessing] Cleaned up ${cleaned} ephemeral agents`);
-    } catch {}
   }
 
   function guard(fn: (...args: any[]) => void | Promise<void>) {

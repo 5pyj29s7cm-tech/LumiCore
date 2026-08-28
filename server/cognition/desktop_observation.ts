@@ -108,6 +108,19 @@ export function requiresRunningProcessObservation(input: string): boolean {
   return ambiguousState && (localScope || observationVerb);
 }
 
+/**
+ * A bounded local-computer inventory is an explicit read-only execution
+ * request, not a request to crawl personal files. It combines the three
+ * existing native observations needed for an honest machine profile: system
+ * information, launchable applications, and a current process snapshot.
+ */
+export function requiresLocalComputerInventoryObservation(input: string): boolean {
+  const text = stripNegativeConstraints(String(input || ''));
+  const localComputer = /\b(?:this|my|local|current)\s+(?:computer|pc|machine|system|device)\b|(?:\u672c\u673a|\u8fd9\u53f0\u7535\u8111|\u6211\u7684\u7535\u8111|\u5f53\u524d\u8bbe\u5907|\u7535\u8111\u4fe1\u606f|\u786c\u4ef6\u4fe1\u606f)/iu.test(text);
+  const inventoryAction = /\b(?:audit|inventory|profile|map|survey|inspect)\b.{0,32}\b(?:computer|pc|machine|system|device)\b|\b(?:computer|pc|machine|system|device)\b.{0,32}\b(?:audit|inventory|profile|map|survey|inspect)\b|(?:\u76d8\u67e5|\u5168\u9762\u68c0\u67e5|\u5168\u9762\u4e86\u89e3|\u6478\u5e95|\u68b3\u7406|\u5efa\u7acb).{0,24}(?:\u7535\u8111|\u672c\u673a|\u8bbe\u5907|\u7cfb\u7edf|\u786c\u4ef6|\u8f6f\u4ef6)|(?:\u7535\u8111|\u672c\u673a|\u8bbe\u5907|\u7cfb\u7edf).{0,24}(?:\u76d8\u67e5|\u5168\u9762\u68c0\u67e5|\u5168\u9762\u4e86\u89e3|\u6478\u5e95|\u68b3\u7406|\u6863\u6848|\u753b\u50cf)/iu.test(text);
+  return localComputer && inventoryAction;
+}
+
 function requiresSystemInfoObservation(input: string): boolean {
   const text = String(input || '');
   const localScope = /\b(?:this|my|local|current)\s+(?:computer|pc|machine|system|device)\b|(?:\u672c\u673a|\u8fd9\u53f0\u7535\u8111|\u6211\u7684\u7535\u8111|\u5f53\u524d\u8bbe\u5907)/iu.test(text);
@@ -127,6 +140,7 @@ export function buildDesktopObservationPlan(input: string): DesktopObservationTo
   const text = String(input || '').trim();
   if (!text) return [];
 
+  const wantsLocalComputerInventory = requiresLocalComputerInventoryObservation(text);
   const wantsActiveWindow = requiresActiveWindowObservation(text);
   const wantsDesktopFiles = requiresDesktopFileListingObservation(text);
   const wantsProcesses = requiresRunningProcessObservation(text);
@@ -139,7 +153,7 @@ export function buildDesktopObservationPlan(input: string): DesktopObservationTo
   // still requests both probes when the user asks for both scopes.
   const wantsAppInventory = explicitAppInventory || (!wantsProcesses && genericAppInventory);
   const wantsDesktopState = /\bdesktop\s+(?:state|status|runtime)\b|\u684c\u9762\u8fd0\u884c\u72b6\u6001|\u684c\u9762\u72b6\u6001/iu.test(text);
-  if (!wantsActiveWindow && !wantsDesktopFiles && !wantsProcesses && !wantsIdle && !wantsSystem && !wantsAppInventory && !wantsDesktopState) return [];
+  if (!wantsLocalComputerInventory && !wantsActiveWindow && !wantsDesktopFiles && !wantsProcesses && !wantsIdle && !wantsSystem && !wantsAppInventory && !wantsDesktopState) return [];
 
   const positiveText = stripNegativeConstraints(text);
   const mutationText = positiveText
@@ -153,12 +167,19 @@ export function buildDesktopObservationPlan(input: string): DesktopObservationTo
   if (hasPositiveMutation) return [];
 
   const calls: DesktopObservationToolCall[] = [];
+  if (wantsLocalComputerInventory) {
+    calls.push(
+      { name: 'desktop_system_info', arguments: {} },
+      { name: 'desktop_list_apps', arguments: { limit: 200 } },
+      { name: 'desktop_running_processes', arguments: { top: 20 } },
+    );
+  }
   if (wantsActiveWindow || wantsDesktopState) calls.push({ name: 'desktop_active_window', arguments: {} });
   if (wantsDesktopFiles) calls.push({ name: 'desktop_list_files', arguments: { path: '~/Desktop', limit: 1000 } });
-  if (wantsProcesses || wantsDesktopState) calls.push({ name: 'desktop_running_processes', arguments: { top: 20 } });
+  if ((wantsProcesses || wantsDesktopState) && !wantsLocalComputerInventory) calls.push({ name: 'desktop_running_processes', arguments: { top: 20 } });
   if (wantsIdle || wantsDesktopState) calls.push({ name: 'desktop_idle_time', arguments: {} });
-  if (wantsSystem) calls.push({ name: 'desktop_system_info', arguments: {} });
-  if (wantsAppInventory) {
+  if (wantsSystem && !wantsLocalComputerInventory) calls.push({ name: 'desktop_system_info', arguments: {} });
+  if (wantsAppInventory && !wantsLocalComputerInventory) {
     const appNames = Array.from(new Set(Array.from(text.matchAll(SPECIFIC_APP_QUERY_RE), match => match[0])));
     const query = appNames.length === 1 ? appNames[0] : '';
     calls.push({

@@ -446,6 +446,9 @@ export function registerDesktopTools(registry: ToolRegistry): void {
       },
       required: ['command'],
     },
+    preflight: (args, context) => {
+      assertValidCommandForHost(args.command, context?.desktopPlatform || process.platform);
+    },
     handler: desktopRunCommand,
     permission: 'user',
     securityLevel: 'confirm',

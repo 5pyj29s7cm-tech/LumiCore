@@ -69,6 +69,7 @@ const PERFORMANCE_INDEX_SQL = [
   `CREATE INDEX IF NOT EXISTS idx_interactions_agent ON interactions(agentId)`,
   `CREATE INDEX IF NOT EXISTS idx_memories_user_type_tier ON memories(userId, type, tier)`,
   `CREATE INDEX IF NOT EXISTS idx_memories_user_agent ON memories(userId, agentId)`,
+  `CREATE INDEX IF NOT EXISTS idx_memory_avatars_user_status ON memory_avatars(userId, status, updatedAt)`,
   `CREATE INDEX IF NOT EXISTS idx_memories_user_parent ON memories(userId, parentId)`,
   `CREATE INDEX IF NOT EXISTS idx_conversations_user_status ON conversations(userId, status)`,
   `CREATE INDEX IF NOT EXISTS idx_token_usage_user_ts ON token_usage(userId, timestamp)`,
@@ -78,8 +79,6 @@ const PERFORMANCE_INDEX_SQL = [
   `CREATE INDEX IF NOT EXISTS idx_interactions_org ON interactions(orgId, userId)`,
   `CREATE INDEX IF NOT EXISTS idx_interactions_request ON interactions(requestId)`,
   `CREATE INDEX IF NOT EXISTS idx_interactions_voice_chain ON interactions(contextChainId, captureSessionId, timestamp)`,
-  `CREATE INDEX IF NOT EXISTS idx_agents_user_domain ON agents(userId, domain)`,
-  `CREATE INDEX IF NOT EXISTS idx_agents_org ON agents(orgId, userId)`,
   `CREATE INDEX IF NOT EXISTS idx_conversations_user_domain ON conversations(userId, domain)`,
   `CREATE INDEX IF NOT EXISTS idx_conversations_org ON conversations(orgId, userId)`,
   `CREATE INDEX IF NOT EXISTS idx_action_tasks_conversation_updated ON conversation_action_tasks(conversationId, updatedAt)`,
@@ -98,18 +97,11 @@ const PERFORMANCE_INDEX_SQL = [
   `CREATE INDEX IF NOT EXISTS idx_model_routing_voice_chain ON model_routing_receipts(contextChainId, captureSessionId, completedAt)`,
   `CREATE INDEX IF NOT EXISTS idx_chat_execution_receipts_expiry ON chat_execution_terminal_receipts(expiresAt)`,
   `CREATE INDEX IF NOT EXISTS idx_read_only_tool_patterns_scope ON read_only_tool_patterns(userId, domain, orgId, updatedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_background_tasks_user_status ON background_delegation_tasks(userId, status, updatedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_background_tasks_lease ON background_delegation_tasks(status, leaseExpiresAt)`,
   `CREATE INDEX IF NOT EXISTS idx_command_center_plans_scope_status ON command_center_plans(userId, domain, orgId, status)`,
   `CREATE INDEX IF NOT EXISTS idx_command_center_plans_due ON command_center_plans(status, nextRunAt)`,
   `CREATE INDEX IF NOT EXISTS idx_autonomous_tasks_user_status ON autonomous_tasks(userId, status, updatedAt)`,
   `CREATE INDEX IF NOT EXISTS idx_autonomous_tasks_lease ON autonomous_tasks(status, leaseExpiresAt)`,
   `CREATE INDEX IF NOT EXISTS idx_external_commit_journal_task ON external_commit_journal(taskId, updatedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_external_ai_sessions_user_updated ON external_ai_sessions(userId, updatedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_external_ai_sessions_task ON external_ai_sessions(taskId, updatedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_external_ai_dispatches_session_status ON external_ai_dispatches(sessionId, status, updatedAt)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_external_ai_dispatches_idempotency ON external_ai_dispatches(idempotencyKey)`,
-  `CREATE INDEX IF NOT EXISTS idx_external_ai_answers_session_received ON external_ai_answers(sessionId, receivedAt)`,
   `CREATE INDEX IF NOT EXISTS idx_external_ai_history_sources_user_status ON external_ai_history_sources(userId, status, updatedAt)`,
   `CREATE INDEX IF NOT EXISTS idx_external_ai_history_sources_scope ON external_ai_history_sources(userId, domain, orgId, sourceKind)`,
   `CREATE INDEX IF NOT EXISTS idx_external_ai_history_jobs_source_status ON external_ai_history_sync_jobs(sourceId, status, updatedAt)`,
@@ -466,6 +458,7 @@ export function initDatabase(): Promise<void> {
           await requireSqliteQuickCheck('before');
           await createTables();
           await migrateSchema();
+          await migrateRetiredLocalAgentTables();
           await requireSqliteQuickCheck('after');
           await loadMemoryDB();
           startupQuickCheckPassed = true;
@@ -497,14 +490,114 @@ function onAlter(err: Error | null) {
   }
 }
 
+/**
+ * Retire the old local Agent/team persistence without erasing the one
+ * user-facing capability that used to be stored in that table: Memory
+ * Avatars.  The migration is deliberately explicit and fail-closed: legacy
+ * rows are copied first, and only then are the team-runtime tables removed.
+ */
+async function migrateRetiredLocalAgentTables(): Promise<void> {
+  const tableRows = await query<{ name: string }>(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('agents', 'agent_templates', 'background_delegation_tasks', 'external_ai_sessions', 'external_ai_dispatches', 'external_ai_answers')",
+  );
+  const existing = new Set(tableRows.map(row => String(row.name || '')));
+
+  if (existing.has('agents')) {
+    const legacyAgents = await query<any>('SELECT * FROM agents');
+    for (const legacy of legacyAgents) {
+      const parseObject = (value: unknown): Record<string, any> => {
+        if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
+        if (typeof value !== 'string') return {};
+        try {
+          const parsed = JSON.parse(value || '{}');
+          return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+        } catch {
+          return {};
+        }
+      };
+      // The legacy route stored the sanctuary marker and identity fields on
+      // the Agent row, while MemoryAvatarLab put personality/evidence/seeds
+      // inside the data column. Merge both shapes before retiring the table.
+      const config = {
+        ...parseObject(legacy.config),
+        ...parseObject(legacy.data),
+      };
+
+      // Sanctuary records were the only old Agent records that represented a
+      // personal memory companion.  Do not resurrect ordinary workers,
+      // external runtimes, or team templates.
+      const isMemoryAvatar = legacy.territory === 'sanctuary'
+        || config.territory === 'sanctuary'
+        || legacy.distilledFrom === 'chat_records'
+        || config.distilledFrom === 'chat_records'
+        || (legacy.memoryScope === 'private' && Boolean(config.personalityConfig));
+      if (!isMemoryAvatar) continue;
+
+      const id = String(legacy.id || '').trim();
+      const userId = String(legacy.userId || '').trim();
+      if (!id || !userId) continue;
+      const now = new Date().toISOString();
+      const relationshipType = String(config.relationshipType || legacy.relationshipType || legacy.category || 'close_friend').trim() || 'close_friend';
+      const payload = {
+        ...config,
+        personalityConfig: config.personalityConfig || {},
+        evidenceMap: Array.isArray(config.evidenceMap) ? config.evidenceMap : [],
+        seedMemories: Array.isArray(config.seedMemories) ? config.seedMemories : [],
+        narrative: String(config.narrative || ''),
+        isFrozen: config.isFrozen !== false && legacy.isFrozen !== false,
+      };
+      await run(
+        `INSERT OR IGNORE INTO memory_avatars (id, userId, name, relationshipType, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, 'active', ?, ?, ?)`,
+        [id, userId, String(legacy.name || 'Memory').trim() || 'Memory', relationshipType, JSON.stringify(payload), legacy.createdAt || now, now],
+      );
+
+      // Older versions kept seed memories only inside the Agent config. Make
+      // them durable and private to this avatar before dropping the legacy
+      // table. INSERT OR IGNORE makes a repeated startup migration safe.
+      const seeds = Array.isArray(config.seedMemories) ? config.seedMemories : [];
+      for (let index = 0; index < seeds.length; index += 1) {
+        const seed = seeds[index];
+        if (!seed || typeof seed !== 'object' || !String(seed.content || '').trim()) continue;
+        const memoryId = `memory-avatar-seed-${id}-${index}`;
+        const createdAt = String(legacy.createdAt || now);
+        await run(
+          `INSERT OR IGNORE INTO memories (id, userId, type, content, keywords, confidence, sourceInteractionId, createdAt, updatedAt, lastRetrievedAt, retrieveCount, tier, perspective, importance, parentId, agentId, nodeType, domain, orgId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, 'semantic', 'owner_trait', 0.8, NULL, ?, 'leaf', 'personal', '')`,
+          [
+            memoryId,
+            userId,
+            ['preference', 'fact', 'habit', 'knowledge'].includes(String(seed.type)) ? String(seed.type) : 'fact',
+            String(seed.content).slice(0, 1000),
+            JSON.stringify(Array.isArray(seed.keywords) ? seed.keywords.slice(0, 12) : []),
+            Math.min(0.95, Math.max(0.1, Number(seed.confidence) || 0.6)),
+            `memory-avatar-import:${id}`,
+            createdAt,
+            createdAt,
+            id,
+          ],
+        );
+      }
+    }
+  }
+
+  // LAP has its own scoped protocol storage and is intentionally unaffected.
+  for (const table of [
+    'agents',
+    'agent_templates',
+    'background_delegation_tasks',
+    'external_ai_sessions',
+    'external_ai_dispatches',
+    'external_ai_answers',
+  ]) {
+    if (existing.has(table)) await run(`DROP TABLE IF EXISTS ${table}`);
+  }
+}
+
 // Add missing columns to existing tables (safe on old DB)
 function migrateSchema(): Promise<void> {
   return new Promise((resolve) => {
     db!.serialize(() => {
     // Add 'phone' column to users if it doesn't exist (old DB lacks it)
     db!.run("ALTER TABLE users ADD COLUMN phone TEXT DEFAULT ''", onAlter);
-    // Add 'status' column to agents if it doesn't exist
-    db!.run("ALTER TABLE agents ADD COLUMN status TEXT DEFAULT 'active'", onAlter);
     // Add 'role' column to interactions if it doesn't exist
     db!.run("ALTER TABLE interactions ADD COLUMN role TEXT DEFAULT ''", onAlter);
     // Add 'personality' column to interactions if it doesn't exist
@@ -515,18 +608,7 @@ function migrateSchema(): Promise<void> {
     db!.run("ALTER TABLE interactions ADD COLUMN toolCalls TEXT DEFAULT ''", onAlter);
     // Add 'conversationId' column to interactions if it doesn't exist
     db!.run("ALTER TABLE interactions ADD COLUMN conversationId TEXT DEFAULT ''", onAlter);
-    // Add agent framework columns
-    db!.run("ALTER TABLE agents ADD COLUMN personalityId TEXT DEFAULT 'lumi'", onAlter);
-    db!.run("ALTER TABLE agents ADD COLUMN modelPreference TEXT DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE agents ADD COLUMN memoryScope TEXT DEFAULT 'shared'", onAlter);
-    db!.run("ALTER TABLE agents ADD COLUMN autonomyLevel TEXT DEFAULT 'reactive'", onAlter);
-    db!.run("ALTER TABLE agents ADD COLUMN runtimeConfig TEXT DEFAULT '{}'", onAlter);
-    // Add runtime + externalCommand to agents
-    db!.run("ALTER TABLE agents ADD COLUMN runtime TEXT DEFAULT 'internal'", onAlter);
-    db!.run("ALTER TABLE agents ADD COLUMN externalCommand TEXT DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE agents ADD COLUMN skillTags TEXT NOT NULL DEFAULT '[]'", onAlter);
-    db!.run("ALTER TABLE agents ADD COLUMN knowledgeDomains TEXT NOT NULL DEFAULT '[]'", onAlter);
-    // Add agentId to memories for agent-private memory
+    // Keep the stable Lumi identity key used by conversations and knowledge.
     db!.run("ALTER TABLE memories ADD COLUMN agentId TEXT DEFAULT ''", onAlter);
     // Add location to memories for spatial context
     db!.run("ALTER TABLE memories ADD COLUMN location TEXT DEFAULT ''", onAlter);
@@ -550,8 +632,6 @@ function migrateSchema(): Promise<void> {
     db!.run("ALTER TABLE interactions ADD COLUMN sttReceiptId TEXT DEFAULT ''", onAlter);
     db!.run("ALTER TABLE interactions ADD COLUMN contextChainId TEXT DEFAULT ''", onAlter);
     db!.run("ALTER TABLE interactions ADD COLUMN previousRequestId TEXT DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE agents ADD COLUMN domain TEXT DEFAULT 'personal'", onAlter);
-    db!.run("ALTER TABLE agents ADD COLUMN orgId TEXT DEFAULT ''", onAlter);
     // Add domain + orgId to conversations for personal/work isolation
     db!.run("ALTER TABLE conversations ADD COLUMN domain TEXT DEFAULT 'personal'", onAlter);
     db!.run("ALTER TABLE conversations ADD COLUMN orgId TEXT DEFAULT ''", onAlter);
@@ -619,6 +699,19 @@ function migrateSchema(): Promise<void> {
       domain TEXT DEFAULT 'personal',
       orgId TEXT DEFAULT ''
     )`, onAlter);
+    // Memory Avatars are a personal, single-persona feature. They are kept
+    // outside the retired local Agent/team tables so removing team
+    // orchestration cannot remove a user's private memory companion.
+    db!.run(`CREATE TABLE IF NOT EXISTS memory_avatars (
+      id TEXT PRIMARY KEY,
+      userId TEXT NOT NULL,
+      name TEXT NOT NULL,
+      relationshipType TEXT NOT NULL DEFAULT 'close_friend',
+      status TEXT NOT NULL DEFAULT 'active',
+      payload TEXT NOT NULL DEFAULT '{}',
+      createdAt TEXT NOT NULL,
+      updatedAt TEXT NOT NULL
+    )`, onAlter);
     // Migrate: add new columns to existing memories table
     db!.run("ALTER TABLE memories ADD COLUMN tier TEXT NOT NULL DEFAULT 'episodic'", onAlter);
     db!.run("ALTER TABLE memories ADD COLUMN perspective TEXT NOT NULL DEFAULT 'owner_trait'", onAlter);
@@ -671,27 +764,6 @@ function createTables(): Promise<void> {
         balance REAL DEFAULT 0,
         phone TEXT DEFAULT '',
         createdAt TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS agents (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        category TEXT NOT NULL,
-        config TEXT NOT NULL,
-        createdAt TEXT NOT NULL,
-        userId TEXT,
-        status TEXT DEFAULT 'active',
-        personalityId TEXT DEFAULT 'lumi',
-        modelPreference TEXT DEFAULT '',
-        memoryScope TEXT DEFAULT 'shared',
-        autonomyLevel TEXT DEFAULT 'reactive',
-        runtimeConfig TEXT DEFAULT '{}',
-        runtime TEXT DEFAULT 'internal',
-        externalCommand TEXT DEFAULT '',
-        domain TEXT DEFAULT 'personal',
-        orgId TEXT DEFAULT '',
-        skillTags TEXT NOT NULL DEFAULT '[]',
-        knowledgeDomains TEXT NOT NULL DEFAULT '[]'
       );
 
       CREATE TABLE IF NOT EXISTS interactions (
@@ -897,15 +969,6 @@ function createTables(): Promise<void> {
         payload TEXT NOT NULL DEFAULT '{}'
       );
 
-      CREATE TABLE IF NOT EXISTS background_delegation_tasks (
-        id TEXT PRIMARY KEY,
-        userId TEXT NOT NULL,
-        status TEXT NOT NULL,
-        leaseExpiresAt TEXT NOT NULL DEFAULT '',
-        updatedAt TEXT NOT NULL,
-        payload TEXT NOT NULL DEFAULT '{}'
-      );
-
       CREATE TABLE IF NOT EXISTS command_center_plans (
         id TEXT PRIMARY KEY,
         userId TEXT NOT NULL,
@@ -947,38 +1010,6 @@ function createTables(): Promise<void> {
         claimToken TEXT NOT NULL,
         createdAt TEXT NOT NULL,
         updatedAt TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS external_ai_sessions (
-        id TEXT PRIMARY KEY,
-        userId TEXT NOT NULL,
-        taskId TEXT NOT NULL DEFAULT '',
-        conversationId TEXT NOT NULL DEFAULT '',
-        status TEXT NOT NULL,
-        updatedAt TEXT NOT NULL,
-        payload TEXT NOT NULL DEFAULT '{}'
-      );
-
-      CREATE TABLE IF NOT EXISTS external_ai_dispatches (
-        id TEXT PRIMARY KEY,
-        sessionId TEXT NOT NULL,
-        userId TEXT NOT NULL,
-        targetId TEXT NOT NULL,
-        status TEXT NOT NULL,
-        routeKind TEXT NOT NULL,
-        idempotencyKey TEXT NOT NULL UNIQUE,
-        updatedAt TEXT NOT NULL,
-        payload TEXT NOT NULL DEFAULT '{}'
-      );
-
-      CREATE TABLE IF NOT EXISTS external_ai_answers (
-        id TEXT PRIMARY KEY,
-        sessionId TEXT NOT NULL,
-        dispatchId TEXT NOT NULL,
-        userId TEXT NOT NULL,
-        targetId TEXT NOT NULL,
-        receivedAt TEXT NOT NULL,
-        payload TEXT NOT NULL DEFAULT '{}'
       );
 
       CREATE TABLE IF NOT EXISTS external_ai_history_sources (
@@ -1261,24 +1292,6 @@ function createTables(): Promise<void> {
         createdAt TEXT NOT NULL
       );
 
-      CREATE TABLE IF NOT EXISTS agent_templates (
-        id TEXT PRIMARY KEY,
-        orgId TEXT NOT NULL,
-        name TEXT NOT NULL,
-        description TEXT NOT NULL,
-        category TEXT NOT NULL,
-        config TEXT NOT NULL,
-        icon TEXT DEFAULT 'Bot',
-        version INTEGER DEFAULT 1,
-        status TEXT NOT NULL DEFAULT 'draft',
-        authorId TEXT NOT NULL,
-        reviewedBy TEXT,
-        reviewComment TEXT,
-        downloadCount INTEGER DEFAULT 0,
-        createdAt TEXT NOT NULL,
-        updatedAt TEXT NOT NULL
-      );
-
       CREATE TABLE IF NOT EXISTS notifications (
         id TEXT PRIMARY KEY,
         userId TEXT NOT NULL,
@@ -1326,7 +1339,7 @@ function createTables(): Promise<void> {
 }
 
 async function insertInitialData(): Promise<void> {
-  const tables = ['users', 'agents', 'interactions', 'marketplace_skills', 'skills', 'founder_vision'];
+  const tables = ['users', 'interactions', 'marketplace_skills', 'skills', 'founder_vision'];
   const counts: { [table: string]: number } = {};
 
   for (const table of tables) {
@@ -1376,7 +1389,6 @@ async function insertInitialData(): Promise<void> {
 // Load database and map old column names to field names server.ts expects
 async function loadMemoryDB(): Promise<void> {
   const users = await query<any>('SELECT * FROM users');
-  const agentsRaw = await query<any>('SELECT * FROM agents');
   const interactionsRaw = await query<any>('SELECT * FROM interactions');
   const marketplaceSkills = await query<any>('SELECT * FROM marketplace_skills');
   const skills = await query<any>('SELECT * FROM skills');
@@ -1390,6 +1402,22 @@ async function loadMemoryDB(): Promise<void> {
     ...m,
     keywords: m.keywords ? JSON.parse(m.keywords) : [],
   }));
+  const memoryAvatarsRaw = await query<any>('SELECT * FROM memory_avatars');
+  const memoryAvatars = memoryAvatarsRaw.map((row: any) => {
+    let payload: Record<string, any> = {};
+    try {
+      const parsed = typeof row.payload === 'string' ? JSON.parse(row.payload || '{}') : row.payload;
+      if (parsed && typeof parsed === 'object') payload = parsed;
+    } catch {}
+    return {
+      ...row,
+      payload,
+      personalityConfig: payload.personalityConfig || {},
+      evidenceMap: Array.isArray(payload.evidenceMap) ? payload.evidenceMap : [],
+      seedMemories: Array.isArray(payload.seedMemories) ? payload.seedMemories : [],
+      isFrozen: payload.isFrozen !== false,
+    };
+  });
 
   // Load reminders
   const remindersRaw = await query<any>('SELECT * FROM reminders');
@@ -1401,12 +1429,8 @@ async function loadMemoryDB(): Promise<void> {
   const conversationActionReceipts = await query<any>('SELECT * FROM conversation_action_receipts');
   const modelRoutingReceiptsRaw = await query<any>('SELECT * FROM model_routing_receipts');
   const readOnlyToolPatternsRaw = await query<any>('SELECT * FROM read_only_tool_patterns');
-  const backgroundDelegationTasksRaw = await query<any>('SELECT * FROM background_delegation_tasks');
   const commandCenterPlansRaw = await query<any>('SELECT * FROM command_center_plans');
   const autonomousTasksRaw = await query<any>('SELECT * FROM autonomous_tasks');
-  const externalAiSessionsRaw = await query<any>('SELECT * FROM external_ai_sessions');
-  const externalAiDispatchesRaw = await query<any>('SELECT * FROM external_ai_dispatches');
-  const externalAiAnswersRaw = await query<any>('SELECT * FROM external_ai_answers');
   const externalAiHistorySourcesRaw = await query<any>('SELECT * FROM external_ai_history_sources');
   const externalAiHistorySyncJobsRaw = await query<any>('SELECT * FROM external_ai_history_sync_jobs');
   const externalAiHistoryConversationsRaw = await query<any>('SELECT * FROM external_ai_history_conversations');
@@ -1436,7 +1460,6 @@ async function loadMemoryDB(): Promise<void> {
   const orgInvitations = await query<any>('SELECT * FROM org_invitations');
   const orgKbArticles = await query<any>('SELECT * FROM org_kb_articles');
   const orgKbEmbeddings = await query<any>('SELECT * FROM org_kb_embeddings');
-  const agentTemplates = await query<any>('SELECT * FROM agent_templates');
   const notificationsRaw = await query<any>('SELECT * FROM notifications');
   const notifications = notificationsRaw.map((n: any) => ({
     ...n,
@@ -1462,22 +1485,6 @@ async function loadMemoryDB(): Promise<void> {
       createdAt: vp.createdAt,
     });
   }
-
-  // Map old column names to the field names that server.ts expects
-  const agents = agentsRaw.map((a: any) => ({
-    ...a,
-    ownerUid: a.userId || a.ownerUid,
-    data: a.config || a.data || '{}',
-    personalityId: a.personalityId || 'lumi',
-    modelPreference: a.modelPreference || '',
-    memoryScope: a.memoryScope || 'shared',
-    autonomyLevel: a.autonomyLevel || 'reactive',
-    runtimeConfig: a.runtimeConfig || '{}',
-    domain: a.domain || 'personal',
-    orgId: a.orgId || '',
-    skillTags: parseJsonArrayValue(a.skillTags).map(item => String(item || '').trim()).filter(Boolean),
-    knowledgeDomains: parseJsonArrayValue(a.knowledgeDomains).map(item => String(item || '').trim()).filter(Boolean),
-  }));
 
   const interactions = interactionsRaw.map((i: any) => ({
     ...i,
@@ -1551,13 +1558,13 @@ async function loadMemoryDB(): Promise<void> {
 
   memoryDB = {
     users,
-    agents,
     interactions,
     marketplaceSkills,
     skills,
     founderVision,
     founderVisionUpdatedAt,
     memories: (memories || []).map((m: any) => ({ ...m, domain: m.domain || 'personal', orgId: m.orgId || '' })),
+    memoryAvatars,
     reminders: remindersRaw || [],
     conversations,
     conversationActionTasks: conversationActionTasks || [],
@@ -1589,41 +1596,11 @@ async function loadMemoryDB(): Promise<void> {
           : [];
       } catch { return []; }
     }),
-    backgroundDelegationTasks: (backgroundDelegationTasksRaw || []).flatMap((row: any) => {
-      try {
-        const task = JSON.parse(row.payload || '{}');
-        return task && typeof task === 'object' ? [{ ...task, id: row.id, userId: row.userId, status: row.status, leaseExpiresAt: row.leaseExpiresAt || '', updatedAt: row.updatedAt }] : [];
-      } catch { return []; }
-    }),
     commandCenterPlans: commandCenterPlansRaw || [],
     autonomousTasks: (autonomousTasksRaw || []).flatMap((row: any) => {
       try {
         const task = JSON.parse(row.payload || '{}');
         return task && typeof task === 'object' ? [{ ...task, id: row.id, userId: row.userId, status: row.status, leaseExpiresAt: row.leaseExpiresAt || '', updatedAt: row.updatedAt }] : [];
-      } catch { return []; }
-    }),
-    externalAiSessions: (externalAiSessionsRaw || []).flatMap((row: any) => {
-      try {
-        const payload = JSON.parse(row.payload || '{}');
-        return payload && typeof payload === 'object'
-          ? [{ ...payload, id: row.id, userId: row.userId, taskId: row.taskId || '', conversationId: row.conversationId || '', status: row.status, updatedAt: row.updatedAt }]
-          : [];
-      } catch { return []; }
-    }),
-    externalAiDispatches: (externalAiDispatchesRaw || []).flatMap((row: any) => {
-      try {
-        const payload = JSON.parse(row.payload || '{}');
-        return payload && typeof payload === 'object'
-          ? [{ ...payload, id: row.id, sessionId: row.sessionId, userId: row.userId, targetId: row.targetId, status: row.status, routeKind: row.routeKind, idempotencyKey: row.idempotencyKey, updatedAt: row.updatedAt }]
-          : [];
-      } catch { return []; }
-    }),
-    externalAiAnswers: (externalAiAnswersRaw || []).flatMap((row: any) => {
-      try {
-        const payload = JSON.parse(row.payload || '{}');
-        return payload && typeof payload === 'object'
-          ? [{ ...payload, id: row.id, sessionId: row.sessionId, dispatchId: row.dispatchId, userId: row.userId, targetId: row.targetId, receivedAt: row.receivedAt }]
-          : [];
       } catch { return []; }
     }),
     externalAiHistorySources: (externalAiHistorySourcesRaw || []).flatMap((row: any) => {
@@ -1722,7 +1699,6 @@ async function loadMemoryDB(): Promise<void> {
     orgInvitations: orgInvitations || [],
     orgKbArticles: orgKbArticles || [],
     orgKbEmbeddings: orgKbEmbeddings || [],
-    agentTemplates: agentTemplates || [],
     notifications: notifications || [],
     auditLog: auditLogEntries || [],
   };
@@ -2119,12 +2095,6 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
       rows: () => memoryDB.users.map((u: any) => [u.uid, u.username, u.password, u.role, u.balance, u.phone || '', u.createdAt]),
     },
     {
-      name: 'agents',
-      createSQL: `CREATE TABLE _temp_agents (id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL, config TEXT NOT NULL, createdAt TEXT NOT NULL, userId TEXT, status TEXT DEFAULT 'active', personalityId TEXT DEFAULT 'lumi', modelPreference TEXT DEFAULT '', memoryScope TEXT DEFAULT 'shared', autonomyLevel TEXT DEFAULT 'reactive', runtimeConfig TEXT DEFAULT '{}', runtime TEXT DEFAULT 'internal', externalCommand TEXT DEFAULT '', domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '', skillTags TEXT NOT NULL DEFAULT '[]', knowledgeDomains TEXT NOT NULL DEFAULT '[]')`,
-      insertSQL: `INSERT INTO _temp_agents (id, name, category, config, createdAt, userId, status, personalityId, modelPreference, memoryScope, autonomyLevel, runtimeConfig, runtime, externalCommand, domain, orgId, skillTags, knowledgeDomains) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => memoryDB.agents.map((a: any) => [a.id, a.name, a.category, a.data || a.config || '{}', a.createdAt, a.ownerUid || a.userId || null, a.status || 'active', a.personalityId || 'lumi', a.modelPreference || '', a.memoryScope || 'shared', a.autonomyLevel || 'reactive', a.runtimeConfig || '{}', a.runtime || 'internal', a.externalCommand || '', a.domain || 'personal', a.orgId || '', JSON.stringify(Array.isArray(a.skillTags) ? a.skillTags : []), JSON.stringify(Array.isArray(a.knowledgeDomains) ? a.knowledgeDomains : [])]),
-    },
-    {
       name: 'interactions',
       createSQL: `CREATE TABLE _temp_interactions (id TEXT PRIMARY KEY, userId TEXT NOT NULL, agentId TEXT, module TEXT, message TEXT NOT NULL, response TEXT, role TEXT DEFAULT '', personality TEXT DEFAULT '', mode TEXT DEFAULT '', toolCalls TEXT DEFAULT '', conversationId TEXT DEFAULT '', cognitiveIntent TEXT DEFAULT '', llmWasCalled INTEGER DEFAULT 0, completionFeedback TEXT DEFAULT '', domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '', source TEXT DEFAULT '', channel TEXT DEFAULT '', externalMessageId TEXT DEFAULT '', routeSequence INTEGER, receivedAt TEXT DEFAULT '', requestId TEXT DEFAULT '', nativeDeviceId TEXT DEFAULT '', executionSessionId TEXT DEFAULT '', nativeClientIdentitySha256 TEXT DEFAULT '', audioInputKind TEXT DEFAULT '', syntheticAudio INTEGER, captureSessionId TEXT DEFAULT '', sttReceiptId TEXT DEFAULT '', contextChainId TEXT DEFAULT '', previousRequestId TEXT DEFAULT '', timestamp TEXT NOT NULL)`,
       insertSQL: `INSERT INTO _temp_interactions (id, userId, agentId, module, message, response, role, personality, mode, toolCalls, conversationId, cognitiveIntent, llmWasCalled, completionFeedback, domain, orgId, source, channel, externalMessageId, routeSequence, receivedAt, requestId, nativeDeviceId, executionSessionId, nativeClientIdentitySha256, audioInputKind, syntheticAudio, captureSessionId, sttReceiptId, contextChainId, previousRequestId, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -2135,6 +2105,28 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
       createSQL: `CREATE TABLE _temp_memories (id TEXT PRIMARY KEY, userId TEXT NOT NULL, type TEXT NOT NULL, content TEXT NOT NULL, keywords TEXT NOT NULL DEFAULT '[]', confidence REAL NOT NULL DEFAULT 0.5, sourceInteractionId TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, lastRetrievedAt TEXT, retrieveCount INTEGER NOT NULL DEFAULT 0, tier TEXT NOT NULL DEFAULT 'episodic', perspective TEXT NOT NULL DEFAULT 'owner_trait', importance REAL NOT NULL DEFAULT 0.3, parentId TEXT, agentId TEXT DEFAULT '', nodeType TEXT NOT NULL DEFAULT 'leaf', location TEXT DEFAULT '', domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '')`,
       insertSQL: `INSERT INTO _temp_memories (id, userId, type, content, keywords, confidence, sourceInteractionId, createdAt, updatedAt, lastRetrievedAt, retrieveCount, tier, perspective, importance, parentId, agentId, nodeType, location, domain, orgId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       rows: () => (memoryDB.memories || []).map((m: any) => [m.id, m.userId, m.type, m.content, JSON.stringify(m.keywords || []), m.confidence || 0.5, m.sourceInteractionId || '', m.createdAt, m.updatedAt, m.lastRetrievedAt, m.retrieveCount || 0, m.tier || 'episodic', m.perspective || 'owner_trait', m.importance ?? 0.3, m.parentId || null, m.agentId || '', m.nodeType || 'leaf', m.location || '', m.domain || 'personal', m.orgId || '']),
+    },
+    {
+      name: 'memory_avatars',
+      createSQL: `CREATE TABLE _temp_memory_avatars (id TEXT PRIMARY KEY, userId TEXT NOT NULL, name TEXT NOT NULL, relationshipType TEXT NOT NULL DEFAULT 'close_friend', status TEXT NOT NULL DEFAULT 'active', payload TEXT NOT NULL DEFAULT '{}', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
+      insertSQL: `INSERT INTO _temp_memory_avatars (id, userId, name, relationshipType, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.memoryAvatars || []).map((avatar: any) => [
+        avatar.id,
+        avatar.userId,
+        avatar.name || 'Memory',
+        avatar.relationshipType || 'close_friend',
+        avatar.status || 'active',
+        JSON.stringify({
+          ...(avatar.payload && typeof avatar.payload === 'object' ? avatar.payload : {}),
+          personalityConfig: avatar.personalityConfig || avatar.payload?.personalityConfig || {},
+          evidenceMap: Array.isArray(avatar.evidenceMap) ? avatar.evidenceMap : (avatar.payload?.evidenceMap || []),
+          seedMemories: Array.isArray(avatar.seedMemories) ? avatar.seedMemories : (avatar.payload?.seedMemories || []),
+          narrative: avatar.narrative || avatar.payload?.narrative || '',
+          isFrozen: avatar.isFrozen !== false,
+        }),
+        avatar.createdAt || new Date().toISOString(),
+        avatar.updatedAt || avatar.createdAt || new Date().toISOString(),
+      ]),
     },
     {
       name: 'reminders',
@@ -2217,19 +2209,6 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
       ]),
     },
     {
-      name: 'background_delegation_tasks',
-      createSQL: `CREATE TABLE _temp_background_delegation_tasks (id TEXT PRIMARY KEY, userId TEXT NOT NULL, status TEXT NOT NULL, leaseExpiresAt TEXT NOT NULL DEFAULT '', updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
-      insertSQL: `INSERT INTO _temp_background_delegation_tasks (id, userId, status, leaseExpiresAt, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.backgroundDelegationTasks || []).map((task: any) => [
-        task.id,
-        task.userId,
-        task.status || 'queued',
-        task.leaseExpiresAt || '',
-        persistenceTimestamp(task.updatedAt, task.createdAt),
-        JSON.stringify(task),
-      ]),
-    },
-    {
       name: 'command_center_plans',
       createSQL: `CREATE TABLE _temp_command_center_plans (id TEXT PRIMARY KEY, userId TEXT NOT NULL, domain TEXT NOT NULL DEFAULT 'personal', orgId TEXT NOT NULL DEFAULT '', conversationId TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL, title TEXT NOT NULL, instruction TEXT NOT NULL, cadence TEXT NOT NULL DEFAULT 'none', timeOfDay TEXT NOT NULL DEFAULT '09:00', dayOfWeek INTEGER NOT NULL DEFAULT 1, dayOfMonth INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'active', nextRunAt TEXT NOT NULL DEFAULT '', lastRunAt TEXT NOT NULL DEFAULT '', lastRuntimeTaskId TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
       insertSQL: `INSERT INTO _temp_command_center_plans (id, userId, domain, orgId, conversationId, kind, title, instruction, cadence, timeOfDay, dayOfWeek, dayOfMonth, status, nextRunAt, lastRunAt, lastRuntimeTaskId, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -2265,50 +2244,6 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
         task.leaseExpiresAt || '',
         persistenceTimestamp(task.updatedAt, task.createdAt),
         JSON.stringify(task),
-      ]),
-    },
-    {
-      name: 'external_ai_sessions',
-      createSQL: `CREATE TABLE _temp_external_ai_sessions (id TEXT PRIMARY KEY, userId TEXT NOT NULL, taskId TEXT NOT NULL DEFAULT '', conversationId TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
-      insertSQL: `INSERT INTO _temp_external_ai_sessions (id, userId, taskId, conversationId, status, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.externalAiSessions || []).map((session: any) => [
-        session.id,
-        session.userId,
-        session.taskId || '',
-        session.conversationId || '',
-        session.status || 'active',
-        persistenceTimestamp(session.updatedAt, session.createdAt),
-        JSON.stringify(session),
-      ]),
-    },
-    {
-      name: 'external_ai_dispatches',
-      createSQL: `CREATE TABLE _temp_external_ai_dispatches (id TEXT PRIMARY KEY, sessionId TEXT NOT NULL, userId TEXT NOT NULL, targetId TEXT NOT NULL, status TEXT NOT NULL, routeKind TEXT NOT NULL, idempotencyKey TEXT NOT NULL UNIQUE, updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
-      insertSQL: `INSERT INTO _temp_external_ai_dispatches (id, sessionId, userId, targetId, status, routeKind, idempotencyKey, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.externalAiDispatches || []).map((dispatch: any) => [
-        dispatch.id,
-        dispatch.sessionId,
-        dispatch.userId,
-        dispatch.targetId,
-        dispatch.status || 'planned',
-        dispatch.routeKind || 'desktop_visual',
-        dispatch.idempotencyKey,
-        persistenceTimestamp(dispatch.updatedAt, dispatch.createdAt),
-        JSON.stringify(dispatch),
-      ]),
-    },
-    {
-      name: 'external_ai_answers',
-      createSQL: `CREATE TABLE _temp_external_ai_answers (id TEXT PRIMARY KEY, sessionId TEXT NOT NULL, dispatchId TEXT NOT NULL, userId TEXT NOT NULL, targetId TEXT NOT NULL, receivedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
-      insertSQL: `INSERT INTO _temp_external_ai_answers (id, sessionId, dispatchId, userId, targetId, receivedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.externalAiAnswers || []).map((answer: any) => [
-        answer.id,
-        answer.sessionId,
-        answer.dispatchId,
-        answer.userId,
-        answer.targetId,
-        persistenceTimestamp(answer.receivedAt),
-        JSON.stringify(answer),
       ]),
     },
     {
@@ -2559,12 +2494,6 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
       createSQL: `CREATE TABLE _temp_org_kb_embeddings (id TEXT PRIMARY KEY, articleId TEXT NOT NULL, chunkIndex INTEGER NOT NULL, embedding TEXT NOT NULL, content TEXT NOT NULL, modelName TEXT NOT NULL DEFAULT 'text-embedding-3-small', createdAt TEXT NOT NULL)`,
       insertSQL: `INSERT INTO _temp_org_kb_embeddings (id, articleId, chunkIndex, embedding, content, modelName, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       rows: () => (memoryDB.orgKbEmbeddings || []).map((e: any) => [e.id, e.articleId, e.chunkIndex, e.embedding, e.content, e.modelName || 'text-embedding-3-small', e.createdAt]),
-    },
-    {
-      name: 'agent_templates',
-      createSQL: `CREATE TABLE _temp_agent_templates (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL, category TEXT NOT NULL, config TEXT NOT NULL, icon TEXT DEFAULT 'Bot', version INTEGER DEFAULT 1, status TEXT NOT NULL DEFAULT 'draft', authorId TEXT NOT NULL, reviewedBy TEXT, reviewComment TEXT, downloadCount INTEGER DEFAULT 0, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_agent_templates (id, orgId, name, description, category, config, icon, version, status, authorId, reviewedBy, reviewComment, downloadCount, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.agentTemplates || []).map((t: any) => [t.id, t.orgId, t.name, t.description, t.category, t.config, t.icon || 'Bot', t.version || 1, t.status || 'draft', t.authorId, t.reviewedBy || null, t.reviewComment || null, t.downloadCount || 0, t.createdAt, t.updatedAt]),
     },
     {
       name: 'notifications',

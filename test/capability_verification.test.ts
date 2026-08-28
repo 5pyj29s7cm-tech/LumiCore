@@ -150,4 +150,27 @@ describe('capability terminal verification', () => {
       result: JSON.stringify({ ok: true, status: 'done', receipt: { ready: true, path: artifactPath } }),
     }).status).toBe('unverified');
   });
+
+  it('verifies a receipt-only nested JSON result instead of requiring display text', () => {
+    const contract = capability('terminal_receipt');
+    contract.verification = {
+      strategy: 'terminal_receipt',
+      required: true,
+      requiredFields: ['ok', 'status', 'matchedCount', 'cancelledCount'],
+      requiredValues: { ok: true },
+      successStatuses: ['idle', 'cancelled'],
+      successSignals: [],
+      limitations: [],
+    };
+
+    expect(verifyCapabilityReceipt(contract, {
+      result: '',
+      receipt: JSON.stringify(JSON.stringify({
+        ok: true,
+        status: 'cancelled',
+        matchedCount: 8,
+        cancelledCount: 8,
+      })),
+    })).toMatchObject({ status: 'verified' });
+  });
 });

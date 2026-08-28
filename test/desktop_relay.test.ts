@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { deviceRegistry } from '../server/devices';
 import {
   getDesktopControlQueueLength,
+  reportDesktopUserActivity,
   resetDesktopControlLeasesForTests,
 } from '../server/desktop/control_lease';
 import {
@@ -410,5 +411,46 @@ describe('desktop relay routing', () => {
     )).toBe(true);
     await voiceCall;
     voiceRelay.releaseControlLease('voice_complete');
+  });
+
+  it('latches physical-user pause for the whole turn and never dispatches a later desktop mutation', async () => {
+    const userId = `relay_user_pause_${Date.now()}`;
+    const sent: any[] = [];
+    const desktopSocket = {
+      connected: true,
+      data: { trustedLocalExecution: true },
+      emit: (event: string, payload: any) => sent.push({ event, payload }),
+    };
+    const socketId = `relay_user_pause_socket_${Date.now()}`;
+    deviceRegistry.register(userId, socketId, {
+      name: 'User Pause Desktop', type: 'desktop', deviceFingerprint: userId,
+    });
+    const { io } = mockIo({ [socketId]: desktopSocket });
+    const relay = createDesktopRelay({
+      io,
+      userId,
+      source: 'chat',
+      taskId: 'durable-user-pause-task',
+      timeoutMs: 30_000,
+    });
+
+    const observation = relay('desktop_active_window');
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(handleDesktopRelayResult(
+      sent[0].payload.correlationId,
+      { output: '{"title":"Aliyun","processName":"quark.exe"}' },
+      socketId,
+    )).toBe(true);
+    await observation;
+    expect(relay.getControlPauseReason()).toBeNull();
+
+    reportDesktopUserActivity(userId);
+    expect(relay.getControlPauseReason()).toBe('desktop_control_paused_for_user_activity');
+
+    const startedAt = Date.now();
+    await expect(relay('desktop_keyboard_press', { key: 'enter' }))
+      .rejects.toThrow(/desktop control is paused/i);
+    expect(Date.now() - startedAt).toBeLessThan(250);
+    expect(sent).toHaveLength(1);
   });
 });

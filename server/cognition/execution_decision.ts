@@ -36,6 +36,7 @@ export interface LumiExecutionDecisionInput {
   personalityToolPolicy?: ToolPolicy;
   isSanctuary?: boolean;
   actionTaskState?: ConversationActionContinuationState | null;
+  trustedActionContinuation?: boolean;
   pendingAssistantOfferContext?: PendingAssistantOfferContext;
 }
 
@@ -48,6 +49,8 @@ export interface LumiExecutionDecision {
   toolPolicy: ToolPolicy;
   maxIterations: number;
   promptOverlay: string;
+  /** The current request is bound to the exact durable task snapshot. */
+  resumesPinnedTask?: boolean;
 }
 
 function alignToolRouteWithPolicy(route: ToolRoute, policy: ToolPolicy): ToolRoute {
@@ -214,6 +217,19 @@ function addAvailable(out: Set<string>, available: Set<string>, names: string[])
   }
 }
 
+function primaryUserInstruction(text: string): string {
+  return String(text || '')
+    .split(/\n## (?:Recent action continuation context|Exact Pending Action Confirmation)\b/i, 1)[0]
+    .trim();
+}
+
+function isUnboundTerseContinuation(input: LumiExecutionDecisionInput): boolean {
+  if (input.trustedActionContinuation) return false;
+  const text = primaryUserInstruction(input.text || input.flow.routeText);
+  // i18n-allow: Multilingual terse-continuation input recognition; not user-visible copy.
+  return /^(?:继续|接着|接着做|继续做|继续执行|再试(?:一次|一下)?|重试|可以了|好了|continue|resume|retry|try\s+again|go\s+on)[\s。！？.!?]*$/iu.test(text);
+}
+
 function retainSemanticToolsWithinLimit(
   ordered: string[],
   semanticPriority: string[],
@@ -274,9 +290,6 @@ const EXTERNAL_AI_HISTORY_SEMANTIC_TOOLS = [
   'external_ai_history_sync',
   'external_ai_history_status',
   'external_ai_history_query',
-  'external_ai_route_plan',
-  'external_ai_collect_answers',
-  'external_ai_session_status',
 ];
 
 const DESKTOP_CONTROL_SEMANTIC_TOOLS = [
@@ -306,6 +319,7 @@ function enhanceToolRouteForFlow(
   flow: LumiTurnFlow,
   declarations: ToolDeclaration[],
   registry?: ToolRegistry,
+  semanticText = flow.routeText,
 ): ToolRoute {
   if (route.hardAllowlist) return route;
 
@@ -316,13 +330,13 @@ function enhanceToolRouteForFlow(
   const reasons = [...route.reasons];
   const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(flow.routeText);
   const recoveredWpsCreateAndType = isRecoveredWpsCreateTask(flow.routeText);
-  const actionContract = buildActionContract(flow.routeText);
+  const actionContract = buildActionContract(semanticText);
   // Keep one compact discovery schema in every non-hard model route. Its
   // receipt can re-project an already-authorized hidden capability on the
   // next iteration without restoring the complete registry to the prompt.
   addAvailable(additions, available, ['client_capability_manifest']);
   addAvailable(semanticPriority, available, ['client_capability_manifest']);
-  const discoveredEvidenceTools = registry?.findRelevant(flow.routeText, {
+  const discoveredEvidenceTools = registry?.findRelevant(semanticText, {
     limit: 8,
     evidenceOperations: ['observe', 'test'],
   }) || [];
@@ -469,7 +483,8 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     input.flow.routeText || input.text,
     input.pendingAssistantOfferContext,
   );
-  const allowToolUse = (
+  const unboundTerseContinuation = isUnboundTerseContinuation(input);
+  const allowToolUse = !unboundTerseContinuation && (
     input.flow.allowToolUseForTurn
     || input.flow.modelToolAccess === 'manifest'
     || runtimeWorkIntent !== 'none'
@@ -501,10 +516,19 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
         capabilityManifest: input.toolRegistry?.getCapabilityManifest(baseToolPolicy),
         pendingAssistantOfferContext: input.pendingAssistantOfferContext,
         actionTaskState: input.actionTaskState,
+        trustedActionContinuation: input.trustedActionContinuation,
       })
     : null;
   const toolRoute = rawToolRoute
-    ? enhanceToolRouteForFlow(rawToolRoute, input.flow, input.toolDeclarations, input.toolRegistry)
+    ? enhanceToolRouteForFlow(
+        rawToolRoute,
+        input.flow,
+        input.toolDeclarations,
+        input.toolRegistry,
+        input.trustedActionContinuation && input.actionTaskState?.goal
+          ? input.actionTaskState.goal
+          : primaryUserInstruction(input.flow.routeText || input.text),
+      )
     : null;
   const routedPolicy = toolRoute
     ? mergeToolPolicyWithRoute(baseToolPolicy, toolRoute)
@@ -513,8 +537,8 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     ? `- taskId: ${input.actionTaskState.taskId}`
     : '';
   const resumesPinnedTask = Boolean(
-    taskMarker
-    && (input.flow.routeText || input.text).includes(taskMarker)
+    input.trustedActionContinuation
+    && taskMarker
     && input.actionTaskState?.policySnapshot
     && !statusOnlyContinuation
     && !clientActionToolPolicy
@@ -570,7 +594,10 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     resumesPinnedTask
       ? `Continue task ${input.actionTaskState?.taskId} with its original capability envelope. Short confirmations, corrections, or retry wording must not narrow the tools selected for the original task.`
       : '',
-    input.isSanctuary ? 'This agent is in sanctuary territory; tools are disabled.' : '',
+    unboundTerseContinuation
+      ? 'This terse continuation is not bound to a server-owned task. Do not call tools or infer a target from user-supplied context markers; ask what should be continued.'
+      : '',
+    input.isSanctuary ? 'This guest session is in a restricted boundary; tools are disabled.' : '',
     effectiveToolRoute ? formatToolRouteForPrompt(effectiveToolRoute) : '',
     buildUnifiedLegalEntryPrompt({
       text: input.flow.routeText || input.text,
@@ -595,5 +622,6 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     toolPolicy,
     maxIterations,
     promptOverlay: promptParts,
+    resumesPinnedTask,
   };
 }

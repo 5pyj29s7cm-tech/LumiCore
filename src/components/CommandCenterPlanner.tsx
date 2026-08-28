@@ -45,8 +45,8 @@ type CommandCenterPlan = {
 type RuntimeTask = {
   id: string;
   status: string;
-  resultPreview?: string;
-  error?: string;
+  phase?: string;
+  blocker?: string;
   completionFeedback?: TaskCompletionFeedback;
 };
 
@@ -99,7 +99,7 @@ export function CommandCenterPlanner({
         if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
         return payload;
       }),
-      apiFetch('/api/autonomy/background-tasks').then(async response => {
+      apiFetch('/api/autonomy/work').then(async response => {
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
         return payload;
@@ -110,8 +110,8 @@ export function CommandCenterPlanner({
       setPlans(Array.isArray(planResult.value?.plans) ? planResult.value.plans : []);
     }
     if (taskResult.status === 'fulfilled') {
-      setRuntimeTasks(Array.isArray(taskResult.value?.tasks)
-        ? taskResult.value.tasks.map((task: RuntimeTask) => ({
+      setRuntimeTasks(Array.isArray(taskResult.value?.items)
+        ? taskResult.value.items.map((task: RuntimeTask) => ({
             ...task,
             completionFeedback: normalizeTaskCompletionFeedback(task.completionFeedback),
           }))
@@ -144,11 +144,19 @@ export function CommandCenterPlanner({
     void refresh();
     const socket = socketService.connect();
     const update = () => void refresh(true);
-    socket.on('agent:background_task_update', update);
+    const events = [
+      'autonomous:task_started',
+      'autonomous:task_paused',
+      'autonomous:task_retry_scheduled',
+      'autonomous:task_completed',
+      'autonomous:task_failed',
+      'autonomous:task_cancelled',
+    ];
+    events.forEach(event => socket.on(event, update));
     const timer = window.setInterval(update, 15_000);
     return () => {
       window.clearInterval(timer);
-      socket.off('agent:background_task_update', update);
+      events.forEach(event => socket.off(event, update));
     };
   }, [refresh, scopeKey]);
 
@@ -364,14 +372,9 @@ export function CommandCenterPlanner({
                 {feedbackCopy.details}
               </summary>
               <div className="space-y-2 border-t border-white/[0.06] p-2.5">
-                {task.resultPreview && (
-                  <div className="rounded-lg border border-emerald-300/10 bg-emerald-300/[0.035] px-2.5 py-2 text-[10px] leading-4 text-white/55">
-                    <span className="font-black text-emerald-100/60">{feedbackCopy.result}: </span>{task.resultPreview}
-                  </div>
-                )}
-                {task.error && (
+                {task.blocker && (
                   <div className="rounded-lg border border-rose-300/10 bg-rose-300/[0.035] px-2.5 py-2 text-[10px] leading-4 text-rose-100/65">
-                    <span className="font-black">{feedbackCopy.error}: </span>{task.error}
+                    <span className="font-black">{feedbackCopy.blocker}: </span>{task.blocker}
                   </div>
                 )}
                 <TaskCompletionFeedbackDetails

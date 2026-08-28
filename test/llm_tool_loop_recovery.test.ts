@@ -800,4 +800,94 @@ describe('LLM tool-loop recovery and terminal truth', () => {
       && message.content.includes('declared fallback or verification capability')
     ))).toBe(true);
   });
+
+  it('stops after verified current-document evidence instead of recovering an old discovery failure', async () => {
+    const registry = new ToolRegistry();
+    const exactPath = 'C:\\Users\\Administrator\\Desktop\\Lumi_\u8def\u6f14.pptx';
+    registerReadOnlyProbe(registry, 'search_files', async () => encodeToolResult(
+      JSON.stringify({ files: [] }),
+      { ok: true, status: 'verified' },
+    ));
+    registerReadOnlyProbe(registry, 'desktop_running_processes', async () => encodeToolResult(
+      JSON.stringify({
+        processes: [{ name: 'wpp.exe', window_titles: ['Lumi_\u8def\u6f14.pptx - WPS Office'] }],
+      }),
+      {
+        ok: true,
+        status: 'verified',
+        processes: [{ name: 'wpp.exe', window_titles: ['Lumi_\u8def\u6f14.pptx - WPS Office'] }],
+      },
+    ));
+    registerReadOnlyProbe(registry, 'desktop_list_files', async () => encodeToolResult(
+      JSON.stringify({ files: [{ path: exactPath }] }),
+      { ok: true, status: 'verified', files: [{ path: exactPath }] },
+    ));
+    registerReadOnlyProbe(registry, 'extract_document_text', async () => encodeToolResult(
+      JSON.stringify({ ok: true, content: 'Lumi Core \u805a\u7126\u4e2a\u4eba\u8fde\u7eed\u6027\u3001\u6388\u6743\u4e0e\u53ef\u9a8c\u8bc1\u884c\u52a8\u3002' }),
+      { ok: true, status: 'verified' },
+    ));
+
+    mocks.makeLLMCall
+      .mockResolvedValueOnce({
+        text: 'guessing before observing the document window',
+        toolCalls: [{
+          id: 'premature-search',
+          name: 'search_files',
+          arguments: { path: 'C:\\Users\\Administrator\\Documents', pattern: 'Lumi_\u8def\u6f14.pptx' },
+        }],
+      })
+      .mockResolvedValueOnce({
+        text: 'observing WPS windows',
+        toolCalls: [{ id: 'wps-window', name: 'desktop_running_processes', arguments: {} }],
+      })
+      .mockResolvedValueOnce({
+        text: 'resolving the exact bounded path',
+        toolCalls: [{
+          id: 'desktop-files',
+          name: 'desktop_list_files',
+          arguments: { directory: 'C:\\Users\\Administrator\\Desktop' },
+        }],
+      })
+      .mockResolvedValueOnce({
+        text: 'reading the exact document',
+        toolCalls: [{
+          id: 'document-read',
+          name: 'extract_document_text',
+          arguments: { filePath: exactPath },
+        }],
+      })
+      .mockResolvedValueOnce({
+        text: '\u8fd9\u4efd\u8def\u6f14\u4e3b\u8981\u8bb2 Lumi Core \u7684\u4e2a\u4eba\u8fde\u7eed\u6027\u3001\u6388\u6743\u548c\u53ef\u9a8c\u8bc1\u884c\u52a8\u3002',
+        toolCalls: [],
+      })
+      .mockResolvedValue({ text: 'stale recovery should never run' });
+
+    const task = '\u5e2e\u6211\u5206\u6790\u4e00\u4e0b WPS \u5f53\u524d\u6253\u5f00\u7684\u6587\u4ef6\uff0c\u5148\u544a\u8bc9\u6211\u5b83\u4e3b\u8981\u8bb2\u4e86\u4ec0\u4e48\u3002';
+    const result = await runWithTools(
+      [{ role: 'user', content: task }],
+      registry,
+      { provider: 'deepseek', model: 'test-model' },
+      undefined,
+      7,
+      ...getters,
+      undefined,
+      {
+        source: 'chat',
+        routedTaskText: task,
+      },
+    );
+
+    expect(mocks.makeLLMCall).toHaveBeenCalledTimes(5);
+    expect(result.text).toContain('\u4e2a\u4eba\u8fde\u7eed\u6027');
+    expect(result.text).not.toContain('stale recovery');
+    expect(result.toolCalls.some(record => record.id === 'premature-search' && record.error)).toBe(true);
+    expect(result.toolCalls.some(record => record.id === 'document-read' && !record.error)).toBe(true);
+    const readPlanningMessages = mocks.makeLLMCall.mock.calls[3][0] as Array<{ role: string; content: string }>;
+    expect(readPlanningMessages.some(message => (
+      message.role === 'system'
+      && message.content.includes('Server-owned current-document target state')
+      && message.content.includes(JSON.stringify(exactPath).slice(1, -1))
+      && message.content.includes('"pathResolved":true')
+    ))).toBe(true);
+  });
 });

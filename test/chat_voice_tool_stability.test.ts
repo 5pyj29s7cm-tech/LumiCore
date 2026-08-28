@@ -188,7 +188,7 @@ describe('chat and voice tool-call stability', () => {
     expect(chat).not.toContain('executeForegroundMessagingAction');
     expect(chat).not.toContain('shouldRunLegacyDirectExecution() && !responseText');
     expect(chat).toContain('toolPolicy: modelCapabilityPolicy');
-    expect(chat).toContain('## Advisory execution candidates');
+    expect(chat).toContain('recognition and legacy quick matches are advisory inputs');
     expect(chat).toContain('buildRecentFailureExplanation');
     expect(chat).toContain('## Grounded current-turn evidence');
     expect(chat).not.toContain('recent_failure_explanation');

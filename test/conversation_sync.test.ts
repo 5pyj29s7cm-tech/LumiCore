@@ -48,12 +48,12 @@ describe('persisted conversation cross-client synchronization', () => {
     })).toBe(true);
   });
 
-  it('reloads a persisted background result even while an unrelated foreground request exists', () => {
+  it('reloads a persisted autonomous result even while an unrelated foreground request exists', () => {
     expect(shouldReloadPersistedConversation({
       event: {
         conversationId: 'conv_1',
-        requestId: 'background_task_1',
-        source: 'background_delegation',
+        requestId: 'autonomous_task_1',
+        source: 'autonomy',
       },
       currentConversationId: 'conv_1',
       currentSocketId: 'socket_ui',

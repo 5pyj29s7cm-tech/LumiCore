@@ -1,12 +1,4 @@
 import {
-  cancelBackgroundTask,
-  listBackgroundTasks,
-  requestPauseBackgroundTask,
-  requestCancelBackgroundTask,
-  resumeBackgroundTask,
-  type BackgroundDelegationTask,
-} from '../agents/background_tasks';
-import {
   cancelTask,
   getTaskHistory,
   getTaskQueue,
@@ -29,7 +21,7 @@ import {
   sanitizeDiagnosticValue,
 } from '../client/diagnostic_sanitizer';
 
-export type RuntimeWorkKind = 'delegation' | 'autonomy' | 'takeover';
+export type RuntimeWorkKind = 'autonomy' | 'takeover';
 
 export type RuntimeWorkPhase =
   | 'queued'
@@ -69,7 +61,6 @@ export interface RuntimeWorkEvidence {
   verification: 'verified' | 'unverified' | 'failed' | 'pending';
   evidenceCount: number;
   toolCount: number;
-  workerCount: number;
   reasonCode: string;
 }
 
@@ -219,63 +210,19 @@ function nextActionForPhase(
   return activeAction;
 }
 
-function evidenceProjection(receipt: BackgroundDelegationTask['terminalReceipt'] | AutonomousTask['terminalReceipt']): RuntimeWorkEvidence {
+function evidenceProjection(receipt: AutonomousTask['terminalReceipt']): RuntimeWorkEvidence {
   return receipt ? {
     terminal: true,
     verification: receipt.verification,
     evidenceCount: receipt.evidenceRefs.length,
     toolCount: receipt.toolNames.length,
-    workerCount: receipt.workerIds.length,
     reasonCode: bounded(receipt.reasonCode, 120),
   } : {
     terminal: false,
     verification: 'pending',
     evidenceCount: 0,
     toolCount: 0,
-    workerCount: 0,
     reasonCode: '',
-  };
-}
-
-function delegationItem(task: BackgroundDelegationTask): RuntimeWorkItem {
-  const phase = phaseForStatus(task.status);
-  const title = bounded(task.title, 240) || task.id;
-  const blocker = task.error || task.recovery?.blockedReason
-    ? 'Background task is blocked or failed. Inspect the local runtime logs before retrying.'
-    : '';
-  return {
-    id: task.id,
-    kind: 'delegation',
-    title,
-    status: task.status,
-    phase,
-    updatedAt: task.updatedAt,
-    cancellationRequested: task.cancelRequested,
-    pauseRequested: task.pauseRequested,
-    scope: normalizedScope(task.context?.domain, task.context?.orgId),
-    conversationId: bounded(task.context?.conversationId, 180),
-    parentTaskId: bounded(task.context?.actionTaskId, 180),
-    source: 'background_delegation',
-    nextAttemptAt: bounded(task.nextAttemptAt, 80),
-    blocker,
-    nextAction: nextActionForPhase(phase, task.nextAttemptAt),
-    progress: {
-      checkpoint: bounded(task.checkpoint?.phase, 120),
-      completedUnits: task.checkpoint?.completedNodeIds?.length || 0,
-      totalUnits: Math.max(task.workers.length, task.checkpoint?.completedNodeIds?.length || 0),
-      receiptCount: task.checkpoint?.receiptIds?.length || 0,
-      toolCallCount: task.toolCallsCount,
-      attempt: task.attempt,
-      recoveryCount: task.recoveryCount,
-    },
-    controls: controlsForPhase(phase, true, true),
-    evidence: evidenceProjection(task.terminalReceipt),
-    completionFeedback: completionFeedbackProjection({
-      receipt: task.terminalReceipt,
-      title,
-      status: task.status,
-      reason: blocker,
-    }),
   };
 }
 
@@ -382,7 +329,6 @@ function takeoverItem(task: WorkTakeoverTask): RuntimeWorkItem {
             : 'pending',
       evidenceCount: verifiedChecks,
       toolCount: 0,
-      workerCount: 0,
       reasonCode: deliveredWithoutVerification ? 'missing_verified_takeover_result' : '',
     },
     completionFeedback: completionFeedbackProjection({
@@ -402,9 +348,9 @@ function itemMatchesScope(item: RuntimeWorkItem, scope?: RuntimeWorkScope): bool
 
 function normalizeKinds(kinds?: RuntimeWorkKind[]): Set<RuntimeWorkKind> {
   const valid = (kinds || []).filter((kind): kind is RuntimeWorkKind => (
-    kind === 'delegation' || kind === 'autonomy' || kind === 'takeover'
+    kind === 'autonomy' || kind === 'takeover'
   ));
-  return new Set(valid.length > 0 ? valid : ['delegation', 'autonomy', 'takeover']);
+  return new Set(valid.length > 0 ? valid : ['autonomy', 'takeover']);
 }
 
 export function getRuntimeWorkSnapshot(
@@ -429,16 +375,6 @@ export function getRuntimeWorkSnapshot(
       items: [],
       observedAt: new Date().toISOString(),
     };
-  }
-  if (selected.has('delegation')) {
-    try {
-      items.push(...listBackgroundTasks(userId)
-        .map(delegationItem)
-        .filter(item => itemMatchesScope(item, scope))
-        .slice(0, 50));
-    } catch {
-      diagnostics.push({ source: 'delegation', code: 'runtime_work_source_unavailable' });
-    }
   }
   if (selected.has('autonomy')) {
     if (!scope || scope.domain === 'personal') {
@@ -507,14 +443,12 @@ export function pauseRuntimeWork(input: {
   const matched = before.items.filter(item => (
     (!input.taskId || item.id === input.taskId)
     && item.controls.canPause
-    && (item.kind === 'delegation' || item.kind === 'autonomy')
+    && item.kind === 'autonomy'
   ));
   const items: RuntimeWorkItem[] = [];
   for (const item of matched) {
-    const task = item.kind === 'delegation'
-      ? requestPauseBackgroundTask(item.id, input.userId)
-      : requestPauseAutonomousTask(item.id, input.userId);
-    if (task) items.push(item.kind === 'delegation' ? delegationItem(task as BackgroundDelegationTask) : autonomyItem(task as AutonomousTask));
+    const task = requestPauseAutonomousTask(item.id, input.userId);
+    if (task) items.push(autonomyItem(task));
   }
   const pausingCount = items.filter(item => item.status === 'pausing').length;
   const pausedCount = items.filter(item => item.status === 'paused').length;
@@ -553,17 +487,13 @@ export function resumeRuntimeWork(input: {
   const matched = before.items.filter(item => (
     (!input.taskId || item.id === input.taskId)
     && item.status === 'paused'
-    && (item.kind === 'delegation' || item.kind === 'autonomy')
+    && item.kind === 'autonomy'
   ));
   const items: RuntimeWorkItem[] = [];
   for (const item of matched) {
-    const task = item.kind === 'delegation'
-      ? resumeBackgroundTask(item.id, input.userId)
-      : resumeAutonomousTask(item.id, input.userId);
+    const task = resumeAutonomousTask(item.id, input.userId);
     if (task) {
-      const projected = item.kind === 'delegation'
-        ? delegationItem(task as BackgroundDelegationTask)
-        : autonomyItem(task as AutonomousTask);
+      const projected = autonomyItem(task);
       if (projected.phase === 'queued' || projected.phase === 'working') items.push(projected);
     }
   }
@@ -607,20 +537,18 @@ export function cancelRuntimeWork(input: {
   const matched = hasExactTargetSet
     ? before.items.filter(item => requestedTaskIdSet.has(item.id) && item.controls.canCancel)
     : before.items.filter(item => item.controls.canCancel);
+  // Rechecking an exact cancellation is idempotent. A task that already
+  // entered `cancelling` must remain an accepted in-progress target instead of
+  // being misreported as a fresh failure merely because canCancel is now false.
+  const alreadyCancelling = hasExactTargetSet
+    ? before.items.filter(item => (
+        requestedTaskIdSet.has(item.id)
+        && item.phase === 'cancelling'
+      ))
+    : [];
 
-  const acceptedIds = new Set<string>();
+  const acceptedIds = new Set<string>(alreadyCancelling.map(item => item.id));
   for (const item of matched) {
-    if (item.kind === 'delegation') {
-      const task = listBackgroundTasks(input.userId).find(candidate => candidate.id === item.id);
-      if (!task) continue;
-      const updated = task.status === 'queued'
-        ? cancelBackgroundTask(task.id)
-        : requestCancelBackgroundTask(task.id, input.userId);
-      if (updated && (updated.status === 'cancelled' || updated.status === 'cancelling' || updated.cancelRequested)) {
-        acceptedIds.add(item.id);
-      }
-      continue;
-    }
     if (item.kind === 'autonomy') {
       if (cancelTask(item.id, input.userId)) acceptedIds.add(item.id);
       continue;
@@ -633,7 +561,10 @@ export function cancelRuntimeWork(input: {
   }
 
   const afterItems = getRuntimeWorkSnapshot(input.userId, [...selected], input.scope).items;
-  const outcomeItems = matched.filter(item => acceptedIds.has(item.id)).map(item => {
+  const outcomeCandidates = Array.from(new Map(
+    [...matched, ...alreadyCancelling].map(item => [item.id, item]),
+  ).values());
+  const outcomeItems = outcomeCandidates.filter(item => acceptedIds.has(item.id)).map(item => {
     const remaining = afterItems.find(candidate => candidate.id === item.id);
     if (!remaining) return {
       ...item,
@@ -648,7 +579,6 @@ export function cancelRuntimeWork(input: {
         verification: 'unverified' as const,
         evidenceCount: item.evidence.evidenceCount,
         toolCount: item.evidence.toolCount,
-        workerCount: item.evidence.workerCount,
         reasonCode: item.evidence.reasonCode || 'user_cancelled',
       },
       completionFeedback: completionFeedbackProjection({

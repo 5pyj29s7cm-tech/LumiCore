@@ -99,7 +99,7 @@ describe('Lumi autonomous chain pressure', () => {
     }
   });
 
-  it('registers and resolves a batch of desktop AI targets without one-off scripts', async () => {
+  it('registers a desktop AI catalog and resolves exactly one explicit target', async () => {
     const { ToolRegistry } = await import('../server/tools/registry');
     const { registerDesktopAiTools } = await import('../server/tools/definitions/desktop_ai_tools');
     const registry = new ToolRegistry();
@@ -126,7 +126,7 @@ describe('Lumi autonomous chain pressure', () => {
     let foreground = 'Lumi';
     const ask = JSON.parse(await registry.execute('desktop_ai_ask', {
       question: 'Return one concise test answer.',
-      targets: ['pressure-ai-7'],
+      target: 'pressure-ai-7',
       send: false,
     }, {
       userId,
@@ -143,6 +143,7 @@ describe('Lumi autonomous chain pressure', () => {
     }));
 
     expect(ask.preparedCount).toBe(1);
+    expect(ask.results).toHaveLength(1);
     expect(ask.results[0]).toMatchObject({
       target: 'pressure-ai-7',
       label: 'Pressure AI 7',

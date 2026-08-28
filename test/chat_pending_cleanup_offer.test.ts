@@ -39,9 +39,9 @@ import {
   setConversationActionExecutionStatus,
 } from '../server/conversation/manager';
 import {
-  registerBackgroundTask,
-  resetBackgroundTasksForTest,
-} from '../server/agents/background_tasks';
+  enqueue,
+  resetAutonomousTaskQueueForTest,
+} from '../server/autonomy/task_queue';
 import { getRuntimeWorkSnapshot } from '../server/runtime/work_control';
 import { registerChatHandler } from '../server/socket/chat';
 import { registerAllTools } from '../server/tools/definitions';
@@ -84,7 +84,7 @@ describe('Chat accepted pending runtime cleanup offer', () => {
 
   beforeAll(async () => {
     await initDatabase();
-    resetBackgroundTasksForTest({ markHydrated: true });
+    resetAutonomousTaskQueueForTest({ markHydrated: true });
     if (!toolRegistry.get('runtime_work_cancel')) registerAllTools(toolRegistry);
 
     conversationId = getOrCreateActiveConversation(userId, 'lumi', 'personal', '').id;
@@ -130,22 +130,28 @@ describe('Chat accepted pending runtime cleanup offer', () => {
       requestId: '',
     });
 
-    const first = registerBackgroundTask({
+    const first = enqueue({
       userId,
-      title: 'offered background A',
-      prompt: 'isolated A',
-      context: { domain: 'personal', conversationId },
-    });
-    const second = registerBackgroundTask({
+      title: 'offered task A',
+      description: 'isolated A',
+      source: 'user_request',
+      priority: 5,
+      mode: 'analysis',
+      conversationId,
+    })!;
+    const second = enqueue({
       userId,
-      title: 'offered background B',
-      prompt: 'isolated B',
-      context: { domain: 'personal', conversationId },
-    });
+      title: 'offered task B',
+      description: 'isolated B',
+      source: 'user_request',
+      priority: 5,
+      mode: 'analysis',
+      conversationId,
+    })!;
     offeredTaskIds = [first.id, second.id];
     const frozenSnapshot = getRuntimeWorkSnapshot(
       userId,
-      ['delegation'],
+      ['autonomy'],
       { domain: 'personal' },
     );
     expect(frozenSnapshot.items.filter(item => item.controls.canCancel).map(item => item.id).sort())
@@ -155,7 +161,7 @@ describe('Chat accepted pending runtime cleanup offer', () => {
       agentId: 'lumi',
       conversationId,
       role: 'assistant',
-      content: '\u662f\u5426\u5e2e\u4f60\u6e05\u7406\u8fd9\u4e9b\u540e\u53f0\u4efb\u52a1\uff1f',
+      content: '\u53e6\u5916\u53f0\u8d26\u91cc\u8fd8\u6709\u5386\u53f2\u963b\u585e\u8bb0\u5f55\u3002\u6216\u8005\u4f60\u60f3\u6e05\u6389\u90a3\u4e9b\u5931\u8d25/\u963b\u585e\u7684\u65e7\u4efb\u52a1\uff0c\u4e5f\u53ef\u4ee5\u8bf4\u4e00\u58f0\u3002',
       domain: 'personal',
       orgId: '',
       source: 'command-center-chat',
@@ -185,12 +191,15 @@ describe('Chat accepted pending runtime cleanup offer', () => {
 
     // This task starts after the assistant made the offer. Acceptance must not
     // widen the frozen target set to include it.
-    laterTaskId = registerBackgroundTask({
+    laterTaskId = enqueue({
       userId,
-      title: 'later background C',
-      prompt: 'must remain active',
-      context: { domain: 'personal', conversationId },
-    }).id;
+      title: 'later task C',
+      description: 'must remain active',
+      source: 'user_request',
+      priority: 5,
+      mode: 'analysis',
+      conversationId,
+    })!.id;
 
     httpServer = createServer();
     io = new SocketIOServer(httpServer, { transports: ['websocket'] });
@@ -254,7 +263,7 @@ describe('Chat accepted pending runtime cleanup offer', () => {
     client?.disconnect();
     if (io) await new Promise<void>(resolve => io.close(() => resolve()));
     if (httpServer?.listening) await new Promise<void>(resolve => httpServer.close(() => resolve()));
-    resetBackgroundTasksForTest({ markHydrated: true });
+    resetAutonomousTaskQueueForTest({ markHydrated: true });
   });
 
   it('confirms the adjacent offer and invokes one exact canonical cancellation without an LLM', async () => {
@@ -264,13 +273,17 @@ describe('Chat accepted pending runtime cleanup offer', () => {
       requestId,
     );
     const ack = await client.timeout(5_000).emitWithAck('agent:chat', {
-      text: '\u6e05\u7406\u4e00\u4e0b',
+      text: '\u6e05\u6389\u8fd9\u4e9b\u4efb\u52a1',
       history: [],
       agentId: 'lumi',
       domain: 'personal',
       source: 'command-center-chat',
       requestId,
       conversationId,
+      // The desktop may still carry the request fence rendered before the
+      // adjacent server-owned offer. It must not replace the offer's frozen
+      // taskIds or turn this new acceptance into stale_task_control.
+      controlTargetRequestId: 'stale-rendered-request',
     });
     expect(ack).toMatchObject({ ok: true, requestId });
 
@@ -284,9 +297,11 @@ describe('Chat accepted pending runtime cleanup offer', () => {
       taskRelation: {
         feedback: 'accept',
         taskRelation: 'confirm',
-        taskId: conversationTaskId,
       },
     });
+    const cleanupTaskId = String(response.taskRelation?.taskId || '');
+    expect(cleanupTaskId).toMatch(/^task_/);
+    expect(cleanupTaskId).not.toBe(conversationTaskId);
     for (const targetId of offeredTaskIds) expect(response.text).toContain(targetId);
     expect(response.text).not.toContain(laterTaskId);
     expect(mocks.runWithTools).not.toHaveBeenCalled();
@@ -298,7 +313,7 @@ describe('Chat accepted pending runtime cleanup offer', () => {
     expect([...(toolEvents[0]?.arguments?.taskIds || [])].sort())
       .toEqual([...offeredTaskIds].sort());
 
-    const snapshot = getRuntimeWorkSnapshot(userId, ['delegation'], { domain: 'personal' });
+    const snapshot = getRuntimeWorkSnapshot(userId, ['autonomy'], { domain: 'personal' });
     for (const targetId of offeredTaskIds) {
       expect(snapshot.items.find(item => item.id === targetId)).toMatchObject({ phase: 'cancelled' });
     }
@@ -314,7 +329,7 @@ describe('Chat accepted pending runtime cleanup offer', () => {
     ));
     expect(receipts).toHaveLength(1);
     expect(receipts[0]).toMatchObject({
-      taskId: conversationTaskId,
+      taskId: cleanupTaskId,
       outcome: 'verified_success',
       executionOrigin: 'deterministic_route',
     });

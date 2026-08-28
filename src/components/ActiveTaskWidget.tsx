@@ -1,13 +1,13 @@
 import { AnimatePresence, motion } from 'motion/react';
 import { CheckCircle2, CircleAlert, Loader2, ShieldAlert } from 'lucide-react';
-import type { BackgroundWorkflowTask } from './workflowTypes';
+import type { WorkflowTask } from './workflowTypes';
 import type { ConversationFocusThread } from '@/hooks/useFocusThreads';
 import type { RuntimeTaskProjection, StructuredRuntimeStatus } from '@/hooks/useRuntimeStatus';
 import { uiMessage } from '@/i18n/uiMessages';
 import type { Locale } from '@/i18n/runtime';
 
 const ACTIVE_TASK_STATUSES = new Set(['created', 'planning', 'executing', 'verifying', 'waiting_confirmation']);
-const ACTIVE_BACKGROUND_STATUSES = new Set(['queued', 'running', 'pausing', 'cancelling']);
+const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'pausing', 'cancelling']);
 
 export interface ActiveTaskWidgetState {
   visible: boolean;
@@ -24,18 +24,18 @@ function activeRuntimeTasks(status: StructuredRuntimeStatus | null): RuntimeTask
   return (status?.tasks || []).filter(task => ACTIVE_TASK_STATUSES.has(task.status));
 }
 
-function activeFocusThreads(threads: ConversationFocusThread[]): ConversationFocusThread[] {
-  return threads.filter(thread => ACTIVE_TASK_STATUSES.has(thread.status));
+function activeFocusThreads(threads: ConversationFocusThread[] | undefined): ConversationFocusThread[] {
+  return (threads || []).filter(thread => ACTIVE_TASK_STATUSES.has(thread.status));
 }
 
-function activeBackgroundTasks(tasks: BackgroundWorkflowTask[]): BackgroundWorkflowTask[] {
-  return tasks.filter(task => ACTIVE_BACKGROUND_STATUSES.has(task.status));
+function activeWorkflowTasks(tasks: WorkflowTask[] | undefined): WorkflowTask[] {
+  return (tasks || []).filter(task => ACTIVE_WORKFLOW_STATUSES.has(task.status));
 }
 
 export function selectActiveTaskWidgetState(input: {
   status: StructuredRuntimeStatus | null;
   focusThreads: ConversationFocusThread[];
-  backgroundTasks: BackgroundWorkflowTask[];
+  tasks: WorkflowTask[];
   workflowActive: boolean;
   workflowStatus: string;
   progressText: string;
@@ -43,31 +43,31 @@ export function selectActiveTaskWidgetState(input: {
 }): ActiveTaskWidgetState {
   const runtimeTasks = activeRuntimeTasks(input.status);
   const threads = activeFocusThreads(input.focusThreads);
-  const backgroundTasks = activeBackgroundTasks(input.backgroundTasks);
-  const primaryTask = runtimeTasks[0];
+  const tasks = activeWorkflowTasks(input.tasks);
+  const primaryRuntimeTask = runtimeTasks[0];
   const primaryThread = threads[0];
-  const primaryBackgroundTask = backgroundTasks[0];
-  const visible = Boolean(primaryTask || primaryThread || primaryBackgroundTask || input.workflowActive);
-  const status = primaryTask?.status
+  const primaryWorkflowTask = tasks[0];
+  const visible = Boolean(primaryRuntimeTask || primaryThread || primaryWorkflowTask || input.workflowActive);
+  const status = primaryRuntimeTask?.status
     || primaryThread?.status
-    || primaryBackgroundTask?.status
+    || primaryWorkflowTask?.status
     || input.workflowStatus;
-  const title = primaryTask?.goal
+  const title = primaryRuntimeTask?.goal
     || primaryThread?.goal
-    || primaryBackgroundTask?.title
+    || primaryWorkflowTask?.title
     || input.fallbackTitle;
-  const detail = primaryTask?.blocker
+  const detail = primaryRuntimeTask?.blocker
     || primaryThread?.waitingFor
     || primaryThread?.nextAction
-    || primaryBackgroundTask?.error
-    || primaryBackgroundTask?.completionFeedback?.blockers[0]
-    || primaryBackgroundTask?.completionFeedback?.incomplete[0]
-    || primaryBackgroundTask?.completionFeedback?.nextSteps[0]
+    || primaryWorkflowTask?.error
+    || primaryWorkflowTask?.completionFeedback?.blockers[0]
+    || primaryWorkflowTask?.completionFeedback?.incomplete[0]
+    || primaryWorkflowTask?.completionFeedback?.nextSteps[0]
     || input.progressText;
   const activeTaskIds = new Set([
     ...runtimeTasks.map(task => task.taskId),
     ...threads.map(thread => thread.taskId),
-    ...backgroundTasks.map(task => task.id),
+    ...tasks.map(task => task.id),
   ].filter(Boolean));
   const activeCount = Math.max(activeTaskIds.size, input.workflowActive ? 1 : 0);
 
@@ -77,9 +77,9 @@ export function selectActiveTaskWidgetState(input: {
     detail,
     status,
     activeCount,
-    receiptTotal: primaryTask?.evidence.total || 0,
-    verifiedReceipts: primaryTask?.evidence.verified || 0,
-    failedReceipts: (primaryTask?.evidence.failed || 0) + (primaryTask?.evidence.unknown || 0),
+    receiptTotal: primaryRuntimeTask?.evidence.total || 0,
+    verifiedReceipts: primaryRuntimeTask?.evidence.verified || 0,
+    failedReceipts: (primaryRuntimeTask?.evidence.failed || 0) + (primaryRuntimeTask?.evidence.unknown || 0),
   };
 }
 
@@ -94,7 +94,7 @@ function statusCopy(status: string, locale: Locale): string {
 export function ActiveTaskWidget({
   status,
   focusThreads,
-  backgroundTasks,
+  tasks,
   workflowActive,
   workflowStatus,
   progressText,
@@ -102,7 +102,7 @@ export function ActiveTaskWidget({
 }: {
   status: StructuredRuntimeStatus | null;
   focusThreads: ConversationFocusThread[];
-  backgroundTasks: BackgroundWorkflowTask[];
+  tasks: WorkflowTask[];
   workflowActive: boolean;
   workflowStatus: string;
   progressText: string;
@@ -112,7 +112,7 @@ export function ActiveTaskWidget({
   const view = selectActiveTaskWidgetState({
     status,
     focusThreads,
-    backgroundTasks,
+    tasks,
     workflowActive,
     workflowStatus,
     progressText,

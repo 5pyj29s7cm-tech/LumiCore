@@ -188,7 +188,6 @@ async function handleSaveWorkflow(args: Record<string, any>, context?: any): Pro
     description,
     steps,
     { source: 'user_authored', reviewedByUser: false },
-    undefined,
     args.category,
     workflowScope(context),
   );

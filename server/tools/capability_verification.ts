@@ -4,6 +4,11 @@ import type {
   CapabilityManifestEntry,
   ToolExecutionRecord,
 } from './types';
+import {
+  toolRecordHasTerminalPayload,
+  toolRecordTerminalPayload,
+  toolRecordTerminalText,
+} from './receipt_payload';
 
 const FAILED_STATUSES = new Set([
   'blocked',
@@ -40,20 +45,6 @@ const SUCCESS_STATUSES = new Set([
 ]);
 const PATH_KEYS = /(?:path|file|filename|output|artifact|receipt)/i;
 const RAW_ARTIFACT_PATH_RE = /(?:[A-Za-z]:\\|\/)[^\r\n"'<>|]+?\.[A-Za-z0-9]{1,12}(?=$|[\s,;)}\]])/g;
-
-function parseResult(value: string): unknown {
-  let parsed: unknown = value;
-  for (let depth = 0; depth < 3 && typeof parsed === 'string'; depth += 1) {
-    const current = parsed.trim();
-    if (!current || !/^[{[]/.test(current)) break;
-    try {
-      parsed = JSON.parse(current);
-    } catch {
-      break;
-    }
-  }
-  return parsed;
-}
 
 function collectValues(
   value: unknown,
@@ -200,15 +191,15 @@ export function verifyCapabilityReceipt(
       reason: record.error,
     };
   }
-  const result = String(record.result || '').trim();
-  if (!result) {
+  if (!toolRecordHasTerminalPayload(record)) {
     return {
       status: 'failed',
       strategy,
       reason: 'The tool returned no terminal receipt.',
     };
   }
-  const payload = record.receipt !== undefined ? record.receipt : parseResult(result);
+  const payload = toolRecordTerminalPayload(record);
+  const result = toolRecordTerminalText(record);
   const verification = capability?.verification;
   const acceptedStatuses = new Set((verification?.successStatuses || []).map(item => item.toLowerCase()));
   const status = statusFromPayload(payload);

@@ -79,11 +79,12 @@ describe('foreground completion feedback persistence', () => {
       'status',
     ]);
     expect(stored.status).toBe('completed');
-    expect(stored.completed).toEqual(['Window observation completed.']);
-    expect(stored.evidence).toHaveLength(8);
+    expect(stored.completed).toEqual(['The task is complete.']);
+    expect(stored.evidence).toEqual(['The current execution result was recorded.']);
     expect(JSON.stringify(stored)).not.toContain('definitely-secret-token-value');
+    expect(JSON.stringify(stored)).not.toMatch(/desktop_active_window|verified terminal evidence|tool receipt/iu);
     expect(JSON.stringify(stored)).not.toContain('providerTrace');
-    expect(stored.nextSteps[0]).toHaveLength(500);
+    expect(stored.nextSteps).toEqual(['No further action is needed.']);
   });
 
   it('does not invent feedback for an ordinary conversation row', async () => {
@@ -137,9 +138,8 @@ describe('foreground completion feedback persistence', () => {
     );
     const serialized = String(rows[0].completionFeedback || '');
     expect(serialized).not.toMatch(/No successful current-turn|\u8fd9\u4e00\u8f6e\u6ca1\u6709\u8bb0\u5f55\u5230\u6210\u529f\u7684\u771f\u5b9e\u5de5\u5177\u6267\u884c/iu);
-    expect(JSON.parse(serialized).blockers).toEqual([
-      'The requested action did not produce a verifiable result after automatic recovery.',
-    ]);
+    expect(JSON.parse(serialized).blockers).toEqual(['当前步骤未能完成。']);
+    expect(serialized).not.toMatch(/execution_|desktop_|verified terminal evidence/iu);
   });
 
   it('replaces a staged terminal projection with persistence-unknown and survives restart', async () => {
@@ -183,9 +183,49 @@ describe('foreground completion feedback persistence', () => {
       message: 'The terminal persistence outcome is unknown.',
       completionFeedback: {
         status: 'blocked',
-        incomplete: ['Task is not verified complete.'],
+        incomplete: ['The task is not complete yet.'],
         blockers: ['Terminal persistence outcome is unknown.'],
       },
     });
+  });
+
+  it('projects internal completion evidence without tool names, reason codes, or the full task label', async () => {
+    const requestId = `public-projection-${suffix}`;
+    const fullTask = '帮我分析一下 WPS 当前打开的文件，先告诉我它主要讲了什么。';
+    const messageId = addMessageIdempotent({
+      userId,
+      agentId: 'lumi',
+      conversationId,
+      role: 'assistant',
+      content: '已读取当前文档。',
+      source: 'chat',
+      channel: 'chat',
+      requestId,
+      completionFeedback: {
+        status: 'completed',
+        completed: [`${fullTask} completed with verified terminal evidence.`],
+        evidence: [
+          'Verified tool receipts: desktop_running_processes, desktop_list_files, extract_document_text',
+        ],
+        incomplete: [],
+        blockers: ['execution_recovery_incomplete'],
+        nextSteps: [],
+      },
+    });
+    await flushDBOrThrow();
+
+    const rows = await querySQL<any>(
+      'SELECT completionFeedback FROM interactions WHERE id = ? LIMIT 1',
+      [messageId],
+    );
+    const stored = JSON.parse(rows[0].completionFeedback);
+    const serialized = JSON.stringify(stored);
+    expect(stored).toMatchObject({
+      status: 'completed',
+      completed: ['任务已完成。'],
+      evidence: ['已记录当前执行结果。'],
+    });
+    expect(serialized).not.toContain(fullTask);
+    expect(serialized).not.toMatch(/desktop_|execution_|extract_document_text|verified terminal evidence/iu);
   });
 });

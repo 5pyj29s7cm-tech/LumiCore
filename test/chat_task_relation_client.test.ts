@@ -65,4 +65,33 @@ describe('chat task relation client ledger', () => {
     ledger.record(taskEvent({ requestId: 'request-a', revision: 3 }));
     expect(ledger.controlTarget({ conversationId: 'conversation-b' })).toEqual({});
   });
+
+  it('drops the obsolete request lease when the durable task becomes previous', () => {
+    const ledger = new ChatTaskRelationLedger();
+    ledger.record(taskEvent({ requestId: 'request-active', revision: 7 }));
+    ledger.record({
+      requestId: 'request-active',
+      conversationId: 'conversation-a',
+      taskRelation: {
+        relation: 'continue',
+        feedback: 'accept',
+        binding: 'previous_task',
+        operation: 'verify',
+        taskId: 'task-a',
+        revision: 8,
+        // Legacy/delayed terminals may still contain this field. It is no
+        // longer a live request lease and must not survive normalization.
+        targetRequestId: 'request-active',
+        preservesRootGoal: true,
+        requiresRootVerification: true,
+        reason: 'durable_previous_action',
+      },
+    });
+
+    expect(ledger.controlTarget({ conversationId: 'conversation-a' })).toEqual({});
+    expect(ledger.controlTarget({
+      conversationId: 'conversation-a',
+      foregroundRequestId: 'request-active',
+    })).toEqual({ controlTargetRequestId: 'request-active' });
+  });
 });

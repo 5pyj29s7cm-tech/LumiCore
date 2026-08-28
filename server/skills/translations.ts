@@ -135,7 +135,7 @@ const BUILTIN_ZH_TRANSLATIONS: Record<string, TranslationEntry> = {
   },
   'skill-hermes': {
     displayName: 'Hermes 助手',
-    description: '研究、写作和编码等通用智能体能力，可作为 Lumi 的团队成员接入。',
+    description: '研究、写作和编码等通用能力，需要通过经过审查的 LumiCore 工具适配器接入。', // i18n-allow: Reviewed Chinese skill catalog copy.
   },
   'skill-image': {
     displayName: '图片处理',

@@ -369,53 +369,6 @@ describe('work takeover execution writeback', () => {
     expect(writeback).toMatchObject({ recorded: true, taskId: task.id, status: 'ran' });
   });
 
-  it('records a synthetic background terminal error on a direct continuation', async () => {
-    const { createWorkTakeoverTask, getWorkTakeoverTask } = await import('../server/work_takeover/tasks');
-    const { persistWorkTakeoverTurnExecution } = await import('../server/work_takeover/execution_writeback');
-
-    const userId = `writeback_background_terminal_${Date.now()}_${Math.random()}`;
-    const task = createWorkTakeoverTask({
-      userId,
-      domain: 'work',
-      orgId: 'org-writeback',
-      category: 'general_work',
-      title: 'Continue delegated customer work',
-      status: 'in_progress',
-    });
-    const { dispatch, capabilitySelection } = await buildTurn(userId, 'continue the customer task');
-
-    const writeback = persistWorkTakeoverTurnExecution({
-      userId,
-      userText: 'continue the customer task',
-      assistantText: 'The background worker was blocked.',
-      source: 'background_delegation',
-      interactionId: 'bg-terminal-test',
-      domain: 'work',
-      orgId: 'org-writeback',
-      flow: dispatch.flow,
-      capabilitySelection,
-      toolRecords: [{
-        id: 'background-terminal-test',
-        name: 'background_delegation',
-        arguments: { backgroundTaskId: 'bg-test' },
-        result: '',
-        error: 'No worker agent accepted the delegated task.',
-      }],
-      finalizationBlocked: true,
-      assistantTextTrusted: false,
-      finalizationReason: 'No worker agent accepted the delegated task.',
-    });
-
-    const updated = getWorkTakeoverTask(userId, task.id)!;
-    expect(writeback).toMatchObject({ recorded: true, taskId: task.id, status: 'blocked' });
-    expect(updated.metadata.workTakeoverExecution.lastTurn.tools[0]).toMatchObject({
-      name: 'background_delegation',
-      status: 'error',
-      error: 'No worker agent accepted the delegated task.',
-    });
-    expect(updated.metadata.workTakeoverExecution.lastFailure.tool).toBe('background_delegation');
-  });
-
   it('surfaces last failure and resume hint in continuity context', async () => {
     const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');
     const { persistWorkTakeoverTurnExecution } = await import('../server/work_takeover/execution_writeback');

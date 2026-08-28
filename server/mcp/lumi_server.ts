@@ -8,7 +8,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { z } from 'zod';
-import { queryMemories, addMemory, getDueReminders, buildNarrativeChain, borrowAgentMemories } from '../memory';
+import { queryMemories, addMemory, getDueReminders, buildNarrativeChain } from '../memory';
 import { runWithTools } from '../llm/adapter';
 import { toolRegistry, ToolRegistry } from '../tools/registry';
 import { personalityRegistry } from '../personality';
@@ -16,8 +16,6 @@ import { deviceRegistry } from '../devices';
 import { canOutputHolographic, textToHolographicOutput } from '../output/holographic';
 import { setOfficeBroadcast } from '../tools/definitions/office_tools';
 import { synthesizeSpeech, getActiveProvider } from '../tts/adapter';
-import { classifyComplexity, decomposeTask, matchWorkers, executeWorkflow, aggregateWithLLM, getRoutingCacheStats } from '../agents/orchestrator';
-import { readDB } from '../../db_layer';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
@@ -43,6 +41,7 @@ import {
   publicMcpToolFailure,
   sanitizeMcpLogValue,
 } from './public_security';
+import { CN_MCP_MESSAGES } from '../regions/packs/cn/mcp_messages';
 
 // Track active transports per session
 const transports: Map<string, { transport: SSEServerTransport; scope: McpCallerScope }> = new Map();
@@ -729,363 +728,21 @@ export function createLumiMcpServer(llmGetters?: {
     },
   );
 
-  // Cross-agent memory sharing: borrow memories from other agents
-  mcp.registerTool(
-    'lumi_agent_share',
-    {
-      description: '从其他 Agent 借用与某个主题相关的高价值记忆。只返回标记为跨 Agent 共享的记忆（growth 层 + 高重要性 internalized 层）。',
-      inputSchema: {
-        requestingAgentId: z.string().describe('请求借用的 Agent ID'),
-        topic: z.string().describe('搜索主题'),
-        limit: z.number().optional().default(5).describe('返回的最大记忆数'),
-      },
-    },
-    async ({ requestingAgentId, topic, limit }) => {
-      try {
-        const memories = borrowAgentMemories(requestingAgentId, topic, scope.userId, Math.max(limit * 4, limit))
-          .filter(memory => (
-            memory.userId === scope.userId
-            && (memory.domain || 'personal') === scope.domain
-            && (memory.orgId || '') === scope.orgId
-          ))
-          .slice(0, limit);
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({
-              borrowed: memories.length,
-              memories: memories.map(m => ({
-                id: m.id,
-                content: m.content,
-                tier: m.tier,
-                importance: m.importance,
-                agentId: m.agentId,
-                keywords: m.keywords,
-              })),
-            }, null, 2),
-          }],
-        };
-      } catch (err: any) {
-        return mcpToolFailure('agent memory share', err);
-      }
-    },
-  );
-
-  // ── Orchestrator management tools ──
-
-  // List all worker agents with status, skills, and routing history
-  mcp.registerTool(
-    'lumi_list_workers',
-    {
-      description: '列出所有可用的 Worker Agent，包括状态、技能标签、知识域和路由缓存统计。用于监控 Lumi 主脑的工人池。',
-      inputSchema: {
-        statusFilter: z.enum(['active', 'idle', 'offline', 'all']).optional().default('all').describe('按状态过滤'),
-      },
-    },
-    async ({ statusFilter }) => {
-      try {
-        const db = readDB();
-        const agents = (db.agents || []).filter((a: any) => {
-          if (!matchesScopedRecord(a, true)) return false;
-          if (statusFilter === 'all') return true;
-          return a.status === statusFilter;
-        });
-
-        const routingStats = getRoutingCacheStats();
-
-        const workers = agents.map((a: any) => {
-          const agentRouting = routingStats.agents?.[a.id] || {};
-          return {
-            id: a.id,
-            name: a.name,
-            status: a.status || 'idle',
-            skillTags: a.skillTags || [],
-            executionMode: a.executionMode || 'lumi',
-            knowledgeDomains: a.knowledgeDomains || [],
-            memoryScope: a.memoryScope || 'shared',
-            autonomyLevel: a.autonomyLevel || 'reactive',
-            routingHistory: agentRouting,
-            createdAt: a.createdAt,
-          };
-        });
-
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({
-              total: workers.length,
-              routingCacheSummary: {
-                totalSkillTags: routingStats.totalSkillTags || 0,
-                totalRoutes: routingStats.totalRoutes || 0,
-              },
-              workers,
-            }, null, 2),
-          }],
-        };
-      } catch (err: any) {
-        return mcpToolFailure('worker list', err);
-      }
-    },
-  );
-
-  // Detailed worker status
-  mcp.registerTool(
-    'lumi_worker_status',
-    {
-      description: '获取指定 Worker Agent 的详细状态，包括关联记忆数、最近任务、路由命中率。',
-      inputSchema: {
-        agentId: z.string().describe('Worker Agent ID'),
-      },
-    },
-    async ({ agentId }) => {
-      try {
-        const db = readDB();
-        const agent = (db.agents || []).find((a: any) => (
-          a.id === agentId && matchesScopedRecord(a, true)
-        ));
-        if (!agent) {
-          return { content: [{ type: 'text' as const, text: `Agent "${agentId}" not found` }], isError: true };
-        }
-
-        // Count memories owned by this agent
-        const memoryCount = (db.memories || []).filter((m: any) => (
-          m.agentId === agentId
-          && m.userId === scope.userId
-          && (m.domain || 'personal') === scope.domain
-          && (m.orgId || '') === scope.orgId
-        )).length;
-
-        // Recent interactions for this agent
-        const recentInteractions = (db.interactions || [])
-          .filter((i: any) => i.agentId === agentId && matchesScopedRecord(i))
-          .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-          .slice(0, 5)
-          .map((i: any) => ({
-            content: (i.content || i.message || '').slice(0, 100),
-            response: (i.response || '').slice(0, 100),
-            timestamp: i.timestamp,
-          }));
-
-        // Routing stats
-        const routingStats = getRoutingCacheStats();
-        const agentRouting = routingStats.agents?.[agentId] || {};
-
-        // Conversations
-        const conversations = (db.conversations || []).filter((c: any) => (
-          c.agentId === agentId && matchesScopedRecord(c)
-        ));
-
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({
-              agent: {
-                id: agent.id,
-                name: agent.name,
-                status: agent.status || 'idle',
-                skillTags: agent.skillTags || [],
-                executionMode: agent.executionMode || 'lumi',
-                knowledgeDomains: agent.knowledgeDomains || [],
-                memoryScope: agent.memoryScope || 'shared',
-                autonomyLevel: agent.autonomyLevel || 'reactive',
-                createdAt: agent.createdAt,
-              },
-              stats: {
-                memoryCount,
-                interactionCount: recentInteractions.length,
-                conversationCount: conversations.length,
-                activeConversations: conversations.filter((c: any) => c.status === 'active').length,
-              },
-              routing: agentRouting,
-              recentTasks: recentInteractions,
-            }, null, 2),
-          }],
-        };
-      } catch (err: any) {
-        return mcpToolFailure('worker status', err);
-      }
-    },
-  );
-
-  // Manually route a task through the orchestrator
+  // Execute a task through the same single LumiCore model/tool loop.
   mcp.registerTool(
     'lumi_route_task',
     {
-      description: '通过 Lumi 主脑编排引擎手动路由一个任务。任务会被分解并分配给合适的 Worker Agent 执行，结果汇总后返回。',
+      description: CN_MCP_MESSAGES.routeTaskDescription,
       inputSchema: {
-        task: z.string().describe('要执行的任务描述'),
-        targetAgentId: z.string().optional().describe('指定目标 Agent ID（可选，不指定则自动匹配）'),
+        task: z.string().describe(CN_MCP_MESSAGES.routeTaskInputDescription),
       },
     },
-    async ({ task, targetAgentId }) => {
+    async ({ task }) => {
       try {
         if (isWorkViewer) return viewerMutationDenied();
         const routeLLM = resolveMcpLLM();
-        bc('mcp:activity', { device: 'xiaozhi', action: 'route_task', status: 'received' });
-
-        const complexity = classifyComplexity(task, { userId: scope.userId, personalityId: 'lumi' });
-
-        if (complexity !== 'complex') {
-          // Simple task — let Lumi handle directly
-          const personality = personalityRegistry.get('lumi') || personalityRegistry.getDefault();
-          const { systemPrompt } = personalityRegistry.buildSystemPrompt('lumi', { mode: 'task', sensory: { audio: false, visual: false, spatial: false, haptic: false, holographic: false, activeDeviceTypes: [], deviceCount: 0 } });
-
-          const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
-            { role: 'system', content: restrictSystemPromptForExecutionBoundary(systemPrompt, 'remote_restricted') },
-            { role: 'user', content: task },
-          ];
-
-          const runMcpSimpleTaskTurn = (
-            turnMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
-            onToolRecord?: (record: ToolRecordEvent) => void,
-            source = 'mcp_route_task',
-          ) => runWithTools(
-            turnMessages, tr,
-            { ...routeLLM, maxTokens: 2048 },
-            onToolRecord, 2,
-            g.getDeepSeek || (() => null), g.getGemini || (() => null), g.getOpenAI || (() => null),
-            g.getAnthropic || (() => null), g.getQwen || (() => null),
-            undefined,
-            {
-              ...mcpToolSecurityContext,
-              userId: scope.userId,
-              domain: scope.domain,
-              orgId: scope.orgId,
-              source,
-              toolPolicy: restrictToolPolicyForExecutionBoundary(
-                personality.toolPolicy,
-                'remote_restricted',
-              ),
-            } as any,
-            g.getOllama,
-            g.getLmStudio,
-            g.getArk,
-            g.getXiaomi,
-            g.getKimi,
-            g.getGlm,
-            g.getRelay,
-          );
-          const result = await runMcpSimpleTaskTurn(messages);
-          const outbound = await finalizeMcpResponseForDelivery({
-            taskText: task,
-            responseText: result.text,
-            toolRecords: result.toolCalls,
-            source: 'mcp_route_task',
-            allowToolUse: true,
-            attempt: async ({ instruction, recordTool }) => {
-              const recovery = await runMcpSimpleTaskTurn(
-                [
-                  ...messages,
-                  ...(String(result.text || '').trim()
-                    ? [{ role: 'assistant' as const, content: result.text }]
-                    : []),
-                  { role: 'user', content: instruction },
-                ],
-                record => {
-                  if (record.result !== undefined || record.error !== undefined) {
-                    recordTool({
-                      id: record.id,
-                      name: record.name,
-                      arguments: record.arguments || {},
-                      result: record.result || '',
-                      error: record.error,
-                    });
-                  }
-                },
-                'mcp_route_task_guard_recovery',
-              );
-              return { text: recovery.text, toolRecords: recovery.toolCalls };
-            },
-          });
-          const finalized = outbound.finalization;
-          bc('mcp:activity', {
-            device: 'xiaozhi',
-            action: 'route_task',
-            status: finalized.blocked ? 'blocked' : 'responded',
-            complexity: 'simple',
-            finalized: true,
-            blocked: finalized.blocked,
-            reason: finalized.reason || '',
-          });
-
-          return {
-            content: [{
-              type: 'text' as const,
-              text: JSON.stringify({
-                complexity: 'simple',
-                handledBy: 'Lumi (direct)',
-                result: finalized.text,
-                toolCalls: outbound.toolRecords.length,
-                finalized: true,
-                blocked: finalized.blocked,
-                reason: finalized.reason || '',
-              }, null, 2),
-            }],
-          };
-        }
-
-        // Complex task — orchestrate
-        const db = readDB();
-        const availableAgents = (db.agents || []).filter((a: any) => (
-          a.status !== 'offline' && matchesScopedRecord(a, true)
-        ));
-
-        if (targetAgentId) {
-          // Direct routing to specified agent
-          const targetAgent = availableAgents.find((a: any) => a.id === targetAgentId);
-          if (!targetAgent) {
-            return { content: [{ type: 'text' as const, text: `Target agent "${targetAgentId}" not found or offline` }], isError: true };
-          }
-        }
-
-        if (availableAgents.length === 0) {
-          return { content: [{ type: 'text' as const, text: 'No worker agents available. Create at least one agent first.' }], isError: true };
-        }
-
-        const subTasks = await decomposeTask(
-          task,
-          routeLLM,
-          {
-            ...mcpToolSecurityContext,
-            userId: scope.userId,
-            personalityId: 'lumi',
-            domain: scope.domain,
-            orgId: scope.orgId,
-          },
-          { getDeepSeek: g.getDeepSeek || (() => null), getGemini: g.getGemini || (() => null), getOpenAI: g.getOpenAI || (() => null), getAnthropic: g.getAnthropic || (() => null), getQwen: g.getQwen || (() => null) },
-        );
-
-        const assignments = matchWorkers(subTasks, availableAgents);
-        const workflowToolRecords: ToolExecutionRecord[] = [];
-        const workflowResult = await executeWorkflow(
-          assignments,
-          {
-            ...mcpToolSecurityContext,
-            userId: scope.userId,
-            personalityId: 'lumi',
-            domain: scope.domain,
-            orgId: scope.orgId,
-            rootTaskText: task,
-            toolPolicy: restrictToolPolicyForExecutionBoundary(
-              (personalityRegistry.get('lumi') || personalityRegistry.getDefault()).toolPolicy,
-              'remote_restricted',
-            ),
-          },
-          routeLLM,
-          { getDeepSeek: g.getDeepSeek || (() => null), getGemini: g.getGemini || (() => null), getOpenAI: g.getOpenAI || (() => null), getAnthropic: g.getAnthropic || (() => null), getQwen: g.getQwen || (() => null) },
-          [],
-          (record) => {
-            upsertCompletedToolRecord(workflowToolRecords, record);
-          },
-        );
-
-        const aggregated = await aggregateWithLLM(
-          workflowResult, task,
-          routeLLM,
-          { getDeepSeek: g.getDeepSeek || (() => null), getGemini: g.getGemini || (() => null), getOpenAI: g.getOpenAI || (() => null), getAnthropic: g.getAnthropic || (() => null), getQwen: g.getQwen || (() => null) },
-        );
-        const recoveryPersonality = personalityRegistry.get('lumi') || personalityRegistry.getDefault();
-        const { systemPrompt: recoverySystemPrompt } = personalityRegistry.buildSystemPrompt('lumi', {
+        const personality = personalityRegistry.get('lumi') || personalityRegistry.getDefault();
+        const { systemPrompt } = personalityRegistry.buildSystemPrompt('lumi', {
           mode: 'task',
           sensory: {
             audio: false,
@@ -1097,15 +754,25 @@ export function createLumiMcpServer(llmGetters?: {
             deviceCount: 0,
           },
         });
-        const runMcpWorkflowRecovery = (
+        const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+          {
+            role: 'system',
+            content: restrictSystemPromptForExecutionBoundary(systemPrompt, 'remote_restricted'),
+          },
+          { role: 'user', content: task },
+        ];
+        bc('mcp:activity', { device: 'xiaozhi', action: 'route_task', status: 'received' });
+
+        const runMcpTaskTurn = (
           turnMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
           onToolRecord?: (record: ToolRecordEvent) => void,
+          source = 'mcp_route_task',
         ) => runWithTools(
           turnMessages,
           tr,
-          { ...routeLLM, maxTokens: 2048 },
+          { ...routeLLM, maxTokens: 4096 },
           onToolRecord,
-          Math.min(4, recoveryPersonality.toolPolicy.maxIterations),
+          Math.min(8, personality.toolPolicy.maxIterations),
           g.getDeepSeek || (() => null),
           g.getGemini || (() => null),
           g.getOpenAI || (() => null),
@@ -1117,9 +784,9 @@ export function createLumiMcpServer(llmGetters?: {
             userId: scope.userId,
             domain: scope.domain,
             orgId: scope.orgId,
-            source: 'mcp_route_task_guard_recovery',
+            source,
             toolPolicy: restrictToolPolicyForExecutionBoundary(
-              recoveryPersonality.toolPolicy,
+              personality.toolPolicy,
               'remote_restricted',
             ),
           } as any,
@@ -1131,25 +798,20 @@ export function createLumiMcpServer(llmGetters?: {
           g.getGlm,
           g.getRelay,
         );
+
+        const result = await runMcpTaskTurn(messages);
         const outbound = await finalizeMcpResponseForDelivery({
           taskText: task,
-          responseText: aggregated,
-          toolRecords: workflowToolRecords,
+          responseText: result.text,
+          toolRecords: result.toolCalls,
           source: 'mcp_route_task',
           allowToolUse: true,
           attempt: async ({ instruction, recordTool }) => {
-            const recovery = await runMcpWorkflowRecovery(
+            const recovery = await runMcpTaskTurn(
               [
-                {
-                  role: 'system',
-                  content: restrictSystemPromptForExecutionBoundary(
-                    recoverySystemPrompt,
-                    'remote_restricted',
-                  ),
-                },
-                { role: 'user', content: task },
-                ...(String(aggregated || '').trim()
-                  ? [{ role: 'assistant' as const, content: aggregated }]
+                ...messages,
+                ...(String(result.text || '').trim()
+                  ? [{ role: 'assistant' as const, content: result.text }]
                   : []),
                 { role: 'user', content: instruction },
               ],
@@ -1164,18 +826,16 @@ export function createLumiMcpServer(llmGetters?: {
                   });
                 }
               },
+              'mcp_route_task_guard_recovery',
             );
             return { text: recovery.text, toolRecords: recovery.toolCalls };
           },
         });
         const finalized = outbound.finalization;
-
         bc('mcp:activity', {
           device: 'xiaozhi',
           action: 'route_task',
           status: finalized.blocked ? 'blocked' : 'responded',
-          subTasks: subTasks.length,
-          agentsUsed: workflowResult.totalAgentsUsed,
           finalized: true,
           blocked: finalized.blocked,
           reason: finalized.reason || '',
@@ -1185,12 +845,8 @@ export function createLumiMcpServer(llmGetters?: {
           content: [{
             type: 'text' as const,
             text: JSON.stringify({
-              complexity: 'complex',
-              handledBy: `Lumi Orchestrator → ${workflowResult.totalAgentsUsed} worker(s)`,
-              subTasks: subTasks.map(s => ({ id: s.id, description: s.description, skill: s.requiredSkill, agentId: s.assignedAgentId })),
-              assignments: assignments.map(a => ({ subTaskId: a.subTask.id, agentId: a.agent.id, agentName: a.agent.name })),
+              handledBy: 'LumiCore',
               result: finalized.text,
-              workflowSteps: workflowResult.subTaskResults.length,
               toolCalls: outbound.toolRecords.length,
               finalized: true,
               blocked: finalized.blocked,
@@ -1199,8 +855,13 @@ export function createLumiMcpServer(llmGetters?: {
           }],
         };
       } catch (err: any) {
-        bc('mcp:activity', { device: 'xiaozhi', action: 'route_task', status: 'failed', reason: 'mcp_operation_failed' });
-        return mcpToolFailure('task routing', err);
+        bc('mcp:activity', {
+          device: 'xiaozhi',
+          action: 'route_task',
+          status: 'failed',
+          reason: 'mcp_operation_failed',
+        });
+        return mcpToolFailure('task execution', err);
       }
     },
   );

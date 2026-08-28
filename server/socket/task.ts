@@ -26,9 +26,6 @@ import {
   getConversationActionStatus,
   prepareConversationActionExecution,
   persistConversationExecutionPlan,
-  persistConversationModelExecutionCheckpoint,
-  persistConversationModelExecutionResult,
-  getConversationModelExecutionRecovery,
   cancelConversationActionExecution,
   createDurableForegroundReleaseGate,
   setConversationActionExecutionStatus,
@@ -42,30 +39,19 @@ import {
   type ForegroundRequestDurabilityDependencies,
 } from "../conversation/manager";
 import { processInput, handleLLMFailure, extractSentiment, CognitiveContext, CognitiveResult } from "../cognition";
-import {
-  buildSkillDescription,
-  classifyComplexity,
-  decomposeTask,
-  executeWorkflow,
-  isTerminalOrchestrationToolEvent,
-  matchWorkers,
-  aggregateWithLLM,
-  recordWorkflowPattern,
-  shouldAttemptOrchestration,
-  shouldDistillSkill,
-  type OrchestrationWorkflowCheckpoint,
-} from "../agents/orchestrator";
-import { markLatestUserTurn } from "../agents/background_delivery";
 import { loadHIMState, saveHIMState, updateEmotionalStateWithHIM } from "../personality/state";
-import { shouldExposeAgentWork } from "../cognition/tool_intent";
 import { formatClientSelfPromptForTurn } from "../client/self_model";
 import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
-import { buildModelToolProjection } from "../cognition/capability_selection";
+import {
+  buildModelCapabilityPolicy,
+  buildModelToolProjection,
+} from "../cognition/capability_selection";
 import { bindCapabilityExecutionPlanTask } from "../cognition/capability_execution_plan";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
 import { createDesktopExecutionTracker, withDesktopExecutionReceipt } from "../desktop/execution_runtime";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
+import { shouldBlockForDesktopControlPause } from '../cognition/desktop_control_pause';
 import {
   recoverBlockedExecutionOnce,
   sanitizeExecutionResponseForDelivery,
@@ -119,6 +105,7 @@ import {
   CN_TASK_EXECUTION_MESSAGES,
   CN_VOICE_WORK_MESSAGES,
 } from "../regions/packs/cn/voice_fast_path_messages";
+import { formatDesktopControlPausePresentation } from '../regions/packs/cn/desktop_control_messages';
 import { normalizeVoiceHistory as normalizeTaskHistory } from './voice_history';
 import {
   beginChatExecutionDurably,
@@ -206,58 +193,6 @@ function taskExecutionKey(scope: ChatExecutionScope): string {
 
 export function taskDurabilityUnknownText(): string {
   return 'Lumi could not durably confirm this task result. Refresh the task state before retrying.';
-}
-
-export class TaskWorkflowCheckpointError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = 'TaskWorkflowCheckpointError';
-  }
-}
-
-export async function persistTaskWorkflowCheckpointDurably(
-  input: {
-    conversationId: string;
-    userId: string;
-    taskId: string;
-    checkpoint: OrchestrationWorkflowCheckpoint;
-    resumeNodeReceipts?: OrchestrationWorkflowCheckpoint['nodeReceipts'];
-  },
-  dependencies: {
-    persist?: typeof persistConversationModelExecutionCheckpoint;
-    flush?: typeof flushDBOrThrow;
-  } = {},
-): Promise<void> {
-  const persist = dependencies.persist || persistConversationModelExecutionCheckpoint;
-  const flush = dependencies.flush || flushDBOrThrow;
-  const preservingRecovery = input.checkpoint.phase === 'compiled'
-    && (input.resumeNodeReceipts?.length || 0) > 0;
-  const persisted = persist({
-    conversationId: input.conversationId,
-    userId: input.userId,
-    taskId: input.taskId,
-    executionGraph: input.checkpoint.executionGraph,
-    nodeReceipts: preservingRecovery
-      ? input.resumeNodeReceipts!
-      : input.checkpoint.nodeReceipts,
-    privateNodeHandoffs: preservingRecovery
-      ? undefined
-      : input.checkpoint.privateNodeHandoffs,
-    arbitrationReceipt: input.checkpoint.arbitrationReceipt,
-  });
-  if (!persisted) {
-    throw new TaskWorkflowCheckpointError(
-      `Task workflow ${input.checkpoint.phase} checkpoint was rejected`,
-    );
-  }
-  try {
-    await flush();
-  } catch (error) {
-    throw new TaskWorkflowCheckpointError(
-      `Task workflow ${input.checkpoint.phase} checkpoint could not be flushed`,
-      { cause: error },
-    );
-  }
 }
 
 export function registerTaskHandler(
@@ -987,7 +922,6 @@ export function registerTaskHandler(
     if (superseded?.terminalEvent) {
       io.to(executionRoom).emit(superseded.terminalEvent.event, superseded.terminalEvent.payload);
     }
-    markLatestUserTurn(executionScope, requestId);
     if (!acknowledged) {
       try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
     }
@@ -1003,7 +937,6 @@ export function registerTaskHandler(
     );
     const routedTaskText = [data.text, taskActionBridge, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
     const interactionId = crypto.randomUUID();
-    const exposeAgentWork = shouldExposeAgentWork(routedTaskText);
 
     // Retrieve personality vector early to bias memory retrieval (cross-system fusion: vector→memory)
     const personalityPreConfig = personalityRegistry.getForUser(
@@ -1079,15 +1012,21 @@ export function registerTaskHandler(
     const visionIntent = turnFlow.visionIntent;
     const executionDecision = executionPipeline.execution;
     executionDecision.toolPolicy = restrictToolPolicyForExecutionBoundary(
-      executionDecision.toolPolicy,
+      buildModelCapabilityPolicy(executionDecision),
       toolSecurityContext.executionBoundary,
     );
+    executionDecision.baseToolPolicy = executionDecision.toolPolicy;
     executionDecision.maxIterations = executionDecision.toolPolicy.maxIterations;
     executionDecision.toolRoute = restrictVisibleToolRouteForExecutionBoundary(
       executionDecision.toolRoute,
       toolSecurityContext.executionBoundary,
     );
-    const modelToolProjection = buildModelToolProjection(executionDecision);
+    const modelToolProjection = buildModelToolProjection(executionDecision, {
+      lane: executionPipeline.capabilityPlan.lane,
+      preferredTools: executionPipeline.capabilityPlan.preferredTools,
+    });
+    const toolSessionActive = executionPipeline.executionRequested
+      && modelToolProjection.toolNames.length > 0;
     const actionFollowupIntent = classifyConversationActionFollowupIntent(
       data.text,
       convForHistory.actionContinuationState,
@@ -1099,7 +1038,7 @@ export function registerTaskHandler(
       requestId,
       userMessageId: taskUserMessageId,
       toolPolicy: executionDecision.toolPolicy,
-      forceTask: executionDecision.allowToolUse,
+      forceTask: executionPipeline.capabilityPlan.taskLedgerRequired,
       forceResume: Boolean(pendingConfirmation || actionFollowupIntent === 'execute'),
     });
     const runtimeOwnedDeterministicRecoveryCall = 'bindingFailure' in actionTaskExecution
@@ -1208,13 +1147,13 @@ export function registerTaskHandler(
       coalesceToolExecutionRecords([...priorTaskRecords, ...records])
     );
     if (
-      executionDecision.allowToolUse
+      toolSessionActive
       && (actionTaskExecution.kind === 'new' || actionTaskExecution.kind === 'resume')
     ) {
       setConversationActionExecutionStatus(convForHistory.id, uid, 'executing', { requestId });
     }
     const deferTaskModelOutput =
-      executionDecision.allowToolUse
+      toolSessionActive
       || shouldDeferModelOutputUntilFinalized({
         taskText: routedTaskText,
         flow: turnFlow,
@@ -1768,202 +1707,6 @@ export function registerTaskHandler(
         return;
       }
 
-      // ── Orchestrator: decompose complex tasks into sub-tasks for worker agents ──
-      let orchestratedText = '';
-      const orchestratedToolRecords: ToolExecutionRecord[] = [];
-      if (!pendingConfirmation && !runtimeOwnedDeterministicRecoveryCall && (cognition.intent.category === 'command' || cognition.intent.category === 'code' || cognition.intent.category === 'question')) {
-        const orchestrationContext = {
-          ...toolSecurityContext,
-          userId: uid,
-          personalityId: data.personalityId || 'lumi',
-          domain: taskScope.domain,
-          orgId: taskScope.orgId,
-          toolPolicy: executionDecision.toolPolicy,
-          rootTaskText: routedTaskText,
-          taskId: actionTaskExecution.state?.taskId,
-          desktopExecutionTracker,
-        };
-        const complexity = classifyComplexity(routedTaskText, orchestrationContext);
-        const shouldOrchestrate = shouldAttemptOrchestration({
-          channel: 'task',
-          text: turnFlow.routeText,
-          complexity,
-          allowToolUse: executionDecision.allowToolUse,
-          clientActionOnly: turnFlow.clientActionOnlyTurn,
-          selfRepair: turnFlow.selfRepairTurn,
-          artifactFirst: workSurfaceRoute.artifactFirst,
-          directDesktop: workSurfaceRoute.directDesktop,
-          capabilityLane: capabilitySelection.lane,
-          cognitionCategory: cognition.intent.category,
-        });
-        if (shouldOrchestrate && actionTaskExecution.state?.taskId) {
-          const db = readDB();
-          const availableAgents = (db.agents || []).filter((a: any) => {
-            if (a.status === 'offline' || a.status === 'terminated') return false;
-            if (taskScope.domain === 'work') {
-              return a.domain === 'work' && a.orgId === taskScope.orgId;
-            }
-            return a.domain !== 'work' && !a.orgId && (!a.ownerUid || a.ownerUid === uid);
-          });
-          if (availableAgents.length >= 1) {
-            let workflowCheckpointed = false;
-            try {
-              emitAgent("agent:status", { status: "thinking", agentName: exposeAgentWork ? "Lumi Orchestrator" : personality.name, phase: exposeAgentWork ? 'orchestrator' : 'background' });
-              const scopedLlmConfig = { provider: activeProvider, model: activeModel, userId: uid, domain: taskScope.domain, orgId: taskScope.orgId, signal: taskAbortController.signal, ...reasoningRoutePolicy };
-              const subTasks = await decomposeTask(data.text, scopedLlmConfig, orchestrationContext, llmGetters);
-              if (exposeAgentWork && !deferTaskModelOutput) emitTask("task:chunk", { text: `[Orchestrator] Decomposed into ${subTasks.length} sub-tasks\n`, agentName: "Lumi" });
-
-              const assignments = matchWorkers(subTasks, availableAgents);
-              if (exposeAgentWork && !deferTaskModelOutput) emitTask("task:chunk", { text: `[Orchestrator] Assigned to ${assignments.length} worker(s)\n`, agentName: "Lumi" });
-
-              const taskModelRecovery = actionTaskExecution.state?.taskId
-                ? getConversationModelExecutionRecovery({
-                    conversationId: convForHistory.id,
-                    userId: uid,
-                    taskId: actionTaskExecution.state.taskId,
-                  })
-                : null;
-              const workflowResult = await executeWorkflow(
-                assignments,
-                {
-                  ...orchestrationContext,
-                  desktopRelay,
-                  desktopExecutionTracker,
-                  resumeNodeReceipts: taskModelRecovery?.receipts,
-                  resumeExecutionGraph: taskModelRecovery?.graph,
-                },
-                scopedLlmConfig,
-                llmGetters,
-                availableAgents,
-                (record, meta) => {
-                  emitAgent("agent:tool_call", {
-                    correlationId: record.id,
-                    name: record.name,
-                    arguments: record.arguments,
-                    result: record.result?.slice(0, 500),
-                    error: record.error,
-                    source: 'task',
-                    worker: meta,
-                  });
-                  if (isTerminalOrchestrationToolEvent(record)) {
-                    orchestratedToolRecords.push({ ...record, result: record.result || '' });
-                  }
-                },
-                async checkpoint => {
-                  await persistTaskWorkflowCheckpointDurably({
-                    conversationId: convForHistory.id,
-                    userId: uid,
-                    taskId: actionTaskExecution.state!.taskId,
-                    checkpoint,
-                    resumeNodeReceipts: taskModelRecovery?.receipts,
-                  });
-                  workflowCheckpointed = true;
-                },
-              );
-              if (actionTaskExecution.state?.taskId) {
-                const finalCheckpointPersisted = persistConversationModelExecutionResult({
-                  conversationId: convForHistory.id,
-                  userId: uid,
-                  taskId: actionTaskExecution.state.taskId,
-                  workflowResult,
-                });
-                if (!finalCheckpointPersisted) {
-                  throw new TaskWorkflowCheckpointError('Task workflow final checkpoint was rejected');
-                }
-                await flushDBOrThrow();
-              }
-              const aggregated = await aggregateWithLLM(workflowResult, data.text, scopedLlmConfig, llmGetters, uid, taskScope);
-              orchestratedText = aggregated;
-
-              const skillTags = subTasks.map(s => s.requiredSkill);
-              recordWorkflowPattern(data.text, subTasks.length, skillTags, uid, taskScope.domain, taskScope.orgId);
-
-              if (shouldDistillSkill(data.text)) {
-                const skillDesc = buildSkillDescription(data.text, workflowResult);
-                emitAgent("agent:proactive", {
-                  type: 'distill_hint',
-                  message: 'I notice this type of task is recurring. I can create an automated skill for this — would you like me to?',
-                  skillDescription: skillDesc,
-                  timestamp: new Date().toISOString(),
-                });
-              }
-              if (exposeAgentWork && !deferTaskModelOutput) {
-              emitTask("task:chunk", { text: `\n[Orchestrator] Workflow result ready for final validation — ${workflowResult.totalAgentsUsed} agent(s) used\n`, agentName: "Lumi" });
-              }
-            } catch (orchErr: any) {
-              if (orchErr instanceof TaskWorkflowCheckpointError || workflowCheckpointed) throw orchErr;
-              console.error('[Orchestrator] Task workflow failed, falling back to normal execution:', orchErr.message);
-            }
-          }
-        }
-      }
-
-      if (orchestratedText) {
-        const finalOrchestratedToolRecords = attachDesktopReceipt(orchestratedToolRecords);
-        const finalOrchestrated = finalizeLumiResponse({
-          taskText: data.text,
-          responseText: orchestratedText,
-          toolRecords: taskAwareRecords(finalOrchestratedToolRecords),
-          source: 'task',
-          flow: turnFlow,
-        });
-        orchestratedText = finalOrchestrated.text;
-        const orchestratedTerminalPayload = {
-          text: orchestratedText,
-          agentName: personality.name,
-          source: 'task',
-          finalized: true,
-          blocked: finalOrchestrated.blocked,
-          reason: finalOrchestrated.reason,
-        };
-        // Orchestrator handled the task — emit result and skip normal LLM path
-        const db = readDB();
-        const conv = convForHistory;
-        db.interactions.push({
-          id: interactionId, content: data.text, response: orchestratedText,
-          role: "user", personality: personality.id, timestamp: new Date().toISOString(),
-          mode: 'task', cognitiveIntent: cognition.intent.category, llmWasCalled: true,
-          userId: uid, conversationId: conv.id, domain: taskScope.domain, orgId: taskScope.orgId,
-        } as any);
-        writeDB(db);
-        const executionWriteback = persistTaskExecutionWriteback(
-          orchestratedText,
-          finalOrchestratedToolRecords,
-          `${interactionId}_orchestrated`,
-          { blocked: finalOrchestrated.blocked, reason: finalOrchestrated.reason },
-        );
-        const terminalCommitted = await commitTaskTerminal({
-          payload: orchestratedTerminalPayload,
-          persistTerminalState: () => executionWriteback,
-          persistAssistantMessage: () => {
-            addMessageIdempotent({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: orchestratedText, personality: personality.id, mode: 'task', source: 'task', channel: 'task', domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: finalOrchestratedToolRecords.length ? finalOrchestratedToolRecords : undefined, cognitiveIntent: finalOrchestrated.blocked ? 'work_product_guard' : cognition!.intent.category, llmWasCalled: true, requestId });
-          },
-          publishAfter: () => {
-            if (finalOrchestrated.notification) {
-              publishRecordedAgent(
-                'agent:notification',
-                normalizeAgentPayload('agent:notification', finalOrchestrated.notification),
-              );
-            }
-            publishTaskExecutionWriteback(executionWriteback);
-            io.to(executionRoom).emit('chat:conversation_updated', { conversationId: convForHistory.id, agentId: '', source: 'task', requestId });
-          },
-          errorContext: 'Orchestrated task terminal',
-        });
-        if (terminalCommitted) {
-          let updatedState = updateEmotionalState(emotionalState, { type: 'interaction', userId: uid, timestamp: new Date().toISOString() });
-          if (isNovelTask) {
-            updatedState = updateEmotionalState(updatedState, { type: 'novel_topic', userId: uid, timestamp: new Date().toISOString() });
-          }
-          saveEmotionalState(taskStateKey, updatedState);
-          persistTaskLearning(orchestratedText, {
-            toolRecords: finalOrchestratedToolRecords,
-            logLabel: 'task orchestrated',
-          });
-        }
-        return;
-      }
-
       const result = await runWithTools(
         messages,
         toolRegistry,
@@ -2069,15 +1812,32 @@ export function registerTaskHandler(
             source: 'task',
             flow: turnFlow,
           });
+      const desktopPauseBlocksCurrentTask = () => {
+        return shouldBlockForDesktopControlPause({
+          pauseReason: desktopRelay.getControlPauseReason(),
+          waitingForConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
+          taskText: routedTaskText,
+          toolRecords: taskAwareRecords(finalTaskToolRecords),
+        });
+      };
+      if (desktopPauseBlocksCurrentTask()) {
+        const pausePresentation = formatDesktopControlPausePresentation(routedTaskText);
+        finalTaskResponse = {
+          ...finalTaskResponse,
+          text: pausePresentation.text,
+          blocked: true,
+          reason: pausePresentation.reason,
+        };
+      }
       const guardRecovery = await recoverBlockedExecutionOnce({
         task: routedTaskText,
         responseText: finalTaskText,
         finalization: finalTaskResponse,
-        allowToolUse: executionDecision.allowToolUse,
+        allowToolUse: toolSessionActive,
         pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
         requiresFreshConfirmation: correctionRequiresFreshConfirmation,
-        aborted: taskLease.signal.aborted,
-        isAborted: () => taskLease.signal.aborted,
+        aborted: taskLease.signal.aborted || desktopPauseBlocksCurrentTask(),
+        isAborted: () => taskLease.signal.aborted || desktopPauseBlocksCurrentTask(),
         isPendingConfirmation: () => Boolean(pendingConfirmationCreatedThisTurn),
         toolRecords: finalTaskToolRecords,
         attempt: async ({ instruction, priorToolRecords, recordTool }) => {

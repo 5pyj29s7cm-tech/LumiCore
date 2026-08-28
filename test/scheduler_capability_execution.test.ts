@@ -369,7 +369,7 @@ describe('scheduler capability execution protocol', () => {
 
     const registrations = source.match(/scheduler\.register\(\{/g) || [];
     const declarations = source.match(/executionClass:\s*'(?:maintenance|proactive_delivery|client_probe|autonomous_orchestration)'/g) || [];
-    expect(registrations).toHaveLength(28);
+    expect(registrations).toHaveLength(26);
     expect(declarations).toHaveLength(registrations.length);
   });
 });

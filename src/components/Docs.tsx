@@ -24,7 +24,7 @@ export function Docs({ t }: { t: any }) {
     <div className="max-w-6xl mx-auto space-y-12">
       <div className="text-center space-y-6">
         <h1 className="text-6xl font-bold tracking-tighter glow-text">{data?.title || t.docs}</h1>
-        <p className="text-xl text-white/60 max-w-2xl mx-auto">{t.docsTagline || 'Master the LumiAI protocol and build advanced Agent architectures.'}</p>
+        <p className="text-xl text-white/60 max-w-2xl mx-auto">{t.docsTagline || 'Learn how LumiCore uses tools, memory, workflows, and local device capabilities.'}</p>
         <div className="max-w-md mx-auto relative">
           <Input placeholder={t.searchDocs || "Search documentation..."} className="bg-white/5 border-white/10 rounded-2xl p-6 h-auto text-lg pl-12" />
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-white/40" size={20} />
@@ -103,7 +103,7 @@ export function Docs({ t }: { t: any }) {
                     </li>
                     <li className="flex gap-4">
                       <div className="w-6 h-6 rounded-full bg-celestial-saturn/20 flex items-center justify-center text-celestial-saturn font-bold text-xs mt-1">2</div>
-                      <p className="text-sm text-white/60"><strong className="text-white">{t.symbioticFeedbackLabel || 'Symbiotic Feedback:'}</strong> {t.symbioticFeedbackDesc || "Real-time sensory data from the host contributes to the local Agent's evolution."}</p>
+                      <p className="text-sm text-white/60"><strong className="text-white">{t.symbioticFeedbackLabel || 'Learning Feedback:'}</strong> {t.symbioticFeedbackDesc || 'Verified local interaction feedback improves LumiCore while preserving user control.'}</p>
                     </li>
                   </ul>
                 </div>
@@ -177,7 +177,7 @@ export function Docs({ t }: { t: any }) {
                   </div>
                   <div className="flex-1 h-px bg-gradient-to-r from-celestial-saturn via-white/20 to-celestial-nebula hidden md:block min-w-[100px]" />
                   <div className="px-4 py-2 rounded-full border border-white/10 bg-white/5 text-xs font-mono">
-                    AES-256-GCM / P2P Mesh
+                    AES-256-GCM / Local encrypted sync
                   </div>
                   <div className="flex-1 h-px bg-gradient-to-r from-celestial-nebula via-white/20 to-celestial-saturn hidden md:block min-w-[100px]" />
                   <div className="flex flex-col items-center gap-2">
@@ -196,8 +196,8 @@ export function Docs({ t }: { t: any }) {
               <DocCard
                 icon={<Book className="text-celestial-mars" />}
                 title={t.gettingStarted || 'Getting Started'}
-                desc={t.gettingStartedDesc || 'Learn the basics of Agent generation and local node setup.'}
-                links={[t.installDoc || 'Installation', t.firstAgentDoc || 'First Agent', t.syncingDevicesDoc || 'Syncing Devices']}
+                desc={t.gettingStartedDesc || 'Learn the basics of LumiCore setup, conversation, tools, and local permissions.'}
+                links={[t.installDoc || 'Installation', t.firstAgentDoc || 'First conversation', t.syncingDevicesDoc || 'Syncing Devices']}
               />
               <DocCard
                 icon={<Zap className="text-celestial-saturn" />}
@@ -207,9 +207,9 @@ export function Docs({ t }: { t: any }) {
               />
               <DocCard
                 icon={<Globe className="text-celestial-glow" />}
-                title={t.ecosystemDoc || 'Ecosystem'}
-                desc={t.ecosystemDocDesc || 'Explore the LumiAI distributed network.'}
-                links={[t.meshBasicsDoc || 'Mesh Basics', t.p2pSyncDoc || 'P2P Sync', t.securityDoc || 'Security']}
+                title={t.ecosystemDoc || 'Capabilities'}
+                desc={t.ecosystemDocDesc || 'Explore LumiCore tools, skills, workflows, and device integrations.'}
+                links={['Tools and skills', 'Task continuity', t.securityDoc || 'Security']}
               />
             </div>
           )}
@@ -242,8 +242,8 @@ export function Docs({ t }: { t: any }) {
               <DocCard
                 icon={<Terminal className="text-celestial-glow" />}
                 title={t.advancedGuides || 'Advanced Guides'}
-                desc={t.advancedGuidesDesc || 'Build complex multi-agent systems and custom knowledge graphs.'}
-                links={[t.orchestrationDoc || 'Orchestration', t.customLLMsDoc || 'Custom LLMs', t.securityRulesDoc || 'Security Rules']}
+                desc={t.advancedGuidesDesc || 'Build reliable LumiCore workflows and custom knowledge graphs.'}
+                links={[t.orchestrationDoc || 'Task execution', t.customLLMsDoc || 'Custom LLMs', t.securityRulesDoc || 'Security Rules']}
               />
               <DocCard
                 icon={<Zap className="text-celestial-saturn" />}
@@ -253,9 +253,9 @@ export function Docs({ t }: { t: any }) {
               />
               <DocCard
                 icon={<Globe className="text-celestial-nebula" />}
-                title={t.globalMeshDoc || 'Global Mesh'}
-                desc={t.globalMeshDocDesc || 'Scale your agents across the distributed mesh.'}
-                links={[t.swarmLogicDoc || 'Swarm Logic', t.crossNodeSyncDoc || 'Cross-Node Sync', t.latencyDoc || 'Latency']}
+                title={t.globalMeshDoc || 'Runtime Reliability'}
+                desc={t.globalMeshDocDesc || 'Keep one LumiCore task continuous across tools, restarts, and model fallback.'}
+                links={['Task continuity', 'Model fallback', 'Failure diagnostics']}
               />
             </div>
           )}
@@ -269,7 +269,7 @@ export function Docs({ t }: { t: any }) {
                   {section.id === 1 && (
                     <div className="p-6 bg-white/5 rounded-2xl border border-white/10 font-mono text-sm overflow-x-auto">
                       <code>
-                        lumi generate --name "MyAgent" --data ./docs/knowledge.pdf --privacy high
+                        lumi status --details
                       </code>
                     </div>
                   )}
@@ -282,10 +282,10 @@ export function Docs({ t }: { t: any }) {
                 <GlassCard className="space-y-6" hoverEffect={false}>
                   <h3 className="text-2xl font-bold tracking-tighter">{t.neuralSynthesisProtocol || 'Neural Synthesis Protocol'}</h3>
                   <div className="space-y-4 text-white/60 leading-relaxed">
-                    <p>{t.neuralSynthesisProtocolDesc || "The LumiAI protocol uses distributed neural synthesis to build Agent intelligence. This process is entirely local, ensuring that your data never leaves your node."}</p>
+                    <p>{t.neuralSynthesisProtocolDesc || 'LumiCore combines local memory, approved tools, model routing, and verification. Local data remains within its configured privacy boundary.'}</p>
                     <div className="p-6 bg-white/5 rounded-2xl border border-white/10 font-mono text-sm overflow-x-auto">
                       <code>
-                        lumi generate --name "MyAgent" --data ./docs/knowledge.pdf --privacy high
+                        lumi status --details
                       </code>
                     </div>
                     <p>{t.neuralSynthesisPrivacyDesc || 'By defining a high privacy level, the protocol will use advanced encryption and local-only processing for all neural weight calculations.'}</p>

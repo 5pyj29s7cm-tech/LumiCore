@@ -15,12 +15,6 @@ import {
   recoverPersistedTask,
   resetAutonomousTaskQueueForTest,
 } from '../server/autonomy/task_queue';
-import {
-  claimBackgroundTask,
-  recordBackgroundTaskFailure,
-  registerBackgroundTask,
-  resetBackgroundTasksForTest,
-} from '../server/agents/background_tasks';
 import { buildTaskTerminalReceipt } from '../server/cognition/acceptance_evidence';
 
 function toolRecord(input: {
@@ -185,12 +179,10 @@ describe('durable queue safety state machine', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-02T00:00:00.000Z'));
     resetAutonomousTaskQueueForTest({ markHydrated: true });
-    resetBackgroundTasksForTest({ markHydrated: true });
   });
 
   afterEach(() => {
     resetAutonomousTaskQueueForTest({ markHydrated: true });
-    resetBackgroundTasksForTest({ markHydrated: true });
     vi.useRealTimers();
   });
 
@@ -235,44 +227,6 @@ describe('durable queue safety state machine', () => {
       blocked: false,
       terminalReceipt: completionReceipt,
     }, 'lease-b')?.status).toBe('completed');
-  });
-
-  it('schedules safe background retries and blocks after the bounded attempt budget', () => {
-    const task = registerBackgroundTask({
-      id: 'retry-background',
-      userId: 'owner',
-      title: 'Read remote state',
-      prompt: 'Read only',
-    });
-    const record = toolRecord({ error: 'provider connection timeout' });
-
-    let claimed = claimBackgroundTask(task.id, { leaseId: 'lease-1' })!;
-    let settled = recordBackgroundTaskFailure(task.id, {
-      error: record.error,
-      toolRecords: [record],
-      baseDelayMs: 100,
-    }, claimed.leaseId)!;
-    expect(settled).toMatchObject({ status: 'queued', attempt: 1 });
-    expect(claimBackgroundTask(task.id, { leaseId: 'too-early' })).toBeNull();
-
-    vi.advanceTimersByTime(10_000);
-    claimed = claimBackgroundTask(task.id, { leaseId: 'lease-2' })!;
-    settled = recordBackgroundTaskFailure(task.id, {
-      error: record.error,
-      toolRecords: [record],
-      baseDelayMs: 100,
-    }, claimed.leaseId)!;
-    expect(settled).toMatchObject({ status: 'queued', attempt: 2 });
-
-    vi.advanceTimersByTime(10_000);
-    claimed = claimBackgroundTask(task.id, { leaseId: 'lease-3' })!;
-    settled = recordBackgroundTaskFailure(task.id, {
-      error: record.error,
-      toolRecords: [record],
-      baseDelayMs: 100,
-    }, claimed.leaseId)!;
-    expect(settled).toMatchObject({ status: 'blocked', attempt: 3 });
-    expect(settled.recovery?.diagnoses).toHaveLength(3);
   });
 
   it('blocks autonomous restart replay when a side effect lacks a reusable persistent ledger', () => {

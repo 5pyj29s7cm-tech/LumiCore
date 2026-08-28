@@ -39,7 +39,7 @@ describe('autonomous capability planning entrance', () => {
       source: 'user_request',
     }, 30, registry);
 
-    expect(pipeline.turnIntent.channel).toBe('agent');
+    expect(pipeline.turnIntent.channel).toBe('autonomy');
     expect(pipeline.executionPlan.risk).toMatchObject({
       sideEffectClass: 'external_commit',
       requiresConfirmation: true,

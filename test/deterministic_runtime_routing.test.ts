@@ -27,6 +27,29 @@ const TOOLS = [
 ].map(declaration);
 
 describe('deterministic runtime-work routing', () => {
+  it('does not turn a negated status-output constraint into a status command', () => {
+    const text = 'Write the requested file exactly once. Do not report task status. Stop when confirmation is required.';
+    expect(classifyRuntimeWorkIntent(text)).toBe('none');
+    const route = routeToolsForTurn(text, TOOLS);
+    expect(route.toolNames).not.toEqual(['runtime_work_status']);
+    expect(route.categories).not.toEqual(['task_control']);
+  });
+
+  it('still honors a positive runtime command after a negated status-output clause', () => {
+    expect(classifyRuntimeWorkIntent('Do not report task status; cancel the current task.')).toBe('cancel');
+  });
+
+  it.each([
+    '\u6e05\u7406\u4e00\u4e0b',
+    '\u6e05\u6389\u8fd9\u4e9b\u4efb\u52a1',
+    '\u6e05\u7406\u4e0a\u8ff0\u4efb\u52a1',
+  ])('does not grant cancel-all authority without an adjacent frozen offer: %s', text => {
+    expect(classifyRuntimeWorkIntent(text)).toBe('none');
+    const route = routeToolsForTurn(text, TOOLS);
+    expect(route.toolNames).not.toContain('runtime_work_cancel');
+    expect(route.forbiddenToolNames).toContain('runtime_work_cancel');
+  });
+
   it.each([
     '你现在后台在执行什么',
     '显示有四个在执行',
@@ -164,5 +187,43 @@ describe('deterministic runtime-work routing', () => {
       taskId: 'task-1',
       now,
     })).toBeUndefined();
+  });
+
+  it('binds the production cleanup wording to the frozen cancellable ids', () => {
+    const now = Date.parse('2026-08-28T06:37:50.000Z');
+    const context = buildPendingAssistantOfferContextFromTranscript({
+      messages: [{
+        id: 'assistant-production-offer',
+        role: 'assistant',
+        message: '\u53e6\u5916\u53f0\u8d26\u91cc\u8fd8\u6709 51 \u4e2a\u5386\u53f2\u963b\u585e\u8bb0\u5f55\uff0c\u591a\u4e3a\u65e7\u4efb\u52a1\u7684\u9057\u7559\u6807\u8bb0\u3002\u6216\u8005\u4f60\u60f3\u6e05\u6389\u90a3\u4e9b\u5931\u8d25/\u963b\u585e\u7684\u65e7\u4efb\u52a1\uff0c\u4e5f\u53ef\u4ee5\u8bf4\u4e00\u58f0\u3002',
+        timestamp: '2026-08-28T06:37:30.000Z',
+        toolCalls: [{
+          name: 'runtime_work_status',
+          result: JSON.stringify({
+            ok: true,
+            items: [
+              { id: 'runtime-task-a', controls: { canCancel: true } },
+              { id: 'runtime-task-complete', controls: { canCancel: false } },
+              { id: 'runtime-task-b', controls: { canCancel: true } },
+            ],
+          }),
+          error: '',
+          terminalVerification: { status: 'verified' },
+          envelope: { status: 'verified_success' },
+        }],
+      }],
+      userId: 'user-production',
+      conversationId: 'conversation-production',
+      taskId: 'conversation-task-production',
+      now,
+    });
+
+    expect(resolvePendingRuntimeCleanupOffer('\u6e05\u6389\u8fd9\u4e9b\u4efb\u52a1', context)).toMatchObject({
+      intent: 'cancel',
+      toolCall: {
+        name: 'runtime_work_cancel',
+        arguments: { taskIds: ['runtime-task-a', 'runtime-task-b'] },
+      },
+    });
   });
 });

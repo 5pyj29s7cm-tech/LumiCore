@@ -205,19 +205,14 @@ describe('Intent Classifier', () => {
     });
   });
 
-  // ── Agent ──
-  describe('agent management', () => {
-    it('"create/make/new" matches command before agent patterns', () => {
-      // COMMAND_PATTERNS are checked before AGENT_PATTERNS in classifyIntent.
-      // "new agent" has "new" which matches the command regex first.
-      const r = c('create a new agent');
-      expect(r.category).toBe('command');
-      expect(r.subIntent).toBe('create');
-    });
-
-    it('agent management phrases → agent', () => {
-      expect(c('代理列表').category).toBe('agent');
-      expect(c('助手切换').category).toBe('agent');
+  describe('single-core boundary', () => {
+    it('keeps parallel-assistant management phrases out of executable creation routes', () => {
+      for (const text of ['create a new agent', '代理列表', '助手切换']) {
+        const result = c(text);
+        expect(result.category, text).toBe('question');
+        expect(result.subIntent, text).toBe('single_core_boundary');
+        expect(result.directToolCall, text).toBeUndefined();
+      }
     });
   });
 

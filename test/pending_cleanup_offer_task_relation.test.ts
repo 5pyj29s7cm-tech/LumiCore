@@ -4,6 +4,7 @@ import {
   buildPendingAssistantOfferContextFromTranscript,
   createPendingRuntimeCleanupOffer,
   resolvePendingRuntimeCleanupOffer,
+  runtimeCleanupTargetTaskIdsFromAssistantTurn,
   type PendingAssistantOfferContext,
 } from '../server/cognition/pending_assistant_offer';
 import { resolveActiveTaskMessageRelation } from '../server/cognition/task_concurrency';
@@ -101,6 +102,21 @@ describe('pending cleanup offer task relation', () => {
     });
   });
 
+  it('uses the server-owned offer fence instead of stale rendered request metadata', () => {
+    const context = validContext(now);
+    expect(resolveActiveTaskMessageRelation('\u6e05\u6389\u8fd9\u4e9b\u4efb\u52a1', state, {
+      pendingAssistantOfferContext: context,
+      controlTargetRequestId: 'stale-rendered-request',
+    })).toMatchObject({
+      relation: 'continue',
+      taskRelation: 'confirm',
+      feedback: 'accept',
+      binding: 'active_task',
+      operation: 'verify',
+      taskId: 'conversation-task',
+    });
+  });
+
   it.each([
     ['missing', undefined],
     ['expired', { ...validContext(now), now: now + 3 * 60_000 }],
@@ -156,5 +172,27 @@ describe('pending cleanup offer task relation', () => {
       conversationId: 'offer-conversation',
       now: now + 1_000,
     })).toBeUndefined();
+  });
+
+  it('recovers frozen targets from a canonical envelope when the display result was truncated', () => {
+    expect(runtimeCleanupTargetTaskIdsFromAssistantTurn({
+      id: 'runtime-status-turn',
+      role: 'assistant',
+      toolCalls: [{
+        name: 'runtime_work_status',
+        result: '{"ok":true,"items":[',
+        error: '',
+        envelope: {
+          status: 'verified_success',
+          result: {
+            ok: true,
+            items: [
+              { id: 'running-task', controls: { canCancel: true } },
+              { id: 'terminal-task', controls: { canCancel: false } },
+            ],
+          },
+        },
+      }],
+    })).toEqual(['running-task']);
   });
 });

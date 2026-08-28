@@ -17,6 +17,7 @@ export interface UserFacingOutputProtectionOptions {
 const MAX_PERSISTED_TOOL_RECORDS = 80;
 const MAX_PERSISTED_STRING = 4_000;
 const MAX_PERSISTED_COLLECTION = 80;
+const MAX_PERSISTED_DESKTOP_ENTRIES = 32;
 
 const DATA_URL_RE = /data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\r\n]+/iu;
 const IMAGE_BASE64_FIELD_RE = /["']?image_base64["']?\s*[:=]\s*["'][^"']*["']/iu;
@@ -141,6 +142,17 @@ function compactPersistedToolValue(value: unknown, key = '', depth = 0): unknown
     }
     const redacted = redactSensitive(value);
     if (redacted.length <= MAX_PERSISTED_STRING) return redacted;
+    const parsed = parseJson(redacted);
+    if (parsed !== null) {
+      const compacted = compactPersistedToolValue(parsed, key, depth + 1);
+      const serialized = JSON.stringify(compacted);
+      if (serialized.length <= MAX_PERSISTED_STRING) return serialized;
+      return JSON.stringify({
+        kind: 'structured_result_summary',
+        originalChars: redacted.length,
+        resultOmitted: true,
+      });
+    }
     const tailLength = 400;
     return `${redacted.slice(0, MAX_PERSISTED_STRING - tailLength - 48)}\n[stored result truncated: ${redacted.length} chars]\n${redacted.slice(-tailLength)}`;
   }
@@ -157,6 +169,127 @@ function compactPersistedToolValue(value: unknown, key = '', depth = 0): unknown
         compactPersistedToolValue(nested, nestedKey, depth + 1),
       ]),
   );
+}
+
+const DESKTOP_FILE_COLLECTION_KEYS = ['files', 'entries', 'items', 'children', 'results'] as const;
+const DESKTOP_PROCESS_COLLECTION_KEYS = ['processes', 'items', 'results', 'windows'] as const;
+const TARGET_DOCUMENT_RE = /\.(?:docx?|xlsx?|pptx?|pdf|wps|et|dps|txt|md|rtf|csv)(?:$|[\s"'])/iu;
+const AUTHORING_PROCESS_RE = /(?:^|[\\/])(?:wps|wpp|et|wpsoffice|winword|excel|powerpnt)(?:\.exe)?$/iu;
+
+function parseNestedJson(value: unknown): unknown {
+  let parsed = value;
+  for (let depth = 0; depth < 3 && typeof parsed === 'string'; depth += 1) {
+    const next = parseJson(parsed);
+    if (next === null) break;
+    parsed = next;
+  }
+  return parsed;
+}
+
+function compactEvidenceString(value: unknown, limit = 600): string {
+  return redactSensitive(String(value || ''))
+    .replace(/[\r\n\t]+/gu, ' ')
+    .trim()
+    .slice(0, limit);
+}
+
+function compactDesktopEntry(value: unknown, kind: 'files' | 'processes'): unknown {
+  if (typeof value === 'string') return compactEvidenceString(value);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const source = value as Record<string, unknown>;
+  const allowed = kind === 'files'
+    ? ['name', 'fileName', 'path', 'fullPath', 'type', 'fileType', 'isDirectory', 'size', 'modifiedMs']
+    : ['pid', 'name', 'process_name', 'processName', 'executable', 'executable_path', 'window_title', 'windowTitle', 'window_titles', 'windowTitles'];
+  return Object.fromEntries(allowed.flatMap(key => {
+    if (source[key] === undefined) return [];
+    const raw = source[key];
+    if (Array.isArray(raw)) {
+      return [[key, raw.slice(0, 12).map(item => compactEvidenceString(item, 300))]];
+    }
+    if (typeof raw === 'string') return [[key, compactEvidenceString(raw, key.includes('path') ? 600 : 300)]];
+    return [[key, raw]];
+  }));
+}
+
+function desktopEntrySearchText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (!value || typeof value !== 'object') return '';
+  const item = value as Record<string, unknown>;
+  return [
+    item.name,
+    item.fileName,
+    item.path,
+    item.fullPath,
+    item.process_name,
+    item.processName,
+    item.executable,
+    item.window_title,
+    item.windowTitle,
+    ...(Array.isArray(item.window_titles) ? item.window_titles : []),
+    ...(Array.isArray(item.windowTitles) ? item.windowTitles : []),
+  ].map(entry => String(entry || '')).join(' ');
+}
+
+function selectDesktopEvidenceEntries(
+  entries: unknown[],
+  kind: 'files' | 'processes',
+): unknown[] {
+  const ranked = entries.map((entry, index) => {
+    const text = desktopEntrySearchText(entry);
+    const isTarget = kind === 'files'
+      ? TARGET_DOCUMENT_RE.test(text)
+      : AUTHORING_PROCESS_RE.test(String((entry as any)?.name || (entry as any)?.process_name || (entry as any)?.processName || ''))
+        || TARGET_DOCUMENT_RE.test(text);
+    const hasWindow = kind === 'processes'
+      && /\S/u.test(String((entry as any)?.window_title || (entry as any)?.windowTitle || ''));
+    return { entry, index, score: (isTarget ? 100 : 0) + (hasWindow ? 30 : 0) + (index < 8 ? 10 : 0) + (index >= entries.length - 4 ? 5 : 0) };
+  });
+  ranked.sort((left, right) => right.score - left.score || left.index - right.index);
+  return ranked.slice(0, MAX_PERSISTED_DESKTOP_ENTRIES)
+    .map(({ entry }) => compactDesktopEntry(entry, kind));
+}
+
+function desktopCollection(value: unknown, keys: readonly string[]): { entries: unknown[]; key: string } | null {
+  const parsed = parseNestedJson(value);
+  if (Array.isArray(parsed)) return { entries: parsed, key: '' };
+  if (!parsed || typeof parsed !== 'object') return null;
+  const object = parsed as Record<string, unknown>;
+  for (const key of keys) {
+    if (Array.isArray(object[key])) return { entries: object[key] as unknown[], key };
+  }
+  return null;
+}
+
+function compactDesktopCollectionResult(
+  value: unknown,
+  toolName: string,
+): { text: string; payload: Record<string, unknown> } | null {
+  const kind = /running_processes|get_running_processes/iu.test(toolName) ? 'processes' : 'files';
+  const collection = desktopCollection(
+    value,
+    kind === 'processes' ? DESKTOP_PROCESS_COLLECTION_KEYS : DESKTOP_FILE_COLLECTION_KEYS,
+  );
+  if (!collection) return null;
+  let entries = selectDesktopEvidenceEntries(collection.entries, kind);
+  const makePayload = (): Record<string, unknown> => ({
+    kind: kind === 'processes' ? 'running_processes_summary' : 'desktop_files_summary',
+    originalCount: collection.entries.length,
+    truncated: entries.length < collection.entries.length,
+    [kind === 'processes' ? 'processes' : 'entries']: entries,
+  });
+  let payload = makePayload();
+  let text = JSON.stringify(payload);
+  while (text.length > MAX_PERSISTED_STRING && entries.length > 1) {
+    entries = entries.slice(0, -1);
+    payload = makePayload();
+    text = JSON.stringify(payload);
+  }
+  if (text.length > MAX_PERSISTED_STRING) {
+    entries = [];
+    payload = makePayload();
+    text = JSON.stringify(payload);
+  }
+  return { text, payload };
 }
 
 function compactClientStateResult(value: unknown): string | null {
@@ -212,7 +345,20 @@ function compactClientStateResult(value: unknown): string | null {
 function compactToolRecordForPersistence(record: unknown): unknown {
   if (!record || typeof record !== 'object' || Array.isArray(record)) return record;
   const candidate = record as Record<string, any>;
-  if (String(candidate.name || candidate.toolName || '') !== 'client_get_state') return candidate;
+  const toolName = String(candidate.name || candidate.toolName || '');
+  if (/^(?:desktop_list_files|search_files|list_directory|desktop_running_processes|get_running_processes)$/iu.test(toolName)) {
+    const compactResult = compactDesktopCollectionResult(candidate.result, toolName);
+    if (!compactResult) return candidate;
+    const envelope = candidate.envelope && typeof candidate.envelope === 'object'
+      ? { ...candidate.envelope, result: compactResult.payload }
+      : candidate.envelope;
+    return {
+      ...candidate,
+      result: compactResult.text,
+      ...(envelope !== undefined ? { envelope } : {}),
+    };
+  }
+  if (toolName !== 'client_get_state') return candidate;
   const compactResult = compactClientStateResult(candidate.result);
   if (!compactResult) return candidate;
   const envelope = candidate.envelope && typeof candidate.envelope === 'object'

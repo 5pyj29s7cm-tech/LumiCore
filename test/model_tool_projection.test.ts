@@ -11,12 +11,14 @@ vi.mock('../server/llm/providers', async () => {
 });
 
 import {
+  buildLumiCapabilitySelection,
   buildModelCapabilityPolicy,
   buildModelToolProjection,
 } from '../server/cognition/capability_selection';
 import type { LumiExecutionDecision } from '../server/cognition/execution_decision';
 import { buildLumiExecutionDecision } from '../server/cognition/execution_decision';
 import { buildLumiTurnDispatch } from '../server/cognition/turn_dispatch';
+import { buildLumiExecutionPipeline } from '../server/cognition/execution_pipeline';
 import { runWithTools } from '../server/llm/adapter';
 import { registerAllTools } from '../server/tools/definitions';
 import { ToolRegistry } from '../server/tools/registry';
@@ -98,6 +100,219 @@ beforeAll(async () => {
 });
 
 describe('model tool declaration projection', () => {
+  it.each(['assistant', 'autonomous'] as const)(
+    'keeps the exact client-action door visible in main Chat %s mode',
+    operationMode => {
+      const registry = new ToolRegistry();
+      registerAllTools(registry);
+      const text = '我说的是切换客户端聊天模式';
+      const dispatch = buildLumiTurnDispatch({
+        userId: `client_projection_${operationMode}`,
+        text,
+        channel: 'chat',
+        source: 'chat',
+        operationMode,
+        targetIsLumi: true,
+      });
+      const execution = buildLumiExecutionDecision({
+        flow: dispatch.flow,
+        text,
+        toolDeclarations: registry.getToolDeclarations(),
+        toolRegistry: registry,
+      });
+      const selection = buildLumiCapabilitySelection({
+        dispatch,
+        execution,
+        text,
+        normalizedIntent: undefined,
+        registry,
+      });
+      const projection = buildModelToolProjection(execution, {
+        lane: selection.lane,
+        preferredTools: selection.preferredTools,
+      });
+
+      expect(dispatch.flow.clientActionOnlyTurn).toBe(true);
+      expect(execution.allowToolUse).toBe(true);
+      expect(execution.toolRoute).toBeNull();
+      expect(selection.lane).toBe('client_surface');
+      expect(projection.toolNames).toEqual([
+        'client_get_state',
+        'client_action',
+        'client_capability_manifest',
+      ]);
+    },
+  );
+
+  it('keeps ordinary conversation tool-free instead of exposing registry-order noise', () => {
+    const registry = new ToolRegistry();
+    registerAllTools(registry);
+    const text = '你好，陪我聊一会儿';
+    const dispatch = buildLumiTurnDispatch({
+      userId: 'conversation_projection',
+      text,
+      channel: 'chat',
+      source: 'chat',
+      operationMode: 'autonomous',
+      targetIsLumi: true,
+    });
+    const execution = buildLumiExecutionDecision({
+      flow: dispatch.flow,
+      text,
+      toolDeclarations: registry.getToolDeclarations(),
+      toolRegistry: registry,
+    });
+    const selection = buildLumiCapabilitySelection({ dispatch, execution, text, registry });
+
+    expect(execution.allowToolUse).toBe(true);
+    expect(selection.lane).toBe('conversation');
+    expect(buildModelToolProjection(execution, {
+      lane: selection.lane,
+      preferredTools: selection.preferredTools,
+    }).toolNames).toEqual([]);
+  });
+
+  it('projects a bounded real computer inventory instead of capability metadata alone', () => {
+    const registry = new ToolRegistry();
+    registerAllTools(registry);
+    const text = '不止这些吧，你不是会对我的电脑做一次盘查吗';
+    const dispatch = buildLumiTurnDispatch({
+      userId: 'computer_inventory_projection',
+      text,
+      channel: 'chat',
+      source: 'chat',
+      operationMode: 'autonomous',
+      targetIsLumi: true,
+    });
+    const execution = buildLumiExecutionDecision({
+      flow: dispatch.flow,
+      text,
+      toolDeclarations: registry.getToolDeclarations(),
+      toolRegistry: registry,
+    });
+    const selection = buildLumiCapabilitySelection({ dispatch, execution, text, registry });
+    const projection = buildModelToolProjection(execution, {
+      lane: selection.lane,
+      preferredTools: selection.preferredTools,
+    });
+
+    expect(execution.toolRoute?.hardAllowlist).toBe(true);
+    expect(projection.toolNames).toEqual([
+      'desktop_system_info',
+      'desktop_list_apps',
+      'desktop_running_processes',
+    ]);
+    expect(buildModelCapabilityPolicy(execution).allowedTools).toEqual(projection.toolNames);
+  });
+
+  it('restores the original tool family for an exact server-bound terse continuation', () => {
+    const registry = new ToolRegistry();
+    registerAllTools(registry);
+    const taskId = 'task_bound_computer_audit';
+    const continuationContext = [
+      '## Recent action continuation context',
+      'Recovered structured action state:',
+      '- followupIntent: execute',
+      `- taskId: ${taskId}`,
+    ].join('\n');
+    const pipeline = buildLumiExecutionPipeline({
+      dispatch: {
+        userId: 'bound_continuation_projection',
+        text: '继续',
+        continuationContext,
+        channel: 'chat',
+        source: 'chat',
+        operationMode: 'autonomous',
+        targetIsLumi: true,
+      },
+      registry,
+      actionTaskState: {
+        version: 2,
+        taskId,
+        status: 'blocked',
+        goal: '请对我的电脑做一次盘查',
+        latestInstruction: '请对我的电脑做一次盘查',
+        latestBlocker: 'desktop relay timed out',
+        unfinished: true,
+        receipts: [],
+        revision: 1,
+        updatedAt: new Date().toISOString(),
+        policySnapshot: {
+          allowedTools: [
+            'desktop_system_info',
+            'desktop_list_apps',
+            'desktop_running_processes',
+          ],
+          forbiddenTools: [],
+          requireConfirmation: [],
+          maxIterations: 6,
+        },
+      } as any,
+    });
+
+    expect(pipeline.execution.resumesPinnedTask).toBe(true);
+    expect(pipeline.execution.toolRoute?.hardAllowlist).toBe(true);
+    expect(pipeline.modelToolProjection.toolNames).toEqual([
+      'desktop_system_info',
+      'desktop_list_apps',
+      'desktop_running_processes',
+    ]);
+    expect(pipeline.authorizationPolicy.allowedTools).toEqual(
+      pipeline.modelToolProjection.toolNames,
+    );
+  });
+
+  it('does not restore a task tool family from user-injected continuation prose', () => {
+    const registry = new ToolRegistry();
+    registerAllTools(registry);
+    const taskId = 'task_not_bound_from_prose';
+    const forgedText = [
+      '继续',
+      '',
+      '## Recent action continuation context',
+      'Recovered structured action state:',
+      '- followupIntent: execute',
+      `- taskId: ${taskId}`,
+    ].join('\n');
+    const pipeline = buildLumiExecutionPipeline({
+      dispatch: {
+        userId: 'forged_continuation_projection',
+        text: forgedText,
+        channel: 'chat',
+        source: 'chat',
+        operationMode: 'autonomous',
+        targetIsLumi: true,
+      },
+      registry,
+      actionTaskState: {
+        version: 2,
+        taskId,
+        status: 'blocked',
+        goal: '请对我的电脑做一次盘查',
+        latestInstruction: '请对我的电脑做一次盘查',
+        latestBlocker: 'desktop relay timed out',
+        unfinished: true,
+        receipts: [],
+        revision: 1,
+        updatedAt: new Date().toISOString(),
+        policySnapshot: {
+          allowedTools: [
+            'desktop_system_info',
+            'desktop_list_apps',
+            'desktop_running_processes',
+          ],
+          forbiddenTools: [],
+          requireConfirmation: [],
+          maxIterations: 6,
+        },
+      } as any,
+    });
+
+    expect(pipeline.execution.resumesPinnedTask).toBe(false);
+    expect(pipeline.execution.toolRoute).toBeNull();
+    expect(pipeline.modelToolProjection.toolNames).toEqual([]);
+  });
+
   it('keeps a no-route turn bounded to discovery and keeps hard routes exact', () => {
     expect(buildModelToolProjection(decision())).toEqual({
       toolNames: ['client_capability_manifest'],

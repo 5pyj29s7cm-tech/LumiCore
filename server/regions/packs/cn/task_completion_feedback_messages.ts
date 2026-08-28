@@ -22,7 +22,6 @@ export function formatCnTaskCompletionFeedback(
         : '未完成';
   const evidence = [
     ...(receipt?.toolNames?.length ? [`工具终态回执：${receipt.toolNames.join('、')}`] : []),
-    ...(receipt?.workerIds?.length ? [`Agent 回执：${receipt.workerIds.length} 个执行单元`] : []),
     ...(receipt?.receiptId ? [`验收回执：${receipt.receiptId}`] : []),
   ];
   const lines = [String(baseText || '').trim(), '', '执行回馈', `- 状态：${status}`];

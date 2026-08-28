@@ -21,22 +21,32 @@ function getAllowedCommands(): Set<string> {
   return DEFAULT_ALLOWED_COMMANDS;
 }
 
+export function assertAllowlistedRunCommand(
+  rawCommand: unknown,
+  platform: NodeJS.Platform = process.platform,
+): ReturnType<typeof assertValidCommandForHost> {
+  const validation = assertValidCommandForHost(rawCommand, platform);
+  const allowedCommands = getAllowedCommands();
+  if (!allowedCommands.has(validation.executable)) {
+    const error = new Error(
+      `Command "${validation.executable}" is not in the allowlist. ` +
+      `Allowed commands: ${Array.from(allowedCommands).sort().join(', ')}`
+    ) as Error & { code?: string; platform?: NodeJS.Platform };
+    error.name = 'CommandAllowlistValidationError';
+    error.code = 'command_not_allowlisted';
+    error.platform = validation.platform;
+    throw error;
+  }
+  return validation;
+}
+
 async function runCommandHandler(args: Record<string, any>): Promise<string> {
   const command = String(args.command || '');
   if (!command.trim()) {
     throw new Error('No command provided.');
   }
 
-  const validation = assertValidCommandForHost(command, process.platform);
-  const cmdName = validation.executable;
-
-  const allowedCommands = getAllowedCommands();
-  if (!allowedCommands.has(cmdName)) {
-    throw new Error(
-      `Command "${cmdName}" is not in the allowlist. ` +
-      `Allowed commands: ${Array.from(allowedCommands).sort().join(', ')}`
-    );
-  }
+  assertAllowlistedRunCommand(command, process.platform);
 
   return new Promise((resolve) => {
     exec(command, {
@@ -93,6 +103,9 @@ export function registerSystemOpsTools(registry: ToolRegistry): void {
         command: { type: 'string', description: 'The shell command to execute' },
       },
       required: ['command'],
+    },
+    preflight: args => {
+      assertAllowlistedRunCommand(args.command, process.platform);
     },
     handler: runCommandHandler,
     permission: 'user',

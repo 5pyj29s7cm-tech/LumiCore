@@ -39,8 +39,8 @@ describe('Lumi operating kernel', () => {
     const { buildLumiOperatingKernelPrompt } = await import('../server/cognition/operating_kernel');
 
     const flow = buildLumiTurnFlow({
-      userId: 'kernel_delegate_user',
-      text: '交给后台子agent并行处理这个账号管理任务',
+      userId: 'kernel_continuity_user',
+      text: '在语音里继续这个账号管理任务',
       channel: 'voice',
       source: 'voice',
       operationMode: 'assistant',
@@ -49,7 +49,8 @@ describe('Lumi operating kernel', () => {
     const prompt = buildLumiOperatingKernelPrompt({ channel: 'voice', flow });
 
     expect(prompt).toContain('surface=voice');
-    expect(prompt).toContain('delegation=explicit_background');
+    expect(prompt).toContain('Lumi is one local desktop AI subject');
+    expect(prompt).not.toContain('delegation=');
     expect(prompt).not.toContain('DeepSeek');
     expect(prompt).not.toContain('Kimi');
     expect(prompt).not.toContain('OpenAI');

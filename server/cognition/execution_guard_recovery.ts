@@ -470,7 +470,7 @@ function publicDeliveryReason(reason: unknown, blocked: boolean): string {
 }
 
 /**
- * Final transport boundary for agent responses. The finalizer keeps detailed
+ * Final transport boundary for Lumi responses. The finalizer keeps detailed
  * diagnostics for logs and retry decisions, but a socket/UI payload exposes
  * only stable public state codes. This prevents implementation guard prose
  * from becoming part of the conversation or a workflow detail after replay.

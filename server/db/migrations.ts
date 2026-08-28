@@ -9,25 +9,17 @@ export interface Migration {
 
 export const MIGRATIONS: Migration[] = [
   { version: 1, description: 'Add phone to users', sql: `ALTER TABLE users ADD COLUMN phone TEXT DEFAULT ''` },
-  { version: 2, description: 'Add status to agents', sql: `ALTER TABLE agents ADD COLUMN status TEXT DEFAULT 'active'` },
   { version: 3, description: 'Add role to interactions', sql: `ALTER TABLE interactions ADD COLUMN role TEXT DEFAULT ''` },
   { version: 4, description: 'Add personality to interactions', sql: `ALTER TABLE interactions ADD COLUMN personality TEXT DEFAULT ''` },
   { version: 5, description: 'Add mode to interactions', sql: `ALTER TABLE interactions ADD COLUMN mode TEXT DEFAULT ''` },
   { version: 6, description: 'Add toolCalls to interactions', sql: `ALTER TABLE interactions ADD COLUMN toolCalls TEXT DEFAULT ''` },
   { version: 7, description: 'Add conversationId to interactions', sql: `ALTER TABLE interactions ADD COLUMN conversationId TEXT DEFAULT ''` },
-  { version: 8, description: 'Add agent framework columns', sql: `ALTER TABLE agents ADD COLUMN personalityId TEXT DEFAULT 'lumi'` },
-  { version: 9, description: 'Add modelPreference to agents', sql: `ALTER TABLE agents ADD COLUMN modelPreference TEXT DEFAULT ''` },
-  { version: 10, description: 'Add memoryScope to agents', sql: `ALTER TABLE agents ADD COLUMN memoryScope TEXT DEFAULT 'shared'` },
-  { version: 11, description: 'Add autonomyLevel to agents', sql: `ALTER TABLE agents ADD COLUMN autonomyLevel TEXT DEFAULT 'reactive'` },
-  { version: 12, description: 'Add runtimeConfig to agents', sql: `ALTER TABLE agents ADD COLUMN runtimeConfig TEXT DEFAULT '{}'` },
   { version: 13, description: 'Add agentId to memories', sql: `ALTER TABLE memories ADD COLUMN agentId TEXT DEFAULT ''` },
   { version: 14, description: 'Add location to memories', sql: `ALTER TABLE memories ADD COLUMN location TEXT DEFAULT ''` },
   { version: 15, description: 'Add domain to memories', sql: `ALTER TABLE memories ADD COLUMN domain TEXT DEFAULT 'personal'` },
   { version: 16, description: 'Add orgId to memories', sql: `ALTER TABLE memories ADD COLUMN orgId TEXT DEFAULT ''` },
   { version: 17, description: 'Add domain to interactions', sql: `ALTER TABLE interactions ADD COLUMN domain TEXT DEFAULT 'personal'` },
   { version: 18, description: 'Add orgId to interactions', sql: `ALTER TABLE interactions ADD COLUMN orgId TEXT DEFAULT ''` },
-  { version: 19, description: 'Add domain to agents', sql: `ALTER TABLE agents ADD COLUMN domain TEXT DEFAULT 'personal'` },
-  { version: 20, description: 'Add orgId to agents', sql: `ALTER TABLE agents ADD COLUMN orgId TEXT DEFAULT ''` },
   { version: 21, description: 'Create memories table', sql: `CREATE TABLE IF NOT EXISTS memories (
     id TEXT PRIMARY KEY, userId TEXT NOT NULL, type TEXT NOT NULL, content TEXT NOT NULL,
     keywords TEXT NOT NULL DEFAULT '[]', confidence REAL NOT NULL DEFAULT 0.5,
@@ -82,6 +74,12 @@ export const MIGRATIONS: Migration[] = [
     createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
   )` },
   { version: 38, description: 'Add completion feedback to interactions', sql: `ALTER TABLE interactions ADD COLUMN completionFeedback TEXT DEFAULT ''` },
+  { version: 39, description: 'Remove retired legacy subject registry', sql: `DROP TABLE IF EXISTS agents` },
+  { version: 40, description: 'Remove retired legacy organization template registry', sql: `DROP TABLE IF EXISTS agent_templates` },
+  { version: 41, description: 'Remove retired legacy fan-out queue', sql: `DROP TABLE IF EXISTS background_delegation_tasks` },
+  { version: 42, description: 'Remove retired external AI session fan-out', sql: `DROP TABLE IF EXISTS external_ai_sessions` },
+  { version: 43, description: 'Remove retired external AI dispatch fan-out', sql: `DROP TABLE IF EXISTS external_ai_dispatches` },
+  { version: 44, description: 'Remove retired external AI answer fan-in', sql: `DROP TABLE IF EXISTS external_ai_answers` },
 ];
 
 // Indexes are safe to create repeatedly
@@ -97,8 +95,6 @@ export const INDEXES = [
   `CREATE INDEX IF NOT EXISTS idx_memories_org ON memories(orgId, userId)`,
   `CREATE INDEX IF NOT EXISTS idx_interactions_user_domain ON interactions(userId, domain)`,
   `CREATE INDEX IF NOT EXISTS idx_interactions_org ON interactions(orgId, userId)`,
-  `CREATE INDEX IF NOT EXISTS idx_agents_user_domain ON agents(userId, domain)`,
-  `CREATE INDEX IF NOT EXISTS idx_agents_org ON agents(orgId, userId)`,
   `CREATE INDEX IF NOT EXISTS idx_canvas_sessions_user ON canvas_sessions(userId)`,
   `CREATE INDEX IF NOT EXISTS idx_canvas_sessions_user_domain ON canvas_sessions(userId, domain)`,
   `CREATE INDEX IF NOT EXISTS idx_canvas_sessions_org ON canvas_sessions(orgId, userId)`,

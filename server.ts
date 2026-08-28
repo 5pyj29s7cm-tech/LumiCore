@@ -90,7 +90,6 @@ import { setupMessaging } from "./server/runtime/messaging";
 import { setupStatic } from "./server/runtime/static";
 import { bootstrap } from "./server/runtime/bootstrap";
 import { lapRoutes } from "./server/lap/routes";
-import { commandCenterRoutes } from "./server/routes/command_center_routes";
 import voiceRoutes from "./routes/voice";
 import fileRoutes, { configureKnowledgeFileRoutes } from "./routes/files";
 import { getGeneratedOutputDir } from "./server/config/data_path";
@@ -126,7 +125,6 @@ configureKnowledgeFileRoutes({
 apiRouter.use("/", voiceRoutes);
 apiRouter.use("/", fileRoutes);
 apiRouter.use("/", lapRoutes);
-apiRouter.use("/", commandCenterRoutes);
 
 // ── Org routes ──
 // Organization routes are always mounted for the work domain in the unified client.
