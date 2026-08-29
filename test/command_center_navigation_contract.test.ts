@@ -37,6 +37,17 @@ describe('command center navigation contract', () => {
     expect(desktop).toContain("if (nexusReturnTarget === 'command-center') openCommandCenter('office')");
   });
 
+  it('returns knowledge and memory utility surfaces to their command-center origin', () => {
+    const desktop = source('src/components/DesktopUI.tsx');
+    expect(desktop).toContain("type SurfaceReturnTarget = 'home' | 'command-center'");
+    expect(desktop).toContain('const surfaceReturnTargetRef = useRef<SurfaceReturnTarget>(\'home\')');
+    expect(desktop).toContain('const restoreSurfaceReturnTarget = useCallback');
+    expect(desktop).toContain('onClose={closeKnowledgeBase}');
+    expect(desktop).toContain('onClose={closeMemoryAvatar}');
+    expect(desktop).toContain("openKnowledgeBase('command-center')");
+    expect(desktop).toContain('closeMemoryAvatar();');
+  });
+
   it('hands native window focus to the chat input when the command center opens or returns', () => {
     const desktop = source('src/components/DesktopUI.tsx');
     const chat = source('src/components/AgentChatPage.tsx');

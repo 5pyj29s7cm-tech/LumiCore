@@ -1,8 +1,10 @@
 import { loadKeys } from '../config/keys';
 import {
+  DEFAULT_RERANK_MODELS,
   getUserRetrievalModelPreferences,
   type RerankModelSelection,
 } from './retrieval_model_preferences';
+import { officialApiModel, officialApiPath, officialApiRequest } from './official_api';
 
 export interface RerankItem {
   index: number;
@@ -56,6 +58,42 @@ async function runSiliconFlowRerank(
   return { provider: selection.provider, model: selection.model, items };
 }
 
+async function runOfficialRerank(
+  selection: RerankModelSelection,
+  query: string,
+  documents: string[],
+  topN: number,
+): Promise<RerankResult> {
+  const model = officialApiModel('RELAY_RERANK_MODEL', selection.model || DEFAULT_RERANK_MODELS.relay);
+  const { body } = await officialApiRequest<any>(officialApiPath('RELAY_RERANK_PATH', '/api/v1/rerank'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      query: query.slice(0, 8_000),
+      documents: documents.map(document => document.slice(0, 20_000)),
+      top_n: topN,
+      return_documents: false,
+    }),
+  });
+  const rawItems = Array.isArray(body?.results) ? body.results
+    : Array.isArray(body?.data?.results) ? body.data.results
+      : Array.isArray(body?.data) ? body.data : [];
+  const items = rawItems
+    .map((item: any) => ({
+      index: Number(item?.index),
+      score: Number(item?.relevance_score ?? item?.score ?? item?.relevanceScore),
+    }))
+    .filter((item: RerankItem) => Number.isInteger(item.index)
+      && item.index >= 0
+      && item.index < documents.length
+      && Number.isFinite(item.score))
+    .slice(0, topN);
+  if (items.length === 0) throw new Error('Lumi Official API rerank returned no valid ranked documents.');
+  return { provider: selection.provider, model, items };
+}
+
+
 export function getRerankSelection(userId = 'anonymous'): RerankModelSelection {
   return getUserRetrievalModelPreferences(userId).rerank;
 }
@@ -76,6 +114,9 @@ export async function rerankConfiguredDocuments(
 
   if (selection.provider === 'siliconflow') {
     return runSiliconFlowRerank(selection, query, normalizedDocuments, topN);
+  }
+  if (selection.provider === 'relay') {
+    return runOfficialRerank(selection, query, normalizedDocuments, topN);
   }
   throw new Error(`Rerank provider is not supported: ${selection.provider}`);
 }

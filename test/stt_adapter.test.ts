@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const clearedEnvKeys = ['DASHSCOPE_API_KEY', 'QWEN_API_KEY', 'OPENAI_API_KEY', 'DOUBAO_SPEECH_KEY'] as const;
 let previousEnv: Partial<Record<(typeof clearedEnvKeys)[number], string | undefined>> = {};
 
-async function loadAdapter(stt: 'auto' | 'local-whisper' | 'qwen' | 'ark' | 'whisper' = 'auto') {
+async function loadAdapter(stt: 'auto' | 'local-whisper' | 'qwen' | 'ark' | 'whisper' | 'relay' = 'auto') {
   vi.resetModules();
   vi.doMock('../server/config/voice_preference', () => ({
     getVoicePreference: () => ({ stt, tts: 'auto' }),
@@ -72,6 +72,12 @@ describe('STT adapter provider selection', () => {
   it('keeps local Whisper out of realtime even when explicitly preferred', async () => {
     process.env.DASHSCOPE_API_KEY = 'dashscope-test-key';
     const adapter = await loadAdapter('local-whisper');
+    expect(adapter.getActiveStreamingSTTProvider()).toBeNull();
+  });
+
+  it('does not advertise the official batch STT adapter as realtime', async () => {
+    process.env.DASHSCOPE_API_KEY = 'dashscope-test-key';
+    const adapter = await loadAdapter('relay');
     expect(adapter.getActiveStreamingSTTProvider()).toBeNull();
   });
 });

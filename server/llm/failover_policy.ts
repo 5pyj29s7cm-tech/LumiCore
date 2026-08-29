@@ -4,7 +4,16 @@ import {
   type UserLLMPrefs,
 } from './user_preferences';
 
-/** Stable order used only after every user-declared candidate is exhausted. */
+/**
+ * Stable order used only after every user-declared candidate is exhausted.
+ *
+ * `relay` is intentionally not part of this compatibility list.  The Lumi
+ * official gateway is a billable/external route and must never be selected
+ * merely because a primary call failed.  It can still be selected when the
+ * user explicitly puts it in `fallbackCandidates`, selects it as
+ * `autoFallbackProvider`, or has an explicit `models.relay` entry (the latter
+ * is how the settings UI remembers a previously selected model).
+ */
 export const REASONING_FAILOVER_PRIORITY = [
   'deepseek',
   'qwen',
@@ -15,7 +24,6 @@ export const REASONING_FAILOVER_PRIORITY = [
   'xiaomi',
   'kimi',
   'glm',
-  'relay',
 ] as const;
 
 function normalizedCandidate(value: { provider?: string; model?: string }): UserLLMFallbackCandidate | null {

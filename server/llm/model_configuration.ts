@@ -1,3 +1,4 @@
+import { flushDBOrThrow } from '../../db_layer';
 import { loadKeys } from '../config/keys';
 import {
   getRegisteredProviderDefaultModel,
@@ -22,6 +23,7 @@ import { makeLLMCall, makeLLMCallDirect } from './providers';
 import { dispatchLLMCall } from './dispatch';
 import { compileReasoningFailoverCandidates } from './failover_policy';
 import { rerankConfiguredDocuments } from './rerank_provider';
+import { relayConfigured } from '../relay/config';
 import {
   DEFAULT_EMBEDDING_MODELS,
   DEFAULT_RERANK_MODELS,
@@ -45,23 +47,25 @@ import {
   upsertUserPreferredVision,
 } from './vision_preferences';
 import {
+  DEFAULT_WORLD_MODELS,
   getUserPreferredWorldModel,
   getUserWorldModelPrefs,
   isWorldModelProvider,
   upsertUserWorldModelPrefs,
 } from './world_preferences';
+import {
+  LUMI_MODEL_ROLE_IDS,
+  LUMI_OFFICIAL_DEFAULT_MODELS,
+  LUMI_OFFICIAL_PROVIDER_ID,
+  LUMI_OFFICIAL_ROLE_CAPABILITIES,
+  LUMI_OFFICIAL_SUPPORTED_ROLES,
+  LUMI_OFFICIAL_UNSUPPORTED_ROLES,
+  normalizeLumiOfficialModel,
+} from '../../shared/model_provider_capabilities';
 
-export const LUMI_MODEL_ROLES = [
-  'reasoning',
-  'vision',
-  'world',
-  'image_generation',
-  'video_generation',
-  'embedding',
-  'rerank',
-  'speech_recognition',
-  'speech_synthesis',
-] as const;
+// Keep the public role list in lockstep with the settings capability manifest.
+// A second hand-maintained list previously allowed the UI and runtime to drift.
+export const LUMI_MODEL_ROLES = LUMI_MODEL_ROLE_IDS;
 
 export type LumiModelRole = typeof LUMI_MODEL_ROLES[number];
 
@@ -98,8 +102,8 @@ const TESTABLE_LLM_PROVIDERS = new Set([
   'ollama', 'lmstudio', 'xiaomi', 'kimi', 'glm', 'relay',
 ]);
 const TESTABLE_VISION_PROVIDERS = new Set(['openai', 'gemini', 'ark', 'qwen', 'ollama', 'lmstudio', 'relay']);
-const STT_PROVIDERS = new Set(['auto', 'local-whisper', 'qwen', 'ark', 'whisper']);
-const TTS_PROVIDERS = new Set(['auto', 'local-cosyvoice', 'gptsovits', 'cosyvoice', 'ark']);
+const STT_PROVIDERS = new Set(['auto', 'local-whisper', 'qwen', 'ark', 'whisper', 'relay']);
+const TTS_PROVIDERS = new Set(['auto', 'local-cosyvoice', 'gptsovits', 'cosyvoice', 'ark', 'relay']);
 const VISION_TEST_IMAGE_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAAsTAAALEwEAmpwYAAAEUUlEQVR4nO1XbUxbVRiuv7htV27b24pbgdveS4uU7wIDCpN1k7ENNzZhjDFsEOyK3UTFRVjcDB8DNzBZpmxz+FEH6v5sJiQLYW5EiT+2+TUomkiYPyRkBrfMyFdMOvOYc1Qis6VAmTHRkzzpzTnv+zzP+bj3vJVI/m/3NI6zKjiZqU7FiF8opeI0G6JHMCAchIuTmWoJt2S+Fh5qjmIZcShYUX9QSUWPThFj9CnOcVaFUroQcQMhAieLQr5lNwV5Jn1kLGA+I3p8rgQnM9UFSlZLRWjl0XhQYQavsWDkzTu48fYEDJo02kfGSEwgHk5mevFvBlRS4Uu/+xhigEZmpCKr2HiEK5PRfegqRt/1YtTtRfdL12gfGSMxJJbk+N0KRvz8Xv0HWMYw5S+BEIYpzNApk8CrU1Cd34KRDu8c1Gx5lY6RGBJLcvwfTGGKaM6q83wOo2R8O1ZLo2bF9eo0rDZuw+Brv+Cbdu8cfP36DLJMRTTmTxMk16cBxgCiGdAA6dPIo7GKTaCzE7WZ6K0fxfVjXp+42DBGY0gsySG5/ngXZEAtFelMIpTJELSZaCu/gGutXgyfv0t/faGtvBsGTTrN+X0VxKUb4GRGhKsTEalKwbq4SlxqmMTlpml8f9WLvqYZnyAxjya7YNTZ8FBoAuVYsgGN3ISVbDx4dSpaXd/CaipBc9kHGH7vNg4Vn4Et1o61MWVY83ApMk3FSNZvRrpQhBPlg+DVaeAjcihH0AZ22drw1v4ZNJR/hcvNg7g79SvOH7gCm9lOkWXaidXCNqSIBTj8eD/Ouu7gCWszInTZQRqQGREeakH7s7fQUTONk/sm0Vh6DtfdY9iz4QiyTSUUGVGFSBW2Ii92H9z2cXQ5b6PTMQYhcq3P13FRh7Cq4CxOPz+Fk3sn0e6cwOFd36Hrwqeo3duKOlcrHDsOUPEkfjNe2TKA0/ZxvFNxi5qoWvdGcIdQp0rFqZqfZsWPV0zgmP1nOEs7scn6JPKzHVhvKUNi5EYUJrbgeNFNnNj5Azrs43CX/wi34yZ4lWXpBnKT9qOl9AYaikfQsH0ELxcM42D+MGpzB5DFO5GhdyBDcOKR6OfwQvYVHMwZQL1tAI0bh9D8mAdHC4eQZ65eugE2RI+VikSUZZ7BM7ZP4Mrox9MUH6Mk5n3YhEaK7QY3HOZe7LFchCvtEqpTP0JFahd0bHJwX0L2L98DctPlmetRldGHqrR+VFj6sIFvwXq+CZXxPaiM68VTcT3YGnsUWrkZKkbwfxcs1gD7R5JWboJ2RQzS9U5UJvSg1HgOO/Sd2B39IaxhDjpGb8IFcC3aADt7lQq0ACHvt56zQZCuoc+0KJln1stmgF0G/PsMSAIUJMtuQCpMzClIApVkyw1fJZmE1O3/lAGfRSnHWRWkZL7vs5eKnrCwXLlknj8mnvtmgBE9REMyX9Nqc1aQJSL7RKrXZThwUypG/Ixw+p255L/cfgNpjJqDkvhwjQAAAABJRU5ErkJggg==';
 
 const PROVIDER_KEY_NAMES: Record<string, string[]> = {
@@ -123,6 +127,11 @@ function cleanModel(value: unknown): string {
   return typeof value === 'string' ? value.trim().slice(0, 200) : '';
 }
 
+function officialConfiguredModel(value: unknown, role: LumiModelRole, fallback: string): string {
+  const model = normalizeLumiOfficialModel(role, value);
+  return model || fallback || LUMI_OFFICIAL_DEFAULT_MODELS[role];
+}
+
 function providerConfigured(provider: string, userId?: string): boolean {
   if (provider === 'auto' || provider === 'inherit_vision') return true;
   if (provider === 'ollama' || provider === 'lmstudio') return getLocalModelConfig(provider).detected;
@@ -130,15 +139,23 @@ function providerConfigured(provider: string, userId?: string): boolean {
   if (isRegisteredOpenAICompatibleProvider(provider, userId)) {
     return listRegisteredProviders(userId).some(item => item.id === provider && item.configured === true);
   }
+  if (provider === 'relay') {
+    return relayConfigured();
+  }
   const keys = loadKeys();
   return (PROVIDER_KEY_NAMES[provider] || []).some(name => Boolean(process.env[name] || keys[name]));
 }
 
-function roleSelection(provider: string, model: string, extra: Record<string, unknown> = {}) {
+/** Whether the configured Lumi official gateway can be used by the runtime. */
+export function isLumiOfficialApiConfigured(userId = 'anonymous'): boolean {
+  return providerConfigured(LUMI_OFFICIAL_PROVIDER_ID, userId);
+}
+
+function roleSelection(provider: string, model: string, userId: string, extra: Record<string, unknown> = {}) {
   return {
     provider,
     model,
-    configured: providerConfigured(provider),
+    configured: providerConfigured(provider, userId),
     ...extra,
   };
 }
@@ -151,50 +168,61 @@ function allRoleConfigurations(userId: string): Record<LumiModelRole, Record<str
   const generation = getUserPreferredGenerationModels(userId);
   const retrieval = getUserRetrievalModelPreferences(userId);
   const voice = getVoicePreference();
-  const activeStt = getActiveStreamingSTTProvider({ requireHealthy: true })
-    || getActiveSTTProvider({ requireHealthy: true });
+  const activeStreamingStt = getActiveStreamingSTTProvider({ requireHealthy: true });
+  const activeStt = activeStreamingStt || getActiveSTTProvider({ requireHealthy: true });
   const activeTts = getActiveTTSProvider({ requireHealthy: true });
 
   return {
-    reasoning: roleSelection(reasoning.provider, reasoning.model, {
+    reasoning: roleSelection(reasoning.provider, reasoning.model, userId, {
       configured: providerConfigured(reasoning.provider, userId),
       selectionMode: reasoning.selectionMode,
       fallbackCandidates: reasoning.fallbackCandidates,
       allowCloudFallback: reasoning.allowCloudFallback,
       legacyMigration: reasoning.legacyMigration,
     }),
-    vision: roleSelection(vision.provider, vision.model),
-    world: roleSelection(world.provider, world.model, {
+    vision: roleSelection(vision.provider, vision.model, userId, {
+      configured: providerConfigured(vision.provider, userId),
+    }),
+    world: roleSelection(world.provider, world.model, userId, {
       effectiveProvider: resolvedWorld.provider,
       effectiveModel: resolvedWorld.model,
       inheritedFromVision: resolvedWorld.inheritedFromVision,
-      configured: providerConfigured(resolvedWorld.provider),
+      configured: providerConfigured(resolvedWorld.provider, userId),
     }),
-    image_generation: roleSelection(generation.image.provider, generation.image.model, {
+    image_generation: roleSelection(generation.image.provider, generation.image.model, userId, {
       configured: generation.image.provider === 'auto'
-        ? ['openai', 'qwen', 'siliconflow'].some(provider => providerConfigured(provider))
-        : providerConfigured(generation.image.provider),
+        ? ['openai', 'qwen', 'siliconflow', LUMI_OFFICIAL_PROVIDER_ID].some(provider => providerConfigured(provider, userId))
+        : providerConfigured(generation.image.provider, userId),
     }),
-    video_generation: roleSelection(generation.video.provider, generation.video.model),
-    embedding: roleSelection(retrieval.embedding.provider, retrieval.embedding.model, {
+    video_generation: roleSelection(generation.video.provider, generation.video.model, userId, {
+      configured: providerConfigured(generation.video.provider, userId),
+    }),
+    embedding: roleSelection(retrieval.embedding.provider, retrieval.embedding.model, userId, {
       fallbackProvider: retrieval.embedding.fallbackProvider,
       fallbackModel: retrieval.embedding.fallbackModel,
       fallbackConfigured: retrieval.embedding.fallbackProvider
-        ? providerConfigured(retrieval.embedding.fallbackProvider)
+        ? providerConfigured(retrieval.embedding.fallbackProvider, userId)
         : false,
     }),
-    rerank: roleSelection(retrieval.rerank.provider, retrieval.rerank.model, {
+    rerank: roleSelection(retrieval.rerank.provider, retrieval.rerank.model, userId, {
       enabled: retrieval.rerank.enabled,
       topN: retrieval.rerank.topN,
+      configured: providerConfigured(retrieval.rerank.provider, userId),
     }),
-    speech_recognition: roleSelection(voice.stt, '', {
+    speech_recognition: roleSelection(voice.stt, '', userId, {
       effectiveProvider: activeStt,
-      configured: Boolean(activeStt),
+      configured: voice.stt === LUMI_OFFICIAL_PROVIDER_ID
+        ? providerConfigured(LUMI_OFFICIAL_PROVIDER_ID, userId)
+        : Boolean(activeStt),
+      realtimeSupported: Boolean(activeStreamingStt),
+      batchOnly: voice.stt === LUMI_OFFICIAL_PROVIDER_ID && !activeStreamingStt,
       providerManagedModel: true,
     }),
-    speech_synthesis: roleSelection(voice.tts, '', {
+    speech_synthesis: roleSelection(voice.tts, '', userId, {
       effectiveProvider: activeTts,
-      configured: Boolean(activeTts),
+      configured: voice.tts === LUMI_OFFICIAL_PROVIDER_ID
+        ? providerConfigured(LUMI_OFFICIAL_PROVIDER_ID, userId)
+        : Boolean(activeTts),
       providerManagedModel: true,
     }),
   };
@@ -210,10 +238,250 @@ export function getLumiModelConfiguration(userId: string, role?: LumiModelRole) 
     scope: 'lumi',
     sharedAcrossPersonalAndOrganizationDomains: true,
     organizationOverridesSupported: false,
+    officialApi: {
+      provider: LUMI_OFFICIAL_PROVIDER_ID,
+      configured: isLumiOfficialApiConfigured(userId || 'anonymous'),
+      supportedRoles: [...LUMI_OFFICIAL_SUPPORTED_ROLES],
+      unavailableRoles: [...LUMI_OFFICIAL_UNSUPPORTED_ROLES],
+    },
   };
   return role
     ? { ...base, role, configuration: roles[role] }
     : { ...base, roles };
+}
+
+export interface OfficialModelConfigurationRoleReceipt {
+  role: LumiModelRole;
+  provider: string;
+  model: string;
+  status: 'applied' | 'skipped';
+  reason?: 'adapter_not_available' | 'official_api_not_configured';
+}
+
+export interface OfficialModelConfigurationApplyResult {
+  ok: true;
+  provider: typeof LUMI_OFFICIAL_PROVIDER_ID;
+  /** Configuration/adapters were persisted; this is not a billable live call. */
+  verification: 'configuration_persisted';
+  applied: OfficialModelConfigurationRoleReceipt[];
+  skipped: OfficialModelConfigurationRoleReceipt[];
+  roles: Record<LumiModelRole, OfficialModelConfigurationRoleReceipt>;
+  configuration: ReturnType<typeof getLumiModelConfiguration>;
+}
+
+function officialModelForRole(userId: string, role: LumiModelRole): string {
+  const envName: Record<LumiModelRole, string> = {
+    reasoning: 'RELAY_REASONING_MODEL',
+    vision: 'RELAY_VISION_MODEL',
+    world: 'RELAY_WORLD_MODEL',
+    image_generation: 'RELAY_IMAGE_MODEL',
+    video_generation: 'RELAY_VIDEO_MODEL',
+    embedding: 'RELAY_EMBEDDING_MODEL',
+    rerank: 'RELAY_RERANK_MODEL',
+    speech_recognition: 'RELAY_STT_MODEL',
+    speech_synthesis: 'RELAY_TTS_MODEL',
+  };
+  const configured = cleanModel(process.env[envName[role]]);
+  if (configured) return officialConfiguredModel(configured, role, LUMI_OFFICIAL_DEFAULT_MODELS[role]);
+
+  switch (role) {
+    case 'reasoning': {
+      const preference = getUserPreferredLLM(userId);
+      return officialConfiguredModel(
+        preference.provider === LUMI_OFFICIAL_PROVIDER_ID
+          ? (preference.model || preference.models[LUMI_OFFICIAL_PROVIDER_ID])
+          : preference.models[LUMI_OFFICIAL_PROVIDER_ID],
+        role,
+        DEFAULT_MODELS[LUMI_OFFICIAL_PROVIDER_ID],
+      );
+    }
+    case 'vision': {
+      const preference = getUserPreferredVision(userId);
+      return officialConfiguredModel(
+        preference.provider === LUMI_OFFICIAL_PROVIDER_ID
+          ? (preference.model || preference.models[LUMI_OFFICIAL_PROVIDER_ID])
+          : preference.models[LUMI_OFFICIAL_PROVIDER_ID],
+        role,
+        DEFAULT_VISION_MODELS[LUMI_OFFICIAL_PROVIDER_ID],
+      );
+    }
+    case 'world': {
+      const preference = getUserWorldModelPrefs(userId);
+      return officialConfiguredModel(
+        preference.provider === LUMI_OFFICIAL_PROVIDER_ID
+          ? (preference.model || preference.models[LUMI_OFFICIAL_PROVIDER_ID])
+          : preference.models[LUMI_OFFICIAL_PROVIDER_ID],
+        role,
+        DEFAULT_WORLD_MODELS[LUMI_OFFICIAL_PROVIDER_ID],
+      );
+    }
+    case 'embedding': {
+      const preference = getUserRetrievalModelPreferences(userId);
+      return officialConfiguredModel(
+        preference.embedding.provider === LUMI_OFFICIAL_PROVIDER_ID ? preference.embedding.model : '',
+        role,
+        DEFAULT_EMBEDDING_MODELS[LUMI_OFFICIAL_PROVIDER_ID],
+      );
+    }
+    case 'image_generation': {
+      const preference = getUserPreferredGenerationModels(userId).image;
+      return officialConfiguredModel(
+        preference.provider === LUMI_OFFICIAL_PROVIDER_ID ? preference.model : '',
+        role,
+        DEFAULT_IMAGE_GENERATION_MODELS[LUMI_OFFICIAL_PROVIDER_ID],
+      );
+    }
+    case 'video_generation': {
+      const preference = getUserPreferredGenerationModels(userId).video;
+      return officialConfiguredModel(
+        preference.provider === LUMI_OFFICIAL_PROVIDER_ID ? preference.model : '',
+        role,
+        DEFAULT_VIDEO_GENERATION_MODELS[LUMI_OFFICIAL_PROVIDER_ID],
+      );
+    }
+    case 'rerank': {
+      const preference = getUserRetrievalModelPreferences(userId).rerank;
+      return officialConfiguredModel(
+        preference.provider === LUMI_OFFICIAL_PROVIDER_ID ? preference.model : '',
+        role,
+        DEFAULT_RERANK_MODELS[LUMI_OFFICIAL_PROVIDER_ID],
+      );
+    }
+    case 'speech_recognition':
+    case 'speech_synthesis':
+      return LUMI_OFFICIAL_DEFAULT_MODELS[role];
+  }
+}
+
+function restoreModelConfigurationSnapshot(
+  userId: string,
+  snapshot: {
+    reasoning: ReturnType<typeof getUserPreferredLLM>;
+    vision: ReturnType<typeof getUserPreferredVision>;
+    world: ReturnType<typeof getUserWorldModelPrefs>;
+    generation: ReturnType<typeof getUserPreferredGenerationModels>;
+    retrieval: ReturnType<typeof getUserRetrievalModelPreferences>;
+    voice: ReturnType<typeof getVoicePreference>;
+  },
+): void {
+  // Best effort rollback. Each preference writer is synchronous from the
+  // caller's perspective and writeDB coalesces the resulting snapshot flush.
+  try {
+    upsertUserPreferredLLM(userId, {
+      provider: snapshot.reasoning.provider,
+      model: snapshot.reasoning.model,
+      models: snapshot.reasoning.models,
+      selectionMode: snapshot.reasoning.selectionMode,
+      fallbackCandidates: snapshot.reasoning.fallbackCandidates,
+      allowCloudFallback: snapshot.reasoning.allowCloudFallback,
+      autoFallbackProvider: snapshot.reasoning.autoFallbackProvider,
+      autoFallbackModel: snapshot.reasoning.autoFallbackModel,
+    });
+  } catch {}
+  try {
+    upsertUserPreferredVision(userId, {
+      provider: snapshot.vision.provider,
+      model: snapshot.vision.model,
+      models: snapshot.vision.models,
+    });
+  } catch {}
+  try {
+    upsertUserWorldModelPrefs(userId, snapshot.world);
+  } catch {}
+  try {
+    upsertUserPreferredGenerationModels(userId, snapshot.generation);
+  } catch {}
+  try {
+    upsertUserRetrievalModelPreferences(userId, snapshot.retrieval);
+  } catch {}
+  try {
+    setVoicePreference(snapshot.voice);
+  } catch {}
+}
+
+/**
+ * Apply the configured Lumi official API to every model role in one atomic
+ * server-side operation. The role manifest is intentionally authoritative:
+ * if a future build removes an adapter it will be reported as skipped instead
+ * of being silently presented as applied. The operation rolls back on an
+ * unexpected persistence/validation error so a click cannot leave a half-
+ * adapted setup.
+ */
+export async function applyLumiOfficialModelConfiguration(userId: string): Promise<OfficialModelConfigurationApplyResult> {
+  const uid = userId || 'anonymous';
+  if (!isLumiOfficialApiConfigured(uid)) {
+    throw new Error('Lumi Official API is not configured. Set RELAY_API_KEY and RELAY_BASE_URL in Settings > AI Providers > Official.');
+  }
+
+  const current = allRoleConfigurations(uid);
+  const snapshot = {
+    reasoning: getUserPreferredLLM(uid),
+    vision: getUserPreferredVision(uid),
+    world: getUserWorldModelPrefs(uid),
+    generation: getUserPreferredGenerationModels(uid),
+    retrieval: getUserRetrievalModelPreferences(uid),
+    voice: getVoicePreference(),
+  };
+  const applied: OfficialModelConfigurationRoleReceipt[] = [];
+  const skipped: OfficialModelConfigurationRoleReceipt[] = [];
+
+  for (const role of LUMI_MODEL_ROLES) {
+    if (!LUMI_OFFICIAL_ROLE_CAPABILITIES[role]) {
+      const existing = current[role];
+      skipped.push({
+        role,
+        provider: String(existing?.provider || existing?.effectiveProvider || ''),
+        model: String(existing?.model || existing?.effectiveModel || ''),
+        status: 'skipped',
+        reason: 'adapter_not_available',
+      });
+      continue;
+    }
+
+    const model = officialModelForRole(uid, role);
+    try {
+      const update: ModelConfigurationUpdate = {
+        role,
+        provider: LUMI_OFFICIAL_PROVIDER_ID,
+      };
+      // Voice preferences select an adapter; their model id is managed by the
+      // official speech endpoint and must not be passed to the voice setter.
+      if (role !== 'speech_recognition' && role !== 'speech_synthesis') update.model = model;
+      updateLumiModelConfiguration(uid, update);
+      applied.push({
+        role,
+        provider: LUMI_OFFICIAL_PROVIDER_ID,
+        model,
+        status: 'applied',
+      });
+    } catch (error: any) {
+      restoreModelConfigurationSnapshot(uid, snapshot);
+      try { await flushDBOrThrow(); } catch {}
+      const detail = String(error?.message || error || 'unknown configuration error').slice(0, 240);
+      throw new Error(`Official API adaptation failed for ${role}: ${detail}`);
+    }
+  }
+
+  // Preference writers coalesce snapshots for performance. The one-click
+  // operation is an explicit durability boundary, so do not report success
+  // until every role is on disk.
+  try {
+    await flushDBOrThrow();
+  } catch (error: any) {
+    restoreModelConfigurationSnapshot(uid, snapshot);
+    try { await flushDBOrThrow(); } catch {}
+    throw new Error(`Official API adaptation could not be persisted: ${String(error?.message || error).slice(0, 240)}`);
+  }
+
+  return {
+    ok: true,
+    provider: LUMI_OFFICIAL_PROVIDER_ID,
+    verification: 'configuration_persisted',
+    applied,
+    skipped,
+    roles: Object.fromEntries([...applied, ...skipped].map(receipt => [receipt.role, receipt])) as Record<LumiModelRole, OfficialModelConfigurationRoleReceipt>,
+    configuration: getLumiModelConfiguration(uid),
+  };
 }
 
 export function updateLumiModelConfiguration(userId: string, input: ModelConfigurationUpdate) {
@@ -512,7 +780,11 @@ export async function testLumiModelConfiguration(
       ok: true,
       provider: config.provider,
       effectiveProvider,
-      verification: 'active_adapter_health',
+      // This endpoint does not spend credits or fabricate an audio sample.
+      // Report adapter readiness honestly; live speech remains a separate
+      // microphone/file or synthesis acceptance test.
+      verification: 'configured_adapter',
+      liveMediaVerified: false,
       latencyMs: Date.now() - startedAt,
     };
   }

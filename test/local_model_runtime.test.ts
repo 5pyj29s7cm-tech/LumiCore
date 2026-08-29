@@ -235,4 +235,21 @@ describe('LLM client hot reconfiguration', () => {
     if (originalUrl === undefined) delete process.env.RELAY_BASE_URL;
     else process.env.RELAY_BASE_URL = originalUrl;
   });
+
+  it('does not create an official relay client when its base URL is missing', async () => {
+    const originalKey = process.env.RELAY_API_KEY;
+    const originalUrl = process.env.RELAY_BASE_URL;
+    process.env.RELAY_API_KEY = 'relay-test-key';
+    delete process.env.RELAY_BASE_URL;
+    vi.resetModules();
+    const { createLLMRuntime } = await import('../server/runtime/llm');
+    const runtime = createLLMRuntime();
+
+    expect(runtime.getRelay()).toBeNull();
+
+    if (originalKey === undefined) delete process.env.RELAY_API_KEY;
+    else process.env.RELAY_API_KEY = originalKey;
+    if (originalUrl === undefined) delete process.env.RELAY_BASE_URL;
+    else process.env.RELAY_BASE_URL = originalUrl;
+  });
 });

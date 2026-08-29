@@ -136,6 +136,11 @@ import { isClientSurfaceRendered, waitForClientSurfaceRendered } from '../lib/cl
 const IDLE_AWAY_SECONDS = 5 * 60;
 const RETURN_IDLE_SECONDS = 30;
 
+// Full-screen utility surfaces can be opened from the Command Center.  Keep
+// the origin explicit so closing an overlay returns to the surface the user
+// came from instead of silently falling back to the personal desktop.
+type SurfaceReturnTarget = 'home' | 'command-center';
+
 const AgentChatPage = lazy(() => import('./AgentChatPage').then(m => ({ default: m.AgentChatPage })));
 const AutonomousFeed = lazy(() => import('./AutonomousFeed').then(m => ({ default: m.AutonomousFeed })));
 const AvatarStudio = lazy(() => import('./AvatarStudio').then(m => ({ default: m.AvatarStudio })));
@@ -1576,6 +1581,7 @@ export function DesktopUI({
   const petReactionTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [memoryLabOpen, setMemoryLabOpen] = useState(false);
+  const surfaceReturnTargetRef = useRef<SurfaceReturnTarget>('home');
 
   const triggerPetReaction = (animation: string, ms: number = 1500) => {
     if (petReactionTimeout.current) clearTimeout(petReactionTimeout.current);
@@ -1708,6 +1714,13 @@ export function DesktopUI({
   }, [chatOpen]);
 
   const openCommandCenter = useCallback((view: CommandCenterView = 'office') => {
+    // Command Center is the canonical parent surface.  Opening it always
+    // dismisses utility overlays and consumes any previous return context.
+    surfaceReturnTargetRef.current = 'home';
+    setKnowledgeOpen(false);
+    setMemoryLabOpen(false);
+    setSanctuaryOpen(false);
+    setSanctuaryAgent(null);
     setCommandCenterView(view);
     setOpenWindows(previous => previous.filter(windowId => !['chat', 'command-center'].includes(windowId)));
     setMinimizedWindows(previous => previous.filter(windowId => !['chat', 'command-center'].includes(windowId)));
@@ -1730,6 +1743,47 @@ export function DesktopUI({
       })();
     }, 80);
   }, [isTauri, setActiveTab]);
+
+  const inferSurfaceReturnTarget = useCallback((): SurfaceReturnTarget => {
+    if (chatOpen || activeTab === 'command-center') return 'command-center';
+    // A utility surface can open another utility surface (for example the
+    // knowledge base can open Memory Avatar).  At that point the chat flag is
+    // deliberately false, so infer from the origin already recorded rather
+    // than treating the second hop as a fresh desktop launch.
+    if (knowledgeOpen || memoryLabOpen || sanctuaryOpen) {
+      return surfaceReturnTargetRef.current;
+    }
+    return 'home';
+  }, [activeTab, chatOpen, knowledgeOpen, memoryLabOpen, sanctuaryOpen]);
+
+  const restoreSurfaceReturnTarget = useCallback(() => {
+    const target = surfaceReturnTargetRef.current;
+    surfaceReturnTargetRef.current = 'home';
+    if (target === 'command-center') {
+      openCommandCenter('office');
+      return;
+    }
+    setActiveTab('home');
+  }, [openCommandCenter, setActiveTab]);
+
+  const openKnowledgeBase = useCallback((returnTarget?: SurfaceReturnTarget) => {
+    surfaceReturnTargetRef.current = returnTarget || inferSurfaceReturnTarget();
+    // Only one full-screen surface owns focus at a time.
+    setChatOpen(false);
+    setChatPrefill('');
+    setChatPrefillSource('proactive');
+    setMemoryLabOpen(false);
+    setSanctuaryOpen(false);
+    setSanctuaryAgent(null);
+    setKnowledgeLoaded(true);
+    setKnowledgeOpen(true);
+    setActiveTab('knowledge');
+  }, [inferSurfaceReturnTarget, setActiveTab]);
+
+  const closeKnowledgeBase = useCallback(() => {
+    setKnowledgeOpen(false);
+    restoreSurfaceReturnTarget();
+  }, [restoreSurfaceReturnTarget]);
 
   const askComputerProfileQuestion = useCallback((prompt: string) => {
     const text = String(prompt || '').trim();
@@ -1758,8 +1812,18 @@ export function DesktopUI({
     return memoryAvatars;
   }, [memoryAvatars]);
 
-  const openMemoryAvatar = useCallback(async (avatarId?: string) => {
+  const openMemoryAvatar = useCallback(async (avatarId?: string, returnTarget?: SurfaceReturnTarget) => {
     try { sounds.playClick(); } catch {}
+    // The right rail invokes this while the Command Center is still open;
+    // direct desktop launches use the personal surface.  Avatar switching
+    // from an already-open Sanctuary intentionally preserves its origin.
+    if (returnTarget) {
+      surfaceReturnTargetRef.current = returnTarget;
+    } else if (chatOpen || activeTab === 'command-center') {
+      surfaceReturnTargetRef.current = 'command-center';
+    } else if (!sanctuaryOpen && !memoryLabOpen) {
+      surfaceReturnTargetRef.current = 'home';
+    }
     const avatars = await loadMemoryAvatars();
     const selected = avatarId
       ? avatars.find(avatar => avatar?.id === avatarId)
@@ -1769,9 +1833,10 @@ export function DesktopUI({
     // refresh the list instead of falling back to avatars[0].
     if (avatarId && !selected) return;
     // Memory Avatar is a separate fullscreen surface. Close the command
-    // center before presenting it so two focus traps never stack and the
-    // top-bar Personal switch remains the single return path.
+    // center and any other utility before presenting it so two focus traps
+    // never stack.  The recorded origin is restored by closeMemoryAvatar.
     setChatOpen(false);
+    setKnowledgeOpen(false);
     setChatPrefill('');
     setChatPrefillSource('proactive');
     setActiveTab('home');
@@ -1783,20 +1848,33 @@ export function DesktopUI({
       return;
     }
     setMemoryLabOpen(true);
-  }, [loadMemoryAvatars, setActiveTab]);
+  }, [activeTab, chatOpen, loadMemoryAvatars, memoryLabOpen, sanctuaryOpen, setActiveTab]);
 
-  const openMemoryAvatarLab = useCallback(() => {
+  const openMemoryAvatarLab = useCallback((returnTarget?: SurfaceReturnTarget) => {
+    if (returnTarget) {
+      surfaceReturnTargetRef.current = returnTarget;
+    } else if (!sanctuaryOpen && !memoryLabOpen && !(chatOpen || activeTab === 'command-center')) {
+      surfaceReturnTargetRef.current = 'home';
+    }
     setChatOpen(false);
+    setKnowledgeOpen(false);
     setChatPrefill('');
     setChatPrefillSource('proactive');
     setActiveTab('home');
     setSanctuaryOpen(false);
     setSanctuaryAgent(null);
     setMemoryLabOpen(true);
-  }, [setActiveTab]);
+  }, [activeTab, chatOpen, memoryLabOpen, sanctuaryOpen, setActiveTab]);
+
+  const closeMemoryAvatar = useCallback(() => {
+    setMemoryLabOpen(false);
+    setSanctuaryOpen(false);
+    setSanctuaryAgent(null);
+    restoreSurfaceReturnTarget();
+  }, [restoreSurfaceReturnTarget]);
 
   useEffect(() => {
-    const handler = () => { void openMemoryAvatar(); };
+    const handler = () => { void openMemoryAvatar(undefined, 'home'); };
     window.addEventListener('lumi:open-memory-lab', handler);
     return () => window.removeEventListener('lumi:open-memory-lab', handler);
   }, [openMemoryAvatar]);
@@ -2994,11 +3072,15 @@ export function DesktopUI({
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.tab === 'home') {
+        surfaceReturnTargetRef.current = 'home';
         setOpenWindows([]);
         setFocusedWindow(null);
         setWindowOrder([]);
         setKnowledgeOpen(false);
         setChatOpen(false);
+        setMemoryLabOpen(false);
+        setSanctuaryOpen(false);
+        setSanctuaryAgent(null);
         setActiveTab('home');
         return;
       }
@@ -3650,6 +3732,19 @@ export function DesktopUI({
         return;
       }
       if (e.key === 'Escape') {
+        // Utility surfaces opened from the Command Center must unwind to
+        // their recorded origin.  Handling them here prevents the global
+        // Escape path from dropping the user onto Personal by accident.
+        if (sanctuaryOpen || memoryLabOpen) {
+          e.preventDefault();
+          closeMemoryAvatar();
+          return;
+        }
+        if (knowledgeOpen) {
+          e.preventDefault();
+          closeKnowledgeBase();
+          return;
+        }
         setIsSearchOpen(false);
         setIsControlCenterOpen(false);
         if (isWallpaperMode) toggleWallpaperMode();
@@ -3685,7 +3780,7 @@ export function DesktopUI({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [chatOpen, endCall, getVoiceScopeOptions, interrupt, isControlCenterOpen, isSearchOpen, isWallpaperMode, openCommandCenter, selectedVoiceId, startCall, startStandardVoiceCall, toggleWallpaperMode]);
+  }, [chatOpen, closeKnowledgeBase, closeMemoryAvatar, endCall, getVoiceScopeOptions, interrupt, isControlCenterOpen, isSearchOpen, isWallpaperMode, knowledgeOpen, memoryLabOpen, openCommandCenter, sanctuaryOpen, selectedVoiceId, startCall, startStandardVoiceCall, toggleWallpaperMode]);
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
@@ -3712,24 +3807,30 @@ export function DesktopUI({
       tab = 'personalization';
     }
     if (tab === 'home') {
+      surfaceReturnTargetRef.current = 'home';
+      setKnowledgeOpen(false);
+      setMemoryLabOpen(false);
+      setSanctuaryOpen(false);
+      setSanctuaryAgent(null);
       setOpenWindows([]);
       setFocusedWindow(null);
       setActiveTab('home');
       return;
     }
     if (tab === 'org') {
+      surfaceReturnTargetRef.current = 'home';
       setActiveTab('org');
       return;
     }
     if (tab === 'memory') {
-      setKnowledgeOpen(true);
-      setActiveTab('knowledge');
+      openKnowledgeBase();
       return;
     }
     if (tab === 'sync') {
       tab = 'devices';
     }
     if (tab === 'notifications') {
+      surfaceReturnTargetRef.current = 'home';
       setIsNotificationPanelOpen(prev => !prev);
       setOpenWindows(prev => prev.filter(w => w !== 'notifications'));
       setMinimizedWindows(prev => prev.filter(w => w !== 'notifications'));
@@ -3740,7 +3841,8 @@ export function DesktopUI({
 
     // Knowledge base and Chat open fullscreen, not as windows
     if (tab === 'knowledge') {
-      setKnowledgeOpen(prev => !prev);
+      if (knowledgeOpen) closeKnowledgeBase();
+      else openKnowledgeBase();
       return;
     }
     if (tab === 'chat' || tab === 'command-center') {
@@ -3763,7 +3865,7 @@ export function DesktopUI({
       setWindowOrder(prev => [...prev, tab]);
     }
     setActiveTab(tab);
-  }, [focusedWindow, minimizedWindows, openCommandCenter, openMemoryAvatar, openWindows, setActiveTab]);
+  }, [closeKnowledgeBase, focusedWindow, knowledgeOpen, minimizedWindows, openCommandCenter, openKnowledgeBase, openMemoryAvatar, openWindows, setActiveTab]);
 
   const closeWindow = useCallback((tab: string) => {
     try { sounds.playClick(); } catch {}
@@ -3876,11 +3978,15 @@ export function DesktopUI({
 
   const enterDesktopWidgetMode = useCallback(async () => {
     try { sounds.playClick(); } catch {}
+    surfaceReturnTargetRef.current = 'home';
     setIsControlCenterOpen(false);
     setIsNotificationPanelOpen(false);
     setIsSearchOpen(false);
     setChatOpen(false);
     setKnowledgeOpen(false);
+    setMemoryLabOpen(false);
+    setSanctuaryOpen(false);
+    setSanctuaryAgent(null);
     setOpenWindows([]);
     setMinimizedWindows([]);
     setFocusedWindow(null);
@@ -3965,15 +4071,19 @@ export function DesktopUI({
         if (value === 'avatar-studio' || value === 'sound') return 'personalization';
         if (value === 'world' || value === 'nexus' || value === 'nexus-view' || value === 'cloud-canvas') return 'nexus';
         if (value === 'chat' || value === 'command-center') return 'command-center';
-        if (value === 'memory' || value === 'memory-avatar' || value === 'memory-avatars' || value === 'sanctuary') return 'memory-avatar';
+        if (value === 'memory-avatar' || value === 'memory-avatars' || value === 'sanctuary') return 'memory-avatar';
         return value;
       };
 
-        const openSurface = (value: string) => {
-          if (value === 'avatar-studio') setPersonalizationSection('appearance');
-          if (value === 'sound') setPersonalizationSection('voice');
-          const windowId = normalizeTarget(value);
-          if (!windowId) throw new Error('Client action requires a target surface');
+      const openSurface = (value: string) => {
+        if (value === 'avatar-studio') setPersonalizationSection('appearance');
+        if (value === 'sound') setPersonalizationSection('voice');
+        const windowId = normalizeTarget(value);
+        if (!windowId) throw new Error('Client action requires a target surface');
+        // Capture the origin before dismissing the current surface.  This is
+        // what lets utility overlays opened by a Command Center action return
+        // to that same office instead of the personal desktop.
+        const returnTarget = inferSurfaceReturnTarget();
         if (isDesktopWidgetMode) {
           void exitDesktopWidgetMode(windowId);
           return;
@@ -3987,12 +4097,16 @@ export function DesktopUI({
         }
 
         if (windowId === 'home') {
+          surfaceReturnTargetRef.current = 'home';
           setOpenWindows([]);
           setMinimizedWindows([]);
           setFocusedWindow(null);
           setWindowOrder([]);
           setKnowledgeOpen(false);
           setChatOpen(false);
+          setMemoryLabOpen(false);
+          setSanctuaryOpen(false);
+          setSanctuaryAgent(null);
           setIsNotificationPanelOpen(false);
           setIsSearchOpen(false);
           setViewMode('personal');
@@ -4000,22 +4114,24 @@ export function DesktopUI({
           return;
         }
         if (windowId === 'nexus') {
+          surfaceReturnTargetRef.current = 'home';
           setNexusReturnTarget('home');
           setViewMode('world');
           setActiveTab('home');
           return;
         }
         if (windowId === 'app-launcher') {
+          surfaceReturnTargetRef.current = 'home';
           setIsSearchOpen(true);
           return;
         }
         if (windowId === 'org') {
+          surfaceReturnTargetRef.current = 'home';
           setActiveTab('org');
           return;
         }
         if (windowId === 'knowledge') {
-          setKnowledgeOpen(true);
-          setActiveTab('knowledge');
+          openKnowledgeBase(returnTarget);
           return;
         }
         if (windowId === 'command-center') {
@@ -4023,10 +4139,11 @@ export function DesktopUI({
           return;
         }
         if (windowId === 'memory-avatar') {
-          void openMemoryAvatar();
+          void openMemoryAvatar(undefined, returnTarget);
           return;
         }
         if (windowId === 'notifications') {
+          surfaceReturnTargetRef.current = 'home';
           setIsNotificationPanelOpen(true);
           setOpenWindows(prev => prev.filter(w => w !== 'notifications'));
           setMinimizedWindows(prev => prev.filter(w => w !== 'notifications'));
@@ -4034,12 +4151,13 @@ export function DesktopUI({
           if (focusedWindow === 'notifications') setFocusedWindow(null);
           return;
         }
+        surfaceReturnTargetRef.current = 'home';
         setOpenWindows(prev => prev.includes(windowId) ? prev : [...prev, windowId]);
         setMinimizedWindows(prev => prev.filter(w => w !== windowId));
         setFocusedWindow(windowId);
         setWindowOrder(prev => [...prev.filter(w => w !== windowId), windowId]);
-          setActiveTab(windowId);
-        };
+        setActiveTab(windowId);
+      };
 
         const getDemoTargetPoint = (value: string): { x: number; y: number } => {
           const windowId = normalizeTarget(value);
@@ -4070,33 +4188,42 @@ export function DesktopUI({
         const windowId = normalizeTarget(value);
         if (!windowId) throw new Error('close_client_surface requires target');
         if (windowId === 'knowledge') {
-          setKnowledgeOpen(false);
+          closeKnowledgeBase();
           return;
         }
         if (windowId === 'command-center') {
+          surfaceReturnTargetRef.current = 'home';
           setChatOpen(false);
+          setKnowledgeOpen(false);
+          setMemoryLabOpen(false);
+          setSanctuaryOpen(false);
+          setSanctuaryAgent(null);
+          setChatPrefill('');
+          setChatPrefillSource('proactive');
           setActiveTab('home');
           return;
         }
         if (windowId === 'memory-avatar') {
-          setMemoryLabOpen(false);
-          setSanctuaryOpen(false);
-          setSanctuaryAgent(null);
+          closeMemoryAvatar();
           return;
         }
         if (windowId === 'nexus') {
+          setNexusReturnTarget('home');
           setViewMode('personal');
           return;
         }
         if (windowId === 'app-launcher') {
+          surfaceReturnTargetRef.current = 'home';
           setIsSearchOpen(false);
           return;
         }
         if (windowId === 'notifications') {
+          surfaceReturnTargetRef.current = 'home';
           setIsNotificationPanelOpen(false);
           return;
         }
         if (windowId === 'org' && activeTab === 'org') {
+          surfaceReturnTargetRef.current = 'home';
           setActiveTab('home');
           return;
         }
@@ -4360,12 +4487,16 @@ export function DesktopUI({
   }, [
     activeTab,
     applyWallpaperMode,
+    closeKnowledgeBase,
+    closeMemoryAvatar,
     closeWindow,
     endMeetingAndReport,
     enterDesktopWidgetMode,
     exitDesktopWidgetMode,
     focusedWindow,
     isDesktopWidgetMode,
+    inferSurfaceReturnTarget,
+    openKnowledgeBase,
     openMemoryAvatar,
     openCommandCenter,
     openWindows,
@@ -4397,7 +4528,7 @@ export function DesktopUI({
         appLauncherOpen: isSearchOpen,
         knowledgeOpen,
         chatOpen,
-        commandCenterOpen: chatOpen,
+        commandCenterOpen: chatOpen || knowledgeOpen || memoryLabOpen || sanctuaryOpen,
         commandCenterView,
         notificationsOpen: isNotificationPanelOpen,
         memoryAvatarOpen: memoryLabOpen || sanctuaryOpen,
@@ -4444,7 +4575,7 @@ export function DesktopUI({
           appLauncherOpen: isSearchOpen,
           knowledgeOpen,
           chatOpen,
-          commandCenterOpen: chatOpen,
+          commandCenterOpen: chatOpen || knowledgeOpen || memoryLabOpen || sanctuaryOpen,
           commandCenterView,
           notificationsOpen: isNotificationPanelOpen,
           memoryAvatarOpen: memoryLabOpen || sanctuaryOpen,
@@ -4912,6 +5043,7 @@ export function DesktopUI({
               connected={orgConnection?.connected ?? false}
               organizationOpen={activeTab === 'org'}
               onOpenOrganization={() => {
+                surfaceReturnTargetRef.current = 'home';
                 setChatOpen(false);
                 setActiveTab('org');
               }}
@@ -4919,12 +5051,17 @@ export function DesktopUI({
                 // The top-bar switch is the single way out of the full-screen
                 // command center. Returning to Personal closes its overlay;
                 // there is intentionally no second exit button in the chat.
+                surfaceReturnTargetRef.current = 'home';
                 setChatOpen(false);
+                setKnowledgeOpen(false);
+                setMemoryLabOpen(false);
+                setSanctuaryOpen(false);
+                setSanctuaryAgent(null);
                 setChatPrefill('');
                 setChatPrefillSource('proactive');
                 setActiveTab('home');
               }}
-              commandCenterOpen={chatOpen}
+              commandCenterOpen={chatOpen || knowledgeOpen || memoryLabOpen || sanctuaryOpen}
               onOpenCommandCenter={() => openCommandCenter('office')}
             />
           </div>
@@ -5894,7 +6031,7 @@ export function DesktopUI({
           <KnowledgeBase
             t={t}
             isOpen={knowledgeOpen}
-            onClose={() => setKnowledgeOpen(false)}
+            onClose={closeKnowledgeBase}
             domain={workDomain}
           />
         </Suspense>
@@ -5907,7 +6044,13 @@ export function DesktopUI({
             t={t}
             user={user}
             isOpen={chatOpen}
-            onClose={() => { setChatOpen(false); setActiveTab('home'); setChatPrefill(''); setChatPrefillSource('proactive'); }}
+            onClose={() => {
+              surfaceReturnTargetRef.current = 'home';
+              setChatOpen(false);
+              setActiveTab('home');
+              setChatPrefill('');
+              setChatPrefillSource('proactive');
+            }}
             layout="command-center"
             commandCenterView={commandCenterView}
             onCommandCenterViewChange={setCommandCenterView}
@@ -5919,10 +6062,7 @@ export function DesktopUI({
             }}
             onOpenMemoryAvatar={() => { void openMemoryAvatar(); }}
             onOpenKnowledge={() => {
-              setChatOpen(false);
-              setKnowledgeLoaded(true);
-              setKnowledgeOpen(true);
-              setActiveTab('knowledge');
+              openKnowledgeBase('command-center');
             }}
             voiceSession={{
               callState,
@@ -6029,7 +6169,7 @@ export function DesktopUI({
             agent={sanctuaryAgent}
             lang={lang}
             isOpen={sanctuaryOpen}
-            onClose={() => { setSanctuaryOpen(false); setSanctuaryAgent(null); }}
+            onClose={closeMemoryAvatar}
             avatars={memoryAvatars}
             onSelectAvatar={(avatarId) => { void openMemoryAvatar(avatarId); }}
             onCreateAnother={openMemoryAvatarLab}
@@ -6050,7 +6190,7 @@ export function DesktopUI({
           >
             <div className="absolute top-4 left-4 z-10">
               <button
-                onClick={() => setMemoryLabOpen(false)}
+                onClick={closeMemoryAvatar}
                 className="w-10 h-10 flex items-center justify-center bg-black/40 backdrop-blur-xl border border-white/[0.08] rounded-2xl text-white/40 hover:text-white hover:border-white/20 transition-all"
               >
                 <ArrowLeft size={18} />

@@ -4,13 +4,13 @@
 import { readDB, writeDB } from '../../db_layer';
 
 export interface VoicePreference {
-  stt: 'auto' | 'local-whisper' | 'qwen' | 'ark' | 'whisper';
-  tts: 'auto' | 'local-cosyvoice' | 'gptsovits' | 'cosyvoice' | 'ark';
+  stt: 'auto' | 'local-whisper' | 'qwen' | 'ark' | 'whisper' | 'relay';
+  tts: 'auto' | 'local-cosyvoice' | 'gptsovits' | 'cosyvoice' | 'ark' | 'relay';
 }
 
 const DEFAULT: VoicePreference = { stt: 'auto', tts: 'auto' };
-const ALLOWED_STT = new Set<VoicePreference['stt']>(['auto', 'local-whisper', 'qwen', 'ark', 'whisper']);
-const ALLOWED_TTS = new Set<VoicePreference['tts']>(['auto', 'local-cosyvoice', 'gptsovits', 'cosyvoice', 'ark']);
+const ALLOWED_STT = new Set<VoicePreference['stt']>(['auto', 'local-whisper', 'qwen', 'ark', 'whisper', 'relay']);
+const ALLOWED_TTS = new Set<VoicePreference['tts']>(['auto', 'local-cosyvoice', 'gptsovits', 'cosyvoice', 'ark', 'relay']);
 
 function normalizePreference(pref: Partial<VoicePreference>): VoicePreference {
   const stt = ALLOWED_STT.has(pref.stt as VoicePreference['stt']) ? pref.stt : DEFAULT.stt;

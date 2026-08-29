@@ -4,6 +4,8 @@ import {
   getUserRetrievalModelPreferences,
   type EmbeddingModelSelection,
 } from './retrieval_model_preferences';
+import { relayApiKey } from '../relay/config';
+import { officialApiModel, officialApiPath, officialApiRequest } from './official_api';
 
 type EmbeddingSelection = Pick<EmbeddingModelSelection, 'provider' | 'model'>;
 
@@ -50,7 +52,9 @@ async function fetchJson(url: string, init: RequestInit, timeoutMs = 10_000): Pr
 
 async function runEmbedding(selection: EmbeddingSelection, text: string): Promise<EmbeddingResult> {
   const provider = selection.provider;
-  const model = selection.model.trim();
+  const model = provider === 'relay'
+    ? officialApiModel('RELAY_EMBEDDING_MODEL', selection.model.trim())
+    : selection.model.trim();
   if (!provider || provider.startsWith('inherit_') || !model) {
     throw new Error('Retrieval model requires an explicit embedding provider and model');
   }
@@ -84,8 +88,8 @@ async function runEmbedding(selection: EmbeddingSelection, text: string): Promis
       baseUrl: normalizedBaseUrl(process.env.SILICONFLOW_BASE_URL || '', 'https://api.siliconflow.cn/v1'),
     },
     relay: {
-      key: process.env.RELAY_API_KEY || keys.RELAY_API_KEY || '',
-      baseUrl: normalizedBaseUrl(process.env.RELAY_BASE_URL || keys.RELAY_BASE_URL || '', 'http://127.0.0.1:1234'),
+      key: relayApiKey(),
+      baseUrl: normalizedBaseUrl(process.env.RELAY_BASE_URL || keys.RELAY_BASE_URL || '', ''),
     },
     lmstudio: {
       key: '',
@@ -96,14 +100,27 @@ async function runEmbedding(selection: EmbeddingSelection, text: string): Promis
   const config = providerConfig[provider];
   if (!config) throw new Error(`Embedding provider is not supported: ${provider}`);
   if (provider !== 'lmstudio' && !config.key) throw new Error(`${provider} embedding credentials are not configured`);
+  if (provider === 'relay' && !config.baseUrl) {
+    throw new Error('RELAY_BASE_URL is not configured. Set it in Settings > AI Providers > Official.');
+  }
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (config.key) headers.Authorization = `Bearer ${config.key}`;
-  const body = await fetchJson(compatibleEmbeddingEndpoint(config.baseUrl), {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ model, input }),
-  });
+  // Keep the official lane on the shared transport so timeout, URL-origin,
+  // bearer-header and redacted-error rules are identical across roles.
+  const body = provider === 'relay'
+    ? (await officialApiRequest<any>(officialApiPath('RELAY_EMBEDDINGS_PATH', '/embeddings'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // ModelDepot documents embedding input as an array. Do not collapse it
+      // to a scalar just because other compatibility providers accept one.
+      body: JSON.stringify({ model, input: [input] }),
+    })).body
+    : await fetchJson(compatibleEmbeddingEndpoint(config.baseUrl), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ model, input }),
+    });
   const vector = usableVector(body?.data?.[0]?.embedding || body?.embedding);
   if (!vector) throw new Error(`${provider} returned no embedding vector`);
   return { provider, model, vector };

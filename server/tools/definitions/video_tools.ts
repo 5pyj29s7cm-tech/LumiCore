@@ -1,18 +1,42 @@
 import fs from 'fs';
 import path from 'path';
+import dns from 'node:dns/promises';
 import { ToolRegistry } from '../registry';
 import type { ToolContext } from '../types';
 import { loadKeys } from '../../config/keys';
 import {
+  DEFAULT_VIDEO_GENERATION_MODELS,
   getUserPreferredGenerationModels,
   type VideoGenerationProvider,
 } from '../../llm/generation_preferences';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 import { getGeneratedOutputDir } from '../../config/data_path';
+import {
+  officialApiBinary,
+  officialApiModel,
+  officialApiPath,
+  officialApiRequest,
+} from '../../llm/official_api';
 
 const OUTPUT_DIR = getGeneratedOutputDir();
 const POLL_DELAY_MS = process.env.NODE_ENV === 'test' ? 0 : 5_000;
 const MAX_POLLS = 120;
+const MAX_REMOTE_VIDEO_BYTES = 100 * 1024 * 1024;
+const REMOTE_MEDIA_TIMEOUT_MS = 90_000;
+
+function isPrivateOrLocalAddress(address: string): boolean {
+  const value = String(address || '').trim().toLowerCase();
+  if (!value) return true;
+  if (value === '::1' || value === '0.0.0.0' || value === '::' || value === 'localhost') return true;
+  if (/^127(?:\.\d{1,3}){3}$/.test(value)) return true;
+  if (/^10(?:\.\d{1,3}){3}$/.test(value)) return true;
+  if (/^192\.168(?:\.\d{1,3}){2}$/.test(value)) return true;
+  if (/^169\.254(?:\.\d{1,3}){2}$/.test(value)) return true;
+  if (/^172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}$/.test(value)) return true;
+  if (/^(?:fc|fd)[0-9a-f]{2}:/i.test(value)) return true;
+  if (/^fe80:/i.test(value)) return true;
+  return false;
+}
 
 function ensureOutputDir(): string {
   if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -55,14 +79,80 @@ async function persistRemoteVideo(
   headers: Record<string, string> = {},
 ): Promise<{ outputPath?: string; downloadError?: string }> {
   try {
-    const response = await fetch(url, { headers });
+    const parsed = new URL(String(url || '').trim());
+    const hostname = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    const literalPrivate = hostname === 'localhost'
+      || hostname.endsWith('.localhost')
+      || isPrivateOrLocalAddress(hostname);
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.hash || literalPrivate) {
+      throw new Error('Remote video URL must be an HTTPS public URL.');
+    }
+    // A hostname can resolve to an internal address even when its spelling is
+    // public. Resolve all answers before fetching and fail closed for private
+    // ranges. This is not a substitute for provider allowlisting, but closes
+    // the common DNS-to-loopback/metadata SSRF path while retaining signed CDN
+    // URLs from providers whose hostname is not known ahead of time.
+    try {
+      const answers = await dns.lookup(hostname, { all: true, verbatim: true });
+      if (answers.some(answer => isPrivateOrLocalAddress(answer.address))) {
+        throw new Error('Remote video URL resolves to a private or local address.');
+      }
+    } catch (error: any) {
+      if (String(error?.message || '').includes('private or local')) throw error;
+      // In tests and in an offline environment a signed host may not resolve;
+      // let fetch produce its normal network error rather than inventing a
+      // successful download. A successful DNS lookup is always checked above.
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REMOTE_MEDIA_TIMEOUT_MS);
+    // Provider URLs are normally signed and need no credential header. Never
+    // forward cookies or bearer tokens to a media origin.
+    const safeHeaders = Object.fromEntries(Object.entries(headers).filter(([name]) => !/^(authorization|cookie|proxy-authorization)$/i.test(name)));
+    let response: Response;
+    try {
+      response = await fetch(parsed.toString(), { headers: safeHeaders, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const declaredLength = Number(response.headers?.get?.('content-length') || 0);
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_REMOTE_VIDEO_BYTES) {
+      throw new Error(`Remote video exceeds the ${MAX_REMOTE_VIDEO_BYTES} byte limit.`);
+    }
+    const bytes = await readResponseBytes(response, MAX_REMOTE_VIDEO_BYTES);
     const outputPath = path.join(ensureOutputDir(), `${provider}_video_${Date.now()}.mp4`);
-    fs.writeFileSync(outputPath, Buffer.from(await response.arrayBuffer()));
+    fs.writeFileSync(outputPath, bytes);
     return { outputPath };
   } catch (error: any) {
     return { downloadError: String(error?.message || error).slice(0, 300) };
   }
+}
+
+async function readResponseBytes(response: Response, maxBytes: number): Promise<Buffer> {
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length > maxBytes) throw new Error(`Remote media exceeds the ${maxBytes} byte limit.`);
+    return bytes;
+  }
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      const chunk = Buffer.from(next.value);
+      total += chunk.length;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        throw new Error(`Remote media exceeds the ${maxBytes} byte limit.`);
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+  return Buffer.concat(chunks, total);
 }
 
 function completedResult(input: {
@@ -293,6 +383,107 @@ async function generateOpenAIVideo(args: Record<string, any>, model: string): Pr
   throw new Error(`OpenAI video generation timed out. Video ID: ${taskId}`);
 }
 
+function officialVideoPayload(args: Record<string, any>, model: string): FormData {
+  const form = new FormData();
+  form.set('model', model);
+  form.set('prompt', String(args.prompt || '').trim());
+  form.set('duration', String(Math.max(1, Math.round(Number(args.duration) || 4))));
+  form.set('size', normalizeSize(args.size, 'x'));
+  if (args.first_frame_image) form.set('input_reference', String(args.first_frame_image));
+  return form;
+}
+
+function officialVideoTaskId(body: any): string {
+  return String(body?.id || body?.task_id || body?.data?.id || body?.data?.task_id || body?.output?.task_id || '').trim();
+}
+
+function officialVideoUrl(body: any): string {
+  return String(body?.video_url || body?.url || body?.data?.video_url || body?.data?.url
+    || body?.output?.video_url || body?.output?.url || body?.result?.video_url
+    || body?.result?.url || body?.result_url || body?.data?.result_url || '').trim();
+}
+
+function saveBase64Video(value: unknown): string | undefined {
+  const raw = String(value || '').trim();
+  const match = raw.match(/^data:[^;,]+;base64,(.+)$/i);
+  const encoded = match?.[1] || (/^[A-Za-z0-9+/=\r\n]+$/.test(raw) && raw.length > 100 ? raw : '');
+  if (!encoded) return undefined;
+  if (Math.ceil(encoded.replace(/\s+/g, '').length * 3 / 4) > MAX_REMOTE_VIDEO_BYTES) {
+    throw new Error(`Generated video exceeds the ${MAX_REMOTE_VIDEO_BYTES} byte limit.`);
+  }
+  const outputPath = path.join(ensureOutputDir(), `official_video_${Date.now()}.mp4`);
+  fs.writeFileSync(outputPath, Buffer.from(encoded.replace(/\s+/g, ''), 'base64'));
+  return outputPath;
+}
+
+/** OpenAI-compatible asynchronous video generation through Lumi's gateway. */
+async function generateOfficialVideo(args: Record<string, any>, selectedModel: string): Promise<string> {
+  const prompt = String(args.prompt || '').trim();
+  if (!prompt) throw new Error('prompt is required');
+  const model = officialApiModel('RELAY_VIDEO_MODEL', selectedModel || DEFAULT_VIDEO_GENERATION_MODELS.relay);
+  // ModelDepot documents JSON POST /v1/videos/generations. A deployment can
+  // opt into multipart for an OpenAI-compatible gateway with the explicit
+  // override rather than making the documented path an accidental fallback.
+  const pathName = officialApiPath('RELAY_VIDEO_PATH', '/videos/generations');
+  const useJson = process.env.RELAY_VIDEO_REQUEST_FORMAT?.toLowerCase() !== 'multipart';
+  const payload = {
+    model,
+    prompt,
+    duration: Math.max(1, Math.round(Number(args.duration) || 4)),
+    size: normalizeSize(args.size, 'x'),
+    ...(args.first_frame_image ? { input_reference: String(args.first_frame_image) } : {}),
+    ...(args.last_frame_image ? { last_frame_image: String(args.last_frame_image) } : {}),
+  };
+  const request = await officialApiRequest<any>(pathName, {
+    method: 'POST',
+    headers: useJson ? { 'Content-Type': 'application/json' } : {},
+    body: useJson ? JSON.stringify(payload) : officialVideoPayload(args, model),
+    timeoutMs: 90_000,
+  });
+  const taskId = officialVideoTaskId(request.body);
+  const immediateUrl = officialVideoUrl(request.body);
+  const immediatePath = saveBase64Video(request.body?.b64_json || request.body?.base64 || request.body?.video_base64);
+  if (!taskId && !immediateUrl && !immediatePath) throw new Error('Lumi Official API video generation returned no task or video reference.');
+  if (!taskId) {
+    const saved = immediatePath ? { outputPath: immediatePath } : immediateUrl ? await persistRemoteVideo(immediateUrl, 'official') : {};
+    return completedResult({ provider: 'relay', model, prompt, taskId: 'completed', videoUrl: immediateUrl, ...saved });
+  }
+
+  const statusTemplate = officialApiPath('RELAY_VIDEO_STATUS_PATH', '/videos/generations/{id}');
+  const contentTemplate = officialApiPath('RELAY_VIDEO_CONTENT_PATH', '/videos/generations/{id}/content');
+  const maxPolls = Math.max(1, Math.min(120, Number(process.env.RELAY_VIDEO_MAX_POLLS) || MAX_POLLS));
+  for (let attempt = 0; attempt < maxPolls; attempt += 1) {
+    await waitForNextPoll();
+    const encodedId = encodeURIComponent(taskId);
+    const statusPath = statusTemplate.replace(/\{id\}/gi, encodedId);
+    const { body } = await officialApiRequest<any>(statusPath, { timeoutMs: 90_000 });
+    const state = String(body?.status || body?.state || body?.output?.status || '').toLowerCase();
+    const videoUrl = officialVideoUrl(body);
+    const base64Path = saveBase64Video(body?.b64_json || body?.base64 || body?.video_base64);
+    if (['completed', 'complete', 'succeeded', 'success', 'done'].includes(state) || videoUrl || base64Path) {
+      if (base64Path) return completedResult({ provider: 'relay', model, prompt, taskId, videoUrl, outputPath: base64Path });
+      if (videoUrl) {
+        const saved = await persistRemoteVideo(videoUrl, 'official');
+        return completedResult({ provider: 'relay', model, prompt, taskId, videoUrl, ...saved });
+      }
+      // Some gateways return a completed task without a URL in the status
+      // body and expose the bytes at a separate content endpoint.
+      try {
+        const content = await officialApiBinary(contentTemplate.replace(/\{id\}/gi, encodedId));
+        const outputPath = path.join(ensureOutputDir(), `official_video_${Date.now()}.mp4`);
+        fs.writeFileSync(outputPath, await readResponseBytes(content, MAX_REMOTE_VIDEO_BYTES));
+        return completedResult({ provider: 'relay', model, prompt, taskId, outputPath });
+      } catch (error: any) {
+        throw new Error(`Lumi Official API video completed but content download failed: ${String(error?.message || error).slice(0, 300)}`);
+      }
+    }
+    if (['failed', 'failure', 'error', 'cancelled', 'canceled'].includes(state)) {
+      throw new Error(`Lumi Official API video generation failed: ${String(body?.error?.message || body?.message || body?.error || 'unknown error').slice(0, 300)}`);
+    }
+  }
+  throw new Error(`Lumi Official API video generation timed out. Task: ${taskId}`);
+}
+
 async function generateVideo(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const prompt = String(args.prompt || '').trim();
   if (!prompt) throw new Error('prompt is required');
@@ -305,13 +496,14 @@ async function generateVideo(args: Record<string, any>, context?: ToolContext): 
   if (provider === 'qwen') return generateQwenVideo(args, model);
   if (provider === 'minimax') return generateMiniMaxVideo(args, model);
   if (provider === 'siliconflow') return generateSiliconFlowVideo(args, model);
+  if (provider === 'relay') return generateOfficialVideo(args, model);
   return generateOpenAIVideo(args, model);
 }
 
 export function registerVideoTools(registry: ToolRegistry): void {
   registry.register({
     name: 'generate_video',
-    description: 'Generate an AI video with the provider and model selected in Settings > Generative Models. Supported runtime adapters are Qwen/DashScope, MiniMax, SiliconFlow, and OpenAI. An explicitly selected provider never silently switches to another provider.',
+    description: 'Generate an AI video with the provider and model selected in Settings > Generative Models. Lumi Official API, Qwen/DashScope, MiniMax, SiliconFlow, and OpenAI are supported. An explicitly selected provider never silently switches to another provider.',
     parameters: {
       type: 'object',
       properties: {

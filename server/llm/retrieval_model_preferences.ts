@@ -35,17 +35,18 @@ const DEFAULT_RERANK: RerankModelSelection = {
 
 const EMBEDDING_PROVIDERS = new Set(['openai', 'qwen', 'siliconflow', 'ollama', 'lmstudio', 'relay']);
 const FALLBACK_PROVIDERS = new Set(['', ...EMBEDDING_PROVIDERS]);
-const RERANK_PROVIDERS = new Set(['siliconflow']);
+const RERANK_PROVIDERS = new Set(['siliconflow', 'relay']);
 export const DEFAULT_EMBEDDING_MODELS: Record<string, string> = {
   openai: 'text-embedding-3-small',
   qwen: 'text-embedding-v4',
   siliconflow: 'Qwen/Qwen3-Embedding-8B',
   ollama: 'nomic-embed-text',
   lmstudio: 'text-embedding-nomic-embed-text-v1.5',
-  relay: 'text-embedding-3-small',
+  relay: 'huawei_maas/bge-m3',
 };
 export const DEFAULT_RERANK_MODELS: Record<string, string> = {
   siliconflow: 'Qwen/Qwen3-Reranker-8B',
+  relay: 'huawei_maas/bge-reranker-v2-m3',
 };
 
 export function isEmbeddingProvider(value: unknown): value is string {

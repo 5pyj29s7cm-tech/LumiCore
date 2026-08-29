@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { getKey } from "../config/keys";
 import { getLocalModelConfig, isTextGenerationModel, refreshLocalModelConfig } from "../llm/local_models";
+import { relayConfigured, relayOpenAIBaseUrl } from "../relay/config";
 
 let openai: OpenAI | null = null;
 let openaiSignature = '';
@@ -236,8 +237,13 @@ function getGlm() {
 
 function getRelay() {
   const key = process.env.RELAY_API_KEY || getKey('RELAY_API_KEY');
-  const baseUrl = process.env.RELAY_BASE_URL || getKey('RELAY_BASE_URL') || 'https://api.example.com/v1';
-  const signature = key ? clientSignature(key, baseUrl) : '';
+  // A relay is not usable with a key alone.  Do not construct a client for
+  // the old example endpoint: role pages would report the provider as
+  // selected, then the first real request would be sent to a placeholder
+  // host.  The settings page and all role probes use the same two-part
+  // readiness contract (key + base URL).
+  const baseUrl = relayConfigured() ? relayOpenAIBaseUrl() : '';
+  const signature = key && baseUrl ? clientSignature(key, baseUrl) : '';
   if (!signature) {
     relay = null;
     relaySignature = '';

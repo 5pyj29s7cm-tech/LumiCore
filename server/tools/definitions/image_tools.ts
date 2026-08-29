@@ -4,11 +4,21 @@ import { createRequire } from 'module';
 import { ToolRegistry } from '../registry';
 import type { ToolContext } from '../types';
 import { loadKeys } from '../../config/keys';
-import { getUserPreferredGenerationModels } from '../../llm/generation_preferences';
+import {
+  DEFAULT_IMAGE_GENERATION_MODELS,
+  getUserPreferredGenerationModels,
+} from '../../llm/generation_preferences';
+import {
+  isOfficialApiConfigured,
+  officialApiModel,
+  officialApiPath,
+  officialApiRequest,
+} from '../../llm/official_api';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 import { getGeneratedOutputDir } from '../../config/data_path';
 
 const OUTPUT_DIR = getGeneratedOutputDir();
+const MAX_GENERATED_IMAGE_BYTES = 25 * 1024 * 1024;
 const require = createRequire(import.meta.url);
 
 function ensureOutputDir(): string {
@@ -183,6 +193,73 @@ async function generateImageSiliconFlow(args: Record<string, any>, selectedModel
   });
 }
 
+function persistOfficialImage(value: unknown, index: number): { value: string; artifact: { type: string; path?: string; url?: string } } | null {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const dataUrl = raw.match(/^data:([^;,]+);base64,(.+)$/i);
+  const base64 = dataUrl ? dataUrl[2] : (/^[A-Za-z0-9+/=\r\n]+$/.test(raw) && raw.length > 80 ? raw : '');
+  if (base64) {
+    const normalized = base64.replace(/\s+/g, '');
+    if (Math.ceil(normalized.length * 3 / 4) > MAX_GENERATED_IMAGE_BYTES) {
+      throw new Error(`Generated image exceeds the ${MAX_GENERATED_IMAGE_BYTES} byte limit.`);
+    }
+    const extension = dataUrl?.[1]?.includes('jpeg') || dataUrl?.[1]?.includes('jpg') ? 'jpg' : 'png';
+    const outputPath = path.join(ensureOutputDir(), `official_image_${Date.now()}_${index + 1}.${extension}`);
+    fs.writeFileSync(outputPath, Buffer.from(normalized, 'base64'));
+    return { value: outputPath, artifact: { type: 'image', path: outputPath } };
+  }
+  if (/^https?:\/\//i.test(raw)) return { value: raw, artifact: { type: 'image_url', url: raw } };
+  return null;
+}
+
+/** OpenAI-compatible image generation through the Lumi official gateway. */
+async function generateImageOfficial(args: Record<string, any>, selectedModel: string): Promise<string> {
+  const prompt = String(args.prompt || '').trim();
+  if (!prompt) throw new Error('prompt is required');
+  const model = officialApiModel('RELAY_IMAGE_MODEL', selectedModel || DEFAULT_IMAGE_GENERATION_MODELS.relay);
+  const payload: Record<string, unknown> = {
+    model,
+    prompt,
+    n: Math.min(Math.max(Number(args.n) || 1, 1), 4),
+    size: String(args.size || '1024x1024').replace('*', 'x'),
+  };
+  if (args.quality) payload.quality = String(args.quality);
+  if (args.style) payload.style = String(args.style);
+  const { body } = await officialApiRequest<any>(officialApiPath('RELAY_IMAGE_PATH', '/images/generations'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const candidates = Array.isArray(body?.data) ? body.data
+    : Array.isArray(body?.images) ? body.images
+      : Array.isArray(body?.output?.images) ? body.output.images
+        : (body?.output && typeof body.output === 'object' ? [body.output]
+          : (body?.url || body?.image_url || body?.b64_json || body?.base64 ? [body] : []));
+  const images: string[] = [];
+  const artifacts: Array<{ type: string; path?: string; url?: string }> = [];
+  candidates.forEach((item: any, index: number) => {
+    const imageUrl = typeof item?.image_url === 'object' ? item.image_url?.url : item?.image_url;
+    const resolved = persistOfficialImage(item?.url || imageUrl || item?.b64_json || item?.base64 || item, index);
+    if (resolved) {
+      images.push(resolved.value);
+      artifacts.push(resolved.artifact);
+    }
+  });
+  if (images.length === 0) throw new Error('Lumi Official API image generation returned no image data.');
+  return JSON.stringify({
+    ok: true,
+    status: 'generated',
+    success: true,
+    prompt,
+    images,
+    artifacts,
+    revised_prompt: body?.data?.[0]?.revised_prompt || prompt,
+    provider: 'relay',
+    model,
+    tip: `Generated ${images.length} image(s) with Lumi Official API.`,
+  });
+}
+
 async function generateImage(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const prefs = getUserPreferredGenerationModels(context?.userId || 'anonymous').image;
   if (prefs.provider === 'openai') {
@@ -193,6 +270,9 @@ async function generateImage(args: Record<string, any>, context?: ToolContext): 
   }
   if (prefs.provider === 'siliconflow') {
     return generateImageSiliconFlow(args, prefs.model || prefs.models.siliconflow);
+  }
+  if (prefs.provider === 'relay') {
+    return generateImageOfficial(args, prefs.model || prefs.models.relay);
   }
 
   const keys = loadKeys();
@@ -218,8 +298,12 @@ async function generateImage(args: Record<string, any>, context?: ToolContext): 
       failures.push('siliconflow: ' + (error?.message || error));
     }
   }
+  if (isOfficialApiConfigured()) {
+    try { return await generateImageOfficial(args, prefs.models.relay); }
+    catch (error: any) { failures.push('relay: ' + (error?.message || error)); }
+  }
   const detail = failures.length > 0 ? ' Attempts: ' + failures.join('; ') : '';
-  throw new Error('No working image generation provider is available. Configure OpenAI, DashScope, or SiliconFlow in Settings, or select a configured provider in Settings > Generative Models.' + detail);
+  throw new Error('No working image generation provider is available. Configure Lumi Official API, OpenAI, DashScope, or SiliconFlow in Settings, or select a configured provider in Settings > Generative Models.' + detail);
 }
 
 async function editImage(args: Record<string, any>): Promise<string> {
@@ -305,7 +389,7 @@ async function editImage(args: Record<string, any>): Promise<string> {
 export function registerImageTools(registry: ToolRegistry): void {
   registry.register({
     name: 'generate_image',
-    description: 'Generate AI images from text prompts using the image provider and model selected in Settings > Generative Models. Automatic mode may try configured OpenAI, DashScope, and SiliconFlow providers; an explicitly selected provider never silently switches to another provider.',
+    description: 'Generate AI images from text prompts using the image provider and model selected in Settings > Generative Models. Lumi Official API, OpenAI, DashScope, and SiliconFlow are supported; an explicitly selected provider never silently switches to another provider.',
     parameters: {
       type: 'object',
       properties: {

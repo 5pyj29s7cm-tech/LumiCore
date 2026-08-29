@@ -3,13 +3,17 @@ import * as localCosyvoice from './providers/local_cosyvoice';
 import * as gptsovits from './providers/gptsovits';
 import * as cosyvoice from './providers/cosyvoice';
 import * as ark from './providers/ark';
+import * as relay from './providers/relay';
 import { getKey } from '../config/keys';
 import { hasDoubaoSpeech } from './providers/ark';
 import { getVoicePreference } from '../config/voice_preference';
 import { isCircuitClosed, isCircuitHealthy, recordFailure, recordSuccess } from '../cloud/circuit_breaker';
+import { relayConfigured } from '../relay/config';
 
 function circuitProvider(provider: TTSProvider): string {
-  return provider === 'ark' ? 'doubao-tts' : provider;
+  if (provider === 'ark') return 'doubao-tts';
+  if (provider === 'relay') return 'relay-tts';
+  return provider;
 }
 
 export async function synthesizeSpeech(text: string, config: TTSConfig): Promise<TTSResult> {
@@ -32,15 +36,21 @@ export async function synthesizeSpeech(text: string, config: TTSConfig): Promise
       case 'ark':
         result = await ark.synthesizeSpeech(text, config.voiceId, config.signal, config.speechRate, config.pitch, config.volume);
         break;
+      case 'relay':
+        result = await relay.synthesizeSpeech(text, config.voiceId, config.signal, config.speechRate, config.pitch, config.volume, config.model);
+        break;
       default:
         throw new Error(`Unknown TTS provider: ${config.provider}`);
     }
-    if (config.provider === 'local-cosyvoice') recordSuccess(circuit);
+    // Local and relay adapters are supervised here. Cloud SDK-backed
+    // providers own their own circuit state, while the relay provider uses
+    // this shared breaker so a dead official endpoint is not retried forever.
+    if (config.provider === 'local-cosyvoice' || config.provider === 'relay') recordSuccess(circuit);
     return result;
   } catch (error: any) {
     // Cloud providers own their resilience/circuit state. Recording the same
     // failure here used to turn one invalid voice into a provider-wide outage.
-    if (config.provider === 'local-cosyvoice') {
+    if (config.provider === 'local-cosyvoice' || config.provider === 'relay') {
       recordFailure(circuit, undefined, error instanceof Error ? error : new Error(String(error)), { openImmediately: true });
     }
     if (config.allowFallback !== false) {
@@ -66,6 +76,8 @@ function getFallbackProvider(
     && (!options.requireWarmLocal || gptsovits.isReadyForAutomaticFallback())) return 'gptsovits';
   if (excluded !== 'ark' && hasDoubaoSpeech() && isCircuitClosed('doubao-tts')) return 'ark';
   if (excluded !== 'cosyvoice' && hasDashScopeKey() && isCircuitClosed('cosyvoice')) return 'cosyvoice';
+  // Keep the official gateway out of implicit fallback. Selecting relay as
+  // the primary provider remains explicit and is handled by getActiveProvider.
   return null;
 }
 
@@ -115,6 +127,8 @@ export async function listVoices(provider: TTSProvider): Promise<VoiceListItem[]
       return gptsovits.listVoices();
     case 'ark':
       return ark.listVoices();
+    case 'relay':
+      return relay.listVoices();
     default:
       throw new Error(`Unknown TTS provider: ${provider}`);
   }
@@ -134,6 +148,8 @@ export function isTTSProviderConfigured(provider: TTSProvider): boolean {
       return hasDashScopeKey();
     case 'ark':
       return hasDoubaoSpeech();
+    case 'relay':
+      return relayConfigured();
     default:
       return false;
   }
@@ -147,6 +163,7 @@ export function getActiveProvider(options: { requireHealthy?: boolean; requireWa
     && (!options.requireWarmLocal || gptsovits.isReadyForAutomaticFallback())) return 'gptsovits';
   if (pref.tts === 'cosyvoice' && hasDashScopeKey() && available('cosyvoice')) return 'cosyvoice';
   if (pref.tts === 'ark' && hasDoubaoSpeech() && available('doubao-tts')) return 'ark';
+  if (pref.tts === 'relay' && relayConfigured() && available('relay-tts')) return 'relay';
   // Auto mode and unavailable explicit selections — prefer local, then healthy cloud.
   if (localCosyvoice.isConfigured() && available('local-cosyvoice')) return 'local-cosyvoice';
   if (gptsovits.isConfigured() && available('gptsovits')
@@ -154,6 +171,9 @@ export function getActiveProvider(options: { requireHealthy?: boolean; requireWa
   if (hasDoubaoSpeech() && available('doubao-tts')) return 'ark';
   const dashscopeKey = hasDashScopeKey();
   if (dashscopeKey && available('cosyvoice')) return 'cosyvoice';
+  // The official gateway is never an implicit auto-mode fallback. It is
+  // still selected when the user explicitly chooses `relay` above, avoiding
+  // an unexpected billable request after a local/cloud voice failure.
   return null;
 }
 

@@ -22,7 +22,10 @@ describe('role-aware diagnostics UI', () => {
     expect(voice).toContain("const isAdmin = user?.role === 'admin'");
     expect(voice).toContain("response.status === 401 || response.status === 403");
     expect(voice).toContain("setAccess('restricted')");
-    expect(voice).toContain("disabled={access !== 'allowed'}");
+    // Provider buttons retain the privileged access gate and may additionally
+    // disable capabilities that have no backend adapter (for example Lumi's
+    // official speech entry).
+    expect(voice).toMatch(/disabled=\{access !== 'allowed'(?: \|\| o\.disabled)?\}/u);
     expect(voice).toContain('Local administrator access required');
   });
 

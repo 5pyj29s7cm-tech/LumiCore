@@ -1,7 +1,9 @@
-export type STTProvider = 'whisper' | 'qwen' | 'ark' | 'local-whisper';
+export type STTProvider = 'whisper' | 'qwen' | 'ark' | 'local-whisper' | 'relay';
 
 export interface STTConfig {
   provider: STTProvider;
+  /** Provider model identifier (used by OpenAI-compatible relay adapters). */
+  model?: string;
   language?: string;
   interimResults?: boolean;
 }
@@ -36,6 +38,8 @@ export interface STTResult {
 export interface StreamingSTTSession {
   sendAudio(chunk: Buffer): void;
   end(): void;
+  /** Flush the current utterance without closing a provider session, when supported. */
+  flush?(): void;
   updateEndpointing?(silenceDurationMs: number): void;
   onResult(callback: (result: STTResult) => void): void;
   onError(callback: (err: Error) => void): void;

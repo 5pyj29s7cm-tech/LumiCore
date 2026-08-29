@@ -1,7 +1,7 @@
 import { readDB, writeDB } from '../../db_layer';
 
-export type ImageGenerationProvider = 'auto' | 'openai' | 'qwen' | 'siliconflow';
-export type VideoGenerationProvider = 'qwen' | 'minimax' | 'siliconflow' | 'openai';
+export type ImageGenerationProvider = 'auto' | 'openai' | 'qwen' | 'siliconflow' | 'relay';
+export type VideoGenerationProvider = 'qwen' | 'minimax' | 'siliconflow' | 'openai' | 'relay';
 
 export interface GenerationModelSelection<TProvider extends string> {
   provider: TProvider;
@@ -18,6 +18,7 @@ export const DEFAULT_IMAGE_GENERATION_MODELS: Record<Exclude<ImageGenerationProv
   openai: 'gpt-image-1',
   qwen: 'wan2.2-t2i-plus',
   siliconflow: 'Kwai-Kolors/Kolors',
+  relay: 'huawei_maas/qwen-image',
 };
 
 export const DEFAULT_VIDEO_GENERATION_MODELS: Record<VideoGenerationProvider, string> = {
@@ -25,10 +26,11 @@ export const DEFAULT_VIDEO_GENERATION_MODELS: Record<VideoGenerationProvider, st
   minimax: 'MiniMax-Hailuo-2.3',
   siliconflow: 'Wan-AI/Wan2.2-T2V-A14B',
   openai: 'sora-2',
+  relay: 'huawei_maas/Wan2.2-T2V-A14B',
 };
 
-const IMAGE_PROVIDERS = new Set<ImageGenerationProvider>(['auto', 'openai', 'qwen', 'siliconflow']);
-const VIDEO_PROVIDERS = new Set<VideoGenerationProvider>(['qwen', 'minimax', 'siliconflow', 'openai']);
+const IMAGE_PROVIDERS = new Set<ImageGenerationProvider>(['auto', 'openai', 'qwen', 'siliconflow', 'relay']);
+const VIDEO_PROVIDERS = new Set<VideoGenerationProvider>(['qwen', 'minimax', 'siliconflow', 'openai', 'relay']);
 
 function parseSetting(userId: string): any {
   try {

@@ -195,7 +195,7 @@ function visionModelFor(provider: VisionProvider): string {
     case 'ark': return 'doubao-1-5-vision-pro-32k';
     case 'ollama': return 'qwen2.5vl:7b';
     case 'lmstudio': return 'local-vision-model';
-    case 'relay': return 'qwen2.5-vl-7b-instruct';
+    case 'relay': return 'huawei_maas/qwen2.5-vl-72b';
     case 'openai': return 'gpt-4o';
     case 'gemini':
     default:

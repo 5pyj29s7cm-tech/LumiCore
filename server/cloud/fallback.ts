@@ -11,6 +11,7 @@ import { isCloudRetryable } from './retry';
 import { getKey } from '../config/keys';
 import { isGptSovitsRuntimeInstalled } from '../tts/gptsovits_runtime';
 import { hasDoubaoSpeechCredentials } from '../config/doubao_speech';
+import { relayConfigured } from '../relay/config';
 
 // ── Provider Priority Lists ──
 
@@ -169,6 +170,10 @@ export function getAvailableLLMProviders(): Record<string, boolean> {
     gemini: !!(process.env.GEMINI_API_KEY || getKey('GEMINI_API_KEY')),
     anthropic: !!(process.env.ANTHROPIC_API_KEY || getKey('ANTHROPIC_API_KEY')),
     glm: !!(process.env.GLM_API_KEY || getKey('GLM_API_KEY')),
+    // The official gateway is intentionally not in LLM_PRIORITY: exposing a
+    // configured relay in health/readiness must not silently opt every user
+    // into a billable external fallback.
+    relay: relayConfigured(),
   };
 }
 
@@ -180,6 +185,9 @@ export function getAvailableSTTProviders(): Record<string, boolean> {
     ark: hasDoubaoSpeechCredentials(),
     qwen: !!(process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY || getKey('DASHSCOPE_API_KEY') || getKey('QWEN_API_KEY')),
     whisper: !!(process.env.OPENAI_API_KEY || getKey('OPENAI_API_KEY')),
+    // Official STT is currently a documented batch adapter; it is still
+    // reported here so the settings/health view reflects the selected route.
+    relay: relayConfigured(),
   };
 }
 
@@ -201,5 +209,6 @@ export function getAvailableTTSProviders(): Record<string, boolean> {
       || getKey('GPTSOVITS_API_URL')
       || isGptSovitsRuntimeInstalled()
     ),
+    relay: relayConfigured(),
   };
 }

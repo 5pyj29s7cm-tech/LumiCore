@@ -9,6 +9,8 @@ import * as localWhisper from './providers/local-whisper';
 import * as whisper from './providers/whisper';
 import * as ark from './providers/ark';
 import { hasDoubaoSpeechCredentials } from '../config/doubao_speech';
+import * as relay from './providers/official';
+import { relayConfigured } from '../relay/config';
 
 export type AudioFileProvider = STTProvider;
 
@@ -64,6 +66,7 @@ const PROVIDER_MODELS: Record<AudioFileProvider, string> = {
   qwen: 'fun-asr',
   ark: 'doubao-stt-1.0',
   'local-whisper': 'faster-whisper-large-v3,medium,small',
+  relay: 'whisper-1',
 };
 
 function getProviderModelLabel(provider: AudioFileProvider): string {
@@ -73,9 +76,13 @@ function getProviderModelLabel(provider: AudioFileProvider): string {
   if (provider === 'qwen') {
     return String(process.env.DASHSCOPE_FILE_ASR_MODEL || PROVIDER_MODELS.qwen);
   }
+  if (provider === 'relay') return String(process.env.RELAY_STT_MODEL || PROVIDER_MODELS.relay);
   return PROVIDER_MODELS[provider];
 }
 
+// The official gateway is an explicit provider choice.  It is deliberately
+// absent from automatic file-ASR fallback so an unrelated local/cloud failure
+// cannot silently create a billable external request.
 const DEFAULT_AUTO_ORDER: AudioFileProvider[] = ['qwen', 'local-whisper', 'whisper', 'ark'];
 
 function getConfiguredKey(provider: AudioFileProvider, availability?: Partial<Record<AudioFileProvider, boolean>>): string {
@@ -93,6 +100,8 @@ function getConfiguredKey(provider: AudioFileProvider, availability?: Partial<Re
     }
     case 'local-whisper':
       return localWhisper.isLocalWhisperAvailable() ? 'local' : '';
+    case 'relay':
+      return relayConfigured() ? 'configured' : '';
     default:
       return '';
   }
@@ -203,6 +212,15 @@ async function transcribeWithProvider(
       });
       return { text: result.text, model: result.model };
     }
+    case 'relay': {
+      const result = await relay.transcribe(audioBuffer, options.language, {
+        fileName: options.fileName,
+        mimeType: options.mimeType,
+        fetchImpl: options.fetchImpl,
+        model: getProviderModelLabel('relay'),
+      });
+      return { text: result.text, model: result.model, segments: result.segments };
+    }
     default:
       throw new Error(`Unsupported audio transcription provider: ${provider}`);
   }
@@ -258,6 +276,7 @@ export async function transcribeAudioFile(
       }
       recordLatency('stt', Date.now() - providerStart);
       recordSuccess(circuitProvider(provider), actualModel);
+      if (provider === 'relay') recordSuccess('relay-stt');
       options.onProgress?.(`转写完成：${provider}/${actualModel}，共 ${text.length} 字`);
       return {
         text,
@@ -276,6 +295,9 @@ export async function transcribeAudioFile(
       const classified = classifyCloudError(failure, provider);
       const accountUnavailable = classified.category === 'auth' || classified.category === 'quota';
       recordFailure(circuitProvider(provider), plannedModel, failure, { openImmediately: accountUnavailable });
+      if (provider === 'relay') {
+        recordFailure('relay-stt', undefined, failure, { openImmediately: accountUnavailable });
+      }
       if (accountUnavailable && provider === 'qwen') {
         recordFailure('qwen-stt', undefined, failure, { openImmediately: true });
       }

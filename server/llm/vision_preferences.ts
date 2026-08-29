@@ -15,7 +15,7 @@ export const DEFAULT_VISION_MODELS: Record<VisionProvider, string> = {
   qwen: 'qwen-vl-max',
   ollama: 'qwen2.5vl:7b',
   lmstudio: 'local-vision-model',
-  relay: 'qwen2.5-vl-7b-instruct',
+  relay: 'huawei_maas/qwen2.5-vl-72b',
 };
 
 const VALID_VISION_PROVIDERS = new Set<VisionProvider>(['openai', 'gemini', 'ark', 'qwen', 'ollama', 'lmstudio', 'relay']);

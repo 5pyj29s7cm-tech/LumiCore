@@ -66,6 +66,8 @@ import { rerankConfiguredDocuments } from "../llm/rerank_provider";
 import { queryWindowsGpuName } from "../adapters/host_probe";
 import { loadRuntimeBuildMetadata } from "../../shared/runtime_build_metadata";
 import {
+  applyLumiOfficialModelConfiguration,
+  isLumiOfficialApiConfigured,
   testLLMProviderConnection,
   testLumiModelFailoverConfiguration,
   testLumiModelConfiguration,
@@ -76,6 +78,7 @@ import { getDesktopControlRuntimeSnapshot } from "../desktop/control_lease";
 import { listRegisteredProviders } from '../extensions/registry';
 import { buildStructuredRuntimeStatus } from '../monitor/runtime_status';
 import { redactDiagnosticSecrets } from '../client/diagnostic_sanitizer';
+import { relayConfigured } from '../relay/config';
 import {
   buildAcceptanceEvidenceSnapshot,
   buildPublicAcceptanceSummary,
@@ -634,8 +637,8 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
 
   router.post("/voice/provider", requireAuth, requireAdmin, requireLocalRequest, (req, res) => {
     const { stt, tts } = req.body || {};
-    const allowedStt = new Set<VoicePreference['stt']>(['auto', 'local-whisper', 'qwen', 'ark', 'whisper']);
-    const allowedTts = new Set<VoicePreference['tts']>(['auto', 'local-cosyvoice', 'gptsovits', 'cosyvoice', 'ark']);
+    const allowedStt = new Set<VoicePreference['stt']>(['auto', 'local-whisper', 'qwen', 'ark', 'whisper', 'relay']);
+    const allowedTts = new Set<VoicePreference['tts']>(['auto', 'local-cosyvoice', 'gptsovits', 'cosyvoice', 'ark', 'relay']);
     const next: Partial<VoicePreference> = {};
 
     if (stt !== undefined) {
@@ -798,7 +801,11 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
           xiaomi: status('xiaomi', envOrStore('XIAOMI_API_KEY'), process.env.XIAOMI_MODEL || 'mimo-v2.5-pro'),
           kimi: status('kimi', envOrStore('KIMI_API_KEY'), process.env.KIMI_MODEL || 'moonshot-v1-8k'),
           glm: status('glm', envOrStore('GLM_API_KEY'), process.env.GLM_MODEL || 'glm-5.1'),
-          relay: status('relay', envOrStore('RELAY_API_KEY') && envOrStore('RELAY_BASE_URL'), process.env.RELAY_MODEL || 'openai-compatible'),
+          relay: status(
+            'relay',
+            relayConfigured(),
+            process.env.RELAY_REASONING_MODEL || process.env.RELAY_MODEL || 'aliyun/qwen-plus',
+          ),
           ollama: status('ollama', ollamaConfig.detected, ollamaConfig.models[0] || 'local', ollamaConfig.detected),
           lmstudio: status('lmstudio', lmstudioConfig.detected, lmstudioConfig.models[0] || 'local', lmstudioConfig.detected),
           ...dynamicProviders,
@@ -960,6 +967,36 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
       });
     } catch (err: any) {
       res.status(500).json({ error: sanitizedProviderError(err) });
+    }
+  });
+
+  /**
+   * Apply the configured Lumi official API to every role with a real runtime
+   * adapter. This is deliberately one server-side operation rather than a
+   * series of browser PUTs, so the response is an auditable per-role receipt
+   * and an unexpected write failure can roll the preference set back.
+   */
+  // Applying the official endpoint changes the instance-wide voice provider
+  // preference as well as the signed-in user's model roles. Keep it local and
+  // administrator-only, just like credential writes and live provider probes.
+  router.post("/preferences/official/apply", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
+    const uid = getUserIdFromRequest(req, jwtSecret);
+    try {
+      const result = await applyLumiOfficialModelConfiguration(uid);
+      return res.json(result);
+    } catch (err: any) {
+      const message = sanitizedProviderError(err);
+      const notConfigured = /not configured|RELAY_API_KEY|RELAY_BASE_URL/i.test(message);
+      return res.status(notConfigured ? 400 : 500).json({
+        ok: false,
+        provider: 'relay',
+        configured: isLumiOfficialApiConfigured(uid),
+        ...(notConfigured ? { code: 'OFFICIAL_API_NOT_CONFIGURED' } : {}),
+        applied: [],
+        skipped: [],
+        failed: [],
+        error: message,
+      });
     }
   });
 

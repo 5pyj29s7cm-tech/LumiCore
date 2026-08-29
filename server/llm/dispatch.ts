@@ -45,6 +45,8 @@ export interface DispatchConfig {
   fallbackCandidates?: UserLLMFallbackCandidate[];
   requestedProvider?: string;
   requestedModel?: string;
+  /** Explicit escape hatch for deployments whose relay SSE contract is verified. */
+  relayStreaming?: boolean;
   /** Local-only declaration names that preflight must retain or fail closed. */
   localRequiredToolNames?: string[];
 }
@@ -83,6 +85,7 @@ function callArguments(config: DispatchConfig, provider: string, model: string) 
     attemptTimeouts: config.attemptTimeouts,
     inputTokenBudget: config.inputTokenBudget,
     localRequiredToolNames: config.localRequiredToolNames,
+    relayStreaming: config.relayStreaming,
     selectionMode: 'pinned' as const,
     fallbackCandidates: [],
     allowCloudFallback: false,

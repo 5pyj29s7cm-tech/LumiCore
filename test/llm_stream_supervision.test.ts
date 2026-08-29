@@ -68,6 +68,36 @@ function callAnthropic(client: any, attemptTimeouts: Partial<ModelAttemptTimeout
   );
 }
 
+function callRelay(
+  client: any,
+  attemptTimeouts: Partial<ModelAttemptTimeouts>,
+  options: { onChunk?: (chunk: string) => void; toolDeclarations?: any[]; relayStreaming?: boolean } = {},
+) {
+  return makeLLMCallStreamingDirect(
+    [{ role: 'user', content: 'test' }],
+    options.toolDeclarations || [],
+    {
+      provider: 'relay',
+      model: 'aliyun/qwen-plus',
+      relayStreaming: options.relayStreaming,
+      attemptTimeouts: { ...generous, ...attemptTimeouts },
+    },
+    options.onChunk || (() => {}),
+    () => null,
+    () => null,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    () => client,
+  );
+}
+
 afterEach(() => {
   resetCircuit();
   setCircuitBreakerConfig({
@@ -199,5 +229,143 @@ describe('provider-independent streaming attempt supervision', () => {
     const healthy = { chat: { completions: { create: async () => complete() } } };
     await expect(callDeepSeek(healthy, {})).resolves.toMatchObject({ text: 'complete' });
     expect(isCircuitHealthy('deepseek', 'generic-model')).toBe(true);
+  });
+
+  it('falls back to one non-stream relay request when SSE fails before semantic output', async () => {
+    const requests: any[] = [];
+    const client = {
+      chat: {
+        completions: {
+          create: vi.fn(async (params: any) => {
+            requests.push(params);
+            if (params.stream) {
+              return (async function* () {
+                // ModelDepot currently emits an empty handshake frame before
+                // reporting chat_stream_error on this deployment.
+                yield { choices: [{ delta: {} }] };
+                throw new Error('chat_stream_error');
+              })();
+            }
+            return { choices: [{ message: { role: 'assistant', content: 'relay answer' } }] };
+          }),
+        },
+      },
+    };
+    const chunks: string[] = [];
+
+    await expect(callRelay(client, {}, { relayStreaming: true, onChunk: chunk => chunks.push(chunk) }))
+      .resolves.toMatchObject({ text: 'relay answer', toolCalls: null });
+    expect(requests.map(request => request.stream)).toEqual([true, false]);
+    expect(chunks).toEqual(['relay answer']);
+  });
+
+  it('keeps structured tool calls from the relay non-stream fallback', async () => {
+    const requests: any[] = [];
+    const client = {
+      chat: {
+        completions: {
+          create: vi.fn(async (params: any) => {
+            requests.push(params);
+            if (params.stream) {
+              return (async function* () {
+                yield { choices: [{ delta: {} }] };
+                throw new Error('chat_stream_error');
+              })();
+            }
+            return {
+              choices: [{
+                message: {
+                  role: 'assistant',
+                  content: null,
+                  tool_calls: [{
+                    id: 'call-1',
+                    type: 'function',
+                    function: { name: 'lookup', arguments: '{"q":"lumi"}' },
+                  }],
+                },
+              }],
+            };
+          }),
+        },
+      },
+    };
+
+    const result = await callRelay(client, {}, {
+      relayStreaming: true,
+      toolDeclarations: [{
+        type: 'function',
+        function: { name: 'lookup', description: 'Lookup', parameters: { type: 'object' } },
+      }],
+    });
+    expect(requests.map(request => request.stream)).toEqual([true, false]);
+    expect(result.text).toBeNull();
+    expect(result.toolCalls).toEqual([{ id: 'call-1', name: 'lookup', arguments: { q: 'lumi' } }]);
+  });
+
+  it('recognizes an in-band relay stream error frame before the iterator closes', async () => {
+    const requests: any[] = [];
+    const client = {
+      chat: {
+        completions: {
+          create: vi.fn(async (params: any) => {
+            requests.push(params);
+            if (params.stream) {
+              return (async function* () {
+                yield { choices: [{ delta: {} }] };
+                yield { error: { code: 'chat_stream_error', message: 'stream unavailable' } };
+              })();
+            }
+            return { choices: [{ message: { role: 'assistant', content: 'in-band recovered' } }] };
+          }),
+        },
+      },
+    };
+
+    await expect(callRelay(client, {}, { relayStreaming: true })).resolves.toMatchObject({ text: 'in-band recovered' });
+    expect(requests.map(request => request.stream)).toEqual([true, false]);
+  });
+
+  it('does not replay a relay request after visible output has started', async () => {
+    const requests: any[] = [];
+    const chunks: string[] = [];
+    const client = {
+      chat: {
+        completions: {
+          create: vi.fn(async (params: any) => {
+            requests.push(params);
+            return (async function* () {
+              yield { choices: [{ delta: { content: 'partial' } }] };
+              throw new Error('chat_stream_error');
+            })();
+          }),
+        },
+      },
+    };
+
+    await expect(callRelay(client, {}, { relayStreaming: true, onChunk: chunk => chunks.push(chunk) }))
+      .rejects.toThrow('chat_stream_error');
+    expect(requests).toHaveLength(1);
+    expect(chunks).toEqual(['partial']);
+  });
+
+  it('uses one non-stream relay request by default when the gateway SSE contract is not enabled', async () => {
+    const requests: any[] = [];
+    const client = {
+      chat: {
+        completions: {
+          create: vi.fn(async (params: any) => {
+            requests.push(params);
+            return { choices: [{ message: { role: 'assistant', content: 'default relay answer' } }] };
+          }),
+        },
+      },
+    };
+    const chunks: string[] = [];
+
+    await expect(callRelay(client, {}, { onChunk: chunk => chunks.push(chunk) }))
+      .resolves.toMatchObject({ text: 'default relay answer', toolCalls: null });
+    expect(requests).toHaveLength(1);
+    expect(requests[0].stream).toBe(false);
+    expect(chunks).toEqual(['default relay answer']);
   });
 });

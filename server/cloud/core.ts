@@ -167,8 +167,14 @@ export function getCloudHealth(): {
   };
 
   return {
-    llm: LLM_PRIORITY.map(p => toHealth(p.provider, llmProviders[p.provider] || false)),
-    stt: STT_PRIORITY.map(p => toHealth(
+    // Keep the official gateway visible for diagnostics without adding it to
+    // the automatic fallback priority. A health row is informational; route
+    // selection still requires an explicit user choice/candidate.
+    llm: [
+      ...LLM_PRIORITY.map(p => toHealth(p.provider, llmProviders[p.provider] || false)),
+      toHealth('relay', llmProviders.relay || false, ['relay']),
+    ],
+    stt: [...STT_PRIORITY.map(p => toHealth(
       p.provider,
       sttProviders[p.provider] || false,
       p.provider === 'qwen'
@@ -176,12 +182,12 @@ export function getCloudHealth(): {
         : p.provider === 'ark'
           ? ['doubao-stt-stream', 'ark']
           : ['openai'],
-    )),
-    tts: TTS_PRIORITY.map(p => toHealth(
+    )), toHealth('relay', sttProviders.relay || false, ['relay-stt'])],
+    tts: [...TTS_PRIORITY.map(p => toHealth(
       p.provider,
       ttsProviders[p.provider] || false,
       p.provider === 'ark' ? ['doubao-tts'] : [p.provider],
-    )),
+    )), toHealth('relay', ttsProviders.relay || false, ['relay-tts'])],
     circuits,
   };
 }

@@ -82,6 +82,14 @@ export interface LLMCallConfig {
   authorizedRoutingCandidate?: boolean;
   /** Local-only declaration names that preflight must retain or fail closed. */
   localRequiredToolNames?: string[];
+  /**
+   * Opt in to SSE for the official relay.  The currently deployed official
+   * gateway accepts the OpenAI-compatible request but its SSE parser is
+   * unreliable, so the safe/default transport is a single non-stream call.
+   * This escape hatch is intentionally per-call and is not user-controlled
+   * through chat text.
+   */
+  relayStreaming?: boolean;
 }
 
 export interface ModelAttemptTimeouts {
@@ -649,6 +657,24 @@ export function parseDeepSeekResponse(rawResponse: any): NormalizedLLMResponse {
   }
 
   return { text, toolCalls: null, reasoningContent, usage };
+}
+
+/**
+ * Normalize a completed OpenAI-compatible response, including the legacy XML
+ * function-call protocol some gateways emit when their streaming adapter is
+ * unavailable.  Keeping this in one place makes the relay's non-stream
+ * fallback behave exactly like the normal streaming parser.
+ */
+function parseOpenAICompatibleResponse(
+  rawResponse: any,
+  toolDeclarations: ToolDeclaration[],
+): NormalizedLLMResponse {
+  const parsed = parseDeepSeekResponse(rawResponse);
+  if (parsed.toolCalls?.length) return parsed;
+  const legacyToolCalls = parseLegacyXmlToolCalls(parsed.text, toolDeclarations);
+  return legacyToolCalls
+    ? { ...parsed, text: null, toolCalls: legacyToolCalls }
+    : parsed;
 }
 
 // ── Gemini ──
@@ -1625,6 +1651,59 @@ function isReasoningModel(model: string): boolean {
   return /reasoner|v4-(pro|flash)|gpt-5|o[134]|r1/i.test(model);
 }
 
+/**
+ * A few OpenAI-compatible gateways accept `stream: true` but fail while
+ * opening/terminating the SSE response (for example `chat_stream_error`).
+ * Only those transport/protocol failures are eligible for the relay fallback;
+ * authentication, quota, and ordinary network failures must still surface so
+ * dispatch can make an informed routing decision instead of issuing a second
+ * billable request blindly.
+ */
+function isRelayStreamingFallbackError(error: unknown): boolean {
+  const messages: string[] = [];
+  let current: any = error;
+  for (let depth = 0; current && depth < 5; depth += 1) {
+    const values = [
+      current?.message,
+      current?.code,
+      current?.type,
+      current?.error?.message,
+      current?.error?.code,
+      current?.response?.data,
+      current?.body,
+    ];
+    for (const value of values) {
+      if (value === undefined || value === null) continue;
+      let message = '';
+      try { message = typeof value === 'string' ? value : JSON.stringify(value); } catch { /* ignore malformed provider metadata */ }
+      if (message?.trim()) messages.push(message.trim());
+    }
+    current = current?.cause;
+  }
+  const text = messages.join(' | ');
+  return /chat[_ -]?stream[_ -]?error|stream(?:ing)?\s+(?:error|failed|unsupported|unavailable|not supported)|(?:not|isn't)\s+(?:an?\s+)?async(?:\s+)?iterable|without semantic content|(?:could not|unable to|failed to)\s+(?:parse|decode).*json|json(?:\s+parse|\s+decod)|unexpected token|invalid\s+json/i.test(text);
+}
+
+/**
+ * Do not replay a relay request when the gateway has already told us that the
+ * credential, account, or route is invalid. Those failures need to remain
+ * visible to the normal route policy; only a response-format/streaming fault
+ * should be transparently retried as a non-stream request.
+ */
+function isRelayNonRetryableStreamingError(error: unknown): boolean {
+  const status = Number((error as any)?.status || (error as any)?.response?.status || 0);
+  if ([401, 402, 403, 404, 429].includes(status)) return true;
+  const values: string[] = [];
+  let current: any = error;
+  for (let depth = 0; current && depth < 5; depth += 1) {
+    for (const value of [current?.message, current?.type, current?.code, current?.error?.message, current?.error?.type]) {
+      if (value !== undefined && value !== null) values.push(String(value));
+    }
+    current = current?.cause;
+  }
+  return /(?:unauthori[sz]ed|forbidden|invalid\s+(?:api\s*)?key|quota|insufficient\s+balance|overdue|payment\s+required|access\s+denied)/i.test(values.join(' | '));
+}
+
 export async function makeLLMCallStreaming(
   messages: NormalizedMessage[],
   toolDeclarations: ToolDeclaration[],
@@ -1803,13 +1882,21 @@ export async function makeLLMCallStreamingDirect(
       messages: localRequest?.messages || messages,
       toolDeclarations: localRequest?.toolDeclarations || toolDeclarations,
       maxTokens: localRequest?.maxTokens || maxTokens,
+      responseFormat: config.responseFormat,
       ...(isLocal ? {} : { userId: config.userId }),
     });
     if (config.provider === 'xiaomi' || (config.provider === 'openai' && isReasoningModel(config.model))) {
       if (params.max_tokens !== undefined) params.max_completion_tokens = params.max_tokens;
       delete params.max_tokens;
     }
-    params.stream = true;
+    // The official relay currently fails its SSE endpoint after an empty
+    // handshake frame.  Use the reliable JSON response by default; callers
+    // may explicitly opt in after verifying a relay deployment's streaming
+    // contract.  Other OpenAI-compatible providers retain normal streaming.
+    const relayStreamingEnabled = config.provider !== 'relay'
+      || config.relayStreaming === true
+      || /^(1|true|yes|on)$/i.test(String(process.env.RELAY_ENABLE_STREAMING || '').trim());
+    params.stream = relayStreamingEnabled;
 
     const outboundSourceSlot = providerSourceUserSlot(params.messages);
     const outboundEvidence = buildProviderOutboundMessagesEvidence({
@@ -1821,7 +1908,16 @@ export async function makeLLMCallStreamingDirect(
       ...outboundSourceSlot,
     });
 
+    // Some official relay deployments accept the OpenAI-compatible request
+    // but currently fail their SSE path with an empty first frame followed by
+    // `chat_stream_error`.  Keep track of semantic output so a transport
+    // failure after partial output is never replayed into the conversation.
+    let relayStreamSemanticSeen = false;
+    let relayStreamFrameSeen = false;
+
     const consumeStream = async (operationSignal?: AbortSignal): Promise<NormalizedLLMResponse> => {
+      relayStreamSemanticSeen = false;
+      relayStreamFrameSeen = false;
       const supervisor = new ModelAttemptSupervisor(operationSignal, config.attemptTimeouts);
       const accumulatedText: string[] = [];
       const accumulatedReasoning: string[] = [];
@@ -1839,12 +1935,27 @@ export async function makeLLMCallStreamingDirect(
         while (true) {
           const next = await supervisor.next(iterator);
           if (next.done) break;
+          relayStreamFrameSeen = true;
           const chunk = next.value;
+          if (config.provider === 'relay' && chunk?.error) {
+            const relayError = chunk.error;
+            const detail = typeof relayError === 'string'
+              ? relayError
+              : String(relayError.message || relayError.code || 'relay stream error');
+            const error = new Error(detail);
+            if (relayError && typeof relayError === 'object' && relayError.code) {
+              (error as any).code = relayError.code;
+            }
+            throw error;
+          }
           const delta = chunk.choices?.[0]?.delta;
           if (delta) {
             if (delta.content) {
               accumulatedText.push(delta.content);
-              if (String(delta.content).trim()) supervisor.markSemanticContent();
+              if (String(delta.content).trim()) {
+                relayStreamSemanticSeen = true;
+                supervisor.markSemanticContent();
+              }
               legacyProtocolFilter.emit(delta.content);
             }
 
@@ -1862,7 +1973,10 @@ export async function makeLLMCallStreamingDirect(
                 if (tc.id) acc.id = tc.id;
                 if (tc.function?.name) acc.name = tc.function.name;
                 if (tc.function?.arguments) acc.args += tc.function.arguments;
-                if (tc.id || tc.function?.name || tc.function?.arguments) supervisor.markSemanticContent();
+                if (tc.id || tc.function?.name || tc.function?.arguments) {
+                  relayStreamSemanticSeen = true;
+                  supervisor.markSemanticContent();
+                }
               }
             }
           }
@@ -1893,8 +2007,68 @@ export async function makeLLMCallStreamingDirect(
         throw error;
       }
     };
+
+    /**
+     * Retry the same request without SSE when the relay's streaming protocol
+     * itself is the failure.  This runs inside the same cloud-resilience
+     * attempt, so a successful fallback records one successful provider call
+     * and does not open the relay circuit because of the expected stream quirk.
+     */
+    const consumeRelayNonStreaming = async (operationSignal?: AbortSignal): Promise<NormalizedLLMResponse> => {
+      const supervisor = new ModelAttemptSupervisor(operationSignal, config.attemptTimeouts);
+      const nonStreamingParams = { ...params, stream: false };
+      try {
+        const response = await supervisor.request(() => client.chat.completions.create(
+          nonStreamingParams,
+          { signal: supervisor.signal },
+        ));
+        const parsed = parseOpenAICompatibleResponse(response, toolDeclarations);
+        if (!String(parsed.text || '').trim() && !(parsed.toolCalls?.length)) {
+          supervisor.assertSemanticContent();
+        }
+        supervisor.markSemanticContent();
+        // The stream path has already buffered output until a semantic frame;
+        // emit the completed non-stream result exactly once.
+        if (parsed.text) onChunk(parsed.text);
+        return parsed;
+      } catch (error) {
+        supervisor.abort(error instanceof Error ? error : new Error(String(error)));
+        throw error;
+      }
+    };
+
+    const executeRelayStreamWithFallback = async (operationSignal?: AbortSignal): Promise<NormalizedLLMResponse> => {
+      try {
+        return await consumeStream(operationSignal);
+      } catch (streamError) {
+        // Never replay a request after visible or structured output has been
+        // emitted, and never mask caller cancellation with a second request.
+        // The official gateway has returned parser/SDK errors with an almost
+        // empty error object (the useful `chat_stream_error` only appeared in
+        // the raw SSE body).  Requiring a recognised message or a frame here
+        // therefore made the recovery branch unreachable in production.  A
+        // relay failure before any semantic output is, by definition, safe to
+        // retry as a transport-shape fallback; keep only cancellation,
+        // credential/quota and partial-output guards as hard exclusions.
+        if (config.provider !== 'relay'
+          || relayStreamSemanticSeen
+          || operationSignal?.aborted
+          || config.signal?.aborted
+          || isRelayNonRetryableStreamingError(streamError)) {
+          throw streamError;
+        }
+        console.warn('[LLM] Official relay streaming failed before semantic output; retrying non-stream transport.', {
+          frameSeen: relayStreamFrameSeen,
+          error: streamError instanceof Error ? streamError.message : String(streamError),
+        });
+        return consumeRelayNonStreaming(operationSignal);
+      }
+    };
+
     const executeStream = () => withCloudResilience(
-      consumeStream,
+      config.provider === 'relay'
+        ? (relayStreamingEnabled ? executeRelayStreamWithFallback : consumeRelayNonStreaming)
+        : consumeStream,
       {
         provider: config.provider,
         model: config.model,

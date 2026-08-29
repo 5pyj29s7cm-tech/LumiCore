@@ -8,6 +8,7 @@ import { apiFetch } from '../services/apiClient';
 import { getDomainReconciliation } from '../lib/domainSession';
 import { mergeNotificationState, notificationClearStorageKey } from '../lib/notificationState';
 import { translate } from '../i18n/runtime';
+import { LUMI_OFFICIAL_DEFAULT_MODELS, normalizeLumiOfficialModel } from '../../shared/model_provider_capabilities';
 
 interface UserProfile {
   uid: string;
@@ -175,6 +176,21 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 
 try {
   localStorage.removeItem('lumi_doubao_speech');
+  // API credentials were stored by older settings panels.  They are now
+  // write-only server credentials; remove any browser copies during startup,
+  // even when the user has not opened Settings yet.
+  localStorage.removeItem('lumi_relay_key');
+  for (const provider of ['deepseek', 'qwen', 'openai', 'gemini', 'anthropic', 'ark', 'xiaomi', 'kimi', 'glm', 'minimax', 'siliconflow']) {
+    localStorage.removeItem(`lumi_${provider}_key`);
+    localStorage.removeItem(`lumi_vision_${provider}_key`);
+  }
+  for (const key of [
+    'lumi_dashscope_key',
+    'lumi_github_token',
+    'lumi_notion_api_key',
+    'lumi_figma_access_token',
+    'lumi_e2b_api_key',
+  ]) localStorage.removeItem(key);
 } catch {
   // Browser storage can be unavailable in non-DOM runtimes.
 }
@@ -194,7 +210,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
     try {
       const parsed = JSON.parse(saved);
-      return {
+      const sanitized = {
         ...parsed,
         apiKey: '',
         selectionMode: parsed.provider === 'auto'
@@ -203,7 +219,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         fallbackCandidates: Array.isArray(parsed.fallbackCandidates) ? parsed.fallbackCandidates : [],
         allowCloudFallback: parsed.allowCloudFallback !== false,
       };
+      // Rewrite legacy persisted state immediately; otherwise a failed or
+      // unauthenticated preference request could leave the old secret on disk.
+      localStorage.setItem('lumi_ai_config', JSON.stringify(sanitized));
+      return sanitized;
     } catch {
+      localStorage.removeItem('lumi_ai_config');
       return {
         provider: 'deepseek',
         model: 'deepseek-v4-flash',
@@ -221,7 +242,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [aiConfig]);
   const [visionConfig, setVisionConfig] = useState<VisionConfig>(() => {
     const saved = localStorage.getItem('lumi_vision_config');
-    return saved ? JSON.parse(saved) : { provider: 'openai', model: 'gpt-4o', apiKey: '' };
+    const fallback: VisionConfig = { provider: 'openai', model: 'gpt-4o', apiKey: '' };
+    if (!saved) return fallback;
+    try {
+      const parsed = JSON.parse(saved);
+      const sanitized = {
+        ...fallback,
+        ...(parsed && typeof parsed === 'object' ? parsed : {}),
+        apiKey: '',
+      } as VisionConfig;
+      // Remove credentials left by older builds as soon as the app starts.
+      localStorage.setItem('lumi_vision_config', JSON.stringify(sanitized));
+      return sanitized;
+    } catch {
+      localStorage.removeItem('lumi_vision_config');
+      return fallback;
+    }
   });
 
   useEffect(() => {
@@ -492,15 +528,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
         qwen: 'qwen-plus', deepseek: 'deepseek-v4-flash', openai: 'gpt-4o',
         gemini: 'gemini-2.0-flash', anthropic: 'claude-sonnet-4-6',
         ark: 'doubao-seed-2-0-lite-260215', xiaomi: 'mimo-v2.5-pro',
-        kimi: 'moonshot-v1-8k', glm: 'glm-5.1', relay: 'gpt-4o',
+        kimi: 'moonshot-v1-8k', glm: 'glm-5.1', relay: LUMI_OFFICIAL_DEFAULT_MODELS.reasoning,
         ollama: 'qwen2.5:7b', lmstudio: 'local-model', auto: 'qwen2.5:7b',
       };
-      resolved.model = savedModels[newConfig.provider] || defaults[newConfig.provider] || '';
+      resolved.model = newConfig.provider === 'relay'
+        ? normalizeLumiOfficialModel('reasoning', savedModels[newConfig.provider] || defaults[newConfig.provider])
+        : savedModels[newConfig.provider] || defaults[newConfig.provider] || '';
     }
     const updated = { ...previous, ...resolved };
-    aiConfigRef.current = updated;
-    setAiConfig(updated);
-    localStorage.setItem('lumi_ai_config', JSON.stringify(updated));
+    // API keys are write-only server credentials. Never mirror a typed key in
+    // localStorage (or keep it in the long-lived context state) even for the
+    // short window before the save request resolves.
+    const persisted = { ...updated, apiKey: '' };
+    aiConfigRef.current = persisted;
+    setAiConfig(persisted);
+    localStorage.setItem('lumi_ai_config', JSON.stringify(persisted));
 
     if (updated.apiKey && updated.provider) {
       const KEY_MAP: Record<string, string> = {
@@ -556,9 +598,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toast.success('Neural core configuration synchronized');
     }).catch(error => {
       if (modelPreferenceRequestRef.current !== requestRevision) return;
-      aiConfigRef.current = previous;
-      setAiConfig(previous);
-      localStorage.setItem('lumi_ai_config', JSON.stringify(previous));
+      const safePrevious = { ...previous, apiKey: '' };
+      aiConfigRef.current = safePrevious;
+      setAiConfig(safePrevious);
+      localStorage.setItem('lumi_ai_config', JSON.stringify(safePrevious));
       toast.error(error?.message || 'Model preference update failed');
     });
   };
@@ -577,13 +620,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
           qwen: 'qwen-vl-max',
           ollama: 'qwen2.5vl:7b',
           lmstudio: 'local-vision-model',
-          relay: 'qwen2.5-vl-7b-instruct',
+          relay: LUMI_OFFICIAL_DEFAULT_MODELS.vision,
         };
         resolved.model = savedModels[newConfig.provider] || defaults[newConfig.provider] || '';
       }
 
       const updated = { ...prev, ...resolved };
-      localStorage.setItem('lumi_vision_config', JSON.stringify(updated));
+      const persisted = { ...updated, apiKey: '' };
+      localStorage.setItem('lumi_vision_config', JSON.stringify(persisted));
 
       if (updated.apiKey && updated.provider) {
         const KEY_MAP: Record<string, string> = {
@@ -614,7 +658,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         credentials: 'include',
       }).catch(() => {});
 
-      return updated;
+      return persisted;
     });
     toast.success('Vision model configuration synchronized');
   };

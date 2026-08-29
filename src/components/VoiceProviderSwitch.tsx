@@ -4,6 +4,7 @@ import { Cpu, Cloud } from 'lucide-react';
 import { apiFetch } from '@/services/apiClient';
 import { VOICE_PROVIDER_CHANGED_EVENT } from '@/services/voiceService';
 import { useApp } from '@/contexts/AppContext';
+import { uiMessage } from '../i18n/uiMessages';
 
 export function VoiceProviderSwitch({ t }: { t?: any }) {
   const { user } = useApp();
@@ -63,12 +64,16 @@ export function VoiceProviderSwitch({ t }: { t?: any }) {
     }
   };
 
+  const locale = t?.langCode === 'en' ? 'en' : 'zh';
+  const officialLabel = uiMessage('settings.lumi-official-api-label.a1b2c3d4e5', locale);
+  const officialVoiceNote = uiMessage('settings.lumi-official-speech-unavailable.d4e5f6a7b8', locale);
   const sttOpts = [
     { value: 'auto', label: t?.auto || 'Auto' },
     { value: 'local-whisper', label: t?.local || 'Local' },
     { value: 'ark', label: 'Doubao' },
     { value: 'qwen', label: 'Qwen ASR' },
     { value: 'whisper', label: 'Whisper' },
+    { value: 'relay', label: officialLabel, disabled: false },
   ];
 
   const ttsOpts = [
@@ -77,8 +82,9 @@ export function VoiceProviderSwitch({ t }: { t?: any }) {
     { value: 'gptsovits', label: 'GPT-SoVITS' },
     { value: 'ark', label: 'Doubao' },
     { value: 'cosyvoice', label: 'Qwen / DashScope CosyVoice' },
+    { value: 'relay', label: officialLabel, disabled: false },
   ];
-  const providerLabel = (value: string, options: Array<{ value: string; label: string }>) =>
+  const providerLabel = (value: string, options: Array<{ value: string; label: string; disabled?: boolean }>) =>
     options.find(o => o.value === value)?.label || value;
   const restrictionLabel = t?.adminOnly || 'Local administrator access required';
   const sttActive = active.streamingStt || active.stt;
@@ -97,8 +103,8 @@ export function VoiceProviderSwitch({ t }: { t?: any }) {
           <button
             key={o.value}
             onClick={() => save(o.value, pref.tts)}
-            disabled={access !== 'allowed'}
-            title={access === 'restricted' ? restrictionLabel : undefined}
+            disabled={access !== 'allowed' || o.disabled}
+            title={o.disabled ? officialVoiceNote : access === 'restricted' ? restrictionLabel : undefined}
             className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
               pref.stt === o.value
                 ? 'bg-celestial-saturn text-black'
@@ -120,8 +126,8 @@ export function VoiceProviderSwitch({ t }: { t?: any }) {
           <button
             key={o.value}
             onClick={() => save(pref.stt, o.value)}
-            disabled={access !== 'allowed'}
-            title={access === 'restricted' ? restrictionLabel : undefined}
+            disabled={access !== 'allowed' || o.disabled}
+            title={o.disabled ? officialVoiceNote : access === 'restricted' ? restrictionLabel : undefined}
             className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
               pref.tts === o.value
                 ? 'bg-celestial-saturn text-black'
@@ -131,6 +137,7 @@ export function VoiceProviderSwitch({ t }: { t?: any }) {
         ))}
       </div>
       {access === 'restricted' && <p className="text-xs text-amber-200/70">{restrictionLabel}</p>}
+      <p className="text-xs text-white/35">{officialVoiceNote}</p>
       {error && <p className="text-xs text-red-300">{error}</p>}
     </div>
   );

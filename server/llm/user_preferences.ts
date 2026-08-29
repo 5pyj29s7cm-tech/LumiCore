@@ -5,6 +5,7 @@ import {
   isRegisteredOpenAICompatibleProvider,
   isRegisteredProviderLocal,
 } from '../extensions/registry';
+import { normalizeLumiOfficialModel } from '../../shared/model_provider_capabilities';
 
 export type BuiltinUserLLMProvider =
   | 'deepseek'
@@ -61,7 +62,8 @@ export const DEFAULT_MODELS: Record<BuiltinUserLLMProvider, string> = {
   xiaomi: 'mimo-v2.5-pro',
   kimi: 'moonshot-v1-8k',
   glm: 'glm-5.1',
-  relay: 'gpt-4o',
+  // ModelDepot/Lumi Official model IDs include the upstream namespace.
+  relay: 'aliyun/qwen-plus',
   ollama: 'qwen2.5:7b',
   lmstudio: 'local-model',
   auto: 'qwen2.5:7b',
@@ -156,6 +158,7 @@ function migrateLegacyModel(provider: UserLLMProvider, model: string): string {
   if (provider === 'deepseek' && model === 'deepseek-chat') return 'deepseek-v4-flash';
   if (provider === 'deepseek' && model === 'deepseek-reasoner') return 'deepseek-v4-pro';
   if (provider === 'xiaomi' && model === 'xiaomi-chat') return 'mimo-v2.5-pro';
+  if (provider === 'relay') return normalizeLumiOfficialModel('reasoning', model);
   return model;
 }
 
@@ -166,7 +169,11 @@ function resolvePrefs(raw: any, userId?: string): UserLLMPrefs {
   const migrationEntries: UserLLMLegacyMigration['entries'] = [];
   const migratedModels = Object.fromEntries(Object.entries(rawModels).map(([candidateProvider, candidateModel]) => {
     const normalizedProvider = normalizeProvider(candidateProvider);
-    const migrated = isLegacySchema ? migrateLegacyModel(normalizedProvider, candidateModel) : candidateModel;
+    // Official model placeholders are invalid even in schema-v2 records: an
+    // older UI could persist them after the schema migration had run.
+    const migrated = normalizedProvider === 'relay'
+      ? migrateLegacyModel(normalizedProvider, candidateModel)
+      : (isLegacySchema ? migrateLegacyModel(normalizedProvider, candidateModel) : candidateModel);
     if (migrated !== candidateModel) {
       migrationEntries.push({ provider: normalizedProvider, from: candidateModel, to: migrated });
     }
@@ -178,9 +185,9 @@ function resolvePrefs(raw: any, userId?: string): UserLLMPrefs {
     ? provider as CloudUserLLMProvider
     : normalizeCloudFallback(raw?.autoFallbackProvider);
   const rawAutoFallbackModel = String(raw?.autoFallbackModel || models[autoFallbackProvider] || getDefaultModelForProvider(autoFallbackProvider, userId));
-  const autoFallbackModel = isLegacySchema
+  const autoFallbackModel = autoFallbackProvider === 'relay'
     ? migrateLegacyModel(autoFallbackProvider, rawAutoFallbackModel)
-    : rawAutoFallbackModel;
+    : (isLegacySchema ? migrateLegacyModel(autoFallbackProvider, rawAutoFallbackModel) : rawAutoFallbackModel);
   if (autoFallbackModel !== rawAutoFallbackModel) {
     migrationEntries.push({ provider: autoFallbackProvider, from: rawAutoFallbackModel, to: autoFallbackModel });
   }
@@ -233,7 +240,7 @@ export function getUserPreferredLLM(userId: string): UserLLMPrefs {
   const resolved = resolvePrefs(raw, uid);
   // Legacy aliases are migrated exactly once. New schema writes preserve the
   // user's literal model id, including ids that happen to match old aliases.
-  if (raw && Number(raw.schemaVersion || 0) < 2) {
+  if (raw && (Number(raw.schemaVersion || 0) < 2 || resolved.legacyMigration?.entries.some(entry => entry.provider === 'relay'))) {
     persistResolvedPrefs(uid, resolved, raw.updatedAt);
   }
   return resolved;

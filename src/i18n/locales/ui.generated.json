@@ -32,16 +32,128 @@
     "zh": "\u670d\u52a1\u5546"
   },
   "settings.lumi-official-service.9a4e2d7c10": {
-    "en": "Lumi Official",
-    "zh": "Lumi \u5b98\u65b9\u670d\u52a1"
+    "en": "Lumi Official API (official endpoint required)",
+    "zh": "Lumi \u5b98\u65b9 API\uff08\u9700\u5b98\u65b9\u7aef\u70b9\uff09"
   },
   "settings.lumi-official-service-description.2c8f6a1e05": {
-    "en": "Configure Lumi's official relay endpoint and key here. The same relay can serve reasoning, vision, and retrieval when selected.",
-    "zh": "\u5728\u8fd9\u91cc\u914d\u7f6e Lumi \u5b98\u65b9\u4e2d\u8f6c\u7ad9\u7684\u5730\u5740\u548c\u5bc6\u94a5\u3002\u9009\u62e9\u4e2d\u8f6c\u6a21\u578b\u540e\uff0c\u63a8\u7406\u3001\u89c6\u89c9\u548c\u68c0\u7d22\u53ef\u5171\u7528\u8be5\u4e2d\u8f6c\u3002"
+    "en": "Use the documented Lumi/ModelDepot endpoint and keep the API key on the backend. The default endpoint is https://zhuan.huaczy.com/v1. It covers reasoning, vision, world actions, embeddings, reranking, image/video generation, and configurable speech adapters.",
+    "zh": "使用随附文档中的 ModelDepot 官方接口，并将 API 密钥只保存在后端。默认地址为 https://zhuan.huaczy.com/v1；角色模型覆盖推理、视觉、世界操作、嵌入、重排、图像、视频，以及可配置的语音适配器。"
   },
   "settings.lumi-official-relay.7d3b1f9c24": {
-    "en": "Lumi Official Relay",
-    "zh": "Lumi \u5b98\u65b9\u4e2d\u8f6c\u7ad9"
+    "en": "Lumi Official API endpoint",
+    "zh": "Lumi \u5b98\u65b9 API \u7aef\u70b9"
+  },
+  "settings.lumi-official-api-label.a1b2c3d4e5": {
+    "en": "Lumi Official API (endpoint required)",
+    "zh": "Lumi \u5b98\u65b9 API\uff08\u9700\u5b98\u65b9\u7aef\u70b9\uff09"
+  },
+  "settings.lumi-official-capability-supported.b2c3d4e5f6": {
+    "en": "All Lumi model roles are supported after the official endpoint is configured in AI Providers → Official.",
+    "zh": "在“AI 服务商 → 官方”配置 Lumi 官方端点后，九类模型角色均可选择；实际可用性仍以接口健康检查为准。"
+  },
+  "settings.lumi-official-capability-unavailable.c3d4e5f6a7": {
+    "en": "No Lumi model role is unavailable in this build.",
+    "zh": "当前构建没有被标记为不可用的 Lumi 官方角色。"
+  },
+  "settings.lumi-official-apply-label.f1a2b3c4d5": {
+    "en": "Apply Lumi Official API",
+    "zh": "一键适配 Lumi 官方 API"
+  },
+  "settings.lumi-official-apply-description.a2b3c4d5e6": {
+    "en": "Apply the configured official endpoint to all nine roles: reasoning, vision, world actions, image/video generation, embeddings, reranking, speech recognition, and speech synthesis.",
+    "zh": "将已配置的官方接口应用到九类角色：推理、视觉、世界操作、图像生成、视频生成、嵌入、重排、语音识别和语音合成。"
+  },
+  "settings.lumi-official-apply-not-configured.b3c4d5e6f7": {
+    "en": "Configure and save the official API key and base URL first.",
+    "zh": "请先填写并保存官方 API 密钥和地址。"
+  },
+  "settings.lumi-official-apply-success.c4d5e6f7a8": {
+    "en": "Lumi Official API applied to {value0} supported roles.",
+    "zh": "Lumi 官方 API 已应用到 {value0} 个受支持角色。"
+  },
+  "settings.lumi-official-apply-partial.d5e6f7a8b9": {
+    "en": "Applied to {value0} roles; {value1} roles failed. Review the details below.",
+    "zh": "已应用到 {value0} 个角色；{value1} 个角色失败，请查看下方详情。"
+  },
+  "settings.lumi-official-apply-failed.e6f7a8b9c0": {
+    "en": "Official API adaptation failed.",
+    "zh": "官方 API 适配失败。"
+  },
+  "settings.lumi-official-endpoint-warning.f7a8b9c0d1": {
+    "en": "The documented endpoint is HTTPS and OpenAI-compatible. API keys are sent only from the backend; do not paste them into frontend code, Git, screenshots, or public documents.",
+    "zh": "仅使用 Lumi 文档确认的 HTTPS 官方端点。API 密钥只从后端发送，不要放入前端代码、Git、截图或公开文档。"
+  },
+  "settings.lumi-official-adapter-unavailable.a8b9c0d1e2": {
+    "en": "No Lumi Official adapter is available for this role in this build.",
+    "zh": "当前版本尚未接通该角色的 Lumi 官方适配器。"
+  },
+  "settings.lumi-official-config-not-ready.b9c0d1e2f3": {
+    "en": "Configure and save a Lumi-issued official endpoint first.",
+    "zh": "请先配置并保存 Lumi 提供的官方端点。"
+  },
+  "settings.lumi-official-speech-unavailable.d4e5f6a7b8": {
+    "en": "Official speech uses the configurable OpenAI-compatible audio endpoints; verify the saved endpoint before first use.",
+    "zh": "随附文档未列出语音接口；如官方网关提供兼容音频路径，请先验证后再启用语音。"
+  },
+  "settings.lumi-official-image-unavailable.e5f6a7b8c9": {
+    "en": "image generation unavailable",
+    "zh": "\u6682\u4e0d\u652f\u6301\u56fe\u50cf\u751f\u6210"
+  },
+  "settings.lumi-official-video-unavailable.f6a7b8c9d0": {
+    "en": "video generation unavailable",
+    "zh": "\u6682\u4e0d\u652f\u6301\u89c6\u9891\u751f\u6210"
+  },
+  "settings.lumi-official-rerank-unavailable.a7b8c9d0e1": {
+    "en": "rerank unavailable",
+    "zh": "\u6682\u4e0d\u652f\u6301\u91cd\u6392"
+  },
+  "settings.capability-vision-world-actions.b8c9d0e1f2": {
+    "en": "vision and world actions",
+    "zh": "\u89c6\u89c9\u548c\u4e16\u754c\u64cd\u4f5c"
+  },
+  "settings.capability-image-video-generation.c9d0e1f2a3": {
+    "en": "image and video generation",
+    "zh": "\u56fe\u50cf\u548c\u89c6\u9891\u751f\u6210"
+  },
+  "settings.capability-world-actions.d0e1f2a3b4": {
+    "en": "world actions",
+    "zh": "\u4e16\u754c\u64cd\u4f5c"
+  },
+  "settings.capability-embedding.e1f2a3b4c5": {
+    "en": "embedding retrieval",
+    "zh": "\u5d4c\u5165\u68c0\u7d22"
+  },
+  "settings.capability-reasoning.f2a3b4c5d6": {
+    "en": "reasoning",
+    "zh": "\u63a8\u7406"
+  },
+  "settings.capability-official-supported-roles.a3b4c5d6e7": {
+    "en": "reasoning, vision, world actions, and embeddings",
+    "zh": "\u63a8\u7406\u3001\u89c6\u89c9\u3001\u4e16\u754c\u64cd\u4f5c\u548c\u5d4c\u5165\u68c0\u7d22"
+  },
+  "settings.capability-official-unavailable-roles.b4c5d6e7f8": {
+    "en": "image/video generation, reranking, and speech",
+    "zh": "\u56fe\u50cf/\u89c6\u9891\u751f\u6210\u3001\u91cd\u6392\u548c\u8bed\u97f3"
+  },
+  "settings.capability-speech-recognition-synthesis.c5d6e7f8a9": {
+    "en": "speech recognition and synthesis",
+    "zh": "\u8bed\u97f3\u8bc6\u522b\u548c\u5408\u6210"
+  },
+  "settings.embedding-role-label.f7a8b9c0d1": {
+    "en": "Embedding retrieval",
+    "zh": "\u5d4c\u5165\u68c0\u7d22"
+  },
+  "settings.rerank-role-label.a8b9c0d1e2": {
+    "en": "Reranking",
+    "zh": "\u91cd\u6392"
+  },
+  "settings.speech-recognition-role-label.b9c0d1e2f3": {
+    "en": "Speech recognition",
+    "zh": "\u8bed\u97f3\u8bc6\u522b"
+  },
+  "settings.speech-synthesis-role-label.c0d1e2f3a4": {
+    "en": "Speech synthesis",
+    "zh": "\u8bed\u97f3\u5408\u6210"
   },
   "settings.service-model-providers.4f8a2c6d19": {
     "en": "Service Providers",
