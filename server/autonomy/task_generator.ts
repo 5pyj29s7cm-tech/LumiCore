@@ -16,6 +16,7 @@ import { makeLLMCall, NormalizedMessage } from '../llm/providers';
 import { getRecentActivity } from '../context/activity_stream';
 import { getUserPreferredLLMConfig } from '../llm/user_preferences';
 import { formatIndustryLearningContext } from './industry_learning';
+import { isMemoryAvatarScoped } from '../memory';
 
 interface LLMGetters {
   getDeepSeek: () => any;
@@ -340,7 +341,7 @@ export async function generateAutonomousTasks(
   // Recent memories
   const db = readDB();
   const recentMemories = (db.memories || [])
-    .filter((m: any) => m.userId === userId && m.confidence >= 0.4)
+    .filter((m: any) => m.userId === userId && !isMemoryAvatarScoped(m) && m.confidence >= 0.4)
     .slice(-10)
     .map((m: any) => m.content.slice(0, 100));
   if (recentMemories.length > 0) {
@@ -349,7 +350,7 @@ export async function generateAutonomousTasks(
 
   // Pending reminders
   const pendingReminders = (db.memories || [])
-    .filter((m: any) => m.userId === userId && m.type === 'reminder' && m.confidence > 0)
+    .filter((m: any) => m.userId === userId && !isMemoryAvatarScoped(m) && m.type === 'reminder' && m.confidence > 0)
     .slice(0, 5)
     .map((m: any) => m.content);
   if (pendingReminders.length > 0) {

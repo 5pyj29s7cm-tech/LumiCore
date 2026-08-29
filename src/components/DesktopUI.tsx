@@ -12,7 +12,6 @@ import {
   X,
   User as UserIcon,
   Search,
-  Folder,
   FileText,
   Activity,
   Wifi,
@@ -32,7 +31,6 @@ import {
   Box,
   Wrench,
   MessageSquare,
-  Castle,
   Brush,
   Play,
   Pause,
@@ -771,7 +769,6 @@ function DesktopWidgetPanel({
   onEndVoice,
   onExpand,
   onHide,
-  onOpenKnowledge,
   onOpenPersonalization,
 }: {
   t: any;
@@ -791,7 +788,6 @@ function DesktopWidgetPanel({
   onEndVoice: () => void;
   onExpand: () => void;
   onHide: () => void;
-  onOpenKnowledge: () => void;
   onOpenPersonalization: () => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1026,14 +1022,6 @@ function DesktopWidgetPanel({
             title={t.personalization || 'Personalization'}
           >
             <Brush size={14} />
-          </button>
-          <button
-            data-widget-action="true"
-            onClick={onOpenKnowledge}
-            className="flex h-8 w-8 items-center justify-center rounded-full border border-cyan-300/14 bg-cyan-300/9 text-cyan-100/72 shadow-lg backdrop-blur-lg transition-colors hover:bg-cyan-300/18 hover:text-white"
-            title={uiMessage('desktop-ui.knowledge.610ef22cae', (lang === 'zh') ? 'zh' : 'en')}
-          >
-            <Folder size={14} />
           </button>
           <button
             data-widget-action="true"
@@ -1582,6 +1570,7 @@ export function DesktopUI({
   const [sanctuaryOpen, setSanctuaryOpen] = useState(false);
   const [sanctuaryLoaded, setSanctuaryLoaded] = useState(false);
   const [sanctuaryAgent, setSanctuaryAgent] = useState<any>(null);
+  const [memoryAvatars, setMemoryAvatars] = useState<any[]>([]);
   const [petReaction, setPetReaction] = useState<{ animation: string; until: number } | null>(null);
   const [activePersonality, setActivePersonality] = useState('lumi');
   const petReactionTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1752,26 +1741,59 @@ export function DesktopUI({
     }, 120);
   }, [openCommandCenter]);
 
-  // Memory Avatar is a private, single-persona surface. It deliberately has
-  // no relationship to the removed Agent/team workspace.
-  const openMemoryAvatar = useCallback(async () => {
-    try { sounds.playClick(); } catch {}
+  // Memory Avatars are private, tool-free surfaces. Keep the list in the
+  // shell so the command center can open an existing avatar, switch between
+  // avatars, or start another distillation without being trapped on the first
+  // one that was created.
+  const loadMemoryAvatars = useCallback(async (): Promise<any[]> => {
     try {
       const res = await fetch('/api/memory-avatars', { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         const avatars = Array.isArray(data?.avatars) ? data.avatars : [];
-        if (avatars.length > 0) {
-          setSanctuaryAgent(avatars[0]);
-          setSanctuaryLoaded(true);
-          setSanctuaryOpen(true);
-          setMemoryLabOpen(false);
-          return;
-        }
+        setMemoryAvatars(avatars);
+        return avatars;
       }
     } catch {}
+    return memoryAvatars;
+  }, [memoryAvatars]);
+
+  const openMemoryAvatar = useCallback(async (avatarId?: string) => {
+    try { sounds.playClick(); } catch {}
+    const avatars = await loadMemoryAvatars();
+    const selected = avatarId
+      ? avatars.find(avatar => avatar?.id === avatarId)
+      : avatars[0];
+    // A stale menu entry must never silently open another person's/avatar's
+    // transcript.  Keep the current surface in place and let the next open
+    // refresh the list instead of falling back to avatars[0].
+    if (avatarId && !selected) return;
+    // Memory Avatar is a separate fullscreen surface. Close the command
+    // center before presenting it so two focus traps never stack and the
+    // top-bar Personal switch remains the single return path.
+    setChatOpen(false);
+    setChatPrefill('');
+    setChatPrefillSource('proactive');
+    setActiveTab('home');
+    if (selected) {
+      setSanctuaryAgent(selected);
+      setSanctuaryLoaded(true);
+      setSanctuaryOpen(true);
+      setMemoryLabOpen(false);
+      return;
+    }
     setMemoryLabOpen(true);
-  }, []);
+  }, [loadMemoryAvatars, setActiveTab]);
+
+  const openMemoryAvatarLab = useCallback(() => {
+    setChatOpen(false);
+    setChatPrefill('');
+    setChatPrefillSource('proactive');
+    setActiveTab('home');
+    setSanctuaryOpen(false);
+    setSanctuaryAgent(null);
+    setMemoryLabOpen(true);
+  }, [setActiveTab]);
 
   useEffect(() => {
     const handler = () => { void openMemoryAvatar(); };
@@ -1844,7 +1866,7 @@ export function DesktopUI({
   const desktopIcons = [
     { id: 'tools', labelKey: 'tools', icon: <Wrench size={24} />, colorClass: 'from-amber-500 to-orange-600', windowId: 'tools' },
     { id: 'skills', labelKey: 'skills', icon: <Sparkles size={24} />, colorClass: 'from-emerald-500 to-teal-600', windowId: 'skills' },
-    { id: 'memory-avatar', labelKey: 'memoryAvatars', icon: <Castle size={24} />, colorClass: 'from-fuchsia-500 to-purple-600', windowId: 'memory-avatar' },
+    { id: 'personalization', label: t.personalization || (uiMessage('desktop-ui.personalization.2c4d8e1f06', (lang === 'zh') ? 'zh' : 'en')), icon: <Brush size={24} />, colorClass: 'from-cyan-400 to-indigo-600', windowId: 'personalization' },
   ];
   const desktopIconAreaHeight = Math.max(
     desktopIconLayout.compact ? 300 : 400,
@@ -4645,8 +4667,7 @@ export function DesktopUI({
         onEndVoice={endVoiceCallFromUI}
         onExpand={() => void exitDesktopWidgetMode()}
         onHide={() => void hideDesktopWidgetMode()}
-        onOpenKnowledge={() => void exitDesktopWidgetMode('knowledge')}
-        onOpenPersonalization={() => void exitDesktopWidgetMode('personalization')}
+          onOpenPersonalization={() => void exitDesktopWidgetMode('personalization')}
       />
     );
   }
@@ -4890,9 +4911,18 @@ export function DesktopUI({
               onSelectDomain={switchDomain}
               connected={orgConnection?.connected ?? false}
               organizationOpen={activeTab === 'org'}
-              onOpenOrganization={() => setActiveTab('org')}
+              onOpenOrganization={() => {
+                setChatOpen(false);
+                setActiveTab('org');
+              }}
               onCloseOrganization={() => {
-                if (activeTab === 'org') setActiveTab('home');
+                // The top-bar switch is the single way out of the full-screen
+                // command center. Returning to Personal closes its overlay;
+                // there is intentionally no second exit button in the chat.
+                setChatOpen(false);
+                setChatPrefill('');
+                setChatPrefillSource('proactive');
+                setActiveTab('home');
               }}
               commandCenterOpen={chatOpen}
               onOpenCommandCenter={() => openCommandCenter('office')}
@@ -5049,35 +5079,6 @@ export function DesktopUI({
               : 'opacity-100 pointer-events-auto'
           }`}
         >
-          <button
-            data-lumi-target="knowledge"
-            onClick={() => setKnowledgeOpen(prev => !prev)}
-            className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all group relative ${
-              knowledgeOpen
-                ? 'bg-gradient-to-br from-cyan-400 to-blue-600 text-white shadow-lg'
-                : 'bg-white/5 text-white/40 hover:bg-white/10 hover:text-white'
-            }`}
-          >
-            <BrainCircuit size={24} />
-            <div className="absolute -top-12 left-1/2 -translate-x-1/2 px-3 py-1 bg-black/80 rounded-lg text-xs font-black uppercase text-white opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-              {t.knowledgeBase || 'Knowledge Base'}
-            </div>
-          </button>
-          <button
-            data-lumi-target="personalization"
-            onClick={() => toggleWindow('personalization')}
-            className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all group relative ${
-              openWindows.includes('personalization')
-                ? 'bg-gradient-to-br from-cyan-400 to-indigo-600 text-white shadow-lg'
-                : 'bg-white/5 text-white/40 hover:bg-white/10 hover:text-white'
-            }`}
-          >
-            <Brush size={24} />
-            <div className="absolute -top-12 left-1/2 -translate-x-1/2 px-3 py-1 bg-black/80 rounded-lg text-xs font-black uppercase text-white opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-              {t.personalization || 'Personalization'}
-            </div>
-          </button>
-          <div className="lumi-dock-separator h-8 w-px shrink-0 bg-white/10 mx-2" />
           <AnimatePresence>
             {dockApps.map(app => {
               const isActive = openWindows.includes(app.id) || (app.id === 'command-center' && chatOpen);
@@ -5916,6 +5917,13 @@ export function DesktopUI({
               setViewMode('world');
               setActiveTab('home');
             }}
+            onOpenMemoryAvatar={() => { void openMemoryAvatar(); }}
+            onOpenKnowledge={() => {
+              setChatOpen(false);
+              setKnowledgeLoaded(true);
+              setKnowledgeOpen(true);
+              setActiveTab('knowledge');
+            }}
             voiceSession={{
               callState,
               audioLevel,
@@ -6022,6 +6030,9 @@ export function DesktopUI({
             lang={lang}
             isOpen={sanctuaryOpen}
             onClose={() => { setSanctuaryOpen(false); setSanctuaryAgent(null); }}
+            avatars={memoryAvatars}
+            onSelectAvatar={(avatarId) => { void openMemoryAvatar(avatarId); }}
+            onCreateAnother={openMemoryAvatarLab}
           />
         </Suspense>
       )}
@@ -6050,6 +6061,10 @@ export function DesktopUI({
                 t={t}
                 lang={lang}
                 onEnterSanctuary={(avatar: any) => {
+                  setMemoryAvatars(previous => [
+                    ...previous.filter(existing => existing?.id !== avatar?.id),
+                    avatar,
+                  ]);
                   setMemoryLabOpen(false);
                   setSanctuaryAgent(avatar);
                   setSanctuaryLoaded(true);

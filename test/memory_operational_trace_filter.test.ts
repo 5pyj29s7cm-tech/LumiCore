@@ -6,6 +6,8 @@ import { upsertUserRetrievalModelPreferences } from '../server/llm/retrieval_mod
 import {
   addMemory,
   getUnconsolidatedEpisodic,
+  isMemoryAvatarAgentId,
+  isMemoryAvatarScoped,
   queryMemories,
   queryMemoriesVector,
 } from '../server/memory/store';
@@ -121,5 +123,44 @@ describe('operational memory trace filtering', () => {
       sourceTaggedTrace.id,
       contentTaggedTrace.id,
     ]));
+  });
+
+  it('keeps multiple Memory Avatar lanes isolated from Lumi recall and deduplication', () => {
+    const token = `avatar-lane-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const userId = `memory-${token}`;
+    const content = `${token} private imported preference`;
+    const base = {
+      userId,
+      type: 'preference' as const,
+      content,
+      keywords: [token],
+      confidence: 0.9,
+      sourceInteractionId: `memory-avatar-import:${token}`,
+    };
+    const avatarA = addMemory(base, {
+      agentId: 'memory_avatar_a',
+      domain: 'personal',
+      orgId: '',
+      source: 'import',
+      privacyClass: 'private',
+      userApproved: true,
+    });
+    const avatarB = addMemory(base, {
+      agentId: 'memory_avatar_b',
+      domain: 'personal',
+      orgId: '',
+      source: 'import',
+      privacyClass: 'private',
+      userApproved: true,
+    });
+
+    expect(isMemoryAvatarAgentId('memory_avatar_a')).toBe(true);
+    expect(isMemoryAvatarScoped(avatarA)).toBe(true);
+    expect(avatarA.id).not.toBe(avatarB.id);
+    expect(queryMemories({ userId, query: token, limit: 10 }).map(memory => memory.id)).toEqual([]);
+    expect(queryMemories({ userId, agentId: 'memory_avatar_a', query: token, limit: 10 }).map(memory => memory.id))
+      .toEqual([avatarA.id]);
+    expect(queryMemories({ userId, agentId: 'memory_avatar_b', query: token, limit: 10 }).map(memory => memory.id))
+      .toEqual([avatarB.id]);
   });
 });

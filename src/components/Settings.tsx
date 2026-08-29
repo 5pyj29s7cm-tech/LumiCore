@@ -2593,33 +2593,45 @@ interface ProviderRuntimeStatus {
   } | null;
 }
 
+type ProviderScope = 'official' | 'local' | 'services';
+
 function AIProvidersPage({ t, providerStatus }: { t: any; providerStatus: Record<string, ProviderRuntimeStatus> }) {
-  const [scope, setScope] = useState<'cloud' | 'local'>('cloud');
-  const extensionProviders = Object.entries(providerStatus).filter(([, status]) => (
-    status.extension === true && (scope === 'local' ? status.local === true : status.local !== true)
-  ));
+  const [scope, setScope] = useState<ProviderScope>('official');
+  const extensionProviders = Object.entries(providerStatus).filter(([, status]) => {
+    if (status.extension !== true) return false;
+    if (scope === 'local') return status.local === true;
+    if (scope === 'services') return status.local !== true;
+    return false;
+  });
+  const tabs: Array<{ id: ProviderScope; label: string }> = [
+    { id: 'official', label: uiMessage('settings.provider-scope-official-lumi.0f4d8e2a11') },
+    { id: 'local', label: uiMessage('settings.provider-scope-local.3b7c1a9e20') },
+    { id: 'services', label: uiMessage('settings.provider-scope-services.6e2f9c4b18') },
+  ];
   return (
     <div className="space-y-6">
       <div className="border-b border-white/10 pb-4">
         <h2 className="text-lg font-semibold text-white">{uiMessage('settings.ai-providers.38c3f21901')}</h2>
-        <div className="mt-4 flex gap-5">
-          {([
-            { id: 'cloud', label: uiMessage('settings.cloud-providers.134b71a80d') },
-            { id: 'local', label: uiMessage('settings.local-compatible.4fda3a8732') },
-          ] as const).map(item => (
+        <div className="mt-4 grid grid-cols-3 gap-1 rounded-xl border border-white/10 bg-white/[0.03] p-1">
+          {tabs.map(item => (
             <button
               key={item.id}
               type="button"
               onClick={() => setScope(item.id)}
-              className={`relative pb-2 text-sm font-medium transition-colors ${scope === item.id ? 'text-white' : 'text-white/45 hover:text-white/70'}`}
+              role="tab"
+              aria-selected={scope === item.id}
+              className={`rounded-lg px-3 py-2 text-sm font-medium transition-colors ${scope === item.id ? 'bg-celestial-saturn text-black shadow-sm' : 'text-white/45 hover:bg-white/[0.06] hover:text-white/70'}`}
             >
               {item.label}
-              {scope === item.id && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-celestial-saturn" />}
             </button>
           ))}
         </div>
       </div>
-      {scope === 'cloud' ? <CloudProviderSettings t={t} providerStatus={providerStatus} /> : <LocalProviderSettings t={t} />}
+      {scope === 'official'
+        ? <OfficialProviderSettings t={t} />
+        : scope === 'local'
+          ? <LocalProviderSettings t={t} />
+          : <ServiceProviderSettings t={t} providerStatus={providerStatus} />}
       {extensionProviders.length > 0 && (
         <SettingsSection title="Signed extension Providers" icon={<Shield size={18} className="text-emerald-300" />}>
           <div className="divide-y divide-white/10 border-y border-white/10">
@@ -2854,12 +2866,34 @@ function ReasoningRoleSettings({ t, providerStatus }: { t: any; providerStatus: 
   );
 }
 
-function CloudProviderSettings({ t, providerStatus }: { t: any; providerStatus: Record<string, ProviderRuntimeStatus> }) {
+function OfficialProviderSettings({ t }: { t: any }) {
+  return (
+    <SettingsSection title={uiMessage('settings.lumi-official-service.9a4e2d7c10')} icon={<Sparkle size={18} className="text-celestial-saturn" />}>
+      <p className="mb-5 max-w-3xl text-sm leading-relaxed text-white/45">
+        {uiMessage('settings.lumi-official-service-description.2c8f6a1e05')}
+      </p>
+      <div className="border-y border-white/10">
+        <RelayProviderRow t={t} label={uiMessage('settings.lumi-official-relay.7d3b1f9c24')} />
+      </div>
+    </SettingsSection>
+  );
+}
+
+function ServiceProviderSettings({ t, providerStatus }: { t: any; providerStatus: Record<string, ProviderRuntimeStatus> }) {
   const failedProbes = Object.entries(providerStatus)
-    .filter(([, status]) => status.configured !== false && status.lastProbe?.ok === false);
+    // Relay belongs to the Lumi Official column; local runtimes belong to Local.
+    // Keep the health banner scoped to the providers rendered in this column.
+    .filter(([provider, status]) => (
+      provider !== 'relay'
+      && provider !== 'ollama'
+      && provider !== 'lmstudio'
+      && !(status.extension === true && status.local === true)
+      && status.configured !== false
+      && status.lastProbe?.ok === false
+    ));
   return (
     <div className="space-y-8">
-      <SettingsSection title={uiMessage('settings.cloud-model-providers.55a86c3fed')}>
+      <SettingsSection title={uiMessage('settings.service-model-providers.4f8a2c6d19')}>
         {failedProbes.length > 0 && (
           <div className="mb-6 flex flex-wrap items-center gap-2 border-y border-red-400/15 py-3 text-xs text-red-200/80">
             <AlertTriangle size={14} />
@@ -2892,11 +2926,10 @@ function CloudProviderSettings({ t, providerStatus }: { t: any; providerStatus: 
 
 function LocalProviderSettings({ t }: { t: any }) {
   return (
-    <SettingsSection title={uiMessage('settings.local-compatible-providers.f6a71d6a1e')}>
+    <SettingsSection title={uiMessage('settings.local-model-providers.8e1c4b6a20')}>
       <div className="border-y border-white/10">
         <OllamaProviderRow t={t} />
         <LmStudioProviderRow t={t} />
-        <RelayProviderRow t={t} />
       </div>
     </SettingsSection>
   );
@@ -3340,7 +3373,7 @@ function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, s
 }
 
 
-function RelayProviderRow({ t }: { t?: any }) {
+function RelayProviderRow({ t, label }: { t?: any; label?: string }) {
   const isZh = t?.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
   const [apiKey, setApiKey] = useState(() => {
@@ -3392,7 +3425,7 @@ function RelayProviderRow({ t }: { t?: any }) {
   return (
     <SettingsDisclosure
       icon={<Globe size={18} className="text-cyan-400" />}
-      label={t?.apiRelayLabel || 'API Relay'}
+      label={label || t?.apiRelayLabel || 'API Relay'}
       badges={<>
         {(serverKeyOk || serverUrlOk) && <span className="rounded-full border border-green-500/20 bg-green-500/10 px-2 py-0.5 text-[11px] font-semibold text-green-400">{uiMessage('settings.configured.d7f5ed6e15')}</span>}
         {saved && <CheckCircle size={14} className="text-green-400" />}

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
-import { Send, Loader2, ArrowLeft, Ghost, Zap, Cpu, Sparkles, FileText, Mic, CheckCircle2, Square, ChevronDown, ChevronRight, XCircle, Copy, Check, Paperclip, Image as ImageIcon, MessageCircle, Briefcase, User, ExternalLink, FolderOpen, Upload, Plus, History, CalendarClock } from 'lucide-react';
+import { Send, Loader2, ArrowLeft, Ghost, Castle, Zap, Cpu, Sparkles, FileText, Mic, CheckCircle2, Square, ChevronDown, ChevronRight, XCircle, Copy, Check, Paperclip, Image as ImageIcon, MessageCircle, Briefcase, User, ExternalLink, FolderOpen, Upload, Plus, History, CalendarClock, Trash2 } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -8,6 +9,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { GlassCard, PulseCounter } from './SharedUI';
 import { toast } from 'sonner';
+import { appConfirm } from '@/lib/appConfirm';
 import { FoundersSanctuary } from './FoundersSanctuary';
 import { usePlatform } from '@/hooks/usePlatform';
 import { useApp } from '@/contexts/AppContext';
@@ -84,6 +86,10 @@ import { CommandCenterPlanner } from './CommandCenterPlanner';
 import { commandCenterPlannerCopy } from '@/i18n/locales/commandCenterPlanner';
 
 const CHAT_HISTORY_LIMIT = 300;
+// Conversation index pages are deliberately small; the left rail keeps
+// requesting subsequent offsets as the user approaches its end rather than
+// imposing a product-level history cap.
+const CONVERSATION_HISTORY_PAGE_SIZE = 40;
 const CHAT_RENDER_LIMIT = 80;
 const CHAT_SEARCH_LIMIT = 200;
 type WorkflowStatus = 'idle' | 'thinking' | 'background' | 'executing' | 'waiting_confirmation' | 'cancelling' | 'cancelled' | 'done' | 'error';
@@ -123,6 +129,12 @@ type ConversationHistoryItem = {
   messageCount: number;
   lastActiveAt: string;
   createdAt: string;
+};
+
+type ConversationHistoryContextMenu = {
+  conversationId: string;
+  x: number;
+  y: number;
 };
 
 const ACTIVE_CHAT_EXECUTION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -432,6 +444,8 @@ export function AgentChatPage({
   commandCenterView = 'office',
   onCommandCenterViewChange,
   onOpenNexus,
+  onOpenMemoryAvatar,
+  onOpenKnowledge,
   voiceSession,
 }: {
   t: any;
@@ -448,6 +462,10 @@ export function AgentChatPage({
   commandCenterView?: CommandCenterView;
   onCommandCenterViewChange?: (view: CommandCenterView) => void;
   onOpenNexus?: () => void;
+  /** Open the Memory Avatar surface from the command-center right rail. */
+  onOpenMemoryAvatar?: () => void;
+  /** Open the scoped knowledge base from the command-center right rail. */
+  onOpenKnowledge?: () => void;
   /** Desktop command center reuses the shell's single microphone session. */
   voiceSession?: AgentChatVoiceSession;
 }) {
@@ -752,11 +770,18 @@ export function AgentChatPage({
   const [isSearchingHistory, setIsSearchingHistory] = useState(false);
   const [searchError, setSearchError] = useState('');
   const [isCreatingConversation, setIsCreatingConversation] = useState(false);
-  const [conversationHistoryOpen, setConversationHistoryOpen] = useState(false);
+  const [conversationHistoryOpen, setConversationHistoryOpen] = useState(true);
+  // The history rail stays mounted at the left edge, but its selector deck
+  // retracts until the user points at it or tabs into it.
+  const [conversationHistorySelectorExpanded, setConversationHistorySelectorExpanded] = useState(false);
   const [commandCenterPlannerOpen, setCommandCenterPlannerOpen] = useState(false);
   const [conversationHistory, setConversationHistory] = useState<ConversationHistoryItem[]>([]);
   const [conversationHistoryLoading, setConversationHistoryLoading] = useState(false);
+  const [conversationHistoryLoadingMore, setConversationHistoryLoadingMore] = useState(false);
+  const [conversationHistoryHasMore, setConversationHistoryHasMore] = useState(true);
   const [restoringConversationId, setRestoringConversationId] = useState('');
+  const [deletingConversationId, setDeletingConversationId] = useState('');
+  const [conversationContextMenu, setConversationContextMenu] = useState<ConversationHistoryContextMenu | null>(null);
   const [workflowStatus, setWorkflowStatus] = useState<WorkflowStatus>('idle');
   const [workflowSteps, setWorkflowSteps] = useState<WorkflowStep[]>([]);
   const [chatProgressLines, setChatProgressLines] = useState<ChatProgressLine[]>([]);
@@ -776,7 +801,11 @@ export function AgentChatPage({
   const taskRelationLedgerRef = useRef(new ChatTaskRelationLedger());
   const chatTurnTimerGuardRef = useRef(new ChatTurnTimerGuard());
   const chatTurnUiMetaRef = useRef(new Map<string, ChatTurnUiMeta>());
-  const conversationHistoryRef = useRef<HTMLDivElement>(null);
+  const conversationHistoryListRef = useRef<HTMLDivElement>(null);
+  const conversationHistoryOffsetRef = useRef(0);
+  const conversationHistoryHasMoreRef = useRef(true);
+  const conversationHistoryLoadingRef = useRef(false);
+  const conversationHistoryRequestRef = useRef(0);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -892,11 +921,12 @@ export function AgentChatPage({
         if (showWeChatSettings) setShowWeChatSettings(false);
         if (showAttachmentMenu) setShowAttachmentMenu(false);
         if (conversationHistoryOpen) setConversationHistoryOpen(false);
+        if (conversationContextMenu) setConversationContextMenu(null);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [conversationHistoryOpen, showAttachmentMenu, showVoicePicker, showWeChatSettings]);
+  }, [conversationContextMenu, conversationHistoryOpen, showAttachmentMenu, showVoicePicker, showWeChatSettings]);
 
   const agentName = agent?.name || (t.lumiEssence || 'Lumi Essence');
   const agentCategory = agent?.category || (t.friend || 'friend');
@@ -951,16 +981,6 @@ export function AgentChatPage({
     const separator = path.includes('?') ? '&' : '?';
     return `${path}${separator}domain=${encodeURIComponent(activeDomain)}&agentId=${encodeURIComponent(agentId)}`;
   }, [activeDomain, agentId]);
-  useEffect(() => {
-    if (!conversationHistoryOpen) return;
-    const onClick = (event: MouseEvent) => {
-      if (conversationHistoryRef.current && !conversationHistoryRef.current.contains(event.target as Node)) {
-        setConversationHistoryOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, [conversationHistoryOpen]);
   const scopedFileUrl = useCallback((path: string) => {
     const separator = path.includes('?') ? '&' : '?';
     const orgScope = activeDomain === 'work' && activeOrgId
@@ -2127,7 +2147,6 @@ export function AgentChatPage({
       chatTurnTimerGuardRef.current.invalidate();
       currentResponseFinalizationRef.current = null;
       bindAttachmentContextToConversation(result.conversation.id);
-      setConversationHistoryOpen(false);
       setConversationHistory(previous => [result.conversation, ...previous.filter(item => item.id !== result.conversation.id)]);
       setMessages([]);
       messagesRef.current = [];
@@ -2157,32 +2176,130 @@ export function AgentChatPage({
     return () => window.removeEventListener('lumi:new-conversation', startNewConversation);
   }, [isOpen, startNewTextConversation]);
 
-  const loadConversationHistory = useCallback(async () => {
-    setConversationHistoryLoading(true);
+  const loadConversationHistory = useCallback(async ({ append = false }: { append?: boolean } = {}) => {
+    if (conversationHistoryLoadingRef.current) return;
+    if (append && !conversationHistoryHasMoreRef.current) return;
+
+    const requestId = ++conversationHistoryRequestRef.current;
+    const offset = append ? conversationHistoryOffsetRef.current : 0;
+    conversationHistoryLoadingRef.current = true;
+    if (append) setConversationHistoryLoadingMore(true);
+    else setConversationHistoryLoading(true);
+
     try {
-      const response = await fetch(scopedConversationUrl('/api/conversations?limit=40'), { credentials: 'include' });
+      const response = await fetch(
+        scopedConversationUrl(`/api/conversations?limit=${CONVERSATION_HISTORY_PAGE_SIZE}&offset=${offset}`),
+        { credentials: 'include' },
+      );
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result?.error || 'Unable to load conversation history');
-      setConversationHistory(Array.isArray(result?.conversations) ? result.conversations : []);
+      if (requestId !== conversationHistoryRequestRef.current) return;
+
+      const page = (Array.isArray(result?.conversations) ? result.conversations : [])
+        .filter((item: any) => String(item?.id || '').trim()) as ConversationHistoryItem[];
+      setConversationHistory(previous => {
+        const merged = new Map<string, ConversationHistoryItem>();
+        if (append) {
+          previous.forEach(item => merged.set(String(item.id), item));
+        }
+        page.forEach(item => merged.set(String(item.id), item));
+        return [...merged.values()];
+      });
+
+      conversationHistoryOffsetRef.current = offset + page.length;
+      const hasMore = typeof result?.hasMore === 'boolean'
+        ? result.hasMore
+        : page.length >= CONVERSATION_HISTORY_PAGE_SIZE;
+      conversationHistoryHasMoreRef.current = hasMore;
+      setConversationHistoryHasMore(hasMore);
     } catch (error: any) {
-      toast.error(error?.message || 'Unable to load conversation history');
+      if (requestId === conversationHistoryRequestRef.current && !append) {
+        toast.error(error?.message || 'Unable to load conversation history');
+      }
     } finally {
-      setConversationHistoryLoading(false);
+      if (requestId === conversationHistoryRequestRef.current) {
+        conversationHistoryLoadingRef.current = false;
+        setConversationHistoryLoading(false);
+        setConversationHistoryLoadingMore(false);
+      }
     }
   }, [scopedConversationUrl]);
 
-  const toggleConversationHistory = useCallback(() => {
-    setConversationHistoryOpen(current => {
-      const next = !current;
-      if (next) void loadConversationHistory();
-      return next;
+  // Reset the paging cursor when the user switches domain/agent. A stale
+  // response from the previous scope is ignored by the request generation.
+  useEffect(() => {
+    conversationHistoryRequestRef.current += 1;
+    conversationHistoryOffsetRef.current = 0;
+    conversationHistoryHasMoreRef.current = true;
+    conversationHistoryLoadingRef.current = false;
+    setConversationHistory([]);
+    setConversationHistoryHasMore(true);
+    setConversationHistoryLoading(false);
+    setConversationHistoryLoadingMore(false);
+    setConversationHistorySelectorExpanded(false);
+  }, [activeDomain, activeOrgId, agentId]);
+
+  useEffect(() => {
+    if (!conversationHistoryOpen) setConversationHistorySelectorExpanded(false);
+  }, [conversationHistoryOpen]);
+
+  // The office rail is visible by default and loads its first page without a
+  // popover click. Re-opening a collapsed rail reuses the existing pages.
+  useEffect(() => {
+    if (!isOpen || !isOfficeCommandCenter || !conversationHistoryOpen) return;
+    if (conversationHistory.length > 0 || conversationHistoryLoadingRef.current) return;
+    if (!conversationHistoryHasMoreRef.current) return;
+    void loadConversationHistory();
+  }, [conversationHistory, conversationHistoryOpen, isOfficeCommandCenter, isOpen, loadConversationHistory]);
+
+  // If the first page does not fill the rail, keep asking for pages until the
+  // list has a scrollable viewport (or the server reports that it is done).
+  // This makes "无极" history useful even for users whose first page is short,
+  // without requiring a manual drag on an invisible scrollbar.
+  useEffect(() => {
+    if (!isOpen || !isOfficeCommandCenter || !conversationHistoryOpen || !conversationHistorySelectorExpanded || !conversationHistoryHasMore) return;
+    const list = conversationHistoryListRef.current;
+    if (!list || list.scrollHeight > list.clientHeight + 8) return;
+    const frame = requestAnimationFrame(() => {
+      const current = conversationHistoryListRef.current;
+      if (!current || current.scrollHeight > current.clientHeight + 8) return;
+      void loadConversationHistory({ append: true });
     });
-  }, [loadConversationHistory]);
+    return () => cancelAnimationFrame(frame);
+  }, [conversationHistory, conversationHistoryHasMore, conversationHistoryOpen, conversationHistorySelectorExpanded, isOfficeCommandCenter, isOpen, loadConversationHistory]);
+
+  const toggleConversationHistory = useCallback(() => {
+    setConversationHistoryOpen(current => !current);
+  }, []);
+
+  const handleConversationHistoryScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    if (!conversationHistorySelectorExpanded) return;
+    const target = event.currentTarget;
+    if (target.scrollHeight - target.scrollTop - target.clientHeight > 96) return;
+    void loadConversationHistory({ append: true });
+  }, [conversationHistorySelectorExpanded, loadConversationHistory]);
+
+  const handleConversationHistorySelectorBlur = useCallback((event: React.FocusEvent<HTMLElement>) => {
+    const nextTarget = event.relatedTarget;
+    if (nextTarget && event.currentTarget.contains(nextTarget as Node)) return;
+    setConversationHistorySelectorExpanded(false);
+  }, []);
+
+  // Keep the active transcript at the front of the collapsed deck. The full
+  // list still preserves the server's recency order after the selector opens.
+  const orderedConversationHistory = useMemo(() => {
+    const activeId = conversationHistory.find(item => item.status === 'active')?.id || attachmentConversationIdRef.current;
+    if (!activeId) return conversationHistory;
+    return [...conversationHistory].sort((left, right) => {
+      if (left.id === activeId) return -1;
+      if (right.id === activeId) return 1;
+      return 0;
+    });
+  }, [conversationHistory]);
 
   const restoreTextConversation = useCallback(async (conversationId: string) => {
     if (!conversationId || restoringConversationId) return;
     if (conversationId === attachmentConversationIdRef.current) {
-      setConversationHistoryOpen(false);
       return;
     }
     setRestoringConversationId(conversationId);
@@ -2236,7 +2353,7 @@ export function AgentChatPage({
         ...item,
         status: item.id === conversationId ? 'active' : item.status === 'active' ? 'closed' : item.status,
       })));
-      setConversationHistoryOpen(false);
+      setConversationHistorySelectorExpanded(false);
       requestAnimationFrame(() => messageInputRef.current?.focus());
     } catch (error: any) {
       toast.error(error?.message || 'Unable to open this conversation');
@@ -2244,6 +2361,53 @@ export function AgentChatPage({
       setRestoringConversationId('');
     }
   }, [activeDomain, agentId, bindAttachmentContextToConversation, clearChatProgress, clearPersistedExecution, normalizePersistedMessages, restoringConversationId, scopedConversationUrl, setDraftText]);
+
+  const deleteConversationFromHistory = useCallback(async (conversationId: string) => {
+    const id = String(conversationId || '').trim();
+    if (!id || deletingConversationId || restoringConversationId) return;
+
+    const conversation = conversationHistory.find(item => String(item.id) === id);
+    const title = conversation?.displayTitle || conversation?.title || conversation?.preview || t.untitled || 'Untitled';
+    const deleteLabel = t.delete || uiMessage('org-settings.delete.5b875326d1', isZh ? 'zh' : 'en');
+    setConversationContextMenu(null);
+    const confirmed = await appConfirm({
+      title: deleteLabel,
+      message: `${deleteLabel}: ${title}?`,
+      confirmText: deleteLabel,
+      cancelText: t.cancel || 'Cancel',
+      tone: 'danger',
+    });
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingConversationId(id);
+    try {
+      const response = await fetch(scopedConversationUrl(`/api/conversations/${encodeURIComponent(id)}`), {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result?.error || 'Unable to delete conversation');
+
+      const isCurrentConversation = id === attachmentConversationIdRef.current;
+      setConversationHistory(previous => previous.filter(item => String(item.id) !== id));
+      // One row disappeared before the next offset is requested; move the
+      // cursor back so an item is not skipped at the page boundary.
+      conversationHistoryOffsetRef.current = Math.max(0, conversationHistoryOffsetRef.current - 1);
+
+      if (isCurrentConversation) {
+        // Keep the chat surface usable after deleting its active transcript.
+        await startNewTextConversation();
+      } else {
+        toast.success(t.deleted || uiMessage('reminder-panel.deleted.e8250ae78f', isZh ? 'zh' : 'en'));
+      }
+    } catch (error: any) {
+      toast.error(error?.message || t.deleteFailed || uiMessage('org-settings.delete-failed-value0.98201beb15', isZh ? 'zh' : 'en'));
+    } finally {
+      setDeletingConversationId('');
+    }
+  }, [conversationHistory, deletingConversationId, isZh, restoringConversationId, scopedConversationUrl, startNewTextConversation, t]);
 
   useEffect(() => {
     // Scroll to bottom when messages change (new messages, initial load)
@@ -3156,19 +3320,20 @@ export function AgentChatPage({
         </motion.div>
       )}
 
-      {!isCommandCenterUtility && (
+      {!isCommandCenterUtility && !isOfficeCommandCenter && (
       <div className={`lumi-chat-toolbar relative z-[55] flex flex-shrink-0 items-center justify-between ${
         isOfficeCommandCenter
           ? 'h-14 border-b border-white/[0.07] bg-[#03070d]/92 px-4 shadow-[0_1px_0_rgba(255,255,255,0.025)]'
           : 'px-4 pt-6 md:px-0'
       }`}>
         <div className="flex shrink-0 items-center gap-2">
-        <button
+        {!isOfficeCommandCenter && <button
           onClick={onClose}
           className="w-10 h-10 flex items-center justify-center bg-black/40 backdrop-blur-xl border border-white/[0.08] rounded-2xl text-white/40 hover:text-white hover:border-white/20 transition-all"
+          aria-label={t.back || uiMessage('org-portal.back.5db5cac55e', isZh ? 'zh' : 'en')}
         >
           <ArrowLeft size={18} />
-        </button>
+        </button>}
         </div>
         <div className={`lumi-chat-toolbar-actions flex min-w-0 items-center ${isOfficeCommandCenter ? 'gap-1.5' : 'gap-3'}`}>
           {!isOfficeCommandCenter && <div className="lumi-chat-voice-picker relative">
@@ -3272,7 +3437,7 @@ export function AgentChatPage({
       )}
 
       {!isCommandCenterUtility && <div className={`relative z-20 flex min-h-0 flex-1 ${
-        isOfficeCommandCenter ? 'lumi-command-center-workspace overflow-hidden' : 'gap-3'
+        isOfficeCommandCenter ? 'lumi-command-center-workspace lumi-command-center-layered overflow-hidden' : 'gap-3'
       }`}>
 
         {isOfficeCommandCenter && (
@@ -3281,12 +3446,13 @@ export function AgentChatPage({
             initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.82, x: '-7%' }}
             animate={{ opacity: 1, scale: 1, x: 0 }}
             transition={{ duration: prefersReducedMotion ? 0 : 0.48, ease: [0.2, 0.75, 0.2, 1] }}
-            className="lumi-command-center-office relative min-h-0 min-w-0 flex-1 overflow-hidden border-r border-white/[0.08] lumi-command-center-office--orbital"
+            className="lumi-command-center-office lumi-command-center-cosmos-stage relative min-h-0 min-w-0 flex-1 overflow-hidden lumi-command-center-office--orbital"
           >
             <div className="absolute inset-0">
               <CommandCenterPanel
                 t={t}
                 view="office"
+                backgroundOnly
                 onViewChange={onCommandCenterViewChange || (() => {})}
                 onOpenNexus={onOpenNexus}
                 runtimeStatusOverride={{
@@ -3297,20 +3463,146 @@ export function AgentChatPage({
                 }}
               />
             </div>
-            <ActiveTaskWidget
-              status={runtimeStatus}
-              focusThreads={focusThreads}
-              tasks={[]}
-              workflowActive={workflowTaskActive}
-              workflowStatus={workflowStatus}
-              progressText={chatProgressStatusText}
-              isZh={isZh}
-            />
+            <div className="lumi-command-center-background-task-widget" aria-hidden="true">
+              <ActiveTaskWidget
+                status={runtimeStatus}
+                focusThreads={focusThreads}
+                tasks={[]}
+                workflowActive={workflowTaskActive}
+                workflowStatus={workflowStatus}
+                progressText={chatProgressStatusText}
+                isZh={isZh}
+              />
+            </div>
           </motion.section>
         )}
 
-        {/* Chat Panel */}
-        <>
+        {/* Chat Panel and the command-center destination rail. */}
+        <div className={isOfficeCommandCenter ? 'lumi-command-center-conversation-layout relative z-20 flex min-h-0 w-full flex-1' : 'contents'}>
+        {isOfficeCommandCenter && conversationHistoryOpen && (
+          <aside
+            data-command-center-history-rail
+            data-command-center-history-selector
+            data-command-center-history-selector-expanded={conversationHistorySelectorExpanded ? 'true' : 'false'}
+            onMouseEnter={() => setConversationHistorySelectorExpanded(true)}
+            onMouseLeave={() => setConversationHistorySelectorExpanded(false)}
+            onFocusCapture={() => setConversationHistorySelectorExpanded(true)}
+            onBlurCapture={handleConversationHistorySelectorBlur}
+            className={`lumi-command-center-history-rail relative z-30 flex min-h-0 shrink-0 flex-col ${conversationHistorySelectorExpanded ? 'lumi-command-center-history-rail--expanded' : ''}`}
+            aria-label={t.previousConversations || 'Conversation history'}
+            aria-expanded={conversationHistorySelectorExpanded}
+          >
+            <div className="lumi-command-center-history-rail-header flex shrink-0 items-center justify-between gap-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <History size={14} className="shrink-0 text-cyan-200/75" />
+                <span className="lumi-command-center-history-selector-mark" aria-hidden="true"><span /><span /><span /></span>
+                <span className="truncate text-[11px] font-black uppercase tracking-[0.14em] text-white/65">
+                  {t.previousConversations || 'Conversation history'}
+                </span>
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                <span className="font-mono text-[9px] text-white/28" aria-live="polite">{conversationHistory.length}</span>
+                <button
+                  type="button"
+                  data-command-center-new-conversation
+                  onClick={() => void startNewTextConversation()}
+                  disabled={isCreatingConversation}
+                  className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 text-white/38 transition-colors hover:border-cyan-300/25 hover:bg-cyan-300/[0.08] hover:text-cyan-100 disabled:cursor-wait disabled:opacity-50"
+                  title={t.newConversationHint || t.newConversation || 'New conversation'}
+                  aria-label={t.newConversation || 'New conversation'}
+                >
+                  {isCreatingConversation ? <Loader2 size={13} className="animate-spin" /> : <Plus size={14} />}
+                </button>
+              </div>
+            </div>
+            <div
+              ref={conversationHistoryListRef}
+              onScroll={handleConversationHistoryScroll}
+              className="lumi-command-center-history-list custom-scrollbar min-h-0 flex-1 overflow-y-auto"
+              aria-busy={conversationHistoryLoading || conversationHistoryLoadingMore}
+            >
+              {conversationHistoryLoading && conversationHistory.length === 0 ? (
+                <div className="flex items-center justify-center py-8 text-white/35"><Loader2 size={16} className="animate-spin" /></div>
+              ) : conversationHistory.length === 0 ? (
+                <div className="px-2 py-8 text-center text-[11px] text-white/35">{t.noConversations || 'No conversations yet'}</div>
+              ) : (
+                <>
+                  {orderedConversationHistory.map(conversation => {
+                    const current = conversation.id === attachmentConversationIdRef.current;
+                    const title = conversation.displayTitle || conversation.title || conversation.preview || t.untitled || 'Untitled';
+                    return (
+                      <button
+                        key={conversation.id}
+                        type="button"
+                        aria-haspopup="menu"
+                        onClick={() => void restoreTextConversation(conversation.id)}
+                        onContextMenu={(event) => {
+                          event.preventDefault();
+                          setConversationContextMenu({
+                            conversationId: conversation.id,
+                            x: Math.min(event.clientX, Math.max(12, window.innerWidth - 236)),
+                            y: Math.min(event.clientY, Math.max(12, window.innerHeight - 86)),
+                          });
+                        }}
+                        disabled={Boolean(restoringConversationId)}
+                        data-command-center-history-item
+                        className={`lumi-command-center-history-item group mb-1 w-full rounded-xl px-3 py-2.5 text-left transition-colors disabled:cursor-wait disabled:opacity-60 ${
+                          current ? 'lumi-command-center-history-item--current bg-cyan-300/[0.10]' : 'hover:bg-white/[0.05]'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="flex min-w-0 items-center gap-2">
+                            <span className="lumi-command-center-history-item-marker" aria-hidden="true"><span /></span>
+                            <span className="lumi-command-center-history-item-title min-w-0 truncate text-[11px] font-semibold text-white/75">{title}</span>
+                          </span>
+                          {restoringConversationId === conversation.id ? (
+                            <Loader2 size={11} className="shrink-0 animate-spin text-cyan-200" />
+                          ) : current ? (
+                            <span className="lumi-command-center-history-current-badge shrink-0 rounded-full bg-cyan-300/[0.12] px-1.5 py-0.5 text-[8px] font-bold text-cyan-100/75">{t.currentConversation || 'Current'}</span>
+                          ) : null}
+                        </div>
+                        {conversation.preview && <div className="lumi-command-center-history-item-preview mt-1 truncate text-[10px] text-white/34">{conversation.preview}</div>}
+                        <div className="lumi-command-center-history-item-meta mt-1.5 flex items-center justify-between text-[9px] text-white/24">
+                          <span>{conversation.messageCount || 0} {t.messageCountLabel || 'messages'}</span>
+                          <span>{new Date(conversation.lastActiveAt || conversation.createdAt).toLocaleString(isZh ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                  {conversationHistoryLoadingMore && (
+                    <div className="flex items-center justify-center gap-2 py-3 text-[10px] text-cyan-100/45">
+                      <Loader2 size={13} className="animate-spin" />
+                      <span>{t.loading || 'Loading more'}</span>
+                    </div>
+                  )}
+                  {!conversationHistoryHasMore && (
+                    <div className="px-2 py-3 text-center text-[9px] uppercase tracking-[0.14em] text-white/22">
+                      {t.allConversationsLoaded || 'All conversations loaded'}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </aside>
+        )}
+        {isOfficeCommandCenter && !conversationHistoryOpen && (
+          <aside
+            data-command-center-history-rail-collapsed
+            className="lumi-command-center-history-rail-collapsed relative z-30 flex shrink-0 items-start justify-center"
+            aria-label={t.selectPreviousConversation || 'Show conversation history'}
+          >
+            <button
+              type="button"
+              data-command-center-history-toggle
+              onClick={toggleConversationHistory}
+              className="flex h-9 w-9 items-center justify-center rounded-xl border border-cyan-300/20 bg-cyan-300/[0.06] text-cyan-100/70 transition-colors hover:border-cyan-200/40 hover:bg-cyan-300/[0.12] hover:text-cyan-50"
+              title={t.selectPreviousConversation || 'Show conversation history'}
+              aria-label={t.selectPreviousConversation || 'Show conversation history'}
+            >
+              <History size={15} />
+            </button>
+          </aside>
+        )}
         <motion.div
           data-command-center-chat-rail={isOfficeCommandCenter ? 'true' : undefined}
           initial={isOfficeCommandCenter && !prefersReducedMotion ? { opacity: 0, x: '100%' } : false}
@@ -3318,20 +3610,47 @@ export function AgentChatPage({
           transition={{ duration: prefersReducedMotion ? 0 : 0.46, ease: [0.2, 0.75, 0.2, 1], delay: isOfficeCommandCenter && !prefersReducedMotion ? 0.08 : 0 }}
           className={`lumi-chat-panel flex min-h-0 min-w-0 flex-col overflow-hidden ${
             isOfficeCommandCenter
-              ? 'lumi-command-center-chat-rail lumi-command-center-chat-rail--entering w-[clamp(420px,30vw,560px)] shrink-0 border-0 bg-[#070b12]'
+              ? 'lumi-command-center-chat-rail lumi-command-center-chat-rail--entering relative z-20 min-w-0 flex-1 border-0 bg-transparent'
               : 'glass flex-1 rounded-[2.5rem] border shadow-2xl md:rounded-[3rem]'
           }`}
-          style={isOfficeCommandCenter ? { ...chatPanelStyle, boxShadow: 'none' } : chatPanelStyle}
+          style={isOfficeCommandCenter
+            ? { ...chatPanelStyle, background: 'transparent', boxShadow: 'none', borderColor: 'transparent' }
+            : chatPanelStyle}
         >
           <div
-            className={`lumi-chat-panel-header flex items-center justify-between border-b ${isOfficeCommandCenter ? 'px-5 py-3.5' : 'p-4 md:p-6'}`}
-            style={chatHeaderStyle}
+            className={`lumi-chat-panel-header flex items-center justify-between ${isOfficeCommandCenter ? 'border-0 bg-transparent px-5 py-3.5' : 'border-b p-4 md:p-6'}`}
+            style={isOfficeCommandCenter
+              ? { ...chatHeaderStyle, background: 'transparent', borderBottomColor: 'transparent' }
+              : chatHeaderStyle}
           >
-            <div className="flex items-center gap-3">
-              <div className="w-2 h-2 rounded-full bg-celestial-saturn animate-pulse" />
-              <span className="text-xs md:text-xs font-bold uppercase tracking-widest text-white/60">
-                Neural Link
-              </span>
+            <div className="flex min-w-0 items-center gap-3">
+              {isOfficeCommandCenter && (
+                <div
+                  data-command-center-integrated-identity
+                  className="flex min-w-0 items-center gap-2.5"
+                >
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-celestial-saturn/20 bg-celestial-saturn/15 text-celestial-saturn">
+                    <Ghost className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <span className="max-w-[24vw] truncate text-sm font-bold tracking-tight text-white/90">{agentName}</span>
+                      <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider ${operationModeMeta.badgeClass}`}>
+                        {operationModeMeta.label}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 truncate text-[9px] font-bold uppercase tracking-[0.14em] text-white/38">
+                      {agentCategory} · {activeDomainLabel}
+                    </div>
+                  </div>
+                </div>
+              )}
+              <div className="flex shrink-0 items-center gap-2">
+                <div className="h-2 w-2 rounded-full bg-celestial-saturn animate-pulse" />
+                <span className="text-xs font-bold uppercase tracking-widest text-white/60">
+                  Neural Link
+                </span>
+              </div>
               <div
                 className={`items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-widest ${operationModeMeta.subtleClass} ${isOfficeCommandCenter ? 'hidden' : 'inline-flex'}`}
                 title={operationModeMeta.detail}
@@ -3350,11 +3669,32 @@ export function AgentChatPage({
                 </div>
               )}
             </div>
-            <div ref={conversationHistoryRef} className="lumi-chat-history-search relative flex items-center gap-2">
+            <div className="lumi-chat-history-search relative flex items-center gap-2">
+              {isOfficeCommandCenter && (
+                <VoiceCallButton
+                  callState={callState}
+                  audioLevel={audioLevel}
+                  onStart={startVoiceSession}
+                  onEnd={endVoiceSession}
+                  hasVoice={voices.length > 0}
+                  className="lumi-command-center-integrated-voice scale-[0.72] origin-right"
+                />
+              )}
+              {isOfficeCommandCenter && activeDomain === 'personal' && (
+                <button
+                  type="button"
+                  onClick={() => setShowWeChatSettings(true)}
+                  className="flex h-8 w-8 items-center justify-center rounded-xl border border-emerald-400/20 bg-emerald-400/10 text-emerald-200 transition-all hover:border-emerald-300/35 hover:bg-emerald-400/15 md:h-9 md:w-9"
+                  title={uiMessage('agent-chat-page.personal-wechat.153d58f0e9')}
+                  aria-label={uiMessage('agent-chat-page.open-personal-wechat-connection.24ff73324a')}
+                >
+                  <MessageCircle className="h-4 w-4" />
+                </button>
+              )}
               {isOfficeCommandCenter && (
                 <button
                   type="button"
-                  onClick={() => { setConversationHistoryOpen(false); setCommandCenterPlannerOpen(value => !value); }}
+                  onClick={() => setCommandCenterPlannerOpen(value => !value)}
                   className={`flex h-8 items-center gap-1.5 rounded-xl border px-2.5 text-[9px] font-bold transition-colors ${
                     commandCenterPlannerOpen
                       ? 'border-cyan-300/30 bg-cyan-300/[0.10] text-cyan-50'
@@ -3367,84 +3707,6 @@ export function AgentChatPage({
                   <span>{commandCenterPlannerText.plannerButton}</span>
                 </button>
               )}
-              {isOfficeCommandCenter && (
-                <button
-                  type="button"
-                  onClick={toggleConversationHistory}
-                  className={`flex h-8 w-8 items-center justify-center rounded-xl border transition-colors ${
-                    conversationHistoryOpen
-                      ? 'border-cyan-300/30 bg-cyan-300/[0.10] text-cyan-100'
-                      : 'border-white/10 bg-white/[0.04] text-white/45 hover:border-cyan-300/25 hover:bg-cyan-300/[0.08] hover:text-cyan-100'
-                  }`}
-                  title={t.selectPreviousConversation || 'Select previous conversation'}
-                  aria-label={t.selectPreviousConversation || 'Select previous conversation'}
-                  aria-expanded={conversationHistoryOpen}
-                >
-                  {conversationHistoryLoading ? <Loader2 size={14} className="animate-spin" /> : <History size={15} />}
-                </button>
-              )}
-              {isOfficeCommandCenter && (
-                <button
-                  type="button"
-                  onClick={() => void startNewTextConversation()}
-                  disabled={isCreatingConversation}
-                  className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-white/45 transition-colors hover:border-cyan-300/25 hover:bg-cyan-300/[0.08] hover:text-cyan-100 disabled:cursor-wait disabled:opacity-50"
-                  title={t.newConversationHint || t.newConversation || 'New conversation'}
-                  aria-label={t.newConversation || 'New conversation'}
-                >
-                  {isCreatingConversation ? <Loader2 size={14} className="animate-spin" /> : <Plus size={15} />}
-                </button>
-              )}
-              <AnimatePresence>
-                {isOfficeCommandCenter && conversationHistoryOpen && (
-                  <motion.div
-                    initial={{ opacity: 0, y: -6, scale: 0.98 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: -6, scale: 0.98 }}
-                    className="absolute right-0 top-10 z-[80] w-[min(320px,calc(100vw-4rem))] overflow-hidden rounded-2xl border border-cyan-300/15 bg-[#07101a]/98 shadow-2xl shadow-black/55 backdrop-blur-2xl"
-                  >
-                    <div className="border-b border-white/[0.07] px-3 py-2.5">
-                      <div className="text-[11px] font-bold text-white/75">{t.previousConversations || 'Previous conversations'}</div>
-                      <div className="mt-0.5 text-[9px] text-white/30">{t.continuePreviousConversation || 'Select one to continue its chat'}</div>
-                    </div>
-                    <div className="custom-scrollbar max-h-[360px] overflow-y-auto p-1.5">
-                      {conversationHistoryLoading && conversationHistory.length === 0 ? (
-                        <div className="flex items-center justify-center py-8 text-white/35"><Loader2 size={16} className="animate-spin" /></div>
-                      ) : conversationHistory.length === 0 ? (
-                        <div className="px-3 py-8 text-center text-[11px] text-white/35">{t.noConversations || 'No conversations yet'}</div>
-                      ) : conversationHistory.map(conversation => {
-                        const current = conversation.id === attachmentConversationIdRef.current;
-                        const title = conversation.displayTitle || conversation.title || conversation.preview || t.untitled || 'Untitled';
-                        return (
-                          <button
-                            key={conversation.id}
-                            type="button"
-                            onClick={() => void restoreTextConversation(conversation.id)}
-                            disabled={Boolean(restoringConversationId)}
-                            className={`group w-full rounded-xl px-3 py-2.5 text-left transition-colors disabled:cursor-wait disabled:opacity-60 ${
-                              current ? 'bg-cyan-300/[0.10]' : 'hover:bg-white/[0.05]'
-                            }`}
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="min-w-0 truncate text-[11px] font-semibold text-white/75">{title}</span>
-                              {restoringConversationId === conversation.id ? (
-                                <Loader2 size={11} className="shrink-0 animate-spin text-cyan-200" />
-                              ) : current ? (
-                                <span className="shrink-0 rounded-full bg-cyan-300/[0.12] px-1.5 py-0.5 text-[8px] font-bold text-cyan-100/75">{t.currentConversation || 'Current'}</span>
-                              ) : null}
-                            </div>
-                            {conversation.preview && <div className="mt-1 truncate text-[10px] text-white/34">{conversation.preview}</div>}
-                            <div className="mt-1.5 flex items-center justify-between text-[9px] text-white/24">
-                              <span>{conversation.messageCount || 0} {t.messageCountLabel || 'messages'}</span>
-                              <span>{new Date(conversation.lastActiveAt || conversation.createdAt).toLocaleString(isZh ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
               {!isOfficeCommandCenter && <div className="relative">
                 <input
                   type="text"
@@ -3476,7 +3738,7 @@ export function AgentChatPage({
             />
           ) : (<div
             ref={scrollRef}
-            className={`flex-1 overflow-y-auto custom-scrollbar ${isOfficeCommandCenter ? 'space-y-5 px-5 py-4' : 'space-y-4 p-4 md:space-y-6 md:p-8'}`}
+             className={`flex-1 overflow-y-auto custom-scrollbar ${isOfficeCommandCenter ? 'lumi-command-center-chat-scroll space-y-5 px-5 py-4' : 'space-y-4 p-4 md:space-y-6 md:p-8'}`}
           >
             {messages.length === 0 && !searchQuery.trim() && (
               <div className="h-full flex flex-col items-center justify-center text-center space-y-8 px-4">
@@ -3528,11 +3790,16 @@ export function AgentChatPage({
             <AnimatePresence initial={false}>
               {displayMessages.map((msg) => (
                 msg.type === 'file_context' || msg.type === 'tool' ? null /* invisible context; chat keeps the user-facing progress while detailed receipts stay in System Explorer */ : (
-                <motion.div
+                  <motion.div
                   key={msg.id}
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className={`flex flex-col ${msg.type === 'agent' ? 'items-start' : 'items-end'}`}
+                  data-command-center-message-type={isOfficeCommandCenter ? (msg.type === 'agent' ? 'agent' : 'user') : undefined}
+                  className={`flex flex-col ${isOfficeCommandCenter ? `lumi-command-center-message-row w-full ${msg.type === 'agent' ? 'items-start' : 'items-end'}` : msg.type === 'agent' ? 'items-start' : 'items-end'}`}
+                  style={isOfficeCommandCenter ? {
+                    width: '100%',
+                    alignItems: msg.type === 'agent' ? 'flex-start' : 'flex-end',
+                  } : undefined}
                 >
                   {/* Image / file previews */}
                   {(() => {
@@ -3591,11 +3858,16 @@ export function AgentChatPage({
                   )}
 
                   <div data-chat-message-bubble className={`relative group select-text leading-relaxed ${
-                    msg.type === 'agent'
-                      ? 'max-w-[92%] text-[15px] md:max-w-[80%] xl:max-w-[76%] rounded-[1.5rem] rounded-tl-none border border-white/10 bg-white/[0.055] p-5 text-white/85 shadow-xl shadow-black/10 md:p-6'
-                      : 'max-w-[85%] text-sm rounded-3xl rounded-tr-none border border-white/10 bg-white/5 p-5 text-white/80'
+                    isOfficeCommandCenter
+                      ? `lumi-command-center-message-text max-w-[92%] text-[15px] text-left md:max-w-[80%] xl:max-w-[76%] ${msg.type === 'agent' ? 'self-start text-white/85' : 'self-end text-white/78'}`
+                      : msg.type === 'agent'
+                        ? 'max-w-[92%] text-[15px] md:max-w-[80%] xl:max-w-[76%] rounded-[1.5rem] rounded-tl-none border border-white/10 bg-white/[0.055] p-5 text-white/85 shadow-xl shadow-black/10 md:p-6'
+                        : 'max-w-[85%] text-sm rounded-3xl rounded-tr-none border border-white/10 bg-white/5 p-5 text-white/80'
                   }`}
-                    style={{
+                    style={isOfficeCommandCenter ? {
+                      width: 'fit-content',
+                      alignSelf: msg.type === 'agent' ? 'flex-start' : 'flex-end',
+                    } : {
                       background: msg.type === 'agent' ? chatAccentTheme.agentBubble : chatAccentTheme.userBubble,
                       borderColor: msg.type === 'agent' ? 'rgba(255,255,255,0.12)' : chatAccentTheme.panelBorder,
                       boxShadow: msg.type === 'agent'
@@ -3613,7 +3885,7 @@ export function AgentChatPage({
                         feedback={msg.completionFeedback}
                         locale={isZh ? 'zh' : 'en'}
                         variant="chat"
-                        className="mt-3"
+                        className={isOfficeCommandCenter ? 'lumi-command-center-task-feedback mt-3' : 'mt-3'}
                       />
                     )}
                     {getDisplayText(msg) && (
@@ -3624,8 +3896,8 @@ export function AgentChatPage({
                           msg.id,
                           event.currentTarget.closest('[data-chat-message-bubble]') as HTMLElement | null,
                         )}
-                        className={`absolute top-2 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-lg hover:bg-white/10 ${
-                          msg.type === 'agent' ? 'right-2' : 'left-2'
+                         className={`absolute top-0 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-lg hover:bg-white/10 ${
+                           isOfficeCommandCenter ? 'right-0' : msg.type === 'agent' ? 'right-2' : 'left-2'
                         }`}
                         title={uiMessage('agent-chat-page.copy-selection-or-the-whole.063df0e978')}
                         aria-label={uiMessage('agent-chat-page.copy-selection-or-the-whole.063df0e978')}
@@ -3638,7 +3910,10 @@ export function AgentChatPage({
                       </button>
                     )}
                   </div>
-                  <span className="text-[12px] uppercase tracking-widest opacity-30 mt-2 px-3">
+                  <span
+                    className={`text-[12px] uppercase tracking-widest opacity-30 mt-2 px-3 ${isOfficeCommandCenter ? 'lumi-command-center-message-meta' : ''}`}
+                    style={isOfficeCommandCenter ? { alignSelf: msg.type === 'agent' ? 'flex-start' : 'flex-end' } : undefined}
+                  >
                     {msg.userName} - {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </span>
                 </motion.div>
@@ -3648,9 +3923,11 @@ export function AgentChatPage({
               <motion.div
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="flex flex-col items-start"
+                  className="flex flex-col items-start"
               >
-                <div className="max-w-[92%] md:max-w-[78%] rounded-[1.35rem] rounded-tl-none border border-white/10 bg-white/[0.045] px-4 py-3 shadow-xl shadow-black/10">
+                <div className={isOfficeCommandCenter
+                  ? 'lumi-command-center-progress-text max-w-[92%] md:max-w-[78%] text-sm leading-relaxed'
+                  : 'max-w-[92%] md:max-w-[78%] rounded-[1.35rem] rounded-tl-none border border-white/10 bg-white/[0.045] px-4 py-3 shadow-xl shadow-black/10'}>
                   <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-white/35">
                     {workflowStatus === 'done' ? (
                       <CheckCircle2 size={13} className="text-emerald-300" />
@@ -3688,8 +3965,10 @@ export function AgentChatPage({
           </div>)}
 
           <div
-            className={`lumi-chat-composer border-t ${isOfficeCommandCenter ? 'p-4' : 'p-6'}`}
-            style={chatInputPanelStyle}
+            className={`lumi-chat-composer ${isOfficeCommandCenter ? 'border-0 bg-transparent p-4' : 'border-t p-6'}`}
+            style={isOfficeCommandCenter
+              ? { ...chatInputPanelStyle, background: 'transparent', borderTopColor: 'transparent' }
+              : chatInputPanelStyle}
           >
             {conversationAttachments.length > 0 && (
               <div className="mb-3 flex items-center justify-between gap-3 rounded-2xl border border-cyan-200/15 bg-cyan-200/[0.055] px-3.5 py-2.5">
@@ -3888,7 +4167,70 @@ export function AgentChatPage({
             </form>
           </div>
         </motion.div>
-        </>
+        {isOfficeCommandCenter && (onOpenMemoryAvatar || onOpenNexus || onOpenKnowledge) && (
+          <aside
+            data-command-center-switcher
+            data-command-center-right-rail="true"
+            className="lumi-command-center-switcher relative z-30 flex shrink-0 flex-col justify-center gap-3"
+            aria-label={uiMessage('command-center.switcher.4b7c2d1e09', isZh ? 'zh' : 'en')}
+          >
+            {onOpenMemoryAvatar && (
+              <button
+                type="button"
+                data-memory-avatar-switch
+                onClick={onOpenMemoryAvatar}
+                className="lumi-command-center-switcher-button lumi-command-center-memory-avatar-switch group flex items-center gap-3 rounded-2xl border border-fuchsia-300/20 bg-fuchsia-300/[0.08] px-3 py-3 text-left text-fuchsia-50/80 transition-all hover:-translate-x-1 hover:border-fuchsia-200/45 hover:bg-fuchsia-300/[0.16] hover:text-white"
+                title={t.memoryAvatars || uiMessage('agent-chat-page.memory-avatar.8c4e1f7a20', isZh ? 'zh' : 'en')}
+                aria-label={t.memoryAvatars || uiMessage('agent-chat-page.open-memory-avatar.2d7a9c4e16', isZh ? 'zh' : 'en')}
+              >
+                <span className="lumi-command-center-switcher-icon flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-fuchsia-200/20 bg-fuchsia-200/10 text-fuchsia-100 transition-transform group-hover:scale-105">
+                  <Castle className="h-5 w-5" />
+                </span>
+                <span className="lumi-command-center-switcher-copy min-w-0">
+                  <span className="block text-xs font-black uppercase tracking-[0.12em]">{t.memoryAvatars || uiMessage('agent-chat-page.memory-avatar.8c4e1f7a20', isZh ? 'zh' : 'en')}</span>
+                  <span className="mt-1 block text-[10px] text-fuchsia-100/45">{uiMessage('command-center.memory-avatar-hint.6a1d9e3c20', isZh ? 'zh' : 'en')}</span>
+                </span>
+              </button>
+            )}
+            {onOpenNexus && (
+              <button
+                type="button"
+                data-lumi-core-switch
+                onClick={onOpenNexus}
+                className="lumi-command-center-switcher-button group flex items-center gap-3 rounded-2xl border border-violet-300/20 bg-violet-300/[0.08] px-3 py-3 text-left text-violet-50/80 transition-all hover:-translate-x-1 hover:border-violet-200/45 hover:bg-violet-300/[0.16] hover:text-white"
+                title={uiMessage('command-center.inner-realm.4d8f2a1c09', isZh ? 'zh' : 'en')}
+                aria-label={uiMessage('command-center.inner-realm.4d8f2a1c09', isZh ? 'zh' : 'en')}
+              >
+                <span className="lumi-command-center-switcher-icon flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-violet-200/20 bg-violet-200/10 text-violet-100 transition-transform group-hover:scale-105">
+                  <Cpu className="h-5 w-5" />
+                </span>
+                <span className="lumi-command-center-switcher-copy min-w-0">
+                  <span className="block text-xs font-black tracking-[0.12em]">{uiMessage('command-center.inner-realm.4d8f2a1c09', isZh ? 'zh' : 'en')}</span>
+                  <span className="mt-1 block text-[10px] text-violet-100/45">{uiMessage('command-center.lumicore-hint.8f2d4c1a09', isZh ? 'zh' : 'en')}</span>
+                </span>
+              </button>
+            )}
+            {onOpenKnowledge && (
+              <button
+                type="button"
+                data-knowledge-base-switch
+                onClick={onOpenKnowledge}
+                className="lumi-command-center-switcher-button lumi-command-center-knowledge-switch group flex items-center gap-3 rounded-2xl border border-cyan-300/20 bg-cyan-300/[0.08] px-3 py-3 text-left text-cyan-50/80 transition-all hover:-translate-x-1 hover:border-cyan-200/45 hover:bg-cyan-300/[0.16] hover:text-white"
+                title={uiMessage('desktop-ui.knowledge.610ef22cae', isZh ? 'zh' : 'en')}
+                aria-label={uiMessage('desktop-ui.knowledge.610ef22cae', isZh ? 'zh' : 'en')}
+              >
+                <span className="lumi-command-center-switcher-icon flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-cyan-200/20 bg-cyan-200/10 text-cyan-100 transition-transform group-hover:scale-105">
+                  <FolderOpen className="h-5 w-5" />
+                </span>
+                <span className="lumi-command-center-switcher-copy min-w-0">
+                  <span className="block text-xs font-black tracking-[0.12em]">{t.knowledgeBase || uiMessage('desktop-ui.knowledge.610ef22cae', isZh ? 'zh' : 'en')}</span>
+                  <span className="mt-1 block truncate text-[10px] text-cyan-100/45">{knowledgeStatusText}</span>
+                </span>
+              </button>
+            )}
+          </aside>
+        )}
+        </div>
 
         {/* Command Center or standalone chat information */}
         {layout === 'command-center' ? null : (
@@ -4000,6 +4342,39 @@ export function AgentChatPage({
         )}
       </div>}
     </div>
+        {conversationContextMenu && typeof document !== 'undefined' && createPortal(
+          <>
+            <button
+              type="button"
+              className="fixed inset-0 z-[240] cursor-default bg-transparent"
+              aria-label={t.close || 'Close'}
+              onClick={() => setConversationContextMenu(null)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                setConversationContextMenu(null);
+              }}
+            />
+            <div
+              data-command-center-conversation-context-menu
+              role="menu"
+              className="fixed z-[241] min-w-48 overflow-hidden rounded-xl border border-white/15 bg-[#0a1019]/95 p-1 shadow-2xl backdrop-blur-xl"
+              style={{ left: conversationContextMenu.x, top: conversationContextMenu.y }}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-semibold text-red-100/80 transition-colors hover:bg-red-400/12 hover:text-red-50 disabled:cursor-wait disabled:opacity-50"
+                disabled={Boolean(deletingConversationId)}
+                onClick={() => void deleteConversationFromHistory(conversationContextMenu.conversationId)}
+              >
+                {deletingConversationId === conversationContextMenu.conversationId ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                <span>{t.delete || uiMessage('org-settings.delete.5b875326d1', isZh ? 'zh' : 'en')}</span>
+              </button>
+            </div>
+          </>,
+          document.body,
+        )}
         </motion.div>
       )}
     </AnimatePresence>

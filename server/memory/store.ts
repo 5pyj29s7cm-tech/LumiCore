@@ -105,6 +105,9 @@ function matchesMemoryQueryFilters(memory: Memory, query: MemoryQuery): boolean 
   if (query.includeOperationalTraces !== true && isOperationalTraceMemory(memory)) return false;
   if (query.evidenceClasses && !query.evidenceClasses.includes(classifyMemoryEvidence(memory))) return false;
   if (query.userId && memory.userId !== query.userId) return false;
+  // Ordinary Lumi retrieval must never absorb a Memory Avatar's frozen seed
+  // memories. The avatar lane opts in by passing its exact agentId.
+  if (query.agentId === undefined && isMemoryAvatarScoped(memory)) return false;
   if (query.agentId !== undefined && (memory.agentId || '') !== query.agentId) return false;
   if (query.type && memory.type !== query.type) return false;
   if (query.minConfidence !== undefined && memory.confidence < query.minConfidence) return false;
@@ -298,6 +301,7 @@ export function getAssociatedMemories(
   domain?: string,
   orgId?: string,
   includeOperationalTraces: boolean = false,
+  agentId?: string,
 ): Memory[] {
   const userMap = coRetrievalMap.get(userId);
   if (!userMap) return [];
@@ -311,7 +315,7 @@ export function getAssociatedMemories(
       const mem = all.find(m => m.id === assocId);
       if (
         mem
-        && matchesMemoryScope(mem, domain, orgId)
+        && matchesMemoryScope(mem, domain, orgId, agentId)
         && (includeOperationalTraces || !isOperationalTraceMemory(mem))
       ) {
         result.push(mem);
@@ -321,10 +325,26 @@ export function getAssociatedMemories(
   return result;
 }
 
-function matchesMemoryScope(memory: Memory, domain?: string, orgId?: string): boolean {
+function matchesMemoryScope(memory: Memory, domain?: string, orgId?: string, agentId?: string): boolean {
   if (domain !== undefined && (memory.domain || 'personal') !== domain) return false;
   if (orgId !== undefined && (memory.orgId || '') !== orgId) return false;
+  if (agentId !== undefined) {
+    if ((memory.agentId || '') !== agentId) return false;
+  } else if (isMemoryAvatarScoped(memory)) {
+    // Scope-only operations are Lumi operations by default. An explicit
+    // avatar agentId is required to touch that frozen lane.
+    return false;
+  }
   return true;
+}
+
+/** Memory Avatar memories are kept in a frozen, private lane. */
+export function isMemoryAvatarAgentId(agentId: unknown): boolean {
+  return String(agentId || '').trim().startsWith('memory_avatar_');
+}
+
+export function isMemoryAvatarScoped(memory: Pick<Memory, 'agentId'>): boolean {
+  return isMemoryAvatarAgentId(memory.agentId);
 }
 
 // ── Dedup index (lazy, invalidated on write) ──
@@ -489,6 +509,7 @@ export function queryMemories(q: MemoryQuery): Memory[] {
         q.domain,
         q.orgId,
         q.includeOperationalTraces === true,
+        q.agentId,
       );
       for (const am of assoc) {
         if (!resultIdSet.has(am.id) && matchesMemoryQueryFilters(am, q)) {
@@ -725,6 +746,12 @@ export function addMemory(
   const tier = overrides?.tier ?? 'episodic';
   const domain = overrides?.domain ?? memory.domain ?? 'personal';
   const orgId = overrides?.orgId ?? memory.orgId ?? '';
+  // Avatar seed memories are isolated lanes. Only apply the agent fence when
+  // the caller explicitly supplies one, so ordinary Lumi memories retain the
+  // existing cross-source deduplication behavior.
+  const scopedAgentId = overrides?.agentId !== undefined
+    ? String(overrides.agentId)
+    : undefined;
   const firewall = evaluateMemoryFirewall({
     userId: memory.userId,
     content: memory.content,
@@ -744,7 +771,7 @@ export function addMemory(
   const candidates = all.filter(m =>
     m.userId === memory.userId &&
     m.type === memory.type &&
-    matchesMemoryScope(m, domain, orgId)
+    matchesMemoryScope(m, domain, orgId, scopedAgentId)
   );
   const contradictions = findContradictions(memory.content, memory.userId, memory.type, candidates);
   for (const conflicted of contradictions) {
@@ -763,7 +790,7 @@ export function addMemory(
   const existing = overrides?.deduplicate === false || contradictions.length > 0
     ? undefined
     : dedupCandidates.find(m =>
-        matchesMemoryScope(m, domain, orgId) && contentSimilarity(m.content, memory.content) > 0.7,
+        matchesMemoryScope(m, domain, orgId, scopedAgentId) && contentSimilarity(m.content, memory.content) > 0.7,
       );
 
   const now = new Date().toISOString();
@@ -933,7 +960,7 @@ export function resolveMemoryConflict(input: {
 }
 
 /** Tier-based decay: core_identity never decays, episodic decays fast */
-export function decayMemories(userId: string, domain?: string, orgId?: string): void {
+export function decayMemories(userId: string, domain?: string, orgId?: string, agentId?: string): void {
   const all = getMemoryStore();
   let changed = false;
 
@@ -945,7 +972,7 @@ export function decayMemories(userId: string, domain?: string, orgId?: string): 
   };
 
   for (const m of all) {
-    if (m.userId !== userId || !matchesMemoryScope(m, domain, orgId)) continue;
+    if (m.userId !== userId || !matchesMemoryScope(m, domain, orgId, agentId)) continue;
     const rate = decayRates[m.tier] || decayRates.episodic;
     if (rate.amount === 0) continue;
     if (m.confidence <= rate.min) continue;
@@ -962,6 +989,7 @@ export function getUnconsolidatedEpisodic(
   domain?: string,
   orgId?: string,
   includeOperationalTraces: boolean = false,
+  agentId?: string,
 ): Memory[] {
   return getMemoryStore().filter(m =>
     m.userId === userId &&
@@ -969,16 +997,17 @@ export function getUnconsolidatedEpisodic(
     !m.parentId &&
     m.confidence >= 0.2 &&
     (includeOperationalTraces || !isOperationalTraceMemory(m)) &&
-    (domain ? (m.domain || 'personal') === domain : true) &&
-    (orgId !== undefined ? (m.orgId || '') === orgId : true)
+    matchesMemoryScope(m, domain, orgId, agentId)
   );
 }
 
 /** Mark episodic memories as consolidated by setting parentId */
-export function markConsolidated(ids: string[], parentId: string): void {
+export function markConsolidated(ids: string[], parentId: string, agentId?: string): void {
   const all = getMemoryStore();
+  const parent = all.find(memory => memory.id === parentId);
+  const lane = agentId !== undefined ? agentId : parent?.agentId;
   for (const m of all) {
-    if (ids.includes(m.id)) {
+    if (ids.includes(m.id) && matchesMemoryScope(m, undefined, undefined, lane)) {
       m.parentId = parentId;
       // Promote consolidated memories — they're now part of something bigger
       m.importance = Math.min(1, m.importance + 0.2);
@@ -1149,7 +1178,7 @@ function getHebbianBonus(userId: string, memoryId: string, domain?: string, orgI
  * Higher intimacy = memories crystallize more easily (the bond makes them meaningful).
  * Returns count of promoted memories.
  */
-export function promoteMemories(userId: string, intimacy: number = 0, domain?: string, orgId?: string): number {
+export function promoteMemories(userId: string, intimacy: number = 0, domain?: string, orgId?: string, agentId?: string): number {
   const all = getMemoryStore();
   let promoted = 0;
 
@@ -1159,7 +1188,7 @@ export function promoteMemories(userId: string, intimacy: number = 0, domain?: s
   const growthThreshold = +(0.80 * intimacyMod).toFixed(2);
 
   for (const m of all) {
-    if (m.userId !== userId || !matchesMemoryScope(m, domain, orgId)) continue;
+    if (m.userId !== userId || !matchesMemoryScope(m, domain, orgId, agentId)) continue;
 
     // Count children for connectedness bonus
     const childrenCount = all.filter(c => c.parentId === m.id).length;
@@ -1189,7 +1218,7 @@ export function promoteMemories(userId: string, intimacy: number = 0, domain?: s
  * Dynamic tier-based decay — value modulates the decay speed.
  * High-value memories resist decay; low-value ones decay faster.
  */
-export function dynamicDecayMemories(userId: string, domain?: string, orgId?: string): void {
+export function dynamicDecayMemories(userId: string, domain?: string, orgId?: string, agentId?: string): void {
   const all = getMemoryStore();
   let changed = false;
 
@@ -1201,7 +1230,7 @@ export function dynamicDecayMemories(userId: string, domain?: string, orgId?: st
   };
 
   for (const m of all) {
-    if (m.userId !== userId || !matchesMemoryScope(m, domain, orgId)) continue;
+    if (m.userId !== userId || !matchesMemoryScope(m, domain, orgId, agentId)) continue;
     const rate = baseRates[m.tier] || baseRates.episodic;
     if (rate.amount === 0) continue;
     if (m.confidence <= rate.min) continue;

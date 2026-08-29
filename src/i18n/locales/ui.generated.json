@@ -19,6 +19,46 @@
     "en": "Cloud",
     "zh": "\u4e91\u670d\u52a1"
   },
+  "settings.provider-scope-official-lumi.0f4d8e2a11": {
+    "en": "Official (Lumi)",
+    "zh": "\u5b98\u65b9（Lumi）"
+  },
+  "settings.provider-scope-local.3b7c1a9e20": {
+    "en": "Local",
+    "zh": "\u672c\u5730"
+  },
+  "settings.provider-scope-services.6e2f9c4b18": {
+    "en": "Service Providers",
+    "zh": "\u670d\u52a1\u5546"
+  },
+  "settings.lumi-official-service.9a4e2d7c10": {
+    "en": "Lumi Official",
+    "zh": "Lumi \u5b98\u65b9\u670d\u52a1"
+  },
+  "settings.lumi-official-service-description.2c8f6a1e05": {
+    "en": "Configure Lumi's official relay endpoint and key here. The same relay can serve reasoning, vision, and retrieval when selected.",
+    "zh": "\u5728\u8fd9\u91cc\u914d\u7f6e Lumi \u5b98\u65b9\u4e2d\u8f6c\u7ad9\u7684\u5730\u5740\u548c\u5bc6\u94a5\u3002\u9009\u62e9\u4e2d\u8f6c\u6a21\u578b\u540e\uff0c\u63a8\u7406\u3001\u89c6\u89c9\u548c\u68c0\u7d22\u53ef\u5171\u7528\u8be5\u4e2d\u8f6c\u3002"
+  },
+  "settings.lumi-official-relay.7d3b1f9c24": {
+    "en": "Lumi Official Relay",
+    "zh": "Lumi \u5b98\u65b9\u4e2d\u8f6c\u7ad9"
+  },
+  "settings.service-model-providers.4f8a2c6d19": {
+    "en": "Service Providers",
+    "zh": "\u670d\u52a1\u5546"
+  },
+  "settings.local-model-providers.8e1c4b6a20": {
+    "en": "Local Providers",
+    "zh": "\u672c\u5730\u670d\u52a1"
+  },
+  "agent-chat-page.memory-avatar.8c4e1f7a20": {
+    "en": "Memory Avatar",
+    "zh": "\u8bb0\u5fc6\u5316\u8eab"
+  },
+  "agent-chat-page.open-memory-avatar.2d7a9c4e16": {
+    "en": "Open Memory Avatar",
+    "zh": "\u6253\u5f00\u8bb0\u5fc6\u5316\u8eab"
+  },
   "settings.local-compatible.4fda3a8732": {
     "en": "Local & Compatible",
     "zh": "\u672c\u5730\u4e0e\u517c\u5bb9"
@@ -2190,6 +2230,10 @@
   "desktop-ui.avatar-studio.ef5c66e7de": {
     "en": "Avatar Studio",
     "zh": "形象设计室"
+  },
+  "desktop-ui.personalization.2c4d8e1f06": {
+    "en": "Personalization",
+    "zh": "个性化"
   },
   "desktop-ui.battery-value0-value1.18d968c4e5": {
     "en": "Battery {value0}%{value1}",
@@ -8159,6 +8203,22 @@
     "en": "Open Lumi Command Center",
     "zh": "\u6253\u5f00 Lumi \u6307\u6325\u4e2d\u5fc3"
   },
+  "command-center.switcher.4b7c2d1e09": {
+    "en": "Command center destinations",
+    "zh": "\u6307\u6325\u4e2d\u5fc3\u5207\u6362"
+  },
+  "command-center.memory-avatar-hint.6a1d9e3c20": {
+    "en": "Private memory space",
+    "zh": "\u79c1\u5bc6\u8bb0\u5fc6\u7a7a\u95f4"
+  },
+  "command-center.lumicore-hint.8f2d4c1a09": {
+    "en": "Core and system view",
+    "zh": "\u6838\u5fc3\u4e0e\u7cfb\u7edf\u89c6\u56fe"
+  },
+  "command-center.inner-realm.4d8f2a1c09": {
+    "en": "Breath Realm",
+    "zh": "\u7075\u606f\u4e4b\u5883"
+  },
   "command-center.network.e5d531b657": {
     "en": "Lumi Network",
     "zh": "Lumi \u7f51\u7edc"
@@ -8512,6 +8572,10 @@
     "en": "Create Another",
     "zh": "再创建一个"
   },
+  "memory-avatar.switch-avatar.2c6f8a1d04": {
+    "en": "Switch memory avatar",
+    "zh": "\u5207\u6362\u8bb0\u5fc6\u5316\u8eab"
+  },
   "memory-avatar-lab.create-sanctuary.f2cde9d0b0": {
     "en": "Create Sanctuary",
     "zh": "创建领地"
@@ -8707,5 +8771,9 @@
   "sanctuary.tools-disabled.4e1aaa0eb6": {
     "en": "· Tools disabled",
     "zh": "· 工具禁用"
+  },
+  "sanctuary.request-unavailable.9d1c4a7e20": {
+    "en": "This memory avatar could not accept the message. Please try again.",
+    "zh": "这个记忆化身暂时无法接收消息，请稍后重试。"
   }
 }

@@ -37,12 +37,21 @@ function conversationMatchesScope(conv: any, scope: ConversationScope): boolean 
 
 export function mountConversationRoutes(router: Router, _jwtSecret: string) {
   router.get("/conversations", requireAuth, (req, res) => {
-    const limit = parseInt(req.query.limit as string) || 20;
-    const offset = parseInt(req.query.offset as string) || 0;
+    // Keep pagination bounded at the transport boundary.  The command-center
+    // history rail uses `hasMore` to continue loading without guessing from a
+    // short page, while older clients can continue to ignore that field.
+    const requestedLimit = parseInt(req.query.limit as string, 10);
+    const limit = Math.min(Math.max(Number.isFinite(requestedLimit) ? requestedLimit : 20, 1), 100);
+    const requestedOffset = parseInt(req.query.offset as string, 10);
+    const offset = Math.max(Number.isFinite(requestedOffset) ? requestedOffset : 0, 0);
     const scope = getConversationScope(req);
-    if (scope.domain === 'work' && !scope.orgId) return res.json({ conversations: [], limit, offset });
+    if (scope.domain === 'work' && !scope.orgId) return res.json({ conversations: [], limit, offset, hasMore: false });
     const agentId = String(req.query.agentId || '').trim() || undefined;
-    const conversations = getUserConversations(req.user!.uid, limit, offset, scope.domain, scope.orgId, agentId)
+    // Fetch one sentinel row so an exact page-size response still tells the
+    // client whether another page exists.
+    const page = getUserConversations(req.user!.uid, limit + 1, offset, scope.domain, scope.orgId, agentId);
+    const hasMore = page.length > limit;
+    const conversations = page.slice(0, limit)
       .map(conversation => {
         const recent = getMessages(conversation.id, 12).filter(message => message.role !== 'tool');
         const lastUser = [...recent].reverse().find(message => message.role !== 'assistant' && String(message.message || '').trim());
@@ -57,7 +66,7 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
         const displayTitle = String(conversation.title || lastUser?.message || preview || '').replace(/\s+/g, ' ').trim().slice(0, 48);
         return { ...conversation, displayTitle, preview };
       });
-    res.json({ conversations, limit, offset });
+    res.json({ conversations, limit, offset, hasMore });
   });
 
   router.get("/conversations/active", requireAuth, (req, res) => {

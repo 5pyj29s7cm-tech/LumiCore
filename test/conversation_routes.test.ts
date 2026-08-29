@@ -82,6 +82,7 @@ describe('conversation session routes', () => {
     });
     const history = await historyResponse.json();
     expect(historyResponse.status).toBe(200);
+    expect(history).toHaveProperty('hasMore', false);
     expect(history.conversations.map((item: any) => item.id)).toEqual(expect.arrayContaining([
       first.conversation.id,
       second.conversation.id,

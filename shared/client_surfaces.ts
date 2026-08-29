@@ -207,7 +207,10 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
     navigationAliases: ['memory avatar', 'memory avatars', '记忆化身', '记忆头像', '记忆空间'],
     actions: ['open_memory_avatar'],
     useWhen: 'Open a private, frozen, tool-free Memory Avatar distilled from user-provided conversation records.',
-    launcherIds: ['memory-avatar'],
+    // Memory Avatar is entered from the Command Center switcher. It is still
+    // a registered surface/action, but it is intentionally not a desktop
+    // launcher icon anymore.
+    launcherIds: [],
   },
   {
     id: 'personality',

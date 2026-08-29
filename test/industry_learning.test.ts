@@ -61,4 +61,49 @@ describe('industry-aware autonomous learning', () => {
     expect(context).toContain('诉讼文书交付包');
     expect(context).toContain('行业学习要求');
   });
+
+  it('does not use Memory Avatar seed content as Lumi industry-habit evidence', async () => {
+    const { readDB, writeDB } = await import('../db_layer');
+    const { getIndustryLearningProfiles } = await import('../server/autonomy/industry_learning');
+    const userId = `industry-avatar-isolation-${Date.now()}`;
+    const db = readDB();
+    db.professionProfiles = [{
+      profession: 'engineer',
+      confidence: 0.9,
+      evidence: [],
+      knowledgeDomains: [],
+      installedRelevantTools: [],
+    }];
+    db.memories = [
+      ...(db.memories || []),
+      {
+        id: `lumi-habit-${userId}`,
+        userId,
+        type: 'habit',
+        content: 'Lumi habit evidence that should remain visible',
+        keywords: [],
+        confidence: 0.9,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        agentId: '',
+      },
+      {
+        id: `avatar-habit-${userId}`,
+        userId,
+        type: 'habit',
+        content: 'SECRET_AVATAR_ONLY_HABIT_MUST_NOT_REACH_LUMI',
+        keywords: [],
+        confidence: 0.99,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        agentId: 'memory_avatar_isolated',
+      },
+    ];
+    writeDB(db);
+
+    const profiles = getIndustryLearningProfiles(userId);
+    const habits = profiles.flatMap(profile => profile.workHabits).join('\n');
+    expect(habits).toContain('Lumi habit evidence that should remain visible');
+    expect(habits).not.toContain('SECRET_AVATAR_ONLY_HABIT');
+  });
 });

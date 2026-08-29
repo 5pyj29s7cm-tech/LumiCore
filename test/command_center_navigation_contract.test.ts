@@ -23,7 +23,7 @@ describe('command center navigation contract', () => {
     const panel = source('src/components/CommandCenterPanel.tsx');
     const types = source('src/components/commandCenterTypes.ts');
     expect(chat).toContain('{isCommandCenterUtility && (');
-    expect(chat).toContain('{!isCommandCenterUtility && (');
+    expect(chat).toContain('{!isCommandCenterUtility && !isOfficeCommandCenter && (');
     expect(chat).not.toContain('lumi-command-center-rail');
     expect(chat).not.toContain('compactCommandCenterOpen');
     expect(panel).not.toContain("onViewChange('network')");

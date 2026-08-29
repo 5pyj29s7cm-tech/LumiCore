@@ -237,9 +237,15 @@ export function MemoryAvatarLab({ t, lang, onEnterSanctuary }: { t: any; lang?: 
     setCurrentStep(1);
     setChatLog('');
     setFileName('');
+    setFormat('wechat');
+    setRelationshipType('close_friend');
     setDistillResult(null);
     setCreatedAvatar(null);
     setSanctuaryName('');
+    setAudioFile(null);
+    setAudioTranscript('');
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    if (audioInputRef.current) audioInputRef.current.value = '';
   };
 
   const steps = [

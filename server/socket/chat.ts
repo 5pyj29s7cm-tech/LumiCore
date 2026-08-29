@@ -767,12 +767,10 @@ export function registerChatHandler(
     // Work context comes from the authenticated socket token. Personal mode can be
     // explicitly requested by the desktop UI to avoid a stale org token leaking into
     // local personal conversations.
-    const requestScope = resolveSocketScope(socket, uid, {
+    const socketScope = resolveSocketScope(socket, uid, {
       domain: data.domain === 'work' ? 'work' : data.domain === 'personal' ? 'personal' : undefined,
       orgId: data.orgId,
     });
-    const resolvedDomain = requestScope.domain;
-    const resolvedOrgId = requestScope.orgId;
     // Only a user-owned Memory Avatar may opt into the private persona lane.
     // Ordinary chat always remains the single LumiCore identity; arbitrary
     // client-supplied Agent IDs cannot create another conversation owner or
@@ -791,6 +789,15 @@ export function registerChatHandler(
     const memoryAvatar = requestedMemoryAvatar;
     const conversationAgentId = memoryAvatar?.id || 'lumi';
     const isMemoryAvatar = Boolean(memoryAvatar && memoryAvatar.status === 'active');
+    // A Memory Avatar is a personal, private reflection even when the shell
+    // is currently connected to an organization workspace. Never let the
+    // transport's work scope pull company KB/RAG or org-scoped memories into
+    // that conversation.
+    const requestScope = isMemoryAvatar
+      ? { domain: 'personal' as const, orgId: '' }
+      : socketScope;
+    const resolvedDomain = requestScope.domain;
+    const resolvedOrgId = requestScope.orgId;
     const allowAdaptiveLearning = !isMemoryAvatar && shouldPersistPostTurnLearningSource(eventSource);
     const toolSecurityContext = buildSocketToolSecurityContext(socket, requestScope);
     const requestedConversationId = String(data.conversationId || '').trim();
@@ -939,6 +946,11 @@ export function registerChatHandler(
       delete boundedPublicPayload.completionFeedback;
       return {
         ...boundedPublicPayload,
+        // Every client-visible event carries the conversation owner.  The
+        // desktop shell shares one user-level socket across Lumi, LAP, and
+        // Memory Avatar surfaces; consumers must be able to reject a late
+        // event from another surface instead of treating it as their own.
+        agentId: conversationAgentId,
         ...(completionFeedback ? { completionFeedback } : {}),
         source: boundedPublicPayload.source || eventSource,
         requestId,
@@ -954,6 +966,14 @@ export function registerChatHandler(
         // event through the user/workspace room without duplicating it here.
         socket.emit(event, normalizedPayload);
         socket.to(executionRoom).emit(event, normalizedPayload);
+        return;
+      }
+      if (isMemoryAvatar) {
+        // Memory Avatar requests are forced into the personal data scope. An
+        // organization-authenticated socket may not be a member of that room,
+        // so deliver its private stream/status frames directly to the socket
+        // that initiated the request instead of silently dropping them.
+        socket.emit(event, normalizedPayload);
         return;
       }
       io.to(executionRoom).emit(event, normalizedPayload);
@@ -2330,7 +2350,7 @@ export function registerChatHandler(
       }
 
       // Retrieve personality vector early to bias memory retrieval (cross-system fusion: vector→memory)
-      const personalityConfig = isMemoryAvatar && memoryAvatar?.personalityConfig?.id
+      const personalityConfig = isMemoryAvatar && memoryAvatar?.personalityConfig
         ? memoryAvatar.personalityConfig
         : personalityRegistry.getForUser(
             personalityId,

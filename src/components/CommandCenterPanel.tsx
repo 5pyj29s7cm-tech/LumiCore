@@ -141,6 +141,12 @@ export function CommandCenterPanel({
   onViewChange,
   onOpenNexus,
   runtimeStatusOverride,
+  /**
+   * Render only the animated core field.  The command-center chat uses this
+   * mode as a non-interactive background layer so conversation remains the
+   * primary surface instead of competing with a second panel.
+   */
+  backgroundOnly = false,
 }: {
   t?: any;
   view: CommandCenterView;
@@ -152,6 +158,7 @@ export function CommandCenterPanel({
     error: string;
     refresh: () => Promise<void>;
   };
+  backgroundOnly?: boolean;
 }) {
   const { workDomain, orgConnection } = useApp();
   const isWork = workDomain === 'work' && Boolean(orgConnection?.connected && orgConnection?.orgId);
@@ -262,8 +269,12 @@ export function CommandCenterPanel({
   const coreState = hasAttention ? 'attention' : activeTasks.length > 0 ? 'working' : 'ready';
 
   return (
-    <section className="flex h-full min-h-0 flex-col overflow-hidden bg-[#02040b]">
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-white/[0.07] bg-black/20 px-3.5">
+    <section
+      data-command-center-background={backgroundOnly ? 'true' : undefined}
+      aria-hidden={backgroundOnly || undefined}
+      className={`flex h-full min-h-0 flex-col overflow-hidden ${backgroundOnly ? 'pointer-events-none bg-transparent' : 'bg-[#02040b]'}`}
+    >
+      {!backgroundOnly && <header className="flex h-14 shrink-0 items-center justify-between border-b border-white/[0.07] bg-black/20 px-3.5">
         <div className="flex min-w-0 items-center gap-3">
           {view === 'core' && (
             <button type="button" onClick={() => onViewChange('office')} className="flex h-8 items-center gap-2 rounded-xl border border-cyan-300/15 bg-cyan-400/[0.06] px-3 text-[10px] font-bold text-cyan-100/60 hover:bg-cyan-400/[0.12] hover:text-cyan-50">
@@ -278,7 +289,7 @@ export function CommandCenterPanel({
         <button type="button" onClick={() => { void refresh(); void refreshRuntime(); refreshScene(true); }} className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/[0.035] text-white/40 hover:bg-white/[0.07] hover:text-white/70" title={copy.refresh}>
           <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
         </button>
-      </header>
+      </header>}
 
       <div className={`relative min-h-0 flex-1 ${view === 'office' ? 'overflow-hidden' : 'custom-scrollbar overflow-y-auto p-4'}`}>
         {view === 'office' && (
@@ -296,10 +307,10 @@ export function CommandCenterPanel({
                 noTasks: copy.noTasks,
               }}
             />
-            <div className="absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2">
+            {!backgroundOnly && <div className="absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2">
               <button type="button" onClick={() => onOpenNexus ? onOpenNexus() : onViewChange('core')} className="flex h-10 items-center gap-2 rounded-2xl border border-violet-300/15 bg-[#080d17]/78 px-3.5 text-[10px] font-bold text-violet-100/70 shadow-2xl backdrop-blur-2xl hover:bg-violet-400/[0.12] hover:text-violet-50"><Cpu size={13} />{copy.core}</button>
               <button type="button" onClick={() => { void refresh(); void refreshRuntime(); }} className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/[0.08] bg-[#080d17]/78 text-white/35 shadow-2xl backdrop-blur-2xl hover:bg-white/[0.07] hover:text-white/70" title={copy.refresh}><RefreshCw size={13} className={loading ? 'animate-spin' : ''} /></button>
-            </div>
+            </div>}
           </div>
         )}
 

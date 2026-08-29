@@ -91,6 +91,8 @@ export interface ConsolidationContext {
   model: string;
   domain?: string;
   orgId?: string;
+  /** Optional explicit Memory Avatar lane; omitted means the Lumi lane. */
+  agentId?: string;
   source?: string;
 }
 
@@ -114,7 +116,7 @@ export async function consolidateEpisodic(
   getGlm?: () => any,
   getRelay?: () => any,
 ): Promise<Memory | null> {
-  const episodic = getUnconsolidatedEpisodic(ctx.userId, ctx.domain, ctx.orgId);
+  const episodic = getUnconsolidatedEpisodic(ctx.userId, ctx.domain, ctx.orgId, false, ctx.agentId);
 
   if (episodic.length < minCount) {
     return null;
@@ -179,12 +181,13 @@ export async function consolidateEpisodic(
         source: 'consolidation',
         domain: ctx.domain || 'personal',
         orgId: ctx.orgId || '',
+        agentId: ctx.agentId,
         privacyClass: ctx.domain === 'work' ? 'organization' : 'private',
       },
     );
 
     // Link original episodic memories to this consolidated one
-    markConsolidated(batch.map(m => m.id), consolidated.id);
+    markConsolidated(batch.map(m => m.id), consolidated.id, ctx.agentId);
 
     console.log(`[Consolidator] Consolidated ${batch.length} episodic memories → growth:${consolidated.id}`);
     return consolidated;
@@ -219,6 +222,7 @@ export async function selfReflect(
     minConfidence: 0.5,
     domain: ctx.domain,
     orgId: ctx.orgId,
+    ...(ctx.agentId !== undefined ? { agentId: ctx.agentId } : {}),
   });
 
   if (growthMemories.length === 0) {
@@ -280,6 +284,7 @@ export async function selfReflect(
         source: 'consolidation',
         domain: ctx.domain || 'personal',
         orgId: ctx.orgId || '',
+        agentId: ctx.agentId,
         privacyClass: ctx.domain === 'work' ? 'organization' : 'private',
       },
     );
@@ -323,6 +328,7 @@ export async function consolidateNarrative(
     minConfidence: 0.3,
     domain: ctx.domain,
     orgId: ctx.orgId,
+    ...(ctx.agentId !== undefined ? { agentId: ctx.agentId } : {}),
   });
 
   if (memories.length < minMemories) return null;
@@ -392,6 +398,7 @@ export async function consolidateNarrative(
         source: 'consolidation',
         domain: ctx.domain || 'personal',
         orgId: ctx.orgId || '',
+        agentId: ctx.agentId,
         privacyClass: ctx.domain === 'work' ? 'organization' : 'private',
       },
     );

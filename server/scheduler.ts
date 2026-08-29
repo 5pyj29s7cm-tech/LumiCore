@@ -3,7 +3,7 @@
 
 import crypto from 'node:crypto';
 import { Server as SocketIOServer } from 'socket.io';
-import { queryMemories, getDueReminders, fireReminder, runBehavioralAnalysis, decayMemories, dynamicDecayMemories, promoteMemories, getUnconsolidatedEpisodic } from './memory';
+import { queryMemories, getDueReminders, fireReminder, runBehavioralAnalysis, decayMemories, dynamicDecayMemories, promoteMemories, getUnconsolidatedEpisodic, isMemoryAvatarScoped } from './memory';
 import { consolidateEpisodic, consolidateNarrative, ConsolidationContext } from './memory/consolidator';
 import { runDreamCycle } from './memory/dream';
 import { buildTree, ensureBranch, moveNode } from './memory/tree';
@@ -2463,6 +2463,7 @@ Output ONLY the reflection — no preamble, no labels.`;
               m.userId === userId &&
               (m.domain || 'personal') === 'personal' &&
               (m.orgId || '') === '' &&
+              !isMemoryAvatarScoped(m) &&
               m.nodeType !== 'branch' &&
               !m.parentId,
           );
@@ -2471,7 +2472,8 @@ Output ONLY the reflection — no preamble, no labels.`;
           const tree = buildTree(allMemories.filter((m: any) =>
             m.userId === userId &&
             (m.domain || 'personal') === 'personal' &&
-            (m.orgId || '') === ''
+            (m.orgId || '') === '' &&
+            !isMemoryAvatarScoped(m)
           ));
           const treeSummary = tree.map(
             t => `- ${t.node.content} [${t.node.nodeType}] (${t.children.length} children)`,
@@ -2521,6 +2523,8 @@ Rules:
             const branchNode = ensureBranch(userId, branch.title, '', null, { domain: 'personal', orgId: '' });
             totalBranches++;
             for (const memId of branch.memoryIds) {
+              const memory = allMemories.find((candidate: any) => candidate.id === memId);
+              if (!memory || isMemoryAvatarScoped(memory)) continue;
               const ok = moveNode(memId, branchNode.id, { userId, domain: 'personal', orgId: '' });
               if (ok) totalAssigned++;
             }
@@ -2570,6 +2574,7 @@ Rules:
                 m.userId === userId &&
                 (m.domain || 'personal') === 'personal' &&
                 (m.orgId || '') === '' &&
+                !isMemoryAvatarScoped(m) &&
                 m.perspective === 'owner_trait' &&
                 m.createdAt > lastEvolvedAt
               ).length
@@ -2636,7 +2641,7 @@ Rules:
           const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
 
           const weekMemories = (db.memories || []).filter((m: any) =>
-            m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && m.createdAt >= weekAgo,
+            m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m) && m.createdAt >= weekAgo,
           );
           const weekInteractions = (db.interactions || []).filter((i: any) =>
             i.userId === userId && (i.domain || 'personal') === 'personal' && (i.orgId || '') === '' && i.timestamp >= weekAgo,
@@ -2653,8 +2658,8 @@ Rules:
             newInteractionCount: weekInteractions.length,
             topMemoryTopics: [...new Set<string>(weekMemories.map((m: any) => (m.keywords || []) as string[]).flat())].slice(0, 10),
             connectionScore: loadEmotionalState(userId).connection,
-            totalFacts: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && m.type === 'fact').length,
-            totalPreferences: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && m.type === 'preference').length,
+            totalFacts: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m) && m.type === 'fact').length,
+            totalPreferences: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m) && m.type === 'preference').length,
             activeConversations: (db.conversations || []).filter((c: any) => c.userId === userId && (c.domain || 'personal') === 'personal' && (c.orgId || '') === '' && c.status === 'active').length,
           });
 
@@ -2705,7 +2710,7 @@ Rules:
           const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString();
 
           const monthMemories = (db.memories || []).filter((m: any) =>
-            m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && m.createdAt >= monthAgo,
+            m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m) && m.createdAt >= monthAgo,
           );
           const monthInteractions = (db.interactions || []).filter((i: any) =>
             i.userId === userId && (i.domain || 'personal') === 'personal' && (i.orgId || '') === '' && i.timestamp >= monthAgo,
@@ -2722,8 +2727,8 @@ Rules:
             newInteractionCount: monthInteractions.length,
             topMemoryTopics: [...new Set<string>(monthMemories.map((m: any) => (m.keywords || []) as string[]).flat())].slice(0, 15),
             connectionScore: loadEmotionalState(userId).connection,
-            totalFacts: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && m.type === 'fact').length,
-            totalPreferences: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && m.type === 'preference').length,
+            totalFacts: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m) && m.type === 'fact').length,
+            totalPreferences: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m) && m.type === 'preference').length,
             activeConversations: (db.conversations || []).filter((c: any) => c.userId === userId && (c.domain || 'personal') === 'personal' && (c.orgId || '') === '' && c.status === 'active').length,
           });
 
@@ -2773,7 +2778,7 @@ Rules:
           const yearAgo = new Date(Date.now() - 365 * 86400000).toISOString();
 
           const yearMemories = (db.memories || []).filter((m: any) =>
-            m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && m.createdAt >= yearAgo,
+            m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m) && m.createdAt >= yearAgo,
           );
           const yearInteractions = (db.interactions || []).filter((i: any) =>
             i.userId === userId && (i.domain || 'personal') === 'personal' && (i.orgId || '') === '' && i.timestamp >= yearAgo,
@@ -2790,8 +2795,8 @@ Rules:
             newInteractionCount: yearInteractions.length,
             topMemoryTopics: [...new Set<string>(yearMemories.map((m: any) => (m.keywords || []) as string[]).flat())].slice(0, 20),
             connectionScore: loadEmotionalState(userId).connection,
-            totalFacts: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && m.type === 'fact').length,
-            totalPreferences: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && m.type === 'preference').length,
+            totalFacts: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m) && m.type === 'fact').length,
+            totalPreferences: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m) && m.type === 'preference').length,
             activeConversations: (db.conversations || []).filter((c: any) => c.userId === userId && (c.domain || 'personal') === 'personal' && (c.orgId || '') === '' && c.status === 'active').length,
           });
 
@@ -2904,7 +2909,7 @@ Rules:
 
           // Collect yesterday's stats
           const newMemories = (db.memories || []).filter((m: any) =>
-            m.userId === userId && (m.domain || 'personal') === 'personal' && !m.orgId && m.createdAt && m.createdAt >= yesterday,
+            m.userId === userId && (m.domain || 'personal') === 'personal' && !m.orgId && !isMemoryAvatarScoped(m) && m.createdAt && m.createdAt >= yesterday,
           );
           const newInteractions = (db.interactions || []).filter((i: any) =>
             i.userId === userId && (i.domain || 'personal') === 'personal' && !i.orgId && i.timestamp && i.timestamp >= yesterday,
@@ -3056,10 +3061,10 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
 
           // 1. Memory spike detection: unusually high memory creation rate
           const recentMemories = (db.memories || []).filter(
-            (m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && m.createdAt >= oneHourAgo,
+            (m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m) && m.createdAt >= oneHourAgo,
           );
           const dayMemories = (db.memories || []).filter(
-            (m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && m.createdAt >= twentyFourHoursAgo,
+            (m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m) && m.createdAt >= twentyFourHoursAgo,
           );
 
           const anomalySignals: string[] = [];

@@ -4933,7 +4933,23 @@ export function registerVoiceHandlers(
     session.lastAcceptedCommandChunkAt = 0;
     session.userId = getUserId(socket);
     setRealtimeVoiceSessionActive(session.userId, socket.id, true);
-    session.agentId = data.agentId || 'lumi';
+    const requestedAgentId = String(data.agentId || 'lumi').trim() || 'lumi';
+    // Memory Avatars are deliberately text-only, frozen, tool-free surfaces.
+    // Voice currently uses the full Lumi execution lane, so accepting a
+    // memory_avatar_* id here would silently bypass that boundary. Reject it
+    // explicitly until a separately constrained voice lane exists.
+    if (requestedAgentId.startsWith('memory_avatar_')) {
+      logger.warn(`[Audio] Refused voice start for Memory Avatar lane: ${requestedAgentId}`);
+      session.isActive = false;
+      setRealtimeVoiceSessionActive(session.userId, socket.id, false);
+      session.agentId = 'lumi';
+      socket.emit('audio:error', {
+        code: 'MEMORY_AVATAR_VOICE_UNAVAILABLE',
+        message: 'Memory Avatars are available in their private text sanctuary, not in the voice execution lane.',
+      });
+      return;
+    }
+    session.agentId = requestedAgentId;
     session.sessionId = normalizeVoiceSessionId(data.sessionId);
     session.voiceCaptureProvenance = createVoiceCaptureProvenance({
       captureSessionId: String(data.captureSessionId || '') === session.sessionId

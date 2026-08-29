@@ -2058,6 +2058,575 @@ body,
   background: linear-gradient(to bottom, transparent 2%, rgba(255, 255, 255, 0.09) 18%, rgba(255, 255, 255, 0.09) 82%, transparent 98%);
 }
 
+/*
+ * Layered command-center conversation.  The core field stays underneath the
+ * dialogue, while the conversation wrapper provides a quiet left reading
+ * rail and a compact right rail for LumiCore/Memory Avatar navigation.  The
+ * field remains mounted (and continues to receive task state updates) but is
+ * non-interactive in this presentation.
+ */
+.lumi-command-center-layered {
+  position: relative;
+  isolation: isolate;
+  flex-direction: column;
+  background: #02040b;
+}
+
+.lumi-command-center-layered .lumi-command-center-cosmos-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  border: 0 !important;
+  opacity: .72;
+  pointer-events: none;
+}
+
+.lumi-command-center-layered .lumi-command-center-cosmos-stage > div {
+  position: absolute;
+  inset: 0;
+}
+
+.lumi-command-center-layered .lumi-command-center-cosmos-stage [data-lumi-core-command-field] {
+  min-height: 100% !important;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(44, 52, 112, .24), transparent 34%),
+    linear-gradient(145deg, rgba(7, 10, 24, .74) 0%, rgba(3, 6, 17, .70) 53%, rgba(1, 2, 8, .78) 100%);
+}
+
+/* Task progress is already surfaced in the conversation stream; keep the
+ * legacy floating card for the utility/core view only. */
+.lumi-command-center-layered .lumi-command-center-background-task-widget {
+  display: none;
+}
+
+.lumi-command-center-layered .lumi-command-center-chat-rail {
+  position: relative;
+  z-index: 20;
+  width: auto !important;
+  max-width: none;
+  min-height: 0;
+  margin: 0;
+  flex: 1 1 auto;
+  border: 0 !important;
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  backdrop-filter: none;
+}
+
+/* The conversation is a reading column, not a second framed window. Keep
+ * only the individual message bubbles and the composer input visible. */
+.lumi-command-center-layered .lumi-command-center-chat-rail::before,
+.lumi-command-center-layered .lumi-command-center-chat-rail::after {
+  display: none;
+}
+
+/* Keep the dialogue and its destinations in one bounded, full-height row.
+ * The cosmos stage is an absolute sibling below this wrapper, so it can glow
+ * through the translucent rails without intercepting pointer input. */
+.lumi-command-center-layered .lumi-command-center-conversation-layout {
+  --command-center-rail-width: clamp(220px, 20vw, 300px);
+  display: grid;
+  grid-template-columns: var(--command-center-rail-width) minmax(0, 1fr) var(--command-center-rail-width);
+  width: 100%;
+  min-height: 0;
+  margin-inline: auto;
+  /* Keep both rails visually attached to the conversation without pinning
+   * their controls against the viewport edge. The equal inline gutter also
+   * gives the central transcript a stable visual axis. */
+  padding: clamp(.75rem, 2vw, 1.75rem) clamp(1rem, 2vw, 2.25rem);
+  column-gap: clamp(.75rem, 2vw, 1.75rem);
+  align-items: stretch;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-rail,
+.lumi-command-center-layered .lumi-command-center-switcher {
+  width: var(--command-center-rail-width);
+  max-width: var(--command-center-rail-width);
+  min-height: 0;
+  padding: .75rem .35rem;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-rail,
+.lumi-command-center-layered .lumi-command-center-history-rail-collapsed {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.lumi-command-center-layered .lumi-command-center-chat-rail {
+  grid-column: 2;
+  grid-row: 1;
+  width: 100% !important;
+  justify-self: center;
+}
+
+.lumi-command-center-layered .lumi-command-center-switcher {
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: end;
+  align-items: flex-end;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-rail {
+  --history-selector-collapsed-width: 10.5rem;
+  position: relative;
+  align-items: flex-start;
+  overflow: visible;
+  transition: filter .22s ease;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-rail-header {
+  min-height: 2.25rem;
+  width: var(--history-selector-collapsed-width);
+  overflow: hidden;
+  transition: width .24s ease, background-color .2s ease, border-color .2s ease;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-list {
+  width: var(--history-selector-collapsed-width);
+  max-height: 9rem;
+  overflow: visible;
+  perspective: 900px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  overscroll-behavior: contain;
+  padding: .5rem 0;
+  transition: width .24s ease, max-height .24s ease, overflow .2s ease;
+}
+
+/* The history rail is a compact, layered selector at rest. Moving into it
+ * opens the deck into a normal scrollable list; leaving it retracts the deck
+ * so the conversation remains the visual focus. The explicit class mirrors
+ * the pointer/focus selectors for keyboard and touch-driven state changes. */
+.lumi-command-center-layered .lumi-command-center-history-rail:hover .lumi-command-center-history-rail-header,
+.lumi-command-center-layered .lumi-command-center-history-rail:focus-within .lumi-command-center-history-rail-header,
+.lumi-command-center-layered .lumi-command-center-history-rail--expanded .lumi-command-center-history-rail-header,
+.lumi-command-center-layered .lumi-command-center-history-rail:hover .lumi-command-center-history-list,
+.lumi-command-center-layered .lumi-command-center-history-rail:focus-within .lumi-command-center-history-list,
+.lumi-command-center-layered .lumi-command-center-history-rail--expanded .lumi-command-center-history-list {
+  width: 100%;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-rail:hover .lumi-command-center-history-list,
+.lumi-command-center-layered .lumi-command-center-history-rail:focus-within .lumi-command-center-history-list,
+.lumi-command-center-layered .lumi-command-center-history-rail--expanded .lumi-command-center-history-list {
+  max-height: min(68vh, 680px);
+  overflow-y: auto;
+  overflow-x: visible;
+  perspective: none;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-list::-webkit-scrollbar,
+.lumi-command-center-layered .lumi-command-center-chat-scroll::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.lumi-command-center-layered .lumi-command-center-chat-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  overscroll-behavior: contain;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-item {
+  position: relative;
+  max-height: 3.1rem;
+  margin-bottom: -1.35rem;
+  border: 1px solid transparent;
+  transform-origin: left center;
+  transition: transform .22s ease, max-height .22s ease, margin .22s ease, opacity .18s ease, background-color .18s ease, box-shadow .18s ease;
+}
+
+/* Three visible cards form the turntable/deck. Older entries remain in the
+ * DOM for accessibility and infinite paging, but retract until the rail is
+ * opened. */
+.lumi-command-center-layered .lumi-command-center-history-item:nth-child(1) {
+  z-index: 3;
+  background: rgba(10, 35, 46, .72);
+  border-color: rgba(103, 232, 249, .22);
+  transform: translateY(0) scale(1);
+}
+
+.lumi-command-center-layered .lumi-command-center-history-item:nth-child(2) {
+  z-index: 2;
+  background: rgba(9, 28, 39, .62);
+  border-color: rgba(103, 232, 249, .14);
+  transform: translate3d(.65rem, 1.35rem, -12px) rotateY(-5deg) scale(.94);
+  opacity: .72;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-item:nth-child(3) {
+  z-index: 1;
+  background: rgba(8, 23, 33, .5);
+  border-color: rgba(103, 232, 249, .09);
+  transform: translate3d(1.2rem, 2.6rem, -24px) rotateY(-9deg) scale(.88);
+  opacity: .42;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-item--current {
+  background: rgba(12, 63, 75, .82) !important;
+  border-color: rgba(103, 232, 249, .28) !important;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-item:nth-child(n+4) {
+  max-height: 0;
+  margin-top: 0;
+  margin-bottom: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-rail:hover .lumi-command-center-history-item,
+.lumi-command-center-layered .lumi-command-center-history-rail:focus-within .lumi-command-center-history-item,
+.lumi-command-center-layered .lumi-command-center-history-rail--expanded .lumi-command-center-history-item {
+  max-height: 12rem;
+  margin-bottom: .25rem;
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-rail:hover .lumi-command-center-history-item:not(.lumi-command-center-history-item--current),
+.lumi-command-center-layered .lumi-command-center-history-rail:focus-within .lumi-command-center-history-item:not(.lumi-command-center-history-item--current),
+.lumi-command-center-layered .lumi-command-center-history-rail--expanded .lumi-command-center-history-item:not(.lumi-command-center-history-item--current) {
+  background: transparent;
+  border-color: transparent;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-item-marker {
+  position: relative;
+  display: inline-flex;
+  width: .72rem;
+  height: .72rem;
+  flex: 0 0 .72rem;
+  align-items: center;
+  justify-content: center;
+  opacity: .68;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-item-marker::before,
+.lumi-command-center-layered .lumi-command-center-history-item-marker::after,
+.lumi-command-center-layered .lumi-command-center-history-item-marker > span {
+  position: absolute;
+  display: block;
+  height: 1px;
+  border-radius: 999px;
+  background: rgba(165, 243, 252, .72);
+  content: "";
+}
+
+.lumi-command-center-layered .lumi-command-center-history-item-marker::before {
+  width: .62rem;
+  transform: translateY(-.16rem);
+}
+
+.lumi-command-center-layered .lumi-command-center-history-item-marker::after {
+  width: .42rem;
+  transform: translateY(.16rem);
+  opacity: .52;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-item-marker > span {
+  width: .2rem;
+  transform: translateX(.26rem);
+  opacity: .7;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-selector-mark {
+  position: relative;
+  display: inline-flex;
+  width: 1.15rem;
+  height: 1rem;
+  flex: 0 0 1.15rem;
+  align-items: center;
+  justify-content: center;
+  opacity: .68;
+  transform-origin: center;
+  transition: transform .24s ease, opacity .2s ease;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-selector-mark span {
+  position: absolute;
+  display: block;
+  height: 1px;
+  border-radius: 999px;
+  background: rgba(165, 243, 252, .75);
+  transition: transform .24s ease, width .24s ease, opacity .2s ease;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-selector-mark span:nth-child(1) {
+  width: 1.05rem;
+  transform: translateY(-.23rem) rotate(-10deg);
+}
+
+.lumi-command-center-layered .lumi-command-center-history-selector-mark span:nth-child(2) {
+  width: .78rem;
+  transform: translateY(0) rotate(10deg);
+  opacity: .65;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-selector-mark span:nth-child(3) {
+  width: .45rem;
+  transform: translateY(.23rem) rotate(-10deg);
+  opacity: .42;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-rail:hover .lumi-command-center-history-selector-mark,
+.lumi-command-center-layered .lumi-command-center-history-rail:focus-within .lumi-command-center-history-selector-mark,
+.lumi-command-center-layered .lumi-command-center-history-rail--expanded .lumi-command-center-history-selector-mark {
+  opacity: 1;
+  transform: rotate(90deg) scale(1.08);
+}
+
+.lumi-command-center-layered .lumi-command-center-history-item:hover,
+.lumi-command-center-layered .lumi-command-center-history-item:focus-visible {
+  z-index: 2;
+  transform: scale(1.025);
+  background: rgba(103, 232, 249, .09);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .18);
+  outline: none;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-item-preview {
+  display: none;
+  max-height: 1.1rem;
+  overflow: hidden;
+  line-height: 1.1rem;
+  transition: max-height .18s ease, color .18s ease, white-space .18s ease;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-item:hover .lumi-command-center-history-item-preview,
+.lumi-command-center-layered .lumi-command-center-history-item:focus-visible .lumi-command-center-history-item-preview {
+  display: -webkit-box;
+  max-height: 4.4rem;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  color: rgba(255, 255, 255, .58);
+}
+
+.lumi-command-center-layered .lumi-command-center-history-item:hover .lumi-command-center-history-item-title,
+.lumi-command-center-layered .lumi-command-center-history-item:focus-visible .lumi-command-center-history-item-title {
+  color: rgba(255, 255, 255, .95);
+}
+
+.lumi-command-center-layered .lumi-command-center-history-item-meta {
+  display: none;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-current-badge {
+  display: none;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-item:hover .lumi-command-center-history-item-meta,
+.lumi-command-center-layered .lumi-command-center-history-item:focus-visible .lumi-command-center-history-item-meta {
+  display: flex;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-rail:hover .lumi-command-center-history-current-badge,
+.lumi-command-center-layered .lumi-command-center-history-rail:focus-within .lumi-command-center-history-current-badge,
+.lumi-command-center-layered .lumi-command-center-history-rail--expanded .lumi-command-center-history-current-badge {
+  display: inline-flex;
+}
+
+.lumi-command-center-layered .lumi-command-center-history-rail-collapsed {
+  width: var(--command-center-rail-width);
+  max-width: var(--command-center-rail-width);
+  padding-top: .75rem;
+}
+
+.lumi-command-center-layered .lumi-command-center-switcher::before {
+  width: 1px;
+  height: min(48%, 180px);
+  margin-inline: auto;
+  content: "";
+  background: linear-gradient(to bottom, transparent, rgba(103, 232, 249, .32), transparent);
+  opacity: .8;
+}
+
+.lumi-command-center-layered .lumi-command-center-switcher-button {
+  width: 3.5rem;
+  min-width: 3.5rem;
+  min-height: 3.5rem;
+  flex: 0 0 3.5rem;
+  margin-left: auto;
+  justify-content: center;
+  gap: 0;
+  padding: .5rem;
+  overflow: hidden;
+  pointer-events: auto;
+  backdrop-filter: blur(18px);
+  transition: width .2s ease, transform .2s ease, background-color .2s ease, border-color .2s ease;
+}
+
+.lumi-command-center-layered .lumi-command-center-switcher-button:hover,
+.lumi-command-center-layered .lumi-command-center-switcher-button:focus-visible {
+  width: 100%;
+  min-width: 0;
+  flex-basis: auto;
+  margin-left: 0;
+  padding-inline: .75rem;
+  justify-content: flex-start;
+  gap: .75rem;
+  transform: translateX(-.2rem) scale(1.015);
+}
+
+.lumi-command-center-layered .lumi-command-center-switcher-copy {
+  display: block;
+  min-width: 0;
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateX(.35rem);
+  transition: max-width .2s ease, opacity .16s ease, transform .2s ease;
+}
+
+.lumi-command-center-layered .lumi-command-center-switcher-button:hover .lumi-command-center-switcher-copy,
+.lumi-command-center-layered .lumi-command-center-switcher-button:focus-visible .lumi-command-center-switcher-copy {
+  max-width: 13rem;
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.lumi-command-center-layered .lumi-command-center-switcher-button:focus-visible {
+  outline: 2px solid rgba(103, 232, 249, .8);
+  outline-offset: 3px;
+}
+
+.lumi-command-center-layered .lumi-command-center-chat-rail .lumi-chat-panel-header {
+  width: min(100%, 768px);
+  margin-inline: auto;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+.lumi-command-center-layered [data-command-center-integrated-identity] {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.lumi-command-center-layered .lumi-command-center-integrated-voice {
+  flex: 0 0 3rem;
+  margin-inline: -0.35rem;
+}
+
+.lumi-command-center-layered .lumi-command-center-chat-rail .lumi-chat-composer {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+.lumi-command-center-layered .lumi-command-center-chat-rail .lumi-chat-composer-row,
+.lumi-command-center-layered .lumi-command-center-chat-rail .lumi-chat-composer > .mb-3,
+.lumi-command-center-layered .lumi-command-center-chat-rail .lumi-chat-composer > .mb-3 + .mb-3 {
+  width: min(100%, 768px);
+  margin-inline: auto;
+}
+
+.lumi-command-center-layered .lumi-command-center-chat-rail > .lumi-chat-panel-header + .flex-1,
+.lumi-command-center-layered .lumi-command-center-chat-rail > .lumi-chat-panel-header + div {
+  width: 100%;
+  max-width: 768px;
+  margin-inline: auto;
+}
+
+.lumi-command-center-layered .lumi-command-center-chat-rail [data-chat-message-bubble] {
+  border-radius: 1.25rem;
+  padding: .85rem 1.25rem;
+  font-size: .9rem;
+}
+
+/* Office mode reads like a transcript: no chat cards, borders, shadows or
+ * rounded containers around message text. Attachments remain cards so files
+ * retain an obvious affordance. */
+.lumi-command-center-layered .lumi-command-center-chat-rail [data-chat-message-bubble].lumi-command-center-message-text {
+  max-width: 92%;
+  width: fit-content;
+  align-self: flex-start;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+/* The transcript row itself owns horizontal placement. Explicit alignment
+ * here prevents a width utility on a nested markdown element from making a
+ * user's message look centered while its timestamp is already on the right. */
+.lumi-command-center-layered .lumi-command-center-message-row[data-command-center-message-type="agent"] > * {
+  align-self: flex-start;
+}
+
+.lumi-command-center-layered .lumi-command-center-message-row[data-command-center-message-type="user"] > * {
+  align-self: flex-end;
+}
+
+.lumi-command-center-layered .lumi-command-center-message-row[data-command-center-message-type="agent"] .lumi-command-center-message-text,
+.lumi-command-center-layered .lumi-command-center-message-row[data-command-center-message-type="user"] .lumi-command-center-message-text {
+  width: fit-content;
+}
+
+.lumi-command-center-layered .lumi-command-center-message-text .chat-message-markdown {
+  line-height: 1.78;
+}
+
+.lumi-command-center-layered .lumi-command-center-message-text .chat-message-markdown p {
+  margin: 0 0 .7rem;
+}
+
+.lumi-command-center-layered .lumi-command-center-message-text .chat-message-markdown p:last-child {
+  margin-bottom: 0;
+}
+
+.lumi-command-center-layered .lumi-command-center-message-text .chat-message-markdown code {
+  border: 1px solid rgba(103, 232, 249, .12);
+  border-radius: .35rem;
+  background: rgba(5, 18, 28, .42);
+  padding: .1rem .3rem;
+}
+
+.lumi-command-center-layered .lumi-command-center-progress-text {
+  max-width: 92%;
+  border-left: 1px solid rgba(103, 232, 249, .42);
+  padding-left: .75rem;
+  color: rgba(226, 232, 240, .62);
+}
+
+.lumi-command-center-layered .lumi-command-center-task-feedback [data-task-feedback-presentation="chat-attention"] {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+}
+
+.lumi-command-center-layered .lumi-command-center-chat-rail [data-chat-message-bubble] .chat-message-markdown {
+  line-height: 1.7;
+}
+
+.lumi-command-center-layered .lumi-command-center-message-meta {
+  font-size: .62rem;
+  letter-spacing: .18em;
+  color: rgba(226, 232, 240, .34);
+}
+
+.lumi-command-center-layered .lumi-command-center-chat-rail .lumi-chat-agent-mark {
+  box-shadow: 0 0 24px rgba(217, 70, 239, .10);
+}
+
+.lumi-command-center-layered .lumi-command-center-memory-avatar-switch {
+  display: flex;
+  cursor: pointer;
+}
+
 @keyframes lumi-command-center-orbital-reveal {
   0% { opacity: 0; transform: translateX(-110%); }
   28% { opacity: 1; }
@@ -2344,6 +2913,88 @@ body,
 @media (max-width: 900px) {
   .lumi-command-center-workspace {
     flex-direction: column;
+  }
+
+  .lumi-command-center-layered .lumi-command-center-conversation-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    width: 100%;
+    padding: .5rem .75rem .75rem;
+    gap: .75rem;
+  }
+
+  .lumi-command-center-layered .lumi-command-center-history-rail {
+    width: 100%;
+    max-width: none;
+    flex: none;
+    grid-column: 1;
+    grid-row: 1;
+    min-height: min(30vh, 220px);
+    max-height: min(30vh, 220px);
+    padding: 0;
+    order: 0;
+  }
+
+  .lumi-command-center-layered .lumi-command-center-history-rail-collapsed {
+    width: 100%;
+    max-width: none;
+    flex: none;
+    grid-column: 1;
+    grid-row: 1;
+    min-height: 2.75rem;
+    max-height: 2.75rem;
+    padding: 0;
+    order: 0;
+  }
+
+  .lumi-command-center-layered .lumi-command-center-chat-rail {
+    width: 100% !important;
+    grid-column: 1;
+    grid-row: 2;
+    order: 1;
+  }
+
+  .lumi-command-center-layered .lumi-command-center-switcher {
+    width: 100%;
+    max-width: none;
+    flex: none;
+    grid-column: 1;
+    grid-row: 3;
+    flex-direction: row;
+    align-items: stretch;
+    justify-content: center;
+    padding: 0;
+    order: 2;
+  }
+
+  .lumi-command-center-layered .lumi-command-center-switcher::before {
+    display: none;
+  }
+
+  .lumi-command-center-layered .lumi-command-center-switcher-button {
+    width: 100%;
+    min-width: 0;
+    min-height: 3.75rem;
+    flex: 1 1 0;
+    margin-left: 0;
+    justify-content: flex-start;
+    gap: .75rem;
+    padding-inline: .75rem;
+  }
+
+  .lumi-command-center-layered .lumi-command-center-switcher-copy {
+    max-width: 13rem;
+    opacity: 1;
+    transform: none;
+  }
+
+  .lumi-command-center-layered [data-command-center-integrated-identity] {
+    max-width: 58%;
+  }
+
+  .lumi-command-center-layered .lumi-command-center-integrated-voice {
+    margin-inline: -0.5rem;
   }
 
   .lumi-command-center-office {
