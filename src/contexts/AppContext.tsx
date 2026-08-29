@@ -9,6 +9,10 @@ import { getDomainReconciliation } from '../lib/domainSession';
 import { mergeNotificationState, notificationClearStorageKey } from '../lib/notificationState';
 import { translate } from '../i18n/runtime';
 import { LUMI_OFFICIAL_DEFAULT_MODELS, normalizeLumiOfficialModel } from '../../shared/model_provider_capabilities';
+import {
+  normalizeLumiClientMode,
+  type LumiClientMode,
+} from '../../shared/operation_modes';
 
 interface UserProfile {
   uid: string;
@@ -57,14 +61,11 @@ interface ToolOverride {
   securityLevel?: string;
 }
 
-export type OperationMode = 'chat' | 'assistant' | 'autonomous' | 'meeting';
+export type OperationMode = LumiClientMode;
 export type AppearanceMode = 'system' | 'light' | 'dark';
 
 function normalizeOperationMode(mode: unknown): OperationMode {
-  if (mode === 'chat' || mode === 'assistant' || mode === 'autonomous' || mode === 'meeting') return mode;
-  if (mode === 'music') return 'assistant';
-  if (mode === 'desktop_control' || mode === 'terminal') return 'assistant';
-  return 'assistant';
+  return normalizeLumiClientMode(mode);
 }
 
 function normalizeAppearanceMode(mode: unknown): AppearanceMode {

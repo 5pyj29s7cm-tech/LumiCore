@@ -1,4 +1,5 @@
 import type { ModelRoutingTrace } from '../llm/model_routing_receipts';
+import type { LumiClientMode } from '../../shared/operation_modes';
 
 export type ToolPermission = 'public' | 'user' | 'admin' | 'system';
 
@@ -6,7 +7,7 @@ export type ToolPermission = 'public' | 'user' | 'admin' | 'system';
 export type SecurityLevel = 'safe' | 'confirm' | 'forbidden';
 export type CapabilitySource = 'builtin' | 'mcp' | 'skill' | 'adapter';
 export type CapabilityOperation = 'observe' | 'test' | 'mutate' | 'create' | 'communicate' | 'unknown';
-export type CapabilityMode = 'chat' | 'assistant' | 'autonomous' | 'meeting';
+export type CapabilityMode = LumiClientMode;
 export type CapabilityRisk = 'none' | 'low' | 'medium' | 'high' | 'critical';
 export type CapabilityTrust = 'core' | 'official' | 'user-reviewed' | 'third-party' | 'untrusted';
 export type CapabilityLane =

@@ -1,6 +1,7 @@
 import type { OperationMode } from './operation_modes';
 import {
   detectRequestedOperationMode,
+  buildOperationModeTaxonomyPrompt,
   getOperationModeConfig,
   normalizeOperationMode,
 } from './operation_modes';
@@ -549,7 +550,11 @@ export function buildInteractionModeOverlay(flow: LumiTurnFlow): string {
     ? '\n\n## Factual Restatement Fidelity\nUse only facts explicitly stated by the user in the relevant recent turns. Apply the latest correction as a replacement and keep every other fact unchanged. Do not add reminders, scheduling, ownership, implications, advice, inferred next steps, or claims that anything was saved or recorded.'
     : '';
   if (flow.conceptualCapabilityQuestion) {
-    return '## Capability Explanation\nThis turn only explains how Lumi modes and per-turn capability routing work. Do not call tools, inspect client state, resume an existing task, or delegate work. A routed subset is not the installed tool inventory; never ask the user to enable, mount, or switch to a fictional tool mode.' + restatementOverlay;
+    return [
+      '## Capability Explanation',
+      'This turn only explains how Lumi modes and per-turn capability routing work. Do not call tools, inspect client state, resume an existing task, or delegate work. A routed subset is not the installed tool inventory; never ask the user to enable, mount, or switch to a fictional tool mode.',
+      buildOperationModeTaxonomyPrompt(),
+    ].join('\n') + restatementOverlay;
   }
   if (flow.clientActionOnlyTurn) {
     return '## Client Surface Capability Hint\nThe user may be asking to change a Lumi mode or open a client-native surface. Treat client_get_state and client_action as the strongest candidates, but let the model decide from the current manifest whether to respond or act. This hint cannot grant capabilities or narrow the hard operation-mode policy. For meeting/autonomous mode, keep the client action confirmation boundary when required.' + restatementOverlay;

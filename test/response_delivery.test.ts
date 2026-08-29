@@ -49,6 +49,14 @@ describe('finalized output delivery gate', () => {
     })).toBe(false);
   });
 
+  it('buffers operation-mode self-knowledge until canonical finalization', () => {
+    const taskText = '\u4f60\u6709\u591a\u5c11\u79cd\u6a21\u5f0f';
+    expect(shouldDeferModelOutputUntilFinalized({
+      taskText,
+      flow: flow({ routeText: taskText }),
+    })).toBe(true);
+  });
+
   it.each([
     '\u4f60\u5bf9\u76ee\u524d\u81ea\u5df1\u7684\u80fd\u529b\u662f\u5426\u6ee1\u610f',
     '\u4e3a\u4ec0\u4e48\u4e0d\u56de\u6211',

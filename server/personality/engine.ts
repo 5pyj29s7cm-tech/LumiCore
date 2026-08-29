@@ -291,11 +291,19 @@ export function generateSystemPrompt(
     blocks.push(growthLines.join('\n'));
   }
 
-  // Execution modes — Lumi's internal thinking-mode presets
-  if (config.executionModes && Object.keys(config.executionModes).length > 0) {
-    blocks.push('\nWhen the task demands it, switch to the appropriate mode:');
-    for (const [modeId, mode] of Object.entries(config.executionModes)) {
-      blocks.push(`- ${modeId}: ${mode.promptExtension}`);
+  // Internal response presets — never confuse these with operation modes.
+  // Internal response presets are style/reasoning lenses, never runtime modes.
+  // `executionModes` remains a compatibility path for existing serialized
+  // personality records created before the taxonomy was clarified.
+  const responsePresets = config.responsePresets || config.executionModes;
+  if (responsePresets && Object.keys(responsePresets).length > 0) {
+    blocks.push('\n## Internal response presets (not LumiCore operation modes)');
+    blocks.push('Private task-style lenses are not user-selectable client modes, are not client.modes state, and cannot change tools, permissions, memory ownership, or task lifecycle. Never enumerate personality presets when asked how many modes LumiCore has.');
+    const selectedPreset = ctx.responsePreset
+      ? responsePresets[ctx.responsePreset]
+      : undefined;
+    if (selectedPreset) {
+      blocks.push(`Selected response preset for this turn: ${selectedPreset.promptExtension}`);
     }
   }
 
@@ -427,5 +435,7 @@ export function getStatusText(config: PersonalityConfig): string {
  */
 export function buildModeOverlay(mode?: string): string {
   const config = getModeConfig(mode);
-  return config?.promptOverlay || '';
+  return config
+    ? `## Conversation style (not an operation or permission mode)\n${config.promptOverlay}`
+    : '';
 }

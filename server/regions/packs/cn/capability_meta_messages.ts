@@ -1,4 +1,36 @@
 import type { OperationMode } from '../../../cognition/operation_modes';
+import {
+  LUMI_MEETING_CAPTURE_SURFACE,
+  LUMI_OPERATION_MODE_IDS,
+  type LumiOperationMode,
+} from '../../../../shared/operation_modes';
+
+const CN_OPERATION_MODE_LINES: Record<LumiOperationMode, string> = {
+  chat: '\u7eaf\u804a\u5929\uff08chat\uff09\uff1a\u4ee5\u5bf9\u8bdd\u4e3a\u4e3b\uff1b\u7528\u6237\u660e\u786e\u4ea4\u4ee3\u524d\u53f0\u4efb\u52a1\u65f6\uff0c\u8be5\u8f6e\u53ef\u4ee5\u4f7f\u7528\u52a9\u624b\u80fd\u529b\uff0c\u4f46\u4e0d\u6301\u4e45\u5207\u6362\u6a21\u5f0f\u3002',
+  assistant: '\u52a9\u624b\uff08assistant\uff09\uff1a\u7528\u6237\u5728\u573a\u65f6\u7684\u524d\u53f0\u6267\u884c\uff0c\u53ef\u6309\u4efb\u52a1\u8c03\u7528\u6587\u4ef6\u3001\u5e94\u7528\u3001\u6d4f\u89c8\u5668\u3001\u684c\u9762\u548c\u5de5\u5177\u80fd\u529b\u3002',
+  autonomous: '\u81ea\u4e3b\uff08autonomous\uff09\uff1a\u5728\u52a9\u624b\u6743\u9650\u57fa\u7840\u4e0a\uff0c\u589e\u52a0\u6301\u7eed\u3001\u540e\u53f0\u548c\u957f\u65f6\u95f4\u4efb\u52a1\u6267\u884c\u3002',
+};
+
+export function formatCnOperationModeInventoryResponse(): string {
+  return [
+    `LumiCore \u5bf9\u7528\u6237\u53ef\u5207\u6362\u7684\u8fd0\u884c\u6743\u9650\u6a21\u5f0f\u53ea\u6709 ${LUMI_OPERATION_MODE_IDS.length} \u79cd\uff1a`,
+    ...LUMI_OPERATION_MODE_IDS.map((mode, index) => `${index + 1}. ${CN_OPERATION_MODE_LINES[mode]}`),
+    `\u4f1a\u8bae\u8f6c\u5199\uff08${LUMI_MEETING_CAPTURE_SURFACE.id}\uff09\u662f\u4e34\u65f6\u8bed\u97f3\u91c7\u96c6\u573a\u666f\uff0c\u4e0d\u662f\u7b2c\u56db\u79cd\u6743\u9650\u6a21\u5f0f\u3002\u4eba\u683c\u4e2d\u7684\u8868\u8fbe\u9884\u8bbe\u548c\u4f1a\u8bdd\u98ce\u683c\u4e5f\u4e0d\u5c5e\u4e8e\u8fd0\u884c\u6a21\u5f0f\uff0c\u4e0d\u4f1a\u6539\u53d8\u5de5\u5177\u6743\u9650\u3002`,
+  ].join('\n');
+}
+
+export function formatCnCurrentOperationModeResponse(mode: OperationMode | string): string {
+  if (mode === LUMI_MEETING_CAPTURE_SURFACE.id) {
+    return '\u5f53\u524d\u6b63\u5728\u4f1a\u8bae\u8f6c\u5199\u573a\u666f\u4e2d\u3002\u8fd9\u662f\u4e34\u65f6\u8bed\u97f3\u91c7\u96c6\u8868\u9762\uff0c\u4e0d\u662f\u7b2c\u56db\u79cd\u8fd0\u884c\u6743\u9650\u6a21\u5f0f\u3002';
+  }
+  const normalized = LUMI_OPERATION_MODE_IDS.includes(mode as LumiOperationMode)
+    ? mode as LumiOperationMode
+    : 'assistant';
+  return `\u5f53\u524d\u8fd0\u884c\u6743\u9650\u6a21\u5f0f\u662f\uff1a${CN_OPERATION_MODE_LINES[normalized]}\nLumiCore \u7684\u6301\u4e45\u8fd0\u884c\u6743\u9650\u6a21\u5f0f\u5171 ${LUMI_OPERATION_MODE_IDS.length} \u79cd\uff1a${LUMI_OPERATION_MODE_IDS.join(' / ')}\u3002`;
+}
+
+export const CN_UNVERIFIED_CLIENT_STATE_CLAIM =
+  '\u8fd9\u4e00\u8f6e\u6ca1\u6709\u8bfb\u53d6\u5230\u53ef\u6838\u9a8c\u7684\u5ba2\u6237\u7aef\u8fd0\u884c\u72b6\u6001\uff0c\u56e0\u6b64\u4e0d\u80fd\u628a\u5f53\u524d\u72b6\u6001\u8bf4\u6210\u201c\u5df2\u9a8c\u8bc1\u201d\u3002\u4ea7\u54c1\u5b9a\u4e49\u53ef\u4ee5\u76f4\u63a5\u8bf4\u660e\uff1b\u5b9e\u65f6\u72b6\u6001\u9700\u8981\u771f\u5b9e\u67e5\u8be2\u56de\u6267\u540e\u518d\u786e\u8ba4\u3002';
 
 export function formatCnCapabilityMetaResponse(
   mode: OperationMode | string,

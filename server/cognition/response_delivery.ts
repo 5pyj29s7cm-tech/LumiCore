@@ -1,6 +1,7 @@
 import { buildActionContract } from './action_contract';
 import { needsRecentActionContinuationContext } from './action_continuation';
 import type { LumiTurnFlow } from './turn_flow';
+import { isOperationModeMetaQuestion } from './capability_meta';
 
 const REFERENTIAL_EXECUTION_RE =
   /^(?:(?:\u4f60)?(?:\u7ee7\u7eed|\u63a5\u7740|\u5feb\u70b9|\u8d76\u7d27|\u9a6c\u4e0a|\u73b0\u5728|\u53bb).{0,20}(?:\u6267\u884c|\u5904\u7406|\u505a|\u5b8c\u6210|\u63a8\u8fdb|\u8fd9\u4e2a\u4efb\u52a1|\u5b83)|(?:continue|resume|proceed|do it|execute it|run it|finish it|go ahead).*)[.!?\u3002\uFF01\uFF1F]*$/iu;
@@ -77,6 +78,7 @@ export function shouldDeferModelOutputUntilFinalized(
     || input.flow.workSurfaceRoute.directDesktop
     || input.flow.workSurfaceRoute.artifactFirst
     || input.flow.workTakeover.shouldResumeTask
+    || isOperationModeMetaQuestion(taskText)
     || (contract.applies && contract.kind !== 'none')
     || needsRecentActionContinuationContext(taskText)
     || REFERENTIAL_EXECUTION_RE.test(taskText)

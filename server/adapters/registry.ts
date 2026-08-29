@@ -6,6 +6,7 @@ import {
   PERSONAL_CLIENT_SURFACES,
   PERSONAL_CLIENT_SURFACE_ACTIONS,
 } from '../../shared/client_surfaces';
+import { LUMI_OPERATION_MODE_IDS } from '../../shared/operation_modes';
 import { sanitizeDiagnosticValue } from '../client/diagnostic_sanitizer';
 import type { CapabilityLane, CapabilityManifestEntry } from '../tools/types';
 import { toolRegistry } from '../tools/registry';
@@ -162,11 +163,14 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       label: 'Client Modes',
       category: 'client',
       status: hasState ? 'ready' : 'available',
-      actions: ['set_client_mode(chat)', 'set_client_mode(assistant)', 'set_client_mode(autonomous)', 'start_meeting_mode'],
+      actions: [
+        ...LUMI_OPERATION_MODE_IDS.map(mode => `set_client_mode(${mode})`),
+        'start_meeting_mode',
+      ],
       surfaces: ['mode switcher', 'voice', 'chat', 'meeting'],
       requiresConfirmation: false,
       diagnostics: state?.mode ? [`Current mode: ${state.mode}`] : [],
-      notes: 'Chat is conversation-first; an explicit foreground action can borrow the Assistant manifest for that turn without persistently changing the visible mode. Assistant is user-present high-permission work. Autonomous has the same practical permissions plus continuous/background work. Switching between Chat, Assistant, and Autonomous does not need tool permission popups; Meeting capture remains explicit.',
+      notes: 'This adapter describes exactly three persistent operation modes: Chat, Assistant, and Autonomous. It is a capability-registry entry, not a live client.modes state field. Chat is conversation-first; an explicit foreground action can borrow the Assistant manifest for that turn without persistently changing the visible mode. Assistant is user-present high-permission work. Autonomous adds continuous/background work. Meeting is an explicit temporary capture surface, not a fourth permission mode.',
     },
     {
       id: 'client.self_intro_demo',

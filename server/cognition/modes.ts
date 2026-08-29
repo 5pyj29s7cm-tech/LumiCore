@@ -1,9 +1,10 @@
 /**
- * Conversation Modes — Lumi's interaction style presets.
+ * Conversation styles — Lumi's interaction style presets.
  *
- * Each mode applies a prompt overlay that shapes HOW Lumi responds
+ * Each style applies a prompt overlay that shapes HOW Lumi responds
  * without changing WHO she is (personality). Modes are user-selectable
- * per conversation and affect tone, depth, and interaction patterns.
+ * per conversation and affect tone, depth, and interaction patterns. They do
+ * not change operation modes, tool permissions, or task ownership.
  */
 
 export type ConversationMode = 'casual' | 'teaching' | 'brainstorm' | 'executive';

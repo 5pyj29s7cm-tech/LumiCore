@@ -74,6 +74,7 @@ describe('chat prior-action status handler', () => {
   const exactReceiptRequestId = `chat-prior-action-exact-receipt-${suffix}`;
   const cancelSeedRequestId = `chat-durable-cancel-seed-${suffix}`;
   const cancelRequestId = `chat-durable-cancel-${suffix}`;
+  const modeFactsRequestId = `chat-operation-mode-facts-${suffix}`;
   const englishStatusQuestion = 'What did you just do, and what evidence proved it succeeded?';
   const chineseStatusQuestion = '你刚才做了什么，什么证据证明成功了？';
   const exactReceiptQuestion = '你上一轮是否真的调用过工具？不要再次调用工具，只根据已保存的回执告诉我：工具名、成功还是失败。';
@@ -541,6 +542,42 @@ describe('chat prior-action status handler', () => {
       taskId: idleTask?.taskId || '',
     }))
       .toMatchObject({ taskId: idleTask?.taskId, status: 'cancelled', unfinished: false });
+    expect(llmTripwire).not.toHaveBeenCalled();
+  });
+
+  it('answers the operation-mode inventory before any model or tool call', async () => {
+    const response = await sendStatusQuestion(
+      modeFactsRequestId,
+      '\u4f60\u6709\u591a\u5c11\u79cd\u6a21\u5f0f',
+    );
+    expect(response).toMatchObject({
+      requestId: modeFactsRequestId,
+      conversationId,
+      source: 'command-center-chat',
+      reason: 'operation_mode_facts',
+      finalized: true,
+      blocked: false,
+    });
+    expect(response.text).toContain('3 \u79cd');
+    expect(response.text).toContain('chat');
+    expect(response.text).toContain('assistant');
+    expect(response.text).toContain('autonomous');
+    expect(response.text).not.toMatch(/7 \u79cd|scholar|office|client\.modes/u);
+    expect(observedEvents.filter(item => (
+      String(item.payload.requestId || '') === modeFactsRequestId
+      && (item.event === 'agent:tool_call' || item.event === 'agent:tool')
+    ))).toEqual([]);
+
+    const reply = (readDB().interactions || []).find((item: any) => (
+      item.role === 'assistant'
+      && String(item.requestId || item.externalMessageId || '') === modeFactsRequestId
+    ));
+    expect(reply).toMatchObject({
+      source: 'chat_operation_mode_facts',
+      cognitiveIntent: 'operation_mode_facts',
+      llmWasCalled: false,
+    });
+    expect(storedToolCalls(reply?.toolCalls)).toEqual([]);
     expect(llmTripwire).not.toHaveBeenCalled();
   });
 });

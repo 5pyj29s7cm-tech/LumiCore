@@ -83,6 +83,9 @@ import {
   hasLegalExternalPlatformResultEvidence,
 } from './result_policy_evidence';
 import { normalizeActionIntent } from './normalized_action_intent';
+import { buildOperationModeMetaResponse } from './capability_meta';
+import { CN_UNVERIFIED_CLIENT_STATE_CLAIM } from '../regions/packs/cn/capability_meta_messages';
+import type { LumiClientMode } from '../../shared/operation_modes';
 
 export interface LumiResultFinalizerInput {
   taskText: string;
@@ -288,6 +291,27 @@ function unsupportedPriorDiagnosticClaim(input: LumiResultFinalizerInput): strin
 
 function taskActionContract(input: LumiResultFinalizerInput) {
   return buildActionEvidenceContract(resultTaskText(input));
+}
+
+function unsupportedClientStateVerificationClaim(input: LumiResultFinalizerInput): string | null {
+  const response = String(input.responseText || '').trim();
+  if (!response) return null;
+  // A conceptual answer may describe a compile-time product definition, but it
+  // must not pretend that live client/runtime state was read or verified.
+  const deniesVerification = /(?:\u6ca1\u6709|\u5e76\u672a|\u672a\u66fe|\u4e0d\u80fd|\u65e0\u6cd5|did\s+not|didn't|cannot|can't|was\s+not|wasn't)[^\u3002\uff01\uff1f.!?\n]{0,24}(?:\u9a8c\u8bc1|\u6838\u5b9e|\u786e\u8ba4|\u8bfb\u53d6|\u67e5\u8be2|verify|confirm|read|inspect|query)/iu.test(response);
+  if (deniesVerification) return null;
+  const verificationClaim = /(?:(?:\u5df2\u9a8c\u8bc1|\u5df2\u6838\u5b9e|\u7ecf\u6838\u5b9e|\u5df2\u786e\u8ba4|\u5df2\u8bfb\u53d6|\u5df2\u67e5\u8be2|\u67e5\u5230|verified|confirmed|read|queried|inspected)[^\u3002\uff01\uff1f.!?\n]{0,100}(?:client\.modes|\u5ba2\u6237\u7aef\u72b6\u6001|\u8fd0\u884c\u65f6\u72b6\u6001|\u5f53\u524d\u914d\u7f6e|client\s+state|runtime\s+state|current\s+configuration)|(?:client\.modes|\u5ba2\u6237\u7aef\u72b6\u6001|\u8fd0\u884c\u65f6\u72b6\u6001|\u5f53\u524d\u914d\u7f6e|client\s+state|runtime\s+state|current\s+configuration)[^\u3002\uff01\uff1f.!?\n]{0,100}(?:\u5df2\u9a8c\u8bc1|\u5df2\u6838\u5b9e|\u7ecf\u6838\u5b9e|\u5df2\u786e\u8ba4|\u5df2\u8bfb\u53d6|\u5df2\u67e5\u8be2|verified|confirmed|read|queried|inspected))/iu.test(response);
+  if (!verificationClaim) return null;
+
+  const hasRelevantReceipt = (input.toolRecords || []).some(record => (
+    toolRecordSucceeded(record)
+    && /^(?:client_get_state|client_health_check|client_capability_manifest|model_configuration_get)$/i.test(String(record.name || ''))
+  ));
+  if (hasRelevantReceipt) return null;
+
+  return isChineseText(resultTaskText(input)) || isChineseText(response)
+    ? CN_UNVERIFIED_CLIENT_STATE_CLAIM
+    : 'No verifiable client-runtime receipt was recorded for this turn, so the current state cannot be described as verified. Product definitions may be stated directly; live state requires a real query receipt.';
 }
 
 function isChineseText(value: string): boolean {
@@ -1044,7 +1068,7 @@ function formatCreatedArtifactWithoutInAppCompletion(input: LumiResultFinalizerI
     : `The file was created at ${path}, but the corresponding action was not completed in the target application.`;
 }
 
-function operationModeFromLabel(label: string): 'chat' | 'assistant' | 'autonomous' | 'meeting' | null {
+function operationModeFromLabel(label: string): LumiClientMode | null {
   const normalized = String(label || '').trim().toLowerCase();
   if (/^(?:\u804a\u5929|\u5bf9\u8bdd|chat|conversation)$/.test(normalized)) return 'chat';
   if (/^(?:\u52a9\u624b|\u52a9\u7406|assistant)$/.test(normalized)) return 'assistant';
@@ -2155,6 +2179,18 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     )),
   };
   const actionText = resultTaskText(input);
+  const operationModeFacts = buildOperationModeMetaResponse({
+    text: actionText,
+    operationMode: input.flow?.operationMode,
+    source: input.source,
+  });
+  if (operationModeFacts) {
+    return {
+      text: operationModeFacts,
+      blocked: false,
+      reason: 'canonical_operation_mode_facts',
+    };
+  }
   const protocolLeak = leakedLegacyToolProtocol(input);
   if (protocolLeak) return protocolLeak;
   const safeResponseText = sanitizeInternalExecutionText(
@@ -2171,6 +2207,14 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   const factualResponseText = sanitizeUnsupportedRestatementAdditions(actionText, input.responseText, input.toolRecords || []);
   if (factualResponseText !== input.responseText) {
     input = { ...input, responseText: factualResponseText };
+  }
+  const unsupportedClientVerification = unsupportedClientStateVerificationClaim(input);
+  if (unsupportedClientVerification) {
+    return {
+      text: unsupportedClientVerification,
+      blocked: false,
+      reason: 'unsupported_client_state_verification_claim_corrected',
+    };
   }
   // A CAD workflow receipt owns both its execution truth and its user-facing
   // terminal state. Do not let model narration or a later generic guard hide

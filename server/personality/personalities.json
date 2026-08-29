@@ -78,7 +78,7 @@
       "cooldownMs": 604800000,
       "maxMutationsPerStep": 3
     },
-    "executionModes": {
+    "responsePresets": {
       "scholar": {
         "description": "Rigorous analysis — for code review, architecture, research.",
         "tone": "professional",

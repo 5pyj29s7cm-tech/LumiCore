@@ -133,6 +133,10 @@ describe('Lumi core integrity pressure', () => {
     expect(prompt).toContain('do not treat it as core identity');
     expect(prompt).toContain('完整闭环');
     expect(prompt).toContain('Active senses: can hear, can see.');
+    expect(prompt).toContain('Internal response presets (not LumiCore operation modes)');
+    expect(prompt).not.toContain('Internal preset scholar');
+    expect(prompt).not.toContain('When the task demands it, switch to the appropriate mode');
+    expect(prompt).not.toContain('Be rigorous and analytical.');
     expectCleanCorePrompt(prompt);
 
     const voiceDispatch = buildLumiTurnDispatch({

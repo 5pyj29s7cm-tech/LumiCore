@@ -30,16 +30,19 @@ export interface PersonalityVector {
   };
 }
 
-/** An execution mode preset stored inside a personality config.
+/** An internal response preset stored inside a personality config.
  *  Scholar and Founder are no longer independent personalities —
- *  they are Lumi's internal thinking-mode presets. */
-export interface ExecutionMode {
+ *  These presets never change the client operation mode or permission tier. */
+export interface InternalResponsePreset {
   description: string;
   tone: ExpressionStyle['tone'];
   verbosity: ExpressionStyle['verbosity'];
   languages?: string[];
   promptExtension: string;
 }
+
+/** @deprecated Serialized compatibility alias; use InternalResponsePreset. */
+export type ExecutionMode = InternalResponsePreset;
 
 export interface ExpressionStyle {
   /** Short persona description for self-reference, e.g. "futuristic AI architect" */
@@ -143,9 +146,13 @@ export interface PersonalityConfig {
    *  expressionStyle.tone and verbosity are derived from this vector. */
   personalityVector?: PersonalityVector;
 
-  /** Execution mode presets (e.g. scholar, founder) — internal thinking-mode switches
-   *  that Lumi can activate for specific task types. These are NOT independent personalities. */
-  executionModes?: Record<string, ExecutionMode>;
+  /** Legacy serialized response presets (e.g. scholar, founder).
+   *  These are neither operation modes nor independent personalities. */
+  /** Internal task/response presets. They never change operation mode or permissions. */
+  responsePresets?: Record<string, InternalResponsePreset>;
+
+  /** @deprecated Legacy serialized key retained for existing user personality data. */
+  executionModes?: Record<string, InternalResponsePreset>;
 
   /** Per-context overrides — e.g. 'floating-window' can be more concise than 'full-screen' */
   contextOverrides?: Record<string, Partial<{
@@ -207,6 +214,8 @@ export interface PersonalityContext {
   uiContext?: string;
   /** Whether this is a tool-enabled (task) or simple (chat) invocation */
   mode: 'chat' | 'task';
+  /** Explicit internal response preset for this turn; never an operation mode. */
+  responsePreset?: string;
   /** Multimodal sensory context from connected devices */
   sensory?: SensoryContext;
 }

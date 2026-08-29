@@ -3,6 +3,7 @@ import dns from 'node:dns/promises';
 import net from 'node:net';
 import OpenAI from 'openai';
 import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
+import { LUMI_CLIENT_MODE_IDS } from '../../shared/operation_modes';
 import { getKey, isPersistableKeyName } from '../config/keys';
 import type { ToolRegistry } from '../tools/registry';
 import type {
@@ -43,7 +44,7 @@ const ALLOWED_LANES = new Set<CapabilityLane>([
 ]);
 const ALLOWED_OPERATIONS = new Set<CapabilityOperation>(['observe', 'test', 'mutate', 'create', 'communicate']);
 const ALLOWED_RISKS = new Set<CapabilityRisk>(['none', 'low', 'medium', 'high', 'critical']);
-const ALLOWED_MODES = new Set<CapabilityMode>(['chat', 'assistant', 'autonomous', 'meeting']);
+const ALLOWED_MODES = new Set<CapabilityMode>(LUMI_CLIENT_MODE_IDS);
 const ALLOWED_SECURITY = new Set<SecurityLevel>(['safe', 'confirm', 'forbidden']);
 const ALLOWED_PERMISSIONS = new Set<ToolPermission>(['user', 'admin']);
 const ALLOWED_VERIFICATION_STRATEGIES = new Set<CapabilityVerification['strategy']>([

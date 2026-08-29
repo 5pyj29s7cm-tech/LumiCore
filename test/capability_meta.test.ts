@@ -1,11 +1,61 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildCapabilityMetaResponse,
+  buildOperationModeMetaResponse,
   isCapabilityMetaQuestion,
+  isCurrentOperationModeQuestion,
+  isOperationModeInventoryQuestion,
   isSelfIntroductionMetaQuestion,
 } from '../server/cognition/capability_meta';
 
 describe('capability access explanations', () => {
+  it.each([
+    '\u4f60\u6709\u591a\u5c11\u79cd\u6a21\u5f0f',
+    '\u4f60\u6709\u51e0\u79cd\u6a21\u5f0f',
+    '\u6709\u54ea\u4e9b\u6a21\u5f0f',
+    '\u6a21\u5f0f\u6709\u591a\u5c11\u79cd',
+    '\u8bf7\u5217\u51fa\u6240\u6709\u6a21\u5f0f',
+    '\u6211\u4eec\u4e0d\u662f\u53ea\u6709\u4e09\u4e2a\u6a21\u5f0f\u5417',
+    '\u4f60\u8bf4\u7684\u4e03\u79cd\u6a21\u5f0f\u5bf9\u5417',
+    '\u4e09\u4e2a\u6a21\u5f0f\u5206\u522b\u662f\u4ec0\u4e48',
+    'How many modes do you have?',
+  ])('answers operation-mode inventory from the canonical three-mode taxonomy: %s', (text) => {
+    expect(isOperationModeInventoryQuestion(text)).toBe(true);
+    expect(isCapabilityMetaQuestion(text)).toBe(true);
+    const response = buildOperationModeMetaResponse({ text, operationMode: 'assistant' }) || '';
+    expect(response).toMatch(/(?:3 \u79cd|exactly 3)/i);
+    expect(response).toContain('chat');
+    expect(response).toContain('assistant');
+    expect(response).toContain('autonomous');
+    expect(response).toContain('meeting');
+    expect(response).not.toMatch(/scholar|office|mentor|celebrate|companion|founder|comfort/i);
+    expect(response).not.toContain('client.modes');
+  });
+
+  it.each([
+    '\u4f60\u73b0\u5728\u662f\u4ec0\u4e48\u6a21\u5f0f',
+    '\u4f60\u73b0\u5728\u4e0d\u662f\u52a9\u624b\u6a21\u5f0f\u5417',
+    '\u662f\u52a9\u624b\u6a21\u5f0f\u5417',
+    '\u4f60\u5f53\u524d\u6a21\u5f0f\u662f\u4ec0\u4e48',
+    '\u5f53\u524d\u6a21\u5f0f\u662f\u4ec0\u4e48',
+  ])('answers the persisted current operation mode without inventing a client-state read: %s', (text) => {
+    expect(isCurrentOperationModeQuestion(text)).toBe(true);
+    expect(isOperationModeInventoryQuestion(text)).toBe(false);
+    const response = buildOperationModeMetaResponse({ text, operationMode: 'assistant' }) || '';
+    expect(response).toContain('assistant');
+    expect(response).not.toMatch(/\u5df2\u9a8c\u8bc1|\u5df2\u8bfb\u53d6|client\.modes/u);
+  });
+
+  it.each([
+    '\u5207\u6362\u5230\u81ea\u4e3b\u6a21\u5f0f',
+    '\u6253\u5f00\u6df1\u8272\u6a21\u5f0f',
+    '\u6df1\u8272\u6a21\u5f0f\u662f\u4ec0\u4e48',
+  ])('does not consume a mode action or unrelated UI mode as taxonomy meta: %s', (text) => {
+    expect(isOperationModeInventoryQuestion(text)).toBe(false);
+    expect(isCurrentOperationModeQuestion(text)).toBe(false);
+    expect(buildOperationModeMetaResponse({ text, operationMode: 'assistant' })).toBeNull();
+  });
+
   it('answers a first-user self introduction without old-task or unverified service claims', () => {
     const text = '\u4e3b\u7a0b\u5e8f\u5b9e\u673a\u9a8c\u6536\u00b7\u8eab\u4efd\u4e0e\u5f15\u5bfc\uff1a\u8bf7\u50cf\u7b2c\u4e00\u6b21\u9762\u5bf9\u65b0\u7528\u6237\u4e00\u6837\uff0c\u4ecb\u7ecd\u4f60\u662f\u8c01\u3001\u80fd\u505a\u4ec0\u4e48\u3001\u4e0d\u80fd\u4fdd\u8bc1\u4ec0\u4e48\u3001\u9047\u5230\u6267\u884c\u5931\u8d25\u600e\u4e48\u5904\u7406\u3002\u4e0d\u8981\u8c03\u7528\u5de5\u5177\u3002';
     expect(isSelfIntroductionMetaQuestion(text)).toBe(true);

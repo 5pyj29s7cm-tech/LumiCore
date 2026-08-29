@@ -10,8 +10,15 @@
  */
 import { ToolPolicy } from '../personality/types';
 import type { ToolRegistry } from '../tools/registry';
+import {
+  LUMI_CLIENT_MODE_IDS,
+  LUMI_MEETING_CAPTURE_SURFACE,
+  LUMI_OPERATION_MODE_IDS,
+  normalizeLumiClientMode,
+  type LumiClientMode,
+} from '../../shared/operation_modes';
 
-export type OperationMode = 'chat' | 'assistant' | 'autonomous' | 'meeting';
+export type OperationMode = LumiClientMode;
 
 export interface OperationModeConfig {
   id: OperationMode;
@@ -107,10 +114,21 @@ export const OPERATION_MODE_CONFIGS: Record<OperationMode, OperationModeConfig> 
 };
 
 export function normalizeOperationMode(mode?: string): OperationMode {
-  if (mode === 'chat' || mode === 'assistant' || mode === 'autonomous' || mode === 'meeting') return mode;
-  if (mode === 'music') return 'assistant';
-  if (mode === 'desktop_control' || mode === 'terminal') return 'assistant';
-  return 'assistant';
+  return normalizeLumiClientMode(mode);
+}
+
+/**
+ * Prompt-sized rendering of the canonical taxonomy. This is definition data,
+ * not a claim that live client state was queried in the current turn.
+ */
+export function buildOperationModeTaxonomyPrompt(): string {
+  return [
+    '## Canonical LumiCore operation-mode taxonomy',
+    `LumiCore has exactly ${LUMI_OPERATION_MODE_IDS.length} persistent user-selectable operation/permission modes: ${LUMI_OPERATION_MODE_IDS.join(', ')}.`,
+    `The complete client-state discriminator is ${LUMI_CLIENT_MODE_IDS.join(', ')} only because ${LUMI_MEETING_CAPTURE_SURFACE.id} represents a temporary transcription/capture surface. It is not a fourth permission mode.`,
+    'Internal personality response presets and conversation styles are not operation modes, do not appear as client runtime modes, and never change tool permissions or task ownership.',
+    'Never claim this taxonomy came from a current client-state check unless a successful current-turn client receipt actually exists.',
+  ].join('\n');
 }
 
 export function parseStoredOperationMode(value: unknown): OperationMode {
@@ -203,12 +221,12 @@ export function detectRequestedOperationMode(text: string): OperationMode | null
   const normalized = stripModeCommandCourtesy(normalizeModeCommandText(text));
   if (!normalized) return null;
 
-  for (const mode of ['chat', 'assistant', 'autonomous', 'meeting'] as OperationMode[]) {
+  for (const mode of LUMI_CLIENT_MODE_IDS) {
     if (PURE_MODE_COMMAND_RES[mode].test(normalized)) return mode;
   }
 
   if (!MODE_SWITCH_VERB_RE.test(normalized)) return null;
-  for (const mode of ['meeting', 'chat', 'assistant', 'autonomous'] as OperationMode[]) {
+  for (const mode of [LUMI_MEETING_CAPTURE_SURFACE.id, ...LUMI_OPERATION_MODE_IDS]) {
     if (MODE_TARGET_RES[mode].test(normalized)) return mode;
   }
   return null;

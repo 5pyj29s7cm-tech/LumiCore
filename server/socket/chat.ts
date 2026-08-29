@@ -15,6 +15,8 @@ import {
 } from "../cognition/operation_modes";
 import { getStoredOperationMode, saveStoredOperationMode } from "../cognition/operation_mode_store";
 import { buildInteractionModeOverlay } from "../cognition/turn_flow";
+import { buildOperationModeMetaResponse } from "../cognition/capability_meta";
+import { LUMI_CLIENT_MODE_IDS, type LumiClientMode } from "../../shared/operation_modes";
 import {
   buildLumiCapabilitySelection,
   buildModelCapabilityPolicy,
@@ -542,8 +544,8 @@ function isShortClientContinuation(userText: string): boolean {
   return Boolean(clean) && clean.length <= 24 && SHORT_CLIENT_CONTINUATION_RE.test(clean);
 }
 
-function getVerifiedClientModeChange(records: ToolExecutionRecord[]): 'chat' | 'assistant' | 'autonomous' | 'meeting' | null {
-  const validModes = new Set(['chat', 'assistant', 'autonomous', 'meeting']);
+function getVerifiedClientModeChange(records: ToolExecutionRecord[]): LumiClientMode | null {
+  const validModes = new Set<string>(LUMI_CLIENT_MODE_IDS);
   for (const record of [...records].reverse()) {
     if (
       record.name !== 'client_action'
@@ -556,7 +558,7 @@ function getVerifiedClientModeChange(records: ToolExecutionRecord[]): 'chat' | '
       const parsed = JSON.parse(String(record.result || '{}'));
       const status = String(parsed?.verification?.status || parsed?.status || '').toLowerCase();
       if (/^(?:verified|not_applicable)$/.test(status) && parsed?.ok !== false) {
-        return mode as 'chat' | 'assistant' | 'autonomous' | 'meeting';
+        return mode as LumiClientMode;
       }
     } catch {
       // A mode preference is never persisted from an unparseable receipt.
@@ -2800,6 +2802,11 @@ export function registerChatHandler(
       };
 
       const actionFollowupIntent = acceptedFollowupIntent;
+      const operationModeMetaText = buildOperationModeMetaResponse({
+        text: visibleUserText,
+        operationMode: turnFlow.operationMode,
+        source: eventSource,
+      });
       const executionFactText = conversationId && isConversationExecutionFactQuestion(visibleUserText)
         ? formatConversationExecutionFactAnswer(getConversationExecutionFacts({
           conversationId,
@@ -2812,7 +2819,13 @@ export function registerChatHandler(
       const exactCorrectionText = conversationId
         ? resolveExactConversationCorrection(visibleUserText, persistedConversationHistory)
         : null;
-      const deterministicConversationResponse = executionFactText
+      const deterministicConversationResponse = operationModeMetaText
+        ? {
+            text: operationModeMetaText,
+            intent: 'operation_mode_facts',
+            source: 'chat_operation_mode_facts',
+          }
+        : executionFactText
         ? {
             text: executionFactText,
             intent: 'execution_facts',
