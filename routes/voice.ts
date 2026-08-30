@@ -321,7 +321,11 @@ router.get('/voice/public-samples/:token', (req: Request, res: Response) => {
 });
 
 // POST /api/voice/clone — Trigger voice cloning
-const TTS_PROVIDERS = new Set<TTSProvider>(['local-cosyvoice', 'cosyvoice', 'ark', 'gptsovits']);
+// `relay` is Lumi's official API gateway.  It is a synthesis provider even
+// though it deliberately does not expose clone/design operations; keeping it
+// in this catalogue is required for the voice picker to preview official
+// voices and for an explicit provider selection to be validated consistently.
+const TTS_PROVIDERS = new Set<TTSProvider>(['local-cosyvoice', 'cosyvoice', 'ark', 'gptsovits', 'relay']);
 
 function resolveRequestedTtsProvider(value?: unknown): TTSProvider | null {
   const requested = String(value || '').trim() as TTSProvider;
@@ -336,6 +340,33 @@ function providerCapabilities(provider: TTSProvider | null) {
     clone: provider === 'cosyvoice' || provider === 'ark',
     design: provider === 'cosyvoice',
   };
+}
+
+/**
+ * Return a short, safe diagnostic for a failed preview.  The old route
+ * replaced every upstream failure with the same `Speech synthesis
+ * unavailable` string, which made a stale model, an open circuit, and a
+ * missing credential indistinguishable to both the user and the client.
+ * Provider adapters already redact bearer tokens; this second boundary also
+ * strips local paths and limits the amount of text returned to the browser.
+ */
+function publicVoiceError(error: unknown): string {
+  const raw = String((error as any)?.message || error || '').trim();
+  if (!raw) return 'Speech synthesis unavailable';
+  return raw
+    .replace(/Bearer\s+[^\s,;]+/gi, 'Bearer [redacted]')
+    .replace(/(?:sk|key|token|secret)[-_]?[A-Za-z0-9_-]{8,}/gi, '[redacted]')
+    .replace(/[A-Za-z]:\\[^\r\n]{0,240}/g, '[local path]')
+    .slice(0, 500);
+}
+
+function publicVoiceErrorStatus(error: unknown): number {
+  const candidate = Number((error as any)?.statusCode ?? (error as any)?.status);
+  if (Number.isInteger(candidate) && candidate >= 400 && candidate <= 599) return candidate;
+  const message = publicVoiceError(error).toLowerCase();
+  if (/not configured|choose and configure|unknown tts|invalid .*provider|text is required/.test(message)) return 400;
+  if (/temporarily unavailable|circuit|timed out|timeout|network|fetch failed/.test(message)) return 503;
+  return 502;
 }
 
 router.post('/voice/clone', requireAuth, async (req: Request, res: Response) => {
@@ -598,6 +629,7 @@ router.delete('/voice/:voiceId', requireAuth, async (req: Request, res: Response
 
 // POST /api/voice/synthesize — Synthesize speech (for TTS without full voice call)
 router.post('/voice/synthesize', requireAuth, async (req: Request, res: Response) => {
+  let activeProvider: TTSProvider | null = null;
   try {
     const { text, voiceId, provider, model } = req.body;
 
@@ -605,7 +637,14 @@ router.post('/voice/synthesize', requireAuth, async (req: Request, res: Response
       return res.status(400).json({ error: 'Text is required' });
     }
 
-    const activeProvider = provider || getActiveProvider();
+    const requestedProvider = provider === undefined || provider === null || String(provider).trim() === ''
+      ? undefined
+      : String(provider).trim() as TTSProvider;
+    if (requestedProvider && !TTS_PROVIDERS.has(requestedProvider)) {
+      return res.status(400).json({ error: `Unknown TTS provider: ${requestedProvider}`, code: 'tts_provider_invalid' });
+    }
+
+    activeProvider = requestedProvider || getActiveProvider();
     if (!activeProvider) {
       return res.status(400).json({ error: 'No TTS provider configured' });
     }
@@ -618,7 +657,7 @@ router.post('/voice/synthesize', requireAuth, async (req: Request, res: Response
       provider: activeProvider,
       voiceId: voiceId || 'default',
       model,
-      allowFallback: !provider,
+      allowFallback: !requestedProvider,
     });
     recordLatency('tts', Date.now() - start);
 
@@ -628,7 +667,14 @@ router.post('/voice/synthesize', requireAuth, async (req: Request, res: Response
     res.send(result.audioBuffer);
   } catch (err: any) {
     logger.error('[Voice Synthesize Error]', err);
-    res.status(500).json({ error: 'Speech synthesis unavailable' });
+    const detail = publicVoiceError(err);
+    const status = publicVoiceErrorStatus(err);
+    res.status(status).json({
+      error: detail,
+      code: 'speech_synthesis_unavailable',
+      provider: activeProvider,
+      retryable: status >= 500,
+    });
   }
 });
 

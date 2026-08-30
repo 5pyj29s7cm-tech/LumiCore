@@ -697,6 +697,13 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
     if (requestedTtsModel) next.ttsModel = requestedTtsModel;
 
     const pref = setVoicePreference(next);
+    // A failed preview can open the relay breaker for the old model.  Changing
+    // the official provider/model is an explicit recovery action, so discard
+    // that stale failure state before the next audition instead of forcing the
+    // user to wait through the cooldown or restart the server.
+    if (current.tts === 'relay' || selectedTts === 'relay' || requestedTtsModel) {
+      resetCircuit('relay-tts');
+    }
     res.json({
       success: true,
       pref,
