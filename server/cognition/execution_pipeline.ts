@@ -13,6 +13,7 @@ import {
   buildModelToolProjection,
   type LumiCapabilitySelection,
 } from './capability_selection';
+import { trustedContinuationEvidenceTools } from './tool_router';
 import {
   buildLumiExecutionDecision,
   type LumiExecutionDecision,
@@ -199,7 +200,14 @@ function hasTrustedActionContinuation(input: BuildLumiExecutionPipelineInput): b
   if (!state?.unfinished || !state.taskId || !context) return false;
   const followup = context.match(/(?:^|\n)-\s*followupIntent:\s*([^\r\n]+)/i)?.[1]?.trim().toLowerCase();
   const taskId = context.match(/(?:^|\n)-\s*taskId:\s*([^\r\n]+)/i)?.[1]?.trim();
-  return followup === 'execute' && taskId === state.taskId;
+  // Corrections and retries are continuations of the same server-owned task,
+  // not new authorization requests.  Requiring the exact durable task id
+  // keeps this boundary fail-closed while allowing a voice-to-text handoff
+  // (whose classifier labels the turn `correction`) to retain the original
+  // capability envelope.  `status` remains observational and must never
+  // reacquire an execution lease.
+  const executionFollowups = new Set(['execute', 'correction', 'retry', 'accept', 'confirm']);
+  return executionFollowups.has(followup || '') && taskId === state.taskId;
 }
 
 function applySelectedWorkflowAdapterPolicy(
@@ -331,9 +339,14 @@ export function buildLumiExecutionPipeline(
       .filter(Boolean) as string[],
   ));
   const authorizationPolicy = buildModelCapabilityPolicy(execution);
+  const pinnedContinuationTools = trustedContinuationEvidenceTools({
+    actionTaskState: input.actionTaskState,
+    trustedActionContinuation,
+  }, new Set(input.registry.getToolDeclarations().map(declaration => declaration.function.name)));
   const modelToolProjection = buildModelToolProjection(execution, {
     lane: selection.lane,
     preferredTools: selection.preferredTools,
+    pinnedTools: pinnedContinuationTools,
   });
   // Operation modes define the authorization ceiling. They must not create a
   // task or tool loop on their own. A turn becomes executable only after the

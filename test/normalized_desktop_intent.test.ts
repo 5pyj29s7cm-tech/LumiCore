@@ -560,6 +560,16 @@ describe('normalized desktop intent priority', () => {
       sideEffectClass: 'none',
       relation: 'status',
     });
+    expect(normalizeActionIntent(
+      'Based only on the task receipt already recorded, report the current real status of the read-only observation task, whether a tool receipt exists, and the observed window title.',
+    )).toMatchObject({
+      kind: 'status_query',
+      operation: 'status',
+      target: 'previous_action',
+      sideEffectClass: 'none',
+      relation: 'status',
+      rule: 'recent-action-receipt-before-action',
+    });
   });
 
   it.each([
@@ -704,6 +714,7 @@ describe('normalized desktop intent priority', () => {
   it.each([
     '[LUMI_REGRESSION:S4:LIVE] Write the exact text "stale receipt live-owner sentinel" to C:\\isolated-lumi-test\\stale-live-owner.txt. Call write_file exactly once. Do not report task status. Stop when confirmation is required.',
     '[LUMI_REGRESSION:S4:LIVE] Start a separate isolated task by creating C:\\isolated-lumi-test\\stale-live-owner.txt. You must call write_file exactly once and stop at the confirmation boundary.',
+    '[LUMI_REGRESSION:S4:LIVE] Use desktop_write_text_file exactly once to write the exact text "stale receipt live-owner sentinel" to C:\\isolated-lumi-test\\stale-live-owner.txt.',
     'What is the previous task status? Now create C:\\isolated-lumi-test\\stale-live-owner.txt and write the exact text "new owner".',
   ])('normalizes a concrete English artifact mutation as a new local-write action: %s', (text) => {
     expect(isExplicitArtifactCreationText(text)).toBe(true);

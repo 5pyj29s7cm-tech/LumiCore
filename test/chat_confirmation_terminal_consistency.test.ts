@@ -1,4 +1,5 @@
 import './helpers';
+import fs from 'node:fs';
 import { createServer, type Server as HttpServer } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Server as SocketIOServer } from 'socket.io';
@@ -30,7 +31,7 @@ vi.mock('../server/agents/rag', async importOriginal => {
 
 import { initDatabase, readDB } from '../db_layer';
 import { getConversationActionStateByTaskId } from '../server/conversation/action_ledger';
-import { getOrCreateActiveConversation } from '../server/conversation/manager';
+import { getOrCreateActiveConversation, startIsolatedConversation } from '../server/conversation/manager';
 import { registerChatHandler } from '../server/socket/chat';
 import { getChatExecution } from '../server/socket/chat_execution_registry';
 import {
@@ -245,5 +246,154 @@ describe('chat pending-confirmation terminal consistency', () => {
     expect(terminal.text).toBe(persistedAssistantText);
     expect(terminal.text).toBe(conversation?.actionContinuationState?.assistantState);
     expect(mocks.runWithTools).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps two target corrections on one task and at a fresh confirmation boundary', async () => {
+    clearAllPendingConfirmationsForTests();
+    mocks.runWithTools.mockClear();
+    const isolated = startIsolatedConversation(userId, 'lumi', 'personal', '');
+    const root = `C:\\isolated-lumi-test\\confirmation-chain-${suffix}`;
+    const targets = [0, 1, 2].map(index => `${root}-target-${index}.txt`);
+    const content = `confirmation-chain-${suffix}`;
+    let modelTurn = 0;
+    mocks.runWithTools.mockImplementation(async (...args: any[]) => {
+      const context = args[11];
+      const requestTurn = modelTurn;
+      modelTurn += 1;
+      const proposed = requestTurn === 0
+        ? { name: 'write_file', arguments: { path: targets[0], content } }
+        : context.runtimeOwnedDeterministicRecoveryCall;
+      expect(proposed).toMatchObject({
+        name: 'write_file',
+        arguments: { path: targets[requestTurn], content },
+      });
+      const approved = await context.requestConfirmation(proposed.name, proposed.arguments);
+      expect(approved).toBe(false);
+      return {
+        text: 'The exact proposal is waiting for confirmation.',
+        toolCalls: [{
+          id: `confirmation-chain-call-${requestTurn}-${suffix}`,
+          taskId: context.taskId,
+          turnId: context.requestId,
+          requestId: context.requestId,
+          executionOrigin: requestTurn === 0 ? 'model_selected' : 'deterministic_route',
+          name: proposed.name,
+          arguments: proposed.arguments,
+          result: 'Tool "write_file" requires user confirmation and was not approved.',
+          adapterStarted: false,
+          terminalVerification: {
+            status: 'unverified',
+            strategy: 'terminal_receipt',
+            reason: 'waiting_confirmation',
+          },
+        }],
+        usageRecords: [],
+      };
+    });
+
+    const send = async (turnRequestId: string, text: string) => {
+      const terminalPromise = waitForRequestEvent<Record<string, any>>(
+        client,
+        'agent:response',
+        turnRequestId,
+      );
+      const ack = await client.timeout(5_000).emitWithAck('agent:chat', {
+        text,
+        history: [],
+        agentId: 'lumi',
+        domain: 'personal',
+        source,
+        requestId: turnRequestId,
+        conversationId: isolated.id,
+      });
+      expect(ack).toMatchObject({ ok: true, requestId: turnRequestId });
+      return terminalPromise;
+    };
+
+    const initialRequestId = `confirmation-chain-initial-${suffix}`;
+    const firstCorrectionRequestId = `confirmation-chain-correction-1-${suffix}`;
+    const secondCorrectionRequestId = `confirmation-chain-correction-2-${suffix}`;
+    const statusRequestId = `confirmation-chain-status-${suffix}`;
+    const cancelRequestId = `confirmation-chain-cancel-${suffix}`;
+    const initial = await send(
+      initialRequestId,
+      `Create the formal confirmation-gated file ${targets[0]} with exact content ${content}. Call write_file, but stop at the confirmation boundary and do not self-confirm.`,
+    );
+    expect(initial).toMatchObject({ reason: 'waiting_confirmation', blocked: false });
+    const firstPending = getPendingConfirmation(userId);
+    expect(firstPending).toMatchObject({
+      toolName: 'write_file',
+      exactArgs: { path: targets[0], content },
+    });
+    const firstState = (readDB().conversations || []).find((item: any) => item.id === isolated.id)
+      ?.actionContinuationState;
+    expect(firstState).toMatchObject({ status: 'waiting_confirmation', unfinished: true });
+    const taskId = String(firstState?.taskId || '');
+
+    const firstCorrection = await send(
+      firstCorrectionRequestId,
+      `Use ${targets[1]} instead of ${targets[0]}. Keep the exact content unchanged and wait for confirmation.`,
+    );
+    expect(firstCorrection).toMatchObject({ reason: 'waiting_confirmation', blocked: false });
+    const secondPending = getPendingConfirmation(userId);
+    expect(secondPending).toMatchObject({
+      taskId,
+      toolName: 'write_file',
+      exactArgs: { path: targets[1], content },
+    });
+    expect(secondPending?.id).not.toBe(firstPending?.id);
+
+    const secondCorrection = await send(
+      secondCorrectionRequestId,
+      `Use ${targets[2]} instead of ${targets[1]}. Keep the exact content unchanged and wait for confirmation.`,
+    );
+    expect(secondCorrection).toMatchObject({ reason: 'waiting_confirmation', blocked: false });
+    const thirdPending = getPendingConfirmation(userId);
+    expect(thirdPending).toMatchObject({
+      taskId,
+      toolName: 'write_file',
+      exactArgs: { path: targets[2], content },
+    });
+    expect(thirdPending?.id).not.toBe(secondPending?.id);
+    expect(getConversationActionStateByTaskId(readDB(), {
+      conversationId: isolated.id,
+      userId,
+      taskId,
+    })).toMatchObject({
+      taskId,
+      status: 'waiting_confirmation',
+      unfinished: true,
+      taskCapsule: {
+        target: { path: targets[2] },
+        latestCorrection: {
+          previousTarget: targets[1],
+          replacementTarget: targets[2],
+        },
+      },
+    });
+
+    const status = await send(statusRequestId, '当前任务状态怎么样');
+    expect(status).toMatchObject({
+      reason: 'task_status',
+      finalized: true,
+      blocked: false,
+    });
+    expect(status.text).toMatch(/等你确认|等待确认/u);
+    expect(getPendingConfirmation(userId)?.id).toBe(thirdPending?.id);
+
+    const cancelled = await send(cancelRequestId, 'Cancel this task. Do not write any file.');
+    expect(cancelled).toMatchObject({
+      reason: 'cancelled_by_user',
+      finalized: true,
+      blocked: false,
+    });
+    expect(getPendingConfirmation(userId)).toBeNull();
+    expect(getConversationActionStateByTaskId(readDB(), {
+      conversationId: isolated.id,
+      userId,
+      taskId,
+    })).toMatchObject({ status: 'cancelled', unfinished: false });
+    expect(mocks.runWithTools).toHaveBeenCalledTimes(3);
+    for (const target of targets) expect(fs.existsSync(target)).toBe(false);
   });
 });

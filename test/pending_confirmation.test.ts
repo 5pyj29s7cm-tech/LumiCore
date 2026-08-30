@@ -77,6 +77,15 @@ describe('One-time pending tool confirmations', () => {
     expect(request).not.toContain('super-secret-password');
   });
 
+  it('keeps a cancellation plus explicit no-write safety clause out of model routing', () => {
+    expect(isConfirmationCancellation('Cancel this task. Do not write any file.')).toBe(true);
+    expect(isConfirmationCancellation('取消当前任务，不要再写入任何文件。')).toBe(true);
+    expect(isConfirmationCancellation('terminate this task')).toBe(true);
+    expect(isConfirmationCancellation('终止当前任务')).toBe(true);
+    expect(isConfirmationCancellation('取消订单 20260830')).toBe(false);
+    expect(isConfirmationCancellation('终止订单 20260830')).toBe(false);
+  });
+
   it('binds an exact proposal to its task and immutable origin request', () => {
     const args = { path: 'C:\\Temp\\corrected.txt', content: 'exact content' };
     const pending = recordPendingConfirmation(

@@ -7,4 +7,6 @@ export const CN_CONVERSATION_EXECUTION_FACT_MESSAGES = {
   priorTurnTools: (items: Array<{ name: string; outcome: 'success' | 'failed' }>) => (
     `上一轮确实调用了工具：${items.map(item => `${item.name}（${item.outcome === 'success' ? '成功' : '失败'}）`).join('、')}。`
   ),
+  taskStatus: (status: string) => `任务状态：${status || '回执未记录'}。`,
+  observedWindowTitle: (title: string) => `观察到的窗口标题：${title || '回执未记录'}。`,
 } as const;

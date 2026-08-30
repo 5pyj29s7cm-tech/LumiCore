@@ -113,6 +113,9 @@ describe('active task message relation', () => {
 
   it('cancels only an explicit cancellation or replacement', () => {
     expect(classifyActiveTaskMessage('取消当前任务', activeState)).toBe('cancel');
+    expect(classifyActiveTaskMessage('Cancel this task. Do not write any file.', activeState)).toBe('cancel');
+    expect(classifyActiveTaskMessage("Cancel this task. Don't write any file.", activeState)).toBe('cancel');
+    expect(classifyActiveTaskMessage('Cancel this task. Don’t write any file.', activeState)).toBe('cancel');
     expect(classifyActiveTaskMessage('停止这个，改成打开 WPS', activeState)).toBe('replace');
   });
 
@@ -312,6 +315,25 @@ describe('active task message relation', () => {
       revision: 8,
     });
     expect(relation.targetRequestId).toBeUndefined();
+  });
+
+  it('binds a cancellation safety restatement to the terminal previous task as a no-op target', () => {
+    const relation = resolveActiveTaskMessageRelation('Cancel this task. Do not write any file.', {
+      ...activeState,
+      status: 'completed',
+      unfinished: false,
+      activeRequestId: undefined,
+      revision: 8,
+    });
+    expect(relation).toMatchObject({
+      relation: 'cancel',
+      taskRelation: 'cancel',
+      feedback: 'cancel',
+      binding: 'previous_task',
+      operation: 'cancel',
+      taskId: 'task-1',
+      revision: 8,
+    });
   });
 
   it('binds a repeated confirmation to the terminal previous task without reviving it', () => {

@@ -154,6 +154,9 @@ export const CN_TASK_EXECUTION_MESSAGES = {
   executing: (goal: string, receiptCount: number) => `“${goal}”还在执行链上${receiptCount ? `，已完成${receiptCount}个可验证步骤` : ''}。`,
   activeWithoutReceipt: '当前任务仍在执行，暂时还没有终态回执。',
   cancelled: '已停止当前任务，未完成的步骤不会继续执行。',
+  terminalCannotCancel: (goal: string, status: string) => status === 'completed'
+    ? `“${goal || '刚才的任务'}”已经完成，取消不会撤销已经发生并记录的结果；我没有再次执行任何操作。`
+    : `“${goal || '刚才的任务'}”已经处于${status === 'cancelled' ? '已取消' : '终态'}，没有可继续停止的步骤；我没有再次执行任何操作。`,
   staleControl: '这条控制请求对应的任务已经变化，我没有停止后来开始的任务。',
   noPendingConfirmation: '没有新的待确认动作；不会重复执行。',
   noRepeatableReply: '上一条没有可复述的 Lumi 回复。',
@@ -219,7 +222,10 @@ export const CN_RESULT_GROUNDING_MESSAGES = {
 export const CN_VOICE_QUICK_WORK_MESSAGES = {
   readingRuntimeWork: (cancelling: boolean) => cancelling ? '正在停止当前工作。' : '正在查看当前工作。',
   runtimeReadFailed: '这次没能读取任务状态，没有擅自报告成功。',
+  runtimeCancellationResultMissing: '这次没有可展示的任务停止结果。',
   noActiveWork: '当前没有正在运行的工作。',
+  runtimeCleanupOffer: (count: number) => `当前有 ${count} 项后台工作仍可撤回。要不要我帮你清理这些后台任务？`,
+  runtimeStatusWithOffer: (summary: string) => `${summary}\n要不要我帮你清理这些后台任务？`,
   workCancelling: (count: number) => `已发出停止指令，${count} 项工作正在收尾。`,
   workCancelled: (count: number) => `已停止 ${count} 项工作。`,
   activeWork: (count: number, titles: string[]) => `当前有 ${count} 项工作在运行${titles.length ? `：${titles.join('、')}` : '。'}`,

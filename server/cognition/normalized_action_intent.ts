@@ -220,7 +220,23 @@ function hasAffirmativeArtifactCreationAction(text: string): boolean {
     /\b(?:start|begin)\b[^.!?;\n]{0,120}\bby\s+creat(?:e|ing)\b/iu;
   const requiredWriteTool =
     /\b(?:must|should|need\s+to|required\s+to)\s+(?:call|use)\s+write_file\b/iu;
-  return clauseImperative.test(text) || startByCreating.test(text) || requiredWriteTool.test(text);
+  // Tool-directed wording is still an explicit mutation when the user gives
+  // an imperative such as "Use desktop_write_text_file ... to write ...".
+  // Previously this fell through as `kind:none`; with an unfinished task in
+  // the conversation, the generic continuation classifier then attached the
+  // independent instruction to the old task. Keep questions and negations out
+  // of this lane by requiring an imperative tool verb and rejecting a nearby
+  // negative guard.
+  const toolBackedWrite =
+    /\b(?:use|call|invoke|run)\s+(?:the\s+)?(?:desktop_write_text_file|write_file)\b[\s\S]{0,120}\b(?:to\s+)?(?:write|create|generate|save)\b/iu;
+  const negatedToolWrite =
+    /\b(?:do\s+not|don't|never|without)\s+(?:use|using|call|calling|invoke|run)\b[\s\S]{0,80}\b(?:desktop_write_text_file|write_file)\b/iu;
+  return (
+    clauseImperative.test(text)
+    || startByCreating.test(text)
+    || requiredWriteTool.test(text)
+    || (toolBackedWrite.test(text) && !negatedToolWrite.test(text))
+  );
 }
 
 function explicitArtifactCreationIntent(text: string): NormalizedActionIntent | null {
@@ -393,6 +409,9 @@ const EN_MIXED_STATUS_EXECUTION_RE =
 const RECENT_ACTION_RECEIPT_QUERY_RE =
   /(?:\u4f60|lumi)?\s*(?:\u521a\u624d|\u521a\u521a|\u4e0a\u4e00\u8f6e|\u4e0a\u6b21).{0,48}(?:\u505a|\u6253\u5f00|\u6267\u884c|\u53d1\u9001|\u521b\u5efa|\u64cd\u4f5c)(?:\u4e86)?.{0,36}(?:\u4ec0\u4e48|\u54ea\u4e2a|\u54ea\u4e9b|\u6210\u529f|\u5b8c\u6210|\u8bc1\u636e|\u56de\u6267)|\bwhat\s+did\s+(?:you|lumi)\s+(?:just\s+)?(?:do|open|run|send|create)\b|\bdid\s+(?:you|lumi)\s+(?:just\s+)?(?:open|run|send|create).{0,120}\bsuccessfully\b|\bwhat\s+evidence\b.{0,48}\b(?:succeed|succeeded|success|complete|completed)\b/iu;
 
+const RECORDED_RECEIPT_STATUS_QUERY_RE =
+  /^(?:(?=.*(?:\u5df2\u8bb0\u5f55|\u5df2\u4fdd\u5b58|\u6301\u4e45\u5316|\u5df2\u6709).{0,32}(?:\u4efb\u52a1|\u5de5\u5177|\u6267\u884c)?\u56de\u6267)(?=.*(?:\u72b6\u6001|\u7ed3\u679c|\u8bc1\u636e|\u662f\u5426|\u6709\u6ca1\u6709|\u7a97\u53e3\u6807\u9898))|(?=.*\b(?:task|tool|execution)\s+receipts?\b)(?=.*\b(?:already\s+(?:recorded|persisted|saved)|persisted|existing)\b)(?=.*\b(?:report|status|result|evidence|whether|exists?|window\s+title|observed\s+window)\b))/iu;
+
 /**
  * A narrow, read-only query for the immediately preceding turn's persisted
  * tool receipts. Keep this separate from generic task status so Chat can
@@ -413,15 +432,19 @@ export function isPriorTurnToolReceiptQuestion(text: string): boolean {
     );
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   const priorTurn = /(?:上一轮|上一回合|上一次|上次|刚才|刚刚|前一轮)|\b(?:previous|prior|last)\s+(?:turn|request|message)\b|\bjust\b/iu.test(value);
+  const recordedReceiptScope = /(?:已记录|已保存|持久化|已有).{0,24}(?:任务|工具|执行)?回执|\b(?:task|tool|execution)\s+receipts?\b.{0,32}\b(?:already\s+(?:recorded|persisted|saved)|persisted|existing)\b/iu.test(value);
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   const toolReceipt = /(?:(?:调用|执行|使用|跑).{0,12}(?:工具|插件|技能)|(?:工具名|工具调用|工具回执|执行回执|已保存的回执|持久化回执))|\b(?:call|use|run|execute)(?:d|ing)?\s+(?:(?:any|a|the)\s+)?tools?\b|\btool\s+(?:name|call|receipt|result)\b/iu.test(positiveToolText);
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-  const asksFact = /(?:是否|有没有|有没|真的|究竟|到底|哪(?:个|些)|什么|成功|失败|结果|回执|告诉|说明)|\b(?:did|was|were|which|what|success|succeed(?:ed)?|fail(?:ed|ure)?|result|receipt)\b/iu.test(value);
-  return priorTurn && toolReceipt && asksFact;
+  const asksFact = /(?:是否|有没有|有没|真的|究竟|到底|哪(?:个|些)|什么|成功|失败|结果|状态|回执|告诉|说明|报告|窗口标题)|\b(?:did|was|were|which|what|whether|exists?|status|report|success|succeed(?:ed)?|fail(?:ed|ure)?|result|receipt|window\s+title|observed\s+window)\b/iu.test(value);
+  return (priorTurn || recordedReceiptScope) && toolReceipt && asksFact;
 }
 
 export function isRecentActionReceiptQuery(text: string): boolean {
-  return isPriorTurnToolReceiptQuestion(text) || RECENT_ACTION_RECEIPT_QUERY_RE.test(text);
+  const value = currentTurnText(String(text || '')).replace(/\s+/gu, ' ').trim();
+  return isPriorTurnToolReceiptQuestion(value)
+    || RECENT_ACTION_RECEIPT_QUERY_RE.test(value)
+    || RECORDED_RECEIPT_STATUS_QUERY_RE.test(value);
 }
 
 const CN_INDEPENDENT_ACTION_AFTER_STATUS_RE =

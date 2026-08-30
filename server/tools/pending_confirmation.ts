@@ -676,11 +676,24 @@ export function isExplicitConfirmationReply(text: string): boolean {
 
 export function isConfirmationCancellation(text: string): boolean {
   const normalized = String(text || '').trim();
-  if (/^(?:\u4e0d\u8981\u6267\u884c|\u505c\u6b62\u6267\u884c|\u4e0d\u540c\u610f|\u62d2\u7edd|cancel|deny|reject|stop)[\u3002\uff01\uff1f.!?\s]*$/iu.test(normalized)) {
+  if (/^(?:\u4e0d\u8981\u6267\u884c|\u505c\u6b62\u6267\u884c|\u4e0d\u540c\u610f|\u62d2\u7edd|cancel|deny|reject|stop|terminate)[\u3002\uff01\uff1f.!?\s]*$/iu.test(normalized)) {
     return true;
   }
-  if (/^(?:\u53d6\u6d88|\u505c\u6b62)[\u3002\uff01\uff1f.!?\s]*$/u.test(normalized)) return true;
-  if (!/^(?:\u53d6\u6d88|\u505c\u6b62)/u.test(normalized)) return false;
+  if (/^(?:\u53d6\u6d88|\u505c\u6b62|\u7ec8\u6b62)[\u3002\uff01\uff1f.!?\s]*$/u.test(normalized)) return true;
+  // English users commonly name the exact pending scope without a trailing
+  // safety clause. Keep domain commands such as "terminate order ..." out of
+  // this lane by requiring an explicit task/operation/work noun.
+  if (/^(?:please\s+)?(?:cancel|stop|abort|terminate)\s+(?:this|that|the\s+current)\s+(?:task|operation|work)[.!?\s]*$/iu.test(normalized)) return true;
+  // A cancellation may explicitly restate the safety outcome (for example,
+  // "Cancel this task. Do not write any file"). Keep it on the deterministic
+  // cancellation lane instead of sending the second sentence to the model.
+  if (/^(?:please\s+)?(?:cancel|stop|abort|terminate)(?:\s+(?:this|that|the\s+current)\s+(?:task|operation|work))?[.!?\s]+(?:do\s+not|don['\u2019]?t|never)\s+(?:write|create|send|publish|execute|run|continue)\b[^\r\n]{0,180}[.!?\s]*$/iu.test(normalized)) {
+    return true;
+  }
+  if (/^(?:\u53d6\u6d88|\u505c\u6b62|\u7ec8\u6b62)(?:\u8fd9\u4e2a|\u90a3\u4e2a|\u5f53\u524d)?(?:\u4efb\u52a1|\u64cd\u4f5c|\u5de5\u4f5c)?[\uff0c,\u3002.\s]+(?:\u4e0d\u8981|\u522b|\u65e0\u9700|\u4e0d\u5fc5)(?:\u518d|\u7ee7\u7eed)?(?:\u5199\u5165|\u521b\u5efa|\u53d1\u9001|\u53d1\u5e03|\u6267\u884c|\u7ee7\u7eed)[^\r\n]{0,180}$/u.test(normalized)) {
+    return true;
+  }
+  if (!/^(?:\u53d6\u6d88|\u505c\u6b62|\u7ec8\u6b62)/u.test(normalized)) return false;
   // Natural cancellations often name the pending recipient/action and then
   // ask Lumi to confirm that nothing was sent. Accept that full sentence as
   // long as it explicitly refers to a confirmation/action boundary. Do not

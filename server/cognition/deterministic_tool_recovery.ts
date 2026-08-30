@@ -20,7 +20,7 @@ const WRITE_FILE_DIRECTIVE_RE = /\.\s*(?:call|use|invoke)\s+(?:the\s+)?write_fil
 const EXPLICIT_WRITE_FILE_RE = /\b(?:call|use|invoke)\s+(?:the\s+)?write_file\b|(?:调用|使用)\s*(?:工具\s*)?write_file\b/iu; // i18n-allow: Multilingual input-recognition pattern; not user-visible copy.
 const ZH_EXACT_CONTENT_MARKER_RE = /内容\s*(?:必须|需要|需|严格)?\s*(?:写成|写为|为)/gu; // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
 const ZH_WRITE_FILE_DIRECTIVE_RE = /[。.!]\s*(?:必须|需要|需|请|务必)?\s*(?:调用|使用)\s*(?:工具\s*)?write_file\b/iu; // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-const PRESERVE_CONTENT_RE = /(?:内容\s*(?:保持|仍然|仍|继续)?\s*(?:不变|相同))|(?:(?:same|unchanged)\s+content)|(?:content\s+(?:stays?|remains?)\s+(?:the\s+)?same)/iu; // i18n-allow: Multilingual input-recognition pattern; not user-visible copy.
+const PRESERVE_CONTENT_RE = /(?:内容\s*(?:保持|仍然|仍|继续)?\s*(?:不变|相同))|(?:(?:same|unchanged)\s+content)|(?:(?:keep|preserve)\s+(?:the\s+)?(?:exact\s+)?content\s+unchanged)|(?:content\s+(?:(?:is|stays?|remains?)\s+)?(?:unchanged|(?:the\s+)?same))/iu; // i18n-allow: Multilingual input-recognition pattern; not user-visible copy.
 
 function uniqueAbsoluteTextPaths(text: string): string[] {
   const matches = [

@@ -69,6 +69,13 @@ export interface LumiCapabilitySelection {
 export interface ModelToolProjectionHints {
   lane?: LumiCapabilityLane;
   preferredTools?: readonly string[];
+  /**
+   * Server-owned capabilities that already produced evidence for the exact
+   * unfinished task. These are placed before semantic suggestions so a
+   * correction/retry cannot evict the tools needed to continue the task from
+   * the model's bounded declaration list.
+   */
+  pinnedTools?: readonly string[];
   /** Ordinary conversation may stay tool-free even in an action-capable mode. */
   allowUnroutedDiscovery?: boolean;
 }
@@ -154,10 +161,14 @@ export function buildModelToolProjection(
     && (wildcard || allowed.has(name)),
   );
   const routedNames = unique(route?.toolNames || []).filter(isAuthorized);
+  const pinnedNames = hardAllowlist
+    ? []
+    : unique(Array.from(hints.pinnedTools || [])).filter(isAuthorized);
   const semanticNames = hardAllowlist
     ? []
     : unique(Array.from(hints.preferredTools || [])).filter(isAuthorized);
   let toolNames = unique([
+    ...pinnedNames,
     ...(hardAllowlist ? routedNames : semanticNames),
     ...(!hardAllowlist ? routedNames : []),
   ]).slice(0, maxTools);

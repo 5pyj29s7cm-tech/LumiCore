@@ -48,6 +48,22 @@ const EN_WORK_ACTION_RE = /\b(continue|resume|advance|next\s+step|keep\s+going|g
 // i18n-allow: Reviewed Chinese hypothetical work-support input recognition; not user-visible copy.
 const CN_WORK_SUPPORT_QUESTION_RE = /(?:(?:你|lumi)[^。！？!?；;\n]{0,32}(?:如何|怎么|怎样)[^。！？!?；;\n]{0,32}(?:陪|帮(?:助)?|协助|支持)[^。！？!?；;\n]{0,32}(?:完成|处理|推进|做)[^。！？!?；;\n]{0,20}(?:工作|任务)|(?:如何|怎么|怎样)[^。！？!?；;\n]{0,32}(?:你|lumi)[^。！？!?；;\n]{0,32}(?:陪|帮(?:助)?|协助|支持)[^。！？!?；;\n]{0,32}(?:工作|任务))/iu;
 const EN_WORK_SUPPORT_QUESTION_RE = /\b(?:how|in\s+what\s+ways?)\b[^.!?;\n]{0,48}\b(?:would|will|can|could)\s+(?:you|lumi)\b[^.!?;\n]{0,48}\b(?:help|support|assist|accompany)\b[^.!?;\n]{0,64}\b(?:work|task)\b/i;
+// A self-contained declaration of a new/isolated task must not inherit the
+// user's latest work-takeover item.  Work-takeover tasks are intentionally
+// user-scoped (they can be created from WeChat, the task centre, or another
+// conversation), so without this boundary a fresh chat such as "这是一个隔离
+// 长任务……" can be classified as a status follow-up for an unrelated task.
+// This is only a continuity veto: the normal current-turn action router still
+// decides whether the newly declared task itself needs tools or a durable task.
+// i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+const CN_NEW_WORK_TASK_DECLARATION_RE = /(?:这是|新建|创建|开始|另起|另一个|新的?|独立的?|隔离的?|可取消的?)[^，,。！？!?；;\n]{0,24}(?:长\s*)?(?:任务|工作)(?=$|[，,。！？!?；;\n])/u;
+const EN_NEW_WORK_TASK_DECLARATION_RE = /\b(?:(?:this\s+is|start|create|make|begin)\s+(?:a\s+)?|(?:a\s+)?(?:new|another|separate|independent|isolated)\s+)(?:long\s+)?(?:task|job|piece\s+of\s+work)\b/i;
+
+function isExplicitNewWorkTaskDeclaration(text: string): boolean {
+  const value = String(text || '').trim();
+  return CN_NEW_WORK_TASK_DECLARATION_RE.test(value)
+    || EN_NEW_WORK_TASK_DECLARATION_RE.test(value);
+}
 // i18n-allow: Reviewed Chinese independent work-action input recognition; not user-visible copy.
 const INDEPENDENT_IMMEDIATE_WORK_ACTION_RE = /(?:[。！？?!；;：:]\s*)(?:(?:那|那么|然后)\s*)?(?:(?:现在|马上|立即|立刻|直接)(?:就)?\s*)?(?:开始|继续|执行|推进|处理|着手|做(?:吧|它|这个|这项|该任务|该工作)?)(?:[。！？.!?]|$)|(?:[.!?;:]\s*)(?:(?:then|and)\s+)?(?:(?:now|immediately|right\s+now)\s+)?(?:start|continue|resume|execute|proceed|do\s+it)\b/i;
 // i18n-allow: Reviewed Chinese explicit work-execution input recognition; not user-visible copy.
@@ -129,6 +145,13 @@ function classifyWorkTakeoverContinuationSignal(
   const hasWorkContext = WORK_CONTEXT_RE.test(clean);
   const hasEnglishWorkContext = EN_WORK_CONTEXT_RE.test(text);
   if (isConversationalWorkSupportQuestion(text)) return { intent: null, strength: 'none' };
+  // Do not let a fresh task declaration inherit an older user-scoped
+  // work-takeover task.  Explicit follow-up wording ("继续这个任务" /
+  // "what happened with that task") does not match this boundary and keeps
+  // the normal continuation path intact.
+  if (latestTask && isExplicitNewWorkTaskDeclaration(text)) {
+    return { intent: null, strength: 'none' };
+  }
   // Explicit execution wording must win over the generic status vocabulary.
   // Otherwise “现在帮我完成这项工作” is misread as a status query merely
   // because it contains “完成”.

@@ -22,6 +22,7 @@ import {
   buildModelCapabilityPolicy,
   buildModelToolProjection,
 } from "../cognition/capability_selection";
+import { trustedContinuationEvidenceTools } from "../cognition/tool_router";
 import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
 import { createDesktopExecutionTracker, withDesktopExecutionReceipt } from "../desktop/execution_runtime";
@@ -125,6 +126,7 @@ import {
 import {
   getConversationActionStateByTaskId,
   getConversationActionStateFromLedger,
+  getLatestConversationActionState,
 } from "../conversation/action_ledger";
 import { findAdjacentVerifiedConfirmedAction } from '../conversation/duplicate_confirmation';
 import { scheduleConversationSummary } from "../conversation/summary_scheduler";
@@ -145,6 +147,7 @@ import {
   conversationActionRequiresFreshConfirmationReview,
   formatConversationActionTaskStatus,
   pendingRuntimeCancellationRecheck,
+  RECONFIRMATION_REQUIRED_BLOCKER,
 } from "../cognition/action_continuation";
 import { buildDurableTaskDeterministicToolRecoveryCall } from '../cognition/deterministic_tool_recovery';
 import {
@@ -1398,6 +1401,9 @@ export function registerChatHandler(
           ? controlTargetRequestId || undefined
           : undefined,
       );
+      const clearedTaskConfirmation = await clearPendingConfirmationDurably(uid, confirmationScope);
+      const clearedTasklessConfirmation = await clearPendingConfirmationDurably(uid, confirmationChannelScope);
+      pendingConfirmationCleared = clearedTaskConfirmation || clearedTasklessConfirmation;
       const cancelledCurrentTask = cancelled?.taskId === resolvedTaskRelation.taskId
         && cancelled.status === 'cancelled';
       const responseText = cancelledCurrentTask
@@ -2026,7 +2032,13 @@ export function registerChatHandler(
       // Prior-turn receipt questions are deterministic ledger reads. Resolve
       // them before memory embeddings, RAG, personality assembly, or any model
       // client so a slow provider cannot block a local execution-status answer.
-      const acceptedFollowupIntent = explicitRuntimeWorkStatusRequest
+      const runtimeStatusOwnsThisTurn = explicitRuntimeWorkStatusRequest
+        && !(
+          resolvedTaskRelation.feedback === 'status'
+          && ['active_task', 'previous_task'].includes(resolvedTaskRelation.binding)
+          && Boolean(resolvedTaskRelation.taskId)
+        );
+      const acceptedFollowupIntent = runtimeStatusOwnsThisTurn
         ? 'none' as const
         : resolvedTaskRelation.binding === 'active_task'
           || resolvedTaskRelation.binding === 'previous_task'
@@ -2053,6 +2065,19 @@ export function registerChatHandler(
       const asksToRecheckPreviousAction = acceptedFollowupIntent === 'status'
         && acceptedNormalizedIntent.kind === 'status_query'
         && acceptedNormalizedIntent.target === 'previous_action';
+      const asksAboutBoundConversationTask = acceptedFollowupIntent === 'status'
+        && ['active_task', 'previous_task'].includes(resolvedTaskRelation.binding)
+        && Boolean(resolvedTaskRelation.taskId)
+        && (
+          acceptedNormalizedIntent.kind === 'none'
+          || (
+            acceptedNormalizedIntent.kind === 'status_query'
+            && ['previous_action', 'recent_task'].includes(acceptedNormalizedIntent.target)
+          )
+        );
+      const asksAboutRecentConversationTask = acceptedFollowupIntent === 'status'
+        && acceptedNormalizedIntent.kind === 'status_query'
+        && acceptedNormalizedIntent.target === 'recent_task';
       const serverBoundRecheckTaskId = asksToRecheckPreviousAction
         ? String(resolvedTaskRelation.taskId || '').trim()
         : '';
@@ -2248,6 +2273,8 @@ export function registerChatHandler(
         acceptedFollowupIntent === 'status'
         && (
           confirmationNeedsFreshReview
+          || asksAboutBoundConversationTask
+          || asksAboutRecentConversationTask
           || (
             acceptedNormalizedIntent.kind === 'status_query'
             && acceptedNormalizedIntent.target === 'previous_action'
@@ -2260,14 +2287,16 @@ export function registerChatHandler(
               conversationId: conversation.id,
               userId: uid,
               domain: resolvedDomain,
-              orgId: resolvedOrgId,
-              currentRequestId: requestId,
-            }), visibleUserText)
+            orgId: resolvedOrgId,
+            currentRequestId: requestId,
+            taskId: serverBoundRecheckTaskId || previousActionState?.taskId || '',
+          }), visibleUserText)
           : getConversationActionStatus(
               conversation.id,
               uid,
               visibleUserText,
               conversation.actionContinuationState,
+              resolvedTaskRelation.taskId || '',
             );
         const responseIntent = priorToolReceiptQuestion
           ? 'execution_facts'
@@ -2445,7 +2474,8 @@ export function registerChatHandler(
 
       if (conversationId && confirmationCancellationRequested) {
         const cancelled = cancelConversationActionExecution(conversationId, uid);
-        if (cancelled || pendingConfirmationCleared) {
+        const cancelledCurrentTask = cancelled?.status === 'cancelled';
+        if (cancelledCurrentTask || pendingConfirmationCleared) {
           const responseText = pendingConfirmationCleared
             ? '已取消刚才等待确认的操作；它没有执行，也不会继续发送。'
             : CN_TASK_EXECUTION_MESSAGES.cancelled;
@@ -2454,6 +2484,58 @@ export function registerChatHandler(
             persistAssistantMessage: () => addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', cognitiveIntent: 'task_cancel', requestId, skipActionContinuation: true }),
             publishAfter: () => emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId }),
             errorContext: 'Pending confirmation cancellation terminal',
+          });
+          await releaseChatSession();
+          return;
+        }
+        const boundTerminalTask = resolvedTaskRelation.taskId
+          ? getConversationActionStateByTaskId(readDB(), {
+              conversationId,
+              userId: uid,
+              taskId: resolvedTaskRelation.taskId,
+            })
+          : getLatestConversationActionState(readDB(), { conversationId, userId: uid });
+        if (boundTerminalTask && !boundTerminalTask.unfinished) {
+          const english = !/[\u3400-\u9fff]/u.test(visibleUserText);
+          const responseText = english
+            ? boundTerminalTask.status === 'completed'
+              ? `The task "${boundTerminalTask.goal || 'the previous task'}" is already completed. Cancellation cannot undo its recorded result, and I did not execute anything again.`
+              : `The task "${boundTerminalTask.goal || 'the previous task'}" is already ${boundTerminalTask.status || 'terminal'}. There is nothing left to stop, and I did not execute anything again.`
+            : CN_TASK_EXECUTION_MESSAGES.terminalCannotCancel(
+                boundTerminalTask.goal,
+                boundTerminalTask.status || 'terminal',
+              );
+          await commitDeterministicTerminal({
+            payload: {
+              text: responseText,
+              agentName: 'Lumi',
+              finalized: true,
+              blocked: false,
+              reason: 'task_already_terminal',
+            },
+            persistAssistantMessage: () => addMessageIdempotent({
+              userId: uid,
+              agentId: conversationAgentId,
+              conversationId,
+              role: 'assistant',
+              content: responseText,
+              domain: resolvedDomain,
+              orgId: resolvedOrgId,
+              source: eventSource,
+              channel: 'chat',
+              cognitiveIntent: 'task_already_terminal',
+              llmWasCalled: false,
+              requestId,
+              skipActionContinuation: true,
+            }),
+            publishAfter: () => emitConversationUpdated({
+              conversationId,
+              agentId: conversationAgentId,
+              source: 'chat',
+              rolledOver: conversationTurn.rolledOver,
+              previousConversationId: conversationTurn.previousConversationId,
+            }),
+            errorContext: 'Terminal task cancellation no-op',
           });
           await releaseChatSession();
           return;
@@ -2888,6 +2970,7 @@ export function registerChatHandler(
           uid,
           visibleUserText,
           conversation?.actionContinuationState,
+          resolvedTaskRelation.taskId || '',
         )}`);
       }
       const recentFailureExplanation = conversationId && !pendingConfirmation
@@ -3021,9 +3104,15 @@ export function registerChatHandler(
       executionDecision.baseToolPolicy = modelCapabilityPolicy;
       executionDecision.toolPolicy = modelCapabilityPolicy;
       executionDecision.maxIterations = modelCapabilityPolicy.maxIterations;
+      const existingActionState = conversation?.actionContinuationState;
+      const pinnedContinuationTools = trustedContinuationEvidenceTools({
+        actionTaskState: existingActionState,
+        trustedActionContinuation: executionDecision.resumesPinnedTask === true,
+      }, new Set(toolRegistry.getToolDeclarations().map(declaration => declaration.function.name)));
       const modelToolProjection = buildModelToolProjection(executionDecision, {
         lane: capabilitySelection.lane,
         preferredTools: capabilitySelection.preferredTools,
+        pinnedTools: pinnedContinuationTools,
       });
       const toolSessionActive = !isMemoryAvatar && executionPipeline.executionRequested
         && modelToolProjection.toolNames.length > 0;
@@ -3032,7 +3121,6 @@ export function registerChatHandler(
       // alone does not make a greeting or ordinary conversation an executable
       // task. Only turns whose flow requires completion evidence/tool work (or
       // a pending confirmation) receive a durable task identity before relay.
-      const existingActionState = conversation?.actionContinuationState;
       const bindsExistingAction = Boolean(
         existingActionState?.taskId
         && ['active_task', 'previous_task'].includes(resolvedTaskRelation.binding)
@@ -4344,9 +4432,20 @@ export function registerChatHandler(
       responseText = finalResponse.text;
       if (finalResponse.blocked) {
         console.warn('[ChatHandler] Completion claim blocked:', finalResponse.reason);
-        if (conversationId && actionTaskExecution.state?.taskId && toolSessionActive) {
+        // Keep the live action lease until the terminal assistant persistence
+        // boundary when this turn already has tool evidence.  Finalizing the
+        // task here clears its active request before `addMessageIdempotent`
+        // can bind the evidence, causing verified observations (notably the
+        // WPS active-window anchor) to be archived as stale and dropping the
+        // target from the durable capsule.  A blocked turn with no evidence
+        // still needs the early request finalization below.
+        if (conversationId && actionTaskExecution.state?.taskId && toolSessionActive && allToolRecords.length === 0) {
+          const blocker = correctionRequiresFreshConfirmation
+            && !pendingConfirmationCreatedThisTurn
+            ? RECONFIRMATION_REQUIRED_BLOCKER
+            : finalResponse.reason || 'The current work product did not pass final verification.';
           setConversationActionExecutionStatus(conversationId, uid, 'blocked', {
-            blocker: finalResponse.reason || 'The current work product did not pass final verification.',
+            blocker,
             assistantState: responseText,
             requestId: '',
           });

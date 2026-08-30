@@ -285,6 +285,13 @@ function applicationFromText(text: string): string {
 
 function replacementClause(text: string): string {
   const clean = compact(text, 500).replace(/[。！？!?]+$/u, '');
+  const useInsteadOf = clean.match(
+    /\buse\s+["']?((?:[A-Za-z]:[\\/]|\\\\)[^"'\r\n]{1,420}?\.(?:pptx?|docx?|xlsx?|pdf|txt|md|csv|json|png|jpe?g|gif|svg|dwg|dxf|zip))["']?\s+instead\s+of\s+["']?((?:[A-Za-z]:[\\/]|\\\\)[^"'\r\n]{1,420}?\.(?:pptx?|docx?|xlsx?|pdf|txt|md|csv|json|png|jpe?g|gif|svg|dwg|dxf|zip))\b/iu,
+  );
+  // English corrections commonly put the replacement before the rejected
+  // target ("use NEW instead of OLD"). The generic matcher otherwise captures
+  // both paths as one value and can leave the capsule pinned to the old target.
+  if (useInsteadOf?.[1]) return compact(useInsteadOf[1], 500);
   // i18n-allow: multilingual target-replacement recognition; not user-visible copy.
   const replacement = clean.match(/(?:而是|应该是|最终目标(?:是|改为)|改成|换成|(?<!不)要用|请用|(?<!不要)(?<!别)用)\s*["'“”‘’]?(.{1,420})$/u)?.[1]
     || clean.match(/\b(?:instead(?:\s+use)?|use|replace(?:\s+it)?\s+with)\s+["']?(.{1,420})$/iu)?.[1];
@@ -947,8 +954,17 @@ export function buildTaskCapsuleV1(
     ? ''
     : receiptPathCandidate;
   const explicitStatePath = paths.at(-1) || '';
-  const statePath = explicitStatePath || receiptPath;
-  const stateApplication = compact(source.appTarget, 160);
+  // `appTarget` is a legacy field and historically carried both an
+  // application name (for example `WPS`) and, in a few persisted turns, the
+  // exact path returned by a desktop-open receipt.  Treat an explicit path as
+  // a path so the durable target projection does not lose its directory when
+  // the capsule's path/object/application precedence is applied.
+  const rawAppTarget = compact(source.appTarget, 500);
+  const appTargetPath = /^(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|\/)/u.test(rawAppTarget)
+    ? rawAppTarget
+    : '';
+  const statePath = explicitStatePath || receiptPath || appTargetPath;
+  const stateApplication = appTargetPath ? '' : compact(rawAppTarget, 160);
   const initialTarget = normalizeTarget({
     label: fileNameFromPath(statePath) || stateApplication,
     application: stateApplication,

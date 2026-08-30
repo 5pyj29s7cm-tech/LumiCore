@@ -159,10 +159,14 @@ function formatEnglishPreviousActionLedgerStatus(
   task: ConversationActionTaskRow,
   state: ConversationActionContinuationState,
   taskReceipts: ConversationActionReceiptRow[],
+  query = '',
 ): string {
-  const receipt = [...taskReceipts].sort((left, right) => (
-    right.createdAt.localeCompare(left.createdAt)
-  ))[0];
+  const receipt = taskReceipts
+    .map((candidate, insertionOrder) => ({ candidate, insertionOrder }))
+    .sort((left, right) => (
+      right.candidate.createdAt.localeCompare(left.candidate.createdAt)
+      || right.insertionOrder - left.insertionOrder
+    ))[0]?.candidate;
   const envelope = parseObject(receipt?.envelope);
   const result = parseObject(envelope.result);
   const expectation = parseObject(result.expectation);
@@ -185,6 +189,14 @@ function formatEnglishPreviousActionLedgerStatus(
     || '',
   ).trim();
   const section = String(result.section || expectation.section || '').trim();
+  const processName = String(result.processName || result.process_name || '').trim();
+  const windowTitle = String(
+    result.windowTitle
+    || result.window_title
+    || result.title
+    || '',
+  ).trim();
+  const asksForWindowDetails = /\b(?:observed\s+window|window\s+title|actual\s+process)\b/iu.test(query);
   const verificationStatus = String(
     verification.status
     || envelopeVerification.status
@@ -221,6 +233,8 @@ function formatEnglishPreviousActionLedgerStatus(
     `Executed action: ${action || 'not recorded'}`,
     target ? `Target: ${target}` : '',
     section ? `Target section: ${section}` : '',
+    asksForWindowDetails && processName ? `Observed process: ${processName}` : '',
+    asksForWindowDetails ? `Observed window title: ${windowTitle || 'not recorded'}` : '',
     `Verification status: ${verificationStatus || 'not recorded'}`,
     matchedEvidence.length
       ? `Verification evidence: ${matchedEvidence.join('; ')}`
@@ -297,8 +311,9 @@ function durableTaskCapsuleTarget(state: ConversationActionContinuationState): s
   if (capsule.target.status === 'rejected') return '';
   return String(
     capsule.target.path
-    || capsule.target.application
+    || capsule.target.object
     || capsule.target.label
+    || capsule.target.application
     || '',
   ).trim().slice(0, 500);
 }
@@ -579,7 +594,13 @@ export function syncConversationActionTaskLedger(
         ? task?.operation || fallbackOperation
         : intent.operation,
     goal: redactGoal(state.goal, intent),
-    target: correctedTarget || intent.target || durableTarget || state.appTarget || task?.target || '',
+    // The durable capsule is the evidence-derived identity. Natural-language
+    // intent commonly reports only a short alias (for example `计算器` or
+    // `WPS`), while the state's appTarget preserves the user-facing target
+    // label and the capsule can carry an even more precise file/object path.
+    // Keep that durable order so a status/retry turn cannot rewrite the row to
+    // a less-specific parser alias.
+    target: correctedTarget || durableTarget || state.appTarget || intent.target || task?.target || '',
     status: taskStatus,
     blocker: state.latestBlocker || '',
     activeRequestId: persistedState.activeRequestId || '',
@@ -1673,7 +1694,7 @@ export function attachConversationExecutionPlan(
 
 export function findConversationActionTask(
   db: any,
-  input: { conversationId: string; userId: string; query?: string },
+  input: { conversationId: string; userId: string; query?: string; taskId?: string; latest?: boolean },
 ): ConversationActionTaskRow | null {
   ensureTables(db);
   const intent = normalizeActionIntent(input.query || '');
@@ -1686,7 +1707,11 @@ export function findConversationActionTask(
     .filter(receipt => receipt.conversationId === input.conversationId);
   const scopedTasks = (db.conversationActionTasks as ConversationActionTaskRow[])
     .filter(task => task.conversationId === input.conversationId && task.userId === input.userId);
-  if (intent.kind === 'status_query' && intent.target === 'previous_action') {
+  const exactTaskId = String(input.taskId || '').trim();
+  if (exactTaskId) {
+    return scopedTasks.find(task => task.id === exactTaskId) || null;
+  }
+  if (input.latest || (intent.kind === 'status_query' && intent.target === 'previous_action')) {
     const latestTaskEventAt = (task: ConversationActionTaskRow): string => (
       scopedReceipts
         .filter(receipt => receipt.taskId === task.id)
@@ -1808,9 +1833,20 @@ export function getConversationActionStateByTaskId(
   return conversationActionStateFromTask(task);
 }
 
+/** Return the most recently evidenced action in one conversation, including terminal tasks. */
+export function getLatestConversationActionState(
+  db: any,
+  input: { conversationId: string; userId: string },
+): ConversationActionContinuationState | null {
+  return conversationActionStateFromTask(findConversationActionTask(db, {
+    ...input,
+    latest: true,
+  }));
+}
+
 export function formatConversationActionLedgerStatus(
   db: any,
-  input: { conversationId: string; userId: string; query?: string },
+  input: { conversationId: string; userId: string; query?: string; taskId?: string },
 ): string | null {
   const task = findConversationActionTask(db, input);
   const state = conversationActionStateFromTask(task);
@@ -1957,7 +1993,11 @@ export function formatConversationActionLedgerStatus(
         && Boolean(processName)
         && Boolean(windowTitle);
       return [
-        `\u51c6\u786e\u76ee\u6807\uff1a${task.target || state.appTarget || openReceipt.targetIdentity || '\u672a\u8bb0\u5f55'}`,
+        // Prefer the persisted user-facing application target when the parser
+        // has shortened it to an observed window title (for example
+        // `计算器` vs `Windows 计算器`). A concrete path/object is still
+        // surfaced by the dedicated artifact/status branches above.
+        `\u51c6\u786e\u76ee\u6807\uff1a${state.appTarget || task.target || openReceipt.targetIdentity || '\u672a\u8bb0\u5f55'}`,
         `\u5b9e\u9645\u8fdb\u7a0b\uff1a${processName || '\u56de\u6267\u672a\u8bb0\u5f55'}`,
         `\u5b9e\u9645\u7a97\u53e3\u6807\u9898\uff1a${windowTitle || '\u56de\u6267\u672a\u8bb0\u5f55'}`,
         `\u7cbe\u786e\u5339\u914d\uff1a${targetMatched ? '\u662f\uff08\u6253\u5f00\u56de\u6267\u4e0e\u6d3b\u52a8\u7a97\u53e3\u56de\u6267\u4e00\u81f4\uff09' : '\u5426\u6216\u56de\u6267\u4e0d\u5b8c\u6574'}`,
@@ -1966,7 +2006,7 @@ export function formatConversationActionLedgerStatus(
     }
   }
   if (task && asksForPreviousAction && detectLanguage(query) === 'en') {
-    return formatEnglishPreviousActionLedgerStatus(task, state, taskReceipts);
+    return formatEnglishPreviousActionLedgerStatus(task, state, taskReceipts, query);
   }
   const latestClientActionReceipt = [...taskReceipts].reverse().find(receipt => (
     receipt.toolName === 'client_action'

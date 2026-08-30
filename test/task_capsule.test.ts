@@ -184,6 +184,41 @@ describe('TaskCapsuleV1', () => {
     );
   });
 
+  it('treats "use NEW instead of OLD" as an exact target replacement', () => {
+    const oldPath = 'C:\\Users\\ExampleUser\\LumiCore\\formal-client-e2e-artifacts\\target-0.txt';
+    const newPath = 'C:\\Users\\ExampleUser\\LumiCore\\formal-client-e2e-artifacts\\target-1.txt';
+    const source = wpsSource({
+      taskId: 'task-english-use-instead-of',
+      status: 'waiting_confirmation',
+      goal: `Create ${oldPath} with exact content receipt-marker.`,
+      latestInstruction: `Create ${oldPath} with exact content receipt-marker.`,
+      appTarget: '',
+      sourcePaths: [oldPath],
+      latestBlocker: '',
+      receipts: [],
+      toolSummaries: [],
+    });
+    const correction = `Use ${newPath} instead of ${oldPath}. Keep the exact content unchanged and wait for confirmation.`;
+
+    expect(classifyTaskCapsuleTurn(correction, source)).toBe('target_correction');
+    const capsule = buildTaskCapsuleV1(source, {
+      currentTurnText: correction,
+      currentTurnRef: 'message-english-correction',
+      observedAt: NOW,
+    });
+    expect(capsule?.target).toMatchObject({
+      path: newPath,
+      status: 'candidate',
+      source: 'user_correction',
+    });
+    expect(capsule?.latestCorrection).toMatchObject({
+      previousTarget: oldPath,
+      replacementTarget: newPath,
+      eventRef: 'message-english-correction',
+    });
+    expect(capsule?.rejectedTargets.map(item => item.identity)).toContain(oldPath);
+  });
+
   it('does not bind ordinary conversational negation to an unfinished task', () => {
     const state = wpsSource();
     expect(classifyTaskCapsuleTurn('不是这个', state)).toBe('target_correction');

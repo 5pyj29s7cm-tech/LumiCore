@@ -101,10 +101,10 @@ export interface ActiveTaskRelationOptions {
 // prevents every socket surface from inventing a different cancellation rule.
 // i18n-allow: multilingual task-control recognition; not user-visible copy.
 const CANCEL_ONLY_RE =
-  /^(?:(?:等一下|等等|先别急)[，,\s]*)?(?:你)?(?:先)?(?:取消|停止|停下|别做了|不要做了|终止)(?:这个|那个|当前)?(?:任务|操作|工作)?[。！？.!?]*$|^(?:(?:wait|hold\s+on)[,!\s]*)?(?:please\s+)?(?:cancel|stop|abort|terminate)(?:\s+(?:this|that|the current)\s+(?:task|operation|work))?[.!?]*$/iu; // i18n-allow: multilingual task-control recognition; not user-visible copy.
+  /^(?:(?:等一下|等等|先别急)[，,\s]*)?(?:你)?(?:先)?(?:取消|停止|停下|别做了|不要做了|终止)(?:这个|那个|当前)?(?:任务|操作|工作)?(?:[，,。.\s]+(?:不要|别|无需|不必)(?:再|继续)?(?:写入|创建|发送|发布|执行|继续)[^\r\n]{0,180})?[。！？.!?]*$|^(?:(?:wait|hold\s+on)[,!\s]*)?(?:please\s+)?(?:cancel|stop|abort|terminate)(?:\s+(?:this|that|the current)\s+(?:task|operation|work))?(?:[.!?\s]+(?:do\s+not|don['’]?t|never)\s+(?:write|create|send|publish|execute|run|continue)\b[^\r\n]{0,180})?[.!?]*$/iu; // i18n-allow: multilingual task-control recognition; not user-visible copy.
 // i18n-allow: multilingual task-replacement recognition; not user-visible copy.
 const REPLACE_RE =
-  /(?:取消|停止|停下|别做|不要做|终止|放弃).{0,24}(?:改成|换成|改做|转去|重新做|而是)|\b(?:cancel|stop|abort|drop)\b.{0,40}\b(?:instead|replace|switch|change\s+to|do)\b/iu; // i18n-allow: multilingual task-replacement recognition; not user-visible copy.
+  /(?:取消|停止|停下|别做|不要做|终止|放弃).{0,24}(?:改成|换成|改做|转去|重新做|而是)|\b(?:cancel|stop|abort|drop)\b.{0,40}\b(?:instead|replace|switch|change\s+to|do(?!\s+not\b|n['’]?t\b))\b/iu; // i18n-allow: multilingual task-replacement recognition; not user-visible copy.
 
 // A retry is materially different from a generic continuation: successful
 // receipts must be reused and only the failed/blocked step may run again.
@@ -346,7 +346,7 @@ export function resolveActiveTaskMessageRelation(
     && exactDurableFence
     && (
       state?.unfinished
-      || (terminalState && (feedback === 'status' || feedback === 'accept'))
+      || (terminalState && (feedback === 'status' || feedback === 'accept' || feedback === 'cancel'))
     ),
   );
   const requestMismatch = Boolean(
@@ -409,7 +409,7 @@ export function resolveActiveTaskMessageRelation(
   }
 
   const terminalPreviousLookup = Boolean(
-    (feedback === 'status' || feedback === 'accept')
+    (feedback === 'status' || feedback === 'accept' || feedback === 'cancel')
     && terminalState
     && durableTaskId
     && !runtimeRequestId,

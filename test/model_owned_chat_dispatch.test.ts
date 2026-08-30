@@ -237,6 +237,11 @@ describe('model-owned main chat architecture', () => {
     expect(chatSource).not.toContain('const capabilityMetaResponse');
     expect(chatSource).not.toContain('const deterministicKnowledgeInspection');
     expect(chatSource).not.toContain("reason: 'conversation_execution_facts'");
+    // A blocked finalizer may clear an action lease before receipt binding only
+    // when this turn produced no tool records.  With evidence (for example a
+    // verified WPS active-window observation), persistence must retain the
+    // lease until the terminal assistant row has been written.
+    expect(chatSource).toContain('toolSessionActive && allToolRecords.length === 0');
     // Natural-language dispatch remains model-owned. Tool-capable fresh turns
     // create only a durable task envelope before the model/tool relay so every
     // receipt has a stable taskId; preparation itself does not execute tools.

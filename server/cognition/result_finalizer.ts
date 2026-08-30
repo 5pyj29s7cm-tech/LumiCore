@@ -18,6 +18,7 @@ import {
 import { CN_CAD_MESSAGES } from '../regions/packs/cn/cad_messages';
 import {
   CN_VOICE_FAST_PATH_MESSAGES,
+  CN_VOICE_QUICK_WORK_MESSAGES,
   formatCnClientActionTargetLabel,
   formatCnToolFailureDetail,
 } from '../regions/packs/cn/voice_fast_path_messages';
@@ -66,7 +67,8 @@ import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../regions/packs/cn/execution_ev
 import { CN_TASK_TARGET_ANCHOR_MESSAGES } from '../regions/packs/cn/task_target_anchor_messages';
 import { CN_EXTERNAL_AI_MESSAGES } from '../regions/packs/cn/external_ai_messages';
 import { coalesceToolExecutionRecords, toolRecordSucceeded } from './task_execution_ledger';
-import { parseReceiptObject, toolRecordTerminalText } from '../tools/receipt_payload';
+import { parseReceiptObject, toolRecordTerminalPayload, toolRecordTerminalText } from '../tools/receipt_payload';
+import { isExplicitRuntimeCleanupProposal } from './pending_assistant_offer';
 import { sanitizeUserFacingExecutionOutput } from './user_output_protection';
 import {
   hasContinuousStockWatchIntent,
@@ -85,6 +87,7 @@ import {
 import { normalizeActionIntent } from './normalized_action_intent';
 import { buildOperationModeMetaResponse } from './capability_meta';
 import { CN_UNVERIFIED_CLIENT_STATE_CLAIM } from '../regions/packs/cn/capability_meta_messages';
+import { formatRuntimeCleanupReceipt } from '../i18n/runtime_cleanup_messages';
 import type { LumiClientMode } from '../../shared/operation_modes';
 
 export interface LumiResultFinalizerInput {
@@ -291,6 +294,115 @@ function unsupportedPriorDiagnosticClaim(input: LumiResultFinalizerInput): strin
 
 function taskActionContract(input: LumiResultFinalizerInput) {
   return buildActionEvidenceContract(resultTaskText(input));
+}
+
+function parseRuntimeWorkReceipt(record: ToolExecutionRecord): Record<string, any> | null {
+  if (!toolRecordSucceeded(record)) return null;
+  const payload = parseReceiptObject(toolRecordTerminalPayload(record));
+  if (!payload || payload.ok !== true) return null;
+  return payload;
+}
+
+function isInternalRuntimeWorkNarration(value: string): boolean {
+  const text = String(value || '').trim();
+  if (!text) return true;
+  // These are model/tool-loop control messages, not useful user feedback. A
+  // verified runtime receipt must still produce a concise visible answer.
+  return /(?:模型不得重新快照|无法形成已验证.*(?:提议|清理)|当前模型请求没有声明|只能由运行时采用|工具结果已收到|no response|no (?:verified|actual) .*result|cannot .*reconstruct .*target)/iu.test(text); // i18n-allow: internal execution-narration recognition; not user-visible copy.
+}
+
+/**
+ * Runtime-work status is a read-only control lane, but it is also the source
+ * of truth for the adjacent cleanup offer. If the model returns an empty
+ * body (or an internal planning sentence), do not persist a blank assistant
+ * turn: render the verified snapshot and, when cancellable work exists, make
+ * the offer explicit so the next short user confirmation can be bound to the
+ * exact frozen task ids.
+ */
+function formatGroundedRuntimeWorkResult(
+  input: LumiResultFinalizerInput,
+  contract: ReturnType<typeof taskActionContract>,
+): LumiResultFinalizerResult | null {
+  const runtimeRecord = [...(input.toolRecords || [])].reverse().find(item => (
+    item.name === 'runtime_work_cancel' || item.name === 'runtime_work_status'
+  ));
+  // A short natural-language command such as “清理这些后台任务” may not
+  // satisfy the generic intent classifier, but a verified runtime receipt is
+  // still authoritative and must never be rendered as an empty turn.
+  if (contract.kind !== 'task_control' && !runtimeRecord) return null;
+  const cancelling = runtimeRecord?.name === 'runtime_work_cancel'
+    || contract.preferredTools.includes('runtime_work_cancel');
+  const record = runtimeRecord && (
+    runtimeRecord.name === (cancelling ? 'runtime_work_cancel' : 'runtime_work_status')
+  ) ? runtimeRecord : null;
+  if (!record) return null;
+  const payload = parseRuntimeWorkReceipt(record);
+  if (!payload) return null;
+  const modelText = String(input.responseText || '').trim();
+
+  if (cancelling) {
+    // A truthful non-empty model sentence is acceptable. Empty/internal
+    // transport output is replaced with the canonical receipt projection.
+    if (!isInternalRuntimeWorkNarration(modelText)) return null;
+    const text = formatRuntimeCleanupReceipt(resultTaskText(input), payload);
+    return {
+      text: text || (isChineseText(resultTaskText(input))
+        ? CN_VOICE_QUICK_WORK_MESSAGES.runtimeCancellationResultMissing
+        : 'No runtime cancellation result was returned.'),
+      blocked: false,
+      reason: 'Grounded runtime work cancellation receipt.',
+    };
+  }
+
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  const cancellableItems = items.filter((item: any) => item?.controls?.canCancel === true);
+  const activeCount = Number(payload.activeCount);
+  const count = Number.isFinite(activeCount) ? Math.max(0, activeCount) : items.length;
+  const chinese = isChineseText(resultTaskText(input));
+  const noWork = String(payload.status || '') === 'idle' || count === 0;
+  if (noWork) {
+    if (!isInternalRuntimeWorkNarration(modelText)) return null;
+    return {
+      text: chinese ? CN_VOICE_QUICK_WORK_MESSAGES.noActiveWork : 'There is no active Lumi work right now.',
+      blocked: false,
+      reason: 'Grounded runtime work status receipt.',
+    };
+  }
+
+  const titles = items.slice(0, 3)
+    .map((item: any) => String(item?.title || item?.id || '').trim())
+    .filter(Boolean);
+  const summary = chinese
+    ? CN_VOICE_QUICK_WORK_MESSAGES.activeWork(count, titles)
+    : `There are ${count} active Lumi work item${count === 1 ? '' : 's'}${titles.length ? `: ${titles.join(', ')}` : '.'}`;
+  // The offer must be adjacent to this assistant turn. Append it even when a
+  // model supplied a factual status sentence without a question; otherwise a
+  // following “清理一下” has no safe immutable target set to adopt.
+  if (cancellableItems.length > 0) {
+    if (isExplicitRuntimeCleanupProposal(modelText)) return null;
+    if (!isInternalRuntimeWorkNarration(modelText)) {
+      return {
+        text: chinese
+          ? CN_VOICE_QUICK_WORK_MESSAGES.runtimeStatusWithOffer(modelText)
+          : `${modelText}\nWould you like me to clear those background tasks?`,
+        blocked: false,
+        reason: 'Grounded runtime work status receipt with cleanup offer.',
+      };
+    }
+    return {
+      text: chinese
+        ? CN_VOICE_QUICK_WORK_MESSAGES.runtimeCleanupOffer(cancellableItems.length)
+        : `There are ${cancellableItems.length} cancellable background task${cancellableItems.length === 1 ? '' : 's'}. Would you like me to clear them?`,
+      blocked: false,
+      reason: 'Grounded runtime work status receipt with cleanup offer.',
+    };
+  }
+  if (!isInternalRuntimeWorkNarration(modelText)) return null;
+  return {
+    text: summary,
+    blocked: false,
+    reason: 'Grounded runtime work status receipt.',
+  };
 }
 
 function unsupportedClientStateVerificationClaim(input: LumiResultFinalizerInput): string | null {
@@ -2262,6 +2374,8 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     });
   }
   const actionContract = taskActionContract(input);
+  const groundedRuntimeWork = formatGroundedRuntimeWorkResult(input, actionContract);
+  if (groundedRuntimeWork) return groundedRuntimeWork;
   const groundedCurrentAuthoringDocument = formatGroundedCurrentAuthoringDocumentResult(input);
   if (groundedCurrentAuthoringDocument) {
     return preserveModelWordingOnGroundedSuccess(input, groundedCurrentAuthoringDocument);

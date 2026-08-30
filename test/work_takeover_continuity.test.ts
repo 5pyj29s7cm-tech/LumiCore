@@ -57,6 +57,31 @@ describe('work takeover continuity', () => {
     expect(getWorkTakeoverContinuationQuickCommand('下一步呢', 'continuity_chat_user', { surface: 'chat' })).toBeNull();
   });
 
+  it('does not inherit an older takeover task when the user declares a new isolated task', async () => {
+    const { initDatabase } = await import('../db_layer');
+    const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');
+    const { buildWorkTakeoverContinuityContext, getWorkTakeoverContinuationQuickCommand } = await import('../server/work_takeover/continuity');
+    await initDatabase();
+
+    const userId = 'continuity_new_task_boundary_user';
+    createWorkTakeoverTask({
+      userId,
+      category: 'general_work',
+      title: '旧的后台接管任务',
+      nextActions: ['继续旧任务'],
+      source: 'manual',
+      status: 'in_progress',
+    });
+
+    const text = '这是可取消的隔离长任务，等待后给出一句结果，不调用任何工具。';
+    const context = buildWorkTakeoverContinuityContext(userId, text, { surface: 'chat' });
+    expect(context.intent).toBeNull();
+    expect(context.strength).toBe('none');
+    expect(context.shouldResumeTask).toBe(false);
+    expect(context.routeText).toBe(text);
+    expect(getWorkTakeoverContinuationQuickCommand(text, userId, { surface: 'chat' })).toBeNull();
+  });
+
   it('never lets a delivery restatement request resume an older work task', async () => {
     const { initDatabase } = await import('../db_layer');
     const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');

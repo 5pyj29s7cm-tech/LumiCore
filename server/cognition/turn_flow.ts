@@ -287,7 +287,12 @@ function buildExecutionGovernance(input: {
   const taskText = taskContextText(input.workTakeover);
   const completionEvidenceNeeded =
     needsCompletionEvidence(input.text) ||
-    needsCompletionEvidence(taskText) ||
+    // Merely having a user-scoped work-takeover item must not turn every new
+    // chat sentence into a durable execution request.  The task text is
+    // evidence for this turn only after continuity has positively bound the
+    // turn to that task; otherwise an unrelated active task can leak its file
+    // or deliverable vocabulary into the new conversation.
+    Boolean(input.workTakeover.shouldResumeTask && needsCompletionEvidence(taskText)) ||
     Boolean(input.workTakeover.shouldResumeTask && WORK_PRODUCT_RE.test(`${input.text} ${taskText}`));
   const capability = classifyCapabilityLearningIntent(input.text, input.flowInput);
   const verification = classifyVerificationIntent({

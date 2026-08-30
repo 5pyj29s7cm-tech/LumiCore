@@ -10,6 +10,8 @@ export interface ConversationExecutionFactScope {
   orgId?: string;
   /** The just-persisted user request, used to locate the immediately preceding turn. */
   currentRequestId?: string;
+  /** Optional server-bound durable task identity for exact status projection. */
+  taskId?: string;
 }
 
 export interface ConversationExecutionFacts {
@@ -257,6 +259,7 @@ export function getConversationExecutionFacts(scope: ConversationExecutionFactSc
     && String(task.userId || '') === scope.userId
     && String(task.domain || 'personal') === domain
     && (domain !== 'work' || String(task.orgId || '') === orgId)
+    && (!scope.taskId || String(task.id || '') === scope.taskId)
   )).map((task: any) => ({
     id: String(task.id || ''),
     status: String(task.status || 'unknown'),
@@ -304,10 +307,35 @@ export function formatConversationExecutionFactAnswer(
       name: record.name,
       outcome: priorTurnToolOutcome(record),
     }));
+    // i18n-allow -- Multilingual receipt-detail recognition; not user-visible copy.
+    const asksWindowTitle = /(?:窗口标题|观察到的窗口)|\b(?:window\s+title|observed\s+window)\b/iu.test(text);
+    const observedWindowRecord = asksWindowTitle
+      ? [...records].reverse().find(record => /^(?:desktop_active_window|get_active_window_info)$/i.test(record.name))
+      : undefined;
+    const observedWindowResult = observedWindowRecord
+      ? parseRecordResult(observedWindowRecord.result)
+      : {};
+    const observedWindowTitle = String(
+      observedWindowResult.windowTitle
+      || observedWindowResult.window_title
+      || observedWindowResult.title
+      || '',
+    ).trim();
+    // i18n-allow -- Multilingual receipt-detail recognition; not user-visible copy.
+    const asksTaskStatus = /(?:任务|当前|真实).{0,20}状态|\b(?:task|current|real)\b.{0,24}\bstatus\b/iu.test(text);
+    const taskStatus = facts.tasks[0]?.status || '';
     if (zh) {
-      return CN_CONVERSATION_EXECUTION_FACT_MESSAGES.priorTurnTools(outcomes);
+      return [
+        CN_CONVERSATION_EXECUTION_FACT_MESSAGES.priorTurnTools(outcomes),
+        asksTaskStatus ? CN_CONVERSATION_EXECUTION_FACT_MESSAGES.taskStatus(taskStatus) : '',
+        asksWindowTitle ? CN_CONVERSATION_EXECUTION_FACT_MESSAGES.observedWindowTitle(observedWindowTitle) : '',
+      ].filter(Boolean).join('\n');
     }
-    return `The previous turn called: ${outcomes.map(item => `${item.name} (${item.outcome})`).join(', ')}.`;
+    return [
+      `The previous turn called: ${outcomes.map(item => `${item.name} (${item.outcome})`).join(', ')}.`,
+      asksTaskStatus ? `Task status: ${taskStatus || 'not recorded'}.` : '',
+      asksWindowTitle ? `Observed window title: ${observedWindowTitle || 'not recorded'}.` : '',
+    ].filter(Boolean).join('\n');
   }
   const toolNames = Array.from(new Set(facts.toolCalls.map(record => record.name)));
   const taskStatuses = Array.from(new Set(facts.tasks.map(task => task.status)));

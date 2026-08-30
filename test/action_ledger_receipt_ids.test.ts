@@ -285,6 +285,92 @@ describe('conversation action receipt ids', () => {
     }
   });
 
+  it('keeps an active-window filename as the durable target when no path is available', () => {
+    const taskId = 'task-active-window-target';
+    const fileName = 'WPS-Quarterly-Review-Draft.pptx';
+    const conversation: any = {
+      id: 'conversation-1',
+      userId: 'user-1',
+      domain: 'personal',
+      orgId: '',
+    };
+    const db: any = {
+      conversations: [conversation],
+      interactions: [],
+      conversationActionTasks: [],
+      conversationActionReceipts: [],
+    };
+    const activeWindow = {
+      id: 'receipt-active-window-target',
+      name: 'desktop_active_window',
+      arguments: {},
+      result: JSON.stringify({
+        ok: true,
+        status: 'observed',
+        title: `${fileName} - WPS Office`,
+        processName: 'wps.exe',
+        documentName: fileName,
+        path: '',
+      }),
+      error: '',
+      outcome: 'success',
+      terminalVerification: {
+        status: 'verified',
+        strategy: 'terminal_receipt',
+        reason: 'The foreground WPS window was observed.',
+      },
+      recordedAt: '2026-08-30T00:00:00.000Z',
+    };
+    const goal = '分析 WPS 当前打开的这份文件。';
+    const state = buildConversationActionContinuationState({
+      previous: {
+        version: 2,
+        taskId,
+        status: 'planning',
+        receipts: [],
+        revision: 1,
+        goal,
+        latestInstruction: goal,
+        appTarget: 'WPS',
+        sourcePaths: [],
+        latestBlocker: '',
+        unfinished: true,
+        evidenceTools: [],
+        assistantState: '',
+        toolSummaries: [],
+        updatedAt: '2026-08-30T00:00:00.000Z',
+      },
+      userText: goal,
+      assistantText: `前台窗口是 ${fileName}。`,
+      toolCalls: [activeWindow],
+      requestId: 'request-active-window-target',
+      updatedAt: '2026-08-30T00:00:01.000Z',
+    });
+
+    expect(state?.taskCapsule?.target).toMatchObject({
+      application: 'WPS',
+      object: fileName,
+      label: fileName,
+      path: '',
+      source: 'active_window',
+      status: 'confirmed',
+    });
+
+    const row = syncConversationActionTaskLedger(db, {
+      conversation,
+      state: state!,
+      userText: goal,
+      now: '2026-08-30T00:00:01.000Z',
+    });
+
+    expect(row).toMatchObject({
+      id: taskId,
+      target: fileName,
+    });
+    expect(JSON.parse(String(row?.context)).actionState.taskCapsule.target.object)
+      .toBe(fileName);
+  });
+
   it('allocates a new durable row id when one tool record is associated with another task', () => {
     const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
     const record = { id: 'tool-call-1', name: 'write_file', arguments: { path: 'result.md' }, result: 'ok' };

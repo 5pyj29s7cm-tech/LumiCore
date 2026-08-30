@@ -9,6 +9,7 @@ import {
   bindConversationActionExecutionTurn,
   getOrCreateActiveConversation,
   setConversationActionExecutionStatus,
+  startIsolatedConversation,
 } from '../server/conversation/manager';
 import { registerChatHandler } from '../server/socket/chat';
 import { getChatExecution } from '../server/socket/chat_execution_registry';
@@ -72,8 +73,11 @@ describe('chat prior-action status handler', () => {
   const secondRequestId = `chat-prior-action-second-${suffix}`;
   const windowSeedRequestId = `chat-prior-action-window-seed-${suffix}`;
   const exactReceiptRequestId = `chat-prior-action-exact-receipt-${suffix}`;
+  const recordedReceiptStatusRequestId = `chat-recorded-receipt-status-${suffix}`;
+  const recordedReceiptSeedRequestId = `chat-recorded-receipt-seed-${suffix}`;
   const cancelSeedRequestId = `chat-durable-cancel-seed-${suffix}`;
   const cancelRequestId = `chat-durable-cancel-${suffix}`;
+  const terminalCancelRequestId = `chat-terminal-cancel-noop-${suffix}`;
   const modeFactsRequestId = `chat-operation-mode-facts-${suffix}`;
   const englishStatusQuestion = 'What did you just do, and what evidence proved it succeeded?';
   const chineseStatusQuestion = '你刚才做了什么，什么证据证明成功了？';
@@ -227,7 +231,11 @@ describe('chat prior-action status handler', () => {
     }
   });
 
-  async function sendStatusQuestion(requestId: string, text: string): Promise<Record<string, any>> {
+  async function sendStatusQuestion(
+    requestId: string,
+    text: string,
+    targetConversationId = conversationId,
+  ): Promise<Record<string, any>> {
     const responsePromise = waitForRequestEvent<Record<string, any>>(
       client,
       'agent:response',
@@ -240,7 +248,7 @@ describe('chat prior-action status handler', () => {
       domain: 'personal',
       source: 'command-center-chat',
       requestId,
-      conversationId,
+      conversationId: targetConversationId,
     });
     expect(ack).toMatchObject({ ok: true, requestId });
     return responsePromise;
@@ -451,9 +459,96 @@ describe('chat prior-action status handler', () => {
       llmWasCalled: false,
     });
     expect(storedToolCalls(reply?.toolCalls)).toEqual([]);
+
     expect(llmTripwire).not.toHaveBeenCalled();
     expect(queryMemoriesVector).not.toHaveBeenCalled();
     expect(retrieveChunks).not.toHaveBeenCalled();
+  });
+
+  it('answers an already-recorded observation receipt with its real task status and window title', async () => {
+    const isolated = startIsolatedConversation(userId, 'lumi', 'personal', '');
+    const seedUserMessageId = addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: isolated.id,
+      role: 'user',
+      content: 'Read the current foreground window title once.',
+      domain: 'personal',
+      orgId: '',
+      source: 'command-center-chat',
+      channel: 'chat',
+      requestId: recordedReceiptSeedRequestId,
+      deferActionPreparation: true,
+    });
+    expect(bindConversationActionExecutionTurn({
+      conversationId: isolated.id,
+      userId,
+      userText: 'Read the current foreground window title once.',
+      requestId: recordedReceiptSeedRequestId,
+      userMessageId: seedUserMessageId,
+    })).toMatchObject({ requestId: recordedReceiptSeedRequestId });
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: isolated.id,
+      role: 'assistant',
+      content: 'The foreground window is LumiCore.',
+      domain: 'personal',
+      orgId: '',
+      source: 'command-center-chat',
+      channel: 'chat',
+      requestId: recordedReceiptSeedRequestId,
+      taskIntent: 'task',
+      llmWasCalled: true,
+      toolCalls: [{
+        id: 'recorded_active_window_receipt',
+        key: 'desktop_active_window:{}',
+        name: 'desktop_active_window',
+        arguments: {},
+        result: JSON.stringify({
+          ok: true,
+          status: 'verified',
+          title: 'LumiCore',
+          processName: 'lumi-core.exe',
+        }),
+        error: '',
+        outcome: 'success',
+        terminalVerification: {
+          status: 'verified',
+          strategy: 'terminal_receipt',
+          reason: 'active window returned',
+        },
+        envelope: {
+          status: 'verified_success',
+          verification: { status: 'verified' },
+        },
+      }],
+    });
+    setConversationActionExecutionStatus(isolated.id, userId, 'completed', {
+      requestId: recordedReceiptSeedRequestId,
+      assistantState: 'The foreground window is LumiCore.',
+    });
+    const baselineReceiptCount = (readDB().conversationActionReceipts || []).length;
+
+    const response = await sendStatusQuestion(
+      recordedReceiptStatusRequestId,
+      'Based only on the task receipt already recorded, report the current real status of the read-only observation task, whether a tool receipt exists, and the observed window title.',
+      isolated.id,
+    );
+    expect(response).toMatchObject({
+      requestId: recordedReceiptStatusRequestId,
+      conversationId: isolated.id,
+      source: 'command-center-chat',
+      reason: 'execution_facts',
+      finalized: true,
+      blocked: false,
+    });
+    expect(response.text).toContain('desktop_active_window (success)');
+    expect(response.text).toContain('Task status: completed.');
+    expect(response.text).toContain('Observed window title: LumiCore.');
+    expect(response.text).not.toMatch(/cannot honestly mark|still pending|No successful current-turn tool execution/iu);
+    expect((readDB().conversationActionReceipts || []).length).toBe(baselineReceiptCount);
+    expect(llmTripwire).not.toHaveBeenCalled();
   });
 
   it('cancels an exact unfinished durable task even after its foreground request lease is gone', async () => {
@@ -542,6 +637,26 @@ describe('chat prior-action status handler', () => {
       taskId: idleTask?.taskId || '',
     }))
       .toMatchObject({ taskId: idleTask?.taskId, status: 'cancelled', unfinished: false });
+
+    const terminalCancel = await sendStatusQuestion(
+      terminalCancelRequestId,
+      'Cancel this task. Do not write any file.',
+    );
+    expect(terminalCancel).toMatchObject({
+      requestId: terminalCancelRequestId,
+      conversationId,
+      source: 'command-center-chat',
+      reason: 'task_already_terminal',
+      finalized: true,
+      blocked: false,
+    });
+    expect(terminalCancel.text).toContain('already cancelled');
+    expect(terminalCancel.text).toContain('did not execute anything again');
+    expect(getConversationActionStateByTaskId(readDB(), {
+      conversationId,
+      userId,
+      taskId: idleTask?.taskId || '',
+    })).toMatchObject({ taskId: idleTask?.taskId, status: 'cancelled', unfinished: false });
     expect(llmTripwire).not.toHaveBeenCalled();
   });
 

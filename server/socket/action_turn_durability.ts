@@ -1,5 +1,6 @@
 import {
   classifyConversationActionFollowupIntent,
+  conversationActionRequiresFreshConfirmationReview,
   type ConversationActionContinuationState,
 } from '../cognition/action_continuation';
 import { resolveActiveTaskMessageRelation } from '../cognition/task_concurrency';
@@ -99,7 +100,10 @@ export async function resolveAcceptedTurnConfirmation(input: {
         )
         || taskCapsuleTurn === 'target_correction'
       )
-      && input.actionState?.status === 'waiting_confirmation'
+      && (
+        input.actionState?.status === 'waiting_confirmation'
+        || conversationActionRequiresFreshConfirmationReview(input.actionState)
+      )
       && input.taskScope.taskId,
     );
     let cleared = false;

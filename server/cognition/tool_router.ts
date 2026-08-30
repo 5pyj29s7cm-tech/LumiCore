@@ -142,6 +142,36 @@ function addIfAvailable(out: Set<string>, available: Set<string>, name: string):
   if (available.has(name)) out.add(name);
 }
 
+/**
+ * A correction/retry is allowed to keep the exact capabilities that already
+ * produced evidence for the same durable task.  The current wording may name
+ * only a replacement path (and therefore match an unrelated route), so retain
+ * the prior receipt tools as a narrow, server-owned continuation envelope.
+ * Never use the personality wildcard to restore the whole registry: when the
+ * snapshot is wildcarded, the observed receipt names are the least-privilege
+ * capability set we can prove belongs to this task.
+ */
+export function trustedContinuationEvidenceTools(
+  options: ToolRouteOptions | undefined,
+  available: Set<string>,
+): string[] {
+  const state = options?.actionTaskState;
+  if (!options?.trustedActionContinuation || !state?.unfinished) return [];
+  const snapshot = state.policySnapshot;
+  const allowed = new Set(snapshot?.allowedTools || []);
+  const forbidden = new Set(snapshot?.forbiddenTools || []);
+  const wildcard = allowed.has('*');
+  const names = [
+    ...(state.evidenceTools || []),
+    ...((state.receipts || []).map(receipt => receipt.name)),
+  ];
+  return unique(names)
+    .filter(name => available.has(name))
+    .filter(name => !forbidden.has('*') && !forbidden.has(name))
+    .filter(name => !snapshot || wildcard || allowed.has(name))
+    .slice(-16);
+}
+
 const MANIFEST_LANES_BY_GROUP: Record<string, CapabilityLane[]> = {
   currentAppControl: ['desktop'],
   files: ['files'],
@@ -795,6 +825,10 @@ export function routeToolsForTurn(
   if (restoredTrustedTaskRoute) {
     reasons.push('the exact server-bound durable task restored its original capability family for this terse continuation');
   }
+  const continuationEvidenceTools = trustedContinuationEvidenceTools(options, available);
+  if (continuationEvidenceTools.length) {
+    reasons.push('the exact server-bound task retained tools that already produced receipts for its unfinished step');
+  }
   const manifestPriorities: string[] = [];
   const runtimeWorkIntent = classifyRuntimeWorkIntent(
     instructionText,
@@ -907,6 +941,15 @@ export function routeToolsForTurn(
       actionContract,
       routingManifest,
     ));
+  }
+
+  // Add this before the restrictive route branches below.  Those branches
+  // (status, cancellation, read-only inspection, active-document anchoring,
+  // and confirmation) are authoritative and may clear it; ordinary
+  // corrections/retries retain the proven read/retry tools instead of losing
+  // them to semantic rerouting of the replacement wording.
+  if (continuationEvidenceTools.length && !currentAppEdit) {
+    for (const name of continuationEvidenceTools) addIfAvailable(selected, available, name);
   }
 
   if (actionContract.kind === 'messaging_read') {
@@ -1197,6 +1240,7 @@ export function routeToolsForTurn(
   const orderedBeforeHealthGate = applyRoutePriority(
     availableNames.filter(name => selected.has(name)),
     unique([
+      ...continuationEvidenceTools,
       ...(currentAuthoringDocumentInspection
         ? ['desktop_running_processes', 'desktop_active_window']
         : []),

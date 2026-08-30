@@ -3489,7 +3489,11 @@ function check(checkId, observed, evidence) {
 async function runCleanupScenario(context) {
   const scenarioId = 'cleanup_offer_then_cleanup';
   const marker = '[LUMI_REGRESSION:S1]';
-  const seederAgentId = 'lumi-regression-s1-seeder';
+  // LumiCore is intentionally single-core: regression seed conversations must
+  // use the canonical Lumi owner instead of an invented agent id. The chat
+  // boundary rejects arbitrary agent ids so a harness-only seeder would never
+  // reach the execution path it is meant to verify.
+  const seederAgentId = 'lumi';
   const seederConversationId = await createConversation(
     context.baseUrl,
     context.token,
@@ -4965,6 +4969,18 @@ async function runPrimaryModelFailoverLmStudioScenario(context) {
       && providerCaptures[1]?.pairedAssistantToolCallAndReceipt === true
       && providerCaptures[1]?.pairedAssistantToolCallCount === 1
       && providerCaptures[1]?.pairedToolReceiptCount === 1;
+    // Public completion feedback deliberately redacts internal tool names
+    // (the product security contract forbids leaking `read_file` and other
+    // protocol identifiers).  The independently derived truth snapshot and
+    // same-task checks below already prove that the read receipt happened; a
+    // generic safe evidence line is therefore truthful even when the public
+    // payload no longer contains the tool name.
+    const publicFeedbackEvidence = Array.isArray(turn.terminal.completionFeedback?.evidence)
+      ? turn.terminal.completionFeedback.evidence
+      : [];
+    const safeRedactedCompletionEvidence = publicFeedbackEvidence.some(item => (
+      /^(?:The current execution result was recorded\.|已记录当前执行结果。)$/u.test(String(item || '').trim())
+    ));
     const terminalFeedbackTruthful = Boolean(
       turn.ack.ok
       && turn.terminal.finalized
@@ -4974,7 +4990,8 @@ async function runPrimaryModelFailoverLmStudioScenario(context) {
       && !/No successful current-turn|这一轮没有记录到成功|model routes unavailable|processing failed/iu
         .test(turn.terminal.text)
       && turn.terminal.completionFeedback?.status === 'completed'
-      && turn.terminal.completionFeedback.evidence.some(item => item.includes('read_file'))
+      && (publicFeedbackEvidence.some(item => String(item || '').includes('read_file'))
+        || safeRedactedCompletionEvidence)
       && turn.terminal.completionFeedback.blockers.length === 0
       && turn.terminal.completionFeedback.incomplete.length === 0
       && persistedAssistant?.textSha256 === turn.terminal.textSha256
