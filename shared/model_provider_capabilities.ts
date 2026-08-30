@@ -15,8 +15,9 @@ export const LUMI_OFFICIAL_PROVIDER_ID = 'relay' as const;
  */
 export const LUMI_OFFICIAL_BASE_URL = 'https://zhuan.huaczy.com/v1' as const;
 
-/** Public API documentation for the endpoint shown in Settings. */
-export const LUMI_OFFICIAL_DOCS_URL = 'https://zhuan.huaczy.com/docs' as const;
+/** Public API documentation and account pages shown in Settings. */
+export const LUMI_OFFICIAL_DOCS_URL = 'https://zhuan.huaczy.com/console/help' as const;
+export const LUMI_OFFICIAL_RECHARGE_URL = 'https://zhuan.huaczy.com/console/recharge' as const;
 
 export const LUMI_MODEL_ROLE_IDS = [
   'reasoning',
@@ -41,8 +42,8 @@ export const LUMI_OFFICIAL_DEFAULT_MODELS: Readonly<Record<LumiModelRoleId, stri
   video_generation: 'huawei_maas/Wan2.2-T2V-A14B',
   embedding: 'huawei_maas/bge-m3',
   rerank: 'huawei_maas/bge-reranker-v2-m3',
-  speech_recognition: 'whisper-1',
-  speech_synthesis: 'tts-1',
+  speech_recognition: 'aliyun/qwen-audio-3.0-asr-flash-streaming',
+  speech_synthesis: 'aliyun/cosyvoice-v3-flash',
 };
 
 /**
@@ -58,8 +59,8 @@ const LEGACY_OFFICIAL_MODEL_IDS: Readonly<Record<LumiModelRoleId, ReadonlySet<st
   video_generation: new Set(['openai-compatible', 'openai_compatible', 'default', 'sora-2']),
   embedding: new Set(['openai-compatible', 'openai_compatible', 'default', 'text-embedding-3-small']),
   rerank: new Set(['openai-compatible', 'openai_compatible', 'default', 'rerank-v1']),
-  speech_recognition: new Set(['openai-compatible', 'openai_compatible', 'default']),
-  speech_synthesis: new Set(['openai-compatible', 'openai_compatible', 'default']),
+  speech_recognition: new Set(['openai-compatible', 'openai_compatible', 'default', 'whisper-1']),
+  speech_synthesis: new Set(['openai-compatible', 'openai_compatible', 'default', 'tts-1']),
 };
 
 export function normalizeLumiOfficialModel(role: LumiModelRoleId, value: unknown): string {

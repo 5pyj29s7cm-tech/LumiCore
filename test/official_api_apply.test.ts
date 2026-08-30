@@ -6,6 +6,7 @@ import { getUserPreferredLLM } from '../server/llm/user_preferences';
 import { getUserPreferredVision } from '../server/llm/vision_preferences';
 import { getUserWorldModelPrefs } from '../server/llm/world_preferences';
 import { getUserRetrievalModelPreferences } from '../server/llm/retrieval_model_preferences';
+import { getVoicePreference, setVoicePreference } from '../server/config/voice_preference';
 import { LUMI_OFFICIAL_SUPPORTED_ROLES, LUMI_OFFICIAL_UNSUPPORTED_ROLES } from '../shared/model_provider_capabilities';
 import { mountSystemRoutes } from '../server/routes/system_routes';
 
@@ -15,19 +16,40 @@ describe('Lumi official API one-click adaptation', () => {
   const userId = 'official-api-apply-test-user';
   const token = jwt.sign({ uid: userId, username: 'official-test', role: 'admin' }, JWT_SECRET);
   const userToken = jwt.sign({ uid: `${userId}-ordinary-user`, username: 'ordinary-test', role: 'user' }, JWT_SECRET);
+  let initialVoicePreference: ReturnType<typeof getVoicePreference>;
 
   beforeAll(async () => {
     const app = await makeApp();
     url = app.url;
     cleanup = app.cleanup;
+    initialVoicePreference = getVoicePreference();
+    app.app.get('/official/v1/models', (req, res) => {
+      if (req.headers.authorization !== 'Bearer sk-official-apply-test') {
+        return res.status(401).json({ error: { message: 'unauthorized' } });
+      }
+      return res.json({
+        object: 'list',
+        data: [
+          { id: 'aliyun/qwen-plus', capability: 'chat' },
+          { id: 'huawei_maas/qwen2.5-vl-72b', capability: 'multimodal_chat' },
+          { id: 'huawei_maas/qwen-image', capability: 'image_generation' },
+          { id: 'huawei_maas/Wan2.2-T2V-A14B', capability: 'video_generation' },
+          { id: 'huawei_maas/bge-m3', capability: 'embedding' },
+          { id: 'huawei_maas/bge-reranker-v2-m3', capability: 'rerank' },
+          { id: 'aliyun/qwen-audio-3.0-asr-flash-streaming', capability: 'speech_recognition' },
+          { id: 'aliyun/cosyvoice-v3-flash', capability: 'speech_synthesis' },
+        ],
+      });
+    });
     mountSystemRoutes(app.apiRouter, JWT_SECRET, { emit: () => {} });
     saveKeys({
       RELAY_API_KEY: 'sk-official-apply-test',
-      RELAY_BASE_URL: 'http://127.0.0.1:8000/v1',
+      RELAY_BASE_URL: `${url}/official/v1`,
     });
   });
 
   afterAll(() => {
+    if (initialVoicePreference) setVoicePreference(initialVoicePreference);
     saveKeys({ RELAY_API_KEY: '', RELAY_BASE_URL: '' });
     cleanup?.();
   });
@@ -57,7 +79,12 @@ describe('Lumi official API one-click adaptation', () => {
     });
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body).toMatchObject({ ok: true, provider: 'relay', verification: 'configuration_persisted' });
+    expect(body).toMatchObject({
+      ok: true,
+      provider: 'relay',
+      verification: 'catalog_verified_and_configuration_persisted',
+      catalog: { modelCount: 8, roleCount: 9 },
+    });
     expect(body.applied.map((item: any) => item.role)).toEqual([...LUMI_OFFICIAL_SUPPORTED_ROLES]);
     expect(body.skipped.map((item: any) => item.role)).toEqual([...LUMI_OFFICIAL_UNSUPPORTED_ROLES]);
     expect(Object.keys(body.roles).sort()).toEqual([...LUMI_OFFICIAL_SUPPORTED_ROLES, ...LUMI_OFFICIAL_UNSUPPORTED_ROLES].sort());
@@ -75,9 +102,47 @@ describe('Lumi official API one-click adaptation', () => {
       'huawei_maas/Wan2.2-T2V-A14B',
       'huawei_maas/bge-m3',
       'huawei_maas/bge-reranker-v2-m3',
-      'whisper-1',
-      'tts-1',
+      'aliyun/qwen-audio-3.0-asr-flash-streaming',
+      'aliyun/cosyvoice-v3-flash',
     ]);
+    expect(getVoicePreference()).toMatchObject({
+      stt: 'relay',
+      sttModel: 'aliyun/qwen-audio-3.0-asr-flash-streaming',
+      tts: 'relay',
+      ttsModel: 'aliyun/cosyvoice-v3-flash',
+    });
     expect(JSON.stringify(body)).not.toContain('sk-official-apply-test');
+  });
+
+  it('persists only live-catalog speech models and exposes the effective ids', async () => {
+    const response = await fetch(`${url}/api/voice/provider`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        stt: 'relay',
+        sttModel: 'aliyun/qwen-audio-3.0-asr-flash-streaming',
+        tts: 'relay',
+        ttsModel: 'aliyun/cosyvoice-v3-flash',
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.pref).toMatchObject({
+      sttModel: 'aliyun/qwen-audio-3.0-asr-flash-streaming',
+      ttsModel: 'aliyun/cosyvoice-v3-flash',
+    });
+    expect(body.active).toMatchObject({
+      sttModel: 'aliyun/qwen-audio-3.0-asr-flash-streaming',
+      ttsModel: 'aliyun/cosyvoice-v3-flash',
+    });
+
+    const rejected = await fetch(`${url}/api/voice/provider`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stt: 'relay', sttModel: 'aliyun/not-in-catalog' }),
+      signal: AbortSignal.timeout(5000),
+    });
+    expect(rejected.status).toBe(400);
   });
 });

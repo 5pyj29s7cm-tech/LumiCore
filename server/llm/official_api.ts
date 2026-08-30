@@ -36,6 +36,29 @@ export interface OfficialApiResponse<T = any> {
   body: T;
 }
 
+export interface OfficialApiModelDescriptor {
+  id: string;
+  capability: string;
+  endpoint: string;
+  ownedBy: string;
+}
+
+export interface OfficialApiModelCatalog {
+  models: OfficialApiModelDescriptor[];
+  byRole: Record<string, string[]>;
+}
+
+const OFFICIAL_MODEL_CAPABILITY_ROLES: Readonly<Record<string, readonly string[]>> = {
+  chat: ['reasoning'],
+  multimodal_chat: ['vision', 'world'],
+  image_generation: ['image_generation'],
+  video_generation: ['video_generation'],
+  embedding: ['embedding'],
+  rerank: ['rerank'],
+  speech_recognition: ['speech_recognition'],
+  speech_synthesis: ['speech_synthesis'],
+};
+
 /** Return credentials without exposing them in logs or public receipts. */
 export function getOfficialApiConfig(): OfficialApiConfig {
   return {
@@ -71,8 +94,19 @@ export function officialApiUrl(path: string, fullUrlEnv?: string): string {
   return relayEndpoint(path, path);
 }
 
-export function officialApiPath(envName: string, fallback: string): string {
-  return relayPath(envName) || fallback;
+export function officialApiPath(envName: string | readonly string[], fallback: string): string {
+  const names = Array.isArray(envName) ? [...envName] : [envName];
+  return relayPath(...names) || fallback;
+}
+
+/** Resolve an authenticated WebSocket route on the configured gateway. */
+export function officialApiWebSocketUrl(path: string, model?: string): string {
+  const url = new URL(officialApiUrl(path));
+  if (url.protocol === 'https:') url.protocol = 'wss:';
+  else if (url.protocol === 'http:') url.protocol = 'ws:';
+  else throw new Error('Lumi Official API WebSocket endpoint must use HTTP(S).');
+  if (model) url.searchParams.set('model', model);
+  return url.toString();
 }
 
 export function officialApiHeaders(extra: Record<string, string> = {}): Record<string, string> {
@@ -156,6 +190,45 @@ export async function officialApiRequest<T = any>(
     if (timer) clearTimeout(timer);
     callerSignal?.removeEventListener('abort', abort);
   }
+}
+
+/**
+ * Read the live model catalog exposed by the official gateway. Only public
+ * routing metadata is returned; credentials and upstream configuration never
+ * leave the server.
+ */
+export async function listOfficialApiModels(
+  options: Pick<OfficialApiRequestOptions, 'fetchImpl' | 'signal' | 'timeoutMs'> = {},
+): Promise<OfficialApiModelCatalog> {
+  const { body } = await officialApiRequest<any>('/models', {
+    method: 'GET',
+    fetchImpl: options.fetchImpl,
+    signal: options.signal,
+    timeoutMs: options.timeoutMs || 15_000,
+  });
+  const rawModels = Array.isArray(body) ? body : Array.isArray(body?.data) ? body.data : [];
+  const models: OfficialApiModelDescriptor[] = [];
+  const seen = new Set<string>();
+  for (const raw of rawModels.slice(0, 2_000)) {
+    const id = String(raw?.id || '').trim().slice(0, 200);
+    const capability = String(raw?.capability || '').trim().toLowerCase().slice(0, 80);
+    if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._:-]+$/.test(id) || !capability || seen.has(id)) continue;
+    seen.add(id);
+    models.push({
+      id,
+      capability,
+      endpoint: String(raw?.endpoint || '').trim().slice(0, 240),
+      ownedBy: String(raw?.owned_by || raw?.ownedBy || '').trim().slice(0, 120),
+    });
+  }
+  models.sort((left, right) => left.id.localeCompare(right.id));
+  const byRole: Record<string, string[]> = {};
+  for (const model of models) {
+    for (const role of OFFICIAL_MODEL_CAPABILITY_ROLES[model.capability] || []) {
+      (byRole[role] ||= []).push(model.id);
+    }
+  }
+  return { models, byRole };
 }
 
 /** Fetch binary content through the official gateway (for video/audio URLs). */
@@ -252,5 +325,5 @@ export async function readOfficialApiBytes(response: Response, maxBytes: number)
 }
 
 export function officialApiModel(envName: string, fallback: string): string {
-  return String(process.env[envName] || fallback).trim() || fallback;
+  return String(relayPath(envName) || fallback).trim() || fallback;
 }

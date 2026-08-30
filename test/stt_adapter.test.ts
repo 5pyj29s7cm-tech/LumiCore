@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const clearedEnvKeys = ['DASHSCOPE_API_KEY', 'QWEN_API_KEY', 'OPENAI_API_KEY', 'DOUBAO_SPEECH_KEY'] as const;
+const clearedEnvKeys = ['DASHSCOPE_API_KEY', 'QWEN_API_KEY', 'OPENAI_API_KEY', 'DOUBAO_SPEECH_KEY', 'RELAY_API_KEY', 'RELAY_BASE_URL'] as const;
 let previousEnv: Partial<Record<(typeof clearedEnvKeys)[number], string | undefined>> = {};
 
-async function loadAdapter(stt: 'auto' | 'local-whisper' | 'qwen' | 'ark' | 'whisper' | 'relay' = 'auto') {
+async function loadAdapter(
+  stt: 'auto' | 'local-whisper' | 'qwen' | 'ark' | 'whisper' | 'relay' = 'auto',
+  sttModel?: string,
+) {
   vi.resetModules();
   vi.doMock('../server/config/voice_preference', () => ({
-    getVoicePreference: () => ({ stt, tts: 'auto' }),
+    getVoicePreference: () => ({ stt, tts: 'auto', sttModel }),
   }));
   vi.doMock('../server/config/keys', () => ({
     getKey: () => undefined,
@@ -27,6 +30,15 @@ async function loadAdapter(stt: 'auto' | 'local-whisper' | 'qwen' | 'ark' | 'whi
     transcribe: vi.fn(),
   }));
   vi.doMock('../server/stt/providers/ark', () => ({
+    transcribe: vi.fn(),
+  }));
+  vi.doMock('../server/stt/providers/official', () => ({
+    createStream: vi.fn(() => ({
+      sendAudio: vi.fn(),
+      end: vi.fn(),
+      onResult: vi.fn(),
+      onError: vi.fn(),
+    })),
     transcribe: vi.fn(),
   }));
   return import('../server/stt/adapter');
@@ -75,9 +87,30 @@ describe('STT adapter provider selection', () => {
     expect(adapter.getActiveStreamingSTTProvider()).toBeNull();
   });
 
-  it('does not advertise the official batch STT adapter as realtime', async () => {
+  it('does not fall through to another provider when the selected official route is unconfigured', async () => {
     process.env.DASHSCOPE_API_KEY = 'dashscope-test-key';
     const adapter = await loadAdapter('relay');
     expect(adapter.getActiveStreamingSTTProvider()).toBeNull();
+  });
+
+  it('advertises the configured official WebSocket STT adapter as realtime', async () => {
+    process.env.RELAY_API_KEY = 'relay-test-key';
+    process.env.RELAY_BASE_URL = 'https://relay.example.test/v1';
+    const adapter = await loadAdapter('relay');
+    expect(adapter.getActiveStreamingSTTProvider()).toBe('relay');
+    expect(adapter.getActiveSTTProvider()).toBe('relay');
+  });
+
+  it('snapshots the persisted official STT model when opening a stream', async () => {
+    process.env.RELAY_API_KEY = 'relay-test-key';
+    process.env.RELAY_BASE_URL = 'https://relay.example.test/v1';
+    const adapter = await loadAdapter('relay', 'aliyun/qwen-audio-3.0-asr-flash-streaming');
+    const official = await import('../server/stt/providers/official');
+    adapter.createStreamingSession({ provider: 'relay', language: 'zh-CN', interimResults: true });
+    expect(official.createStream).toHaveBeenCalledWith(
+      'zh-CN',
+      true,
+      { model: 'aliyun/qwen-audio-3.0-asr-flash-streaming' },
+    );
   });
 });

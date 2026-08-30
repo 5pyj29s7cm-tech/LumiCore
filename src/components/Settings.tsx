@@ -65,7 +65,9 @@ import {
   LUMI_OFFICIAL_BASE_URL,
   LUMI_OFFICIAL_DEFAULT_MODELS,
   LUMI_OFFICIAL_DOCS_URL,
+  LUMI_OFFICIAL_RECHARGE_URL,
   LUMI_OFFICIAL_PROVIDER_ID as SHARED_LUMI_OFFICIAL_PROVIDER_ID,
+  type LumiModelRoleId,
 } from '../../shared/model_provider_capabilities';
 
 const VoiceForge = lazy(() => import('./VoiceForge').then(m => ({ default: m.VoiceForge })));
@@ -86,6 +88,68 @@ const LUMI_OFFICIAL_APPLY_FAILED_KEY = 'settings.lumi-official-apply-failed.e6f7
 const LUMI_OFFICIAL_ADAPTER_UNAVAILABLE_KEY = 'settings.lumi-official-adapter-unavailable.a8b9c0d1e2' as const;
 const LUMI_OFFICIAL_CONFIG_NOT_READY_KEY = 'settings.lumi-official-config-not-ready.b9c0d1e2f3' as const;
 const LUMI_RELAY_BASE_URL_PLACEHOLDER = LUMI_OFFICIAL_BASE_URL;
+const LUMI_OFFICIAL_CATALOG_REFRESH_EVENT = 'lumi:official-model-catalog-refresh';
+
+type LumiOfficialCatalog = {
+  models: Array<{ id: string; capability: string; endpoint?: string; ownedBy?: string }>;
+  byRole: Partial<Record<LumiModelRoleId, string[]>>;
+};
+
+let lumiOfficialCatalogCache: LumiOfficialCatalog | null = null;
+let lumiOfficialCatalogPromise: Promise<LumiOfficialCatalog> | null = null;
+
+async function loadLumiOfficialCatalog(force = false): Promise<LumiOfficialCatalog> {
+  if (force) lumiOfficialCatalogCache = null;
+  if (lumiOfficialCatalogCache) return lumiOfficialCatalogCache;
+  if (!lumiOfficialCatalogPromise) {
+    lumiOfficialCatalogPromise = apiFetch('/api/preferences/official/models', { credentials: 'include' })
+      .then(async response => {
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok || body.ok !== true) throw new Error(body.error || `HTTP ${response.status}`);
+        const catalog: LumiOfficialCatalog = {
+          models: Array.isArray(body.models) ? body.models : [],
+          byRole: body.byRole && typeof body.byRole === 'object' ? body.byRole : {},
+        };
+        lumiOfficialCatalogCache = catalog;
+        return catalog;
+      })
+      .finally(() => { lumiOfficialCatalogPromise = null; });
+  }
+  return lumiOfficialCatalogPromise;
+}
+
+function useLumiOfficialCatalog(): LumiOfficialCatalog | null {
+  const [catalog, setCatalog] = useState<LumiOfficialCatalog | null>(lumiOfficialCatalogCache);
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = (force = false) => {
+      void loadLumiOfficialCatalog(force)
+        .then(next => { if (!cancelled) setCatalog(next); })
+        .catch(() => { if (!cancelled) setCatalog(null); });
+    };
+    const onRefresh = () => refresh(true);
+    refresh(false);
+    window.addEventListener(LUMI_OFFICIAL_CATALOG_REFRESH_EVENT, onRefresh);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(LUMI_OFFICIAL_CATALOG_REFRESH_EVENT, onRefresh);
+    };
+  }, []);
+  return catalog;
+}
+
+function officialModelOptions(
+  catalog: LumiOfficialCatalog | null,
+  role: LumiModelRoleId,
+  fallback: string[],
+): string[] {
+  const live = catalog?.byRole?.[role];
+  return Array.isArray(live) && live.length > 0 ? live : fallback;
+}
+
+function refreshLumiOfficialCatalog(): void {
+  window.dispatchEvent(new Event(LUMI_OFFICIAL_CATALOG_REFRESH_EVENT));
+}
 
 function readStoredRelayBaseUrl(): string {
   try {
@@ -1456,6 +1520,12 @@ function VisionLocalProviderRow({ icon, label, providerId, endpoint, storageKey,
 
 function VisionRelayProviderRow({ t }: { t?: any }) {
   const { visionConfig, updateVisionConfig } = useApp();
+  const officialCatalog = useLumiOfficialCatalog();
+  const relayVisionModels = officialModelOptions(officialCatalog, 'vision', [
+    LUMI_OFFICIAL_DEFAULT_MODELS.vision,
+    'aliyun/qwen3-vl-flash',
+    'aliyun/qwen3-vl-plus',
+  ]);
   const isZh = t?.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
   // Never hydrate a secret from browser storage. The backend only exposes a
@@ -1515,6 +1585,7 @@ function VisionRelayProviderRow({ t }: { t?: any }) {
       setTestState('idle');
       setTestMessage('');
       setSaved(true);
+      refreshLumiOfficialCatalog();
       setTimeout(() => setSaved(false), 2000);
       toast.success(t?.apiKeySaved || uiMessage('settings.api-key-saved.a1dc4d42fb'));
     }).catch(err => toast.error(err.message || t?.failedToSaveKey || uiMessage('settings.failed-to-save.465b88f9c0')));
@@ -1530,6 +1601,7 @@ function VisionRelayProviderRow({ t }: { t?: any }) {
       setConnectionDirty(false);
       setTestState('idle');
       setTestMessage('');
+      refreshLumiOfficialCatalog();
       toast.success(t?.apiKeyRemoved || uiMessage('settings.api-key-removed.bae3220b94'));
     }).catch(err => toast.error(err.message || uiMessage('settings.failed-to-remove.5c5d9c7827')));
   };
@@ -1592,7 +1664,7 @@ function VisionRelayProviderRow({ t }: { t?: any }) {
           className="h-10 min-w-0 rounded-lg border border-white/10 bg-black/30 px-3 font-mono text-xs text-white outline-none focus:border-cyan-400/50"
         />
         <datalist id="vision-relay-models">
-          {[LUMI_OFFICIAL_DEFAULT_MODELS.vision, 'huawei_maas/deepseek-r1-250528', 'huawei_maas/qwen3-32b'].map(m => <option key={m} value={m} />)}
+          {relayVisionModels.map(m => <option key={m} value={m} />)}
         </datalist>
       </div>
       <div className="flex flex-wrap gap-2">
@@ -1896,6 +1968,9 @@ function GenerativeModelsPage({ t }: { t: any }) {
   const [preferences, setPreferences] = useState<GenerationPreferences>(DEFAULT_GENERATION_PREFERENCES);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const officialCatalog = useLumiOfficialCatalog();
+  const relayImageModels = officialModelOptions(officialCatalog, 'image_generation', GENERATION_MODEL_OPTIONS.relayImage);
+  const relayVideoModels = officialModelOptions(officialCatalog, 'video_generation', GENERATION_MODEL_OPTIONS.relayVideo);
 
   useEffect(() => {
     let cancelled = false;
@@ -1921,7 +1996,9 @@ function GenerativeModelsPage({ t }: { t: any }) {
         provider,
         model: provider === 'auto'
           ? ''
-          : previous.image.models[provider] || IMAGE_GENERATION_PROVIDERS[provider]?.models[0] || '',
+          : previous.image.models[provider]
+            || (provider === LUMI_OFFICIAL_PROVIDER_ID ? relayImageModels[0] : IMAGE_GENERATION_PROVIDERS[provider]?.models[0])
+            || '',
       },
     }));
   };
@@ -1932,7 +2009,9 @@ function GenerativeModelsPage({ t }: { t: any }) {
       video: {
         ...previous.video,
         provider,
-        model: previous.video.models[provider] || VIDEO_GENERATION_PROVIDERS[provider]?.models[0] || '',
+        model: previous.video.models[provider]
+          || (provider === LUMI_OFFICIAL_PROVIDER_ID ? relayVideoModels[0] : VIDEO_GENERATION_PROVIDERS[provider]?.models[0])
+          || '',
       },
     }));
   };
@@ -1970,8 +2049,12 @@ function GenerativeModelsPage({ t }: { t: any }) {
 
   if (loading) return <div className="flex h-40 items-center justify-center"><Loader2 className="animate-spin text-white/45" /></div>;
 
-  const imageProvider = IMAGE_GENERATION_PROVIDERS[preferences.image.provider];
-  const videoProvider = VIDEO_GENERATION_PROVIDERS[preferences.video.provider];
+  const imageProvider = preferences.image.provider === LUMI_OFFICIAL_PROVIDER_ID
+    ? { ...IMAGE_GENERATION_PROVIDERS.relay, models: relayImageModels }
+    : IMAGE_GENERATION_PROVIDERS[preferences.image.provider];
+  const videoProvider = preferences.video.provider === LUMI_OFFICIAL_PROVIDER_ID
+    ? { ...VIDEO_GENERATION_PROVIDERS.relay, models: relayVideoModels }
+    : VIDEO_GENERATION_PROVIDERS[preferences.video.provider];
 
   return (
     <div className="space-y-8">
@@ -2101,7 +2184,7 @@ const WORLD_MODEL_OPTIONS: Record<string, string[]> = {
   qwen: ['qwen-vl-max'],
   ollama: ['qwen2.5vl:7b', 'minicpm-v:8b', 'llama3.2-vision:11b'],
   lmstudio: ['qwen2.5-vl-7b-instruct', 'minicpm-v-4_5', 'internvl3_5-8b'],
-  relay: [LUMI_OFFICIAL_DEFAULT_MODELS.vision, 'huawei_maas/deepseek-r1-250528', 'huawei_maas/qwen3-32b'],
+  relay: [LUMI_OFFICIAL_DEFAULT_MODELS.world, 'aliyun/qwen3-vl-flash', 'aliyun/qwen3-vl-plus'],
 };
 
 function WorldActionModelPage({ t }: { t: any }) {
@@ -2110,6 +2193,7 @@ function WorldActionModelPage({ t }: { t: any }) {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testMessage, setTestMessage] = useState('');
+  const officialCatalog = useLumiOfficialCatalog();
 
   useEffect(() => {
     let cancelled = false;
@@ -2182,7 +2266,11 @@ function WorldActionModelPage({ t }: { t: any }) {
   if (loading) return <div className="flex h-40 items-center justify-center"><Loader2 className="animate-spin text-white/45" /></div>;
 
   const inherited = preference.provider === 'inherit_vision';
-  const modelOptions = inherited ? [] : WORLD_MODEL_OPTIONS[preference.provider] || [];
+  const modelOptions = inherited
+    ? []
+    : preference.provider === LUMI_OFFICIAL_PROVIDER_ID
+      ? officialModelOptions(officialCatalog, 'world', WORLD_MODEL_OPTIONS.relay)
+      : WORLD_MODEL_OPTIONS[preference.provider] || [];
   const activeProvider = inherited ? preference.resolved?.provider : preference.provider;
   const activeModel = inherited ? preference.resolved?.model : preference.model;
 
@@ -2327,6 +2415,13 @@ function RetrievalModelSettings({ t }: { t?: any }) {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testMessage, setTestMessage] = useState('');
+  const officialCatalog = useLumiOfficialCatalog();
+  const embeddingOptions = (provider: string) => provider === LUMI_OFFICIAL_PROVIDER_ID
+    ? officialModelOptions(officialCatalog, 'embedding', EMBEDDING_MODELS.relay)
+    : EMBEDDING_MODELS[provider] || [];
+  const rerankOptions = (provider: string) => provider === LUMI_OFFICIAL_PROVIDER_ID
+    ? officialModelOptions(officialCatalog, 'rerank', RERANK_MODELS.relay)
+    : RERANK_MODELS[provider] || [];
 
   useEffect(() => {
     let cancelled = false;
@@ -2441,7 +2536,7 @@ function RetrievalModelSettings({ t }: { t?: any }) {
             id={`embedding-${preferences.embedding.provider}-model`}
             label={uiMessage('settings.model.44c0cd4289')}
             value={preferences.embedding.model}
-            options={EMBEDDING_MODELS[preferences.embedding.provider] || []}
+            options={embeddingOptions(preferences.embedding.provider)}
             onChange={model => setEmbedding({ model })}
           />
           <label className="grid gap-2 md:grid-cols-[170px_minmax(0,1fr)] md:items-center">
@@ -2456,7 +2551,7 @@ function RetrievalModelSettings({ t }: { t?: any }) {
               id={`embedding-${preferences.embedding.fallbackProvider}-fallback-model`}
               label={uiMessage('settings.fallback-model-id.31f402c7ca')}
               value={preferences.embedding.fallbackModel}
-              options={EMBEDDING_MODELS[preferences.embedding.fallbackProvider] || []}
+              options={embeddingOptions(preferences.embedding.fallbackProvider)}
               onChange={fallbackModel => setEmbedding({ fallbackModel })}
             />
           )}
@@ -2491,7 +2586,7 @@ function RetrievalModelSettings({ t }: { t?: any }) {
                 id={`rerank-${preferences.rerank.provider}-model`}
                 label={uiMessage('settings.model.44c0cd4289')}
                 value={preferences.rerank.model}
-                options={RERANK_MODELS[preferences.rerank.provider] || []}
+                options={rerankOptions(preferences.rerank.provider)}
                 onChange={model => setRerank({ model })}
               />
               <label className="grid gap-2 md:grid-cols-[170px_minmax(0,1fr)] md:items-center">
@@ -2877,6 +2972,7 @@ function ReasoningRoleSettings({ t, providerStatus }: { t: any; providerStatus: 
   ));
   const [testing, setTesting] = useState(false);
   const [testMessage, setTestMessage] = useState('');
+  const officialCatalog = useLumiOfficialCatalog();
 
   useEffect(() => {
     setModel(aiConfig.model);
@@ -3011,7 +3107,13 @@ function ReasoningRoleSettings({ t, providerStatus }: { t: any; providerStatus: 
           id={`reasoning-role-${aiConfig.provider}`}
           label={uiMessage('settings.model.44c0cd4289')}
           value={model}
-          options={[configuredModel, ...selectedExtensionModels, ...(REASONING_MODEL_OPTIONS[aiConfig.provider] || [])].filter(Boolean)}
+          options={[
+            configuredModel,
+            ...selectedExtensionModels,
+            ...(aiConfig.provider === LUMI_OFFICIAL_PROVIDER_ID
+              ? officialModelOptions(officialCatalog, 'reasoning', REASONING_MODEL_OPTIONS.relay)
+              : REASONING_MODEL_OPTIONS[aiConfig.provider] || []),
+          ].filter(Boolean)}
           onChange={value => { setModel(value); setTestMessage(''); }}
         />
         {(selectionMode === 'ordered_fallback' || selectionMode === 'auto') && (
@@ -3062,6 +3164,10 @@ function OfficialProviderSettings({ t }: { t: any }) {
   const locale = t?.langCode === 'en' ? 'en' : 'zh';
   const [applying, setApplying] = useState(false);
   const [applyResult, setApplyResult] = useState<OfficialRoleApplyResponse | null>(null);
+  const officialCatalog = useLumiOfficialCatalog();
+  const catalogSummary = officialCatalog
+    ? { modelCount: officialCatalog.models.length, roleCount: Object.keys(officialCatalog.byRole).length }
+    : null;
 
   const applyOfficialApi = async () => {
     if (applying) return;
@@ -3115,15 +3221,33 @@ function OfficialProviderSettings({ t }: { t: any }) {
       <p className="mb-5 max-w-3xl text-sm leading-relaxed text-white/45">
         {uiMessage('settings.lumi-official-service-description.2c8f6a1e05')}
         {' '}
-        <a
-          href={LUMI_OFFICIAL_DOCS_URL}
-          target="_blank"
-          rel="noreferrer"
-          className="text-cyan-300/80 underline decoration-cyan-300/30 underline-offset-2 hover:text-cyan-200"
-        >
-          API docs
-        </a>
+        <span className="inline-flex flex-wrap gap-x-3 gap-y-1">
+          <a
+            href={LUMI_OFFICIAL_DOCS_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-cyan-300/80 underline decoration-cyan-300/30 underline-offset-2 hover:text-cyan-200"
+          >
+            API docs <ExternalLink size={12} />
+          </a>
+          <a
+            href={LUMI_OFFICIAL_RECHARGE_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-amber-200/80 underline decoration-amber-200/30 underline-offset-2 hover:text-amber-100"
+          >
+            {uiMessage('settings.lumi-official-recharge-link.1c2d3e4f5a', locale)} <ExternalLink size={12} />
+          </a>
+        </span>
       </p>
+      {catalogSummary && (
+        <p className="mb-4 text-xs text-cyan-100/45" data-testid="official-model-catalog-summary">
+          {formatUiMessage('settings.lumi-official-catalog-summary.2d3e4f5a6b', {
+            value0: catalogSummary.modelCount,
+            value1: catalogSummary.roleCount,
+          }, locale)}
+        </p>
+      )}
       <div className="border-y border-white/10">
         <RelayProviderRow t={t} label={uiMessage('settings.lumi-official-relay.7d3b1f9c24')} />
       </div>
@@ -3698,6 +3822,7 @@ function RelayProviderRow({ t, label }: { t?: any; label?: string }) {
       setServerKeyOk(true);
       setServerUrlOk(true);
       setSaved(true);
+      refreshLumiOfficialCatalog();
       setTimeout(() => setSaved(false), 2000);
       toast.success(t?.apiKeySaved || uiMessage('settings.api-key-saved.a1dc4d42fb'));
     }).catch(err => toast.error(err.message || t?.failedToSaveKey || uiMessage('settings.failed-to-save.465b88f9c0')));
@@ -3712,6 +3837,7 @@ function RelayProviderRow({ t, label }: { t?: any; label?: string }) {
       setApiKey('');
       setBaseUrl('');
       setSaved(true);
+      refreshLumiOfficialCatalog();
       setTimeout(() => setSaved(false), 2000);
       toast.success(t?.apiKeyRemoved || uiMessage('settings.api-key-removed.bae3220b94'));
     }).catch(err => toast.error(err.message || t?.failedToRemoveKey || uiMessage('settings.failed-to-remove.5c5d9c7827')));

@@ -92,6 +92,17 @@ LumiCore 支持以下模型来源，具体可用模型由用户账号、服务�
 | Ollama、LM Studio | 自动检测本地服务，不经过客户端套餐限制 |
 | 自定义 Relay | 连接 OpenAI 兼容接口 |
 
+### Lumi 官方 API（ModelDepot）
+
+如果使用 Lumi 官方服务，设置页中的 Base URL 应填写 `https://zhuan.huaczy.com/v1`，API Key 只保存在后端。模型名使用 `供应商/模型名` 格式，例如 `aliyun/qwen-plus` 或 `huawei_maas/bge-m3`。官方目录会在设置页实时同步，并按推理、视觉、世界操作、图像、视频、嵌入、重排、语音识别和语音合成九类角色筛选。
+
+- API 调用说明：<https://zhuan.huaczy.com/console/help>
+- 官方充值入口：<https://zhuan.huaczy.com/console/recharge>
+- 聊天、嵌入、图片和视频使用 `/v1` 兼容接口；重排按文档使用 `/api/v1/rerank`。
+- 实时语音识别使用 `/v1/audio/transcriptions/stream` WebSocket，按文档先发送 `run-task`，收到 `task-started` 后发送单声道音频，最后发送 `finish-task`；语音合成使用 `/v1/audio/speech`。
+- 文件语音识别会从 WAV/MP3/Opus/AAC 头读取源采样率后再建立任务；无法自描述采样率的编码文件需要调用方显式提供采样率或选择其他文件识别提供商，避免把 24/44.1/48 kHz 音频误报为 16 kHz。
+- `aliyun/cosyvoice-v3-flash` 支持传入音色 ID；当前官方网关的 `cosyvoice-v3-plus` 与 `qwen-audio-3.0-tts-plus` 使用服务端默认音色，适配器会省略不兼容的 `voice` 字段。
+
 模型选择不会被底层静默替换。连接失败、模型不支持当前输入或降级条件不成立时，Lumi 应明确报告原因。不同模型的工具调用、视觉、长上下文和中文能力并不相同，能够连接不等于能够完成所有任务。
 
 ### 语音交互

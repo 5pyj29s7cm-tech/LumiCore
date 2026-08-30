@@ -109,7 +109,10 @@ async function runEmbedding(selection: EmbeddingSelection, text: string): Promis
   // Keep the official lane on the shared transport so timeout, URL-origin,
   // bearer-header and redacted-error rules are identical across roles.
   const body = provider === 'relay'
-    ? (await officialApiRequest<any>(officialApiPath('RELAY_EMBEDDINGS_PATH', '/embeddings'), {
+    ? (await officialApiRequest<any>(officialApiPath(
+      ['RELAY_EMBEDDINGS_PATH', 'RELAY_EMBEDDING_PATH'],
+      '/embeddings',
+    ), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // ModelDepot documents embedding input as an array. Do not collapse it

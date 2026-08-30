@@ -43,6 +43,14 @@
     "en": "Lumi Official API endpoint",
     "zh": "Lumi \u5b98\u65b9 API \u7aef\u70b9"
   },
+  "settings.lumi-official-recharge-link.1c2d3e4f5a": {
+    "en": "Recharge",
+    "zh": "\u5b98\u65b9\u5145\u503c"
+  },
+  "settings.lumi-official-catalog-summary.2d3e4f5a6b": {
+    "en": "Synced {value0} models from the official endpoint across {value1} LumiCore roles.",
+    "zh": "\u5df2\u4ece\u5b98\u65b9\u7aef\u70b9\u540c\u6b65 {value0} \u4e2a\u6a21\u578b\uff0c\u8986\u76d6 {value1} \u7c7b LumiCore \u6a21\u578b\u804c\u8d23\u3002"
+  },
   "settings.lumi-official-api-label.a1b2c3d4e5": {
     "en": "Lumi Official API (endpoint required)",
     "zh": "Lumi \u5b98\u65b9 API\uff08\u9700\u5b98\u65b9\u7aef\u70b9\uff09"
@@ -92,8 +100,8 @@
     "zh": "请先配置并保存 Lumi 提供的官方端点。"
   },
   "settings.lumi-official-speech-unavailable.d4e5f6a7b8": {
-    "en": "Official speech uses the configurable OpenAI-compatible audio endpoints; verify the saved endpoint before first use.",
-    "zh": "随附文档未列出语音接口；如官方网关提供兼容音频路径，请先验证后再启用语音。"
+    "en": "Official speech uses the documented streaming STT and audio synthesis routes. Available models are read from the live official catalog; Plus/Qwen audio TTS models use their server default voice.",
+    "zh": "官方语音使用文档约定的流式语音识别和语音合成路由，可用模型从官方实时目录读取；Plus/Qwen Audio 语音合成模型使用服务端默认音色。"
   },
   "settings.lumi-official-image-unavailable.e5f6a7b8c9": {
     "en": "image generation unavailable",

@@ -43,7 +43,13 @@ import {
   assessProviderAvailability,
   saveProviderProbe,
 } from "../llm/provider_health";
-import { getVoicePreference, setVoicePreference, type VoicePreference } from "../config/voice_preference";
+import {
+  getConfiguredVoiceModel,
+  getVoicePreference,
+  normalizeVoiceModelId,
+  setVoicePreference,
+  type VoicePreference,
+} from "../config/voice_preference";
 import { getActiveSTTProvider, getActiveStreamingSTTProvider } from "../stt/adapter";
 import { getActiveProvider as getActiveTTSProvider } from "../tts/adapter";
 import { probeDoubaoStreamingConnection } from "../stt/providers/ark_stream";
@@ -79,6 +85,7 @@ import { listRegisteredProviders } from '../extensions/registry';
 import { buildStructuredRuntimeStatus } from '../monitor/runtime_status';
 import { redactDiagnosticSecrets } from '../client/diagnostic_sanitizer';
 import { relayConfigured } from '../relay/config';
+import { listOfficialApiModels } from '../llm/official_api';
 import {
   buildAcceptanceEvidenceSnapshot,
   buildPublicAcceptanceSummary,
@@ -585,6 +592,8 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
         stt: getActiveSTTProvider({ requireHealthy: true }),
         streamingStt: getActiveStreamingSTTProvider({ requireHealthy: true }),
         tts: getActiveTTSProvider({ requireHealthy: true }),
+        sttModel: getConfiguredVoiceModel('stt', pref),
+        ttsModel: getConfiguredVoiceModel('tts', pref),
       },
     });
   });
@@ -635,10 +644,11 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
     return res.status(result.ok ? 200 : 502).json(result);
   });
 
-  router.post("/voice/provider", requireAuth, requireAdmin, requireLocalRequest, (req, res) => {
+  router.post("/voice/provider", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
     const { stt, tts } = req.body || {};
     const allowedStt = new Set<VoicePreference['stt']>(['auto', 'local-whisper', 'qwen', 'ark', 'whisper', 'relay']);
     const allowedTts = new Set<VoicePreference['tts']>(['auto', 'local-cosyvoice', 'gptsovits', 'cosyvoice', 'ark', 'relay']);
+    const current = getVoicePreference();
     const next: Partial<VoicePreference> = {};
 
     if (stt !== undefined) {
@@ -650,6 +660,42 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
       next.tts = tts;
     }
 
+    const selectedStt = (next.stt || current.stt) as VoicePreference['stt'];
+    const selectedTts = (next.tts || current.tts) as VoicePreference['tts'];
+    const requestedSttModel = req.body?.sttModel === undefined ? undefined : normalizeVoiceModelId(req.body.sttModel);
+    const requestedTtsModel = req.body?.ttsModel === undefined ? undefined : normalizeVoiceModelId(req.body.ttsModel);
+    if (req.body?.sttModel !== undefined && req.body.sttModel !== '' && !requestedSttModel) {
+      return res.status(400).json({ error: 'Invalid official STT model id' });
+    }
+    if (req.body?.ttsModel !== undefined && req.body.ttsModel !== '' && !requestedTtsModel) {
+      return res.status(400).json({ error: 'Invalid official TTS model id' });
+    }
+    if (requestedSttModel && selectedStt !== 'relay') {
+      return res.status(400).json({ error: 'STT model selection requires Lumi Official API.' });
+    }
+    if (requestedTtsModel && selectedTts !== 'relay') {
+      return res.status(400).json({ error: 'TTS model selection requires Lumi Official API.' });
+    }
+
+    // A model chosen from the UI must still exist in the live catalog and
+    // carry the matching capability. This prevents a stale/forged id from
+    // being persisted and later turning into an opaque provider failure.
+    if (requestedSttModel || requestedTtsModel) {
+      try {
+        const catalog = await listOfficialApiModels();
+        if (requestedSttModel && !catalog.byRole.speech_recognition?.includes(requestedSttModel)) {
+          return res.status(400).json({ error: 'The selected official STT model is not available in the current catalog.' });
+        }
+        if (requestedTtsModel && !catalog.byRole.speech_synthesis?.includes(requestedTtsModel)) {
+          return res.status(400).json({ error: 'The selected official TTS model is not available in the current catalog.' });
+        }
+      } catch (error: any) {
+        return res.status(502).json({ error: sanitizedProviderError(error) });
+      }
+    }
+    if (requestedSttModel) next.sttModel = requestedSttModel;
+    if (requestedTtsModel) next.ttsModel = requestedTtsModel;
+
     const pref = setVoicePreference(next);
     res.json({
       success: true,
@@ -658,6 +704,8 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
         stt: getActiveSTTProvider({ requireHealthy: true }),
         streamingStt: getActiveStreamingSTTProvider({ requireHealthy: true }),
         tts: getActiveTTSProvider({ requireHealthy: true }),
+        sttModel: getConfiguredVoiceModel('stt', pref),
+        ttsModel: getConfiguredVoiceModel('tts', pref),
       },
     });
   });
@@ -997,6 +1045,17 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
         failed: [],
         error: message,
       });
+    }
+  });
+
+  // Return only public model metadata from the server-side official catalog;
+  // the API key and upstream credentials are never exposed to the renderer.
+  router.get("/preferences/official/models", requireAuth, requireLocalRequest, async (_req, res) => {
+    try {
+      const catalog = await listOfficialApiModels();
+      return res.json({ ok: true, ...catalog });
+    } catch (err: any) {
+      return res.status(502).json({ ok: false, models: [], byRole: {}, error: sanitizedProviderError(err) });
     }
   });
 

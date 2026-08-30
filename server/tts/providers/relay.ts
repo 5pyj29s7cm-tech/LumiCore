@@ -5,8 +5,27 @@ import {
   officialApiPath,
   readOfficialApiBytes,
 } from '../../llm/official_api';
+import { normalizeLumiOfficialModel } from '../../../shared/model_provider_capabilities';
+import { listVoices as listCosyVoiceVoices } from './cosyvoice';
 
 const MAX_TTS_AUDIO_BYTES = 20 * 1024 * 1024;
+
+/**
+ * The official gateway maps several TTS model families onto one endpoint,
+ * but they do not all accept the OpenAI `voice` field.  Keep the known
+ * voice-less models explicit so a newly-added model continues to receive the
+ * legacy voice behavior until its request contract is verified.
+ */
+const RELAY_TTS_MODELS_WITHOUT_VOICE = new Set([
+  'cosyvoice-v3-plus',
+  'qwen-audio-3.0-tts-plus',
+]);
+
+/** Return whether the relay TTS request should include its optional voice. */
+export function shouldSendRelayTtsVoice(model: string): boolean {
+  const modelName = String(model || '').trim().toLowerCase().split('/').pop() || '';
+  return !RELAY_TTS_MODELS_WITHOUT_VOICE.has(modelName);
+}
 
 export async function synthesizeSpeech(
   text: string,
@@ -17,10 +36,19 @@ export async function synthesizeSpeech(
   _volume?: number,
   model?: string,
 ): Promise<TTSResult> {
-  const resolvedModel = officialApiModel('RELAY_TTS_MODEL', model || 'tts-1');
+  // An explicit role selection is snapshotted by the adapter; env config is
+  // only the fallback for legacy installs without a persisted model choice.
+  const resolvedModel = normalizeLumiOfficialModel(
+    'speech_synthesis',
+    String(model || officialApiModel('RELAY_TTS_MODEL', 'aliyun/cosyvoice-v3-flash')).trim()
+      || 'aliyun/cosyvoice-v3-flash',
+  );
   const requestedFormat = String(process.env.RELAY_TTS_FORMAT || 'mp3').trim().toLowerCase();
   const format = ['mp3', 'wav', 'opus', 'aac', 'flac', 'pcm'].includes(requestedFormat) ? requestedFormat : 'mp3';
-  const resolvedVoice = voiceId || process.env.RELAY_TTS_VOICE || 'alloy';
+  const resolvedVoice = voiceId && voiceId !== 'default'
+    ? voiceId
+    : process.env.RELAY_TTS_VOICE || 'longxiaochun_v3';
+  const voice = shouldSendRelayTtsVoice(resolvedModel) ? { voice: resolvedVoice } : {};
   const response = await officialApiBinary(
     officialApiPath('RELAY_TTS_PATH', '/audio/speech'),
     {
@@ -29,7 +57,7 @@ export async function synthesizeSpeech(
       body: JSON.stringify({
         model: resolvedModel,
         input: String(text || ''),
-        voice: resolvedVoice,
+        ...voice,
         response_format: format,
         ...(speechRate !== undefined ? { speed: speechRate } : {}),
       }),
@@ -48,10 +76,6 @@ export async function synthesizeSpeech(
   return { audioBuffer, format: `audio/${format}` };
 }
 
-export function listVoices(): VoiceListItem[] {
-  return ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer'].map(voiceId => ({
-    voiceId,
-    name: voiceId,
-    category: 'premade' as const,
-  }));
+export async function listVoices(): Promise<VoiceListItem[]> {
+  return listCosyVoiceVoices();
 }

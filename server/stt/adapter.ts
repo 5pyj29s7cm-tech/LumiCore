@@ -11,11 +11,7 @@ import { recordLatency } from '../monitor/latency_store';
 import { isCircuitClosed, isCircuitHealthy, recordFailure, recordSuccess } from '../cloud/circuit_breaker';
 import { relayConfigured } from '../relay/config';
 
-// The supplied official API guide does not define a realtime audio contract.
-// Keep relay out
-// of the realtime selector until an explicit streaming adapter is implemented;
-// selecting it must not create a session whose final result is silently lost.
-type StreamingSTTProvider = 'qwen' | 'ark';
+type StreamingSTTProvider = 'qwen' | 'ark' | 'relay';
 
 function hasQwenKey(): boolean {
   return Boolean(process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY
@@ -26,12 +22,22 @@ function hasOpenAIKey(): boolean {
   return Boolean(process.env.OPENAI_API_KEY || getKey('OPENAI_API_KEY'));
 }
 
+/** Snapshot the role-specific official model when a realtime/batch session is
+ * created.  This keeps Settings -> voice behavior on the same adapter path
+ * while preventing a preference change from mutating an already-open stream. */
+function resolveSessionConfig(config: STTConfig): STTConfig {
+  if (config.provider !== 'relay' || config.model) return config;
+  const selected = String(getVoicePreference().sttModel || '').trim();
+  return selected ? { ...config, model: selected } : config;
+}
+
 export async function transcribe(audioBuffer: Buffer, config: STTConfig): Promise<STTResult> {
   const start = Date.now();
+  const sessionConfig = resolveSessionConfig(config);
   // Local Whisper is batch-only; use it only when installed.
-  const effectiveProvider = config.provider === 'local-whisper' && !localWhisper.isLocalWhisperAvailable()
+  const effectiveProvider = sessionConfig.provider === 'local-whisper' && !localWhisper.isLocalWhisperAvailable()
     ? getActiveSTTProvider()
-    : config.provider;
+    : sessionConfig.provider;
 
   if (!effectiveProvider) {
     throw new Error('No STT provider configured. Configure local Whisper, DashScope, OpenAI Whisper, or Doubao Speech.');
@@ -40,20 +46,21 @@ export async function transcribe(audioBuffer: Buffer, config: STTConfig): Promis
   let result: STTResult;
   switch (effectiveProvider) {
     case 'local-whisper':
-      result = await localWhisper.transcribe(audioBuffer, config.language);
+      result = await localWhisper.transcribe(audioBuffer, sessionConfig.language);
       break;
     case 'whisper':
-      result = await whisper.transcribe(audioBuffer, config.language);
+      result = await whisper.transcribe(audioBuffer, sessionConfig.language);
       break;
     case 'ark':
-      result = await ark.transcribe(audioBuffer, config.language);
+      result = await ark.transcribe(audioBuffer, sessionConfig.language);
       break;
     case 'relay':
       try {
-        result = await relay.transcribe(audioBuffer, config.language, { model: config.model });
-        // Batch-only official STT uses its own shared circuit. Without this
-        // accounting a failed endpoint would remain "healthy" forever and a
-        // configured voice route would keep retrying it on every utterance.
+        result = await relay.transcribe(audioBuffer, config.language, {
+          model: sessionConfig.model,
+          rawPcm: true,
+          sampleRate: 16_000,
+        });
         recordSuccess('relay-stt');
       } catch (error: any) {
         recordFailure('relay-stt', undefined, error instanceof Error ? error : new Error(String(error)), { openImmediately: true });
@@ -62,7 +69,7 @@ export async function transcribe(audioBuffer: Buffer, config: STTConfig): Promis
       break;
     case 'qwen':
       result = await new Promise((resolve, reject) => {
-        const session = qwen.createStream(config.language || 'zh', false);
+        const session = qwen.createStream(sessionConfig.language || 'zh', false);
         session.onResult((result) => {
           if (result.isFinal) resolve(result);
         });
@@ -73,7 +80,7 @@ export async function transcribe(audioBuffer: Buffer, config: STTConfig): Promis
       });
       break;
     default:
-      throw new Error(`Unknown STT provider: ${config.provider}`);
+      throw new Error(`Unknown STT provider: ${sessionConfig.provider}`);
   }
   recordLatency('stt', Date.now() - start);
   return result;
@@ -82,15 +89,16 @@ export async function transcribe(audioBuffer: Buffer, config: STTConfig): Promis
 export function createStreamingSession(
   config: STTConfig,
 ): StreamingSTTSession {
-  const provider = config.provider;
+  const sessionConfig = resolveSessionConfig(config);
+  const provider = sessionConfig.provider;
   if (provider === 'qwen') {
-    return qwen.createStream(config.language, config.interimResults);
+    return qwen.createStream(sessionConfig.language, sessionConfig.interimResults);
   }
   if (provider === 'ark') {
-    return arkStream.createStream(config.language || 'zh-CN', config.interimResults);
+    return arkStream.createStream(sessionConfig.language || 'zh-CN', sessionConfig.interimResults);
   }
   if (provider === 'relay') {
-    throw new Error('Lumi Official API STT is batch-only; configure a realtime STT provider for live microphone calls.');
+    return relay.createStream(sessionConfig.language || 'zh', sessionConfig.interimResults, { model: sessionConfig.model });
   }
   throw new Error(`Streaming not supported for provider: ${provider}`);
 }
@@ -267,13 +275,12 @@ export function getActiveStreamingSTTProvider(options: { requireHealthy?: boolea
   const available = options.requireHealthy ? isCircuitHealthy : isCircuitClosed;
   const qwenKey = hasQwenKey();
   const doubaoSpeech = arkStream.hasDoubaoSpeech();
+  const relayReady = relayConfigured();
 
   if (pref.stt === 'qwen' && qwenKey && available('qwen-stt')) return 'qwen';
   if (pref.stt === 'ark' && doubaoSpeech && available('doubao-stt-stream')) return 'ark';
-  // The official guide currently specifies REST file transcription only. Do
-  // not silently replace an explicit official selection with another
-  // provider's realtime stream; callers can use the batch lane instead.
-  if (pref.stt === 'local-whisper' || pref.stt === 'whisper' || pref.stt === 'relay') return null;
+  if (pref.stt === 'relay') return relayReady && available('relay-stt') ? 'relay' : null;
+  if (pref.stt === 'local-whisper' || pref.stt === 'whisper') return null;
 
   if (doubaoSpeech && available('doubao-stt-stream')) return 'ark';
   if (qwenKey && available('qwen-stt')) return 'qwen';

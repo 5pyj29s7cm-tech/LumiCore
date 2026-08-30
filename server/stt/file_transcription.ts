@@ -11,6 +11,7 @@ import * as ark from './providers/ark';
 import { hasDoubaoSpeechCredentials } from '../config/doubao_speech';
 import * as relay from './providers/official';
 import { relayConfigured } from '../relay/config';
+import { getVoicePreference } from '../config/voice_preference';
 
 export type AudioFileProvider = STTProvider;
 
@@ -66,7 +67,7 @@ const PROVIDER_MODELS: Record<AudioFileProvider, string> = {
   qwen: 'fun-asr',
   ark: 'doubao-stt-1.0',
   'local-whisper': 'faster-whisper-large-v3,medium,small',
-  relay: 'whisper-1',
+  relay: 'aliyun/qwen-audio-3.0-asr-flash-streaming',
 };
 
 function getProviderModelLabel(provider: AudioFileProvider): string {
@@ -76,7 +77,9 @@ function getProviderModelLabel(provider: AudioFileProvider): string {
   if (provider === 'qwen') {
     return String(process.env.DASHSCOPE_FILE_ASR_MODEL || PROVIDER_MODELS.qwen);
   }
-  if (provider === 'relay') return String(process.env.RELAY_STT_MODEL || PROVIDER_MODELS.relay);
+  if (provider === 'relay') {
+    return String(getVoicePreference().sttModel || process.env.RELAY_STT_MODEL || PROVIDER_MODELS.relay);
+  }
   return PROVIDER_MODELS[provider];
 }
 

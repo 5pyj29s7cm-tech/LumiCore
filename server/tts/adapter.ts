@@ -37,7 +37,15 @@ export async function synthesizeSpeech(text: string, config: TTSConfig): Promise
         result = await ark.synthesizeSpeech(text, config.voiceId, config.signal, config.speechRate, config.pitch, config.volume);
         break;
       case 'relay':
-        result = await relay.synthesizeSpeech(text, config.voiceId, config.signal, config.speechRate, config.pitch, config.volume, config.model);
+        result = await relay.synthesizeSpeech(
+          text,
+          config.voiceId,
+          config.signal,
+          config.speechRate,
+          config.pitch,
+          config.volume,
+          config.model || getVoicePreference().ttsModel,
+        );
         break;
       default:
         throw new Error(`Unknown TTS provider: ${config.provider}`);

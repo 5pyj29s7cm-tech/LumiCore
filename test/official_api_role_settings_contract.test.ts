@@ -50,8 +50,12 @@ describe('Lumi official API role settings contract', () => {
   it('keeps the documented endpoint and model ids in one shared contract', async () => {
     const manifest = await import('../shared/model_provider_capabilities');
     expect(manifest.LUMI_OFFICIAL_BASE_URL).toBe('https://zhuan.huaczy.com/v1');
+    expect(manifest.LUMI_OFFICIAL_DOCS_URL).toBe('https://zhuan.huaczy.com/console/help');
+    expect(manifest.LUMI_OFFICIAL_RECHARGE_URL).toBe('https://zhuan.huaczy.com/console/recharge');
     expect(manifest.LUMI_OFFICIAL_DEFAULT_MODELS.reasoning).toBe('aliyun/qwen-plus');
     expect(manifest.LUMI_OFFICIAL_DEFAULT_MODELS.video_generation).toBe('huawei_maas/Wan2.2-T2V-A14B');
     expect(LUMI_OFFICIAL_DEFAULT_MODELS.image_generation).toBe('huawei_maas/qwen-image');
+    expect(LUMI_OFFICIAL_DEFAULT_MODELS.speech_recognition).toBe('aliyun/qwen-audio-3.0-asr-flash-streaming');
+    expect(LUMI_OFFICIAL_DEFAULT_MODELS.speech_synthesis).toBe('aliyun/cosyvoice-v3-flash');
   });
 });

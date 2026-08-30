@@ -24,6 +24,7 @@ import { dispatchLLMCall } from './dispatch';
 import { compileReasoningFailoverCandidates } from './failover_policy';
 import { rerankConfiguredDocuments } from './rerank_provider';
 import { relayConfigured } from '../relay/config';
+import { listOfficialApiModels, type OfficialApiModelCatalog } from './official_api';
 import {
   DEFAULT_EMBEDDING_MODELS,
   DEFAULT_RERANK_MODELS,
@@ -62,6 +63,7 @@ import {
   LUMI_OFFICIAL_UNSUPPORTED_ROLES,
   normalizeLumiOfficialModel,
 } from '../../shared/model_provider_capabilities';
+import { normalizeVoiceModelId } from '../config/voice_preference';
 
 // Keep the public role list in lockstep with the settings capability manifest.
 // A second hand-maintained list previously allowed the UI and runtime to drift.
@@ -209,21 +211,25 @@ function allRoleConfigurations(userId: string): Record<LumiModelRole, Record<str
       topN: retrieval.rerank.topN,
       configured: providerConfigured(retrieval.rerank.provider, userId),
     }),
-    speech_recognition: roleSelection(voice.stt, '', userId, {
+    speech_recognition: roleSelection(voice.stt, voice.stt === LUMI_OFFICIAL_PROVIDER_ID
+      ? (voice.sttModel || LUMI_OFFICIAL_DEFAULT_MODELS.speech_recognition)
+      : '', userId, {
       effectiveProvider: activeStt,
       configured: voice.stt === LUMI_OFFICIAL_PROVIDER_ID
         ? providerConfigured(LUMI_OFFICIAL_PROVIDER_ID, userId)
         : Boolean(activeStt),
       realtimeSupported: Boolean(activeStreamingStt),
       batchOnly: voice.stt === LUMI_OFFICIAL_PROVIDER_ID && !activeStreamingStt,
-      providerManagedModel: true,
+      providerManagedModel: false,
     }),
-    speech_synthesis: roleSelection(voice.tts, '', userId, {
+    speech_synthesis: roleSelection(voice.tts, voice.tts === LUMI_OFFICIAL_PROVIDER_ID
+      ? (voice.ttsModel || LUMI_OFFICIAL_DEFAULT_MODELS.speech_synthesis)
+      : '', userId, {
       effectiveProvider: activeTts,
       configured: voice.tts === LUMI_OFFICIAL_PROVIDER_ID
         ? providerConfigured(LUMI_OFFICIAL_PROVIDER_ID, userId)
         : Boolean(activeTts),
-      providerManagedModel: true,
+      providerManagedModel: false,
     }),
   };
 }
@@ -261,8 +267,9 @@ export interface OfficialModelConfigurationRoleReceipt {
 export interface OfficialModelConfigurationApplyResult {
   ok: true;
   provider: typeof LUMI_OFFICIAL_PROVIDER_ID;
-  /** Configuration/adapters were persisted; this is not a billable live call. */
-  verification: 'configuration_persisted';
+  /** The live catalog was read before all selected roles were persisted. */
+  verification: 'catalog_verified_and_configuration_persisted';
+  catalog: { modelCount: number; roleCount: number };
   applied: OfficialModelConfigurationRoleReceipt[];
   skipped: OfficialModelConfigurationRoleReceipt[];
   roles: Record<LumiModelRole, OfficialModelConfigurationRoleReceipt>;
@@ -281,6 +288,21 @@ function officialModelForRole(userId: string, role: LumiModelRole): string {
     speech_recognition: 'RELAY_STT_MODEL',
     speech_synthesis: 'RELAY_TTS_MODEL',
   };
+  // Voice model selections are persisted in the voice preference and must
+  // win over a legacy deployment env value; otherwise the UI can appear to
+  // save one model while every realtime request silently uses another.
+  if (role === 'speech_recognition') {
+    const voice = getVoicePreference();
+    if (voice.stt === LUMI_OFFICIAL_PROVIDER_ID && voice.sttModel) {
+      return officialConfiguredModel(voice.sttModel, role, LUMI_OFFICIAL_DEFAULT_MODELS[role]);
+    }
+  }
+  if (role === 'speech_synthesis') {
+    const voice = getVoicePreference();
+    if (voice.tts === LUMI_OFFICIAL_PROVIDER_ID && voice.ttsModel) {
+      return officialConfiguredModel(voice.ttsModel, role, LUMI_OFFICIAL_DEFAULT_MODELS[role]);
+    }
+  }
   const configured = cleanModel(process.env[envName[role]]);
   if (configured) return officialConfiguredModel(configured, role, LUMI_OFFICIAL_DEFAULT_MODELS[role]);
 
@@ -348,8 +370,9 @@ function officialModelForRole(userId: string, role: LumiModelRole): string {
       );
     }
     case 'speech_recognition':
+      return officialConfiguredModel(getVoicePreference().sttModel, role, LUMI_OFFICIAL_DEFAULT_MODELS[role]);
     case 'speech_synthesis':
-      return LUMI_OFFICIAL_DEFAULT_MODELS[role];
+      return officialConfiguredModel(getVoicePreference().ttsModel, role, LUMI_OFFICIAL_DEFAULT_MODELS[role]);
   }
 }
 
@@ -407,10 +430,21 @@ function restoreModelConfigurationSnapshot(
  * unexpected persistence/validation error so a click cannot leave a half-
  * adapted setup.
  */
-export async function applyLumiOfficialModelConfiguration(userId: string): Promise<OfficialModelConfigurationApplyResult> {
+export async function applyLumiOfficialModelConfiguration(
+  userId: string,
+  options: { catalog?: OfficialApiModelCatalog } = {},
+): Promise<OfficialModelConfigurationApplyResult> {
   const uid = userId || 'anonymous';
   if (!isLumiOfficialApiConfigured(uid)) {
     throw new Error('Lumi Official API is not configured. Set RELAY_API_KEY and RELAY_BASE_URL in Settings > AI Providers > Official.');
+  }
+
+  // A saved key/base URL is not proof that any selected model still exists.
+  // Read the current gateway catalog before changing preferences so one-click
+  // adaptation cannot persist stale or capability-incompatible model ids.
+  const catalog = options.catalog || await listOfficialApiModels();
+  if (catalog.models.length === 0) {
+    throw new Error('Lumi Official API returned an empty model catalog. No role configuration was changed.');
   }
 
   const current = allRoleConfigurations(uid);
@@ -438,15 +472,23 @@ export async function applyLumiOfficialModelConfiguration(userId: string): Promi
       continue;
     }
 
-    const model = officialModelForRole(uid, role);
+    const availableModels = catalog.byRole[role] || [];
+    const configuredModel = officialModelForRole(uid, role);
+    const model = availableModels.includes(configuredModel)
+      ? configuredModel
+      : availableModels.includes(LUMI_OFFICIAL_DEFAULT_MODELS[role])
+        ? LUMI_OFFICIAL_DEFAULT_MODELS[role]
+        : availableModels[0];
+    if (!model) {
+      restoreModelConfigurationSnapshot(uid, snapshot);
+      throw new Error(`Lumi Official API catalog has no compatible model for ${role}. No role configuration was changed.`);
+    }
     try {
       const update: ModelConfigurationUpdate = {
         role,
         provider: LUMI_OFFICIAL_PROVIDER_ID,
       };
-      // Voice preferences select an adapter; their model id is managed by the
-      // official speech endpoint and must not be passed to the voice setter.
-      if (role !== 'speech_recognition' && role !== 'speech_synthesis') update.model = model;
+      update.model = model;
       updateLumiModelConfiguration(uid, update);
       applied.push({
         role,
@@ -476,7 +518,11 @@ export async function applyLumiOfficialModelConfiguration(userId: string): Promi
   return {
     ok: true,
     provider: LUMI_OFFICIAL_PROVIDER_ID,
-    verification: 'configuration_persisted',
+    verification: 'catalog_verified_and_configuration_persisted',
+    catalog: {
+      modelCount: catalog.models.length,
+      roleCount: Object.keys(catalog.byRole).length,
+    },
     applied,
     skipped,
     roles: Object.fromEntries([...applied, ...skipped].map(receipt => [receipt.role, receipt])) as Record<LumiModelRole, OfficialModelConfigurationRoleReceipt>,
@@ -575,13 +621,35 @@ export function updateLumiModelConfiguration(userId: string, input: ModelConfigu
   } else {
     const current = getVoicePreference();
     const provider = input.provider || (input.role === 'speech_recognition' ? current.stt : current.tts);
-    if (input.model) throw new Error('Speech roles select a provider; the provider manages its model identifier.');
+    const requestedModel = cleanModel(input.model);
     if (input.role === 'speech_recognition') {
       if (!STT_PROVIDERS.has(provider)) throw new Error(`Unsupported speech recognition provider: ${provider}`);
-      setVoicePreference({ stt: provider as any });
+      if (requestedModel && provider !== LUMI_OFFICIAL_PROVIDER_ID) {
+        throw new Error('Speech model selection is only supported by Lumi Official API.');
+      }
+      if (requestedModel && !normalizeVoiceModelId(requestedModel)) {
+        throw new Error('Speech model must use a provider/model identifier.');
+      }
+      setVoicePreference({
+        stt: provider as any,
+        ...(provider === LUMI_OFFICIAL_PROVIDER_ID
+          ? { sttModel: normalizeVoiceModelId(requestedModel) || current.sttModel || LUMI_OFFICIAL_DEFAULT_MODELS.speech_recognition }
+          : {}),
+      });
     } else {
       if (!TTS_PROVIDERS.has(provider)) throw new Error(`Unsupported speech synthesis provider: ${provider}`);
-      setVoicePreference({ tts: provider as any });
+      if (requestedModel && provider !== LUMI_OFFICIAL_PROVIDER_ID) {
+        throw new Error('Speech model selection is only supported by Lumi Official API.');
+      }
+      if (requestedModel && !normalizeVoiceModelId(requestedModel)) {
+        throw new Error('Speech model must use a provider/model identifier.');
+      }
+      setVoicePreference({
+        tts: provider as any,
+        ...(provider === LUMI_OFFICIAL_PROVIDER_ID
+          ? { ttsModel: normalizeVoiceModelId(requestedModel) || current.ttsModel || LUMI_OFFICIAL_DEFAULT_MODELS.speech_synthesis }
+          : {}),
+      });
     }
   }
 

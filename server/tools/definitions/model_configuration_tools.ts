@@ -90,7 +90,7 @@ export function registerModelConfigurationTools(registry: ToolRegistry): void {
         },
         model: {
           type: 'string',
-          description: 'Exact model id. Speech roles select provider-managed models and therefore do not accept this field.',
+          description: 'Exact provider/model id. Speech roles accept this field when the provider is Lumi Official API; other speech providers keep their own model selection.',
         },
         fallbackProvider: {
           type: 'string',
