@@ -4147,7 +4147,7 @@ export function AgentChatPage({
                   variant="ghost"
                   title={uiMessage('agent-chat-page.dictation-text-only.a17d39c4e2', isZh ? 'zh' : 'en')}
                   aria-label={uiMessage('agent-chat-page.dictation-text-only.a17d39c4e2', isZh ? 'zh' : 'en')}
-                  className={`absolute right-2 top-1/2 h-8 w-8 -translate-y-1/2 rounded-full p-0 transition-colors ${isOfficeCommandCenter ? 'hidden' : ''} ${
+                  className={`absolute right-2 top-1/2 h-8 w-8 -translate-y-1/2 rounded-full p-0 transition-colors ${
                     isListening ? 'text-celestial-mars bg-celestial-mars/20 animate-pulse' : 'text-white/40 hover:text-white'
                   }`}
                 >
