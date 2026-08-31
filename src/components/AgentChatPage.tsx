@@ -589,29 +589,38 @@ export function AgentChatPage({
   const visibleSuggestions = quickSuggestions.filter(s => s.show).slice(0, 4);
   const usesSharedVoiceSession = Boolean(voiceSession);
 
+  // Keep the callback identity stable for the lifetime of the local voice
+  // session.  The voice hook owns socket listeners in an effect; passing an
+  // inline callback here used to tear those listeners down and recreate them
+  // on every chat-state render, leaving a small window in which an
+  // `audio:response` packet could be missed.
+  const handleLocalVoiceTranscript = useCallback((text: string, isFinal: boolean) => {
+    if (!isFinal) return;
+    if (inputDictationActiveRef.current) {
+      const transcript = String(text || '').trim();
+      if (transcript) {
+        const current = draftTextRef.current.trim();
+        const next = [current, transcript].filter(Boolean).join('\n');
+        draftTextRef.current = next;
+        if (messageInputRef.current) messageInputRef.current.value = next;
+        setHasDraftText(next.trim().length > 0);
+      }
+      return;
+    }
+    setMessages(prev => [...prev, {
+      id: makeChatMessageId('voice'),
+      text,
+      userName: user?.displayName || user?.username || 'You',
+      timestamp: new Date().toISOString(),
+      type: 'user',
+      source: 'voice',
+    }]);
+  }, [user?.displayName, user?.username]);
+
   const localVoiceSession = useVoiceCall({
     socket,
     disabled: usesSharedVoiceSession,
-    onTranscript: (text, isFinal) => {
-      if (isFinal) {
-        if (inputDictationActiveRef.current) {
-          const transcript = String(text || '').trim();
-          if (transcript) {
-            const current = draftTextRef.current.trim();
-            setDraftText([current, transcript].filter(Boolean).join('\n'));
-          }
-          return;
-        }
-        setMessages(prev => [...prev, {
-          id: makeChatMessageId('voice'),
-          text,
-          userName: user?.displayName || user?.username || 'You',
-          timestamp: new Date().toISOString(),
-          type: 'user',
-          source: 'voice',
-        }]);
-      }
-    },
+    onTranscript: handleLocalVoiceTranscript,
   });
   const callState = voiceSession?.callState ?? localVoiceSession.callState;
   const audioLevel = voiceSession?.audioLevel ?? localVoiceSession.audioLevel;
@@ -4136,6 +4145,8 @@ export function AgentChatPage({
                   type="button"
                   onClick={toggleListening}
                   variant="ghost"
+                  title={uiMessage('agent-chat-page.dictation-text-only.a17d39c4e2', isZh ? 'zh' : 'en')}
+                  aria-label={uiMessage('agent-chat-page.dictation-text-only.a17d39c4e2', isZh ? 'zh' : 'en')}
                   className={`absolute right-2 top-1/2 h-8 w-8 -translate-y-1/2 rounded-full p-0 transition-colors ${isOfficeCommandCenter ? 'hidden' : ''} ${
                     isListening ? 'text-celestial-mars bg-celestial-mars/20 animate-pulse' : 'text-white/40 hover:text-white'
                   }`}

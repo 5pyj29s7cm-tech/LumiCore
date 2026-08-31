@@ -963,6 +963,10 @@
     "en": "Voice is already active. End the current call first.",
     "zh": "语音通话正在进行，先结束当前通话"
   },
+  "agent-chat-page.dictation-text-only.a17d39c4e2": {
+    "en": "Dictation (text only)",
+    "zh": "听写（仅转成文字）"
+  },
   "audit-log-viewer.action.91069d1d41": {
     "en": "Action",
     "zh": "操作"

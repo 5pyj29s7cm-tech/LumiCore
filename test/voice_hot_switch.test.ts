@@ -8,6 +8,7 @@ import {
 } from '../src/hooks/useVoiceCall';
 import {
   applyVoiceSwitchRequest,
+  chooseVoiceForProvider,
   type VoiceSwitchSession,
 } from '../server/socket/voice';
 
@@ -127,6 +128,45 @@ describe('live voice selection', () => {
       currentVoiceId: 'voice-a',
     });
     expect(session.currentVoiceId).toBe('voice-a');
+  });
+
+  it('reconciles a stale voice from another provider before realtime synthesis', () => {
+    expect(chooseVoiceForProvider(
+      'zh_female_vv_uranus_bigtts',
+      'relay',
+      [],
+      [{ voiceId: 'longxiaochun_v3' }],
+    )).toEqual({
+      voiceId: 'longxiaochun_v3',
+      requestedVoiceId: 'zh_female_vv_uranus_bigtts',
+      replaced: true,
+    });
+  });
+
+  it('preserves a voice that belongs to the active realtime provider', () => {
+    expect(chooseVoiceForProvider(
+      'longxiaochun_v3',
+      'relay',
+      [],
+      [{ voiceId: 'longxiaochun_v3' }, { voiceId: 'longwan_v3' }],
+    )).toEqual({
+      voiceId: 'longxiaochun_v3',
+      requestedVoiceId: 'longxiaochun_v3',
+      replaced: false,
+    });
+  });
+
+  it('prefers a ready scoped voice from the active provider over an incompatible selection', () => {
+    expect(chooseVoiceForProvider(
+      'alloy',
+      'relay',
+      [{ voiceId: 'my-relay-clone', provider: 'relay', status: 'ready' }],
+      [{ voiceId: 'longxiaochun_v3' }],
+    )).toEqual({
+      voiceId: 'my-relay-clone',
+      requestedVoiceId: 'alloy',
+      replaced: true,
+    });
   });
 
   it('wires one shared UI state to the live switch protocol and acknowledgements', () => {

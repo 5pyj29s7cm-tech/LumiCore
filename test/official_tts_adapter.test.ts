@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { listVoices, shouldSendRelayTtsVoice, synthesizeSpeech } from '../server/tts/providers/relay';
+import {
+  isRelayVoiceCompatibilityError,
+  listVoices,
+  shouldSendRelayTtsVoice,
+  synthesizeSpeech,
+} from '../server/tts/providers/relay';
 
 const originalKey = process.env.RELAY_API_KEY;
 const originalBaseUrl = process.env.RELAY_BASE_URL;
@@ -89,5 +94,36 @@ describe('Lumi official TTS adapter', () => {
     expect(shouldSendRelayTtsVoice('COSYVOICE-V3-FLASH')).toBe(true);
     expect(shouldSendRelayTtsVoice('aliyun/cosyvoice-v3-plus')).toBe(false);
     expect(shouldSendRelayTtsVoice('qwen-audio-3.0-tts-plus')).toBe(false);
+  });
+
+  it('recovers a stale OpenAI voice id before the circuit breaker sees a failure', async () => {
+    const calls: Array<{ init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (_url: string | URL, init?: RequestInit) => {
+      calls.push({ init });
+      const body = JSON.parse(String(init?.body));
+      if (body.voice === 'alloy') {
+        return new Response(JSON.stringify({ detail: '[cosyvoice:]Engine return error code: 418' }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(new Uint8Array([0x49, 0x44, 0x33, 0x04]), {
+        status: 200,
+        headers: { 'content-type': 'audio/mpeg' },
+      });
+    });
+
+    const result = await synthesizeSpeech('test', 'alloy', undefined, 1.1);
+    expect(result.audioBuffer.length).toBe(4);
+    expect(calls).toHaveLength(2);
+    expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({ voice: 'alloy', speed: 1.1 });
+    expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({ voice: 'longxiaochun_v3' });
+    expect(JSON.parse(String(calls[1].init?.body))).not.toHaveProperty('speed');
+  });
+
+  it('classifies only voice compatibility failures as recoverable voice errors', () => {
+    expect(isRelayVoiceCompatibilityError(new Error('Engine return error code: 418'))).toBe(true);
+    expect(isRelayVoiceCompatibilityError(new Error('model does not exist'))).toBe(false);
+    expect(isRelayVoiceCompatibilityError(new Error('Requests rate limit exceeded'))).toBe(false);
   });
 });

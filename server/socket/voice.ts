@@ -36,6 +36,7 @@ import { computeAdaptiveEndpointSilenceMs } from "../stt/adaptive_endpointing";
 import { getMeetingAudioDir } from "../stt/artifact_paths";
 import { isVoiceProfileAccessible, listScopedVoiceProfiles, voiceProfileScope } from '../tts/profile_store';
 import { synthesizeSpeech, getActiveProvider as getTTSProvider, listVoices as listTTSVoices, resolveEmotionVoice } from "../tts/adapter";
+import type { TTSProvider } from '../tts/types';
 import { extractFirstCompleteSpeechSentence } from "../tts/speculative_sentence";
 import { recordLatency } from "../monitor/latency_store";
 import { markVoiceLatencyMilestone, startVoiceLatencyTrace } from "../monitor/voice_latency_store";
@@ -242,6 +243,21 @@ import {
 } from './voice_provenance';
 import { getTaskRegressionSyntheticVoiceBinding } from '../evidence/task_truth_snapshot_route';
 export { normalizeVoiceHistory, normalizeVoiceHistoryRecord } from './voice_history';
+
+/**
+ * Keep a failed speech synthesis attempt visible to the active voice client
+ * without turning a recoverable TTS outage into a dropped conversation. The
+ * text response is still durable; this event only describes the audio lane.
+ */
+function emitVoiceTtsFailure(socket: Socket, requestId?: string, lane = 'conversation'): void {
+  if (!socket.connected) return;
+  socket.emit('audio:tts_error', {
+    code: 'TTS_OUTPUT_UNAVAILABLE',
+    requestId,
+    lane,
+    retryable: true,
+  });
+}
 
 interface AudioSession {
   sttSession: ReturnType<typeof createResilientStreamingSession> | null;
@@ -539,19 +555,74 @@ async function isVoiceSwitchSelectionAvailable(
   const provider = getTTSProvider();
   if (!provider) return false;
 
-  const profile = listScopedVoiceProfiles(scope).find((entry: any) => String(entry?.voiceId || '') === voiceId);
-  if (profile) {
-    return String(profile.provider || 'cosyvoice') === provider
-      && profile.status !== 'training'
-      && profile.status !== 'failed';
+  const resolution = await resolveVoiceForProvider(scope, provider, voiceId);
+  return resolution.voiceId === voiceId;
+}
+
+export interface ProviderVoiceResolution {
+  voiceId: string | null;
+  requestedVoiceId: string;
+  replaced: boolean;
+}
+
+/**
+ * Keep a live call's voice on the same provider as the active TTS route.
+ * Preview requests carry provider/model explicitly, while the realtime socket
+ * historically carried only a voice id.  After switching providers that left
+ * an Ark/OpenAI voice id paired with relay CosyVoice and produced text without
+ * audio.  Prefer the requested id only when it belongs to this provider;
+ * otherwise select the first ready scoped voice or provider preset.
+ */
+export function chooseVoiceForProvider(
+  requestedVoiceId: unknown,
+  provider: TTSProvider,
+  scopedProfiles: any[],
+  providerVoices: Array<{ voiceId?: string }>,
+): ProviderVoiceResolution {
+  const requested = normalizeVoiceSwitchId(requestedVoiceId);
+  const readyProfiles = (Array.isArray(scopedProfiles) ? scopedProfiles : []).filter((entry: any) => (
+    String(entry?.provider || 'cosyvoice') === provider
+    && entry?.status !== 'training'
+    && entry?.status !== 'failed'
+    && normalizeVoiceSwitchId(entry?.voiceId)
+  ));
+  const catalogue = (Array.isArray(providerVoices) ? providerVoices : [])
+    .map(entry => normalizeVoiceSwitchId(entry?.voiceId))
+    .filter(Boolean);
+  const requestedProfile = (Array.isArray(scopedProfiles) ? scopedProfiles : [])
+    .find((entry: any) => normalizeVoiceSwitchId(entry?.voiceId) === requested);
+  const requestedProfileCompatible = Boolean(
+    requestedProfile
+    && String(requestedProfile.provider || 'cosyvoice') === provider
+    && requestedProfile.status !== 'training'
+    && requestedProfile.status !== 'failed',
+  );
+
+  if (requested && (requestedProfileCompatible || catalogue.includes(requested))) {
+    return { voiceId: requested, requestedVoiceId: requested, replaced: false };
   }
 
+  const fallback = normalizeVoiceSwitchId(readyProfiles[0]?.voiceId) || catalogue[0] || null;
+  return {
+    voiceId: fallback,
+    requestedVoiceId: requested,
+    replaced: Boolean(requested && fallback !== requested),
+  };
+}
+
+async function resolveVoiceForProvider(
+  scope: ReturnType<typeof voiceProfileScope>,
+  provider: TTSProvider,
+  requestedVoiceId: unknown,
+): Promise<ProviderVoiceResolution> {
+  const profiles = listScopedVoiceProfiles(scope);
+  let providerVoices: Array<{ voiceId?: string }> = [];
   try {
-    const voices = await listTTSVoices(provider);
-    return voices.some(voice => voice.voiceId === voiceId);
-  } catch {
-    return false;
+    providerVoices = await listTTSVoices(provider);
+  } catch (error: any) {
+    logger.warn(`[Audio] Could not load ${provider} voice catalogue: ${error?.message || String(error)}`);
   }
+  return chooseVoiceForProvider(requestedVoiceId, provider, profiles, providerVoices);
 }
 
 interface VoiceInputTiming {
@@ -1459,7 +1530,10 @@ async function respondAlongsideActiveVoiceWork(
     });
 
     const ttsProvider = getTTSProvider();
-    if (!ttsProvider || !session.currentVoiceId || !session.isActive) return;
+    if (!ttsProvider || !session.currentVoiceId || !session.isActive) {
+      if (session.isActive) emitVoiceTtsFailure(socket, workRequestId, 'conversation');
+      return;
+    }
     const emotionVoice = (() => {
       try {
         return resolveEmotionVoice(session.currentVoiceId || 'longxiaochun_v3', loadEmotionalState(getVoiceStateKey(session)));
@@ -1493,12 +1567,16 @@ async function respondAlongsideActiveVoiceWork(
     addEchoText(responseText, voiceEchoScope(session));
     socket.emit('audio:response', {
       buffer: ttsResult.audioBuffer,
+      format: ttsResult.format,
       volumeGain: computeVolumeGain(),
       lane: 'conversation',
       requestId: workRequestId,
     });
   } catch (err: any) {
-    if (err?.name !== 'AbortError') logger.warn(`[Audio Sidecar] ${err?.message || String(err)}`);
+    if (err?.name !== 'AbortError') {
+      logger.warn(`[Audio Sidecar] ${err?.message || String(err)}`);
+      emitVoiceTtsFailure(socket, workRequestId, 'conversation');
+    }
   } finally {
     if (session.sidecarAbortController === controller) session.sidecarAbortController = null;
     if (session.ttsAbortController === controller) session.ttsAbortController = null;
@@ -2244,7 +2322,9 @@ async function processVoiceInput(
           addEchoText(staleText, voiceEchoScope(session));
           socket.emit('audio:response', {
             buffer: ttsResult.audioBuffer,
+            format: ttsResult.format,
             volumeGain: computeVolumeGain(),
+            lane: 'conversation',
             requestId,
           });
         }
@@ -2252,6 +2332,7 @@ async function processVoiceInput(
     } catch (bindingSpeechError: any) {
       if (bindingSpeechError?.name !== 'AbortError') {
         logger.warn(`[Audio] Failed to speak stale/busy turn response: ${bindingSpeechError?.message || String(bindingSpeechError)}`);
+        emitVoiceTtsFailure(socket, requestId, 'conversation');
       }
     } finally {
       if (bindingSpeechCounted) {
@@ -2881,7 +2962,6 @@ async function processVoiceInput(
     modelToolProjection,
     desktopExecutionTracker,
   };
-  const ttsProvider = getTTSProvider();
   // Resolve at synthesis time so a live switch also applies to sentences that
   // were queued while the model was still generating this turn.
   const resolveCurrentEmotionVoice = (): { voiceId: string; speechRate?: number; pitch?: number; volume?: number } => {
@@ -2970,6 +3050,7 @@ async function processVoiceInput(
   type SynthesizedSpeech = Awaited<ReturnType<typeof synthesizeSpeech>>;
   let speculativeSpeech: {
     text: string;
+    provider: TTSProvider;
     voiceId: string;
     switchGeneration: number;
     controller: AbortController;
@@ -3017,6 +3098,7 @@ async function processVoiceInput(
   };
 
   const maybeStartSpeculativeSpeech = () => {
+    const ttsProvider = getTTSProvider();
     if (
       speculativeSpeech
       || toolSessionActive
@@ -3045,6 +3127,7 @@ async function processVoiceInput(
     }).catch(error => ({ error }));
     speculativeSpeech = {
       text: firstSentence,
+      provider: ttsProvider,
       voiceId: currentEmotionVoice.voiceId,
       switchGeneration,
       controller,
@@ -3056,10 +3139,6 @@ async function processVoiceInput(
     const txt = sentence.trim();
     if (!txt || txt.length <= 1 || !session.isActive || session.suppressedSpeechRequestIds.has(requestId)) return Promise.resolve(0);
     if (!/[a-zA-Z一-鿿㐀-䶿\d]/.test(txt)) return Promise.resolve(0);
-    if (!ttsProvider || !session.currentVoiceId) {
-      logger.warn('[Audio TTS] No configured provider or voice; delivering text without synthetic fallback speech');
-      return Promise.resolve(0);
-    }
     const speech = ensureTurnSpeechController();
     if (speech.controller.signal.aborted) return Promise.resolve(0);
     sentenceIdx++;
@@ -3078,10 +3157,42 @@ async function processVoiceInput(
       session.isSpeaking = true;
       ttsSpeakingCount++;
       try {
+        const ttsProvider = getTTSProvider();
+        if (!ttsProvider) {
+          logger.warn('[Audio TTS] No configured healthy provider; delivering text and reporting the unavailable audio lane');
+          emitVoiceTtsFailure(socket, requestId, 'conversation');
+          resolvePlayback(0);
+          return;
+        }
+        const voiceResolution = await resolveVoiceForProvider(
+          voiceProfileScope(session.userId, session.domain, session.orgId),
+          ttsProvider,
+          session.currentVoiceId,
+        );
+        if (!voiceResolution.voiceId) {
+          logger.warn(`[Audio TTS] Provider ${ttsProvider} has no available voice; delivering text only`);
+          emitVoiceTtsFailure(socket, requestId, 'conversation');
+          resolvePlayback(0);
+          return;
+        }
+        if (session.currentVoiceId !== voiceResolution.voiceId) {
+          const previousVoiceId = session.currentVoiceId;
+          session.currentVoiceId = voiceResolution.voiceId;
+          session.voiceSwitchGeneration += 1;
+          socket.emit('audio:voice_changed', {
+            voiceId: voiceResolution.voiceId,
+            previousVoiceId,
+            sessionId: session.sessionId,
+            provider: ttsProvider,
+            fallback: true,
+            reason: 'provider_compatibility',
+          });
+        }
         let ttsResult: SynthesizedSpeech;
         const currentEmotionVoice = resolveCurrentEmotionVoice();
         if (
           speculativeSpeech?.text === txt
+          && speculativeSpeech.provider === ttsProvider
           && canReuseSpeculativeVoiceSpeech({
             preparedVoiceId: speculativeSpeech.voiceId,
             currentVoiceId: currentEmotionVoice.voiceId,
@@ -3090,8 +3201,21 @@ async function processVoiceInput(
           })
         ) {
           const prepared = await speculativeSpeech.promise;
-          if (!prepared.result) throw prepared.error || new Error('Speculative TTS failed');
-          ttsResult = prepared.result;
+          if (prepared.result) {
+            ttsResult = prepared.result;
+          } else {
+            // Speculation is an optimization only. A stale provider/voice or
+            // transient speculative failure must not suppress finalized TTS.
+            ttsResult = await synthesizeSpeech(txt, {
+              provider: ttsProvider,
+              voiceId: currentEmotionVoice.voiceId,
+              speechRate: currentEmotionVoice.speechRate,
+              pitch: currentEmotionVoice.pitch,
+              volume: currentEmotionVoice.volume,
+              signal: speech.controller.signal,
+              allowFallback: false,
+            });
+          }
           speculativeSpeech = null;
         } else {
           if (speculativeSpeech?.text === txt) {
@@ -3113,7 +3237,16 @@ async function processVoiceInput(
           socket.emit("audio:status", { status: "speaking", requestId });
           addEchoText(txt, voiceEchoScope(session));
           const volumeGain = computeVolumeGain();
-          socket.emit("audio:response", { buffer: ttsResult.audioBuffer, volumeGain, requestId });
+          socket.emit("audio:response", {
+            buffer: ttsResult.audioBuffer,
+            format: ttsResult.format,
+            volumeGain,
+            requestId,
+            lane: 'conversation',
+          });
+          logger.info(
+            `[Audio TTS] Emitted request=${requestId} provider=${ttsProvider} voice=${currentEmotionVoice.voiceId} bytes=${ttsResult.audioBuffer.length}`,
+          );
           const playbackMs = estimatePlaybackMs(ttsResult.audioBuffer, txt);
           setTimeout(() => resolvePlayback(0), playbackMs);
         } else {
@@ -3125,6 +3258,7 @@ async function processVoiceInput(
           return;
         }
         logger.warn(`[Audio TTS] ${e.message?.slice(0, 80)}`);
+        emitVoiceTtsFailure(socket, requestId, 'conversation');
         resolvePlayback(0);
       } finally {
         if (session.bgGeneration === speech.generation) session.isSpeaking = false;
@@ -4912,6 +5046,7 @@ export function registerVoiceHandlers(
     }
     session.isActive = true;
     session.voiceSwitchGeneration += 1;
+    const voiceStartGeneration = session.voiceSwitchGeneration;
     session.accumulatedText = '';
     session.isSpeaking = false;
     session.isProcessing = false;
@@ -4951,6 +5086,7 @@ export function registerVoiceHandlers(
     }
     session.agentId = requestedAgentId;
     session.sessionId = normalizeVoiceSessionId(data.sessionId);
+    const voiceStartSessionId = session.sessionId;
     session.voiceCaptureProvenance = createVoiceCaptureProvenance({
       captureSessionId: String(data.captureSessionId || '') === session.sessionId
         ? data.captureSessionId
@@ -4990,8 +5126,10 @@ export function registerVoiceHandlers(
       session.userId,
       session.domain === 'work' ? session.orgId : undefined,
     );
-    // Use explicit voiceId, then personality's TTS voice, then null (TTS provider default)
-    const requestedVoiceId = data.voiceId || personalityCfg?.ttsVoiceId || null;
+    // Use explicit voiceId, then personality's TTS voice. Reconcile that id
+    // with the active TTS provider before the first utterance; preview calls
+    // carry a provider explicitly but the realtime socket does not.
+    const requestedVoiceId = normalizeVoiceSwitchId(data.voiceId || personalityCfg?.ttsVoiceId) || null;
     const voiceScope = voiceProfileScope(session.userId, session.domain, session.orgId);
     if (requestedVoiceId && !isVoiceProfileAccessible(voiceScope, requestedVoiceId)) {
       logger.warn(`[Audio] Refused voice profile from another domain: ${requestedVoiceId}`);
@@ -5003,7 +5141,51 @@ export function registerVoiceHandlers(
         sessionId: session.sessionId,
       });
     } else {
-      session.currentVoiceId = requestedVoiceId;
+      const activeTtsProvider = getTTSProvider();
+      if (activeTtsProvider) {
+        try {
+          const voiceResolution = await resolveVoiceForProvider(
+            voiceScope,
+            activeTtsProvider,
+            requestedVoiceId,
+          );
+          if (
+            !session.isActive
+            || session.voiceSwitchGeneration !== voiceStartGeneration
+            || session.sessionId !== voiceStartSessionId
+          ) return;
+          session.currentVoiceId = voiceResolution.voiceId;
+          if (voiceResolution.voiceId && voiceResolution.voiceId !== requestedVoiceId) {
+            logger.info(
+              `[Audio] Reconciled live voice for provider=${activeTtsProvider} requested=${requestedVoiceId || 'none'} resolved=${voiceResolution.voiceId}`,
+            );
+            socket.emit('audio:voice_changed', {
+              voiceId: voiceResolution.voiceId,
+              previousVoiceId: requestedVoiceId,
+              sessionId: session.sessionId,
+              provider: activeTtsProvider,
+              fallback: true,
+              reason: 'provider_compatibility',
+            });
+          }
+        } catch (error: any) {
+          if (
+            !session.isActive
+            || session.voiceSwitchGeneration !== voiceStartGeneration
+            || session.sessionId !== voiceStartSessionId
+          ) return;
+          session.currentVoiceId = requestedVoiceId;
+          logger.warn(
+            `[Audio] Could not reconcile live voice for provider=${activeTtsProvider}: ${error?.message || String(error)}`,
+          );
+          if (!session.transcriptionOnly) emitVoiceTtsFailure(socket, undefined, 'conversation');
+        }
+      } else {
+        // Preserve the requested id so a provider that recovers during this
+        // call can reconcile it at synthesis time. STT remains usable.
+        session.currentVoiceId = requestedVoiceId;
+        if (!session.transcriptionOnly) emitVoiceTtsFailure(socket, undefined, 'conversation');
+      }
     }
     session.personalityId = data.personalityId || 'lumi';
 
@@ -5518,8 +5700,10 @@ export function registerVoiceHandlers(
     const session = getAudioSession(socket);
     const durationMs = Math.max(250, Math.min(120_000, Number(data?.durationMs) || 3_000));
     session.ttsPlaybackUntil = Math.max(session.ttsPlaybackUntil, Date.now() + durationMs + 250);
-    if (data?.lane === 'conversation') return;
     markVoiceLatencyMilestone(requestId, 'firstPlaybackAt');
+    logger.info(
+      `[Audio Playback] Acknowledged request=${requestId} lane=${data?.lane || 'conversation'} durationMs=${durationMs}`,
+    );
   });
 
   // ── Presence: periodic heartbeat from usePresence hook ──
@@ -5764,8 +5948,10 @@ export function registerVoiceHandlers(
 
     const proactiveVoice = resolveEmotionVoice(voiceId, es);
 
+    let proactiveTtsCounted = false;
     try {
       ttsSpeakingCount++;
+      proactiveTtsCounted = true;
       addEchoText(proactiveText, voiceEchoScope(session));
       const result = await synthesizeSpeech(proactiveText, {
         provider: ttsProvider,
@@ -5775,7 +5961,6 @@ export function registerVoiceHandlers(
         volume: proactiveVoice.volume,
         allowFallback: false,
       });
-      ttsSpeakingCount = Math.max(0, ttsSpeakingCount - 1);
       const proactiveGain = computeVolumeGain();
       socket.emit("audio:proactive_speak", {
         audioBuffer: result.audioBuffer,
@@ -5784,10 +5969,11 @@ export function registerVoiceHandlers(
         volumeGain: proactiveGain,
       });
       logger.info(`[ProactiveVoice] Spoke to ${userId}: "${proactiveText.slice(0, 60)}"`);
-      resetSpeaking();
     } catch (err: any) {
-      resetSpeaking();
       logger.warn(`[ProactiveVoice] TTS failed: ${err.message}`);
+    } finally {
+      if (proactiveTtsCounted) ttsSpeakingCount = Math.max(0, ttsSpeakingCount - 1);
+      resetSpeaking();
     }
   });
 
