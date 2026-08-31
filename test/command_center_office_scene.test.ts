@@ -148,7 +148,7 @@ describe('single-core command center', () => {
     expect(chatPage).toContain('!isOfficeCommandCenter && (');
     expect(chatPage).toContain('<div className="lumi-chat-voice-picker relative"');
     expect(chatPage).toContain('onClick={requestMeetingMode}');
-    expect(chatPage).toContain("isOfficeCommandCenter ? 'hidden' : ''");
+    expect(chatPage).toContain("isOfficeCommandCenter ? 'hidden' : 'inline-flex'");
     expect(taskWidget).toContain("const ACTIVE_TASK_STATUSES = new Set(['created', 'planning', 'executing', 'verifying', 'waiting_confirmation'])");
     expect(taskWidget).toContain('AnimatePresence');
     expect(taskWidget).toContain('view.visible &&');
