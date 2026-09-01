@@ -694,7 +694,11 @@ export class ToolRegistry {
   }): ToolDefinition[] {
     const query = String(text || '').toLowerCase().trim();
     if (!query) return [];
-    const ascii = query.match(/[a-z0-9_]{3,}/g) || [];
+    // File-system path segments describe where work lives, not what capability
+    // the user requested. Without removing them first, a common path such as
+    // D:\\work\\brief.txt spuriously matches every "workflow/work" tool.
+    const semanticQuery = query.replace(/\b[a-z]:[\\/][^\s"'<>|]*/gi, ' ');
+    const ascii = semanticQuery.match(/[a-z0-9_]{3,}/g) || [];
     const cjkRuns = query.match(/[\u3400-\u9fff]+/g) || [];
     const cjk: string[] = [];
     for (const run of cjkRuns) {
@@ -713,8 +717,15 @@ export class ToolRegistry {
       .filter(tool => !allowedOperations || (tool.evidence && allowedOperations.has(tool.evidence.operation)))
       .map(tool => {
         const haystack = `${tool.name} ${tool.description} ${(tool.routingHints || []).join(' ')}`.toLowerCase();
+        const haystackAsciiTokens = new Set(
+          (haystack.match(/[a-z0-9_]{3,}/g) || []).flatMap(token => [token, ...token.split('_').filter(Boolean)]),
+        );
         const score = tokens.reduce((total, token) => (
-          total + (haystack.includes(token) ? Math.min(4, token.length) : 0)
+          total + ((/^[a-z0-9_]+$/i.test(token)
+            ? haystackAsciiTokens.has(token)
+            : haystack.includes(token))
+            ? Math.min(4, token.length)
+            : 0)
         ), 0);
         return { tool, score };
       })

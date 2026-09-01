@@ -179,4 +179,18 @@ describe('runtime capability manifest', () => {
     expect(output.capabilities[0].matchScore).toBeGreaterThan(0);
     expect(output.capabilities[0].matchedTerms).toEqual(expect.arrayContaining(['网易云', '播放']));
   });
+
+  it('does not treat a path segment as a partial English capability term', () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      ...sampleTool('industry_workspace_status'),
+      description: 'Read the active industry workspace before continuing a workflow.',
+      routingHints: ['current workspace', 'industry workflow'],
+    });
+
+    expect(registry.findRelevant('读取 D:\\work\\brief.txt 并告诉我风险')).toEqual([]);
+    expect(registry.findRelevant('check the current workspace').map(tool => tool.name)).toEqual([
+      'industry_workspace_status',
+    ]);
+  });
 });
