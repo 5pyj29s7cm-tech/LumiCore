@@ -13,6 +13,118 @@ import {
 } from '../server/cognition/action_continuation';
 
 describe('recent action continuation', () => {
+  it('does not attach a negative playback observation to an unrelated unfinished task', () => {
+    const browserTask = {
+      version: 2 as const,
+      taskId: 'task-browser-open',
+      status: 'blocked' as const,
+      goal: 'Open the browser settings page.',
+      latestInstruction: 'Open the browser settings page.',
+      appTarget: 'browser',
+      sourcePaths: [],
+      latestBlocker: 'Browser launch failed.',
+      unfinished: true,
+      evidenceTools: [],
+      assistantState: '',
+      toolSummaries: [],
+      revision: 2,
+      activeRequestId: undefined,
+      updatedAt: '2026-09-01T00:00:00.000Z',
+    };
+
+    expect(classifyConversationActionFollowupIntent('\u8fd8\u6ca1\u64ad\u653e', browserTask))
+      .toBe('none');
+  });
+
+  it('continues the exact blocked playback task for the field correction', () => {
+    const correction = '\u90a3\u4f60\u76f4\u63a5\u653e\u5f53\u524d\u7684\u97f3\u4e50';
+    const playbackTask = {
+      version: 2 as const,
+      taskId: 'task-field-netease-playback',
+      status: 'blocked' as const,
+      goal: '\u7528\u7f51\u6613\u4e91\u7ed9\u6211\u653e\u9996\u79cb\u5929\u4e0d\u56de\u6765\u5427',
+      latestInstruction: '\u7528\u7f51\u6613\u4e91\u7ed9\u6211\u653e\u9996\u79cb\u5929\u4e0d\u56de\u6765\u5427',
+      appTarget: '\u7f51\u6613\u4e91\u97f3\u4e50',
+      sourcePaths: [],
+      latestBlocker: 'not_found',
+      unfinished: true,
+      evidenceTools: ['desktop_open', 'desktop_ui_snapshot'],
+      assistantState: '\u5df2\u6253\u5f00\u7f51\u6613\u4e91\uff0c\u4f46\u8fd8\u4e0d\u80fd\u786e\u8ba4\u97f3\u4e50\u5df2\u7ecf\u5f00\u59cb\u64ad\u653e\u3002',
+      toolSummaries: [],
+      receipts: [],
+      revision: 3,
+      activeRequestId: undefined,
+      updatedAt: '2026-09-01T03:43:07.002+08:00',
+    };
+    const policy = {
+      allowedTools: ['desktop_open', 'desktop_active_window', 'desktop_ui_snapshot', 'desktop_keyboard_press'],
+      requireConfirmation: [],
+      forbiddenTools: [],
+      maxIterations: 6,
+    };
+
+    expect(classifyConversationActionFollowupIntent(correction, playbackTask)).toBe('execute');
+    const prepared = prepareConversationActionTaskState(playbackTask, {
+      userText: correction,
+      requestId: 'chat_field_play_current_music',
+      toolPolicy: policy,
+      now: '2026-09-01T03:43:47.488+08:00',
+    });
+    expect(prepared.kind).toBe('resume');
+    expect(prepared.state).toMatchObject({
+      taskId: playbackTask.taskId,
+      goal: playbackTask.goal,
+      latestInstruction: correction,
+      activeRequestId: 'chat_field_play_current_music',
+      unfinished: true,
+    });
+  });
+
+  it('binds bare approval to the blocked task that asked the user to activate the player', () => {
+    const approval = '\u53ef\u4ee5';
+    const playbackTask = {
+      version: 2 as const,
+      taskId: 'task-field-awaiting-player-activation',
+      status: 'blocked' as const,
+      goal: '\u7528\u7f51\u6613\u4e91\u7ed9\u6211\u653e\u9996\u79cb\u5929\u4e0d\u56de\u6765\u5427',
+      latestInstruction: '\u90a3\u4f60\u76f4\u63a5\u653e\u5f53\u524d\u7684\u97f3\u4e50',
+      appTarget: '\u7f51\u6613\u4e91\u97f3\u4e50',
+      sourcePaths: [],
+      latestBlocker: 'target_mismatch',
+      unfinished: true,
+      evidenceTools: ['desktop_active_window'],
+      assistantState: '\u8bf7\u624b\u52a8\u70b9\u51fb\u4efb\u52a1\u680f\u4e0a\u7684\u201c\u7f51\u6613\u4e91\u97f3\u4e50\u201d\u56fe\u6807\uff0c\u5c06\u5b83\u5207\u5230\u524d\u53f0\u3002\u5b8c\u6210\u540e\u544a\u8bc9\u6211\u4e00\u58f0\uff0c\u6211\u4f1a\u7ee7\u7eed\u64ad\u653e\u3002',
+      toolSummaries: [],
+      receipts: [],
+      revision: 4,
+      activeRequestId: undefined,
+      updatedAt: '2026-09-01T03:44:32.956+08:00',
+    };
+    const policy = {
+      allowedTools: ['desktop_open', 'desktop_active_window', 'computer_use'],
+      requireConfirmation: [],
+      forbiddenTools: [],
+      maxIterations: 6,
+    };
+
+    expect(classifyConversationActionFollowupIntent(approval, playbackTask)).toBe('execute');
+    const prepared = prepareConversationActionTaskState(playbackTask, {
+      userText: approval,
+      requestId: 'chat_field_player_approval',
+      toolPolicy: policy,
+      now: '2026-09-01T03:44:52.498+08:00',
+    });
+    expect(prepared.kind).toBe('resume');
+    expect(prepared.state).toMatchObject({
+      taskId: playbackTask.taskId,
+      goal: playbackTask.goal,
+      latestInstruction: approval,
+      activeRequestId: 'chat_field_player_approval',
+      unfinished: true,
+    });
+    expect(prepared.state?.goal).not.toBe(approval);
+  });
+
   it('resumes the same unfinished client task for an actionable correction', () => {
     const correction = '\u6211\u8bf4\u7684\u662f\u5207\u6362\u5ba2\u6237\u7aef\u804a\u5929\u6a21\u5f0f';
     const clientTask = {
@@ -387,6 +499,36 @@ describe('recent action continuation', () => {
       unfinished: false,
     })).toBe('none');
     expect(classifyConversationActionFollowupIntent('可以了')).toBe('none');
+  });
+
+  it('does not resume a blocked task from readiness prose unless that exact task requested a resumable condition', () => {
+    const blocked = {
+      version: 2 as const,
+      taskId: 'task-readiness-fence',
+      status: 'blocked' as const,
+      goal: 'Open WPS and inspect the current document.',
+      latestInstruction: 'Open WPS and inspect the current document.',
+      appTarget: 'WPS',
+      sourcePaths: [],
+      latestBlocker: 'target mismatch',
+      unfinished: true,
+      evidenceTools: ['desktop_active_window'],
+      assistantState: 'The foreground target did not match, so this attempt ended.',
+      toolSummaries: [],
+      receipts: [],
+      revision: 2,
+      updatedAt: '2026-08-28T10:15:41.044Z',
+    };
+
+    expect(classifyConversationActionFollowupIntent('it is open now', blocked)).toBe('none');
+    expect(classifyConversationActionFollowupIntent('ready', {
+      ...blocked,
+      assistantState: 'Please send me the document file.',
+    })).toBe('none');
+    expect(classifyConversationActionFollowupIntent('ready', {
+      ...blocked,
+      assistantState: 'Please put WPS in the foreground and tell me when it is ready.',
+    })).toBe('execute');
   });
 
   it('executes a mixed status check and affirmative resume clause for an unfinished durable task', () => {

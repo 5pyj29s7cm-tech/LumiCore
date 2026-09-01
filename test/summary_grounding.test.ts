@@ -47,6 +47,44 @@ describe('evidence-grounded conversation summaries', () => {
     expect(transcript).toContain('网络采样已完成');
   });
 
+  it('does not ground an execution claim in a handler result that failed terminal verification', () => {
+    const unsupportedClaim = '\u7f51\u6613\u4e91\u97f3\u4e50\u5df2\u7ecf\u64ad\u653e\u3002';
+    const transcript = buildEvidenceGroundedSummaryTranscript([
+      message({ role: 'user', message: '\u6253\u5f00\u7f51\u6613\u4e91\u5e76\u64ad\u653e\u97f3\u4e50\u3002' }),
+      message({
+        role: 'assistant',
+        message: unsupportedClaim,
+        toolCalls: [{
+          name: 'desktop_open',
+          arguments: { target: '\u7f51\u6613\u4e91\u97f3\u4e50' },
+          result: JSON.stringify({ ok: true, status: 'opened' }),
+          capability: {
+            capabilityId: 'desktop.open',
+            lane: 'desktop',
+            operation: 'mutate',
+            risk: 'low',
+            sideEffects: [],
+            verification: {
+              strategy: 'visual',
+              required: true,
+              requiredFields: [],
+              successSignals: [],
+              limitations: [],
+            },
+          },
+          terminalVerification: {
+            status: 'unverified',
+            strategy: 'visual',
+            reason: 'The player opened but playback was not observed.',
+          },
+        }],
+      }),
+    ]);
+
+    expect(transcript).not.toContain(unsupportedClaim);
+    expect(transcript).toContain('\u6253\u5f00\u7f51\u6613\u4e91\u5e76\u64ad\u653e\u97f3\u4e50');
+  });
+
   it('removes unsupported legacy facts and never trusts prose evidence markers', () => {
     const sanitized = sanitizeSummaryForPrompt([
       '用户希望 Lumi 边工作边自然聊天。',

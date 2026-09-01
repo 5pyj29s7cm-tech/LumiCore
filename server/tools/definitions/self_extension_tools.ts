@@ -203,6 +203,7 @@ export function registerSelfExtensionTools(registry: ToolRegistry): void {
         domain: args.domain ? String(args.domain) : undefined,
         clientState: getClientStateForScope(userId, { domain: context?.domain, orgId: context?.orgId }) as Record<string, any> | null,
         tools: registry.list(),
+        capabilityManifest: registry.getCapabilityManifest(),
       });
       return JSON.stringify({
         ok: true,
@@ -279,6 +280,7 @@ export function registerSelfExtensionTools(registry: ToolRegistry): void {
         record: args.record !== false,
         clientState: getClientStateForScope(userId, { domain: context?.domain, orgId: context?.orgId }) as Record<string, any> | null,
         tools: registry.list(),
+        capabilityManifest: registry.getCapabilityManifest(),
         executeTool: (name, toolArgs) => executeToolCallOrThrow({
           registry,
           name,

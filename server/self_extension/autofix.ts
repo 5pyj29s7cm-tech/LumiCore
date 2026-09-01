@@ -11,7 +11,7 @@ import {
   type CapabilityLearningStatus,
   type CapabilityRoute,
 } from './capability_memory';
-import type { ToolDefinition } from '../tools/types';
+import type { CapabilityManifestEntry, ToolDefinition } from '../tools/types';
 
 export interface CapabilityGapAutofixOptions {
   userId?: string;
@@ -23,6 +23,7 @@ export interface CapabilityGapAutofixOptions {
   observedFailure?: string;
   clientState?: Record<string, any> | null;
   tools?: ToolDefinition[];
+  capabilityManifest?: CapabilityManifestEntry[];
   outputDirectory?: string;
   allowExternalExecution?: boolean;
   allowResearch?: boolean;
@@ -384,6 +385,7 @@ export async function runCapabilityGapAutofix(options: CapabilityGapAutofixOptio
     domain: options.domain,
     clientState: options.clientState || null,
     tools,
+    capabilityManifest: options.capabilityManifest,
   });
   const failureEvidence = hasFailureEvidence(options);
   const learned = reusableLearnedRecord(userId, scopeDomain, scopeDomain === 'work' ? orgId : '', plan.domain, goal);

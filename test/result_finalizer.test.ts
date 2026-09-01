@@ -495,8 +495,9 @@ describe('Lumi result finalizer', () => {
 
     expect(result.blocked).toBe(true);
     expect(result.reason).toContain('\u6210\u529f\u6267\u884c\u4e86\u67e5\u8be2\u6216\u68c0\u67e5\u5de5\u5177');
-    expect(result.text).toContain('\u5df2\u6210\u529f\u6267\u884c\uff1aclient_get_state');
-    expect(result.text).toContain('\u4e0d\u662f\u5b8c\u6210\u5f53\u524d\u8bf7\u6c42\u6240\u9700\u7684\u6267\u884c\u8bc1\u636e');
+    expect(result.text).toContain('\u5df2\u7ecf\u53d6\u5f97\u90e8\u5206\u6709\u6548\u56de\u6267');
+    expect(result.text).not.toContain('client_get_state');
+    expect(result.text).toContain('\u8fd8\u7f3a\u5c11\u80fd\u8bc1\u660e\u6700\u7ec8\u7ed3\u679c\u7684\u8bc1\u636e');
     expect(result.text).not.toContain('\u8fd9\u4e00\u8f6e\u6ca1\u6709\u6210\u529f\u6267\u884c\u4efb\u4f55\u5de5\u5177');
     expect(result.text).not.toContain('client_get_state: undefined');
   });
@@ -2734,6 +2735,62 @@ describe('Lumi result finalizer', () => {
     expect(result.text).toContain('\u4e2a\u4eba\u8fde\u7eed\u6027');
     expect(result.text).toContain('\u6388\u6743\u4e0e\u53ef\u9a8c\u8bc1\u884c\u52a8');
     expect(result.text).not.toMatch(/execution_|desktop_|C:\\\\Users|\u56de\u6267|\u53d7\u963b|\u7ee7\u7eed\u6267\u884c/iu);
+  });
+
+  it('does not preserve a terminal “正在执行” claim from unrelated finished observations', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '\u53ef\u4ee5',
+      responseText: '\u5df2\u5b8c\u6210\u73af\u5883\u68c0\u67e5\u3002\n\u6b63\u5728\u6267\u884c\u2014\u2014',
+      toolRecords: [{
+        name: 'desktop_list_apps',
+        arguments: {},
+        result: JSON.stringify({ ok: true, status: 'completed', apps: ['LumiCore'] }),
+        ...verifiedDesktopReceipt,
+      }, {
+        name: 'desktop_active_window',
+        arguments: {},
+        result: JSON.stringify({ ok: true, title: 'LumiCore', process_name: 'lumi-core.exe' }),
+        ...verifiedDesktopReceipt,
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.text).toContain('\u64cd\u4f5c\u5df2\u7ecf\u7ed3\u675f');
+    expect(result.text).not.toContain('\u6b63\u5728\u6267\u884c\u2014\u2014');
+  });
+
+  it('keeps a verified artifact completed while correcting a stray ongoing-status tail', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const root = mkdtempSync(path.join(os.tmpdir(), 'lumi-completed-artifact-status-'));
+    const artifactPath = path.join(root, 'verified.txt');
+    const content = 'verified artifact body';
+    try {
+      writeFileSync(artifactPath, content, 'utf8');
+      const result = finalizeLumiResponse({
+        taskText: `Create ${artifactPath} with the exact text "${content}", then read it back and verify it.`,
+        responseText: 'The file was created and verified.\n\u6b63\u5728\u6267\u884c\u2014\u2014',
+        toolRecords: [{
+          name: 'write_file',
+          arguments: { path: artifactPath, content },
+          result: JSON.stringify({ ok: true, status: 'verified', path: artifactPath }),
+          terminalVerification: { status: 'verified', strategy: 'artifact', reason: 'write verified' },
+        }, {
+          name: 'read_file',
+          arguments: { path: artifactPath },
+          result: content,
+          terminalVerification: { status: 'verified', strategy: 'terminal_receipt', reason: 'readback verified' },
+        }],
+        source: 'chat',
+      });
+
+      expect(result.blocked).toBe(false);
+      expect(result.text).toContain(artifactPath);
+      expect(result.text).not.toContain('\u6b63\u5728\u6267\u884c\u2014\u2014');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('keeps socket entrypoints on the shared finalizer path', () => {

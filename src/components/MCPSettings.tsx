@@ -1,17 +1,22 @@
 import React, { useState, useEffect } from 'react';
-import { Cpu, RefreshCw, CheckCircle, XCircle, Wrench, Sparkles, Download, Plus, AlertTriangle, XOctagon } from 'lucide-react';
+import { Cpu, RefreshCw, CheckCircle, XCircle, Wrench, Sparkles, Download, Plus, AlertTriangle, XOctagon, Power, Trash2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { toast } from 'sonner';
 import { socketService } from '@/services/socketService';
+import { apiFetch } from '@/services/apiClient';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 
 interface MCPServer {
   name: string;
-  command: string;
-  args: string[];
+  command?: string;
+  args?: string[];
   enabled: boolean;
   connected: boolean;
+  registered?: boolean;
+  usable?: boolean;
+  runtimeStatus?: 'callable' | 'disabled' | 'connected_unregistered' | 'disconnected';
+  registeredToolNames?: string[];
   source?: 'local' | 'external';
   transport?: 'stdio' | 'http' | 'ws';
   url?: string;
@@ -35,6 +40,19 @@ interface ServerHealth {
 
 type HealthMap = Record<string, ServerHealth>;
 
+function parseKeyValueLines(value: string): Record<string, string> | undefined {
+  const entries = value
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => {
+      const separator = line.indexOf('=');
+      if (separator <= 0) throw new Error(`Invalid key=value line: ${line}`);
+      return [line.slice(0, separator).trim(), line.slice(separator + 1).trim()] as const;
+    });
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
 export function MCPSettings({ t }: { t?: any }) {
   const isZh = t?.langCode !== 'en';
   const [servers, setServers] = useState<MCPServer[]>([]);
@@ -42,17 +60,17 @@ export function MCPSettings({ t }: { t?: any }) {
 
   const fetchServers = async () => {
     try {
-      const res = await fetch('/api/mcp');
+      const res = await apiFetch('/api/mcp');
       const data = await res.json();
       setServers(data.servers || []);
     } catch {
       // Fallback to skills endpoint if the traditional MCP endpoint is unavailable.
       try {
-        const res = await fetch('/api/skills');
+        const res = await apiFetch('/api/skills');
         const data = await res.json();
         const mapped = (data.skills || []).map((s: any) => ({
           name: s.name,
-          command: 'npx',
+          command: s.source === 'local' ? 'managed local runtime' : '',
           args: s.source === 'local' ? ['tsx', `~/lumi_skills/${s.name}/index.ts`] : [],
           enabled: s.enabled,
           connected: s.connected,
@@ -77,7 +95,7 @@ export function MCPSettings({ t }: { t?: any }) {
 
   const fetchHealth = async () => {
     try {
-      const res = await fetch('/api/mcp/health');
+      const res = await apiFetch('/api/mcp/health');
       if (res.ok) {
         const data = await res.json();
         setHealthMap(data.servers || {});
@@ -100,25 +118,67 @@ export function MCPSettings({ t }: { t?: any }) {
   // Add Server form
   const [showAddForm, setShowAddForm] = useState(false);
   const [newName, setNewName] = useState('');
-  const [newCommand, setNewCommand] = useState('npx');
+  const [newTransport, setNewTransport] = useState<'stdio' | 'http' | 'ws'>('stdio');
+  const [newCommand, setNewCommand] = useState('');
   const [newArgs, setNewArgs] = useState('');
+  const [newUrl, setNewUrl] = useState('');
+  const [newHeaders, setNewHeaders] = useState('');
+  const [newEnv, setNewEnv] = useState('');
 
   const handleAddServer = async () => {
-    if (!newName.trim() || !newCommand.trim()) {
-      toast.error(t?.mcpNameCommandRequired || 'Name and command are required');
+    if (!newName.trim() || (newTransport === 'stdio' ? !newCommand.trim() : !newUrl.trim())) {
+      toast.error(newTransport === 'stdio'
+        ? (t?.mcpNameCommandRequired || 'Name and command are required')
+        : 'Name and endpoint URL are required');
       return;
     }
-    const args = newArgs.trim() ? newArgs.split(/\s+/) : [];
-    const payload = { [newName.trim()]: { command: newCommand.trim(), args, enabled: true, source: 'external', transport: 'stdio' } };
     try {
-      const res = await fetch('/api/mcp', {
+      const headers = parseKeyValueLines(newHeaders);
+      const env = parseKeyValueLines(newEnv);
+      const reviewSummary = newTransport === 'stdio'
+        ? [
+            `Connect external MCP server "${newName.trim()}"?`,
+            `Local process: ${newCommand.trim()} ${newArgs.trim()}`.trim(),
+            `Environment keys: ${Object.keys(env || {}).join(', ') || 'none'}`,
+            'This process can publish tools to LumiCore. Its tools remain subject to LumiCore permissions and execution receipts.',
+          ].join('\n\n')
+        : [
+            `Connect external MCP server "${newName.trim()}"?`,
+            `Endpoint: ${newUrl.trim()}`,
+            `Header keys: ${Object.keys(headers || {}).join(', ') || 'none'}`,
+            'The endpoint can publish tools to LumiCore. Its tools remain subject to LumiCore permissions and execution receipts.',
+          ].join('\n\n');
+      if (!window.confirm(reviewSummary)) return;
+      const config = newTransport === 'stdio'
+        ? {
+            command: newCommand.trim(),
+            args: newArgs.trim() ? newArgs.split(/\s+/) : [],
+            ...(env ? { env } : {}),
+            enabled: true,
+            source: 'external' as const,
+            transport: 'stdio' as const,
+          }
+        : {
+            url: newUrl.trim(),
+            ...(headers ? { headers } : {}),
+            enabled: true,
+            source: 'external' as const,
+            transport: newTransport,
+          };
+      const payload = { [newName.trim()]: config };
+      const res = await apiFetch('/api/mcp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ servers: payload }),
       });
-      await res.json();
+      const data = await res.json();
+      if (!res.ok) {
+        const serviceError = data?.services?.find((item: any) => item?.error || item?.rollbackError);
+        throw new Error(serviceError?.error || serviceError?.rollbackError || data?.error || `HTTP ${res.status}`);
+      }
       toast.success(`${t?.mcpServerAdded || 'Server added'}: "${newName.trim()}"`);
-      setNewName(''); setNewCommand('npx'); setNewArgs('');
+      setNewName(''); setNewTransport('stdio'); setNewCommand(''); setNewArgs('');
+      setNewUrl(''); setNewHeaders(''); setNewEnv('');
       setShowAddForm(false);
       fetchServers();
     } catch (err: any) {
@@ -128,12 +188,42 @@ export function MCPSettings({ t }: { t?: any }) {
 
   const restartServer = async (name: string) => {
     try {
-      const res = await fetch(`/api/mcp/restart/${name}`, { method: 'POST' });
+      const res = await apiFetch(`/api/mcp/restart/${name}`, { method: 'POST' });
       const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
       toast.success(`${data.tools?.length || 0} ${t?.mcpToolsReconnected || 'tools reconnected'}`);
       fetchServers();
     } catch (err: any) {
       toast.error(`${t?.mcpRestartFailed || 'Restart failed'}: ${err.message}`);
+    }
+  };
+
+  const setServerEnabled = async (name: string, enabled: boolean) => {
+    try {
+      const res = await apiFetch(`/api/mcp/${encodeURIComponent(name)}/state`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      toast.success(enabled ? 'MCP server enabled and verified' : 'MCP server disabled');
+      await Promise.all([fetchServers(), fetchHealth()]);
+    } catch (err: any) {
+      toast.error(`MCP state update failed: ${err.message}`);
+    }
+  };
+
+  const deleteServer = async (name: string) => {
+    if (!window.confirm(`Remove MCP server "${name}"?`)) return;
+    try {
+      const res = await apiFetch(`/api/mcp/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      toast.success(`MCP server removed: ${name}`);
+      await Promise.all([fetchServers(), fetchHealth()]);
+    } catch (err: any) {
+      toast.error(`MCP removal failed: ${err.message}`);
     }
   };
 
@@ -216,7 +306,11 @@ export function MCPSettings({ t }: { t?: any }) {
                         <span className="text-[12px] text-white/45">{server.toolCount} tools</span>
                       )}
                     </div>
-                    <p className="text-xs text-white/55 font-mono">{server.command} {server.args.join(' ')}</p>
+                    <p className="text-xs text-white/55 font-mono">
+                      {server.transport === 'http' || server.transport === 'ws'
+                        ? `${server.transport.toUpperCase()} ${server.url || ''}`
+                        : `${server.command || ''} ${(Array.isArray(server.args) ? server.args : []).join(' ')}`.trim()}
+                    </p>
                     {server.description && (
                       <p className="text-xs text-white/55 mt-1">{server.description}</p>
                     )}
@@ -233,6 +327,21 @@ export function MCPSettings({ t }: { t?: any }) {
                       {t?.mcpRestart || 'Restart'}
                     </Button>
                   )}
+                  <Button
+                    onClick={() => setServerEnabled(server.name, !server.enabled)}
+                    className="bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-black uppercase tracking-widest px-3 h-9 rounded-xl"
+                    title={server.enabled ? 'Disable MCP server' : 'Enable and verify MCP server'}
+                  >
+                    <Power size={14} className="mr-1" />
+                    {server.enabled ? 'Disable' : 'Enable'}
+                  </Button>
+                  <Button
+                    onClick={() => deleteServer(server.name)}
+                    className="bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-300 px-3 h-9 rounded-xl"
+                    title="Remove MCP server"
+                  >
+                    <Trash2 size={14} />
+                  </Button>
                 </div>
               </div>
 
@@ -270,6 +379,26 @@ export function MCPSettings({ t }: { t?: any }) {
                   </div>
                 );
               })()}
+              <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold">
+                <span className={`rounded-full border px-2 py-1 ${
+                  server.usable
+                    ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-300'
+                    : 'border-amber-400/20 bg-amber-500/10 text-amber-200'
+                }`}>
+                  {server.usable
+                    ? 'Callable now'
+                    : server.registered
+                      ? 'Registered but disabled'
+                      : server.connected
+                        ? 'Connected without registered tools'
+                        : 'Not callable'}
+                </span>
+                {Array.isArray(server.registeredToolNames) && server.registeredToolNames.length > 0 && (
+                  <span className="text-white/40 font-mono">
+                    {server.registeredToolNames.join(', ')}
+                  </span>
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -286,7 +415,7 @@ export function MCPSettings({ t }: { t?: any }) {
         </button>
         {showAddForm && (
           <div className="space-y-3 pt-2">
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <Input
                 value={newName}
                 onChange={e => setNewName(e.target.value)}
@@ -294,24 +423,59 @@ export function MCPSettings({ t }: { t?: any }) {
                 className="bg-white/5 border-white/10 rounded-xl py-2 text-sm"
                 onKeyDown={e => e.key === 'Enter' && handleAddServer()}
               />
-              <Input
-                value={newCommand}
-                onChange={e => setNewCommand(e.target.value)}
-                placeholder={t?.mcpCommandPlaceholder || 'Command (npx, node, python...)'}
-                className="bg-white/5 border-white/10 rounded-xl py-2 text-sm"
-                onKeyDown={e => e.key === 'Enter' && handleAddServer()}
-              />
-              <Input
-                value={newArgs}
-                onChange={e => setNewArgs(e.target.value)}
-                placeholder={t?.mcpArgsPlaceholder || 'Args (space-separated)'}
-                className="bg-white/5 border-white/10 rounded-xl py-2 text-sm"
-                onKeyDown={e => e.key === 'Enter' && handleAddServer()}
-              />
+              <select
+                value={newTransport}
+                onChange={e => setNewTransport(e.target.value as 'stdio' | 'http' | 'ws')}
+                className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-white/80 outline-none"
+              >
+                <option value="stdio">STDIO process</option>
+                <option value="http">Streamable HTTP</option>
+                <option value="ws">WebSocket</option>
+              </select>
+              {newTransport === 'stdio' ? (
+                <>
+                  <Input
+                    value={newCommand}
+                    onChange={e => setNewCommand(e.target.value)}
+                    placeholder={t?.mcpCommandPlaceholder || 'Absolute local executable or pinned runtime'}
+                    className="bg-white/5 border-white/10 rounded-xl py-2 text-sm"
+                    onKeyDown={e => e.key === 'Enter' && handleAddServer()}
+                  />
+                  <Input
+                    value={newArgs}
+                    onChange={e => setNewArgs(e.target.value)}
+                    placeholder={t?.mcpArgsPlaceholder || 'Args (space-separated)'}
+                    className="bg-white/5 border-white/10 rounded-xl py-2 text-sm"
+                    onKeyDown={e => e.key === 'Enter' && handleAddServer()}
+                  />
+                  <textarea
+                    value={newEnv}
+                    onChange={e => setNewEnv(e.target.value)}
+                    placeholder="Environment, one KEY=value per line"
+                    className="min-h-20 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/80 outline-none placeholder:text-white/30 md:col-span-2"
+                  />
+                </>
+              ) : (
+                <>
+                  <Input
+                    value={newUrl}
+                    onChange={e => setNewUrl(e.target.value)}
+                    placeholder={newTransport === 'http' ? 'https://mcp.example.com/mcp' : 'wss://mcp.example.com'}
+                    className="bg-white/5 border-white/10 rounded-xl py-2 text-sm"
+                    onKeyDown={e => e.key === 'Enter' && handleAddServer()}
+                  />
+                  <textarea
+                    value={newHeaders}
+                    onChange={e => setNewHeaders(e.target.value)}
+                    placeholder="Headers, one KEY=value per line"
+                    className="min-h-20 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/80 outline-none placeholder:text-white/30 md:col-span-2"
+                  />
+                </>
+              )}
             </div>
             <Button
               onClick={handleAddServer}
-              disabled={!newName.trim() || !newCommand.trim()}
+              disabled={!newName.trim() || (newTransport === 'stdio' ? !newCommand.trim() : !newUrl.trim())}
               className="bg-celestial-saturn text-black font-bold text-xs px-6 py-2 rounded-xl hover:scale-105 transition-transform disabled:opacity-40"
             >
               <Plus size={14} className="mr-1" /> {t?.mcpAddServerBtn || 'Add Server'}

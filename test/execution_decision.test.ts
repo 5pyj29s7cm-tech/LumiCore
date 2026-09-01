@@ -916,6 +916,97 @@ describe('Lumi execution decision', () => {
     expect(browseDecision.toolPolicy.allowedTools).toEqual(['*']);
   });
 
+  it('projects the complete reuse-first Skill Hall and MCP capability chain for a real Lumi gap', async () => {
+    const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+    const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
+    const text = 'Fix Lumi\'s missing tool capability. Search the Skill Hall and approved external MCP candidates first, and generate a skill only if the capability is genuinely missing.';
+    const lifecycleNames = [
+      'skill_marketplace_search',
+      'list_skills',
+      'capability_research',
+      'external_control_candidates',
+      'external_control_configure_candidate',
+      'generate_skill',
+      'skill_marketplace_install',
+      'install_skill',
+      'capability_gap_autofix',
+      'client_capability_manifest',
+    ];
+    const lifecycleDeclarations = [
+      ...declarations,
+      ...lifecycleNames.map(name => ({
+        type: 'function' as const,
+        function: {
+          name,
+          description: name.replace(/_/g, ' '),
+          parameters: { type: 'object', properties: {} },
+        },
+      })),
+    ];
+    const dispatch = buildLumiTurnDispatch({
+      userId: 'execution_decision_skill_chain_user',
+      text,
+      channel: 'chat',
+      source: 'chat',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+    const decision = buildLumiExecutionDecision({
+      flow: dispatch.flow,
+      text,
+      toolDeclarations: lifecycleDeclarations,
+    });
+
+    expect(dispatch.flow.executionGovernance.capabilityLearningIntent).toBe('learn_missing');
+    expect(decision.toolRoute?.categories).toContain('capability_learning');
+    expect(decision.toolRoute?.toolNames).toEqual(expect.arrayContaining(lifecycleNames));
+    expect(dispatch.flow.promptOverlay).toContain('search the Skill Hall');
+    expect(dispatch.flow.promptOverlay).toContain('real task receipt');
+  });
+
+  it('gives an ordinary unsupported task a read-only Skill Hall and MCP discovery path', async () => {
+    const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+    const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
+    const text = '把这个客户清单同步到 AcmeFlow，并核对同步结果';
+    const discoveryNames = [
+      'client_capability_manifest',
+      'self_extension_plan',
+      'skill_marketplace_search',
+      'external_control_candidates',
+      'capability_research',
+    ];
+    const discoveryDeclarations = discoveryNames.map(name => ({
+      type: 'function' as const,
+      function: {
+        name,
+        description: name.replace(/_/g, ' '),
+        parameters: { type: 'object', properties: {} },
+      },
+    }));
+    const dispatch = buildLumiTurnDispatch({
+      userId: 'ordinary-capability-gap-user',
+      text,
+      channel: 'chat',
+      source: 'chat',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+    const decision = buildLumiExecutionDecision({
+      flow: dispatch.flow,
+      text,
+      toolDeclarations: discoveryDeclarations,
+    });
+
+    expect(decision.toolRoute?.categories).toContain('capability_gap_discovery');
+    expect(decision.toolRoute?.toolNames).toEqual(expect.arrayContaining(discoveryNames));
+    expect(decision.toolRoute?.toolNames).not.toEqual(expect.arrayContaining([
+      'external_control_configure_candidate',
+      'skill_marketplace_install',
+      'generate_skill',
+      'install_skill',
+    ]));
+  });
+
   it('routes natural follow-up wording to action paths instead of empty chat', async () => {
     const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
     const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');

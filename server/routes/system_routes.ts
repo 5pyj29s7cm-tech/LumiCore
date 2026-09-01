@@ -477,7 +477,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
         functionalProbes: {
           databaseRead: true,
           registeredTools: toolRegistry.list().length,
-          extensionProviders: listRegisteredProviders().map(({ userId: _userId, ...provider }) => provider),
+          extensionProviders: listRegisteredProviders(req.user.uid).map(({ userId: _userId, ...provider }) => provider),
           mcp: mcpHealth,
           localModels: {
             ollama: {
@@ -814,14 +814,14 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
   });
 
   // Provider status
-  router.get("/llm/providers", requireAuth, (_req, res) => {
+  router.get("/llm/providers", requireAuth, (req, res) => {
     try {
       const stored = loadKeys();
       const envOrStore = (envKey: string, storeKey: string = envKey) =>
         !!(process.env[envKey] && process.env[envKey]!.length > 0) || !!stored[storeKey];
       const ollamaConfig = getLocalModelConfig('ollama');
       const lmstudioConfig = getLocalModelConfig('lmstudio');
-      const extensionProviders = listRegisteredProviders().map(({ userId: _userId, ...provider }) => provider);
+      const extensionProviders = listRegisteredProviders(req.user!.uid).map(({ userId: _userId, ...provider }) => provider);
       const status = (
         provider: string,
         configured: boolean,

@@ -31,9 +31,13 @@ describe('external control candidates', () => {
     const candidate = getExternalControlCandidate('playwright-mcp');
 
     expect(candidate?.mcp?.serverName).toBe('playwright');
-    expect(candidate?.mcp?.config.command).toBe('npx');
-    expect(candidate?.mcp?.config.args).toEqual(expect.arrayContaining(['@playwright/mcp@latest']));
+    expect(candidate?.mcp?.config.command).toBe(process.execPath);
+    expect(candidate?.mcp?.config.args).toHaveLength(1);
+    expect(candidate?.mcp?.config.args?.[0]).toMatch(/[\\/]@playwright[\\/]mcp[\\/]cli\.js$/i);
+    expect(candidate?.mcp?.config.cwd).toMatch(/[\\/]@playwright[\\/]mcp$/i);
+    expect(candidate?.mcp?.config.args).not.toContain('-y');
     expect(candidate?.mcp?.config.enabled).toBe(false);
+    expect(candidate?.mcp?.config.description).toContain('@playwright/mcp@0.0.79');
     expect(candidate?.industries).toContain('ecommerce');
   });
 
@@ -53,6 +57,10 @@ describe('external control candidates', () => {
       enabled: false,
     }, {
       userId: 'organization-member',
+      authenticated: true,
+      authRole: 'admin',
+      localExecution: true,
+      executionBoundary: 'trusted_local',
       domain: 'work',
       orgId: 'organization-id',
       userConfirmed: true,

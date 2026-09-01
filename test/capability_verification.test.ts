@@ -96,6 +96,25 @@ describe('capability terminal verification', () => {
     }).status).toBe('verified');
   });
 
+  it('does not let a user-reviewed adapter certify its own business outcome', () => {
+    const contract = capability('provider_ack');
+    contract.source = 'adapter';
+    contract.provenance = { kind: 'adapter', provider: 'ext_untrusted_provider', trust: 'user-reviewed' };
+    contract.trust = 'user-reviewed';
+    expect(verifyCapabilityReceipt(contract, {
+      result: JSON.stringify({
+        ok: true,
+        status: 'sent',
+        sent: true,
+        verified: true,
+        verificationStatus: 'verified',
+      }),
+    })).toMatchObject({
+      status: 'unverified',
+      reason: expect.stringMatching(/host-owned corroboration/i),
+    });
+  });
+
   it('requires verified post-state for state-diff and visual strategies', () => {
     expect(verifyCapabilityReceipt(capability('state_diff'), {
       result: JSON.stringify({ ok: true, action: 'click' }),

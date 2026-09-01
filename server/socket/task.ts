@@ -43,10 +43,6 @@ import { loadHIMState, saveHIMState, updateEmotionalStateWithHIM } from "../pers
 import { formatClientSelfPromptForTurn } from "../client/self_model";
 import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
-import {
-  buildModelCapabilityPolicy,
-  buildModelToolProjection,
-} from "../cognition/capability_selection";
 import { bindCapabilityExecutionPlanTask } from "../cognition/capability_execution_plan";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
 import { createDesktopExecutionTracker, withDesktopExecutionReceipt } from "../desktop/execution_runtime";
@@ -63,6 +59,7 @@ import {
 } from "../cognition/response_delivery";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
+import { buildTextReplyStyleOverlay } from '../cognition/reply_style';
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
 import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
 import { canAutoApproveAction } from "../tools/action_constitution";
@@ -935,7 +932,10 @@ export function registerTaskHandler(
       convForHistory.actionContinuationState,
       taskUserMessageId,
     );
-    const routedTaskText = [data.text, taskActionBridge, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
+    const taskContinuationContext = [taskActionBridge, pendingConfirmationPrompt]
+      .filter(Boolean)
+      .join('\n\n');
+    const routedTaskText = [data.text, taskContinuationContext].filter(Boolean).join('\n\n');
     const interactionId = crypto.randomUUID();
 
     // Retrieve personality vector early to bias memory retrieval (cross-system fusion: vector→memory)
@@ -988,10 +988,21 @@ export function registerTaskHandler(
     };
 
     // ── Load persisted conversation history (survives page reload) ──
+    const boundaryPersonalityToolPolicy = restrictToolPolicyForExecutionBoundary(
+      personality.toolPolicy,
+      toolSecurityContext.executionBoundary,
+    );
+    const boundaryAllowedToolNames = new Set(boundaryPersonalityToolPolicy.allowedTools || []);
+    const boundaryForbiddenTools = toolSecurityContext.executionBoundary === 'remote_restricted'
+      ? toolRegistry.getToolDeclarations()
+          .map(declaration => declaration.function.name)
+          .filter(name => !boundaryAllowedToolNames.has('*') && !boundaryAllowedToolNames.has(name))
+      : [];
     const executionPipeline = buildLumiExecutionPipeline({
       dispatch: {
         userId: uid,
-        text: routedTaskText,
+        text: data.text,
+        continuationContext: taskContinuationContext,
         channel: 'task',
         source: 'task',
         category: 'command',
@@ -1001,8 +1012,9 @@ export function registerTaskHandler(
         targetIsLumi: personality.id === 'lumi',
       },
       registry: toolRegistry,
-      personalityToolPolicy: personality.toolPolicy,
+      personalityToolPolicy: boundaryPersonalityToolPolicy,
       actionTaskState: convForHistory.actionContinuationState,
+      additionalForbiddenTools: boundaryForbiddenTools,
       pendingAssistantOfferContext,
       source: 'task',
     });
@@ -1011,22 +1023,17 @@ export function registerTaskHandler(
     const workSurfaceRoute = turnFlow.workSurfaceRoute;
     const visionIntent = turnFlow.visionIntent;
     const executionDecision = executionPipeline.execution;
-    executionDecision.toolPolicy = restrictToolPolicyForExecutionBoundary(
-      buildModelCapabilityPolicy(executionDecision),
-      toolSecurityContext.executionBoundary,
-    );
-    executionDecision.baseToolPolicy = executionDecision.toolPolicy;
-    executionDecision.maxIterations = executionDecision.toolPolicy.maxIterations;
-    executionDecision.toolRoute = restrictVisibleToolRouteForExecutionBoundary(
+    const modelToolPolicy = executionPipeline.authorizationPolicy;
+    const modelToolProjection = executionPipeline.modelToolProjection;
+    const pipelineToolContext = {
+      currentTurnExecutionRequested: executionPipeline.executionRequested,
+      trustedActionContinuation: executionPipeline.trustedActionContinuation,
+    };
+    const visibleToolRoute = restrictVisibleToolRouteForExecutionBoundary(
       executionDecision.toolRoute,
       toolSecurityContext.executionBoundary,
     );
-    const modelToolProjection = buildModelToolProjection(executionDecision, {
-      lane: executionPipeline.capabilityPlan.lane,
-      preferredTools: executionPipeline.capabilityPlan.preferredTools,
-    });
-    const toolSessionActive = executionPipeline.executionRequested
-      && modelToolProjection.toolNames.length > 0;
+    const toolSessionActive = executionPipeline.executionRequested;
     const actionFollowupIntent = classifyConversationActionFollowupIntent(
       data.text,
       convForHistory.actionContinuationState,
@@ -1037,9 +1044,9 @@ export function registerTaskHandler(
       userText: data.text,
       requestId,
       userMessageId: taskUserMessageId,
-      toolPolicy: executionDecision.toolPolicy,
+      toolPolicy: modelToolPolicy,
       forceTask: executionPipeline.capabilityPlan.taskLedgerRequired,
-      forceResume: Boolean(pendingConfirmation || actionFollowupIntent === 'execute'),
+      forceResume: Boolean(pendingConfirmation || executionPipeline.trustedActionContinuation),
     });
     const runtimeOwnedDeterministicRecoveryCall = 'bindingFailure' in actionTaskExecution
       ? null
@@ -1172,13 +1179,13 @@ export function registerTaskHandler(
     const attachDesktopReceipt = (records: ToolExecutionRecord[]) => (
       withDesktopExecutionReceipt(records, desktopExecutionTracker)
     );
-    if (executionDecision.toolRoute) {
+    if (visibleToolRoute) {
       emitAgent('agent:tool_route', {
-        categories: executionDecision.toolRoute.categories,
-        reasons: executionDecision.toolRoute.reasons,
-        toolNames: executionDecision.toolRoute.toolNames,
-        totalAvailable: executionDecision.toolRoute.totalAvailable,
-        truncated: executionDecision.toolRoute.truncated,
+        categories: visibleToolRoute.categories,
+        reasons: visibleToolRoute.reasons,
+        toolNames: visibleToolRoute.toolNames,
+        totalAvailable: visibleToolRoute.totalAvailable,
+        truncated: visibleToolRoute.truncated,
         source: 'task',
         trace: intentTrace,
       });
@@ -1272,6 +1279,7 @@ export function registerTaskHandler(
         flow: turnFlow,
       });
     }
+    effectiveSystemPrompt += '\n\n' + buildTextReplyStyleOverlay('task');
 
     const messages: NormalizedMessage[] = [
       { role: 'system', content: effectiveSystemPrompt },
@@ -1455,6 +1463,7 @@ export function registerTaskHandler(
         arguments: confirmedArgs,
         context: {
           ...toolSecurityContext,
+          ...pipelineToolContext,
           userId: uid,
           taskId: actionTaskExecution.state?.taskId,
           conversationId: convForHistory.id,
@@ -1470,7 +1479,7 @@ export function registerTaskHandler(
           userConfirmed: true,
           actionIntent: confirmedTask,
           routedTaskText: confirmedTask,
-          toolPolicy: executionDecision.toolPolicy,
+          toolPolicy: modelToolPolicy,
           desktopExecutionTracker,
         },
         preflight: () => consumed
@@ -1526,7 +1535,7 @@ export function registerTaskHandler(
               error: record.error,
             });
           },
-          executionDecision.maxIterations || 25,
+          modelToolPolicy.maxIterations || 25,
           llmGetters.getDeepSeek,
           llmGetters.getGemini,
           llmGetters.getOpenAI,
@@ -1535,6 +1544,7 @@ export function registerTaskHandler(
           undefined,
           {
             ...toolSecurityContext,
+            ...pipelineToolContext,
             userId: uid,
             domain: taskScope.domain,
             orgId: taskScope.orgId,
@@ -1542,7 +1552,7 @@ export function registerTaskHandler(
             requestConfirmation,
             actionIntent: confirmedTask,
             routedTaskText: confirmedTask,
-            toolPolicy: executionDecision.toolPolicy,
+            toolPolicy: modelToolPolicy,
             modelToolProjection,
             priorToolRecords: [confirmationRecord],
             desktopExecutionTracker,
@@ -1573,6 +1583,8 @@ export function registerTaskHandler(
         toolRecords: taskAwareRecords(confirmationRecords),
         source: 'task_confirmation',
         flow: { ...turnFlow, routeText: confirmedTask },
+        taskId: actionTaskExecution.state?.taskId,
+        requestId,
       });
       confirmationRecord.executionOrigin = 'confirmed_action_resume';
       const terminalCommitted = await commitTaskTerminal({
@@ -1591,7 +1603,31 @@ export function registerTaskHandler(
           { blocked: finalConfirmation.blocked, reason: finalConfirmation.reason },
         ),
         persistAssistantMessage: () => {
-          addMessageIdempotent({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: finalConfirmation.text, personality: personality.id, mode: 'task', source: 'task', channel: 'task', domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: confirmationRecords, cognitiveIntent: finalConfirmation.blocked ? 'work_product_guard' : 'confirmation', requestId });
+          addMessageIdempotent({
+            userId: uid,
+            agentId: '',
+            conversationId: convForHistory.id,
+            role: 'assistant',
+            content: finalConfirmation.text,
+            personality: personality.id,
+            mode: 'task',
+            source: 'task',
+            channel: 'task',
+            domain: taskScope.domain,
+            orgId: taskScope.orgId,
+            toolCalls: confirmationRecords,
+            cognitiveIntent: finalConfirmation.blocked ? 'work_product_guard' : 'confirmation',
+            requestId,
+            ...(finalConfirmation.blocked && actionTaskExecution.state?.taskId ? {
+              terminalTaskDisposition: {
+                outcome: 'blocked' as const,
+                taskId: actionTaskExecution.state.taskId,
+                requestId,
+                reason: finalConfirmation.reason
+                  || 'The confirmed task request ended without verified goal-level completion evidence.',
+              },
+            } : {}),
+          });
         },
         publishAfter: executionWriteback => {
           if (finalConfirmation.notification) {
@@ -1647,6 +1683,8 @@ export function registerTaskHandler(
           toolRecords: taskAwareRecords(directToolRecords),
           source: 'task',
           flow: turnFlow,
+          taskId: actionTaskExecution.state?.taskId,
+          requestId,
         });
         const directResponseText = finalDirect.text;
         const terminalCommitted = await commitTaskTerminal({
@@ -1684,7 +1722,32 @@ export function registerTaskHandler(
             );
           },
           persistAssistantMessage: () => {
-            addMessageIdempotent({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: directResponseText, personality: personality.id, mode: 'task', source: 'task', channel: 'task', domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: directToolRecords.length ? directToolRecords : undefined, cognitiveIntent: finalDirect.blocked ? 'work_product_guard' : cognition!.intent.category, llmWasCalled: false, requestId });
+            addMessageIdempotent({
+              userId: uid,
+              agentId: '',
+              conversationId: convForHistory.id,
+              role: 'assistant',
+              content: directResponseText,
+              personality: personality.id,
+              mode: 'task',
+              source: 'task',
+              channel: 'task',
+              domain: taskScope.domain,
+              orgId: taskScope.orgId,
+              toolCalls: directToolRecords.length ? directToolRecords : undefined,
+              cognitiveIntent: finalDirect.blocked ? 'work_product_guard' : cognition!.intent.category,
+              llmWasCalled: false,
+              requestId,
+              ...(finalDirect.blocked && actionTaskExecution.state?.taskId ? {
+                terminalTaskDisposition: {
+                  outcome: 'blocked' as const,
+                  taskId: actionTaskExecution.state.taskId,
+                  requestId,
+                  reason: finalDirect.reason
+                    || 'The direct task request ended without verified goal-level completion evidence.',
+                },
+              } : {}),
+            });
           },
           publishAfter: executionWriteback => {
             if (finalDirect.notification) {
@@ -1719,7 +1782,7 @@ export function registerTaskHandler(
             error: record.error,
           });
         },
-        executionDecision.maxIterations || 25,
+        modelToolPolicy.maxIterations || 25,
         llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
         (chunk) => {
           if (!taskLease.signal.aborted && !deferTaskModelOutput) {
@@ -1730,7 +1793,7 @@ export function registerTaskHandler(
             }
           }
         },
-        { ...toolSecurityContext, userId: uid, taskId: actionTaskExecution.state?.taskId, taskRevision: actionTaskExecution.state?.revision, conversationId: convForHistory.id, turnId: requestId, requestId, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: routedTaskText, routedTaskText, ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}), toolPolicy: executionDecision.toolPolicy, modelToolProjection, desktopExecutionTracker, isCancelled: () => taskLease.signal.aborted, llmGetters, source: 'task', supervisedExternalCommits: true },
+        { ...toolSecurityContext, ...pipelineToolContext, userId: uid, taskId: actionTaskExecution.state?.taskId, taskRevision: actionTaskExecution.state?.revision, conversationId: convForHistory.id, turnId: requestId, requestId, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: data.text, routedTaskText, ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}), toolPolicy: modelToolPolicy, modelToolProjection, desktopExecutionTracker, isCancelled: () => taskLease.signal.aborted, llmGetters, source: 'task', supervisedExternalCommits: true },
         llmGetters.getOllama,
         llmGetters.getLmStudio,
         llmGetters.getArk,
@@ -1755,6 +1818,8 @@ export function registerTaskHandler(
           toolRecords: finalTaskToolRecords,
           source: 'task',
           flow: turnFlow,
+          taskId: actionTaskExecution.state?.taskId,
+          requestId,
         });
         const terminalCommitted = await commitTaskTerminal({
           payload: {
@@ -1811,6 +1876,8 @@ export function registerTaskHandler(
             toolRecords: taskAwareRecords(finalTaskToolRecords),
             source: 'task',
             flow: turnFlow,
+            taskId: actionTaskExecution.state?.taskId,
+            requestId,
           });
       const desktopPauseBlocksCurrentTask = () => {
         return shouldBlockForDesktopControlPause({
@@ -1867,7 +1934,7 @@ export function registerTaskHandler(
                 error: record.error,
               });
             },
-            Math.max(2, Math.min(12, executionDecision.maxIterations || 8)),
+            Math.max(2, Math.min(12, modelToolPolicy.maxIterations || 8)),
             llmGetters.getDeepSeek,
             llmGetters.getGemini,
             llmGetters.getOpenAI,
@@ -1876,6 +1943,7 @@ export function registerTaskHandler(
             undefined,
             {
               ...toolSecurityContext,
+              ...pipelineToolContext,
               userId: uid,
               taskId: actionTaskExecution.state?.taskId,
               conversationId: convForHistory.id,
@@ -1885,10 +1953,10 @@ export function registerTaskHandler(
               orgId: taskScope.orgId,
               desktopRelay,
               requestConfirmation,
-              actionIntent: routedTaskText,
+              actionIntent: data.text,
               routedTaskText,
               ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}),
-              toolPolicy: executionDecision.toolPolicy,
+              toolPolicy: modelToolPolicy,
               modelToolProjection,
               priorToolRecords,
               desktopExecutionTracker,
@@ -1930,6 +1998,8 @@ export function registerTaskHandler(
               toolRecords: taskAwareRecords(records),
               source: 'task_guard_recovery',
               flow: turnFlow,
+              taskId: actionTaskExecution.state?.taskId,
+              requestId,
             }),
       });
       finalTaskResponse = guardRecovery.finalization;
@@ -1982,7 +2052,32 @@ export function registerTaskHandler(
         persistTerminalState: () => executionWriteback,
         persistAssistantMessage: () => {
           if (!finalTaskText) return;
-          addMessageIdempotent({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: finalTaskText, personality: personality.id, mode: 'task', source: 'task', channel: 'task', domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: finalTaskToolRecords.length ? finalTaskToolRecords : undefined, cognitiveIntent: finalTaskResponse.blocked ? 'work_product_guard' : cognition!.intent.category, llmWasCalled: true, requestId });
+          addMessageIdempotent({
+            userId: uid,
+            agentId: '',
+            conversationId: convForHistory.id,
+            role: 'assistant',
+            content: finalTaskText,
+            personality: personality.id,
+            mode: 'task',
+            source: 'task',
+            channel: 'task',
+            domain: taskScope.domain,
+            orgId: taskScope.orgId,
+            toolCalls: finalTaskToolRecords.length ? finalTaskToolRecords : undefined,
+            cognitiveIntent: finalTaskResponse.blocked ? 'work_product_guard' : cognition!.intent.category,
+            llmWasCalled: true,
+            requestId,
+            ...(finalTaskResponse.blocked && actionTaskExecution.state?.taskId ? {
+              terminalTaskDisposition: {
+                outcome: 'blocked' as const,
+                taskId: actionTaskExecution.state.taskId,
+                requestId,
+                reason: finalTaskResponse.reason
+                  || 'The task request ended without verified goal-level completion evidence.',
+              },
+            } : {}),
+          });
         },
         publishAfter: () => {
           if (finalTaskResponse.notification) {

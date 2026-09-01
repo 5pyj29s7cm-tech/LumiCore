@@ -188,6 +188,26 @@ describe('chat execution registry', () => {
     });
   });
 
+  it('does not promote response generation or an unproved status frame to execution', () => {
+    beginChatExecution(scope, 'request-status-truth');
+
+    recordChatExecutionEvent(scope, 'request-status-truth', 'agent:status', {
+      status: 'responding',
+    });
+    expect(getChatExecution(scope, 'request-status-truth')?.status).toBe('planning');
+
+    recordChatExecutionEvent(scope, 'request-status-truth', 'agent:status', {
+      status: 'executing',
+    });
+    expect(getChatExecution(scope, 'request-status-truth')?.status).toBe('planning');
+
+    recordChatExecutionEvent(scope, 'request-status-truth', 'agent:status', {
+      status: 'executing',
+      executionAccepted: true,
+    });
+    expect(getChatExecution(scope, 'request-status-truth')?.status).toBe('executing');
+  });
+
   it('exposes cancelling before a terminal cancellation response', () => {
     beginChatExecution(scope, 'request-1');
     expect(markChatExecutionCancelling(scope, 'request-1')).toMatchObject({ status: 'cancelling', terminal: false });

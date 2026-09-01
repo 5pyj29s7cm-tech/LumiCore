@@ -78,7 +78,9 @@ describe('Lumi client action routing', () => {
 
     expect(result.blocked).toBe(true);
     expect(result.text).toContain('我还没有真正操作客户端');
-    expect(result.text).toContain('client_get_state / client_action');
+    expect(result.text).toContain('\u7ee7\u7eed\u5b8c\u6210\u5bf9\u5e94\u7684\u5ba2\u6237\u7aef\u64cd\u4f5c');
+    expect(result.text).not.toContain('client_get_state');
+    expect(result.text).not.toContain('client_action');
   });
 
   it('allows client completion claims when client_action produced evidence', () => {

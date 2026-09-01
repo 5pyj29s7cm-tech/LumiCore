@@ -204,15 +204,21 @@ describe('remote organization work routing integration', () => {
 
   it('runs deterministic organization knowledge commands inside the same task and receipt route', async () => {
     const messageId = `remote-kb-${suffix}`;
+    let modelCalls = 0;
+    const unexpectedModelCall = () => {
+      modelCalls += 1;
+      throw new Error('deterministic organization command must not call a model');
+    };
     const reply = await processWithPersonality(
       message('查询组织知识库 no-such-routing-article', messageId),
       {
         llmGetters: {
-          getDeepSeek: () => { throw new Error('deterministic organization command must not call a model'); },
-          getGemini: () => { throw new Error('deterministic organization command must not call a model'); },
+          getDeepSeek: unexpectedModelCall,
+          getGemini: unexpectedModelCall,
         },
       },
     );
+    expect(modelCalls).toBe(0);
     expect(reply).toContain('组织知识库');
     const [item] = listOrganizationWorkItems(orgId).filter(candidate => candidate.requestId === `feishu_bot:${messageId}`);
     expect(item).toMatchObject({ status: 'completed', source: 'feishu_bot' });

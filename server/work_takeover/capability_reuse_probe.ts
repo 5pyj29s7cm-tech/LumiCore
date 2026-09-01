@@ -19,7 +19,7 @@ import {
 import { exportWorkTakeoverPacket, type WorkTakeoverPacket } from './task_packet';
 import { verifyWorkTakeoverResult, type WorkTakeoverResultVerification } from './result_verifier';
 import { buildSelfExtensionPlan, type SelfExtensionPlan } from '../self_extension/pipeline';
-import type { ToolDefinition } from '../tools/types';
+import type { CapabilityManifestEntry, ToolDefinition } from '../tools/types';
 
 export interface WorkTakeoverCapabilityReuseProbeOptions {
   userId: string;
@@ -41,6 +41,7 @@ export interface WorkTakeoverCapabilityReuseProbeOptions {
   outputDirectory?: string;
   record?: boolean;
   tools?: ToolDefinition[];
+  capabilityManifest?: CapabilityManifestEntry[];
   desktopRelay?: (name: string, args: Record<string, any>) => Promise<string>;
 }
 
@@ -147,6 +148,7 @@ function auditCapability(
   task: WorkTakeoverTask,
   capability: WorkTakeoverCapabilitySelection,
   tools: ToolDefinition[],
+  capabilityManifest?: CapabilityManifestEntry[],
 ): CapabilityReuseAuditItem {
   const names = toolNames(tools);
   const plan = buildSelfExtensionPlan({
@@ -156,6 +158,7 @@ function auditCapability(
     goal: capabilityGoal(task, capability),
     domain: capabilityDomain(capability),
     tools,
+    capabilityManifest,
   });
   const availableSuggestedTools = capability.tools.filter(name => names.includes(name));
   const shouldCreateNewCapability = plan.resolution.shouldCreateNewCapability;
@@ -218,8 +221,15 @@ function buildCapabilityReuseAudit(
   task: WorkTakeoverTask,
   plan: WorkTakeoverExecutionPlan,
   tools: ToolDefinition[],
+  capabilityManifest?: CapabilityManifestEntry[],
 ): { items: CapabilityReuseAuditItem[]; summary: CapabilityReuseAuditSummary } {
-  const items = plan.capabilities.map(capability => auditCapability(userId, task, capability, tools));
+  const items = plan.capabilities.map(capability => auditCapability(
+    userId,
+    task,
+    capability,
+    tools,
+    capabilityManifest,
+  ));
   return { items, summary: summarizeAudit(items) };
 }
 
@@ -465,7 +475,13 @@ export async function runWorkTakeoverCapabilityReuseProbe(
     progress = getWorkTakeoverExecutionProgress(currentTask, plan);
   }
 
-  const capabilityReuseAudit = buildCapabilityReuseAudit(userId, currentTask, plan, options.tools || []);
+  const capabilityReuseAudit = buildCapabilityReuseAudit(
+    userId,
+    currentTask,
+    plan,
+    options.tools || [],
+    options.capabilityManifest,
+  );
   const verification = verifyWorkTakeoverResult(currentTask, {
     filePaths: uniqueStrings([
       packet?.folderPath,

@@ -5,6 +5,8 @@ import { Send, Loader2, ArrowLeft, Ghost, Castle, Zap, Cpu, Sparkles, FileText, 
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
+import { safeMarkdownComponents } from '@/lib/externalNavigation';
+import { projectAgentActivity } from '@/lib/agentStatusTruth';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { GlassCard, PulseCounter } from './SharedUI';
@@ -1806,7 +1808,7 @@ export function AgentChatPage({
       // Auto-speak disabled
     };
 
-    const onStatus = (data: { status: string; requestId?: string; source?: string; conversationId?: string; taskRelation?: unknown }) => {
+    const onStatus = (data: { status: string; requestId?: string; source?: string; conversationId?: string; taskRelation?: unknown; executionAccepted?: boolean }) => {
       if (!isCurrentChatEvent(data)) return;
       recordTaskRelation(data);
       const activeStatus = ['queued', 'replacing', 'acknowledged', 'planning', 'thinking', 'responding', 'executing', 'waiting_confirmation', 'cancelling'].includes(data.status);
@@ -1815,7 +1817,12 @@ export function AgentChatPage({
         ? settleTrackedChatRequest(data.requestId)
         : null;
       setIsTyping(activeStatus || chatRequestLedgerRef.current.size > 0 || Boolean(terminalTracking?.remaining));
-      if (data.status === 'thinking') {
+      const turnMeta = chatTurnUiMetaRef.current.get(String(data.requestId || ''));
+      const activity = projectAgentActivity(data.status, {
+        executionAccepted: data.executionAccepted,
+        hasToolEvidence: turnMeta?.hadTool ?? currentRequestHadToolRef.current,
+      });
+      if (activity === 'thinking') {
         if (String(data.requestId || '') !== chatRequestLedgerRef.current.foreground) return;
         setWorkflowStatus('thinking');
         pushChatProgress(uiMessage('agent-chat-page.i-am-figuring-out-how.017a8f967e', (isZh) ? 'zh' : 'en'), 'thinking');
@@ -1829,11 +1836,11 @@ export function AgentChatPage({
             time: Date.now(),
           }];
         });
-      } else if (data.status === 'responding' || data.status === 'executing') {
+      } else if (activity === 'executing') {
         setWorkflowStatus('executing');
-      } else if (data.status === 'waiting_confirmation') {
+      } else if (activity === 'waiting_confirmation') {
         setWorkflowStatus('waiting_confirmation');
-      } else if (data.status === 'cancelling') {
+      } else if (activity === 'cancelling') {
         setWorkflowStatus('cancelling');
       } else if (data.status === 'idle') {
         if (!terminalTracking?.remaining) {
@@ -3885,7 +3892,7 @@ export function AgentChatPage({
                     }}
                   >
                     <div className={`markdown-body chat-message-markdown select-text ${msg.type === 'agent' ? 'chat-message-markdown-agent' : 'chat-message-markdown-user'}`}>
-                      <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                      <Markdown components={safeMarkdownComponents} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
                         {getDisplayText(msg)}
                       </Markdown>
                     </div>

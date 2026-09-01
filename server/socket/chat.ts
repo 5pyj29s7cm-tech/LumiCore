@@ -56,6 +56,7 @@ import {
   getExplicitSentenceCountConstraint,
   sentenceCountCorrectionInstruction,
 } from "../cognition/response_constraints";
+import { buildTextReplyStyleOverlay } from '../cognition/reply_style';
 import { CN_STREAM_INTERRUPTION_RECOVERY_INSTRUCTION } from "../i18n/response_recovery_messages";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import {
@@ -610,19 +611,7 @@ export function shouldRunVisibleActionPreflight(userText: string, attachments: C
 }
 
 function buildNaturalReplyStyleOverlay(source?: string): string {
-  const voiceLine = source === 'voice'
-    ? '- In voice, default to one short sentence. If the user asks a simple question, answer in under 20 Chinese characters when possible.'
-    : '- Default to concise replies. Use detail only when the user asks for analysis, implementation, or a report.';
-  return [
-    '## Reply Style',
-    '- Never reveal hidden reasoning, chain-of-thought, private deliberation, or “I need to think/analyze” narration.',
-    '- Give the final answer directly. Do not describe how you are deciding unless the user explicitly asks for reasoning.',
-    '- If corrected for being verbose, reply with only the correction or confirmation.',
-    '- Make the answer easy to scan: use short paragraphs of 2-4 sentences and put a blank line between paragraphs.',
-    '- When the answer has multiple topics, use brief descriptive headings and compact bullet lists. Do not produce a single dense wall of text.',
-    '- Keep hierarchy restrained: lead with the outcome, then supporting details, then next actions when needed.',
-    voiceLine,
-  ].join('\n');
+  return buildTextReplyStyleOverlay(source === 'voice' ? 'voice' : 'chat');
 }
 
 export function registerChatHandler(
@@ -3396,6 +3385,8 @@ export function registerChatHandler(
             orgId: resolvedOrgId,
             toolPolicy: modelCapabilityPolicy,
             actionIntent: visibleUserText,
+            currentTurnExecutionRequested: executionPipeline.executionRequested,
+            trustedActionContinuation: executionPipeline.trustedActionContinuation,
             routedTaskText: visibleUserText,
             requestConfirmation: requestToolConfirmation,
             isCancelled: () => abortController.signal.aborted,
@@ -3644,6 +3635,8 @@ export function registerChatHandler(
             isCancelled: () => abortController.signal.aborted,
             userConfirmed: true,
             actionIntent: confirmedTask,
+            currentTurnExecutionRequested: executionPipeline.executionRequested,
+            trustedActionContinuation: executionPipeline.trustedActionContinuation,
             routedTaskText: confirmedTask,
             toolPolicy: modelCapabilityPolicy,
             modelToolProjection,
@@ -3734,6 +3727,8 @@ export function registerChatHandler(
               isCancelled: () => abortController.signal.aborted,
               requestConfirmation: requestToolConfirmation,
               actionIntent: confirmedTask,
+              currentTurnExecutionRequested: executionPipeline.executionRequested,
+              trustedActionContinuation: executionPipeline.trustedActionContinuation,
               routedTaskText: confirmedTask,
               toolPolicy: modelCapabilityPolicy,
               modelToolProjection,
@@ -3790,6 +3785,8 @@ export function registerChatHandler(
               toolRecords: taskAwareRecords(confirmationRecords),
               source: 'chat_confirmation',
               flow: { ...turnFlow, routeText: confirmedTask },
+              taskId: durableTaskId,
+              requestId,
             });
         confirmedRecord.executionOrigin = 'confirmed_action_resume';
         const confirmationCompletionFeedback = buildForegroundTaskCompletionFeedback({
@@ -3851,7 +3848,32 @@ export function registerChatHandler(
           }),
           persistAssistantMessage: () => {
             if (!conversationId) return;
-            addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: confirmationResponseText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', toolCalls: confirmationRecords, cognitiveIntent: finalized.blocked ? 'work_product_guard' : 'confirmation', llmWasCalled: confirmationLlmWasCalled, requestId, completionFeedback: confirmationCompletionFeedback });
+            addMessageIdempotent({
+              userId: uid,
+              agentId: conversationAgentId,
+              conversationId,
+              role: 'assistant',
+              content: confirmationResponseText,
+              personality: personality.id,
+              domain: resolvedDomain,
+              orgId: resolvedOrgId,
+              source: eventSource,
+              channel: 'chat',
+              toolCalls: confirmationRecords,
+              cognitiveIntent: finalized.blocked ? 'work_product_guard' : 'confirmation',
+              llmWasCalled: confirmationLlmWasCalled,
+              requestId,
+              completionFeedback: confirmationCompletionFeedback,
+              ...(finalized.blocked && durableTaskId ? {
+                terminalTaskDisposition: {
+                  outcome: 'blocked' as const,
+                  taskId: durableTaskId,
+                  requestId,
+                  reason: finalized.reason
+                    || 'The confirmed foreground request ended without verified goal-level completion evidence.',
+                },
+              } : {}),
+            });
             refreshTerminalPayloadTaskRelation(confirmationTerminalPayload, durableTaskId);
           },
           flush: flushDBOrThrow,
@@ -4187,6 +4209,8 @@ export function registerChatHandler(
               toolPolicy: modelCapabilityPolicy,
               modelToolProjection,
               actionIntent: visibleUserText,
+              currentTurnExecutionRequested: executionPipeline.executionRequested,
+              trustedActionContinuation: executionPipeline.trustedActionContinuation,
               routedTaskText: turnFlow.routeText,
               ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}),
               desktopExecutionTracker,
@@ -4263,6 +4287,8 @@ export function registerChatHandler(
             toolRecords: finalTaskRecords,
             source: 'chat',
             flow: turnFlow,
+            taskId: durableTaskId,
+            requestId,
           });
       const desktopPauseBlocksCurrentTask = () => {
         return shouldBlockForDesktopControlPause({
@@ -4364,6 +4390,8 @@ export function registerChatHandler(
               toolPolicy: modelCapabilityPolicy,
               modelToolProjection,
               actionIntent: visibleUserText,
+              currentTurnExecutionRequested: executionPipeline.executionRequested,
+              trustedActionContinuation: executionPipeline.trustedActionContinuation,
               routedTaskText: turnFlow.routeText,
               ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}),
               priorToolRecords,
@@ -4406,6 +4434,8 @@ export function registerChatHandler(
               toolRecords: withDesktopExecutionReceipt(records, desktopExecutionTracker),
               source: 'chat_guard_recovery',
               flow: turnFlow,
+              taskId: durableTaskId,
+              requestId,
             }),
       });
       for (const record of guardRecovery.toolRecords) {
@@ -4544,6 +4574,15 @@ export function registerChatHandler(
             llmWasCalled,
             requestId,
             completionFeedback: responseCompletionFeedback,
+            ...(finalResponse.blocked && durableTaskId ? {
+              terminalTaskDisposition: {
+                outcome: 'blocked' as const,
+                taskId: durableTaskId,
+                requestId,
+                reason: finalResponse.reason
+                  || 'The foreground request ended without verified goal-level completion evidence.',
+              },
+            } : {}),
           });
           refreshTerminalPayloadTaskRelation(responseTerminalPayload, durableTaskId);
         },
@@ -4895,4 +4934,3 @@ export function registerChatHandler(
     }
   });
 }
-

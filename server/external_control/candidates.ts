@@ -1,3 +1,7 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { createRequire } from 'node:module';
 import type { MCPServerConfig } from '../mcp/client';
 
 export type ExternalControlLayer = 'browser' | 'desktop_ui' | 'desktop_vision' | 'safety';
@@ -19,28 +23,54 @@ export interface ExternalControlCandidate {
   };
 }
 
+const PLAYWRIGHT_MCP_VERSION = '0.0.79';
+const PLAYWRIGHT_MCP_CLI_SHA256 = '70dab09ab9a5bc1943fb78e2655f00af7349f9931073833919f19c5d7d786ad6';
+
+function resolvePinnedPlaywrightMcpRuntime(): { cliPath: string; packageDirectory: string } | null {
+  try {
+    const localRequire = createRequire(import.meta.url);
+    const packageJsonPath = localRequire.resolve('@playwright/mcp/package.json');
+    const packageDirectory = fs.realpathSync(path.dirname(packageJsonPath));
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+    if (packageJson.version !== PLAYWRIGHT_MCP_VERSION || packageJson.bin?.['playwright-mcp'] !== 'cli.js') return null;
+    const cliPath = fs.realpathSync(path.join(packageDirectory, 'cli.js'));
+    const relativeCli = path.relative(packageDirectory, cliPath);
+    if (!relativeCli || relativeCli.startsWith('..') || path.isAbsolute(relativeCli)) return null;
+    const cliDigest = crypto.createHash('sha256').update(fs.readFileSync(cliPath)).digest('hex');
+    if (cliDigest !== PLAYWRIGHT_MCP_CLI_SHA256) return null;
+    return { cliPath, packageDirectory };
+  } catch {
+    return null;
+  }
+}
+
+const PINNED_PLAYWRIGHT_MCP = resolvePinnedPlaywrightMcpRuntime();
+
 const PLAYWRIGHT_MCP: ExternalControlCandidate = {
   id: 'playwright-mcp',
   label: 'Playwright MCP structured browser control',
   layer: 'browser',
-  status: 'requires_setup',
+  status: PINNED_PLAYWRIGHT_MCP ? 'requires_setup' : 'planned',
   actions: ['external_control_configure_candidate', 'browser_open_task', 'web_login_learn_site', 'web_login_run'],
   industries: ['ecommerce', 'short_video', 'account_management', 'legal', 'design_delivery', 'general_work'],
   surfaces: ['browser DOM', 'logged-in web apps', 'store backends', 'creator centers', 'web forms'],
   safety: 'Use for visible browser automation and authenticated sessions. Publishing, purchases, payments, account switching, and final submissions still require confirmation.',
   notes: 'Best first upgrade for Lumi browser work because it can expose structured page state instead of relying only on screenshots and coordinates.',
-  setup: ['Configure the MCP server, then restart it from the MCP settings or with client_repair_skill.'],
-  mcp: {
+  setup: PINNED_PLAYWRIGHT_MCP
+    ? ['Configure the pinned local MCP server, then restart it from MCP settings or with client_repair_skill. Browser binaries may require a separate reviewed setup.']
+    : ['The pinned bundled @playwright/mcp runtime is missing or failed integrity verification. Reinstall LumiCore dependencies before enabling it.'],
+  ...(PINNED_PLAYWRIGHT_MCP ? { mcp: {
     serverName: 'playwright',
     config: {
-      command: 'npx',
-      args: ['-y', '@playwright/mcp@latest'],
+      command: process.execPath,
+      args: [PINNED_PLAYWRIGHT_MCP.cliPath],
+      cwd: PINNED_PLAYWRIGHT_MCP.packageDirectory,
       enabled: false,
       source: 'external',
       transport: 'stdio',
-      description: 'Playwright MCP structured browser automation for real websites and authenticated browser tasks.',
+      description: `Pinned @playwright/mcp@${PLAYWRIGHT_MCP_VERSION} structured browser automation for real websites and authenticated browser tasks.`,
     },
-  },
+  } } : {}),
 };
 
 const NATIVE_ACCESSIBILITY: ExternalControlCandidate = {

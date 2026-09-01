@@ -69,7 +69,10 @@ function deadlineRegistry(verifiedDelayMs = 0) {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  // Reset queued one-shot implementations as well as call history. If a
+  // cancellation/deadline test exits before consuming its last mocked model
+  // response, clearAllMocks would leak that response into the next case.
+  vi.resetAllMocks();
 });
 
 afterEach(() => {
@@ -140,7 +143,9 @@ describe('bounded cumulative model-wait lifecycle', () => {
       {
         provider: 'deepseek',
         model: 'test-model',
-        modelWaitBudgetMs: 500,
+        // This case verifies cancellation quarantine, not budget expiry. Keep
+        // enough wall-clock headroom for a heavily parallel full-suite run.
+        modelWaitBudgetMs: 5_000,
       },
       undefined,
       3,

@@ -15,6 +15,10 @@ function withAuthHeaders(headers?: HeadersInit): HeadersInit {
     if (token && !next.has('Authorization')) {
       next.set('Authorization', `Bearer ${token}`);
     }
+    const desktopSessionProof = localStorage.getItem('lumi_desktop_session_proof');
+    if (desktopSessionProof && !next.has('x-lumi-desktop-session')) {
+      next.set('x-lumi-desktop-session', desktopSessionProof);
+    }
   } catch {}
   return next;
 }

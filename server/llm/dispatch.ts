@@ -40,6 +40,8 @@ export interface DispatchConfig {
   signal?: AbortSignal;
   attemptTimeouts?: Partial<ModelAttemptTimeouts>;
   inputTokenBudget?: number;
+  /** Server-selected schemas that every routed provider candidate must retain. */
+  protectedToolNames?: string[];
   allowCloudFallback?: boolean;
   selectionMode?: UserLLMSelectionMode;
   fallbackCandidates?: UserLLMFallbackCandidate[];
@@ -49,6 +51,9 @@ export interface DispatchConfig {
   relayStreaming?: boolean;
   /** Local-only declaration names that preflight must retain or fail closed. */
   localRequiredToolNames?: string[];
+  /** Buffer one streaming candidate until terminal success so a failed
+   * action-planning candidate can be replaced without mixed visible output. */
+  bufferStreamUntilCandidateSuccess?: boolean;
 }
 
 export interface LLMGetters {
@@ -84,6 +89,7 @@ function callArguments(config: DispatchConfig, provider: string, model: string) 
     signal: config.signal,
     attemptTimeouts: config.attemptTimeouts,
     inputTokenBudget: config.inputTokenBudget,
+    protectedToolNames: config.protectedToolNames,
     localRequiredToolNames: config.localRequiredToolNames,
     relayStreaming: config.relayStreaming,
     selectionMode: 'pinned' as const,
@@ -619,7 +625,10 @@ export async function dispatchLLMCallStreaming(
         attempts.push(skippedAttempt(candidate, blocked));
         continue;
       }
-      const visibility = createCandidateVisibility(onChunk);
+      const visibility = createCandidateVisibility(
+        onChunk,
+        config.bufferStreamUntilCandidateSuccess === true,
+      );
       const startedAt = Date.now();
       let result: NormalizedLLMResponse;
       try {
@@ -681,7 +690,10 @@ export async function dispatchLLMCallStreaming(
       attempts.push(skippedAttempt(candidate, 'runtime_client_unavailable'));
       continue;
     }
-    const visibility = createCandidateVisibility(onChunk);
+    const visibility = createCandidateVisibility(
+      onChunk,
+      config.bufferStreamUntilCandidateSuccess === true,
+    );
     const startedAt = Date.now();
     let result: NormalizedLLMResponse;
     try {
@@ -748,7 +760,10 @@ export async function dispatchLLMCallStreaming(
       attempts.push(skippedAttempt(candidate, blocked));
       continue;
     }
-    const visibility = createCandidateVisibility(onChunk);
+    const visibility = createCandidateVisibility(
+      onChunk,
+      config.bufferStreamUntilCandidateSuccess === true,
+    );
     const startedAt = Date.now();
     let result: NormalizedLLMResponse;
     try {
@@ -820,22 +835,32 @@ async function attemptStreamingCandidate(
   if (!String(result.text || '').trim() && !(result.toolCalls?.length)) {
     throw new Error('Model candidate completed without semantic content');
   }
-  visibility.finish(result.text);
+  visibility.finish(
+    result.text,
+    config.bufferStreamUntilCandidateSuccess === true && Boolean(result.toolCalls?.length),
+  );
   return result;
 }
 
 interface CandidateVisibility {
   readonly committed: boolean;
   accept: StreamCallback;
-  finish: (resultText: string | null) => void;
+  finish: (resultText: string | null, discardPending?: boolean) => void;
 }
 
-function createCandidateVisibility(onChunk: StreamCallback): CandidateVisibility {
+function createCandidateVisibility(
+  onChunk: StreamCallback,
+  bufferUntilSuccess = false,
+): CandidateVisibility {
   let committed = false;
   let pending: string[] = [];
   return {
     get committed() { return committed; },
     accept(chunk: string) {
+      if (bufferUntilSuccess) {
+        pending.push(chunk);
+        return;
+      }
       if (committed) {
         onChunk(chunk);
         return;
@@ -846,8 +871,15 @@ function createCandidateVisibility(onChunk: StreamCallback): CandidateVisibility
       for (const buffered of pending) onChunk(buffered);
       pending = [];
     },
-    finish(resultText: string | null) {
+    finish(resultText: string | null, discardPending = false) {
       if (committed) return;
+      if (discardPending) {
+        // Tool-selection narration is only a model proposal. The adapter must
+        // execute and adjudicate the calls before any user-visible status is
+        // emitted, so discard this candidate's buffered prose.
+        pending = [];
+        return;
+      }
       if (pending.length > 0) {
         committed = true;
         for (const buffered of pending) onChunk(buffered);

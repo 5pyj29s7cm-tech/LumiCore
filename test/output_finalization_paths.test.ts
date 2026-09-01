@@ -80,8 +80,9 @@ describe('finalized output paths', () => {
     expect(rest).toContain('createPreFinalizationTextGate');
     expect(rest).toContain('restTextGate.push(chunk)');
     expect(rest).toContain('if (!deferRestStream)');
-    expect(rest).toContain('const restModelToolPolicy = restrictToolPolicyForExecutionBoundary(');
-    expect(rest).toContain('restExecutionPipeline.authorizationPolicy');
+    expect(rest).toContain('const restModelToolPolicy = restExecutionPipeline.authorizationPolicy');
+    expect(rest).toContain('const restModelToolProjection = restExecutionPipeline.modelToolProjection');
+    expect(rest).toContain('additionalForbiddenTools: restBoundaryForbiddenTools');
     expect(rest).toContain("'remote_restricted'");
     expect(rest).toContain('toolPolicy: restModelToolPolicy');
     expect(rest).toContain('restModelToolPolicy.maxIterations || 3');
@@ -126,6 +127,19 @@ describe('finalized output paths', () => {
     expectFinalizationMetadataOnEveryAgentResponse('server/socket/chat.ts');
     expectFinalizationMetadataOnEveryAgentResponse('server/socket/voice.ts');
     expectFinalizationMetadataOnEveryAgentResponse('server/socket/task.ts');
+  });
+
+  it('persists a request-fenced blocked disposition from every foreground socket', () => {
+    for (const relativePath of [
+      'server/socket/chat.ts',
+      'server/socket/voice.ts',
+      'server/socket/task.ts',
+    ]) {
+      const code = source(relativePath);
+      expect(code).toContain('terminalTaskDisposition');
+      expect(code).toContain("outcome: 'blocked'");
+      expect(code).toContain('requestId');
+    }
   });
 
   it('keeps parallel heuristic execution out of model-owned main chat', () => {

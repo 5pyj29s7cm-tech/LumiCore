@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 import OpenAI from 'openai';
+import { Agent as UndiciAgent } from 'undici';
 import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
 import { LUMI_CLIENT_MODE_IDS } from '../../shared/operation_modes';
 import { getKey, isPersistableKeyName } from '../config/keys';
@@ -165,14 +166,39 @@ export interface ExtensionCompatibilityReceipt {
   error?: string;
 }
 
+export interface SignedExtensionRuntimeSnapshot {
+  extensionId: string;
+  revisionId: string;
+  name: string;
+  version: string;
+  kind: ExtensionRevision['kind'];
+  revisionStatus: ExtensionRevisionStatus;
+  manifestDigest: string;
+  signerFingerprint: string;
+  registered: boolean;
+  usable: boolean;
+  runtimeStatus: string;
+  registeredToolNames: string[];
+  declaredToolCount: number;
+  keyReady: boolean;
+  providerId: string;
+  providerModelIds: string[];
+}
+
 interface ExtensionPublisher {
   fingerprint: string;
   publisherId: string;
   publicKey: string;
   status: 'trusted' | 'revoked';
-  trustedBy: string;
+  trustedBy: string | string[];
   createdAt: string;
   updatedAt: string;
+}
+
+function publisherTrustedBy(publisher: ExtensionPublisher, userId: string): boolean {
+  return Array.isArray(publisher.trustedBy)
+    ? publisher.trustedBy.includes(userId)
+    : publisher.trustedBy === userId;
 }
 
 interface ExtensionActivationReceipt {
@@ -204,7 +230,12 @@ interface ExtensionRuntimeOverrides {
 }
 
 const activeRuntime = new Map<string, ExtensionRevision>();
-const registeredTools = new Map<string, { extensionId: string; registry: ToolRegistry }>();
+const registeredTools = new Map<string, {
+  extensionId: string;
+  revisionId: string;
+  userId: string;
+  registry: ToolRegistry;
+}>();
 const providerClients = new Map<string, { signature: string; client: OpenAI }>();
 const executionCounts = new Map<string, number>();
 let runtimeOverrides: ExtensionRuntimeOverrides | null = null;
@@ -254,6 +285,15 @@ export function extensionManifestSigningPayload(manifest: LumiExtensionManifest)
 function digest(value: unknown): string {
   const input = typeof value === 'string' ? value : canonicalJson(value);
   return crypto.createHash('sha256').update(input).digest('hex');
+}
+
+/**
+ * Every signed extension receives a private credential namespace. An extension
+ * may never borrow host-wide model, messaging, source-control, or organization
+ * credentials merely by naming their settings key in its signed manifest.
+ */
+export function extensionCredentialNamespace(extensionId: string): string {
+  return `LUMI_EXT_${crypto.createHash('sha256').update(String(extensionId || '')).digest('hex').slice(0, 16).toUpperCase()}_`;
 }
 
 function cleanError(error: unknown): string {
@@ -324,18 +364,41 @@ function isLoopbackHost(hostname: string): boolean {
 }
 
 function isPrivateAddress(address: string): boolean {
-  if (net.isIPv4(address)) {
-    const octets = address.split('.').map(Number);
-    return octets[0] === 10
+  const normalized = String(address || '').trim().toLowerCase().split('%', 1)[0];
+  let ipv4 = net.isIPv4(normalized) ? normalized : '';
+  if (!ipv4 && normalized.startsWith('::ffff:')) {
+    const mapped = normalized.slice('::ffff:'.length);
+    if (net.isIPv4(mapped)) {
+      ipv4 = mapped;
+    } else if (/^[0-9a-f]{1,4}:[0-9a-f]{1,4}$/i.test(mapped)) {
+      const [high, low] = mapped.split(':').map(part => Number.parseInt(part, 16));
+      ipv4 = `${high >>> 8}.${high & 0xff}.${low >>> 8}.${low & 0xff}`;
+    }
+  }
+  if (ipv4) {
+    const octets = ipv4.split('.').map(Number);
+    return octets[0] === 0
+      || octets[0] === 10
+      || (octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127)
       || octets[0] === 127
       || (octets[0] === 169 && octets[1] === 254)
       || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+      || (octets[0] === 192 && octets[1] === 0 && octets[2] === 0)
+      || (octets[0] === 192 && octets[1] === 0 && octets[2] === 2)
       || (octets[0] === 192 && octets[1] === 168)
-      || octets[0] === 0;
+      || (octets[0] === 198 && octets[1] >= 18 && octets[1] <= 19)
+      || (octets[0] === 198 && octets[1] === 51 && octets[2] === 100)
+      || (octets[0] === 203 && octets[1] === 0 && octets[2] === 113)
+      || octets[0] >= 224;
   }
-  if (net.isIPv6(address)) {
-    const lower = address.toLowerCase();
-    return lower === '::1' || lower.startsWith('fc') || lower.startsWith('fd') || lower.startsWith('fe80:');
+  if (net.isIPv6(normalized)) {
+    return normalized === '::'
+      || normalized === '::1'
+      || normalized.startsWith('fc')
+      || normalized.startsWith('fd')
+      || /^fe[89ab][0-9a-f]:/i.test(normalized)
+      || normalized.startsWith('ff')
+      || normalized.startsWith('2001:db8:');
   }
   return true;
 }
@@ -433,8 +496,12 @@ function validateManifest(input: unknown): LumiExtensionManifest {
   const origins = Array.from(new Set((manifest.permissions.networkOrigins || []).map(normalizeOrigin)));
   if (origins.length === 0 || origins.length > 8) throw new Error('Extension permissions must declare 1 to 8 exact network origins.');
   const credentialRefs = Array.from(new Set((manifest.permissions.credentialRefs || []).map(item => String(item).trim())));
-  if (credentialRefs.length > 8 || credentialRefs.some(item => !isPersistableKeyName(item))) {
-    throw new Error('Extension credentialRefs contain an unsupported credential-store key name.');
+  const credentialNamespace = extensionCredentialNamespace(manifest.id);
+  if (
+    credentialRefs.length > 8
+    || credentialRefs.some(item => !isPersistableKeyName(item) || !item.startsWith(credentialNamespace))
+  ) {
+    throw new Error(`Extension credentialRefs must use this extension's dedicated ${credentialNamespace}* credential namespace.`);
   }
   manifest.permissions = {
     networkOrigins: origins,
@@ -556,6 +623,42 @@ function manifestKind(manifest: LumiExtensionManifest): ExtensionRevision['kind'
   return manifest.provider && manifest.tools?.length ? 'hybrid' : manifest.provider ? 'provider' : 'plugin';
 }
 
+/** Re-derive every executable identity field from signed bytes, never DB labels. */
+function verifyPersistedRevision(
+  revision: ExtensionRevision,
+  store: ExtensionArrays = arrays(),
+): LumiExtensionManifest {
+  if (!revision || !String(revision.id || '').startsWith('extension_revision_')) {
+    throw new Error('Persisted extension revision id is invalid.');
+  }
+  if (!String(revision.userId || '').trim() || revision.userId === 'anonymous') {
+    throw new Error('Persisted extension revision has no authenticated owner.');
+  }
+  const manifest = validateManifest(revision.manifest);
+  const verified = verifyManifestSignature(manifest);
+  const manifestDigest = digest(unsignedManifest(manifest));
+  const expectedToolNames = (manifest.tools || []).map(tool => tool.name);
+  if (
+    manifest.id !== revision.extensionId
+    || manifest.version !== revision.version
+    || manifestKind(manifest) !== revision.kind
+    || verified.fingerprint !== revision.signerFingerprint
+    || manifestDigest !== revision.manifestDigest
+    || canonicalJson(expectedToolNames) !== canonicalJson(revision.toolNames)
+  ) {
+    throw new Error('Persisted extension identity does not match its signed revision record.');
+  }
+  const trusted = store.publishers.find(item => (
+    item.fingerprint === verified.fingerprint
+    && item.publisherId === manifest.publisher.id
+    && item.publicKey === manifest.publisher.publicKey
+    && publisherTrustedBy(item, revision.userId)
+    && item.status === 'trusted'
+  ));
+  if (!trusted) throw new Error('Persisted extension publisher trust is missing, revoked, or belongs to another user.');
+  return manifest;
+}
+
 function sourceBaseUrl(manifest: LumiExtensionManifest): URL {
   if (manifest.provider) return new URL(manifest.provider.baseUrl);
   return new URL(manifest.permissions.networkOrigins[0]);
@@ -576,11 +679,63 @@ async function assertResolvedDestinationAllowed(url: URL, manifest: LumiExtensio
     if (manifest.permissions.localNetwork !== true) throw new Error('Network sandbox denied loopback access.');
     return;
   }
-  const lookup = runtimeOverrides?.dnsLookup || (async (hostname: string) => dns.lookup(hostname, { all: true }));
-  const addresses = await lookup(url.hostname);
+  await resolveAllowedExtensionAddresses(url.hostname, manifest);
+}
+
+async function resolveAllowedExtensionAddresses(
+  hostname: string,
+  manifest: LumiExtensionManifest,
+): Promise<Array<{ address: string; family: number }>> {
+  const lookup = runtimeOverrides?.dnsLookup || (async (target: string) => dns.lookup(target, { all: true }));
+  const addresses = await lookup(hostname);
   if (!addresses.length) throw new Error('Extension destination did not resolve.');
   if (addresses.some(item => isPrivateAddress(item.address)) && manifest.permissions.localNetwork !== true) {
     throw new Error('Network sandbox denied a destination resolving to a private or link-local address.');
+  }
+  return addresses.map(item => ({ address: item.address, family: Number(item.family) }));
+}
+
+function createExtensionNetworkDispatcher(manifest: LumiExtensionManifest): UndiciAgent {
+  return new UndiciAgent({
+    connect: {
+      lookup: ((hostname: string, options: any, callback: (...args: any[]) => void) => {
+        resolveAllowedExtensionAddresses(hostname, manifest)
+          .then(addresses => {
+            const requestedFamily = typeof options === 'number' ? options : Number(options?.family || 0);
+            const matching = requestedFamily
+              ? addresses.filter(item => item.family === requestedFamily)
+              : addresses;
+            if (!matching.length) {
+              callback(new Error(`Extension destination has no allowed IPv${requestedFamily || ''} address.`));
+              return;
+            }
+            if (options?.all === true) callback(null, matching);
+            else callback(null, matching[0].address, matching[0].family);
+          })
+          .catch(error => callback(error));
+      }) as any,
+    },
+  });
+}
+
+async function extensionNetworkFetch(
+  manifest: LumiExtensionManifest,
+  input: RequestInfo | URL,
+  init: RequestInit,
+): Promise<{ response: Response; close: () => Promise<void> }> {
+  if (runtimeOverrides?.fetch) {
+    return { response: await runtimeOverrides.fetch(input, init), close: async () => undefined };
+  }
+  const dispatcher = createExtensionNetworkDispatcher(manifest);
+  try {
+    const response = await fetch(input, { ...init, dispatcher } as RequestInit & { dispatcher: UndiciAgent });
+    return {
+      response,
+      close: async () => { await dispatcher.close(); },
+    };
+  } catch (error) {
+    await dispatcher.close().catch(() => undefined);
+    throw error;
   }
 }
 
@@ -596,28 +751,119 @@ function credentialValue(name: string): string | undefined {
   return process.env[name] || getKey(name);
 }
 
+function abortReason(signal: AbortSignal, fallback: string): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new Error(fallback);
+}
+
+async function waitForAbortable<T>(
+  operation: Promise<T>,
+  signal: AbortSignal,
+  fallback: string,
+): Promise<T> {
+  if (signal.aborted) throw abortReason(signal, fallback);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortReason(signal, fallback));
+    signal.addEventListener('abort', onAbort, { once: true });
+    operation.then(
+      value => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      error => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function readBoundedResponseText(
+  response: Response,
+  maxBytes: number,
+  signal: AbortSignal,
+  abort: (reason: Error) => void,
+): Promise<string> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const chunk = await waitForAbortable(
+        reader.read(),
+        signal,
+        'Extension response read was aborted.',
+      );
+      if (chunk.done) break;
+      totalBytes += chunk.value.byteLength;
+      if (totalBytes > maxBytes) {
+        const error = new Error('Extension response exceeded its declared response-byte budget.');
+        abort(error);
+        void reader.cancel(error).catch(() => undefined);
+        throw error;
+      }
+      chunks.push(chunk.value);
+    }
+    return Buffer.concat(chunks.map(chunk => Buffer.from(chunk)), totalBytes).toString('utf8');
+  } catch (error) {
+    void reader.cancel(error).catch(() => undefined);
+    throw error;
+  } finally {
+    try { reader.releaseLock(); } catch {}
+  }
+}
+
 async function boundedFetch(
   manifest: LumiExtensionManifest,
   url: URL,
   init: RequestInit,
 ): Promise<{ response: Response; text: string }> {
-  await assertResolvedDestinationAllowed(url, manifest);
-  const bodyBytes = typeof init.body === 'string' ? Buffer.byteLength(init.body, 'utf8') : 0;
-  if (bodyBytes > manifest.permissions.maxRequestBytes!) throw new Error('Extension request exceeds its declared request-byte budget.');
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), manifest.permissions.timeoutMs!);
+  const timer = setTimeout(() => controller.abort(
+    new Error('Extension request exceeded its total timeout.'),
+  ), manifest.permissions.timeoutMs!);
   const signal = init.signal
     ? AbortSignal.any([init.signal, controller.signal])
     : controller.signal;
+  let closeNetwork = async () => undefined;
   try {
-    const fetchImpl = runtimeOverrides?.fetch || fetch;
-    const response = await fetchImpl(url, { ...init, signal, redirect: 'error' });
+    await waitForAbortable(
+      assertResolvedDestinationAllowed(url, manifest),
+      signal,
+      'Extension destination resolution was aborted.',
+    );
+    const bodyBytes = typeof init.body === 'string' ? Buffer.byteLength(init.body, 'utf8') : 0;
+    if (bodyBytes > manifest.permissions.maxRequestBytes!) throw new Error('Extension request exceeds its declared request-byte budget.');
+    const pendingNetwork = extensionNetworkFetch(manifest, url, { ...init, signal, redirect: 'error' });
+    let secured: Awaited<ReturnType<typeof extensionNetworkFetch>>;
+    try {
+      secured = await waitForAbortable(
+        pendingNetwork,
+        signal,
+        'Extension connection was aborted.',
+      );
+    } catch (error) {
+      void pendingNetwork.then(result => result.close()).catch(() => undefined);
+      throw error;
+    }
+    closeNetwork = secured.close;
+    const response = secured.response;
     const contentLength = Number(response.headers.get('content-length') || 0);
     if (contentLength > manifest.permissions.maxResponseBytes!) throw new Error('Extension response exceeds its declared response-byte budget.');
-    const text = await response.text();
-    if (Buffer.byteLength(text, 'utf8') > manifest.permissions.maxResponseBytes!) throw new Error('Extension response exceeded its declared response-byte budget.');
+    const text = await readBoundedResponseText(
+      response,
+      manifest.permissions.maxResponseBytes!,
+      signal,
+      reason => controller.abort(reason),
+    );
     return { response, text };
   } finally {
+    const pendingClose = closeNetwork().catch(() => undefined);
+    if (signal.aborted) void pendingClose;
+    else await waitForAbortable(pendingClose, signal, 'Extension connection cleanup was aborted.')
+      .catch(() => undefined);
     clearTimeout(timer);
   }
 }
@@ -650,6 +896,33 @@ function acquireConcurrency(revision: ExtensionRevision): () => void {
   };
 }
 
+function invalidateRevisionRuntime(revision: ExtensionRevision): void {
+  activeRuntime.delete(revision.extensionId);
+  providerClients.delete(revision.extensionId);
+  const registries = new Set<ToolRegistry>();
+  for (const owner of registeredTools.values()) {
+    if (owner.extensionId === revision.extensionId && owner.revisionId === revision.id) {
+      registries.add(owner.registry);
+    }
+  }
+  for (const registry of registries) unregisterExtensionTools(registry, revision.extensionId);
+}
+
+function assertCurrentExecutableRevision(revision: ExtensionRevision): void {
+  try {
+    verifyPersistedRevision(revision);
+    if (
+      revision.status !== 'active'
+      || activeRuntime.get(revision.extensionId)?.id !== revision.id
+    ) {
+      throw new Error('Signed extension revision is not the current active runtime.');
+    }
+  } catch (error) {
+    invalidateRevisionRuntime(revision);
+    throw error;
+  }
+}
+
 async function invokeExtensionTool(
   revision: ExtensionRevision,
   tool: ExtensionToolManifest,
@@ -657,6 +930,7 @@ async function invokeExtensionTool(
   context?: ToolContext,
 ): Promise<string> {
   if ((context?.userId || 'anonymous') !== revision.userId) throw new Error('Extension tool is not authorized for this user.');
+  assertCurrentExecutableRevision(revision);
   return runWithConcurrency(revision, async () => {
     const url = endpointUrl(revision.manifest, tool.endpointPath);
     const request = {
@@ -679,16 +953,14 @@ async function invokeExtensionTool(
     });
     if (!response.ok) throw new Error(`Extension tool ${tool.name} failed with HTTP ${response.status}.`);
     const upstream = parseJsonObject(text, `Extension tool ${tool.name}`);
-    const externalCommit = tool.capability.sideEffects.some(effect => ['external_state_change', 'external_communication'].includes(effect.type));
-    const verified = externalCommit
-      ? upstream.verified === true && upstream.verificationStatus === 'verified'
-      : upstream.verified !== false;
+    const providerClaimedVerified = upstream.verified === true && upstream.verificationStatus === 'verified';
     return JSON.stringify({
       ...upstream,
-      ok: upstream.ok !== false,
-      verified,
-      verificationStatus: verified ? 'verified' : 'unknown',
-      status: upstream.status || (verified ? 'completed' : 'unknown'),
+      ok: upstream.ok === true,
+      verified: false,
+      verificationStatus: 'unverified',
+      providerClaimedVerified,
+      status: upstream.status || (upstream.ok === true ? 'provider_reported' : 'unknown'),
       extensionId: revision.extensionId,
       extensionVersion: revision.version,
       revisionId: revision.id,
@@ -707,6 +979,7 @@ async function reconcileExtensionTool(
   idempotencyKey: string,
 ): Promise<string | null> {
   if (!tool.reconcilePath || (context?.userId || 'anonymous') !== revision.userId) return null;
+  assertCurrentExecutableRevision(revision);
   return runWithConcurrency(revision, async () => {
     const url = endpointUrl(revision.manifest, tool.reconcilePath!);
     const { response, text } = await boundedFetch(revision.manifest, url, {
@@ -719,9 +992,10 @@ async function reconcileExtensionTool(
     if (upstream.verified !== true || upstream.verificationStatus !== 'verified') return null;
     return JSON.stringify({
       ...upstream,
-      ok: upstream.ok !== false,
-      verified: true,
-      verificationStatus: 'verified',
+      ok: upstream.ok === true,
+      verified: false,
+      verificationStatus: 'unverified',
+      providerClaimedVerified: true,
       reconciled: true,
       extensionId: revision.extensionId,
       revisionId: revision.id,
@@ -731,15 +1005,33 @@ async function reconcileExtensionTool(
 }
 
 function buildToolDefinition(revision: ExtensionRevision, tool: ExtensionToolManifest): ToolDefinition {
+  const hostSideEffects = tool.capability.sideEffects.some(effect => (
+    effect.type === 'external_communication' || effect.type === 'external_state_change'
+  ))
+    ? tool.capability.sideEffects
+    : [
+      ...tool.capability.sideEffects,
+      {
+        type: 'external_communication' as const,
+        scope: `user-reviewed signed extension ${revision.extensionId}`,
+        reversible: false,
+      },
+    ];
   return {
     name: tool.name,
     description: `${tool.description} Signed extension ${revision.extensionId}@${revision.version}; execution is restricted to its exact origin, credential references, timeout, byte, and concurrency budgets.`,
     parameters: tool.parameters,
     permission: tool.permission,
-    securityLevel: tool.securityLevel,
+    // A third-party signature authenticates bytes and publisher identity; it
+    // cannot prove that a POST endpoint declared as "observe" is read-only.
+    // Host policy therefore imposes a confirmation/external-commit floor. A
+    // manifest may tighten this to forbidden, but can never relax it to safe.
+    securityLevel: tool.securityLevel === 'forbidden' ? 'forbidden' : 'confirm',
     routingHints: tool.routingHints,
     capability: {
       ...tool.capability,
+      risk: tool.capability.risk === 'critical' ? 'critical' : 'high',
+      sideEffects: hostSideEffects,
       source: 'adapter',
       provider: revision.extensionId,
       provenance: { kind: 'adapter', provider: revision.extensionId, trust: 'user-reviewed' },
@@ -751,9 +1043,10 @@ function buildToolDefinition(revision: ExtensionRevision, tool: ExtensionToolMan
     evidence: {
       capability: tool.capability.id,
       operation: tool.capability.operation,
-      assurance: 'verified',
+      assurance: 'declared',
       limitations: [
         `Evidence is bound to signed extension revision ${revision.id}.`,
+        'The extension provider cannot independently verify its own business outcome; host-owned corroboration is required.',
         ...(tool.capability.verification.limitations || []),
       ],
     },
@@ -770,9 +1063,136 @@ function buildDefinitions(revision: ExtensionRevision): ToolDefinition[] {
   return (revision.manifest.tools || []).map(tool => buildToolDefinition(revision, tool));
 }
 
+function extensionRuntimeState(
+  revision: ExtensionRevision,
+  registry?: ToolRegistry,
+): {
+  registered: boolean;
+  usable: boolean;
+  runtimeStatus: string;
+  registeredToolNames: string[];
+  declaredToolCount: number;
+  keyReady: boolean;
+} {
+  let identityValid = false;
+  try {
+    verifyPersistedRevision(revision);
+    identityValid = true;
+  } catch {
+    invalidateRevisionRuntime(revision);
+  }
+  const active = identityValid
+    && revision.status === 'active'
+    && activeRuntime.get(revision.extensionId)?.id === revision.id;
+  const declaredToolNames = [...revision.toolNames];
+  const registeredToolNames = declaredToolNames.filter(name => {
+    const owner = registeredTools.get(name);
+    if (
+      !owner
+      || owner.extensionId !== revision.extensionId
+      || owner.revisionId !== revision.id
+      || owner.userId !== revision.userId
+      || (registry && owner.registry !== registry)
+    ) return false;
+    const targetRegistry = registry || owner.registry;
+    const definition = targetRegistry.get(name);
+    const manifest = targetRegistry.getCapabilityManifestEntry(name);
+    return Boolean(
+      definition
+      && manifest?.executable === true
+      && manifest.source === 'adapter'
+      && manifest.provider === revision.extensionId
+      && manifest.provenance.kind === 'adapter'
+      && manifest.provenance.provider === revision.extensionId
+      && definition.capability?.prerequisites?.includes(`active signed revision ${revision.id}`)
+      && definition.capability?.prerequisites?.includes(`manifest digest ${revision.manifestDigest}`)
+    );
+  });
+  const allDeclaredToolsRegistered = registeredToolNames.length === declaredToolNames.length;
+  const keyReady = (revision.manifest.permissions.credentialRefs || [])
+    .every(name => Boolean(credentialValue(name)));
+  // Provider-only extensions have no ToolDefinition to register, so their
+  // active runtime identity is the executable boundary. Tool/hybrid revisions
+  // additionally require every signed declaration to be present with the
+  // exact revision provenance in this registry.
+  const registered = active && allDeclaredToolsRegistered;
+  const usable = registered && keyReady && revision.compatibility?.ok === true;
+  const runtimeStatus = revision.status !== 'active'
+    ? revision.status
+    : !active || !allDeclaredToolsRegistered
+      ? 'registration_missing'
+      : !keyReady
+        ? 'needs_configuration'
+        : revision.compatibility?.ok !== true
+          ? 'compatibility_unverified'
+          : 'registered';
+  return {
+    registered,
+    usable,
+    runtimeStatus,
+    registeredToolNames,
+    declaredToolCount: declaredToolNames.length,
+    keyReady,
+  };
+}
+
+/**
+ * Server-owned proof used by the model/tool loop after a verified activation
+ * receipt. Manifest-declared names are only candidates: callers receive the
+ * intersection with the exact active revision and current ToolRegistry.
+ */
+export function getExactRegisteredExtensionToolNames(input: {
+  extensionId: string;
+  revisionId: string;
+  userId: string;
+  manifestDigest: string;
+  registry: ToolRegistry;
+}): string[] {
+  const revision = activeRuntime.get(input.extensionId);
+  if (
+    !revision
+    || revision.status !== 'active'
+    || revision.id !== input.revisionId
+    || revision.userId !== input.userId
+    || revision.manifestDigest !== input.manifestDigest
+  ) return [];
+  const runtime = extensionRuntimeState(revision, input.registry);
+  return runtime.usable ? runtime.registeredToolNames : [];
+}
+
+/** Structured, read-only runtime truth for planners and diagnostics. */
+export function listExtensionRuntimeSnapshots(
+  context?: ToolContext,
+  registry?: ToolRegistry,
+): SignedExtensionRuntimeSnapshot[] {
+  const userId = context?.userId || 'anonymous';
+  return arrays().revisions
+    .filter(revision => revision.userId === userId)
+    .map(revision => {
+      const runtime = extensionRuntimeState(revision, registry || context?.toolRegistry);
+      return {
+        extensionId: revision.extensionId,
+        revisionId: revision.id,
+        name: revision.manifest.name,
+        version: revision.version,
+        kind: revision.kind,
+        revisionStatus: revision.status,
+        manifestDigest: revision.manifestDigest,
+        signerFingerprint: revision.signerFingerprint,
+        ...runtime,
+        providerId: revision.manifest.provider?.id || '',
+        providerModelIds: revision.manifest.provider?.models.map(model => model.id) || [],
+      };
+    });
+}
+
 function activeRevisionFromDb(extensionId: string): ExtensionRevision | null {
   try {
-    return arrays().revisions.find(item => item.extensionId === extensionId && item.status === 'active') || null;
+    const store = arrays();
+    const revision = store.revisions.find(item => item.extensionId === extensionId && item.status === 'active') || null;
+    if (!revision) return null;
+    verifyPersistedRevision(revision, store);
+    return revision;
   } catch {
     return null;
   }
@@ -780,7 +1200,15 @@ function activeRevisionFromDb(extensionId: string): ExtensionRevision | null {
 
 function runtimeRevision(extensionId: string): ExtensionRevision | null {
   const cached = activeRuntime.get(extensionId);
-  if (cached?.status === 'active') return cached;
+  if (cached?.status === 'active') {
+    try {
+      verifyPersistedRevision(cached);
+      return cached;
+    } catch {
+      invalidateRevisionRuntime(cached);
+      return null;
+    }
+  }
   const persisted = activeRevisionFromDb(extensionId);
   if (persisted) activeRuntime.set(extensionId, persisted);
   return persisted;
@@ -841,11 +1269,13 @@ function providerClientFetch(revision: ExtensionRevision): typeof fetch {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), revision.manifest.permissions.timeoutMs!);
     let finished = false;
-    const finish = () => {
+    let closeNetwork = async () => undefined;
+    const finish = async () => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
       release();
+      await closeNetwork().catch(() => undefined);
     };
     const callerSignal = init?.signal || request?.signal;
     const signal = callerSignal ? AbortSignal.any([callerSignal, controller.signal]) : controller.signal;
@@ -865,12 +1295,17 @@ function providerClientFetch(revision: ExtensionRevision): typeof fetch {
       if (bodyBytes > revision.manifest.permissions.maxRequestBytes!) {
         throw new Error('Provider request exceeds its signed request-byte budget.');
       }
-      const fetchImpl = runtimeOverrides?.fetch || fetch;
-      const response = await fetchImpl(input, { ...init, signal, redirect: 'error' });
+      const secured = await extensionNetworkFetch(
+        revision.manifest,
+        input,
+        { ...init, signal, redirect: 'error' },
+      );
+      closeNetwork = secured.close;
+      const response = secured.response;
       const length = Number(response.headers.get('content-length') || 0);
       if (length > revision.manifest.permissions.maxResponseBytes!) throw new Error('Provider response exceeds its signed response-byte budget.');
       if (!response.body) {
-        finish();
+        await finish();
         return response;
       }
       const reader = response.body.getReader();
@@ -880,7 +1315,7 @@ function providerClientFetch(revision: ExtensionRevision): typeof fetch {
           try {
             const chunk = await reader.read();
             if (chunk.done) {
-              finish();
+              await finish();
               streamController.close();
               return;
             }
@@ -888,18 +1323,18 @@ function providerClientFetch(revision: ExtensionRevision): typeof fetch {
             if (responseBytes > revision.manifest.permissions.maxResponseBytes!) {
               controller.abort();
               await reader.cancel('response byte budget exceeded');
-              finish();
+              await finish();
               streamController.error(new Error('Provider response exceeded its signed response-byte budget.'));
               return;
             }
             streamController.enqueue(chunk.value);
           } catch (error) {
-            finish();
+            await finish();
             streamController.error(error);
           }
         },
         async cancel(reason) {
-          try { await reader.cancel(reason); } finally { finish(); }
+          try { await reader.cancel(reason); } finally { await finish(); }
         },
       });
       return new Response(bodyStream, {
@@ -908,7 +1343,7 @@ function providerClientFetch(revision: ExtensionRevision): typeof fetch {
         headers: response.headers,
       });
     } catch (error) {
-      finish();
+      await finish();
       throw error;
     }
   }) as typeof fetch;
@@ -937,8 +1372,18 @@ export function getRegisteredOpenAIClient(providerId: string, userId?: string): 
 
 export function listRegisteredProviders(userId?: string): Array<Record<string, unknown>> {
   try {
-    return arrays().revisions
+    const store = arrays();
+    return store.revisions
       .filter(item => item.status === 'active' && item.manifest.provider && (!userId || item.userId === userId))
+      .filter(item => {
+        try {
+          verifyPersistedRevision(item, store);
+          return true;
+        } catch {
+          invalidateRevisionRuntime(item);
+          return false;
+        }
+      })
       .map(item => ({
         id: item.extensionId,
         version: item.version,
@@ -999,13 +1444,15 @@ async function compatibilityProbe(manifest: LumiExtensionManifest): Promise<Exte
 }
 
 export async function testRegisteredExtension(extensionId: string, userId?: string, version?: string): Promise<ExtensionCompatibilityReceipt> {
-  const revision = arrays().revisions.find(item => (
+  const store = arrays();
+  const revision = store.revisions.find(item => (
     item.extensionId === extensionId
     && item.userId === (userId || 'anonymous')
     && (!version || item.version === version)
     && (version ? true : item.status === 'active')
   ));
   if (!revision) throw new Error('Extension revision was not found in this user scope.');
+  verifyPersistedRevision(revision, store);
   return compatibilityProbe(revision.manifest);
 }
 
@@ -1019,10 +1466,26 @@ function ensurePublisherTrust(
   const existing = store.publishers.find(item => item.fingerprint === fingerprint);
   if (existing?.status === 'revoked') throw new Error('Extension publisher key is revoked.');
   if (existing) {
-    if (existing.publisherId !== manifest.publisher.id) throw new Error('Trusted publisher fingerprint is bound to a different publisher id.');
+    if (
+      existing.publisherId !== manifest.publisher.id
+      || existing.publicKey !== manifest.publisher.publicKey
+    ) {
+      throw new Error('Trusted publisher fingerprint is bound to a different publisher identity.');
+    }
+    if (publisherTrustedBy(existing, userId)) return;
+    if (!trustPublisher) throw new Error('Publisher is not trusted by this user. Confirm this exact manifest and set trustPublisher=true for first use.');
+    existing.trustedBy = Array.from(new Set([
+      ...(Array.isArray(existing.trustedBy) ? existing.trustedBy : [existing.trustedBy]),
+      userId,
+    ])).sort();
+    existing.updatedAt = nowIso();
     return;
   }
-  const impersonated = store.publishers.find(item => item.publisherId === manifest.publisher.id && item.status === 'trusted');
+  const impersonated = store.publishers.find(item => (
+    item.publisherId === manifest.publisher.id
+    && publisherTrustedBy(item, userId)
+    && item.status === 'trusted'
+  ));
   if (impersonated) throw new Error('Publisher id is already bound to a different trusted key; explicit key rotation is not supported by install.');
   if (!trustPublisher) throw new Error('Publisher is not trusted. Confirm this exact manifest and set trustPublisher=true for first use.');
   const now = nowIso();
@@ -1031,7 +1494,7 @@ function ensurePublisherTrust(
     publisherId: manifest.publisher.id,
     publicKey: manifest.publisher.publicKey,
     status: 'trusted',
-    trustedBy: userId,
+    trustedBy: [userId],
     createdAt: now,
     updatedAt: now,
   });
@@ -1071,6 +1534,7 @@ async function persistStrict(): Promise<void> {
 }
 
 function registerRevisionTools(registry: ToolRegistry, revision: ExtensionRevision): void {
+  verifyPersistedRevision(revision);
   const definitions = buildDefinitions(revision);
   const registered: string[] = [];
   try {
@@ -1082,7 +1546,12 @@ function registerRevisionTools(registry: ToolRegistry, revision: ExtensionRevisi
       if (registry.get(definition.name)) registry.unregister(definition.name);
       if (!registry.register(definition)) throw new Error(`Tool registration failed for ${definition.name}.`);
       registered.push(definition.name);
-      registeredTools.set(definition.name, { extensionId: revision.extensionId, registry });
+      registeredTools.set(definition.name, {
+        extensionId: revision.extensionId,
+        revisionId: revision.id,
+        userId: revision.userId,
+        registry,
+      });
     }
   } catch (error) {
     for (const name of registered) {
@@ -1112,7 +1581,8 @@ async function withActivationLock<T>(operation: () => Promise<T>): Promise<T> {
   try { return await operation(); } finally { release(); }
 }
 
-function publicRevision(revision: ExtensionRevision): Record<string, unknown> {
+function publicRevision(revision: ExtensionRevision, registry?: ToolRegistry): Record<string, unknown> {
+  const runtime = extensionRuntimeState(revision, registry);
   return {
     id: revision.id,
     extensionId: revision.extensionId,
@@ -1123,7 +1593,9 @@ function publicRevision(revision: ExtensionRevision): Record<string, unknown> {
     manifestDigest: revision.manifestDigest,
     signerFingerprint: revision.signerFingerprint,
     publisherId: revision.manifest.publisher.id,
+    credentialNamespace: extensionCredentialNamespace(revision.extensionId),
     toolNames: [...revision.toolNames],
+    ...runtime,
     provider: revision.manifest.provider ? {
       id: revision.manifest.provider.id,
       protocol: revision.manifest.provider.protocol,
@@ -1151,11 +1623,25 @@ function publicRevision(revision: ExtensionRevision): Record<string, unknown> {
   };
 }
 
+function assertTrustedLocalExtensionAdministrator(context: ToolContext | undefined, action: string): void {
+  if (
+    context?.authenticated !== true
+    || context.authRole !== 'admin'
+    || context.localExecution !== true
+    || context.executionBoundary !== 'trusted_local'
+    || context.domain === 'work'
+    || Boolean(context.orgId)
+  ) {
+    throw new Error(`${action} requires the authenticated local desktop administrator in the personal workspace.`);
+  }
+}
+
 export async function installAndActivateExtension(
   input: { manifest: unknown; trustPublisher?: boolean },
   context?: ToolContext,
   registry?: ToolRegistry,
 ): Promise<string> {
+  assertTrustedLocalExtensionAdministrator(context, 'Extension installation');
   if (context?.userConfirmed !== true) throw new Error('Extension installation requires confirmation bound to the exact signed manifest.');
   const targetRegistry = registry || context?.toolRegistry;
   if (!targetRegistry) throw new Error('Tool registry is unavailable for transactional extension activation.');
@@ -1174,10 +1660,22 @@ export async function installAndActivateExtension(
     if (sameVersion && sameVersion.manifestDigest !== manifestDigest) {
       throw new Error('Extension version is immutable and already exists with a different manifest digest.');
     }
-    if (sameVersion?.status === 'active') {
-      return JSON.stringify({ ok: true, verified: true, status: 'already_active', revision: publicRevision(sameVersion) }, null, 2);
-    }
     ensurePublisherTrust(manifest, fingerprint, userId, input.trustPublisher === true);
+    if (sameVersion?.status === 'active') {
+      const runtime = extensionRuntimeState(sameVersion, targetRegistry);
+      return JSON.stringify({
+        ok: runtime.usable,
+        verified: true,
+        verificationStatus: runtime.usable ? 'verified' : 'unverified',
+        status: runtime.usable ? 'already_active' : 'runtime_unavailable',
+        extensionId: sameVersion.extensionId,
+        revisionId: sameVersion.id,
+        manifestDigest: sameVersion.manifestDigest,
+        signerFingerprint: sameVersion.signerFingerprint,
+        ...runtime,
+        revision: publicRevision(sameVersion, targetRegistry),
+      }, null, 2);
+    }
     const now = nowIso();
     const revision: ExtensionRevision = sameVersion || {
       id: `extension_revision_${crypto.randomUUID()}`,
@@ -1239,6 +1737,10 @@ export async function installAndActivateExtension(
       revision.updatedAt = revision.activatedAt;
       activeRuntime.set(manifest.id, revision);
       providerClients.delete(manifest.id);
+      const runtime = extensionRuntimeState(revision, targetRegistry);
+      if (!runtime.usable) {
+        throw new Error(`Signed extension activation did not produce an exact callable runtime (${runtime.runtimeStatus}).`);
+      }
       const activatedReceipt = receipt(revision, 'activated', oldActive?.id || '');
       pushReceipt(store, activatedReceipt);
       writeDB(db);
@@ -1248,13 +1750,23 @@ export async function installAndActivateExtension(
         verified: true,
         verificationStatus: 'verified',
         status: 'activated',
+        extensionId: revision.extensionId,
+        revisionId: revision.id,
+        manifestDigest: revision.manifestDigest,
+        signerFingerprint: revision.signerFingerprint,
+        ...runtime,
         receipt: activatedReceipt,
-        revision: publicRevision(revision),
+        revision: publicRevision(revision, targetRegistry),
       }, null, 2);
     } catch (error) {
       unregisterExtensionTools(targetRegistry, manifest.id);
       for (const definition of oldDefinitions) {
-        if (targetRegistry.register(definition)) registeredTools.set(definition.name, { extensionId: manifest.id, registry: targetRegistry });
+        if (targetRegistry.register(definition)) registeredTools.set(definition.name, {
+          extensionId: manifest.id,
+          revisionId: oldActive!.id,
+          userId: oldActive!.userId,
+          registry: targetRegistry,
+        });
       }
       db.extensionPublishers = arraySnapshot.publishers;
       db.extensionRevisions = arraySnapshot.revisions;
@@ -1289,6 +1801,7 @@ export async function rollbackExtension(
   context?: ToolContext,
   registry?: ToolRegistry,
 ): Promise<string> {
+  assertTrustedLocalExtensionAdministrator(context, 'Extension rollback');
   if (context?.userConfirmed !== true) throw new Error('Extension rollback requires explicit confirmation.');
   const targetRegistry = registry || context?.toolRegistry;
   if (!targetRegistry) throw new Error('Tool registry is unavailable for rollback.');
@@ -1301,9 +1814,7 @@ export async function rollbackExtension(
       ? candidates.find(item => item.version === input.version)
       : [...candidates].sort((a, b) => Date.parse(b.activatedAt || b.createdAt) - Date.parse(a.activatedAt || a.createdAt))[0];
     if (!target) throw new Error('No prior extension revision is available for rollback.');
-    const trusted = store.publishers.find(item => item.fingerprint === target.signerFingerprint && item.status === 'trusted');
-    if (!trusted) throw new Error('Rollback target publisher is no longer trusted.');
-    verifyManifestSignature(target.manifest);
+    verifyPersistedRevision(target, store);
     const compatibility = await compatibilityProbe(target.manifest);
     target.compatibility = compatibility;
     if (!compatibility.ok) {
@@ -1314,6 +1825,7 @@ export async function rollbackExtension(
       return JSON.stringify({ ok: false, verified: true, status: 'rollback_compatibility_failed', receipt: failedReceipt }, null, 2);
     }
     const current = store.revisions.find(item => item.extensionId === input.extensionId && item.status === 'active');
+    if (current) verifyPersistedRevision(current, store);
     const currentDefinitions = current ? buildDefinitions(current) : [];
     const currentSnapshot = current ? structuredClone(current) : null;
     const targetSnapshot = structuredClone(target);
@@ -1329,16 +1841,37 @@ export async function rollbackExtension(
       target.updatedAt = target.activatedAt;
       activeRuntime.set(input.extensionId, target);
       providerClients.delete(input.extensionId);
+      const runtime = extensionRuntimeState(target, targetRegistry);
+      if (!runtime.usable) {
+        throw new Error(`Signed extension rollback did not produce an exact callable runtime (${runtime.runtimeStatus}).`);
+      }
       const rollbackReceipt = receipt(target, 'rollback_activated', current?.id || '');
       pushReceipt(store, rollbackReceipt);
       writeDB(db);
       await persistStrict();
-      return JSON.stringify({ ok: true, verified: true, verificationStatus: 'verified', status: 'rollback_activated', receipt: rollbackReceipt, revision: publicRevision(target) }, null, 2);
+      return JSON.stringify({
+        ok: true,
+        verified: true,
+        verificationStatus: 'verified',
+        status: 'rollback_activated',
+        extensionId: target.extensionId,
+        revisionId: target.id,
+        manifestDigest: target.manifestDigest,
+        signerFingerprint: target.signerFingerprint,
+        ...runtime,
+        receipt: rollbackReceipt,
+        revision: publicRevision(target, targetRegistry),
+      }, null, 2);
     } catch (error) {
       unregisterExtensionTools(targetRegistry, input.extensionId);
       Object.assign(target, targetSnapshot);
       for (const definition of currentDefinitions) {
-        if (targetRegistry.register(definition)) registeredTools.set(definition.name, { extensionId: input.extensionId, registry: targetRegistry });
+        if (targetRegistry.register(definition)) registeredTools.set(definition.name, {
+          extensionId: input.extensionId,
+          revisionId: current!.id,
+          userId: current!.userId,
+          registry: targetRegistry,
+        });
       }
       if (current) {
         Object.assign(current, currentSnapshot);
@@ -1360,6 +1893,7 @@ export async function disableExtension(
   context?: ToolContext,
   registry?: ToolRegistry,
 ): Promise<string> {
+  assertTrustedLocalExtensionAdministrator(context, 'Disabling an extension');
   if (context?.userConfirmed !== true) throw new Error('Disabling an extension requires explicit confirmation.');
   const targetRegistry = registry || context?.toolRegistry;
   if (!targetRegistry) throw new Error('Tool registry is unavailable for extension disable.');
@@ -1368,6 +1902,7 @@ export async function disableExtension(
     const store = arrays(db);
     const revision = store.revisions.find(item => item.extensionId === extensionId && item.status === 'active' && item.userId === (context?.userId || 'anonymous'));
     if (!revision) throw new Error('Active extension was not found in this user scope.');
+    verifyPersistedRevision(revision, store);
     const revisionSnapshot = structuredClone(revision);
     const definitions = buildDefinitions(revision);
     try {
@@ -1385,7 +1920,12 @@ export async function disableExtension(
     } catch (error) {
       Object.assign(revision, revisionSnapshot);
       for (const definition of definitions) {
-        if (targetRegistry.register(definition)) registeredTools.set(definition.name, { extensionId, registry: targetRegistry });
+        if (targetRegistry.register(definition)) registeredTools.set(definition.name, {
+          extensionId,
+          revisionId: revision.id,
+          userId: revision.userId,
+          registry: targetRegistry,
+        });
       }
       activeRuntime.set(extensionId, revision);
       providerClients.delete(extensionId);
@@ -1404,7 +1944,7 @@ export async function disableExtension(
   });
 }
 
-export function listExtensions(context?: ToolContext): string {
+export function listExtensions(context?: ToolContext, registry?: ToolRegistry): string {
   const userId = context?.userId || 'anonymous';
   const store = arrays();
   return JSON.stringify({
@@ -1412,8 +1952,12 @@ export function listExtensions(context?: ToolContext): string {
     verified: true,
     status: 'listed',
     extensionApiVersion: LUMI_EXTENSION_API_VERSION,
-    extensions: store.revisions.filter(item => item.userId === userId).map(publicRevision),
-    trustedPublishers: store.publishers.filter(item => item.status === 'trusted').map(item => ({
+    extensions: store.revisions
+      .filter(item => item.userId === userId)
+      .map(item => publicRevision(item, registry || context?.toolRegistry)),
+    trustedPublishers: store.publishers.filter(item => (
+      item.status === 'trusted' && publisherTrustedBy(item, userId)
+    )).map(item => ({
       publisherId: item.publisherId,
       fingerprint: item.fingerprint,
       status: item.status,
@@ -1435,13 +1979,7 @@ export async function hydrateActiveExtensions(registry: ToolRegistry): Promise<{
   const errors: string[] = [];
   for (const revision of store.revisions.filter(item => item.status === 'active')) {
     try {
-      const manifest = validateManifest(revision.manifest);
-      const verified = verifyManifestSignature(manifest);
-      if (verified.fingerprint !== revision.signerFingerprint || digest(unsignedManifest(manifest)) !== revision.manifestDigest) {
-        throw new Error('Persisted manifest identity does not match its signed revision record.');
-      }
-      const trusted = store.publishers.find(item => item.fingerprint === revision.signerFingerprint && item.status === 'trusted');
-      if (!trusted) throw new Error('Persisted extension publisher is not trusted.');
+      verifyPersistedRevision(revision, store);
       registerRevisionTools(registry, revision);
       activeRuntime.set(revision.extensionId, revision);
       activated += 1;

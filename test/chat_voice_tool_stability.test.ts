@@ -24,6 +24,39 @@ describe('chat and voice tool-call stability', () => {
     expect(pipeline).toContain('buildLumiCapabilitySelection');
   });
 
+  it('treats the shared pipeline policy and projection as immutable entry outputs', () => {
+    const root = process.cwd();
+    const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
+    const task = readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8');
+    const rest = readFileSync(path.join(root, 'server/routes/chat_routes.ts'), 'utf8');
+
+    expect(voice).toContain('const routedToolPolicy = executionPipeline.authorizationPolicy');
+    expect(voice).toContain('const modelToolProjection = executionPipeline.modelToolProjection');
+    expect(voice).toContain('const toolSessionActive = requestedToolSession');
+    expect(voice).toContain('continuationContext: [actionContinuationBridge, proactiveContextPrompt, pendingConfirmationPrompt]');
+    expect(voice).toContain('currentTurnExecutionRequested: executionPipeline.executionRequested');
+    expect(voice).toContain('trustedActionContinuation: executionPipeline.trustedActionContinuation');
+    expect(voice).toContain('|| executionPipeline.trustedActionContinuation');
+    expect(task).toContain('const modelToolPolicy = executionPipeline.authorizationPolicy');
+    expect(task).toContain('const modelToolProjection = executionPipeline.modelToolProjection');
+    expect(task).toContain('const toolSessionActive = executionPipeline.executionRequested');
+    expect(task).toContain('continuationContext: taskContinuationContext');
+    expect(task).toContain('currentTurnExecutionRequested: executionPipeline.executionRequested');
+    expect(task).toContain('trustedActionContinuation: executionPipeline.trustedActionContinuation');
+    expect(task).toContain('forceResume: Boolean(pendingConfirmation || executionPipeline.trustedActionContinuation)');
+    expect(rest).toContain('const restModelToolPolicy = restExecutionPipeline.authorizationPolicy');
+    expect(rest).toContain('const restModelToolProjection = restExecutionPipeline.modelToolProjection');
+    expect(rest).toContain('const restToolSessionActive = restExecutionPipeline.executionRequested');
+    expect(rest).toContain('currentTurnExecutionRequested: restExecutionPipeline.executionRequested');
+    expect(rest).toContain('trustedActionContinuation: restExecutionPipeline.trustedActionContinuation');
+
+    for (const source of [voice, task, rest]) {
+      expect(source).not.toContain('buildModelCapabilityPolicy');
+      expect(source).not.toContain('buildModelToolProjection');
+      expect(source).not.toMatch(/(?:executionDecision|restExecutionDecision)\.(?:baseToolPolicy|toolPolicy|maxIterations|toolRoute)\s*=/);
+    }
+  });
+
   it('feeds the same persisted action pointer into text and voice continuation routing', () => {
     const root = process.cwd();
     const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');

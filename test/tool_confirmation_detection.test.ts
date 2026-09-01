@@ -36,6 +36,10 @@ describe('tool confirmation detection', () => {
 
     const result = await registry.execute('client_repair_skill', { skillName: 'demo' }, {
       userId: 'confirmation-boundary-user',
+      authenticated: true,
+      authRole: 'admin',
+      localExecution: true,
+      executionBoundary: 'trusted_local',
       toolPolicy: {
         allowedTools: ['client_repair_skill'],
         requireConfirmation: ['client_repair_skill'],

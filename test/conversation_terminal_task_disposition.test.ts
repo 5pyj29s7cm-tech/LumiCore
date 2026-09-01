@@ -185,6 +185,57 @@ describe('transport-neutral terminal task disposition', () => {
     });
   });
 
+  it('applies the exact blocked disposition even when the same batch contains a stale receipt', () => {
+    const scope = prepareRequest('mixed-current-and-stale');
+    const staleRequestId = `previous-${scope.requestId}`;
+    const staleReceipt = {
+      ...successRecord(scope, 'stale'),
+      id: `stale-${scope.requestId}`,
+      key: 'search_files:stale-request',
+      requestId: staleRequestId,
+      turnId: staleRequestId,
+    };
+    const currentReceipt = successRecord(scope, 'current');
+    const reason = 'The current request reached a verified blocker after its observation.';
+
+    persistAssistant(scope, [staleReceipt, currentReceipt], {
+      outcome: 'blocked',
+      taskId: scope.taskId,
+      requestId: scope.requestId,
+      reason,
+    });
+
+    expect(getConversationActionStateByTaskId(readDB(), scope)).toMatchObject({
+      taskId: scope.taskId,
+      status: 'blocked',
+      unfinished: true,
+      latestBlocker: reason,
+    });
+    expect(taskRow(scope)).toMatchObject({
+      status: 'blocked',
+      activeRequestId: '',
+      completionSource: '',
+    });
+    expect(JSON.parse(taskRow(scope).context).taskFinalization).toMatchObject({
+      outcome: 'blocked',
+      requestId: scope.requestId,
+      reason,
+    });
+
+    const archived = (readDB().conversationActionReceipts || []).filter((row: any) => (
+      row.taskId === scope.taskId
+    ));
+    expect(archived).toEqual(expect.arrayContaining([
+      expect.objectContaining({ requestId: staleRequestId, toolName: 'search_files' }),
+      expect.objectContaining({ requestId: scope.requestId, toolName: 'search_files' }),
+    ]));
+    expect(getConversationActionTurn(scope)).toMatchObject({
+      status: 'terminal',
+      taskId: scope.taskId,
+      requestId: scope.requestId,
+    });
+  });
+
   it('keeps the default all-success inference completed', () => {
     const scope = prepareRequest('all-success');
     persistAssistant(scope, [successRecord(scope, 'first'), successRecord(scope, 'second')]);

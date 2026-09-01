@@ -274,6 +274,22 @@ export function verifyCapabilityReceipt(
     };
   }
 
+  const providerOwnedDeclaration = capability?.source === 'skill'
+    || capability?.source === 'mcp'
+    || capability?.provenance.kind === 'skill'
+    || capability?.provenance.kind === 'mcp'
+    || (
+      (capability?.source === 'adapter' || capability?.provenance.kind === 'adapter')
+      && !['core', 'official'].includes(String(capability?.provenance.trust || ''))
+    );
+  if (providerOwnedDeclaration) {
+    return {
+      status: 'unverified',
+      strategy,
+      reason: 'The external Skill, MCP, or user-reviewed adapter returned a structurally valid receipt, but its self-declared verification cannot independently prove the final business outcome. Host-owned corroboration is required.',
+    };
+  }
+
   if (strategy === 'artifact') {
     return artifactExists(payload, result)
       ? { status: 'verified', strategy, reason: 'The declared artifact exists and is non-empty.' }

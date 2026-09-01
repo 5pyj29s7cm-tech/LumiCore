@@ -2,6 +2,29 @@ import './helpers';
 import { describe, expect, it } from 'vitest';
 
 describe('Lumi turn flow', () => {
+  it('keeps the field midnight remark as ordinary conversation', async () => {
+    const { initDatabase } = await import('../db_layer');
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+    await initDatabase();
+
+    const text = '\u51cc\u6668\u4e86';
+    const flow = buildLumiTurnFlow({
+      userId: 'turn_flow_field_midnight_remark',
+      text,
+      channel: 'chat',
+      source: 'command-center-chat',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+
+    expect(flow.routeText).toBe(text);
+    expect(flow.allowToolUseForTurn).toBe(false);
+    expect(flow.selfRepairTurn).toBe(false);
+    expect(flow.autoPromoteToAssistant).toBe(false);
+    expect(flow.completionEvidenceNeeded).toBe(false);
+    expect(flow.executionGovernance.verificationIntent).toBe('none');
+  });
+
   it('treats the exact prior-turn receipt question as status-only, not saved-artifact work', async () => {
     const text = '你上一轮是否真的调用过工具？不要再次调用工具，只根据已保存的回执告诉我：工具名、成功还是失败。';
     const { initDatabase } = await import('../db_layer');
@@ -667,7 +690,9 @@ describe('Lumi turn flow', () => {
 
     expect(flow.executionGovernance.capabilityLearningIntent).toBe('inspect_reuse');
     expect(flow.executionGovernance.shouldInspectCapabilitiesFirst).toBe(true);
-    expect(flow.promptOverlay).toContain('capability_learning_list/self_extension_plan');
+    expect(flow.promptOverlay).toContain('search the Skill Hall');
+    expect(flow.promptOverlay).toContain('approved external MCP candidate');
+    expect(flow.promptOverlay).toContain('real task receipt');
     expect(flow.promptOverlay).toContain('capability_gap_autofix');
   });
 

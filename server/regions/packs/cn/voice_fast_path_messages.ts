@@ -152,6 +152,7 @@ export const CN_TASK_EXECUTION_MESSAGES = {
   reconfirmationRequired: (goal: string) => `“${goal}”上次等待确认的具体操作只存在于已结束的客户端进程中，重启后无法安全恢复，所以我没有执行旧操作。请让我重新生成并展示这一步的目标、参数和影响；你审阅新提议后再确认。`,
   blocked: (goal: string, detail: string) => `“${goal}”还没完成。最后阻塞在：${detail}任务上下文已经保留，你可以让我从这一步继续，不需要重新描述。`,
   executing: (goal: string, receiptCount: number) => `“${goal}”还在执行链上${receiptCount ? `，已完成${receiptCount}个可验证步骤` : ''}。`,
+  resumableNotRunning: (goal: string, receiptCount: number) => `“${goal}”的任务上下文仍然保留${receiptCount ? `，已有${receiptCount}个可验证步骤` : ''}，但当前没有正在运行的执行请求。`,
   activeWithoutReceipt: '当前任务仍在执行，暂时还没有终态回执。',
   cancelled: '已停止当前任务，未完成的步骤不会继续执行。',
   terminalCannotCancel: (goal: string, status: string) => status === 'completed'
@@ -183,6 +184,7 @@ export const CN_TASK_EXECUTION_MESSAGES = {
     reviewCurrentConfirmation: '请审阅当前展示的目标、参数和影响后确认或取消。',
     resumeExactAction: '确认后直接恢复已保存的精确动作并验证结果。',
     resumeBlockedStep: '收到继续、重试或纠正后，保留已成功回执并从这个阻塞步骤继续。',
+    resumeStoredTask: '收到“继续”或具体纠正后，从已保留的任务断点重新取得执行权。',
     format: (input: {
       activity: string;
       target: string;
@@ -208,6 +210,7 @@ export const CN_RESULT_GROUNDING_MESSAGES = {
   toolProtocolBlocked: '这轮工具请求没有被执行，内部协议文本已拦截。',
   unverifiedExecutionActivity: '这轮没有启动新的执行任务；刚才的回复混入了旧任务内容。',
   actionNotStarted: '这轮没有任何工具执行回执；刚才只说了方案，实际还没开始。不能把计划当成执行结果。',
+  executionEndedWithoutCompletion: '这一轮操作已经结束，但还没有证据证明目标完成；不会继续显示“正在执行”。',
   desktopSoftwareShortcutCount: (count: number) => `桌面上有 ${count} 个软件快捷方式。`,
   desktopSnapshotIntro: '本轮桌面状态读取已完成，结果来自当前桌面客户端的本次采样。',
   processSnapshot: (count: number, names: string[]) => `运行快照：已读取 ${count} 条活跃进程记录${names.length ? `，前几项为 ${names.join('、')}` : ''}。`,

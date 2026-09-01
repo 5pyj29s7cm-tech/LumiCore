@@ -81,6 +81,51 @@ describe('whole model-request context budget', () => {
     expect(JSON.stringify(prepared.toolDeclarations)).not.toContain('unused default');
   });
 
+  it.each([4_096, 16_384])(
+    'retains only the required subset from 32 verbose schemas without failing closed at %i tokens',
+    (inputTokenBudget) => {
+    const protectedNames = [
+      'continuation_write',
+      'work_product_verify',
+      'client_capability_manifest',
+      'capability_gap_autofix',
+    ];
+    const toolNames = [
+      ...Array.from({ length: 28 }, (_, index) => `optional_schema_${index}`),
+      ...protectedNames,
+    ];
+    const prepared = prepareModelRequestContext({
+      messages: [
+        { role: 'system', content: `Safety rules. ${'large ordinary context '.repeat(4_000)}` },
+        { role: 'user', content: 'Continue the exact task and verify the result.', sourceMessageId: 'protected-tools-source' },
+      ],
+      toolDeclarations: toolNames.map(name => ({
+        type: 'function' as const,
+        function: {
+          name,
+          description: `${name} ${'verbose schema description '.repeat(80)}`,
+          parameters: {
+            type: 'object',
+            properties: {
+              value: { type: 'string', description: 'verbose parameter '.repeat(80) },
+            },
+          },
+        },
+      })),
+      protectedToolNames: protectedNames,
+      inputTokenBudget,
+    });
+
+    const deliveredNames = prepared.toolDeclarations.map(tool => tool.function.name);
+    expect(toolNames).toHaveLength(32);
+    expect(deliveredNames).toEqual(expect.arrayContaining(protectedNames));
+    expect(deliveredNames.length).toBeLessThan(toolNames.length);
+    expect(prepared.droppedToolNames.length).toBeGreaterThan(0);
+    expect(protectedNames.every(name => !prepared.droppedToolNames.includes(name))).toBe(true);
+    expect(prepared.estimatedInputTokens).toBeLessThanOrEqual(inputTokenBudget);
+    },
+  );
+
   it('enforces the same cap on the actual non-streaming provider payload', async () => {
     const input = oversizedRequest();
     let request: any;
@@ -102,6 +147,8 @@ describe('whole model-request context budget', () => {
     );
 
     expect(result.text).toBe('bounded answer');
+    expect(result.modelRequestContext?.deliveredToolNames.length).toBeGreaterThan(0);
+    expect(result.modelRequestContext?.droppedToolNames.length).toBeGreaterThan(0);
     expect(request.messages.at(-1).content).toContain('CURRENT_INPUT_SENTINEL');
     expect(JSON.stringify(request.messages)).toContain('Never disclose credentials');
     expect(estimateModelRequestTextTokens(JSON.stringify({ messages: request.messages, tools: request.tools })))

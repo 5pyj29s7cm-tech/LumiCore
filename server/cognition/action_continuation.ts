@@ -11,7 +11,12 @@ import {
 } from '../regions/packs/cn/voice_fast_path_messages';
 import { isGuardGeneratedConversationRecord } from '../conversation/guard_history';
 import { findLatestRepeatableAssistantReply } from '../conversation/assistant_restatement';
-import { buildActionContract, buildActionEvidenceContract } from './action_contract';
+import {
+  buildActionContract,
+  buildActionEvidenceContract,
+  requestedMediaPlayerTarget,
+  requiresMediaPlaybackAction,
+} from './action_contract';
 import type { ToolPolicy } from '../personality/types';
 import { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
 import { isExplicitConfirmationReply } from '../tools/pending_confirmation';
@@ -424,13 +429,101 @@ const MIXED_STATUS_QUESTION_RE =
 const AMBIGUOUS_UNFINISHED_TASK_STATUS_RE =
   /^(?:怎么回事|什么情况|出什么问题了|哪里(?:出|有)问题了|卡在哪(?:里)?|为什么(?:停了|没继续|没完成|没做完)|what happened|what went wrong|where (?:is|was) it blocked)[啊呀吧嘛呢，,。！？?!\s]*$/iu; // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
 
+// A terse negative observation such as "还没播放" is not merely a request to
+// read status. While the matching durable task is unfinished it corrects the
+// result of that same action and authorizes another attempt under the existing
+// task id. Matching the verb back to the original goal prevents an unrelated
+// blocked task from capturing the utterance.
+const NEGATIVE_RESULT_CORRECTION_RE = /^(?:(?:(?:\u8fd8|\u4ecd\u7136|\u4f9d\u7136|\u8fd8\u662f)\s*)?\u6ca1(?:\u6709)?|\u5e76\u672a|\u672a\u80fd)\s*(?:\u6210\u529f\s*)?(\u64ad\u653e|\u6253\u5f00|\u542f\u52a8|\u8fd0\u884c|\u4fdd\u5b58|\u521b\u5efa|\u751f\u6210|\u5199\u5165|\u53d1\u9001|\u5173\u95ed|\u5220\u9664)(?:\u51fa\u6765|\u6210\u529f|\u5b8c\u6210)?[\u3002\uff01!\s]*$|^(?:it\s+)?(?:still\s+)?(?:hasn['\u2019]?t|isn['\u2019]?t|didn['\u2019]?t|not)\s+(play(?:ing|ed)?|open(?:ing|ed)?|start(?:ing|ed)?|run(?:ning)?|sav(?:e|ed|ing)|creat(?:e|ed|ing)|generat(?:e|ed|ing)|writ(?:e|ten|ing)|send(?:ing)?|sent|clos(?:e|ed|ing)|delet(?:e|ed|ing))[.!\s]*$/iu;
+
+function isNegativeResultCorrectionForTask(
+  text: string,
+  state: ConversationActionContinuationState | null | undefined,
+): boolean {
+  const durableState = normalizeConversationActionState(state);
+  if (!durableState?.unfinished) return false;
+  const match = compact(text, 240).match(NEGATIVE_RESULT_CORRECTION_RE);
+  const operation = compact(match?.[1] || match?.[2], 40).toLowerCase();
+  if (!operation) return false;
+  const goal = `${durableState.goal} ${durableState.latestInstruction}`;
+  if (/^(?:\u64ad\u653e|play)/iu.test(operation)) {
+    return /(?:\u64ad\u653e|\u97f3\u4e50|\u6b4c\u66f2|\u6b4c|\u7f51\u6613\u4e91|QQ\s*\u97f3\u4e50|Spotify|\bplay\b|\bmusic\b|\bsong\b)/iu.test(goal);
+  }
+  const operationFamilies: Array<[RegExp, RegExp]> = [
+    [/^(?:\u6253\u5f00|\u542f\u52a8|\u8fd0\u884c|open|start|run)/iu, /(?:\u6253\u5f00|\u542f\u52a8|\u8fd0\u884c|\bopen\b|\bstart\b|\brun\b)/iu],
+    [/^(?:\u4fdd\u5b58|save)/iu, /(?:\u4fdd\u5b58|\bsav(?:e|ed|ing)\b)/iu],
+    [/^(?:\u521b\u5efa|\u751f\u6210|\u5199\u5165|creat|generat|writ)/iu, /(?:\u521b\u5efa|\u751f\u6210|\u5199\u5165|\bcreat|\bgenerat|\bwrit)/iu],
+    [/^(?:\u53d1\u9001|send|sent)/iu, /(?:\u53d1\u9001|\bsend\b|\bsent\b)/iu],
+    [/^(?:\u5173\u95ed|close)/iu, /(?:\u5173\u95ed|\bclos(?:e|ed|ing)\b)/iu],
+    [/^(?:\u5220\u9664|delet)/iu, /(?:\u5220\u9664|\bdelet(?:e|ed|ing)\b)/iu],
+  ];
+  const family = operationFamilies.find(([operationPattern]) => operationPattern.test(operation));
+  return Boolean(family?.[1].test(goal));
+}
+
 // A user may satisfy the exact condition Lumi just asked for outside the
 // client (for example by foregrounding WPS), then report only that readiness
 // fact. These acknowledgements are executable continuation only while the
 // durable task is blocked; without that state they remain ordinary dialogue.
 // i18n-allow: Multilingual blocked-task readiness acknowledgement recognition; not user-visible copy.
 const BLOCKED_TASK_READINESS_RE =
-  /^(?:(?:(?:已经|已|现在|刚才|刚刚)\s*)?(?:把|将)?(?:它|这个|那个|文件|文档|窗口|应用|软件)?\s*(?:切换|切|换|放|调)\s*(?:到|至)?\s*(?:前台|当前窗口)(?:了)?|(?:已经|已|现在)\s*(?:打开|开启)(?:了|好了)?|(?:已经)?\s*(?:准备好|准备就绪)(?:了)?|(?:现在\s*)?可以了|(?:it(?:'s| is)\s+)?(?:in (?:the )?foreground|open|ready)(?:\s+now)?|ready\s+to\s+continue)[\s啊呀啦吧呢，,。！!]*$/iu;
+  /^(?:(?:(?:已经|已|现在|刚才|刚刚)\s*)?(?:把|将)?(?:它|这个|那个|文件|文档|窗口|应用|软件)?\s*(?:切换|切|换|放|调)\s*(?:到|至)?\s*(?:前台|当前窗口)(?:了)?|(?:已经|已|现在)\s*(?:打开|开启)(?:了|好了)?|(?:已经)?\s*(?:准备好|准备就绪)(?:了)?|(?:it(?:'s| is)\s+)?(?:in (?:the )?foreground|open|ready)(?:\s+now)?|ready\s+to\s+continue)[\s啊呀啦吧呢，,。！!]*$/iu;
+
+// A bare acknowledgement is ambiguous by itself. It becomes executable only
+// when the exact blocked task's last assistant state explicitly asked the
+// user to prepare/foreground something and report back. This keeps “可以” from
+// becoming a new durable task while preventing it from authorizing an
+// unrelated or reconstructed confirmation boundary.
+const BARE_BLOCKED_TASK_READINESS_RE =
+  // i18n-allow: Reviewed multilingual readiness acknowledgement recognition; not user-visible copy.
+  /^(?:可以|可以了|行|好|好了|已好|就绪|ok(?:ay)?|done|ready)[\s啊呀啦吧呢，,。！!]*$/iu;
+const ASSISTANT_REQUESTED_READINESS_RE =
+  // i18n-allow: Reviewed multilingual assistant readiness-request recognition; not user-visible copy.
+  /(?:请|麻烦|一旦|当|等|完成后|准备好后|切到前台后)[^。！？.!?\n]{0,120}(?:告诉我|跟我说|说一声|回复我|回我|通知我)|(?:请|麻烦)[^。！？.!?\n]{0,120}(?:切到|切换到|打开|前台|准备好|发给我)|\b(?:tell|let)\s+me\s+(?:know|when|once)\b[^.!?\n]{0,80}\b(?:ready|foreground|open|done)\b|\b(?:please\s+)?(?:put|bring|switch|open)\b[^.!?\n]{0,80}\b(?:foreground|open|ready)\b|\b(?:reply|say)\b[^.!?\n]{0,80}\b(?:ready|foreground|open|done)\b/iu;
+
+function isBlockedTaskReadinessAcknowledgement(
+  text: string,
+  state: ConversationActionContinuationState | null | undefined,
+): boolean {
+  const durableState = normalizeConversationActionState(state);
+  if (!durableState?.unfinished || durableState.status !== 'blocked') return false;
+  const assistantState = durableState.assistantState || '';
+  if (!ASSISTANT_REQUESTED_READINESS_RE.test(assistantState)) return false;
+  // A request to attach/send a file is not satisfied by a textual "ready".
+  // The attachment pipeline must provide its own current-turn evidence. A
+  // mixed alternative that also asks the user to foreground/open something
+  // may still resume through that explicitly requested readiness condition.
+  // i18n-allow: Reviewed multilingual attachment-only readiness recognition; not user-visible copy.
+  const attachmentHandoffRequested = /(?:\u53d1\u7ed9\u6211|\u628a[^\n\u3002\uff01\uff1f]{0,48}\u6587\u4ef6[^\n\u3002\uff01\uff1f]{0,24}\u53d1\u6765)|\b(?:send|attach|upload)\b[^.!?\n]{0,80}\b(?:file|document|attachment)\b/iu.test(assistantState);
+  // i18n-allow: Reviewed multilingual foreground/open readiness recognition; not user-visible copy.
+  const foregroundOrOpenRequested = /(?:\u5207\u5230|\u5207\u6362\u5230|\u524d\u53f0|\u6253\u5f00|\u51c6\u5907\u597d)|\b(?:foreground|open|ready)\b/iu.test(assistantState);
+  if (attachmentHandoffRequested && !foregroundOrOpenRequested) return false;
+  return BLOCKED_TASK_READINESS_RE.test(text)
+    || BARE_BLOCKED_TASK_READINESS_RE.test(text);
+}
+
+function normalizeMediaTarget(value: string): string {
+  return value.normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function isMediaPlaybackContinuationForTask(
+  text: string,
+  state: ConversationActionContinuationState | null | undefined,
+): boolean {
+  const durableState = normalizeConversationActionState(state);
+  if (
+    !durableState?.unfinished
+    || !requiresMediaPlaybackAction(durableState.goal)
+    || !requiresMediaPlaybackAction(text)
+  ) return false;
+  const previousTarget = normalizeMediaTarget(requestedMediaPlayerTarget(durableState.goal));
+  const currentTarget = normalizeMediaTarget(requestedMediaPlayerTarget(text));
+  // An explicitly different player is new work; an omitted/deictic target
+  // continues the exact unfinished playback goal.
+  return !previousTarget || !currentTarget
+    || previousTarget.includes(currentTarget)
+    || currentTarget.includes(previousTarget);
+}
 
 // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
 const STATUS_RESULT_DEMAND_RE =
@@ -852,11 +945,17 @@ export function classifyConversationActionFollowupIntent(
   if (isImmediateAssistantRestatementRequest(text)) return 'repeat';
   const durableState = normalizeConversationActionState(state);
   const compactText = compact(text, 500);
+  // Never let a readiness acknowledgement reconstruct a one-time dangerous
+  // confirmation that was lost across restart.
   if (
-    durableState?.unfinished
-    && durableState.status === 'blocked'
-    && BLOCKED_TASK_READINESS_RE.test(compactText)
+    conversationActionRequiresFreshConfirmationReview(durableState)
+    && isExplicitConfirmationReply(compactText)
+  ) return 'status';
+  if (
+    isBlockedTaskReadinessAcknowledgement(compactText, durableState)
   ) return 'execute';
+  if (isNegativeResultCorrectionForTask(compactText, durableState)) return 'execute';
+  if (isMediaPlaybackContinuationForTask(compactText, durableState)) return 'execute';
   const normalizedIntent = normalizeActionIntent(text);
   if (
     durableState?.unfinished
@@ -873,13 +972,6 @@ export function classifyConversationActionFollowupIntent(
     durableState?.unfinished
     && isTaskCapsuleTargetContinuation(compactText, durableState)
   ) return 'execute';
-  // A restart without the exact one-time envelope invalidates the old grant.
-  // Treat a bare confirmation as a deterministic status/review request, never
-  // as permission to reconstruct or execute the previous dangerous action.
-  if (
-    conversationActionRequiresFreshConfirmationReview(durableState)
-    && isExplicitConfirmationReply(compactText)
-  ) return 'status';
   if (
     normalizedIntent.kind === 'correction_explanation'
     || normalizedIntent.kind === 'work_task'
@@ -1103,6 +1195,7 @@ export function prepareConversationActionTaskState(
 
 export function formatConversationActionTaskStatus(
   value: ConversationActionContinuationState | null | undefined,
+  options: { executionActive?: boolean } = {},
 ): string {
   const state = normalizeConversationActionState(value);
   if (!state) return CN_TASK_EXECUTION_MESSAGES.noResumableTask;
@@ -1156,8 +1249,20 @@ export function formatConversationActionTaskStatus(
     blocker = publicBlocker;
     userAction = feedback.requestRetryOrCorrection;
     nextStep = feedback.resumeBlockedStep;
-  } else {
+  } else if (
+    options.executionActive === true
+    || (
+      options.executionActive === undefined
+      && Boolean(String(state.activeRequestId || '').trim())
+      && ['planning', 'executing', 'verifying'].includes(state.status || '')
+    )
+  ) {
     activity = CN_TASK_EXECUTION_MESSAGES.executing(goal, successes);
+  } else {
+    activity = CN_TASK_EXECUTION_MESSAGES.resumableNotRunning(goal, successes);
+    blocker = feedback.noBlocker;
+    userAction = feedback.requestRetryOrCorrection;
+    nextStep = feedback.resumeStoredTask;
   }
 
   return feedback.format({

@@ -87,36 +87,6 @@
         "trust": "third-party",
         "lane": "files"
       }
-    },
-    "playwright": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@playwright/mcp@latest"
-      ],
-      "enabled": false,
-      "source": "external",
-      "transport": "stdio",
-      "description": "Playwright MCP structured browser automation for real websites and authenticated browser tasks.",
-      "capabilityDefault": {
-        "operation": "mutate",
-        "risk": "high",
-        "sideEffects": [
-          { "type": "network_read", "scope": "user-requested websites", "reversible": true },
-          { "type": "credential_access", "scope": "user-authorized browser sessions", "reversible": true },
-          { "type": "external_state_change", "scope": "web forms, account state, and browser-visible actions", "reversible": false },
-          { "type": "external_communication", "scope": "website submissions, posts, and messages", "reversible": false }
-        ],
-        "verification": {
-          "strategy": "terminal_receipt",
-          "required": true,
-          "requiredFields": [],
-          "successSignals": ["Playwright MCP terminal receipt"],
-          "limitations": ["A single browser command is not task completion; state-changing work requires a later page snapshot or provider acknowledgement."]
-        },
-        "trust": "third-party",
-        "lane": "web"
-      }
     }
   },
   "remoteDevices": {}

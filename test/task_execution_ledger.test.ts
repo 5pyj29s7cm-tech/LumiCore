@@ -293,6 +293,24 @@ describe('durable conversation task execution ledger', () => {
     expect(recordsToTaskReceipts([])).toEqual([]);
   });
 
+  it('does not describe a resumable task without a request owner as currently executing', () => {
+    const started = prepareConversationActionTaskState(null, {
+      userText: '打开桌面上的方案并检查内容',
+      requestId: 'request-detached',
+      toolPolicy: { allowedTools: ['desktop_open'], requireConfirmation: [], forbiddenTools: [], maxIterations: 5 },
+    });
+    const detached = {
+      ...started.state!,
+      activeRequestId: undefined,
+      status: 'planning' as const,
+      unfinished: true,
+    };
+
+    const reply = formatConversationActionTaskStatus(detached);
+    expect(reply).toContain('当前没有正在运行的执行请求');
+    expect(reply).not.toContain('还在执行链上');
+  });
+
   it('reports the six user-facing task facts without leaking an internal guard', () => {
     const started = prepareConversationActionTaskState(null, {
       userText: '打开桌面上的季度报告并核对内容',

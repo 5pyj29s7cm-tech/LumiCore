@@ -1,7 +1,9 @@
 import { getAdapterRegistry } from '../adapters/registry';
+import { listExtensionRuntimeSnapshots } from '../extensions/registry';
 import { getMarketplaceSkills } from '../marketplace/registry';
 import { mcpManager } from '../mcp/client';
-import { ToolDefinition } from '../tools/types';
+import { getExtensionRuntimeStates, type ExtensionRuntimeStatus } from '../skills/runtime_state';
+import { CapabilityManifestEntry, ToolDefinition } from '../tools/types';
 import {
   isCapabilityLearningRecordVerified,
   listCapabilityLearningRecords,
@@ -15,6 +17,7 @@ export interface SelfExtensionPlanOptions {
   domain?: string;
   clientState?: Record<string, any> | null;
   tools?: ToolDefinition[];
+  capabilityManifest?: CapabilityManifestEntry[];
 }
 
 export interface SelfExtensionPlan {
@@ -30,7 +33,7 @@ export interface SelfExtensionPlan {
       | 'research_adapter'
       | 'generate_skill_draft'
       | 'core_change_needed';
-    primarySource: 'learned_capability' | 'adapter' | 'tool' | 'installed_skill' | 'marketplace_skill' | 'planned_adapter' | 'none';
+    primarySource: 'learned_capability' | 'adapter' | 'tool' | 'signed_extension' | 'installed_skill' | 'marketplace_skill' | 'planned_adapter' | 'none';
     reason: string;
     preferredTools: string[];
     shouldCreateNewCapability: boolean;
@@ -38,8 +41,44 @@ export interface SelfExtensionPlan {
   existingCoverage: {
     adapters: Array<{ id: string; label: string; status: string; actions: string[]; notes?: string }>;
     tools: Array<{ name: string; securityLevel: string; description: string }>;
-    installedSkills: Array<{ name: string; description: string; broken?: boolean; toolCount?: number }>;
-    marketplaceSkills: Array<{ id: string; name: string; installed: boolean; requiresSetup?: boolean; setupNote?: string }>;
+    signedExtensions: Array<{
+      extensionId: string;
+      revisionId: string;
+      name: string;
+      version: string;
+      kind: 'provider' | 'plugin' | 'hybrid';
+      registered: boolean;
+      usable: boolean;
+      runtimeStatus: string;
+      toolNames: string[];
+      providerId: string;
+      providerModelIds: string[];
+    }>;
+    installedSkills: Array<{
+      name: string;
+      description: string;
+      broken?: boolean;
+      toolCount?: number;
+      configured: boolean;
+      enabled: boolean;
+      keyReady: boolean;
+      registered: boolean;
+      usable: boolean;
+      runtimeStatus: ExtensionRuntimeStatus;
+      toolNames: string[];
+    }>;
+    marketplaceSkills: Array<{
+      id: string;
+      name: string;
+      installSource: 'bundled' | 'community';
+      installable: boolean;
+      installed: boolean;
+      requiresSetup?: boolean;
+      setupNote?: string;
+      usable: boolean;
+      runtimeStatus: ExtensionRuntimeStatus | 'not_installed';
+      toolNames: string[];
+    }>;
     learnedCapabilities: Array<{ id: string; domain: string; goal: string; status: string; verified: boolean; route: string; preferredTools: string[]; summary: string }>;
   };
   gap: {
@@ -58,15 +97,15 @@ export interface SelfExtensionPlan {
 }
 
 const DOMAIN_HINTS: Array<{ domain: string; patterns: RegExp[]; keywords: string[] }> = [
-  { domain: 'music', patterns: [/music|netease|song|playlist|lyric|网易云|音乐|歌单|歌词|播放|切歌/i], keywords: ['music', 'netease', 'song', 'playlist', 'lyric'] },
-  { domain: 'cad_bim', patterns: [/cad|dxf|dwg|revit|ifc|bim|floor.?plan|户型|施工图|图纸|装修|建模/i], keywords: ['cad', 'dxf', 'revit', 'ifc', 'bim', 'floorplan', 'drawing'] },
-  { domain: 'messaging', patterns: [/wechat|wecom|feishu|lark|message|reply|微信|企微|飞书|消息|回复/i], keywords: ['wechat', 'feishu', 'wecom', 'message', 'reply'] },
-  { domain: 'legal', patterns: [/legal|law|case|contract|court|律师|律所|案件|合同|法院|庭审/i], keywords: ['legal', 'case', 'contract', 'court', 'law'] },
-  { domain: 'design', patterns: [/design|logo|poster|ui|ux|image|视觉|设计|海报|图片|品牌/i], keywords: ['design', 'image', 'poster', 'brand', 'ui'] },
-  { domain: 'finance', patterns: [/finance|invoice|expense|stock|财务|发票|报销|股票|预算/i], keywords: ['finance', 'invoice', 'expense', 'stock', 'budget'] },
-  { domain: 'usage_monitoring', patterns: [/token|usage|cost|model|算力|用量|模型|扣费|消耗/i], keywords: ['usage', 'token', 'model', 'provider', 'cost'] },
-  { domain: 'client_control', patterns: [/open|switch|mode|client|window|组织|聊天窗|模式|打开|切换|窗口/i], keywords: ['client', 'window', 'mode', 'open', 'action'] },
-  { domain: 'files', patterns: [/file|folder|document|pdf|docx|文件|文件夹|文档|资料/i], keywords: ['file', 'folder', 'document', 'pdf', 'docx'] },
+  { domain: 'music', patterns: [/music|netease|song|playlist|lyric|网易云|音乐|歌单|歌词|播放|切歌/i], keywords: ['music', 'netease', 'song', 'playlist', 'lyric', '音乐', '歌单', '歌词', '播放'] }, // i18n-allow: Reviewed multilingual capability input recognition; not user-visible copy.
+  { domain: 'cad_bim', patterns: [/cad|dxf|dwg|revit|ifc|bim|floor.?plan|户型|施工图|图纸|装修|建模/i], keywords: ['cad', 'dxf', 'revit', 'ifc', 'bim', 'floorplan', 'drawing', '户型', '施工图', '图纸', '建模'] }, // i18n-allow: Reviewed multilingual capability input recognition; not user-visible copy.
+  { domain: 'messaging', patterns: [/wechat|wecom|feishu|lark|message|reply|微信|企微|企业微信|飞书|消息|回复/i], keywords: ['wechat', 'feishu', 'wecom', 'message', 'reply', '微信', '企业微信', '飞书', '消息', '回复'] }, // i18n-allow: Reviewed multilingual capability input recognition; not user-visible copy.
+  { domain: 'legal', patterns: [/legal|law|case|contract|court|律师|律所|案件|合同|法院|庭审|法律/i], keywords: ['legal', 'case', 'contract', 'court', 'law', '律师', '案件', '合同', '法院'] }, // i18n-allow: Reviewed multilingual capability input recognition; not user-visible copy.
+  { domain: 'design', patterns: [/design|logo|poster|ui|ux|image|视觉|设计|海报|图片|品牌/i], keywords: ['design', 'image', 'poster', 'brand', 'ui', '设计', '海报', '图片', '品牌'] }, // i18n-allow: Reviewed multilingual capability input recognition; not user-visible copy.
+  { domain: 'finance', patterns: [/finance|invoice|expense|stock|财务|财税|发票|报销|股票|预算|税务/i], keywords: ['finance', 'invoice', 'expense', 'stock', 'budget', '财务', '财税', '发票', '报销', '税务'] }, // i18n-allow: Reviewed multilingual capability input recognition; not user-visible copy.
+  { domain: 'usage_monitoring', patterns: [/token|usage|cost|model|算力|用量|模型|扣费|消耗|令牌/i], keywords: ['usage', 'token', 'model', 'provider', 'cost', '算力', '用量', '模型', '扣费', '消耗'] }, // i18n-allow: Reviewed multilingual capability input recognition; not user-visible copy.
+  { domain: 'client_control', patterns: [/open|switch|mode|client|window|组织|聊天窗|聊天|模式|打开|切换|窗口|客户端/i], keywords: ['client', 'window', 'mode', 'open', 'action', '组织', '聊天', '模式', '打开', '切换', '窗口'] }, // i18n-allow: Reviewed multilingual capability input recognition; not user-visible copy.
+  { domain: 'files', patterns: [/file|folder|document|pdf|docx|文件|文件夹|文档|资料/i], keywords: ['file', 'folder', 'document', 'pdf', 'docx', '文件', '文件夹', '文档', '资料'] }, // i18n-allow: Reviewed multilingual capability input recognition; not user-visible copy.
 ];
 
 export function buildSelfExtensionPlan(options: SelfExtensionPlanOptions): SelfExtensionPlan {
@@ -79,7 +118,17 @@ export function buildSelfExtensionPlan(options: SelfExtensionPlanOptions): SelfE
     includePlanned: true,
   });
   const tools = options.tools || [];
+  let signedExtensionRuntime: ReturnType<typeof listExtensionRuntimeSnapshots> = [];
+  try {
+    signedExtensionRuntime = listExtensionRuntimeSnapshots({ userId: options.userId || 'anonymous' });
+  } catch {
+    // The planner also runs during isolated startup/tests before DB hydration.
+  }
   const localSkills = mcpManager.listLocalSkills();
+  const runtimeByName = new Map(
+    getExtensionRuntimeStates(options.capabilityManifest || [])
+      .map(state => [state.name, state]),
+  );
   const marketplace = getMarketplaceSkills();
 
   const matchingAdapters = registry.adapters
@@ -110,6 +159,30 @@ export function buildSelfExtensionPlan(options: SelfExtensionPlanOptions): SelfE
       description: trim(tool.description, 220),
     }));
 
+  const matchingSignedExtensions: SelfExtensionPlan['existingCoverage']['signedExtensions'] = signedExtensionRuntime
+    .filter(extension => matchesAny([
+      extension.extensionId,
+      extension.name,
+      extension.kind,
+      extension.providerId,
+      extension.providerModelIds.join(' '),
+      extension.registeredToolNames.join(' '),
+    ].join(' '), keywords))
+    .slice(0, 12)
+    .map(extension => ({
+      extensionId: extension.extensionId,
+      revisionId: extension.revisionId,
+      name: extension.name,
+      version: extension.version,
+      kind: extension.kind,
+      registered: extension.registered,
+      usable: extension.usable,
+      runtimeStatus: extension.runtimeStatus,
+      toolNames: [...extension.registeredToolNames],
+      providerId: extension.providerId,
+      providerModelIds: [...extension.providerModelIds],
+    }));
+
   const matchingLocalSkills = localSkills
     .filter(skill => matchesAny(`${skill.name} ${skill.description || ''} ${skill.generatedFrom || ''}`, keywords))
     .map(skill => ({
@@ -117,18 +190,36 @@ export function buildSelfExtensionPlan(options: SelfExtensionPlanOptions): SelfE
       description: skill.description,
       broken: skill.broken,
       toolCount: skill.toolCount,
+      configured: runtimeByName.get(skill.name)?.configured ?? false,
+      enabled: runtimeByName.get(skill.name)?.enabled ?? false,
+      keyReady: runtimeByName.get(skill.name)?.keyReady ?? true,
+      registered: runtimeByName.get(skill.name)?.registered ?? false,
+      usable: runtimeByName.get(skill.name)?.usable ?? false,
+      runtimeStatus: runtimeByName.get(skill.name)?.status || 'not_configured',
+      toolNames: runtimeByName.get(skill.name)?.toolNames || [],
     }));
 
-  const matchingMarketplace = marketplace
+  const matchingMarketplace: SelfExtensionPlan['existingCoverage']['marketplaceSkills'] = marketplace
     .filter(skill => matchesAny(`${skill.id} ${skill.name} ${skill.description} ${skill.category} ${skill.setupNote || ''}`, keywords))
     .slice(0, 12)
-    .map(skill => ({
+    .map(skill => {
+      const runtimeName = skill.id.replace(/^skill-/i, '');
+      const runtime = runtimeByName.get(runtimeName);
+      return ({
       id: skill.id,
       name: skill.name,
-      installed: skill.installed,
+      installSource: skill.installSource,
+      installable: skill.installSource === 'bundled'
+        && skill.runtimeInstallable !== false
+        && Boolean(skill.installPath),
+      installed: runtime?.packagePresent ?? skill.installed,
       requiresSetup: skill.requiresSetup || skill.requiresApiKey || false,
       setupNote: skill.setupNote,
-    }));
+      usable: runtime?.usable ?? false,
+      runtimeStatus: runtime?.status || ('not_installed' as const),
+      toolNames: runtime?.toolNames || [],
+    });
+    });
   const learnedCapabilities = listCapabilityLearningRecords({
     userId: options.userId || 'anonymous',
     scopeDomain: options.scopeDomain === 'work' && options.orgId ? 'work' : 'personal',
@@ -149,22 +240,23 @@ export function buildSelfExtensionPlan(options: SelfExtensionPlanOptions): SelfE
 
   const coverageReady = matchingAdapters.some(adapter => ['ready', 'available', 'draft_only'].includes(adapter.status))
     || matchingTools.some(tool => tool.securityLevel === 'safe' || tool.securityLevel === 'confirm')
-    || matchingLocalSkills.some(skill => !skill.broken)
+    || matchingSignedExtensions.some(extension => extension.usable)
+    || matchingLocalSkills.some(skill => skill.usable)
     || learnedCapabilities.some(record => record.verified);
-  const repairableSkill = matchingLocalSkills.some(skill => skill.broken);
-  const installableSkill = matchingMarketplace.some(skill => !skill.installed);
+  const repairableSkill = matchingLocalSkills.some(skill => !skill.usable);
+  const installableSkill = matchingMarketplace.some(skill => skill.installable && !skill.installed);
   const plannedAdapter = matchingAdapters.some(adapter => adapter.status === 'planned');
   const highRisk = /(send|post|pay|purchase|delete|remove|desktop|wechat|cad|revit|微信|发送|付款|删除|桌面|键鼠|施工图|生产图)/i.test(goal);
 
   const readiness: SelfExtensionPlan['readiness'] =
     coverageReady ? 'use_existing'
       : repairableSkill || installableSkill ? 'install_or_repair_skill'
-      : plannedAdapter || shouldResearch(domain, goal) ? 'research_adapter'
-      : canGenerateSkill(domain, goal) ? 'generate_skill_draft'
+      : plannedAdapter || shouldResearch(domain, goal) || canGenerateSkill(domain, goal) ? 'research_adapter'
       : 'core_change_needed';
   const resolution = buildResolution(readiness, {
     matchingTools,
     matchingAdapters,
+    matchingSignedExtensions,
     matchingLocalSkills,
     matchingMarketplace,
     learnedCapabilities,
@@ -182,6 +274,7 @@ export function buildSelfExtensionPlan(options: SelfExtensionPlanOptions): SelfE
     existingCoverage: {
       adapters: matchingAdapters,
       tools: matchingTools,
+      signedExtensions: matchingSignedExtensions,
       installedSkills: matchingLocalSkills,
       marketplaceSkills: matchingMarketplace,
       learnedCapabilities,
@@ -196,13 +289,14 @@ export function buildSelfExtensionPlan(options: SelfExtensionPlanOptions): SelfE
     pipeline: buildPipeline(goal, domain, readiness, {
       matchingTools,
       matchingAdapters,
+      matchingSignedExtensions,
       matchingLocalSkills,
       matchingMarketplace,
       learnedCapabilities,
       highRisk,
     }),
     safety: [
-      'Check learned capability routes, adapters, tools, installed skills, and marketplace skills before creating anything new.',
+      'Check learned capability routes, adapters, tools, signed extensions, installed skills, and marketplace skills before creating anything new.',
       'Use existing explicit tools and client actions before generating new tools.',
       'Use capability_research before connecting a new external ecosystem, GitHub project, MCP server, CAD/BIM bridge, or online AI service.',
       'generate_skill, install_skill, client_repair_skill, desktop control, external app automation, messaging, provider changes, and file writes remain confirmation-sensitive.',
@@ -250,8 +344,9 @@ function buildResolution(
   facts: {
     matchingTools: Array<{ name: string; securityLevel: string; description: string }>;
     matchingAdapters: Array<{ id: string; label: string; status: string; actions: string[]; notes?: string }>;
-    matchingLocalSkills: Array<{ name: string; description: string; broken?: boolean; toolCount?: number }>;
-    matchingMarketplace: Array<{ id: string; name: string; installed: boolean; requiresSetup?: boolean; setupNote?: string }>;
+    matchingSignedExtensions: SelfExtensionPlan['existingCoverage']['signedExtensions'];
+    matchingLocalSkills: SelfExtensionPlan['existingCoverage']['installedSkills'];
+    matchingMarketplace: SelfExtensionPlan['existingCoverage']['marketplaceSkills'];
     learnedCapabilities: SelfExtensionPlan['existingCoverage']['learnedCapabilities'];
     repairableSkill: boolean;
     installableSkill: boolean;
@@ -280,6 +375,17 @@ function buildResolution(
     };
   }
 
+  const readySignedExtension = facts.matchingSignedExtensions.find(extension => extension.usable);
+  if (readySignedExtension) {
+    return {
+      decision: 'use_existing_coverage',
+      primarySource: 'signed_extension',
+      reason: `A matching signed extension is already callable: ${readySignedExtension.name}.`,
+      preferredTools: readySignedExtension.toolNames,
+      shouldCreateNewCapability: false,
+    };
+  }
+
   const readyTool = facts.matchingTools.find(tool => tool.securityLevel === 'safe' || tool.securityLevel === 'confirm');
   if (readyTool) {
     return {
@@ -291,26 +397,26 @@ function buildResolution(
     };
   }
 
-  const installedSkill = facts.matchingLocalSkills.find(skill => !skill.broken);
+  const installedSkill = facts.matchingLocalSkills.find(skill => skill.usable);
   if (installedSkill) {
     return {
       decision: 'use_existing_coverage',
       primarySource: 'installed_skill',
       reason: `A matching installed skill already exists: ${installedSkill.name}.`,
-      preferredTools: [],
+      preferredTools: installedSkill.toolNames,
       shouldCreateNewCapability: false,
     };
   }
 
   if (facts.repairableSkill || facts.installableSkill) {
-    const marketplaceSkill = facts.matchingMarketplace.find(skill => !skill.installed);
+    const marketplaceSkill = facts.matchingMarketplace.find(skill => skill.installable && !skill.installed);
     return {
       decision: 'repair_or_install_skill',
       primarySource: facts.repairableSkill ? 'installed_skill' : 'marketplace_skill',
       reason: facts.repairableSkill
         ? 'A matching skill exists but needs repair before Lumi should invent a new route.'
         : `A matching skill can be installed or set up${marketplaceSkill ? `: ${marketplaceSkill.name}` : ''}.`,
-      preferredTools: facts.repairableSkill ? ['client_repair_skill'] : ['install_skill'],
+      preferredTools: facts.repairableSkill ? ['client_repair_skill'] : ['skill_marketplace_install'],
       shouldCreateNewCapability: false,
     };
   }
@@ -353,8 +459,9 @@ function buildPipeline(
   facts: {
     matchingTools: Array<{ name: string; securityLevel: string; description: string }>;
     matchingAdapters: Array<{ id: string; label: string; status: string; actions: string[]; notes?: string }>;
-    matchingLocalSkills: Array<{ name: string; description: string; broken?: boolean; toolCount?: number }>;
-    matchingMarketplace: Array<{ id: string; name: string; installed: boolean; requiresSetup?: boolean; setupNote?: string }>;
+    matchingSignedExtensions: SelfExtensionPlan['existingCoverage']['signedExtensions'];
+    matchingLocalSkills: SelfExtensionPlan['existingCoverage']['installedSkills'];
+    matchingMarketplace: SelfExtensionPlan['existingCoverage']['marketplaceSkills'];
     learnedCapabilities: SelfExtensionPlan['existingCoverage']['learnedCapabilities'];
     highRisk: boolean;
   },
@@ -368,6 +475,22 @@ function buildPipeline(
       notes: 'Confirm what Lumi already has before inventing a new tool.',
     },
   ];
+
+  pipeline.push({
+    step: 'Inspect installed signed extensions and Providers',
+    status: 'available_now',
+    tool: 'extension_registry_list',
+    args: {},
+    notes: 'Only extensions whose exact signed revision is currently registered and usable count as existing coverage.',
+  });
+
+  pipeline.push({
+    step: 'Search the Skill Hall for an approved reusable capability',
+    status: 'available_now',
+    tool: 'skill_marketplace_search',
+    args: { query: goal },
+    notes: 'Only an exact official bundled result is installable. Community entries remain discovery metadata until a separate immutable review flow exists.',
+  });
 
   const learned = facts.learnedCapabilities.find(record => record.verified);
   if (learned) {
@@ -401,28 +524,69 @@ function buildPipeline(
     });
   }
 
-  const brokenSkill = facts.matchingLocalSkills.find(skill => skill.broken);
-  if (brokenSkill) {
+  const unavailableSkill = facts.matchingLocalSkills.find(skill => !skill.usable);
+  if (unavailableSkill) {
     pipeline.push({
-      step: 'Repair matching installed skill',
+      step: unavailableSkill.broken ? 'Repair matching installed skill' : 'Restore matching installed skill to a callable state',
       status: 'confirm_first',
       tool: 'client_repair_skill',
-      args: { skillName: brokenSkill.name },
-      notes: 'Repair/reinstall is confirmation-sensitive because it can run dependency setup or restart MCP.',
+      args: { skillName: unavailableSkill.name },
+      notes: `Current state: ${unavailableSkill.runtimeStatus}. Repair/reconfigure is confirmation-sensitive and must end with exact live tool registration.`,
     });
   }
 
-  const installable = facts.matchingMarketplace.find(skill => !skill.installed);
+  const installable = facts.matchingMarketplace.find(skill => skill.installable && !skill.installed);
   if (installable) {
     pipeline.push({
-      step: 'Install matching bundled/community skill',
+      step: 'Install matching official bundled skill',
       status: 'confirm_first',
-      tool: 'install_skill',
-      notes: `Candidate: ${installable.name}. Open Skill Hall or use install_skill with the verified local source path.`,
+      tool: 'skill_marketplace_install',
+      args: { skillId: installable.id },
+      notes: `Candidate: ${installable.name}. Install this exact Skill Hall id, then require live registration before use.`,
     });
   }
 
-  if (readiness === 'research_adapter' || shouldResearch(domain, goal)) {
+  const readySignedExtension = facts.matchingSignedExtensions.find(extension => extension.usable);
+  if (readySignedExtension) {
+    pipeline.push({
+      step: 'Reuse callable signed extension',
+      status: facts.highRisk ? 'confirm_first' : 'available_now',
+      tool: readySignedExtension.toolNames[0] || 'extension_registry_list',
+      args: readySignedExtension.toolNames[0] ? { goal } : {},
+      notes: `Use ${readySignedExtension.name}@${readySignedExtension.version}; its live tools are bound to revision ${readySignedExtension.revisionId}.`,
+    });
+  } else {
+    const unavailableSignedExtension = facts.matchingSignedExtensions[0];
+    if (unavailableSignedExtension) {
+      pipeline.push({
+        step: 'Verify matching signed extension runtime',
+        status: 'available_now',
+        tool: 'extension_registry_test',
+        args: { extensionId: unavailableSignedExtension.extensionId, version: unavailableSignedExtension.version },
+        notes: `The signed extension is recorded as ${unavailableSignedExtension.runtimeStatus}, not callable. Do not treat its declared tools as available.`,
+      });
+    }
+  }
+
+  if (
+    !installable
+    && !facts.matchingLocalSkills.some(skill => skill.usable)
+    && !facts.matchingSignedExtensions.some(extension => extension.usable)
+  ) {
+    pipeline.push({
+      step: 'Inspect curated external MCP candidates',
+      status: 'available_now',
+      tool: 'external_control_candidates',
+      args: { industry: domain },
+      notes: 'This is read-only discovery. A candidate must still be explicitly reviewed and connected before it can publish tools.',
+    });
+  }
+
+  if (
+    !installable
+    && !facts.matchingSignedExtensions.some(extension => extension.usable)
+    && (readiness === 'research_adapter' || shouldResearch(domain, goal) || canGenerateSkill(domain, goal))
+  ) {
     pipeline.push({
       step: 'Research integration candidates',
       status: 'needs_research',
@@ -432,13 +596,18 @@ function buildPipeline(
     });
   }
 
-  if (readiness === 'generate_skill_draft' || (!facts.matchingTools.length && canGenerateSkill(domain, goal))) {
+  if (
+    !installable
+    && !facts.matchingTools.length
+    && !facts.matchingSignedExtensions.some(extension => extension.usable)
+    && canGenerateSkill(domain, goal)
+  ) {
     pipeline.push({
       step: 'Generate a reusable skill draft',
       status: 'confirm_first',
       tool: 'generate_skill',
       args: { description: buildSkillDescription(goal, domain) },
-      notes: 'Generated skills are standalone MCP packages. Generation/installation stays confirmation-sensitive.',
+      notes: 'Available only after the same task records a clear Skill Hall search, curated MCP discovery, and external integration research. Generated drafts remain pure-computation, separately reviewed MCP packages.',
     });
   }
 

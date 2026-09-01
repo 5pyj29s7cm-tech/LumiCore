@@ -6895,6 +6895,78 @@
     "en": "Available in the hall only; Lumi can call it after install and connection.",
     "zh": "当前只是大厅里的可安装技能；安装并连接后 Lumi 才能调用。"
   },
+  "skill-center.approve-install.20260901": {
+    "en": "Approve and install",
+    "zh": "确认并安装"
+  },
+  "skill-center.generated-draft-created.20260901": {
+    "en": "Skill draft generated. Review it before installation.",
+    "zh": "技能草稿已生成，请审核后安装"
+  },
+  "skill-center.generated-draft-install-explanation.20260901": {
+    "en": "This isolated draft was validated without executing its handler. Generated skills are restricted to pure computation/data transformation. Approval is bound to the exact source, manifest, dependency lock, and hash; only after approval may Lumi activate MCP and register its exact tools, and any failure rolls the install back.",
+    "zh": "当前只是隔离草稿，不可执行。确认安装后，LumiCore 会重新校验源码和清单，按已审核的依赖锁在不执行生命周期脚本的前提下复现依赖，再启动 MCP、登记精确工具并核对实时能力清单；任一步失败都会回滚。"
+  },
+  "skill-center.generated-skill-activated.20260901": {
+    "en": "Skill installed, registered, and ready for Lumi.",
+    "zh": "技能已安装、注册并可供 Lumi 调用"
+  },
+  "skill-center.no-extra-permissions.20260901": {
+    "en": "No extra permissions declared",
+    "zh": "未声明额外权限"
+  },
+  "skill-center.no-state-changes.20260901": {
+    "en": "No state changes detected",
+    "zh": "未检测到状态变更"
+  },
+  "skill-center.not-now.20260901": {
+    "en": "Not now",
+    "zh": "暂不安装"
+  },
+  "skill-center.pending-generated-draft.20260901": {
+    "en": "Skill draft awaiting review",
+    "zh": "待审核技能草稿"
+  },
+  "skill-center.permissions.20260901": {
+    "en": "Permissions",
+    "zh": "权限"
+  },
+  "skill-center.side-effects.20260901": {
+    "en": "Side effects",
+    "zh": "副作用"
+  },
+  "skill-center.validation-evidence.20260901": {
+    "en": "Validation evidence",
+    "zh": "\u9a8c\u8bc1\u8bc1\u636e"
+  },
+  "skill-center.artifact-hash.20260901": {
+    "en": "Approved artifact hash",
+    "zh": "\u5df2\u5ba1\u6838\u4ea7\u7269\u54c8\u5e0c"
+  },
+  "skill-center.execution-command.20260901": {
+    "en": "Post-approval execution command",
+    "zh": "\u5ba1\u6279\u540e\u6267\u884c\u547d\u4ee4"
+  },
+  "skill-center.static-findings.20260901": {
+    "en": "Static review findings",
+    "zh": "\u9759\u6001\u5ba1\u67e5\u7ed3\u679c"
+  },
+  "skill-center.no-static-findings.20260901": {
+    "en": "No blocked patterns were found. The generated handler has not been executed.",
+    "zh": "\u672a\u53d1\u73b0\u88ab\u7981\u6a21\u5f0f\uff1b\u751f\u6210\u7684 handler \u5c1a\u672a\u6267\u884c\u3002"
+  },
+  "skill-center.generated-source.20260901": {
+    "en": "Review generated source",
+    "zh": "\u67e5\u770b\u751f\u6210\u6e90\u7801"
+  },
+  "skill-center.review-required.20260901": {
+    "en": "Review required",
+    "zh": "\u9700\u8981\u5ba1\u6838"
+  },
+  "skill-center.review-source.20260901": {
+    "en": "Review source",
+    "zh": "\u5ba1\u67e5\u6e90\u7801"
+  },
   "skill-center.broken.565289cc16": {
     "en": "Broken",
     "zh": "坏技能"

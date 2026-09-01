@@ -423,8 +423,12 @@ function statusForEvent(
   if (event === 'agent:tool' || event === 'agent:tool_call') return 'executing';
   if (event === 'agent:status') {
     const status = String(payload.status || '').trim().toLowerCase();
-    if (status === 'thinking') return 'planning';
-    if (status === 'responding' || status === 'executing') return 'executing';
+    if (status === 'thinking' || status === 'responding') return 'planning';
+    // A model composing its answer is not task execution. Explicit execution
+    // status is accepted only when the server emitter attaches its own proof;
+    // model-authored text or an untrusted status frame cannot promote the
+    // durable request to `executing`.
+    if (status === 'executing' && payload.executionAccepted === true) return 'executing';
     if (status === 'waiting_confirmation') return 'waiting_confirmation';
     if (status === 'cancelling') return 'cancelling';
     if (status === 'error') return 'failed';

@@ -6,6 +6,7 @@ import { ToolRegistry } from '../server/tools/registry';
 import { toolRecordSucceeded } from '../server/cognition/task_execution_ledger';
 import { encodeToolResult } from '../server/tools/result_envelope';
 import { ToolLifecyclePersistenceError } from '../server/llm/adapter';
+import { registerDesktopTools } from '../server/tools/definitions/desktop_tools';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -90,6 +91,71 @@ function registryWithTargetPolicyTools() {
 }
 
 describe('unified tool execution engine', () => {
+  it('blocks adapter start when the shared pipeline marked the turn conversational', async () => {
+    const { registry, handler } = registryWithTool();
+    const record = await executeToolCall({
+      registry,
+      name: 'read_demo',
+      arguments: { target: 'desktop' },
+      context: {
+        actionIntent: '你发消息给我时不要一坨丢过来',
+        currentTurnExecutionRequested: false,
+      },
+    });
+
+    expect(record.error).toMatch(/current turn is conversational/i);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('blocks a stale desktop target before the adapter can legitimize it with a receipt', async () => {
+    const registry = new ToolRegistry();
+    registerDesktopTools(registry);
+    const desktopRelay = vi.fn(async () => JSON.stringify({ ok: true, status: 'verified' }));
+    const record = await executeToolCall({
+      registry,
+      name: 'desktop_open',
+      arguments: { target: 'https://wenshu.court.gov.cn' },
+      context: {
+        actionIntent: '打开网易云音乐并播放一首歌',
+        routedTaskText: '打开网易云音乐并播放一首歌',
+        currentTurnExecutionRequested: true,
+        desktopRelay,
+      },
+    });
+
+    expect(record.error).toMatch(/does not match the current task target/i);
+    expect(desktopRelay).not.toHaveBeenCalled();
+  });
+
+  it('uses recovered target context only for the exact trusted durable task', async () => {
+    const registry = new ToolRegistry();
+    registerDesktopTools(registry);
+    const desktopRelay = vi.fn(async () => JSON.stringify({ ok: true, status: 'verified' }));
+    const routedTaskText = [
+      '## Recent action continuation context',
+      'Recovered structured action state:',
+      '- taskId: task_music',
+      '- followupIntent: execute',
+      '- goal: 打开网易云音乐并播放一首歌',
+    ].join('\n');
+    const record = await executeToolCall({
+      registry,
+      name: 'desktop_open',
+      arguments: { target: 'https://wenshu.court.gov.cn' },
+      context: {
+        taskId: 'task_music',
+        actionIntent: '继续',
+        routedTaskText,
+        currentTurnExecutionRequested: true,
+        trustedActionContinuation: true,
+        desktopRelay,
+      },
+    });
+
+    expect(record.error).toMatch(/does not match the current task target/i);
+    expect(desktopRelay).not.toHaveBeenCalled();
+  });
+
   it('enforces the server target anchor when the caller omits preflight', async () => {
     const { registry, handlers } = registryWithTargetPolicyTools();
     const anchoredPath = path.join(os.homedir(), 'Desktop', 'quarterly-report.docx');

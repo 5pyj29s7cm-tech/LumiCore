@@ -1,8 +1,18 @@
 import { Router, Request, Response, NextFunction } from "express";
+import fs from "fs";
 import path from "path";
-import { mcpManager, getMCPConfig, updateMCPConfig, normalizeSkillInstallName } from "../mcp";
+import crypto from "node:crypto";
+import {
+  activateInstalledSkill,
+  getMCPConfig,
+  mcpManager,
+  normalizeSkillInstallName,
+  requireSafeMCPServerName,
+  unregisterServerTools,
+} from "../mcp";
 import {
   generateSkill,
+  isGeneratedSkillDraftLocation,
   readGeneratedSkillDraft,
   validateGeneratedSkillDraftForInstall,
 } from "../skills/generator";
@@ -10,10 +20,98 @@ import { getRecentWorkflows } from "../skills/worklog";
 import { loadKeys } from "../config/keys";
 import { requireAdmin, requireAuth, requireLocalRequest, resolveDomain } from "../middleware/auth";
 import { isLoopbackAddress } from "../config/local_identity";
+import { getExtensionRuntimeStates } from "../skills/runtime_state";
+import { toolRegistry } from "../tools/registry";
+import {
+  DESKTOP_SESSION_HEADER,
+  verifyDesktopSessionProof,
+} from "../config/desktop_bootstrap";
 
 const asyncHandler = (fn: (req: Request, res: Response, next?: NextFunction) => Promise<any>) =>
   (req: Request, res: Response, next: NextFunction) =>
     Promise.resolve(fn(req, res, next)).catch(next);
+
+const GENERATED_DRAFT_APPROVAL_TTL_MS = 15 * 60_000;
+type GeneratedDraftApproval = {
+  uid: string;
+  domain: string;
+  orgId: string;
+  directory: string;
+  contentHash: string;
+  desktopSessionDigest: string;
+  expiresAt: number;
+};
+const generatedDraftApprovals = new Map<string, GeneratedDraftApproval>();
+
+function desktopSessionDigest(req: Request): string {
+  return crypto.createHash('sha256')
+    .update(String(req.headers[DESKTOP_SESSION_HEADER] || ''))
+    .digest('hex');
+}
+
+function requireNativeDesktopSession(req: Request, res: Response, next: NextFunction): void {
+  if (!req.user || !verifyDesktopSessionProof(req.headers[DESKTOP_SESSION_HEADER], req.user.uid)) {
+    res.status(403).json({ error: 'A valid native desktop session proof is required for host skill changes.' });
+    return;
+  }
+  next();
+}
+
+function requirePersonalHostSkillScope(req: Request, res: Response, next: NextFunction): void {
+  const scope = resolveDomain(req.user!);
+  if (scope.domain !== 'personal' || Boolean(scope.orgId)) {
+    res.status(403).json({ error: 'Host skill changes are available only in the personal administrator workspace.' });
+    return;
+  }
+  next();
+}
+
+function issueGeneratedDraftApproval(req: Request, directory: string, contentHash: string) {
+  const now = Date.now();
+  for (const [nonce, approval] of generatedDraftApprovals) {
+    if (approval.expiresAt <= now) generatedDraftApprovals.delete(nonce);
+  }
+  const approvalNonce = crypto.randomBytes(32).toString('base64url');
+  const expiresAt = now + GENERATED_DRAFT_APPROVAL_TTL_MS;
+  const scope = resolveDomain(req.user!);
+  generatedDraftApprovals.set(approvalNonce, {
+    uid: req.user!.uid,
+    domain: scope.domain,
+    orgId: scope.orgId || '',
+    directory: path.resolve(directory),
+    contentHash,
+    desktopSessionDigest: desktopSessionDigest(req),
+    expiresAt,
+  });
+  return { approvalNonce, approvalExpiresAt: new Date(expiresAt).toISOString() };
+}
+
+function consumeGeneratedDraftApproval(
+  req: Request,
+  directory: string,
+  contentHash: string,
+): { ok: true } | { ok: false; error: string } {
+  const nonce = String(req.body?.approvalNonce || '').trim();
+  if (!nonce) return { ok: false, error: 'A one-time generated draft approval nonce is required.' };
+  const approval = generatedDraftApprovals.get(nonce);
+  // A presented nonce is single-use even when the remaining binding is wrong.
+  generatedDraftApprovals.delete(nonce);
+  if (!approval || approval.expiresAt <= Date.now()) {
+    return { ok: false, error: 'The generated draft approval expired or was already used. Review a fresh draft.' };
+  }
+  const scope = resolveDomain(req.user!);
+  if (
+    approval.uid !== req.user?.uid
+    || approval.domain !== scope.domain
+    || approval.orgId !== (scope.orgId || '')
+    || approval.directory !== path.resolve(directory)
+    || approval.contentHash !== contentHash
+    || approval.desktopSessionDigest !== desktopSessionDigest(req)
+  ) {
+    return { ok: false, error: 'The generated draft approval is not bound to this user, workspace scope, native session, directory, and review hash.' };
+  }
+  return { ok: true };
+}
 
 function getStartupFailureNote(description: string | undefined): string | undefined {
   const match = String(description || '').match(/\(disabled after startup failure:\s*([^)]+)\)\s*$/i);
@@ -44,12 +142,20 @@ export function mountSkillRoutes(
   io: { emit: (event: string, data: any) => void },
 ) {
   const activateOrRollback = async (name: string) => {
-    try {
-      return await mcpManager.restartServer(name);
-    } catch (error) {
-      mcpManager.uninstallSkill(name);
-      throw error;
+    const config = mcpManager.getConfig()[name];
+    if (config?.enabled !== true && config?.installationState !== 'pending') {
+      return {
+        skillName: name,
+        runtimeStatus: 'configuration_required' as const,
+        usable: false as const,
+        toolCount: 0,
+        registeredToolNames: [] as string[],
+        manifestCapabilityIds: [] as string[],
+        requiresApiKey: config?.requiresApiKey === true,
+        apiKeyEnv: config?.apiKeyEnv,
+      };
     }
+    return activateInstalledSkill(name, { rollbackInstallOnFailure: true });
   };
 
   // List all installed skills (local + external MCP servers)
@@ -59,33 +165,39 @@ export function mountSkillRoutes(
       const localSkills = mcpManager.listLocalSkills();
       const mcpConfig = getMCPConfig();
       const health = mcpManager.getServerHealth();
-      const allSkills = Object.entries(mcpConfig).map(([name, config]) => {
+      const allSkills = getExtensionRuntimeStates(toolRegistry.getCapabilityManifest()).map((runtime) => {
+        const name = runtime.name;
+        const config = mcpConfig[name];
         const local = localSkills.find(s => s.name === name);
         const serverHealth = health[name];
-        const startupError = serverHealth?.lastError || getStartupFailureNote(config.description);
+        const startupError = serverHealth?.lastError || getStartupFailureNote(config?.description);
         const summary = {
           name,
-          description: stripStartupFailureNote(config.description, name),
-          enabled: config.enabled,
-          source: config.source || 'external',
-          autoGenerated: config.autoGenerated || false,
-          toolCount: config.toolCount || (local?.toolCount || 0),
-          connected: mcpManager.getConnectedServers().includes(name),
-          broken: local?.broken || false,
-          healthStatus: serverHealth?.status || 'unknown',
-          requiresApiKey: config.requiresApiKey || false,
+          description: stripStartupFailureNote(config?.description || local?.description, name),
+          enabled: runtime.enabled,
+          source: config?.source || local?.source || 'local',
+          autoGenerated: config?.autoGenerated || local?.autoGenerated || false,
+          toolCount: runtime.toolNames.length || config?.toolCount || (local?.toolCount || 0),
+          connected: runtime.connected,
+          registered: runtime.registered,
+          usable: runtime.usable,
+          runtimeStatus: runtime.status,
+          registeredToolNames: runtime.toolNames,
+          broken: runtime.broken,
+          healthStatus: runtime.healthStatus,
+          requiresApiKey: config?.requiresApiKey || false,
         };
         if (!includeOperationalDetails) return summary;
         return {
           ...summary,
-          generatedFrom: config.generatedFrom,
+          generatedFrom: config?.generatedFrom,
           installedAt: local?.installedAt || '',
           startupError,
           consecutiveCrashes: serverHealth?.consecutiveCrashes || 0,
           lastCrashTime: serverHealth?.lastCrashTime,
           lastSuccessfulConnect: serverHealth?.lastSuccessfulConnect,
-          apiKeyEnv: config.apiKeyEnv,
-          apiKeyUrl: config.apiKeyUrl,
+          apiKeyEnv: config?.apiKeyEnv,
+          apiKeyUrl: config?.apiKeyUrl,
         };
       });
       res.json({ skills: allSkills });
@@ -95,7 +207,7 @@ export function mountSkillRoutes(
   });
 
   // Generate a skill from description or workflows
-  router.post("/skills/generate", requireAuth, requireAdmin, requireLocalRequest, asyncHandler(async (req, res) => {
+  router.post("/skills/generate", requireAuth, requireAdmin, requirePersonalHostSkillScope, requireLocalRequest, requireNativeDesktopSession, asyncHandler(async (req, res) => {
     try {
       const { description, provider, model } = req.body;
       const dc = resolveDomain(req.user!);
@@ -122,8 +234,13 @@ export function mountSkillRoutes(
       );
 
       if (result.success) {
+        if (!result.directory || !result.review?.contentHash) {
+          return res.status(500).json({ error: 'Generated draft review identity is incomplete.' });
+        }
+        const approval = issueGeneratedDraftApproval(req, result.directory, result.review.contentHash);
         res.json({
           ...result,
+          ...approval,
           activated: false,
           note: 'Draft created in the isolated Lumi data directory. Review and explicitly install it before use.',
         });
@@ -136,24 +253,53 @@ export function mountSkillRoutes(
   }));
 
   // Install a skill from git/npm/local
-  router.post("/skills/install", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
+  router.post("/skills/install", requireAuth, requireAdmin, requirePersonalHostSkillScope, requireLocalRequest, requireNativeDesktopSession, async (req, res) => {
     try {
       const { source, url, package: pkgName, path: localPath, name } = req.body;
 
-      if (source === 'git' && url) {
-        const destDir = await mcpManager.installFromGitHub(String(url));
-        const skillName = path.basename(destDir);
-        await activateOrRollback(skillName);
-        res.json({ success: true, name: skillName, directory: destDir });
+      if ((source === 'git' || source === 'github' || source === 'npm') && (url || pkgName)) {
+        return res.status(409).json({
+          success: false,
+          usable: false,
+          reviewRequired: true,
+          error: 'Direct third-party package execution is disabled. Use a curated external MCP candidate or an immutable reviewed package proposal.',
+        });
       } else if (source === 'local' && localPath) {
-        const generatedDraft = readGeneratedSkillDraft(localPath);
-        if (generatedDraft && req.body.approved !== true) {
+        const generatedDraftLocation = isGeneratedSkillDraftLocation(localPath);
+        if (!generatedDraftLocation) {
           return res.status(409).json({
-            error: 'Generated skill draft installation requires approved=true after reviewing permissions, risk, side effects, and trial results.',
+            success: false,
+            usable: false,
+            reviewRequired: true,
+            error: 'Arbitrary local skill execution is disabled. Only a Lumi-generated draft bound to its exact review hash can use this installation route.',
+          });
+        }
+        const generatedDraft = readGeneratedSkillDraft(localPath);
+        if (generatedDraftLocation && !generatedDraft) {
+          return res.status(400).json({
+            error: 'Generated skill draft metadata is missing or invalid. Regenerate and review the draft instead of installing it as an ordinary local skill.',
+          });
+        }
+        if (generatedDraftLocation && req.body.approved !== true) {
+          return res.status(409).json({
+            error: 'Generated skill draft installation requires approved=true after reviewing permissions, risk, side effects, and non-executing validation results.',
             draft: generatedDraft,
           });
         }
-        const validation = generatedDraft
+        const approvedContentHash = String(req.body.approvedContentHash || '').trim();
+        if (generatedDraftLocation && approvedContentHash !== generatedDraft!.review.contentHash) {
+          return res.status(409).json({
+            error: 'The approval does not match the current generated skill review hash. Review the draft again before installing it.',
+          });
+        }
+        const approval = consumeGeneratedDraftApproval(req, localPath, approvedContentHash);
+        if (!approval.ok) {
+          const approvalError = 'error' in approval
+            ? approval.error
+            : 'The generated draft approval could not be verified.';
+          return res.status(409).json({ error: approvalError });
+        }
+        const validation = generatedDraftLocation
           ? await validateGeneratedSkillDraftForInstall(localPath)
           : null;
         if (validation && !validation.valid) {
@@ -162,58 +308,72 @@ export function mountSkillRoutes(
             details: validation.errors,
           });
         }
-        const skillName = normalizeSkillInstallName(name || validation?.skillName || path.basename(localPath));
-        const destDir = await mcpManager.installSkillValidated(
-          skillName,
-          localPath,
-          validation?.review
-            ? {
-                approvedGeneratedDraft: {
-                  approvedAt: new Date().toISOString(),
-                  review: validation.review as unknown as Record<string, unknown>,
-                },
-              }
-            : undefined,
-        );
-        await activateOrRollback(skillName);
-        res.json({ success: true, name: skillName, directory: destDir });
-      } else if (source === 'npm' && pkgName) {
-        const npmDir = await mcpManager.installFromNpm(pkgName);
-        const npmName = path.basename(npmDir);
-        await activateOrRollback(npmName);
-        io.emit('skill:installed', { name: npmName, source: 'npm' });
-        res.json({ success: true, name: npmName, directory: npmDir });
-      } else if (source === 'github' && url) {
-        const ghDir = await mcpManager.installFromGitHub(url);
-        const ghName = path.basename(ghDir);
-        await activateOrRollback(ghName);
-        io.emit('skill:installed', { name: ghName, source: 'github' });
-        res.json({ success: true, name: ghName, directory: ghDir });
+        if (validation && (
+          !validation.validatedDirectory
+          || validation.review?.contentHash !== approvedContentHash
+        )) {
+          return res.status(409).json({
+            error: 'Generated skill validation did not return the exact approved immutable snapshot.',
+          });
+        }
+        const requestedName = String(name || '').trim();
+        if (validation && requestedName && normalizeSkillInstallName(requestedName) !== validation.skillName) {
+          return res.status(409).json({
+            error: `The approval is bound to generated skill "${validation.skillName}" and cannot install it as "${requestedName}".`,
+          });
+        }
+        const skillName = normalizeSkillInstallName(validation?.skillName || requestedName || path.basename(localPath));
+        const validatedSnapshot = validation?.validatedDirectory || '';
+        let destDir = '';
+        try {
+          destDir = await mcpManager.installSkillValidated(
+            skillName,
+            validatedSnapshot || localPath,
+            validation?.review
+              ? {
+                  approvedGeneratedDraft: {
+                    approvedAt: new Date().toISOString(),
+                    review: validation.review as unknown as Record<string, unknown>,
+                  },
+                }
+              : undefined,
+          );
+        } finally {
+          if (validatedSnapshot) {
+            try { fs.rmSync(validatedSnapshot, { recursive: true, force: true }); } catch {}
+          }
+        }
+        const activation = await activateOrRollback(skillName);
+        try { fs.rmSync(localPath, { recursive: true, force: true }); } catch {}
+        res.json({ success: true, name: skillName, directory: destDir, ...activation });
       } else {
-        res.status(400).json({ error: 'Invalid source. Use: github/git (with a GitHub HTTPS URL), local (with path), or npm (with package)' });
+        res.status(400).json({ error: 'Invalid source. Install an official Skill Hall entry, configure a curated MCP candidate, or provide a reviewed Lumi-generated draft.' });
       }
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  // Repair a local skill by reinstalling known sources or restarting it
-  router.post("/skills/:name/repair", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
+  // Repair is a pure restart, except for an exact package bundled with this build.
+  router.post("/skills/:name/repair", requireAuth, requireAdmin, requirePersonalHostSkillScope, requireLocalRequest, requireNativeDesktopSession, async (req, res) => {
     try {
       const result = await mcpManager.repairSkill(req.params.name);
       if (!result.success) return res.status(400).json(result);
+      const activation = await activateInstalledSkill(req.params.name);
       io.emit('skill:updated', { name: req.params.name });
-      res.json(result);
+      res.json({ ...result, ...activation });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
   // Explicitly clean incomplete local skills
-  router.delete("/skills/broken", requireAuth, requireAdmin, requireLocalRequest, async (_req, res) => {
+  router.delete("/skills/broken", requireAuth, requireAdmin, requirePersonalHostSkillScope, requireLocalRequest, requireNativeDesktopSession, async (_req, res) => {
     try {
       const removed = mcpManager.cleanupBrokenSkills();
       for (const name of removed) {
+        unregisterServerTools(name);
+        try { await mcpManager.disconnectServer(name); } catch {}
         io.emit('skill:uninstalled', { name });
       }
       res.json({ success: true, removed });
@@ -223,8 +383,10 @@ export function mountSkillRoutes(
   });
 
   // Uninstall a skill
-  router.delete("/skills/:name", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
+  router.delete("/skills/:name", requireAuth, requireAdmin, requirePersonalHostSkillScope, requireLocalRequest, requireNativeDesktopSession, async (req, res) => {
     try {
+      try { await mcpManager.disconnectServer(req.params.name); } catch {}
+      unregisterServerTools(req.params.name);
       mcpManager.uninstallSkill(req.params.name);
       io.emit('skill:uninstalled', { name: req.params.name });
       res.json({ success: true });
@@ -234,11 +396,15 @@ export function mountSkillRoutes(
   });
 
   // Enable a skill
-  router.post("/skills/:name/enable", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
+  router.post("/skills/:name/enable", requireAuth, requireAdmin, requirePersonalHostSkillScope, requireLocalRequest, requireNativeDesktopSession, async (req, res) => {
     try {
+      const skillName = requireSafeMCPServerName(req.params.name);
       const config = getMCPConfig();
-      if (!config[req.params.name]) return res.status(404).json({ error: 'Skill not found' });
-      const skillConfig = config[req.params.name];
+      if (!Object.prototype.hasOwnProperty.call(config, skillName)) return res.status(404).json({ error: 'Skill not found' });
+      const skillConfig = config[skillName];
+      if (skillConfig.source === 'local') {
+        mcpManager.assertLocalSkillRuntimeIdentity(skillName, skillConfig);
+      }
       if (skillConfig.requiresApiKey && skillConfig.apiKeyEnv) {
         const stored = loadKeys()[skillConfig.apiKeyEnv]?.trim();
         const fromEnv = process.env[skillConfig.apiKeyEnv]?.trim();
@@ -251,24 +417,31 @@ export function mountSkillRoutes(
           });
         }
       }
-      skillConfig.enabled = true;
-      updateMCPConfig(config);
-      try { await mcpManager.restartServer(req.params.name); } catch {} // start the process
-      res.json({ success: true });
+      if (skillConfig.installationState === 'active') {
+        skillConfig.enabled = true;
+      } else {
+        skillConfig.enabled = false;
+        skillConfig.installationState = 'pending';
+      }
+      mcpManager.saveConfig(config);
+      const activation = await activateInstalledSkill(skillName);
+      res.json({ success: true, ...activation });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
   // Disable a skill
-  router.post("/skills/:name/disable", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
+  router.post("/skills/:name/disable", requireAuth, requireAdmin, requirePersonalHostSkillScope, requireLocalRequest, requireNativeDesktopSession, async (req, res) => {
     try {
+      const skillName = requireSafeMCPServerName(req.params.name);
       const config = getMCPConfig();
-      if (!config[req.params.name]) return res.status(404).json({ error: 'Skill not found' });
-      config[req.params.name].enabled = false;
-      updateMCPConfig(config);
-      try { await mcpManager.disconnectServer(req.params.name); } catch {} // stop the process
-      res.json({ success: true });
+      if (!Object.prototype.hasOwnProperty.call(config, skillName)) return res.status(404).json({ error: 'Skill not found' });
+      config[skillName].enabled = false;
+      mcpManager.saveConfig(config);
+      await mcpManager.disconnectServer(skillName);
+      const unregistered = unregisterServerTools(skillName);
+      res.json({ success: true, unregistered });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

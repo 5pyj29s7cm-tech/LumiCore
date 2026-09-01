@@ -13,6 +13,22 @@ function declaration(name: string, description = name) {
   };
 }
 
+function mcpManifest(toolNames: string[], provider: string) {
+  return toolNames.map(toolName => ({
+    toolName,
+    capabilityId: `mcp.${provider}.${toolName}`,
+    family: provider,
+    lane: 'industry',
+    source: 'mcp',
+    provider,
+    provenance: { kind: 'mcp', provider, trust: 'third-party' },
+    intents: [],
+    routingTerms: toolName.split('_'),
+    executable: true,
+    deprecated: false,
+  })) as any;
+}
+
 const DECLARATIONS = [
   'work_product_plan',
   'work_product_verify',
@@ -155,8 +171,12 @@ const DECLARATIONS = [
   'mcp_content-ops_short_video_script',
   'git_status',
   'git_commit',
+  'skill_marketplace_search',
+  'skill_marketplace_install',
   'list_skills',
   'generate_skill',
+  'install_skill',
+  'capability_research',
   'self_extension_plan',
   'adapter_registry_list',
   'capability_gap_autofix',
@@ -648,6 +668,17 @@ describe('tool router', () => {
     expect(route.toolNames.indexOf('wechat_send_message')).toBeLessThan(3);
   });
 
+  it('hard-forbids messaging commits when the request only opens WeChat', () => {
+    const route = routeToolsForTurn(
+      '\u64cd\u4f5c\u684c\u9762\u6253\u5f00\u5fae\u4fe1',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).toContain('messaging');
+    expect(route.toolNames).not.toContain('wechat_send_message');
+    expect(route.forbiddenToolNames).toContain('wechat_send_message');
+  });
+
   it('prioritizes the dedicated send tool for a foreground WeChat inquiry', () => {
     const route = routeToolsForTurn(
       '你打开微信问一下阿露在干嘛。',
@@ -721,10 +752,16 @@ describe('tool router', () => {
   });
 
   it('filters unavailable MCP tools when a health gate is provided', () => {
+    const stockbotTools = DECLARATIONS
+      .map(item => item.function.name)
+      .filter(name => name.startsWith('mcp_stockbot_'));
     const route = routeToolsForTurn(
       'Lumi 帮我给 600519 做一个交易计划，算仓位和止损，再记录到模拟盘',
       DECLARATIONS,
-      { connectedMcpServers: [] },
+      {
+        connectedMcpServers: [],
+        capabilityManifest: mcpManifest(stockbotTools, 'stockbot'),
+      },
     );
 
     expect(route.categories).toContain('market_finance');
@@ -736,10 +773,16 @@ describe('tool router', () => {
   });
 
   it('keeps connected MCP tools when the health gate marks their server connected', () => {
+    const stockbotTools = DECLARATIONS
+      .map(item => item.function.name)
+      .filter(name => name.startsWith('mcp_stockbot_'));
     const route = routeToolsForTurn(
       'Lumi 帮我给 600519 做一个交易计划，算仓位和止损，再记录到模拟盘',
       DECLARATIONS,
-      { connectedMcpServers: ['stockbot'] },
+      {
+        connectedMcpServers: ['stockbot'],
+        capabilityManifest: mcpManifest(stockbotTools, 'stockbot'),
+      },
     );
 
     expect(route.toolNames).toEqual(expect.arrayContaining([
@@ -748,6 +791,51 @@ describe('tool router', () => {
       'mcp_stockbot_paper_trade',
     ]));
     expect(route.unavailableMcpServers).not.toContain('stockbot');
+  });
+
+  it('uses manifest provenance for MCP owners whose server name contains underscores', () => {
+    const name = 'mcp_sales_customer_ops_customer_health_review';
+    const unavailable = routeToolsForTurn(
+      'customer health review',
+      [declaration(name, 'Review customer health and sales risk')],
+      {
+        connectedMcpServers: [],
+        capabilityManifest: mcpManifest([name], 'sales_customer_ops'),
+      },
+    );
+    expect(unavailable.toolNames).not.toContain(name);
+    expect(unavailable.unavailableMcpServers).toEqual(['sales_customer_ops']);
+
+    const connected = routeToolsForTurn(
+      'customer health review',
+      [declaration(name, 'Review customer health and sales risk')],
+      {
+        connectedMcpServers: ['sales_customer_ops'],
+        capabilityManifest: mcpManifest([name], 'sales_customer_ops'),
+      },
+    );
+    expect(connected.toolNames).toContain(name);
+  });
+
+  it('does not apply an MCP health gate to an explicitly builtin manifest entry', () => {
+    const name = 'mcp_stockbot_stock_quote';
+    const manifest = [{
+      ...mcpManifest([name], 'stockbot')[0],
+      source: 'builtin',
+      provider: 'lumicore',
+      provenance: { kind: 'builtin', provider: 'lumicore', trust: 'core' },
+    }] as any;
+    const route = routeToolsForTurn(
+      'Check the stock quote for 600519.',
+      [declaration(name, 'Check a stock quote')],
+      {
+        connectedMcpServers: [],
+        capabilityManifest: manifest,
+      },
+    );
+
+    expect(route.toolNames).toContain(name);
+    expect(route.unavailableMcpServers).toEqual([]);
   });
 
   it('routes audio transcription requests to transcript file tooling', () => {
@@ -1205,8 +1293,13 @@ describe('tool router', () => {
 
     expect(route.categories).toContain('skills_agents');
     expect(route.toolNames).toEqual(expect.arrayContaining([
+      'skill_marketplace_search',
       'list_skills',
       'generate_skill',
+      'install_skill',
+      'capability_research',
+      'external_control_candidates',
+      'external_control_configure_candidate',
       'capability_gap_autofix',
       'client_get_state',
     ]));

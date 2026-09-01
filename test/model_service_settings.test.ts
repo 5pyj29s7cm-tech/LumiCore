@@ -59,7 +59,8 @@ describe('skill model-service settings classification', () => {
     const runtimeSettings = fs.readFileSync(path.join(process.cwd(), 'src/components/MCPSettings.tsx'), 'utf8');
     const skillHall = fs.readFileSync(path.join(process.cwd(), 'src/components/SkillCenter.tsx'), 'utf8');
     expect(runtimeSettings).toContain("detail: { action: 'open_skills' }");
-    expect(runtimeSettings).toContain("fetch(`/api/mcp/restart/${name}`");
+    expect(runtimeSettings).toContain("apiFetch(`/api/mcp/restart/${name}`");
+    expect(runtimeSettings).not.toContain("await fetch(`/api/mcp/restart/${name}`");
     expect(runtimeSettings).not.toContain('/api/mcp/github/search');
     expect(runtimeSettings).not.toContain('toggleServer');
     expect(skillHall).toContain('<GitHubMCPBrowser t={t} embedded />');

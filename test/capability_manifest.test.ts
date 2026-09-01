@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { registerAllTools } from '../server/tools/definitions';
+import { registerClientSelfTools } from '../server/tools/definitions/client_self_tools';
 import { ToolRegistry } from '../server/tools/registry';
 
 function sampleTool(name: string, securityLevel: 'safe' | 'confirm' | 'forbidden' = 'safe') {
@@ -141,5 +142,41 @@ describe('runtime capability manifest', () => {
         assurance: 'none',
       }),
     ]);
+  });
+
+  it('ranks capabilities from a natural Chinese sentence instead of requiring an exact substring', async () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      ...sampleTool('netease_music_play'),
+      description: '在网易云音乐中搜索并播放歌曲',
+      routingHints: ['网易云', '播放音乐', '歌曲'],
+    });
+    registry.register({
+      ...sampleTool('desktop_open'),
+      description: '打开一个桌面应用',
+      routingHints: ['打开软件'],
+    });
+    registerClientSelfTools(registry);
+
+    const output = JSON.parse(await registry.execute('client_capability_manifest', {
+      query: '请帮我打开网易云，然后播放一首周杰伦的歌',
+      executableOnly: true,
+      limit: 2,
+    }, {
+      toolPolicy: {
+        allowedTools: ['*'],
+        forbiddenTools: [],
+        requireConfirmation: [],
+        maxIterations: 4,
+      },
+    }));
+
+    expect(output.matched).toBeGreaterThan(0);
+    expect(output.capabilities[0]).toMatchObject({
+      toolName: 'netease_music_play',
+      executableThisTurn: true,
+    });
+    expect(output.capabilities[0].matchScore).toBeGreaterThan(0);
+    expect(output.capabilities[0].matchedTerms).toEqual(expect.arrayContaining(['网易云', '播放']));
   });
 });

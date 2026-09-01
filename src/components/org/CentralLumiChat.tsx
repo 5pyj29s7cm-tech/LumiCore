@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
+import { safeMarkdownComponents } from '../../lib/externalNavigation';
 import { useApp } from '../../contexts/AppContext';
 import { useSocket } from '../../hooks/useSocket';
 import { useT } from '../../lib/useT';
@@ -831,7 +832,7 @@ export function CentralLumiChat() {
                 </div>
               )}
               <div className={`markdown-body chat-message-markdown select-text ${msg.role === 'assistant' ? 'chat-message-markdown-agent text-[15px]' : 'chat-message-markdown-user text-sm'}`}>
-                <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                <Markdown components={safeMarkdownComponents} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
                   {msg.content}
                 </Markdown>
               </div>

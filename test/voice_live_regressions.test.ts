@@ -303,8 +303,9 @@ describe('live voice regression cases', () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result.text).toContain('已成功执行：client_get_state');
-    expect(result.text).toContain('不是完成当前请求所需的执行证据');
+    expect(result.text).toContain('\u5df2\u7ecf\u53d6\u5f97\u90e8\u5206\u6709\u6548\u56de\u6267');
+    expect(result.text).toContain('\u8fd8\u7f3a\u5c11\u80fd\u8bc1\u660e\u6700\u7ec8\u7ed3\u679c\u7684\u8bc1\u636e');
+    expect(result.text).not.toContain('client_get_state');
     expect(result.text).not.toContain('这一轮没有成功执行任何工具');
     expect(result.text).not.toContain('没有记录到成功的工具执行');
     expect(result.text).not.toContain('undefined');

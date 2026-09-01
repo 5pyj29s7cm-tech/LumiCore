@@ -1578,6 +1578,62 @@ describe('Lumi action contract', () => {
     expect(hasCoreActionEvidence(buildActionContract(text), withPlayingState, text)).toBe(true);
   });
 
+  it('keeps the field playback correction under the media contract and rejects unrelated receipts', () => {
+    const text = '\u90a3\u4f60\u76f4\u63a5\u653e\u5f53\u524d\u7684\u97f3\u4e50';
+    const verified = {
+      status: 'verified' as const,
+      strategy: 'terminal_receipt' as const,
+      reason: 'The adapter returned a terminal observation.',
+    };
+    const records = [{
+      name: 'desktop_list_apps',
+      arguments: { query: '\u7f51\u6613\u4e91' },
+      result: JSON.stringify([{ app_id: '\u7f51\u6613\u4e91\u97f3\u4e50' }]),
+      terminalVerification: verified,
+    }, {
+      name: 'desktop_open',
+      arguments: { target: '\u7f51\u6613\u4e91\u97f3\u4e50' },
+      result: JSON.stringify({
+        ok: false,
+        status: 'target_mismatch',
+        targetMatched: false,
+        actualTarget: { title: 'LumiCore', processName: 'lumi-core.exe' },
+      }),
+      terminalVerification: {
+        status: 'failed' as const,
+        strategy: 'terminal_receipt' as const,
+        reason: 'The foreground application did not match NetEase Cloud Music.',
+      },
+    }, {
+      name: 'desktop_active_window',
+      arguments: {},
+      result: JSON.stringify({ title: 'LumiCore', process_name: 'lumi-core.exe' }),
+      terminalVerification: verified,
+    }, {
+      name: 'desktop_keyboard_press',
+      arguments: { key: 'alt+space', expectedProcessId: 78084 },
+      result: JSON.stringify({
+        ok: true,
+        status: 'verified',
+        targetMatched: true,
+        actualTarget: { title: 'LumiCore', process_name: 'lumi-core.exe' },
+      }),
+      terminalVerification: verified,
+    }];
+
+    expect(requiresMediaPlaybackAction(text)).toBe(true);
+    expect(buildActionContract(text)).toMatchObject({
+      applies: true,
+      kind: 'desktop_operation',
+      label: 'Verified music playback',
+    });
+    expect(hasMediaPlaybackEvidence(records, text)).toBe(false);
+    expect(hasCoreActionEvidence(buildActionContract(text), records, text)).toBe(false);
+    expect(taskCompletionFromReceipts(text, recordsToTaskReceipts(records))).toMatchObject({
+      complete: false,
+    });
+  });
+
   it('renders a reusable prompt section with stages and evidence', () => {
     const prompt = formatActionContractPrompt(buildActionContract('\u89c6\u9891\u7f51\u7ad9\u81ea\u52a8\u8bc4\u8bba'));
 

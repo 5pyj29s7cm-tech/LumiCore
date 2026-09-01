@@ -7,13 +7,27 @@ import {
   testRegisteredExtension,
 } from '../../extensions/registry';
 import type { ToolRegistry } from '../registry';
+import type { ToolContext } from '../types';
+
+function assertTrustedLocalExtensionAdministrator(context?: ToolContext): void {
+  if (
+    context?.authenticated !== true
+    || context.authRole !== 'admin'
+    || context.localExecution !== true
+    || context.executionBoundary !== 'trusted_local'
+    || context.domain === 'work'
+    || Boolean(context.orgId)
+  ) {
+    throw new Error('Extension runtime changes and credential-bearing probes require the authenticated local desktop administrator in the personal workspace.');
+  }
+}
 
 export function registerExtensionRegistryTools(registry: ToolRegistry): void {
   registry.register({
     name: 'extension_registry_list',
     description: 'List locally installed signed Lumi extensions, OpenAI-compatible providers, declared capabilities, permissions, compatibility evidence, activation state, and publisher fingerprints. Secrets are never returned.',
     parameters: { type: 'object', properties: {}, required: [] },
-    handler: async (_args, context) => listExtensions(context),
+    handler: async (_args, context) => listExtensions(context, registry),
     permission: 'user',
     securityLevel: 'safe',
     capability: {
@@ -40,7 +54,7 @@ export function registerExtensionRegistryTools(registry: ToolRegistry): void {
       required: ['manifest'],
     },
     handler: async (args, context) => installAndActivateExtension({ manifest: args.manifest, trustPublisher: args.trustPublisher === true }, context, registry),
-    permission: 'user',
+    permission: 'admin',
     securityLevel: 'confirm',
     capability: {
       id: 'extension.registry.install', family: 'extension_registry', lane: 'system', source: 'builtin',
@@ -52,7 +66,15 @@ export function registerExtensionRegistryTools(registry: ToolRegistry): void {
       ],
       verification: {
         strategy: 'terminal_receipt', required: true,
-        requiredFields: ['status', 'receipt.manifestDigest', 'receipt.signerFingerprint'],
+        requiredFields: [
+          'status',
+          'manifestDigest',
+          'signerFingerprint',
+          'runtimeStatus',
+          'usable',
+          'registeredToolNames',
+        ],
+        requiredValues: { runtimeStatus: 'registered', usable: true },
         successStatuses: ['activated', 'already_active'],
         failureStatuses: ['compatibility_failed', 'rolled_back'],
         successSignals: ['signature verified, compatibility probe passed, registry persisted'],
@@ -76,18 +98,24 @@ export function registerExtensionRegistryTools(registry: ToolRegistry): void {
       },
       required: ['extensionId'],
     },
-    handler: async (args, context) => JSON.stringify({
-      ok: true,
-      verified: true,
-      verificationStatus: 'verified',
-      extensionId: String(args.extensionId || ''),
-      compatibility: await testRegisteredExtension(String(args.extensionId || ''), context?.userId, args.version ? String(args.version) : undefined),
-    }, null, 2),
-    permission: 'user',
+    handler: async (args, context) => {
+      assertTrustedLocalExtensionAdministrator(context);
+      return JSON.stringify({
+        ok: true,
+        verified: true,
+        verificationStatus: 'verified',
+        extensionId: String(args.extensionId || ''),
+        compatibility: await testRegisteredExtension(String(args.extensionId || ''), context?.userId, args.version ? String(args.version) : undefined),
+      }, null, 2);
+    },
+    permission: 'admin',
     securityLevel: 'safe',
     capability: {
       id: 'extension.registry.compatibility', family: 'extension_registry', lane: 'system', source: 'builtin',
-      operation: 'test', risk: 'low', sideEffects: [{ type: 'network_read', scope: 'signed extension compatibility endpoints', reversible: true }],
+      operation: 'test', risk: 'medium', sideEffects: [
+        { type: 'network_read', scope: 'signed extension compatibility endpoints', reversible: true },
+        { type: 'credential_access', scope: 'extension-dedicated credential namespace', reversible: true },
+      ],
       verification: {
         strategy: 'measured', required: true, requiredFields: ['compatibility.status', 'compatibility.latencyMs'],
         successSignals: ['bounded live compatibility probe'], limitations: [],
@@ -108,14 +136,16 @@ export function registerExtensionRegistryTools(registry: ToolRegistry): void {
       required: ['extensionId'],
     },
     handler: async (args, context) => rollbackExtension({ extensionId: String(args.extensionId || ''), version: args.version ? String(args.version) : undefined }, context, registry),
-    permission: 'user',
+    permission: 'admin',
     securityLevel: 'confirm',
     capability: {
       id: 'extension.registry.rollback', family: 'extension_registry', lane: 'system', source: 'builtin',
       operation: 'mutate', risk: 'high',
       sideEffects: [{ type: 'local_state_change', scope: 'active extension/provider revision', reversible: true }],
       verification: {
-        strategy: 'terminal_receipt', required: true, requiredFields: ['status', 'receipt.revisionId'],
+        strategy: 'terminal_receipt', required: true,
+        requiredFields: ['status', 'receipt.revisionId', 'runtimeStatus', 'usable', 'registeredToolNames'],
+        requiredValues: { runtimeStatus: 'registered', usable: true },
         successStatuses: ['rollback_activated'], failureStatuses: ['rollback_compatibility_failed', 'rollback_failed_previous_restored'],
         successSignals: ['prior signed revision registered and persisted'], limitations: [],
       },
@@ -132,7 +162,7 @@ export function registerExtensionRegistryTools(registry: ToolRegistry): void {
       required: ['extensionId'],
     },
     handler: async (args, context) => disableExtension(String(args.extensionId || ''), context, registry),
-    permission: 'user',
+    permission: 'admin',
     securityLevel: 'confirm',
     capability: {
       id: 'extension.registry.disable', family: 'extension_registry', lane: 'system', source: 'builtin',

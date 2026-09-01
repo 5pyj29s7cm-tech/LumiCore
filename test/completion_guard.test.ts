@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { guardCompletionClaims } from '../server/work_product/completion_guard';
 
+function expectStructuredGuardMarkdown(text: string): void {
+  const lines = text.split('\n');
+
+  expect(lines.length).toBeGreaterThanOrEqual(4);
+  expect(lines[0].trim()).not.toBe('');
+  expect(lines[1]).toBe('');
+  expect(lines.slice(2).every(line => line.startsWith('- '))).toBe(true);
+  expect(text).not.toContain('\n\n\n');
+}
+
 describe('completion guard desktop action handling', () => {
   it('does not mistake a source-access instruction inside verified legal research for an open claim', () => {
     const task = '律师版实机验收·法条与类案：基于案件ID case-001，只使用可核验来源输出结果；禁止凭模型记忆编造法条，不要登录外部网站。';
@@ -98,6 +108,63 @@ describe('completion guard desktop action handling', () => {
 
     expect(result.blocked).toBe(false);
     expect(result.text).toBe(response);
+  });
+});
+
+describe('completion guard reply formatting', () => {
+  it.each([
+    {
+      name: 'execution-status guard',
+      task: 'open WeChat from the desktop shortcut',
+      response: "I'm executing this now.",
+      expectedSummary: 'That action has not started successfully.',
+    },
+    {
+      name: 'action-promise guard',
+      task: 'review the attached document',
+      response: 'I will review the document now.',
+      expectedSummary: 'I have not started the requested action yet.',
+    },
+    {
+      name: 'completion-evidence guard',
+      task: 'open WeChat from the desktop shortcut',
+      response: 'Opened WeChat.',
+      expectedSummary: 'The desktop action does not yet have a verified completion result.',
+    },
+  ])('formats the $name as a Markdown paragraph followed by bullets', ({ task, response, expectedSummary }) => {
+    const result = guardCompletionClaims({ task, response, toolCalls: [] });
+
+    expect(result.blocked).toBe(true);
+    expect(result.text.startsWith(`${expectedSummary}\n\n- `)).toBe(true);
+    expectStructuredGuardMarkdown(result.text);
+  });
+
+  it('uses the same Markdown structure for a Chinese guarded reply', () => {
+    const result = guardCompletionClaims({
+      task: '\u6253\u5f00\u684c\u9762\u4e0a\u7684\u5fae\u4fe1',
+      response: '\u5df2\u7ecf\u6253\u5f00\u5fae\u4fe1\u3002',
+      toolCalls: [],
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.text).toContain('\u8fd9\u9879\u684c\u9762\u64cd\u4f5c\u8fd8\u4e0d\u80fd\u786e\u8ba4\u5b8c\u6210\u3002');
+    expectStructuredGuardMarkdown(result.text);
+  });
+
+  it.each([
+    '\u6211\u4f1a\u73b0\u5728\u6253\u5f00\u5ba2\u6237\u7aef\u77e5\u8bc6\u5e93\u3002',
+    '\u5df2\u7ecf\u6253\u5f00\u5ba2\u6237\u7aef\u77e5\u8bc6\u5e93\u3002',
+  ])('does not expose internal client tool names in guarded user-facing replies: %s', (response) => {
+    const result = guardCompletionClaims({
+      task: '\u6253\u5f00\u5ba2\u6237\u7aef\u77e5\u8bc6\u5e93',
+      response,
+      toolCalls: [],
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.text).not.toContain('client_get_state');
+    expect(result.text).not.toContain('client_action');
+    expectStructuredGuardMarkdown(result.text);
   });
 });
 
@@ -433,8 +500,9 @@ describe('completion guard generic execution claims', () => {
 
     expect(result.blocked).toBe(true);
     expect(result.reason).toContain('\u6210\u529f\u6267\u884c\u4e86\u67e5\u8be2\u6216\u68c0\u67e5\u5de5\u5177');
-    expect(result.text).toContain('\u5df2\u6210\u529f\u6267\u884c\uff1aclient_get_state');
-    expect(result.text).toContain('\u4e0d\u662f\u5b8c\u6210\u5f53\u524d\u8bf7\u6c42\u6240\u9700\u7684\u6267\u884c\u8bc1\u636e');
+    expect(result.text).toContain('\u5df2\u7ecf\u53d6\u5f97\u90e8\u5206\u6709\u6548\u56de\u6267');
+    expect(result.text).not.toContain('client_get_state');
+    expect(result.text).toContain('\u8fd8\u7f3a\u5c11\u80fd\u8bc1\u660e\u6700\u7ec8\u7ed3\u679c\u7684\u8bc1\u636e');
     expect(result.text).not.toContain('\u8fd9\u4e00\u8f6e\u6ca1\u6709\u6210\u529f\u6267\u884c\u4efb\u4f55\u5de5\u5177');
     expect(result.text).not.toContain('\u6ca1\u6709\u8bb0\u5f55\u5230\u6210\u529f\u7684\u5de5\u5177\u6267\u884c');
     expect(result.text).not.toContain('undefined');
@@ -456,7 +524,8 @@ describe('completion guard generic execution claims', () => {
 
     expect(result.blocked).toBe(true);
     expect(result.reason).toContain('\u6210\u529f\u6267\u884c\u4e86\u67e5\u8be2\u6216\u68c0\u67e5\u5de5\u5177');
-    expect(result.text).toContain('Successfully executed: client_get_state');
+    expect(result.text).toContain('Some verified progress exists');
+    expect(result.text).not.toContain('client_get_state');
     expect(result.text).not.toContain('client_get_state: undefined');
   });
 
@@ -477,7 +546,8 @@ describe('completion guard generic execution claims', () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result.text).toContain(`desktop_active_window: ${expectedDetail}`);
+    expect(result.text).toContain(expectedDetail);
+    expect(result.text).not.toContain('desktop_active_window');
     expect(result.text).not.toContain('undefined');
   });
 

@@ -44,6 +44,7 @@ import {
 } from '../cognition/deterministic_tool_recovery';
 import { formatDesktopControlPausePresentation } from '../regions/packs/cn/desktop_control_messages';
 import { buildTaskTargetAnchorProjection } from '../conversation/task_target_anchor';
+import { getExactRegisteredExtensionToolNames } from '../extensions/registry';
 
 export { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
 
@@ -64,6 +65,8 @@ export interface LLMConfig {
   attemptTimeouts?: Partial<ModelAttemptTimeouts>;
   /** Total provider-input budget including system, history, input and schemas. */
   inputTokenBudget?: number;
+  /** Schemas selected by the execution plan that provider compaction must retain. */
+  protectedToolNames?: string[];
   /** Cumulative budget spent waiting on model providers; tool runtime is excluded. */
   modelWaitBudgetMs?: number;
   /**
@@ -89,6 +92,9 @@ export interface LLMConfig {
    * This never changes executor authorization or the cloud candidate payload.
    */
   localRequiredToolNames?: string[];
+  /** Action/tool-loop streams are caller-buffered and may safely fail over
+   * before the selected candidate reaches a terminal response. */
+  bufferStreamUntilCandidateSuccess?: boolean;
 }
 
 export interface LLMResult {
@@ -228,7 +234,13 @@ function parseDiscoveredModelToolNames(
 ): string[] {
   const names: string[] = [];
   const seen = new Set<string>();
-  for (const record of records) {
+  // A model may first ask a broad inventory question and then refine it after
+  // seeing the receipt. Read newest-to-oldest so the refined, current query
+  // owns the bounded dynamic slots instead of being permanently crowded out
+  // by the first broad result. Registry policy still filters every declaration
+  // later, and this never raises MAX_DYNAMIC_DISCOVERY_TOOLS.
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index];
     if (
       record.name !== discoveryToolName
       || Boolean(record.error)
@@ -359,6 +371,93 @@ function toolLifecycleCallKey(call: { id?: string; name?: string }): string {
   return `name:${String(call.name || '').trim()}`;
 }
 
+const RUNTIME_ACTIVATION_CAPABILITIES = new Map([
+  ['install_skill', 'skills.package.install'],
+  ['skill_marketplace_install', 'skills.marketplace.install'],
+  ['client_repair_skill', 'skills.runtime.repair'],
+  ['external_control_configure_candidate', 'external-control.candidate.configure'],
+  ['extension_registry_install', 'extension.registry.install'],
+  ['extension_registry_rollback', 'extension.registry.rollback'],
+]);
+
+function verifiedRuntimeActivatedToolNames(
+  context: ToolContext | undefined,
+  records: ToolExecutionRecord[],
+  toolRegistry?: ToolRegistry,
+): string[] {
+  if (!toolRegistry) return [];
+  const currentTaskId = String(context?.taskId || '').trim();
+  const names = records
+    .slice(-8)
+    .flatMap(record => {
+      const expectedCapabilityId = RUNTIME_ACTIVATION_CAPABILITIES.get(record.name);
+      if (
+        !expectedCapabilityId
+        || record.capability?.capabilityId !== expectedCapabilityId
+        || !currentTaskId
+        || record.taskId !== currentTaskId
+        || record.error
+        || record.terminalVerification?.status !== 'verified'
+      ) return [];
+      try {
+        const payload = JSON.parse(String(record.result || '{}'));
+        const registeredRuntime = payload?.runtimeStatus === 'registered'
+          || (payload?.registered === true && payload?.connected === true);
+        if (
+          payload?.ok !== true
+          || payload?.usable !== true
+          || !registeredRuntime
+          || !Array.isArray(payload?.registeredToolNames)
+        ) return [];
+
+        if (record.name === 'extension_registry_install' || record.name === 'extension_registry_rollback') {
+          // Signed extension activation may widen only the exact durable task
+          // that produced the verified receipt. The registry owns the final
+          // identity check; payload-declared names never grant authority.
+          return getExactRegisteredExtensionToolNames({
+            extensionId: String(payload.extensionId || ''),
+            revisionId: String(payload.revisionId || ''),
+            userId: String(context?.userId || 'anonymous'),
+            manifestDigest: String(payload.manifestDigest || ''),
+            registry: toolRegistry,
+          });
+        }
+
+        return payload.registeredToolNames
+          .map((name: unknown) => String(name || '').trim())
+          .filter((name: string) => {
+            if (!name) return false;
+            const manifest = toolRegistry.getCapabilityManifestEntry(name, context?.toolPolicy);
+            return manifest?.executable === true;
+          });
+      } catch {
+        return [];
+      }
+    });
+  return Array.from(new Set(names.filter(Boolean)));
+}
+
+function refreshRuntimeActivatedToolAuthorization(
+  context: ToolContext | undefined,
+  records: ToolExecutionRecord[],
+  toolRegistry: ToolRegistry,
+): void {
+  if (!context?.toolPolicy) return;
+  const activated = verifiedRuntimeActivatedToolNames(context, records, toolRegistry);
+  if (activated.length === 0) return;
+  const forbidden = new Set(context.toolPolicy.forbiddenTools || []);
+  if (forbidden.has('*')) return;
+  const exactAllowed = activated.filter(name => !forbidden.has(name));
+  if (exactAllowed.length === 0) return;
+  context.toolPolicy = {
+    ...context.toolPolicy,
+    allowedTools: Array.from(new Set([
+      ...(context.toolPolicy.allowedTools || []),
+      ...exactAllowed,
+    ])),
+  };
+}
+
 /**
  * Resolve the current declaration projection. Discovery results may replace
  * low-priority initial schemas, but never increase the per-turn schema cap;
@@ -367,28 +466,121 @@ function toolLifecycleCallKey(call: { id?: string; name?: string }): string {
 function resolveModelVisibleToolNames(
   context: ToolContext | undefined,
   records: ToolExecutionRecord[],
+  toolRegistry?: ToolRegistry,
 ): string[] | undefined {
   const projection = context?.modelToolProjection;
   if (!projection) return undefined;
   const maxTools = Math.max(0, Math.min(32, Math.floor(projection.maxTools || 0)));
   if (maxTools === 0) return [];
+  const dropped = new Set(
+    (projection.droppedToolNames || []).map(name => String(name || '').trim()).filter(Boolean),
+  );
   const initial = Array.from(new Set(
     (projection.toolNames || []).map(name => String(name || '').trim()).filter(Boolean),
-  )).slice(0, maxTools);
-  if (!projection.allowDynamicDiscovery) return initial;
+  )).filter(name => !dropped.has(name)).slice(0, maxTools);
+  const activatedRuntimeTools = verifiedRuntimeActivatedToolNames(context, records, toolRegistry)
+    .filter(name => !dropped.has(name));
+  if (!projection.allowDynamicDiscovery && activatedRuntimeTools.length === 0) return initial;
 
   const discoveryToolName = String(
     projection.discoveryToolName || 'client_capability_manifest',
   ).trim();
-  const discovered = parseDiscoveredModelToolNames(records, discoveryToolName);
+  const discovered = parseDiscoveredModelToolNames(records, discoveryToolName)
+    .filter(name => !dropped.has(name));
   const remaining = initial.filter(name => (
-    name !== discoveryToolName && !discovered.includes(name)
+    name !== discoveryToolName
+    && !activatedRuntimeTools.includes(name)
+    && !discovered.includes(name)
   ));
   const keepDiscovery = initial.includes(discoveryToolName) && maxTools > 0;
   const ordinaryLimit = Math.max(0, maxTools - (keepDiscovery ? 1 : 0));
-  const visible = [...discovered, ...remaining].slice(0, ordinaryLimit);
+  const visible = Array.from(new Set([
+    ...activatedRuntimeTools,
+    ...discovered,
+    ...remaining,
+  ])).slice(0, ordinaryLimit);
   if (keepDiscovery) visible.push(discoveryToolName);
   return visible;
+}
+
+function parseVerifiedSameTaskReceipt(
+  records: ToolExecutionRecord[],
+  context: ToolContext | undefined,
+  toolName: string,
+  capabilityId: string,
+): any | null {
+  const taskId = String(context?.taskId || '').trim();
+  if (!taskId) return null;
+  for (const record of records.slice().reverse()) {
+    if (
+      record.name !== toolName
+      || record.taskId !== taskId
+      || record.error
+      || record.terminalVerification?.status !== 'verified'
+      || record.capability?.capabilityId !== capabilityId
+    ) continue;
+    try {
+      return JSON.parse(String(record.result || '{}'));
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Model-selected Skill generation is the last reuse route, never the first.
+ * The read-only host receipts must belong to this exact durable task so
+ * copied chat text or an older task cannot manufacture permission to generate.
+ */
+function hasSameTaskSkillGenerationDiscovery(
+  records: ToolExecutionRecord[],
+  context: ToolContext | undefined,
+): boolean {
+  const marketplace = parseVerifiedSameTaskReceipt(
+    records,
+    context,
+    'skill_marketplace_search',
+    'skills.marketplace.search',
+  );
+  const extensionPlan = parseVerifiedSameTaskReceipt(
+    records,
+    context,
+    'self_extension_plan',
+    'self-extension.plan',
+  );
+  const marketplaceSkills = Array.isArray(marketplace?.skills)
+    ? marketplace.skills
+    : Array.isArray(extensionPlan?.existingCoverage?.marketplaceSkills)
+      ? extensionPlan.existingCoverage.marketplaceSkills
+      : null;
+  const noInstallableSkill = Array.isArray(marketplaceSkills)
+    && marketplaceSkills.every((skill: any) => skill?.installable !== true || skill?.installed === true);
+  const signedExtensions = Array.isArray(extensionPlan?.existingCoverage?.signedExtensions)
+    ? extensionPlan.existingCoverage.signedExtensions
+    : null;
+  const noUsableSignedExtension = Array.isArray(signedExtensions)
+    && signedExtensions.every((extension: any) => extension?.usable !== true);
+  const externalCandidates = parseVerifiedSameTaskReceipt(
+    records,
+    context,
+    'external_control_candidates',
+    'external-control.candidate.list',
+  );
+  const research = parseVerifiedSameTaskReceipt(
+    records,
+    context,
+    'capability_research',
+    'capability.external.research',
+  );
+  return noInstallableSkill
+    && noUsableSignedExtension
+    && externalCandidates?.ok === true
+    && externalCandidates?.status === 'listed'
+    && Array.isArray(externalCandidates?.candidates)
+    && research?.ok === true
+    && research?.status === 'researched'
+    && Array.isArray(research?.candidates);
 }
 
 function taskExplicitlyNamesTool(task: string, toolName: string): boolean {
@@ -404,7 +596,7 @@ function taskExplicitlyNamesTool(task: string, toolName: string): boolean {
  * every declaration, while a dynamic route retains its semantic winner,
  * explicitly requested/previously executed tools, and discovery.
  */
-function resolveLocalRequiredToolNames(
+export function resolveRequiredToolNamesForModel(
   context: ToolContext | undefined,
   primaryTask: string,
   declarations: Array<{ function: { name: string } }>,
@@ -418,22 +610,31 @@ function resolveLocalRequiredToolNames(
   const required = new Set<string>();
   const projection = context?.modelToolProjection;
 
-  if (projection && projection.allowDynamicDiscovery !== true) {
-    for (const name of orderedNames) required.add(name);
-  } else {
-    required.add(orderedNames[0]);
-    for (const name of orderedNames) {
-      if (taskExplicitlyNamesTool(primaryTask, name)) required.add(name);
-    }
-    for (const record of records) {
-      const name = String(record?.name || '').trim();
-      if (declared.has(name)) required.add(name);
-    }
-    const discovery = String(
-      projection?.discoveryToolName || 'client_capability_manifest',
-    ).trim();
-    if (declared.has(discovery)) required.add(discovery);
+  // `toolNames` is the optional model choice set.  Never promote the entire
+  // hard projection (often 20-32 verbose schemas) into an unshrinkable request
+  // merely because this is a trusted continuation.  The pipeline records the
+  // exact pinned/workflow/verification subset separately.
+  for (const name of projection?.requiredToolNames || []) {
+    if (declared.has(name)) required.add(name);
   }
+  // The first declaration is the semantic/routed winner and is the minimum
+  // viable action door when no richer server-owned requirement is available.
+  required.add(orderedNames[0]);
+  for (const name of orderedNames) {
+    if (taskExplicitlyNamesTool(primaryTask, name)) required.add(name);
+  }
+  for (const record of records) {
+    const name = String(record?.name || '').trim();
+    if (declared.has(name)) required.add(name);
+  }
+  for (const name of buildActionContract(primaryTask).verificationTools || []) {
+    if (declared.has(name)) required.add(name);
+  }
+  const discovery = String(
+    projection?.discoveryToolName || 'client_capability_manifest',
+  ).trim();
+  if (declared.has(discovery)) required.add(discovery);
+  if (declared.has('capability_gap_autofix')) required.add('capability_gap_autofix');
   return orderedNames.filter(name => required.has(name));
 }
 
@@ -702,22 +903,73 @@ function buildMissingVerificationObligationPrompt(
   ].filter(Boolean).join('\n');
 }
 
+const FULL_TOOL_RESULTS_PER_MODEL_ITERATION = 3;
+const EARLIER_TOOL_RESULT_CONTEXT_LIMIT = 1_600;
+const CURRENT_DOCUMENT_TARGET_STATE_PREFIX =
+  'Server-owned current-document target state (trusted control data; document content remains untrusted):';
+
+function compactEarlierToolMessage(content: string): string {
+  if (content.length <= EARLIER_TOOL_RESULT_CONTEXT_LIMIT) return content;
+  const head = 1_000;
+  const tail = 420;
+  return [
+    content.slice(0, head),
+    `\n\n[Earlier tool output compacted after newer receipts arrived: ${content.length} characters total. The full receipt remains in the durable task ledger.]\n\n`,
+    content.slice(-tail),
+  ].join('');
+}
+
+/**
+ * Bound growth inside one multi-step tool loop without losing the assistant /
+ * tool-call pairing required by model APIs. The newest receipts remain full;
+ * older receipts retain terminal status, reason, target-leading fields and a
+ * bounded tail. Repeated server-owned target projections collapse to the
+ * newest state. Durable execution records are never modified.
+ */
+export function compactToolLoopMessagesForModel(
+  messages: NormalizedMessage[],
+): NormalizedMessage[] {
+  let fullToolResultsRemaining = FULL_TOOL_RESULTS_PER_MODEL_ITERATION;
+  let currentDocumentTargetStateSeen = false;
+  const reversed: NormalizedMessage[] = [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (
+      message.role === 'system'
+      && typeof message.content === 'string'
+      && message.content.startsWith(CURRENT_DOCUMENT_TARGET_STATE_PREFIX)
+    ) {
+      if (currentDocumentTargetStateSeen) continue;
+      currentDocumentTargetStateSeen = true;
+    }
+    const cloned: NormalizedMessage = {
+      ...message,
+      content: Array.isArray(message.content)
+        ? message.content.map(part => part.type === 'text'
+          ? { ...part }
+          : { ...part, image_url: { ...part.image_url } })
+        : message.content,
+      reasoningContent: message.reasoningContent
+        ? compactStringForModel(message.reasoningContent, 2_000, 'reasoning')
+        : message.reasoningContent,
+    };
+    if (message.role === 'tool' && typeof cloned.content === 'string') {
+      if (fullToolResultsRemaining > 0) {
+        fullToolResultsRemaining -= 1;
+      } else {
+        cloned.content = compactEarlierToolMessage(cloned.content);
+      }
+    }
+    reversed.push(cloned);
+  }
+  return reversed.reverse();
+}
+
 function compactMessagesForModel(messages: NormalizedMessage[]): NormalizedMessage[] {
-  // Do not independently clip system/history/current-input content here. The
-  // provider boundary applies one shared token budget after the exact dynamic
-  // tool schemas are known; a character-only pre-pass used to cut safety text
-  // out of the middle while still allowing a 43k-token assembled request.
-  return messages.map(message => ({
-    ...message,
-    content: Array.isArray(message.content)
-      ? message.content.map(part => part.type === 'text'
-        ? { ...part }
-        : { ...part, image_url: { ...part.image_url } })
-      : message.content,
-    reasoningContent: message.reasoningContent
-      ? compactStringForModel(message.reasoningContent, 2_000, 'reasoning')
-      : message.reasoningContent,
-  }));
+  // The provider boundary still owns the shared token budget after dynamic
+  // schemas are known. This pass only prevents iterative tool output and
+  // repeated target state from growing without bound inside the same turn.
+  return compactToolLoopMessagesForModel(messages);
 }
 
 function collectArtifactRefs(text: string): string[] {
@@ -1621,7 +1873,7 @@ export async function runWithTools(
           {
             failClosedWithoutPolicy: context?.autonomous === true,
             context: withoutRuntimeOwnedRecoveryCall(context),
-            visibleToolNames: resolveModelVisibleToolNames(context, checkpointRecords),
+            visibleToolNames: resolveModelVisibleToolNames(context, checkpointRecords, toolRegistry),
           },
         );
         const missingVerification = buildMissingVerificationObligationPrompt(
@@ -1724,7 +1976,22 @@ async function runWithToolsInternal(
   // Exact content recovered from a revoked confirmation is adapter-private.
   // No registry declaration hook or tool handler may observe that hidden
   // payload unless it becomes the validated arguments of write_file itself.
-  const toolExecutionContext = withoutRuntimeOwnedRecoveryCall(context);
+  const sanitizedToolExecutionContext = withoutRuntimeOwnedRecoveryCall(context);
+  const toolExecutionContext = sanitizedToolExecutionContext
+    ? {
+        ...sanitizedToolExecutionContext,
+        ...(sanitizedToolExecutionContext.modelToolProjection
+          ? {
+              modelToolProjection: {
+                ...sanitizedToolExecutionContext.modelToolProjection,
+                droppedToolNames: [
+                  ...(sanitizedToolExecutionContext.modelToolProjection.droppedToolNames || []),
+                ],
+              },
+            }
+          : {}),
+      }
+    : undefined;
   const usageRecords: LLMUsageRecord[] = usageRecordSink || [];
   const invocationBudget: ToolInvocationBudgetState = invocationBudgetState || newToolInvocationBudget();
   invocationBudget.lastTouchedAt = Date.now();
@@ -1789,12 +2056,13 @@ async function runWithToolsInternal(
         usageRecords,
       };
     }
+    refreshRuntimeActivatedToolAuthorization(toolExecutionContext, executionLog, toolRegistry);
     const toolDeclarations = toolRegistry.getToolDeclarationsForPolicy(
-      context?.toolPolicy,
+      toolExecutionContext?.toolPolicy,
       {
         failClosedWithoutPolicy: context?.autonomous === true,
         context: toolExecutionContext,
-        visibleToolNames: resolveModelVisibleToolNames(toolExecutionContext, executionLog),
+        visibleToolNames: resolveModelVisibleToolNames(toolExecutionContext, executionLog, toolRegistry),
       },
     );
     const exposedToolNames = new Set(toolDeclarations.map(declaration => declaration.function.name));
@@ -1805,8 +2073,15 @@ async function runWithToolsInternal(
         ...config,
         signal: attempt.signal,
         attemptTimeouts: attempt.attemptTimeouts,
-        localRequiredToolNames: resolveLocalRequiredToolNames(
-          context,
+        bufferStreamUntilCandidateSuccess: toolSessionActive,
+        protectedToolNames: resolveRequiredToolNamesForModel(
+          toolExecutionContext,
+          primaryTask,
+          toolDeclarations,
+          executionLog,
+        ),
+        localRequiredToolNames: resolveRequiredToolNamesForModel(
+          toolExecutionContext,
           primaryTask,
           toolDeclarations,
           executionLog,
@@ -1857,6 +2132,15 @@ async function runWithToolsInternal(
           onChunk: onStreamChunk,
         });
     recordLatency('llm', Date.now() - llmStart);
+
+    const providerDroppedToolNames = response.modelRequestContext?.droppedToolNames || [];
+    if (providerDroppedToolNames.length > 0) {
+      // A local/fallback candidate may have a tighter schema budget than the
+      // next candidate.  Enforce its actual manifest for this response only;
+      // do not permanently narrow the task projection or dynamic discovery
+      // would be unable to surface a capability on the following iteration.
+      for (const name of providerDroppedToolNames) exposedToolNames.delete(name);
+    }
 
     // A provider may ignore AbortSignal and resolve after the caller has
     // cancelled or timed out. Re-check before interpreting a late response so
@@ -1989,7 +2273,7 @@ async function runWithToolsInternal(
         executionLog,
         toolRegistry,
         exposedToolNames,
-        context?.toolPolicy,
+        toolExecutionContext?.toolPolicy,
       );
       if (
         missingVerification
@@ -2254,6 +2538,16 @@ async function runWithToolsInternal(
         preflight: () => {
           if (!currentAppGuard.allowed) {
             return { allowed: false, reason: currentAppGuard.reason, arguments: executionArguments };
+          }
+          if (
+            tc.name === 'generate_skill'
+            && !hasSameTaskSkillGenerationDiscovery(executionLog, toolExecutionContext)
+          ) {
+            return {
+              allowed: false,
+              arguments: executionArguments,
+              reason: 'Skill generation is the final reuse route. This same task must first verify existing signed extensions, record a Skill Hall search with no installable match, inspect curated external MCP candidates, and complete external integration research.',
+            };
           }
           if (isForbiddenLocalCadImageFallback(primaryTask, tc.name, tc.arguments || {})) {
             return {

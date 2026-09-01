@@ -148,11 +148,44 @@ function hydrateConversationActionState(
   const resolveHistoricalTask = Boolean(
     query.trim() && needsRecentActionContinuationContext(query),
   );
-  const ledgerState = getConversationActionStateFromLedger(db, {
-    conversationId: conversation.id,
-    userId: conversation.userId,
-    query: resolveHistoricalTask ? query : '',
-  });
+  // Once an unrelated conversational turn detaches the live pointer, only an
+  // explicit continuation query may rehydrate unfinished historical work.
+  // Looking up the newest ledger row for every ordinary turn recreates the
+  // stale pointer we just detached and lets an old goal leak into new text.
+  const recoverableActiveTask = !existing && !resolveHistoricalTask
+    ? (db.conversationActionTasks || [])
+      .filter((task: any) => (
+        task.conversationId === conversation.id
+        && task.userId === conversation.userId
+        && conversationTaskStatusOwnsExecutionLease(task.status)
+        && Boolean(String(task.activeRequestId || '').trim())
+        && (db.conversationActionTurns || []).some((turn: any) => (
+          turn.conversationId === conversation.id
+          && turn.userId === conversation.userId
+          && turn.taskId === task.id
+          && turn.requestId === task.activeRequestId
+          && (turn.status === 'accepted' || turn.status === 'leased')
+        ))
+      ))
+      .sort((left: any, right: any) => (
+        String(right.updatedAt || '').localeCompare(String(left.updatedAt || ''))
+        || String(right.createdAt || '').localeCompare(String(left.createdAt || ''))
+      ))[0]
+    : null;
+  const recoverableActiveState = recoverableActiveTask
+    ? getConversationActionStateByTaskId(db, {
+        conversationId: conversation.id,
+        userId: conversation.userId,
+        taskId: String(recoverableActiveTask.id || ''),
+      })
+    : null;
+  const ledgerState = existing || resolveHistoricalTask
+    ? getConversationActionStateFromLedger(db, {
+        conversationId: conversation.id,
+        userId: conversation.userId,
+        query: resolveHistoricalTask ? query : '',
+      })
+    : recoverableActiveState;
   const exactExistingLedgerState = existing?.taskId
     ? getConversationActionStateByTaskId(db, {
         conversationId: conversation.id,
@@ -201,10 +234,10 @@ function shouldDetachUnrelatedActionState(
 }
 
 /**
- * A blocked/confirmation-waiting task stays in the durable ledger for audit,
- * but must stop being the conversation's live pointer once the user clearly
- * starts an unrelated turn. Keeping that pointer live caused later model,
- * screen and biometric questions to inherit the older task id.
+ * A blocked/confirmation-waiting task stays resumable in the durable ledger,
+ * but stops being the conversation's live pointer once the user clearly starts
+ * an unrelated turn. Detachment is not cancellation: an explicit later
+ * continue/retry/confirmation may select the same task from the ledger.
  */
 function detachUnrelatedConversationActionState(
   db: any,
@@ -214,13 +247,17 @@ function detachUnrelatedConversationActionState(
 ): boolean {
   const previous = normalizeConversationActionState(conversation.actionContinuationState);
   if (!previous || !shouldDetachUnrelatedActionState(previous, userText)) return false;
-  return Boolean(finalizeConversationActionTask(db, {
+  // Persist the unfinished state without a request lease, then remove only the
+  // compatibility projection. The task identity, blocker, policy, receipts
+  // and pending confirmation remain authoritative in the durable ledger.
+  syncConversationActionTaskLedger(db, {
     conversation,
     state: previous,
-    outcome: 'cancelled',
-    assistantState: 'Detached because the user started an unrelated turn.',
+    userText: previous.latestInstruction || previous.goal,
     now,
-  }));
+  });
+  delete conversation.actionContinuationState;
+  return true;
 }
 
 export interface Conversation {
@@ -1681,7 +1718,12 @@ export function prepareConversationActionExecution(input: {
     userText: input.userText,
     requestId: input.requestId,
     userMessageId: input.userMessageId,
-    preserveExistingTask: input.preserveExistingTask ?? input.forceResume === true,
+    // A fresh executable turn still needs to see the prior unfinished state
+    // long enough for prepareConversationActionTaskState to record an exact
+    // supersession edge. Detachment is only for a genuinely conversational
+    // turn; it must not erase the old identity before a replacement is built.
+    preserveExistingTask: input.preserveExistingTask
+      ?? (input.forceResume === true || input.forceTask === true),
   }, true);
   const boundTurn = binding.turn;
   // The durable transcript identity is the ownership fence for every channel.
@@ -2308,8 +2350,9 @@ function quarantineForegroundTaskWithoutActionTurnInDb(
  * never guessed: an otherwise identifiable request is quarantined as
  * persistence_unknown instead of publishing success.
  *
- * Chat and Task now use this boundary before releasing foreground resources.
- * Voice is intentionally not integrated in this slice.
+ * Chat, Task, and Voice use this boundary before releasing foreground
+ * resources so every entry point applies the same task/receipt ownership
+ * verdict.
  */
 export function finalizeForegroundRequest(
   input: FinalizeForegroundRequestInput,
@@ -3494,16 +3537,19 @@ export function addMessage(msg: {
             || conv.pendingActionContinuation?.requestId,
         })
         : { currentRecords: records, staleRecords: [] };
-      const terminalTaskDisposition = receiptOwnership.staleRecords.length === 0
-        ? resolveConversationActionTerminalDisposition({
-            db,
-            conversation: conv,
-            role: msg.role,
-            requestId: msg.requestId,
-            skipActionContinuation: msg.skipActionContinuation,
-            terminalDisposition: msg.terminalTaskDisposition,
-          })
-        : null;
+      // A transport's semantic terminal result is fenced by the exact live
+      // task/request/turn in resolveConversationActionTerminalDisposition.
+      // Late receipts have their own immutable ownership fence below; their
+      // presence in the same persistence batch must not suppress the current
+      // request's otherwise-valid terminal disposition.
+      const terminalTaskDisposition = resolveConversationActionTerminalDisposition({
+        db,
+        conversation: conv,
+        role: msg.role,
+        requestId: msg.requestId,
+        skipActionContinuation: msg.skipActionContinuation,
+        terminalDisposition: msg.terminalTaskDisposition,
+      });
       if (receiptOwnership.staleRecords.length > 0) {
         // Receipt ownership is independent from the transient user/assistant
         // pairing pointer. A late terminal may arrive after that pointer was
@@ -3764,6 +3810,7 @@ export function addMessage(msg: {
               turnId: currentUserMessageIdForLedger || msg.requestId || pending.requestId,
               now,
               terminalDisposition: terminalTaskDisposition || undefined,
+              assistantState: msg.content,
               currentPairingAuthority: {
                 userMessageId: pending.messageId,
                 assistantMessageId: id,

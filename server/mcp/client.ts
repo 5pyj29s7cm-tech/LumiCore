@@ -9,6 +9,7 @@ import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/webso
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import crypto from 'crypto';
 import { exec, execFile } from 'child_process';
 import { getDataPath } from '../config/data_path';
 import { loadKeys } from '../config/keys';
@@ -26,6 +27,18 @@ import type {
   CapabilityTrust,
   CapabilityVerification,
 } from '../tools/types';
+import {
+  computeSkillContentDigest,
+  configTargetsInstalledPackage,
+  createBundledSkillIdentity,
+  createGeneratedSkillIdentity,
+  createManagedSkillRuntimeIdentity,
+  signManagedSkillIdentity,
+  verifyManagedSkillIdentitySignature,
+  verifyManagedSkillRuntimeIdentity,
+  type ManagedSkillIdentity,
+} from '../marketplace/official_identity';
+import { getJwtSecret } from '../config/local_identity';
 
 export interface MCPToolCapabilityDeclaration {
   id?: string;
@@ -46,6 +59,7 @@ export interface MCPToolCapabilityDeclaration {
 export interface MCPServerConfig {
   command?: string;
   args?: string[];
+  cwd?: string;
   env?: Record<string, string>;
   enabled: boolean;
   source?: 'local' | 'external';      // local = Lumi skill dir, external = third-party
@@ -60,13 +74,23 @@ export interface MCPServerConfig {
   apiKeyEnv?: string;                   // env/stored key name required by this server
   apiKeyUrl?: string;                   // provider console URL for setup UI
   cachedTools?: MCPToolDef[];            // persisted declarations for on-demand process startup
+  /** Fingerprint of the exact server config that produced cachedTools. */
+  cachedToolsFingerprint?: string;
+  /** Server HMAC over a managed local Skill's cached tool inventory. */
+  cachedToolsAttestation?: string;
+  /** Installation is non-routable until activation+manifest verification commits it active. */
+  installationState?: 'pending' | 'active' | 'disabled';
   capabilityDefault?: MCPToolCapabilityDeclaration;
   toolCapabilities?: Record<string, MCPToolCapabilityDeclaration>;
+  /** Server-owned identity for an installed official bundled Skill. */
+  managedSkill?: ManagedSkillIdentity;
 }
 
 export interface MCPToolDef {
   serverName: string;
   name: string;
+  /** Exact protocol tool name returned by this server, without Lumi's registry prefix. */
+  rawName?: string;
   description?: string;
   inputSchema: Record<string, any>;
   annotations?: {
@@ -100,6 +124,10 @@ export interface SkillRepairResult {
   reason?: string;
   directory?: string;
   toolCount?: number;
+  /** Exact declarations returned by the connected MCP server. */
+  tools?: MCPToolDef[];
+  reviewRequired?: boolean;
+  requiredFlow?: 'immutable_package_proposal';
 }
 
 interface ConnectedServer {
@@ -116,9 +144,59 @@ interface MCPConfigFile {
 }
 
 const SKILLS_DIR = path.join(os.homedir(), 'lumi_skills');
+const PENDING_SKILL_MARKER = '.lumi-pending';
+const RESERVED_RUNTIME_NAMES = new Set(['.', '..', '__proto__', 'constructor', 'prototype']);
+const FORBIDDEN_MANAGED_ENV_KEYS = new Set([
+  'NODE_OPTIONS',
+  'NODE_PATH',
+  'LD_PRELOAD',
+  'LD_LIBRARY_PATH',
+  'DYLD_INSERT_LIBRARIES',
+  'DYLD_LIBRARY_PATH',
+]);
 const DEFAULT_RUNTIME_CONFIG = 'mcp_config.json';
 const FACTORY_CONFIG = path.join(process.cwd(), 'server', 'mcp', 'config.example.json');
 const PROCESS_IDLE_TIMEOUT_MS = 60_000;
+const PROCESS_CONNECT_TIMEOUT_MS = 15_000;
+const DEFAULT_TOOL_CALL_WALL_TIMEOUT_MS = 120_000;
+
+class MCPRuntimeTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MCPRuntimeTimeoutError';
+  }
+}
+
+function withMCPWallTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  message: string,
+  onTimeout: () => void,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { onTimeout(); } catch {}
+      reject(new MCPRuntimeTimeoutError(message));
+    }, timeoutMs);
+    operation.then(
+      value => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      error => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
 const DEFAULT_CONFIG_FILE: MCPConfigFile = {
   mcpServers: {
     filesystem: {
@@ -144,14 +222,6 @@ const DEFAULT_CONFIG_FILE: MCPConfigFile = {
       source: 'external',
       transport: 'stdio',
       description: 'Git repository inspection tools.',
-    },
-    playwright: {
-      command: 'npx',
-      args: ['-y', '@playwright/mcp@latest'],
-      enabled: false,
-      source: 'external',
-      transport: 'stdio',
-      description: 'Playwright MCP structured browser automation for real websites and authenticated browser tasks.',
     },
   },
   remoteDevices: {},
@@ -199,9 +269,47 @@ function isNpxCommand(command: string): boolean {
   return base === 'npx' || base === 'npx.cmd' || base === 'npx.ps1';
 }
 
+/**
+ * Package-manager launchers may fetch and execute mutable code while an MCP
+ * runtime is enabled. Only an explicitly local npx resolution is accepted;
+ * remote acquisition must use a separately approved immutable proposal.
+ */
+export function assertMCPPackageRunnerPolicy(config: MCPServerConfig): void {
+  if (config.enabled !== true) return;
+  const transport = config.transport || (config.url ? 'http' : 'stdio');
+  if (transport !== 'stdio') return;
+  const command = path.basename(String(config.command || '')).toLowerCase();
+  const args = (config.args || []).map(value => String(value).toLowerCase());
+  if (isNpxCommand(command)) {
+    if (
+      !args.includes('--no-install')
+      || args.some(value => value === '-y' || value === '--yes' || value === '-p' || value === '--package')
+    ) {
+      throw new Error(
+        'Online npx package execution is disabled. Use a pinned local runtime with --no-install or an immutable staged package proposal.',
+      );
+    }
+    return;
+  }
+  const first = args[0] || '';
+  const mutableRunner = command === 'bunx' || command === 'bunx.exe'
+    || ((command === 'npm' || command === 'npm.cmd' || command === 'npm.ps1') && ['exec', 'x'].includes(first))
+    || ((command === 'pnpm' || command === 'pnpm.cmd' || command === 'pnpm.ps1') && ['dlx', 'exec'].includes(first))
+    || ((command === 'yarn' || command === 'yarn.cmd' || command === 'yarn.ps1') && first === 'dlx')
+    || (command.startsWith('corepack') && ['npx', 'npm', 'pnpm', 'yarn', 'bunx'].includes(first));
+  if (mutableRunner) {
+    throw new Error(
+      'Package-manager MCP execution is disabled until an immutable staged package proposal is approved.',
+    );
+  }
+}
+
 export function normalizeSkillInstallName(name: string): string {
-  const normalized = String(name || '')
-    .trim()
+  const requested = String(name || '').trim();
+  if (RESERVED_RUNTIME_NAMES.has(requested.toLowerCase())) {
+    throw new Error('Invalid skill name');
+  }
+  const normalized = requested
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, '-')
     .replace(/-+/g, '-')
@@ -210,6 +318,134 @@ export function normalizeSkillInstallName(name: string): string {
 
   if (!normalized) throw new Error('Invalid skill name');
   return normalized;
+}
+
+/**
+ * Runtime/config server names are identifiers, never path fragments or object
+ * prototype keys. Unlike install names, they are not silently rewritten: a
+ * caller must address the exact configured server it intends to mutate.
+ */
+export function requireSafeMCPServerName(name: string): string {
+  const requested = String(name || '').trim();
+  if (
+    !requested
+    || requested.length > 80
+    || RESERVED_RUNTIME_NAMES.has(requested.toLowerCase())
+    || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(requested)
+  ) {
+    throw new Error('Invalid MCP server or skill name');
+  }
+  return requested;
+}
+
+export function requireSafeMCPToolName(name: string): string {
+  const requested = String(name || '').trim();
+  if (
+    !requested
+    || requested.length > 128
+    || RESERVED_RUNTIME_NAMES.has(requested.toLowerCase())
+    || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(requested)
+  ) {
+    throw new Error('Invalid MCP tool name');
+  }
+  return requested;
+}
+
+export function mcpRegistryToolName(serverName: string, rawToolName: string): string {
+  return `mcp_${requireSafeMCPServerName(serverName)}_${requireSafeMCPToolName(rawToolName)}`;
+}
+
+function stableConfigValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableConfigValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => ![
+        'cachedTools',
+        'cachedToolsFingerprint',
+        'cachedToolsAttestation',
+        'toolCount',
+        // Installation state is an authorization gate, not a transport/tool
+        // declaration. Pending is checked separately before routing/calls.
+        'installationState',
+      ].includes(key))
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, stableConfigValue(item)]),
+  );
+}
+
+/**
+ * Identifies the runtime/config declaration that a cached inventory belongs
+ * to. A cache without this exact fingerprint is never treated as routable.
+ */
+export function mcpServerConfigFingerprint(config: MCPServerConfig): string {
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify(stableConfigValue(config)))
+    .digest('hex');
+}
+
+function ownServerConfig(
+  config: Record<string, MCPServerConfig>,
+  name: string,
+): MCPServerConfig | undefined {
+  return Object.prototype.hasOwnProperty.call(config, name) ? config[name] : undefined;
+}
+
+function resolveDirectSkillDirectory(name: string): string {
+  const safeName = requireSafeMCPServerName(name);
+  const root = path.resolve(SKILLS_DIR);
+  const resolved = path.resolve(root, safeName);
+  if (path.dirname(resolved) !== root) {
+    throw new Error('Invalid skill directory target');
+  }
+  return resolved;
+}
+
+function resolveValidatedSkillSourceDirectory(sourceDir: string): string {
+  const requested = String(sourceDir || '').trim();
+  if (!path.isAbsolute(requested)) {
+    throw new Error('Local skill source directory must be absolute');
+  }
+  if (fs.lstatSync(requested).isSymbolicLink()) {
+    throw new Error('Local skill source directory cannot be a symbolic link or junction');
+  }
+  const resolved = fs.realpathSync(requested);
+  if (!fs.statSync(resolved).isDirectory()) {
+    throw new Error('Local skill source directory not found');
+  }
+  const skillsRoot = fs.existsSync(SKILLS_DIR)
+    ? fs.realpathSync(SKILLS_DIR)
+    : path.resolve(SKILLS_DIR);
+  const relative = path.relative(skillsRoot, resolved);
+  if (!relative || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
+    throw new Error('Local skill source directory must be outside the installed skills directory');
+  }
+  validateSkillSourceTree(resolved, resolved);
+  return resolved;
+}
+
+function validateSkillSourceTree(root: string, current: string): void {
+  const stat = fs.lstatSync(current);
+  if (stat.isSymbolicLink()) {
+    throw new Error('Local skill source cannot contain symbolic links or junctions');
+  }
+  const resolved = fs.realpathSync(current);
+  const relative = path.relative(root, resolved);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error('Local skill source entry escapes its source directory');
+  }
+  if (stat.isDirectory()) {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      // Installed dependencies are deliberately regenerated in staging.
+      if (entry.name === 'node_modules') continue;
+      validateSkillSourceTree(root, path.join(current, entry.name));
+    }
+    return;
+  }
+  if (!stat.isFile()) {
+    throw new Error('Local skill source may contain only regular files and directories');
+  }
 }
 
 export function normalizeGitHubRepoUrl(repoUrl: string): string {
@@ -260,7 +496,8 @@ interface CrashTracker {
 export class MCPClientManager {
   private servers: Map<string, ConnectedServer> = new Map();
   private discoveryInitialized = false;
-  private connectingServers: Map<string, Promise<MCPToolDef[]>> = new Map();
+  private connectingServers: Map<string, { fingerprint: string; promise: Promise<MCPToolDef[]> }> = new Map();
+  private connectionEpoch: Map<string, number> = new Map();
   private activeCalls: Map<string, number> = new Map();
   private idleTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private configPath: string;
@@ -269,8 +506,9 @@ export class MCPClientManager {
   private quarantineRoot: string;
   private runtimeCleanupApplied = false;
   private crashTrackers: Map<string, CrashTracker> = new Map();
+  private invalidManagedRuntimes: Map<string, string> = new Map();
   private closingSet: Set<string> = new Set();
-  private onServerRecovered?: (name: string, tools: MCPToolDef[]) => void;
+  private onServerRecovered?: (name: string, tools: MCPToolDef[]) => void | Promise<unknown>;
   private ioRef?: any;
 
   constructor(
@@ -288,7 +526,7 @@ export class MCPClientManager {
   }
 
   setSocketIO(io: any): void { this.ioRef = io; }
-  setOnServerRecovered(cb: (name: string, tools: MCPToolDef[]) => void): void { this.onServerRecovered = cb; }
+  setOnServerRecovered(cb: (name: string, tools: MCPToolDef[]) => void | Promise<unknown>): void { this.onServerRecovered = cb; }
 
   getConfig(): Record<string, MCPServerConfig> {
     return this.readConfigFile().mcpServers || {};
@@ -298,6 +536,49 @@ export class MCPClientManager {
     const config = this.readConfigFile();
     config.mcpServers = servers;
     this.saveConfigFile(config);
+  }
+
+  /** Make one pending package startable only for the explicit activation transaction. */
+  beginSkillActivation(name: string): MCPServerConfig {
+    const safeName = requireSafeMCPServerName(name);
+    const config = this.getConfig();
+    const current = ownServerConfig(config, safeName);
+    if (!current) throw new Error(`MCP Skill "${safeName}" has no installed runtime configuration.`);
+    if (current.source === 'local') this.assertLocalSkillRuntimeIdentity(safeName, current);
+    const next: MCPServerConfig = {
+      ...current,
+      enabled: true,
+      installationState: current.installationState === 'active' ? 'active' : 'pending',
+    };
+    config[safeName] = next;
+    this.saveConfig(config);
+    return next;
+  }
+
+  /** Commit activation only after the caller verified live tools and manifest entries. */
+  commitSkillActivation(name: string): void {
+    const safeName = requireSafeMCPServerName(name);
+    const config = this.getConfig();
+    const current = ownServerConfig(config, safeName);
+    if (!current) throw new Error(`MCP Skill "${safeName}" disappeared before activation commit.`);
+    if (current.source === 'local') this.assertLocalSkillRuntimeIdentity(safeName, current);
+    if (current.source === 'local') {
+      const skillDir = resolveDirectSkillDirectory(safeName);
+      if (!fs.existsSync(skillDir)) throw new Error(`MCP Skill "${safeName}" package is missing.`);
+      const pkg = this.readPkg(skillDir);
+      if (!pkg.lumi) pkg.lumi = {};
+      pkg.lumi.status = 'active';
+      fs.writeFileSync(path.join(skillDir, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`, 'utf8');
+    }
+    config[safeName] = {
+      ...current,
+      enabled: true,
+      installationState: 'active',
+    };
+    this.saveConfig(config);
+    if (current.source === 'local') {
+      fs.rmSync(path.join(resolveDirectSkillDirectory(safeName), PENDING_SKILL_MARKER), { force: true });
+    }
   }
 
   getRemoteDevices(): Record<string, string> {
@@ -367,7 +648,19 @@ export class MCPClientManager {
   private saveConfigFile(config: MCPConfigFile): void {
     const dir = path.dirname(this.configPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(this.configPath, `${JSON.stringify(config, null, 2)}\n`);
+    const temporaryPath = path.join(
+      dir,
+      `.${path.basename(this.configPath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
+    );
+    try {
+      fs.writeFileSync(temporaryPath, `${JSON.stringify(config, null, 2)}\n`, {
+        encoding: 'utf8',
+        flag: 'wx',
+      });
+      fs.renameSync(temporaryPath, this.configPath);
+    } finally {
+      if (fs.existsSync(temporaryPath)) fs.rmSync(temporaryPath, { force: true });
+    }
   }
 
   private ensureRuntimeConfig(): void {
@@ -465,6 +758,150 @@ export class MCPClientManager {
     this.saveConfig(config);
   }
 
+  private stampManagedSkillIdentity(
+    directory: string,
+    identity?: ManagedSkillIdentity,
+  ): void {
+    const pkgPath = path.join(directory, 'package.json');
+    const pkg = this.readPkg(directory);
+    if (!pkg.lumi) pkg.lumi = {};
+    if (identity) pkg.lumi.managedSkill = identity;
+    else delete pkg.lumi.managedSkill;
+    fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`, 'utf8');
+  }
+
+  private managedSkillRuntimeEnvironment(pkg: any): Record<string, string> | undefined {
+    const lumi = pkg?.lumi || {};
+    const keys = new Set<string>();
+    if (Array.isArray(lumi.envKeys)) {
+      for (const value of lumi.envKeys) keys.add(String(value || '').trim());
+    }
+    if (lumi.requiresApiKey && lumi.apiKeyEnv) keys.add(String(lumi.apiKeyEnv).trim());
+    const env: Record<string, string> = {};
+    for (const key of Array.from(keys).sort()) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || FORBIDDEN_MANAGED_ENV_KEYS.has(key.toUpperCase())) {
+        throw new Error(`Managed Skill environment key is unsafe: ${key || '(empty)'}`);
+      }
+      env[key] = `\${${key}}`;
+    }
+    return Object.keys(env).length > 0 ? env : undefined;
+  }
+
+  private deriveManagedSkillRuntime(directory: string) {
+    const pkg = this.readPkg(directory);
+    if (pkg.lumi?.runCommand) {
+      throw new Error(
+        'Official/generated Skills cannot execute an unbound runCommand. Configure a reviewed external MCP server instead.',
+      );
+    }
+    const entry = path.resolve(directory, 'index.ts');
+    if (!fs.existsSync(entry) || !fs.statSync(entry).isFile()) {
+      throw new Error('Managed Skill runtime requires an installed index.ts entry point');
+    }
+    const tsxCli = this.resolveRuntimeTsxCli();
+    if (!tsxCli) throw new Error('The trusted LumiCore TypeScript runtime is unavailable');
+    const command = path.resolve(process.execPath);
+    const dependencyDirectories = this.collectManagedRuntimeDependencyDirectories(directory);
+    return createManagedSkillRuntimeIdentity({
+      command,
+      args: [path.resolve(tsxCli), entry],
+      cwd: path.resolve(directory),
+      env: this.managedSkillRuntimeEnvironment(pkg),
+      files: [command, path.resolve(tsxCli), entry, ...dependencyDirectories],
+    });
+  }
+
+  private bindManagedSkillRuntime(
+    directory: string,
+    identity: ManagedSkillIdentity,
+  ): ManagedSkillIdentity {
+    const runtime = this.deriveManagedSkillRuntime(directory);
+    return signManagedSkillIdentity({ ...identity, runtime, signature: undefined }, getJwtSecret());
+  }
+
+  /** Fail closed before activation, process start, restart, or tool use. */
+  assertLocalSkillRuntimeIdentity(
+    name: string,
+    suppliedConfig?: MCPServerConfig,
+  ): ManagedSkillIdentity {
+    const safeName = requireSafeMCPServerName(name);
+    try {
+      const config = suppliedConfig || ownServerConfig(this.getConfig(), safeName);
+      if (!config || config.source !== 'local') {
+        throw new Error(`Local Skill "${safeName}" has no managed local runtime configuration.`);
+      }
+      const directory = resolveDirectSkillDirectory(safeName);
+      const pkg = this.readPkg(directory);
+      const packageIdentity = pkg.lumi?.managedSkill as ManagedSkillIdentity | undefined;
+      const configIdentity = config.managedSkill;
+      if (!packageIdentity || !configIdentity || JSON.stringify(packageIdentity) !== JSON.stringify(configIdentity)) {
+        throw new Error(`Local Skill "${safeName}" package and config identities do not match.`);
+      }
+      if (!verifyManagedSkillIdentitySignature(packageIdentity, getJwtSecret())) {
+        throw new Error(`Local Skill "${safeName}" managed identity signature is invalid.`);
+      }
+      if (!['bundled', 'generated'].includes(packageIdentity.origin)) {
+        throw new Error(`Local Skill "${safeName}" has an unsupported runtime origin.`);
+      }
+      if (
+        pkg.name !== packageIdentity.packageName
+        || String(pkg.lumi?.installedVersion || pkg.version || '') !== packageIdentity.packageVersion
+        || computeSkillContentDigest(directory) !== packageIdentity.contentDigest
+      ) {
+        throw new Error(`Local Skill "${safeName}" package content changed after approval.`);
+      }
+      const runtimeVerification = verifyManagedSkillRuntimeIdentity(packageIdentity.runtime);
+      if (!runtimeVerification.valid) {
+        const reason = 'reason' in runtimeVerification
+          ? runtimeVerification.reason
+          : 'runtime identity is invalid';
+        throw new Error(`Local Skill "${safeName}" runtime identity failed: ${reason}`);
+      }
+      const runtime = packageIdentity.runtime!;
+      const expectedRuntime = this.deriveManagedSkillRuntime(directory);
+      if (JSON.stringify(runtime) !== JSON.stringify(expectedRuntime)) {
+        throw new Error(`Local Skill "${safeName}" runtime no longer matches the host-derived execution identity.`);
+      }
+      if (
+        config.transport !== 'stdio'
+        || Boolean(config.url)
+        || Boolean(config.headers)
+        || path.resolve(String(config.command || '')) !== runtime.command
+        || JSON.stringify(config.args || []) !== JSON.stringify(runtime.args)
+        || path.resolve(String(config.cwd || '')) !== runtime.cwd
+        || JSON.stringify(config.env || null) !== JSON.stringify(runtime.env || null)
+        || runtime.cwd !== path.resolve(directory)
+        || !runtime.args.includes(path.resolve(directory, 'index.ts'))
+      ) {
+        throw new Error(`Local Skill "${safeName}" command, entry point, cwd, or environment differs from its approved runtime identity.`);
+      }
+      this.invalidManagedRuntimes.delete(safeName);
+      return packageIdentity;
+    } catch (error: any) {
+      this.invalidManagedRuntimes.set(safeName, String(error?.message || error));
+      throw error;
+    }
+  }
+
+  private assertManagedSkillSource(
+    sourceDirectory: string,
+    identity?: ManagedSkillIdentity,
+  ): void {
+    if (!identity) return;
+    const pkg = this.readPkg(sourceDirectory);
+    if (
+      !['bundled', 'generated'].includes(identity.origin)
+      || pkg.name !== identity.packageName
+      || String(pkg.version || '') !== identity.packageVersion
+      || computeSkillContentDigest(sourceDirectory) !== identity.contentDigest
+    ) {
+      throw new Error('The managed official skill identity does not match the bundled source package');
+    }
+    if (pkg.lumi?.runCommand) {
+      throw new Error('Managed Skill runCommand is not bound to an immutable local runtime');
+    }
+  }
+
   syncBundledSkillUpgrades(
     bundledRoot = path.join(process.cwd(), 'server', 'skills', 'bundled'),
   ): Array<{ name: string; fromVersion: string; toVersion: string }> {
@@ -483,26 +920,127 @@ export class MCPClientManager {
       const installedVersion = String(installedPkg.lumi?.installedVersion || installedPkg.version || '0.0.0');
       const samePackage = Boolean(sourcePkg.name) && sourcePkg.name === installedPkg.name;
       const managedInstall = Boolean(installedPkg.lumi?.installedVersion);
-      if (samePackage && managedInstall) {
+      const config = this.getConfig();
+      const serverConfig = ownServerConfig(config, name);
+      let officialIdentity: ManagedSkillIdentity | undefined;
+      try {
+        officialIdentity = createBundledSkillIdentity(`skill-${name}`, sourceDir);
+      } catch {}
+      let installedIdentity = installedPkg.lumi?.managedSkill as ManagedSkillIdentity | undefined;
+      const safeCurrentLegacyInstall = Boolean(
+        !installedIdentity
+        && officialIdentity
+        && sourceVersion === installedVersion
+        && samePackage
+        && managedInstall
+        && installedPkg.lumi?.installedAt
+        && serverConfig
+        && configTargetsInstalledPackage(serverConfig, installedDir, sourcePkg)
+        && (() => {
+          try { return computeSkillContentDigest(installedDir) === officialIdentity!.contentDigest; }
+          catch { return false; }
+        })()
+      );
+      if (safeCurrentLegacyInstall && officialIdentity && serverConfig) {
+        try {
+          const boundIdentity = this.bindManagedSkillRuntime(installedDir, officialIdentity);
+          this.stampManagedSkillIdentity(installedDir, boundIdentity);
+          serverConfig.command = boundIdentity.runtime!.command;
+          serverConfig.args = boundIdentity.runtime!.args;
+          serverConfig.cwd = boundIdentity.runtime!.cwd;
+          serverConfig.transport = 'stdio';
+          serverConfig.managedSkill = boundIdentity;
+          config[name] = serverConfig;
+          this.saveConfig(config);
+          installedIdentity = boundIdentity;
+        } catch (error: any) {
+          serverConfig.enabled = false;
+          serverConfig.installationState = 'disabled';
+          config[name] = serverConfig;
+          this.saveConfig(config);
+          console.warn(`[MCP] Disabled unbound bundled runtime "${name}": ${error?.message || error}`);
+          continue;
+        }
+      }
+      const contentMatches = Boolean(installedIdentity?.contentDigest)
+        && (() => {
+          try { return computeSkillContentDigest(installedDir) === installedIdentity!.contentDigest; }
+          catch { return false; }
+        })();
+      const exactManagedRuntime = Boolean(
+        samePackage
+        && managedInstall
+        && installedPkg.lumi?.installedAt
+        && installedIdentity?.origin === 'bundled'
+        && installedIdentity.skillId === `skill-${name}`
+        && installedIdentity.packageName === installedPkg.name
+        && installedIdentity.packageVersion === installedVersion
+        && verifyManagedSkillIdentitySignature(installedIdentity, getJwtSecret())
+        && (() => {
+          try {
+            return JSON.stringify(installedIdentity!.runtime)
+              === JSON.stringify(this.deriveManagedSkillRuntime(installedDir));
+          } catch { return false; }
+        })()
+        && serverConfig
+        && JSON.stringify(serverConfig.managedSkill || null) === JSON.stringify(installedIdentity)
+        && configTargetsInstalledPackage(serverConfig, installedDir, sourcePkg)
+        && contentMatches
+      );
+      const currentOfficialIdentityMatches = Boolean(
+        officialIdentity
+        && installedIdentity?.origin === 'bundled'
+        && installedIdentity.skillId === officialIdentity.skillId
+        && installedIdentity.packageName === officialIdentity.packageName
+        && installedIdentity.packageVersion === officialIdentity.packageVersion
+        && installedIdentity.contentDigest === officialIdentity.contentDigest
+      );
+      if (
+        exactManagedRuntime
+        && sourceVersion === installedVersion
+        && !currentOfficialIdentityMatches
+        && serverConfig
+      ) {
+        serverConfig.enabled = false;
+        serverConfig.installationState = 'disabled';
+        config[name] = serverConfig;
+        this.saveConfig(config);
+        console.warn(`[MCP] Disabled bundled Skill "${name}" because its source changed without a version change.`);
+        continue;
+      }
+      if (
+        exactManagedRuntime
+        && currentOfficialIdentityMatches
+        && sourceVersion === installedVersion
+      ) {
         this.syncBundledCapabilityMetadata(name, sourcePkg.lumi || {});
       }
-      if (!samePackage || !managedInstall || comparePackageVersions(sourceVersion, installedVersion) <= 0) continue;
-      try {
-        this.installSkill(name, sourceDir, true);
-        upgrades.push({ name, fromVersion: installedVersion, toVersion: sourceVersion });
-        console.log(`[MCP] Synced bundled skill "${name}" ${installedVersion} -> ${sourceVersion}`);
-      } catch (error: any) {
-        console.warn(`[MCP] Bundled skill sync failed for "${name}": ${error?.message || String(error)}`);
+      if (!exactManagedRuntime || comparePackageVersions(sourceVersion, installedVersion) <= 0) continue;
+      if (serverConfig) {
+        serverConfig.enabled = false;
+        serverConfig.installationState = 'disabled';
+        config[name] = serverConfig;
+        this.saveConfig(config);
       }
+      console.warn(
+        `[MCP] Bundled Skill "${name}" ${installedVersion} is older than ${sourceVersion}; `
+        + 'automatic non-transactional replacement is disabled. Reinstall the official Skill Hall entry explicitly.',
+      );
     }
     return upgrades;
   }
 
   /** Install a skill from a source directory into ~/lumi_skills/ */
-  installSkill(name: string, sourceDir: string, allowUpgrade = false): string {
+  installSkill(
+    name: string,
+    sourceDir: string,
+    allowUpgrade = false,
+    options: { pendingActivation?: boolean; managedSkill?: ManagedSkillIdentity } = {},
+  ): string {
     this.ensureSkillsDir();
     const skillName = normalizeSkillInstallName(name);
     const destDir = path.join(SKILLS_DIR, skillName);
+    this.assertManagedSkillSource(sourceDir, options.managedSkill);
 
     if (fs.existsSync(destDir)) {
       const hasIndex = fs.existsSync(path.join(destDir, 'index.ts'));
@@ -526,14 +1064,34 @@ export class MCPClientManager {
     }
 
     this.copyDirSync(sourceDir, destDir);
+    if (options.pendingActivation === true) {
+      fs.writeFileSync(
+        path.join(destDir, PENDING_SKILL_MARKER),
+        `${new Date().toISOString()}\n`,
+        'utf8',
+      );
+      const pendingPkg = this.readPkg(destDir);
+      if (!pendingPkg.lumi) pendingPkg.lumi = {};
+      pendingPkg.lumi.status = 'pending';
+      fs.writeFileSync(
+        path.join(destDir, 'package.json'),
+        `${JSON.stringify(pendingPkg, null, 2)}\n`,
+        'utf8',
+      );
+    }
     this.prepareLocalSkillDependencies(destDir);
     this.patchInstalledMetadata(destDir);
     // Also stamp the installed version from source
     const srcPkg = this.readPkg(sourceDir);
     this.patchInstalledVersion(destDir, srcPkg.version || '0.0.0');
 
+    const installedIdentity = options.managedSkill
+      ? this.bindManagedSkillRuntime(destDir, options.managedSkill)
+      : undefined;
+    this.stampManagedSkillIdentity(destDir, installedIdentity);
+
     const resultingPkg: any = this.readPkg(destDir);
-    this.registerLocalSkill(skillName, destDir, resultingPkg);
+    this.registerLocalSkill(skillName, destDir, resultingPkg, options);
 
     return destDir;
   }
@@ -547,22 +1105,40 @@ export class MCPClientManager {
         approvedAt: string;
         review: Record<string, unknown>;
       };
+      managedSkill?: ManagedSkillIdentity;
     },
   ): Promise<string> {
     this.ensureSkillsDir();
     const skillName = normalizeSkillInstallName(name);
-    const destDir = path.join(SKILLS_DIR, skillName);
-    const stagingDir = path.join(SKILLS_DIR, `.staging-${skillName}-${process.pid}-${Date.now()}`);
-    const config = this.getConfig();
-    if (fs.existsSync(destDir) || config[skillName]) {
-      throw new Error(`Skill "${skillName}" already exists. Uninstall it first.`);
+    const destDir = resolveDirectSkillDirectory(skillName);
+    const sourceDirectory = resolveValidatedSkillSourceDirectory(sourceDir);
+    const generatedReviewHash = String(
+      options?.approvedGeneratedDraft?.review?.contentHash || '',
+    ).trim();
+    const managedIdentity = options?.managedSkill
+      || (options?.approvedGeneratedDraft
+        ? createGeneratedSkillIdentity(skillName, sourceDirectory, generatedReviewHash)
+        : undefined);
+    const stagingDir = path.resolve(
+      SKILLS_DIR,
+      `.staging-${skillName}-${process.pid}-${Date.now()}`,
+    );
+    if (path.dirname(stagingDir) !== path.resolve(SKILLS_DIR)) {
+      throw new Error('Invalid skill staging directory target');
     }
-    if (!fs.existsSync(sourceDir) || !fs.statSync(sourceDir).isDirectory()) {
-      throw new Error('Local skill source directory not found');
+    const config = this.getConfig();
+    if (fs.existsSync(destDir) || ownServerConfig(config, skillName)) {
+      throw new Error(`Skill "${skillName}" already exists. Uninstall it first.`);
     }
 
     try {
-      this.copyDirSync(sourceDir, stagingDir);
+      this.assertManagedSkillSource(sourceDirectory, managedIdentity);
+      this.copyDirSync(sourceDirectory, stagingDir);
+      fs.writeFileSync(
+        path.join(stagingDir, PENDING_SKILL_MARKER),
+        `${new Date().toISOString()}\n`,
+        'utf8',
+      );
       const pkg = this.readPkg(stagingDir);
       const hasIndex = fs.existsSync(path.join(stagingDir, 'index.ts'));
       const hasRunCommand = Boolean(pkg.lumi?.runCommand);
@@ -574,7 +1150,7 @@ export class MCPClientManager {
           ...(pkg.lumi || {}),
           autoGenerated: false,
           generatedByLumi: true,
-          status: 'installed',
+          status: 'pending',
           approvedAt: options.approvedGeneratedDraft.approvedAt,
           draftReview: options.approvedGeneratedDraft.review,
         };
@@ -585,12 +1161,30 @@ export class MCPClientManager {
         );
       }
 
-      await this.prepareLocalSkillDependenciesSync(stagingDir);
+      if (!pkg.lumi) pkg.lumi = {};
+      pkg.lumi.status = 'pending';
+      if (managedIdentity) pkg.lumi.managedSkill = managedIdentity;
+      else delete pkg.lumi.managedSkill;
+      fs.writeFileSync(
+        path.join(stagingDir, 'package.json'),
+        `${JSON.stringify(pkg, null, 2)}\n`,
+        'utf8',
+      );
+
+      if (options?.approvedGeneratedDraft) {
+        await this.installLockedDepsWithoutScripts(stagingDir);
+      } else {
+        await this.prepareLocalSkillDependenciesSync(stagingDir);
+      }
       this.patchInstalledMetadata(stagingDir);
-      this.patchInstalledVersion(stagingDir, this.readPkg(sourceDir).version || '0.0.0');
+      this.patchInstalledVersion(stagingDir, this.readPkg(sourceDirectory).version || '0.0.0');
       fs.renameSync(stagingDir, destDir);
       try {
-        this.registerLocalSkill(skillName, destDir, this.readPkg(destDir));
+        const installedIdentity = managedIdentity
+          ? this.bindManagedSkillRuntime(destDir, managedIdentity)
+          : undefined;
+        this.stampManagedSkillIdentity(destDir, installedIdentity);
+        this.registerLocalSkill(skillName, destDir, this.readPkg(destDir), { pendingActivation: true });
       } catch (error) {
         fs.rmSync(destDir, { recursive: true, force: true });
         throw error;
@@ -613,37 +1207,35 @@ export class MCPClientManager {
   }
 
   /**
-   * Try to make an installed skill usable again.
-   * Broken npm/GitHub/bundled skills can be reinstalled. Existing local skills
-   * get dependencies refreshed and are restarted.
+   * Repair never follows mutable package metadata. Repository/npm changes must
+   * enter a separately reviewed immutable proposal. Official bundled packages
+   * may be restored from this build; otherwise repair is a pure restart.
    */
   async repairSkill(name: string): Promise<SkillRepairResult> {
     this.ensureSkillsDir();
-    const safeName = path.basename(name);
-    if (safeName !== name) {
+    let safeName: string;
+    try {
+      safeName = requireSafeMCPServerName(name);
+    } catch {
       return { success: false, reason: 'Invalid skill name' };
     }
 
-    const skillDir = path.join(SKILLS_DIR, name);
+    const skillDir = resolveDirectSkillDirectory(safeName);
     const exists = fs.existsSync(skillDir);
     const config = this.getConfig();
-    const serverConfig = config[name];
+    const serverConfig = ownServerConfig(config, safeName);
     if (!exists && !serverConfig) {
-      return { success: false, reason: `Skill "${name}" not found` };
+      return { success: false, reason: `Skill "${safeName}" not found` };
     }
 
     if (!exists && serverConfig?.source === 'local') {
-      const bundledPath = path.join(process.cwd(), 'server', 'skills', 'bundled', name);
+      const bundledPath = path.join(process.cwd(), 'server', 'skills', 'bundled', safeName);
       if (fs.existsSync(bundledPath)) {
-        const directory = this.installSkill(name, bundledPath, true);
-        const latest = this.getConfig();
-        if (latest[name]) {
-          latest[name].enabled = true;
-          latest[name].description = (latest[name].description || name).replace(/\s*\(disabled after startup failure:[^)]+\)\s*$/i, '');
-          this.saveConfig(latest);
-        }
-        const tools = await this.restartServer(name);
-        return { success: true, action: 'reinstalled', directory, toolCount: tools.length };
+        return {
+          success: false,
+          reason: 'The managed package is missing. Repair will not replace it through the legacy non-transactional path; uninstall the stale registration, then explicitly install the official Skill Hall entry again.',
+          reviewRequired: true,
+        };
       }
     }
 
@@ -653,66 +1245,65 @@ export class MCPClientManager {
     const isBroken = exists && !hasIndex && !hasRunCommand;
 
     if (isBroken) {
-      const npmPackage = pkg.lumi?.npmPackage;
-      const repoUrl = pkg.lumi?.repoUrl;
-      const bundledPath = path.join(process.cwd(), 'server', 'skills', 'bundled', name);
-
-      if (npmPackage) {
-        fs.rmSync(skillDir, { recursive: true, force: true });
-        const directory = await this.installFromNpm(npmPackage);
-        const latest = this.getConfig();
-        if (latest[name]) {
-          latest[name].enabled = true;
-          this.saveConfig(latest);
-        }
-        const tools = await this.restartServer(name);
-        return { success: true, action: 'reinstalled', directory, toolCount: tools.length };
-      }
-
-      if (repoUrl) {
-        fs.rmSync(skillDir, { recursive: true, force: true });
-        const directory = await this.installFromGitHub(repoUrl);
-        const latest = this.getConfig();
-        if (latest[name]) {
-          latest[name].enabled = true;
-          this.saveConfig(latest);
-        }
-        const tools = await this.restartServer(name);
-        return { success: true, action: 'reinstalled', directory, toolCount: tools.length };
-      }
+      const bundledPath = path.join(process.cwd(), 'server', 'skills', 'bundled', safeName);
 
       if (fs.existsSync(bundledPath)) {
-        const directory = this.installSkill(name, bundledPath, true);
-        const latest = this.getConfig();
-        if (latest[name]) {
-          latest[name].enabled = true;
-          this.saveConfig(latest);
-        }
-        const tools = await this.restartServer(name);
-        return { success: true, action: 'reinstalled', directory, toolCount: tools.length };
+        return {
+          success: false,
+          reason: 'The managed package is incomplete. Repair will not overwrite it through the legacy non-transactional path; uninstall it, then explicitly install the official Skill Hall entry again.',
+          reviewRequired: true,
+        };
       }
 
       return {
         success: false,
-        reason: 'Skill package is missing index.ts/runCommand and has no reinstall source. Clean it up, then reinstall or regenerate it.',
+        reason: pkg.lumi?.npmPackage || pkg.lumi?.repoUrl
+          ? 'The installed third-party package is broken. Repair will not execute its mutable npmPackage/repoUrl metadata; create and approve an immutable staged package proposal first.'
+          : 'Skill package is missing index.ts/runCommand and has no trusted bundled restore source. Clean it up, then reinstall an approved package or regenerate it.',
+        ...(pkg.lumi?.npmPackage || pkg.lumi?.repoUrl
+          ? { reviewRequired: true, requiredFlow: 'immutable_package_proposal' as const }
+          : {}),
       };
     }
 
     if (exists) {
-      this.repairGeneratedSkillSource(skillDir, pkg);
-      await this.prepareLocalSkillDependenciesSync(skillDir);
       if (!serverConfig) {
-        this.registerLocalSkill(name, skillDir, pkg);
+        return {
+          success: false,
+          reason: 'The local package has no approved runtime registration. Repair cannot register or execute it; reinstall it through the reviewed Skill Hall/draft flow.',
+        };
       }
     }
 
     const latest = this.getConfig();
-    if (latest[name]) {
-      latest[name].enabled = true;
-      this.saveConfig(latest);
+    const latestServer = ownServerConfig(latest, safeName);
+    if (!latestServer || latestServer.installationState === 'pending') {
+      return {
+        success: false,
+        reason: 'The skill is pending activation. Complete its original reviewed activation transaction instead of repairing it.',
+      };
     }
-    const tools = await this.restartServer(name);
-    return { success: true, action: 'restarted', directory: exists ? skillDir : undefined, toolCount: tools.length };
+    if (latestServer.enabled !== true) {
+      return {
+        success: false,
+        reason: latestServer.requiresApiKey
+          ? `Configure ${latestServer.apiKeyEnv || 'the required API key'} and enable the skill before restarting it.`
+          : 'The skill is disabled. Enable it explicitly before requesting a restart.',
+      };
+    }
+    if (latestServer.source === 'local') {
+      try {
+        this.assertLocalSkillRuntimeIdentity(safeName, latestServer);
+      } catch (error: any) {
+        return {
+          success: false,
+          reason: error?.message || 'The local Skill runtime identity could not be verified.',
+          reviewRequired: true,
+        };
+      }
+    }
+    const tools = await this.restartServer(safeName);
+    return { success: true, action: 'restarted', directory: exists ? skillDir : undefined, toolCount: tools.length, tools };
   }
 
   private repairGeneratedSkillSource(skillDir: string, pkg: any): boolean {
@@ -852,11 +1443,20 @@ export class MCPClientManager {
   /** Install a skill from an npm package (e.g. "lumi-skill-nanobanana") */
   async installFromNpm(packageName: string): Promise<string> {
     this.ensureSkillsDir();
-    const skillName = packageName
+    const requestedPackage = String(packageName || '').trim();
+    if (
+      !requestedPackage
+      || requestedPackage.length > 214
+      || !/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*(?:@[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)?$/.test(requestedPackage)
+    ) {
+      throw new Error('Invalid npm skill package name');
+    }
+    const skillName = normalizeSkillInstallName(requestedPackage
+      .replace(/@[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/, '')
       .replace(/^@/, '')
       .replace(/\//g, '-')
-      .replace(/[^a-z0-9-]/g, '-');
-    const skillDir = path.join(SKILLS_DIR, skillName);
+      .replace(/[^a-z0-9-]/g, '-'));
+    const skillDir = resolveDirectSkillDirectory(skillName);
 
     if (fs.existsSync(skillDir)) {
       const hasIndex = fs.existsSync(path.join(skillDir, 'index.ts'));
@@ -871,13 +1471,14 @@ export class MCPClientManager {
 
     // Create a workspace package that depends on the npm MCP skill
     fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, PENDING_SKILL_MARKER), `${new Date().toISOString()}\n`, 'utf8');
     const workspacePkg: any = {
       name: `lumi-skill-${skillName}`,
       version: '1.0.0',
       type: 'module',
-      description: `Installed from npm: ${packageName}`,
-      dependencies: { [packageName]: '*' },
-      lumi: { installedAt: new Date().toISOString(), installedFrom: 'npm', npmPackage: packageName },
+      description: `Installed from npm: ${requestedPackage}`,
+      dependencies: { [requestedPackage.replace(/@[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/, '')]: requestedPackage.match(/@([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)$/)?.[1] || '*' },
+      lumi: { installedAt: new Date().toISOString(), installedFrom: 'npm', npmPackage: requestedPackage, status: 'pending' },
     };
     fs.writeFileSync(path.join(skillDir, 'package.json'), JSON.stringify(workspacePkg, null, 2));
 
@@ -886,7 +1487,8 @@ export class MCPClientManager {
       await this.installDepsSync(skillDir);
 
       // Read the installed package's package.json for lumi config
-      const depPkgPath = path.join(skillDir, 'node_modules', ...packageName.split('/'), 'package.json');
+      const dependencyName = requestedPackage.replace(/@[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/, '');
+      const depPkgPath = path.join(skillDir, 'node_modules', ...dependencyName.split('/'), 'package.json');
       let depPkg: any = {};
       try { depPkg = JSON.parse(fs.readFileSync(depPkgPath, 'utf-8')); } catch {}
 
@@ -900,44 +1502,44 @@ export class MCPClientManager {
         workspacePkg.lumi.requiresApiKey = lumi.requiresApiKey || false;
         workspacePkg.lumi.apiKeyEnv = lumi.apiKeyEnv;
         workspacePkg.lumi.apiKeyUrl = lumi.apiKeyUrl;
-        workspacePkg.lumi.description = depPkg.description || lumi.description || packageName;
+        workspacePkg.lumi.description = depPkg.description || lumi.description || dependencyName;
         fs.writeFileSync(path.join(skillDir, 'package.json'), JSON.stringify(workspacePkg, null, 2));
-        this.registerLocalSkill(skillName, skillDir, workspacePkg);
+        this.registerLocalSkill(skillName, skillDir, workspacePkg, { pendingActivation: true });
       } else if (depPkg.main || depPkg.exports || fs.existsSync(path.join(path.dirname(depPkgPath), 'index.mjs'))) {
         // Standard MCP package: create a tsx wrapper index.ts
-        const wrapper = `// Auto-generated wrapper for npm package: ${packageName}
+        const wrapper = `// Auto-generated wrapper for npm package: ${dependencyName}
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
 async function main() {
   // The npm package exports its own MCP server — import and start
-  const mod = await import('${packageName}');
+  const mod = await import('${dependencyName}');
   // If the package exports a server directly, use it; otherwise start via the package's main
   if (mod.server) {
     const transport = new StdioServerTransport();
     await mod.server.connect(transport);
-    console.error('[npm-skill] ${packageName} ready');
+    console.error('[npm-skill] ${dependencyName} ready');
   } else if (mod.default?.server) {
     const transport = new StdioServerTransport();
     await mod.default.server.connect(transport);
-    console.error('[npm-skill] ${packageName} ready (default export)');
+    console.error('[npm-skill] ${dependencyName} ready (default export)');
   } else {
     // Fallback: let the package's entry point handle it (it should be self-booting)
-    console.error('[npm-skill] ${packageName} loaded (self-booting)');
+    console.error('[npm-skill] ${dependencyName} loaded (self-booting)');
   }
 }
 main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1); });
 `;
         fs.writeFileSync(path.join(skillDir, 'index.ts'), wrapper);
         workspacePkg.lumi.toolCount = lumi.toolCount || 1;
-        workspacePkg.lumi.description = depPkg.description || lumi.description || packageName;
+        workspacePkg.lumi.description = depPkg.description || lumi.description || dependencyName;
         workspacePkg.dependencies = workspacePkg.dependencies || {};
         workspacePkg.dependencies['@modelcontextprotocol/sdk'] = '^1.0.0';
         fs.writeFileSync(path.join(skillDir, 'package.json'), JSON.stringify(workspacePkg, null, 2));
         await this.installDepsSync(skillDir);
-        this.registerLocalSkill(skillName, skillDir, workspacePkg);
+        this.registerLocalSkill(skillName, skillDir, workspacePkg, { pendingActivation: true });
       } else {
-        throw new Error(`npm package "${packageName}" does not have a lumi MCP config (lumi.runCommand or main entry). Not a valid Lumi skill package.`);
+        throw new Error(`npm package "${dependencyName}" does not have a lumi MCP config (lumi.runCommand or main entry). Not a valid Lumi skill package.`);
       }
     } catch (err) {
       fs.rmSync(skillDir, { recursive: true, force: true });
@@ -972,6 +1574,7 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
           err ? reject(new Error(`Git clone failed: ${stderr?.trim() || err.message}`)) : resolve();
         });
       });
+      fs.writeFileSync(path.join(skillDir, PENDING_SKILL_MARKER), `${new Date().toISOString()}\n`, 'utf8');
 
       // Run npm install
       await this.installDepsSync(skillDir);
@@ -985,11 +1588,12 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
       pkg.lumi.installedAt = new Date().toISOString();
       pkg.lumi.installedFrom = 'github';
       pkg.lumi.repoUrl = normalizedRepoUrl;
+      pkg.lumi.status = 'pending';
       pkg.lumi.toolCount = lumi.toolCount || 1;
       if (!pkg.description) pkg.description = lumi.description || repoName;
       fs.writeFileSync(path.join(skillDir, 'package.json'), JSON.stringify(pkg, null, 2));
 
-      this.registerLocalSkill(repoName, skillDir, pkg);
+      this.registerLocalSkill(repoName, skillDir, pkg, { pendingActivation: true });
     } catch (err) {
       fs.rmSync(skillDir, { recursive: true, force: true });
       throw err;
@@ -1000,7 +1604,7 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
   /** Run npm install synchronously (awaits completion) */
   private installDepsSync(dir: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      exec('npm install --loglevel=error --no-audit --no-fund', {
+      exec('npm install --ignore-scripts --loglevel=error --no-audit --no-fund', {
         timeout: 120000,
         cwd: dir,
       }, (error, _stdout, stderr) => {
@@ -1024,6 +1628,57 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
       if (fs.existsSync(candidate)) return candidate;
     }
     return null;
+  }
+
+  private collectManagedRuntimeDependencyDirectories(skillDir: string): string[] {
+    const runtimeNodeModules = this.resolveRuntimeNodeModulesDir();
+    if (!runtimeNodeModules) throw new Error('LumiCore runtime dependencies are unavailable');
+    const skillPackage = this.readPkg(skillDir);
+    const skillDependencies = Object.keys(skillPackage.dependencies || {});
+    const visited = new Set<string>();
+    const directories: string[] = [];
+
+    const resolveDependency = (name: string, parentDirectory?: string): string | undefined => {
+      if (!parentDirectory) {
+        const runtimePackage = packagePath(runtimeNodeModules, name);
+        return fs.existsSync(path.join(runtimePackage, 'package.json'))
+          ? runtimePackage
+          : undefined;
+      }
+
+      // Mirror Node's upward node_modules lookup. npm commonly hoists a
+      // transitive package to the Skill's top-level node_modules; checking only
+      // dependency/node_modules and the LumiCore root could bind a different
+      // package from the one the Skill will actually import.
+      let cursor = path.resolve(parentDirectory);
+      while (true) {
+        const candidate = packagePath(path.join(cursor, 'node_modules'), name);
+        if (fs.existsSync(path.join(candidate, 'package.json'))) return candidate;
+        const parent = path.dirname(cursor);
+        if (parent === cursor) break;
+        cursor = parent;
+      }
+      return undefined;
+    };
+    const visit = (name: string, parentDirectory?: string, required = true): void => {
+      const directory = resolveDependency(name, parentDirectory);
+      if (!directory) {
+        if (required) throw new Error(`Managed Skill dependency "${name}" is unavailable`);
+        return;
+      }
+      const resolved = fs.realpathSync(directory);
+      if (visited.has(resolved)) return;
+      if (visited.size >= 512) throw new Error('Managed Skill dependency closure is unexpectedly large');
+      visited.add(resolved);
+      directories.push(resolved);
+      const pkg = this.readPkg(resolved);
+      for (const dependency of Object.keys(pkg.dependencies || {})) visit(dependency, resolved, true);
+      for (const dependency of Object.keys(pkg.optionalDependencies || {})) visit(dependency, resolved, false);
+      for (const dependency of Object.keys(pkg.peerDependencies || {})) visit(dependency, resolved, false);
+    };
+    visit('tsx', undefined, true);
+    for (const dependency of skillDependencies) visit(dependency, skillDir, true);
+    return directories.sort((left, right) => left.localeCompare(right));
   }
 
   private resolveRuntimeTsxCli(): string | null {
@@ -1076,6 +1731,27 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
     await this.installDepsSync(dir);
   }
 
+  /** Generated drafts must reproduce the reviewed lock without lifecycle code. */
+  private installLockedDepsWithoutScripts(dir: string): Promise<void> {
+    const lockfile = path.join(dir, 'package-lock.json');
+    if (!fs.existsSync(lockfile) || !fs.statSync(lockfile).isFile()) {
+      return Promise.reject(new Error('Approved generated skill is missing its reviewed package-lock.json'));
+    }
+    return new Promise((resolve, reject) => {
+      exec('npm ci --ignore-scripts --loglevel=error --no-audit --no-fund', {
+        timeout: 120000,
+        maxBuffer: 512 * 1024,
+        cwd: dir,
+      }, (error, _stdout, stderr) => {
+        if (error) {
+          reject(new Error(stderr.trim() || error.message));
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+
   private readPkg(dir: string): any {
     const pkgPath = path.join(dir, 'package.json');
     try { return JSON.parse(fs.readFileSync(pkgPath, 'utf-8')); } catch { return {}; }
@@ -1104,73 +1780,113 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
   /** Uninstall a local skill */
   uninstallSkill(name: string): void {
     const skillName = normalizeSkillInstallName(name);
-    const skillDir = path.join(SKILLS_DIR, skillName);
-    if (fs.existsSync(skillDir)) {
-      fs.rmSync(skillDir, { recursive: true, force: true });
-    }
-
-    // Remove from config.json
+    const skillDir = resolveDirectSkillDirectory(skillName);
+    // Remove the executable configuration first. If Windows has a locked file,
+    // the package must still be unable to auto-start on the next boot.
     const config = this.getConfig();
-    if (config[skillName]) {
+    if (ownServerConfig(config, skillName)) {
       delete config[skillName];
       this.saveConfig(config);
+    }
+    if (!fs.existsSync(skillDir)) return;
+
+    try {
+      fs.rmSync(skillDir, { recursive: true, force: true });
+    } catch (error: any) {
+      let quarantinePath = '';
+      try {
+        fs.mkdirSync(this.quarantineRoot, { recursive: true });
+        quarantinePath = path.join(
+          this.quarantineRoot,
+          `${skillName}-failed-uninstall-${Date.now()}`,
+        );
+        fs.renameSync(skillDir, quarantinePath);
+      } catch {
+        try {
+          fs.writeFileSync(
+            path.join(skillDir, '.lumi-disabled'),
+            `${new Date().toISOString()}\n`,
+            'utf8',
+          );
+        } catch {}
+      }
+      throw new Error(
+        quarantinePath
+          ? `Skill "${skillName}" was disabled and quarantined after removal failed: ${error?.message || error}`
+          : `Skill "${skillName}" was disabled but its locked package could not be removed or quarantined: ${error?.message || error}`,
+      );
     }
   }
 
   /** Register a skill directory as an MCP server entry in config.json */
-  private registerLocalSkill(name: string, skillDir: string, pkg: any): void {
+  private registerLocalSkill(
+    name: string,
+    skillDir: string,
+    pkg: any,
+    options: { pendingActivation?: boolean } = {},
+  ): void {
+    const safeName = requireSafeMCPServerName(name);
+    if (resolveDirectSkillDirectory(safeName) !== path.resolve(skillDir)) {
+      throw new Error('Local skill runtime path is outside the installed skills directory');
+    }
     const config = this.getConfig();
     const lumi = pkg.lumi || {};
+    const pendingActivation = options.pendingActivation === true
+      || lumi.status === 'pending'
+      || fs.existsSync(path.join(skillDir, PENDING_SKILL_MARKER));
+    const installationState: MCPServerConfig['installationState'] = pendingActivation
+      ? (lumi.requiresApiKey ? 'disabled' : 'pending')
+      : 'active';
+    const enabled = !pendingActivation && !lumi.requiresApiKey;
 
     // Support external MCP packages with custom run commands
     if (lumi.runCommand) {
-      config[name] = {
+      config[safeName] = {
         command: lumi.runCommand,
         args: lumi.runArgs || [],
+        cwd: path.resolve(skillDir),
         env: lumi.requiresApiKey && lumi.apiKeyEnv
           ? { [lumi.apiKeyEnv]: `\${${lumi.apiKeyEnv}}` }
           : undefined,
-        enabled: !lumi.requiresApiKey, // Disable by default if API key needed
+        enabled,
+        installationState,
         source: 'local',
         transport: 'stdio',
         autoGenerated: lumi.autoGenerated || false,
         generatedFrom: lumi.generatedFrom,
-        description: pkg.description || lumi.description || name,
+        description: pkg.description || lumi.description || safeName,
         toolCount: lumi.toolCount,
         requiresApiKey: lumi.requiresApiKey || false,
         apiKeyEnv: lumi.apiKeyEnv,
         apiKeyUrl: lumi.apiKeyUrl,
         capabilityDefault: lumi.capabilityDefault,
         toolCapabilities: lumi.toolCapabilities,
+        managedSkill: lumi.managedSkill,
       };
     } else {
       const indexPath = toPortableSkillPath(path.join(skillDir, 'index.ts'));
+      const managedRuntime = lumi.managedSkill?.runtime;
       // Build env map from lumi.envKeys (array of key names to pass through from stored keys)
-      let env: Record<string, string> | undefined;
-      const envKeys = new Set<string>();
-      if (lumi.envKeys && Array.isArray(lumi.envKeys)) {
-        for (const k of lumi.envKeys) envKeys.add(k);
-      }
-      if (lumi.requiresApiKey && lumi.apiKeyEnv) envKeys.add(lumi.apiKeyEnv);
-      if (envKeys.size > 0) {
-        env = {};
-        for (const k of envKeys) { env[k] = `\${${k}}`; }
-      }
-      config[name] = {
-        command: 'npx',
-        args: ['tsx', indexPath],
+      const env = managedRuntime?.env || this.managedSkillRuntimeEnvironment(pkg);
+      config[safeName] = {
+        command: managedRuntime?.command || 'npx',
+        args: managedRuntime?.args || ['tsx', indexPath],
+        cwd: managedRuntime?.cwd || path.resolve(skillDir),
         env,
-        enabled: !lumi.requiresApiKey,
+        enabled,
+        installationState,
         source: 'local',
+        transport: 'stdio',
         autoGenerated: lumi.autoGenerated || false,
         generatedFrom: lumi.generatedFrom,
-        description: pkg.description || lumi.description || name,
+        description: pkg.description || lumi.description || safeName,
         toolCount: lumi.toolCount,
         requiresApiKey: lumi.requiresApiKey || false,
         apiKeyEnv: lumi.apiKeyEnv,
         apiKeyUrl: lumi.apiKeyUrl,
         capabilityDefault: lumi.capabilityDefault,
         toolCapabilities: lumi.toolCapabilities,
+        managedSkill: lumi.managedSkill,
       };
     }
 
@@ -1179,7 +1895,7 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
 
   /** Run npm install in a skill directory (fire-and-forget, non-blocking) */
   private installDepsInDir(dir: string): void {
-    exec('npm install --loglevel=error --no-audit --no-fund', {
+    exec('npm install --ignore-scripts --loglevel=error --no-audit --no-fund', {
       timeout: 120000,
       cwd: dir,
     }, (error, _stdout, stderr) => {
@@ -1215,18 +1931,64 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
     return transportType === 'stdio';
   }
 
+  private isInstallationPending(name: string, config: MCPServerConfig): boolean {
+    if (config.installationState === 'pending') return true;
+    if (config.source !== 'local') return false;
+    try {
+      return fs.existsSync(path.join(resolveDirectSkillDirectory(name), PENDING_SKILL_MARKER));
+    } catch {
+      return true;
+    }
+  }
+
+  private hasCurrentCachedToolInventory(config: MCPServerConfig): boolean {
+    const current = Boolean(
+      config.cachedTools?.length
+      && config.cachedToolsFingerprint
+      && config.cachedToolsFingerprint === mcpServerConfigFingerprint(config),
+    );
+    if (!current || config.source !== 'local') return current;
+    if (!config.cachedToolsAttestation) return false;
+    const expected = crypto
+      .createHmac('sha256', getJwtSecret())
+      .update(JSON.stringify({
+        fingerprint: config.cachedToolsFingerprint,
+        tools: stableConfigValue(config.cachedTools),
+      }))
+      .digest();
+    let supplied: Buffer;
+    try { supplied = Buffer.from(config.cachedToolsAttestation, 'base64url'); } catch { return false; }
+    return supplied.length === expected.length && crypto.timingSafeEqual(supplied, expected);
+  }
+
   private cacheToolDefinitions(name: string, tools: MCPToolDef[]): void {
+    const safeName = requireSafeMCPServerName(name);
     const config = this.getConfig();
-    if (!config[name]) return;
-    config[name].cachedTools = tools.map(tool => ({
-      serverName: name,
+    if (!ownServerConfig(config, safeName)) return;
+    config[safeName].cachedTools = tools.map(tool => ({
+      serverName: safeName,
       name: tool.name,
+      rawName: tool.rawName || requireSafeMCPToolName(
+        tool.name.slice(`mcp_${safeName}_`.length),
+      ),
       description: tool.description,
       inputSchema: tool.inputSchema,
       annotations: tool.annotations,
       capability: tool.capability,
     }));
-    config[name].toolCount = tools.length;
+    config[safeName].cachedToolsFingerprint = mcpServerConfigFingerprint(config[safeName]);
+    if (config[safeName].source === 'local') {
+      config[safeName].cachedToolsAttestation = crypto
+        .createHmac('sha256', getJwtSecret())
+        .update(JSON.stringify({
+          fingerprint: config[safeName].cachedToolsFingerprint,
+          tools: stableConfigValue(config[safeName].cachedTools),
+        }))
+        .digest('base64url');
+    } else {
+      delete config[safeName].cachedToolsAttestation;
+    }
+    config[safeName].toolCount = tools.length;
     this.saveConfig(config);
   }
 
@@ -1255,14 +2017,39 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
     this.idleTimers.set(name, timer);
   }
 
+  /** Withdraw a timed-out runtime immediately and actively close its transport. */
+  private terminateTimedOutRuntime(
+    name: string,
+    explicitTransport?: ConnectedServer['transport'],
+  ): void {
+    const safeName = requireSafeMCPServerName(name);
+    const connected = this.servers.get(safeName);
+    const transport = explicitTransport || connected?.transport;
+    this.connectionEpoch.set(safeName, (this.connectionEpoch.get(safeName) || 0) + 1);
+    this.connectingServers.delete(safeName);
+    this.clearIdleTimer(safeName);
+    if (!explicitTransport || connected?.transport === explicitTransport) {
+      this.servers.delete(safeName);
+    }
+    if (!transport) return;
+    this.closingSet.add(safeName);
+    void Promise.resolve(transport.close())
+      .catch(() => undefined)
+      .finally(() => this.closingSet.delete(safeName));
+  }
+
   private async ensureServerConnected(name: string, config: MCPServerConfig): Promise<MCPToolDef[]> {
     if (this.servers.has(name)) return this.connectServer(name, config);
     const pending = this.connectingServers.get(name);
-    if (pending) return pending;
-    const connection = this.connectServer(name, config).finally(() => {
-      this.connectingServers.delete(name);
+    const fingerprint = mcpServerConfigFingerprint(config);
+    if (pending?.fingerprint === fingerprint) return pending.promise;
+    const epoch = this.connectionEpoch.get(name) || 0;
+    const connection = this.connectServer(name, config, epoch).finally(() => {
+      if (this.connectingServers.get(name)?.promise === connection) {
+        this.connectingServers.delete(name);
+      }
     });
-    this.connectingServers.set(name, connection);
+    this.connectingServers.set(name, { fingerprint, promise: connection });
     return connection;
   }
 
@@ -1276,20 +2063,36 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
 
     for (const entry of localEntries) {
       if (!entry.isDirectory()) continue;
-      if (entry.name.startsWith('.staging-')) continue;
+      if (entry.name.startsWith('.')) continue;
       const skillDir = path.join(SKILLS_DIR, entry.name);
+      if (fs.existsSync(path.join(skillDir, '.lumi-disabled'))) {
+        console.warn(`[MCP] ${entry.name}: skipped disabled local skill package`);
+        continue;
+      }
+      if (fs.existsSync(path.join(skillDir, PENDING_SKILL_MARKER))) {
+        console.warn(`[MCP] ${entry.name}: skipped pending local skill package until activation commits`);
+        continue;
+      }
       const indexPath = path.join(skillDir, 'index.ts');
       if (!fs.existsSync(indexPath)) continue;
       const pkg = this.readPkg(skillDir);
-      if (pkg?.lumi?.status === 'draft' || pkg?.lumi?.autoGenerated === true) {
+      if (
+        pkg?.lumi?.status === 'draft'
+        || pkg?.lumi?.status === 'pending'
+        || pkg?.lumi?.autoGenerated === true
+      ) {
         console.warn(`[MCP] ${entry.name}: skipped unapproved generated skill draft`);
         continue;
       }
-      this.ensureRuntimeNodeModulesLink(skillDir);
-
-      if (!config[entry.name]) {
-        this.registerLocalSkill(entry.name, skillDir, pkg);
+      const installedConfig = ownServerConfig(config, entry.name);
+      if (!installedConfig || installedConfig.source !== 'local') {
+        // A directory is package presence, not installation authority. Skill
+        // Hall/runtime-state can display it as not_configured, but startup must
+        // never turn copied files into an enabled executable configuration.
+        console.warn(`[MCP] ${entry.name}: package present without an approved local runtime configuration; skipped`);
+        continue;
       }
+      this.ensureRuntimeNodeModulesLink(skillDir);
     }
 
     // Reload config after auto-registering local skills
@@ -1298,6 +2101,14 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
 
     for (const [serverName, serverConfig] of Object.entries(finalConfig)) {
       if (!serverConfig.enabled) continue;
+      if (serverConfig.installationState === 'pending') {
+        console.warn(`[MCP] ${serverName}: skipped pending installation until activation commits`);
+        continue;
+      }
+      if (this.isInstallationPending(serverName, serverConfig)) {
+        console.warn(`[MCP] ${serverName}: skipped local package with an uncommitted pending marker`);
+        continue;
+      }
       if (serverConfig.autoGenerated === true) {
         console.warn(`[MCP] ${serverName}: skipped unapproved auto-generated skill configuration`);
         continue;
@@ -1306,11 +2117,30 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
         console.log(`[MCP] ${serverName}: skipped (missing ${serverConfig.apiKeyEnv})`);
         continue;
       }
+      if (serverConfig.source === 'local') {
+        try {
+          this.assertLocalSkillRuntimeIdentity(serverName, serverConfig);
+        } catch (error: any) {
+          await this.disconnectServer(serverName);
+          console.warn(`[MCP] ${serverName}: skipped invalid managed runtime identity (${error?.message || error})`);
+          continue;
+        }
+      }
+      try {
+        assertMCPPackageRunnerPolicy(serverConfig);
+      } catch (error: any) {
+        console.warn(`[MCP] ${serverName}: skipped unsafe package runner (${error?.message || error})`);
+        continue;
+      }
 
-      if (this.isProcessBacked(serverConfig) && serverConfig.cachedTools?.length) {
+      const cacheMatchesConfig = this.hasCurrentCachedToolInventory(serverConfig);
+      if (this.isProcessBacked(serverConfig) && cacheMatchesConfig) {
         allTools.push(...serverConfig.cachedTools);
         console.log(`[MCP] ${serverName}: ${serverConfig.cachedTools.length} cached tools ready on demand`);
         continue;
+      }
+      if (serverConfig.cachedTools?.length && !cacheMatchesConfig) {
+        console.warn(`[MCP] ${serverName}: ignored stale tool inventory without a matching config fingerprint`);
       }
 
       try {
@@ -1337,22 +2167,48 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
     return allTools;
   }
 
-  private async connectServer(name: string, config: MCPServerConfig): Promise<MCPToolDef[]> {
-    // Dedup: if already connected, return cached tools
-    const existing = this.servers.get(name);
+  private async connectServer(
+    name: string,
+    config: MCPServerConfig,
+    expectedEpoch = this.connectionEpoch.get(name) || 0,
+  ): Promise<MCPToolDef[]> {
+    name = requireSafeMCPServerName(name);
+    assertMCPPackageRunnerPolicy(config);
+    if (config.source === 'local') this.assertLocalSkillRuntimeIdentity(name, config);
+    // A config mutation must never reuse a client created for an older
+    // command/URL/header set.
+    let existing = this.servers.get(name);
+    if (
+      existing
+      && mcpServerConfigFingerprint(existing.config) !== mcpServerConfigFingerprint(config)
+    ) {
+      await this.disconnectServer(name);
+      existing = undefined;
+      expectedEpoch = this.connectionEpoch.get(name) || 0;
+    }
+    // Dedup only when the live connection belongs to this exact config.
     if (existing) {
       try {
-        const tools = await existing.client.listTools();
-        return tools.tools.map((tool: any) => ({
-          serverName: name,
-          name: `mcp_${name}_${tool.name}`,
-          description: tool.description || `${tool.name} (from MCP server: ${name})`,
-          inputSchema: tool.inputSchema || { type: 'object', properties: {} },
-          annotations: tool.annotations,
-        }));
+        const tools = await withMCPWallTimeout(
+          existing.client.listTools(),
+          PROCESS_CONNECT_TIMEOUT_MS,
+          `MCP server "${name}" timed out while listing tools.`,
+          () => this.terminateTimedOutRuntime(name, existing!.transport),
+        );
+        return tools.tools.map((tool: any) => {
+          const rawName = requireSafeMCPToolName(tool.name);
+          return {
+            serverName: name,
+            name: mcpRegistryToolName(name, rawName),
+            rawName,
+            description: tool.description || `${rawName} (from MCP server: ${name})`,
+            inputSchema: tool.inputSchema || { type: 'object', properties: {} },
+            annotations: tool.annotations,
+          };
+        });
       } catch {
         // Stale connection — clean up and reconnect below
-        this.servers.delete(name);
+        await this.disconnectServer(name);
       }
     }
 
@@ -1390,6 +2246,7 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
       transport = new StdioClientTransport({
         command,
         args,
+        cwd: config.cwd ? path.resolve(expandPortablePath(config.cwd)) : undefined,
         env: Object.keys(resolvedEnv).length > 0 ? resolvedEnv : (config.env || undefined),
       });
     } else {
@@ -1403,8 +2260,24 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
       { capabilities: {} },
     );
 
-    await client.connect(transport);
+    try {
+      await withMCPWallTimeout(
+        client.connect(transport),
+        PROCESS_CONNECT_TIMEOUT_MS,
+        `MCP server "${name}" timed out while connecting.`,
+        () => this.terminateTimedOutRuntime(name, transport),
+      );
+    } catch (error) {
+      if (!(error instanceof MCPRuntimeTimeoutError)) {
+        try { await transport.close(); } catch {}
+      }
+      throw error;
+    }
 
+    if ((this.connectionEpoch.get(name) || 0) !== expectedEpoch) {
+      try { await transport.close(); } catch {}
+      throw new Error(`MCP server "${name}" connection was superseded by a newer configuration.`);
+    }
     this.servers.set(name, { client, transport, config });
 
     // Initialize crash tracker
@@ -1425,6 +2298,9 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
         self.closingSet.delete(name);
         return;
       }
+      // A superseded/timed-out transport must never withdraw a newer live
+      // connection that now owns the same server name.
+      if (self.servers.get(name)?.transport !== transport) return;
       // If server still in map, this is an unexpected crash
       if (self.servers.has(name)) {
         console.log(`[MCP] CRASH DETECTED: "${name}" process exited unexpectedly`);
@@ -1451,50 +2327,132 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
       tracker.restartTimer = null;
     }
 
-    const result = await client.listTools();
-    return result.tools.map((tool: any) => ({
-      serverName: name,
-      name: `mcp_${name}_${tool.name}`,
-      description: tool.description || `${tool.name} (from MCP server: ${name})`,
-      inputSchema: tool.inputSchema || { type: 'object', properties: {} },
-      annotations: tool.annotations,
-    }));
+    let result: Awaited<ReturnType<Client['listTools']>>;
+    try {
+      result = await withMCPWallTimeout(
+        client.listTools(),
+        PROCESS_CONNECT_TIMEOUT_MS,
+        `MCP server "${name}" timed out while listing tools.`,
+        () => this.terminateTimedOutRuntime(name, transport),
+      );
+    } catch (error) {
+      if (!(error instanceof MCPRuntimeTimeoutError)) {
+        this.closingSet.add(name);
+        try { await transport.close(); } catch {}
+        this.servers.delete(name);
+        this.closingSet.delete(name);
+      }
+      throw error;
+    }
+    return result.tools.map((tool: any) => {
+      const rawName = requireSafeMCPToolName(tool.name);
+      return {
+        serverName: name,
+        name: mcpRegistryToolName(name, rawName),
+        rawName,
+        description: tool.description || `${rawName} (from MCP server: ${name})`,
+        inputSchema: tool.inputSchema || { type: 'object', properties: {} },
+        annotations: tool.annotations,
+      };
+    });
   }
 
   async callTool(fullName: string, args: Record<string, any>, options: MCPCallOptions = {}): Promise<string> {
     if (!fullName.startsWith('mcp_')) throw new Error(`Invalid MCP tool name: ${fullName}`);
     const config = this.getConfig();
-    const serverNames = Array.from(new Set([...Object.keys(config), ...this.servers.keys()]));
-    const serverName = serverNames
-      .filter(name => fullName.startsWith(`mcp_${name}_`))
-      .sort((left, right) => right.length - left.length)[0];
-    if (!serverName) throw new Error(`Invalid MCP tool name: ${fullName}`);
-    const toolName = fullName.slice(`mcp_${serverName}_`.length);
-    const existingServer = this.servers.get(serverName);
-    const serverConfig = config[serverName] || existingServer?.config;
-    if (!serverConfig) throw new Error(`MCP server "${serverName}" is not configured`);
-    if (serverConfig.enabled === false) throw new Error(`MCP server "${serverName}" is disabled`);
+    const candidates = Array.from(new Set([...Object.keys(config), ...this.servers.keys()]))
+      .filter(name => {
+        try {
+          return fullName.startsWith(`mcp_${requireSafeMCPServerName(name)}_`);
+        } catch {
+          return false;
+        }
+      });
+    if (candidates.length !== 1) {
+      throw new Error(
+        candidates.length > 1
+          ? `Ambiguous MCP tool owner: ${fullName}`
+          : `Invalid MCP tool name: ${fullName}`,
+      );
+    }
+    const serverName = candidates[0];
+    const rawToolName = fullName.slice(`mcp_${serverName}_`.length);
+    return this.callToolForServer(serverName, rawToolName, args, options);
+  }
+
+  /** Execute an already-declared tool against its exact owning server. */
+  async callToolForServer(
+    serverName: string,
+    rawToolName: string,
+    args: Record<string, any>,
+    options: MCPCallOptions = {},
+  ): Promise<string> {
+    const safeServerName = requireSafeMCPServerName(serverName);
+    const safeToolName = requireSafeMCPToolName(rawToolName);
+    const fullName = mcpRegistryToolName(safeServerName, safeToolName);
+    const config = this.getConfig();
+    let existingServer = this.servers.get(safeServerName);
+    const serverConfig = ownServerConfig(config, safeServerName) || existingServer?.config;
+    if (!serverConfig) throw new Error(`MCP server "${safeServerName}" is not configured`);
+    if (serverConfig.enabled === false) throw new Error(`MCP server "${safeServerName}" is disabled`);
+    assertMCPPackageRunnerPolicy(serverConfig);
+    if (this.isInstallationPending(safeServerName, serverConfig)) {
+      throw new Error(`MCP server "${safeServerName}" is pending activation and is not callable yet`);
+    }
     if (this.isMissingRequiredApiKey(serverConfig)) {
-      throw new Error(`MCP server "${serverName}" requires ${serverConfig.apiKeyEnv}`);
+      throw new Error(`MCP server "${safeServerName}" requires ${serverConfig.apiKeyEnv}`);
+    }
+    if (serverConfig.source === 'local') {
+      try {
+        this.assertLocalSkillRuntimeIdentity(safeServerName, serverConfig);
+      } catch (error) {
+        if (existingServer) await this.disconnectServer(safeServerName);
+        throw error;
+      }
     }
 
-    this.clearIdleTimer(serverName);
-    if (!this.servers.has(serverName)) {
-      await this.ensureServerConnected(serverName, serverConfig);
+    this.clearIdleTimer(safeServerName);
+    if (
+      existingServer
+      && mcpServerConfigFingerprint(existingServer.config) !== mcpServerConfigFingerprint(serverConfig)
+    ) {
+      await this.disconnectServer(safeServerName);
+      existingServer = undefined;
     }
-    const server = this.servers.get(serverName);
-    if (!server) throw new Error(`MCP server "${serverName}" failed to connect`);
-    this.activeCalls.set(serverName, (this.activeCalls.get(serverName) || 0) + 1);
+    if (!this.servers.has(safeServerName)) {
+      await this.ensureServerConnected(safeServerName, serverConfig);
+    }
+    const server = this.servers.get(safeServerName);
+    if (!server) throw new Error(`MCP server "${safeServerName}" failed to connect`);
+    this.activeCalls.set(safeServerName, (this.activeCalls.get(safeServerName) || 0) + 1);
 
     try {
-      const request = { name: toolName, arguments: args };
-      const timeoutMs = Number(options.timeoutMs);
-      const result = Number.isFinite(timeoutMs) && timeoutMs > 0
-        ? await server.client.callTool(request, undefined, {
+      const request = { name: safeToolName, arguments: args };
+      const requestedTimeoutMs = Number(options.timeoutMs);
+      const hasRequestedTimeout = Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0;
+      const timeoutMs = hasRequestedTimeout
+        ? requestedTimeoutMs
+        : DEFAULT_TOOL_CALL_WALL_TIMEOUT_MS;
+      const call = hasRequestedTimeout
+        ? server.client.callTool(request, undefined, {
             timeout: timeoutMs,
             maxTotalTimeout: timeoutMs,
           })
-        : await server.client.callTool(request);
+        : server.client.callTool(request);
+      let result: Awaited<typeof call>;
+      try {
+        result = await withMCPWallTimeout(
+          call,
+          timeoutMs,
+          `MCP tool "${fullName}" exceeded its wall timeout.`,
+          () => this.terminateTimedOutRuntime(safeServerName, server.transport),
+        );
+      } catch (error) {
+        if (!(error instanceof MCPRuntimeTimeoutError) && /timed?\s*out|timeout/i.test(String((error as any)?.message || error))) {
+          this.terminateTimedOutRuntime(safeServerName, server.transport);
+        }
+        throw error;
+      }
 
       const contents = (result as any).content || [];
       const text = contents
@@ -1506,10 +2464,10 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
       }
       return text;
     } finally {
-      const remaining = Math.max(0, (this.activeCalls.get(serverName) || 1) - 1);
-      if (remaining > 0) this.activeCalls.set(serverName, remaining);
-      else this.activeCalls.delete(serverName);
-      this.scheduleIdleDisconnect(serverName);
+      const remaining = Math.max(0, (this.activeCalls.get(safeServerName) || 1) - 1);
+      if (remaining > 0) this.activeCalls.set(safeServerName, remaining);
+      else this.activeCalls.delete(safeServerName);
+      if (this.servers.has(safeServerName)) this.scheduleIdleDisconnect(safeServerName);
     }
   }
 
@@ -1535,18 +2493,12 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
   }
 
   async restartServer(name: string): Promise<MCPToolDef[]> {
-    this.clearIdleTimer(name);
-    const server = this.servers.get(name);
-    if (server) {
-      this.closingSet.add(name);
-      try { await server.transport.close(); } catch {}
-      this.servers.delete(name);
-      this.closingSet.delete(name);
-    }
-
+    name = requireSafeMCPServerName(name);
     const config = this.getConfig();
-    const serverConfig = config[name];
+    const serverConfig = ownServerConfig(config, name);
     if (!serverConfig || !serverConfig.enabled) return [];
+    if (serverConfig.source === 'local') this.assertLocalSkillRuntimeIdentity(name, serverConfig);
+    await this.disconnectServer(name);
 
     const tools = await this.ensureServerConnected(name, serverConfig);
     this.cacheToolDefinitions(name, tools);
@@ -1556,13 +2508,25 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
 
   /** Disconnect a server without restarting it (used when disabling) */
   async disconnectServer(name: string): Promise<void> {
+    name = requireSafeMCPServerName(name);
+    this.connectionEpoch.set(name, (this.connectionEpoch.get(name) || 0) + 1);
+    this.connectingServers.delete(name);
     this.clearIdleTimer(name);
     const server = this.servers.get(name);
     if (server) {
       this.closingSet.add(name);
-      try { await server.transport.close(); } catch {}
-      this.servers.delete(name);
-      this.closingSet.delete(name);
+      let closeError: unknown;
+      try {
+        await server.transport.close();
+      } catch (error) {
+        closeError = error;
+      } finally {
+        this.servers.delete(name);
+        this.closingSet.delete(name);
+      }
+      if (closeError) {
+        throw new Error(`MCP server "${name}" did not close cleanly: ${String((closeError as any)?.message || closeError)}`);
+      }
     }
   }
 
@@ -1590,7 +2554,7 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
       try {
         const config = this.getConfig();
         const serverConfig = config[name];
-        if (!serverConfig || !serverConfig.enabled) {
+        if (!serverConfig || !serverConfig.enabled || this.isInstallationPending(name, serverConfig)) {
           console.log(`[MCP] Server "${name}" is now disabled, skipping restart`);
           return;
         }
@@ -1601,7 +2565,7 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
         tracker.consecutiveCrashes = 0;
         tracker.lastSuccessfulConnect = new Date().toISOString();
 
-        this.onServerRecovered?.(name, tools);
+        await this.onServerRecovered?.(name, tools);
         this.cacheToolDefinitions(name, tools);
         this.scheduleIdleDisconnect(name);
       } catch (err: any) {
@@ -1651,9 +2615,18 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
     for (const [name] of Object.entries(config)) {
       const tracker = this.crashTrackers.get(name);
       const isRestarting = !!tracker?.restartTimer;
-      const readyOnDemand = Boolean(config[name]?.enabled && this.isProcessBacked(config[name]) && config[name]?.cachedTools?.length);
+      const identityFailure = config[name]?.source === 'local'
+        ? this.invalidManagedRuntimes.get(name)
+        : undefined;
+      const readyOnDemand = Boolean(
+        config[name]?.enabled
+        && !identityFailure
+        && this.isProcessBacked(config[name])
+        && this.hasCurrentCachedToolInventory(config[name]),
+      );
       health[name] = {
-        status: isRestarting ? 'restarting'
+        status: identityFailure ? 'failed'
+          : isRestarting ? 'restarting'
           : this.servers.has(name) ? 'connected'
           : (tracker?.consecutiveCrashes ?? 0) >= 5 ? 'failed'
           : (tracker?.consecutiveCrashes ?? 0) > 0 ? 'crashed'
@@ -1662,7 +2635,7 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
         consecutiveCrashes: tracker?.consecutiveCrashes || 0,
         lastCrashTime: tracker?.lastCrashTime || undefined,
         lastSuccessfulConnect: tracker?.lastSuccessfulConnect || undefined,
-        lastError: tracker?.lastError || undefined,
+        lastError: identityFailure || tracker?.lastError || undefined,
       };
     }
     return health;
@@ -1686,13 +2659,31 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
   getAvailableServers(): string[] {
     const config = this.getConfig();
     return Object.entries(config)
-      .filter(([, serverConfig]) => serverConfig.enabled && !this.isMissingRequiredApiKey(serverConfig))
+      .filter(([name, serverConfig]) => (
+        serverConfig.enabled
+        && (serverConfig.source !== 'local' || !this.invalidManagedRuntimes.has(name))
+        && !this.isInstallationPending(name, serverConfig)
+        && !this.isMissingRequiredApiKey(serverConfig)
+      ))
+      .filter(([, serverConfig]) => {
+        try {
+          assertMCPPackageRunnerPolicy(serverConfig);
+          return true;
+        } catch {
+          return false;
+        }
+      })
       .filter(([name]) => (this.crashTrackers.get(name)?.consecutiveCrashes || 0) < 5)
       .map(([name]) => name);
   }
 
   getRoutableServers(): string[] {
-    return this.discoveryInitialized ? this.getAvailableServers() : [];
+    if (!this.discoveryInitialized) return [];
+    const config = this.getConfig();
+    return this.getAvailableServers().filter(name => (
+      this.servers.has(name)
+      || (Boolean(config[name]) && this.hasCurrentCachedToolInventory(config[name]))
+    ));
   }
 }
 

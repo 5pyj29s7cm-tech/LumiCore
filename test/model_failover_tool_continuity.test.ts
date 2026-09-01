@@ -132,6 +132,14 @@ describe('model failover tool continuity', () => {
     const fallbackPayloads: any[] = [];
     const primaryCreate = vi.fn(async (payload: any) => {
       primaryPayloads.push(structuredClone(payload));
+      if (primaryPayloads.length === 1) {
+        return (async function* partialThenFail() {
+          yield {
+            choices: [{ delta: { content: 'PRIVATE PRIMARY PARTIAL MUST NOT LEAK' } }],
+          };
+          throw new Error('ECONNRESET after deterministic partial primary output');
+        })();
+      }
       throw new Error('ECONNREFUSED deterministic S8 primary provider failure');
     });
     const fallbackCreate = vi.fn(async (payload: any) => {
@@ -141,6 +149,7 @@ describe('model failover tool continuity', () => {
           yield {
             choices: [{
               delta: {
+                content: 'I am executing the probe now — this proposal must stay private.',
                 tool_calls: [{
                   index: 0,
                   id: `s8-tool-call-${suffix}`,
@@ -230,6 +239,8 @@ describe('model failover tool continuity', () => {
 
     expect(result.text).toBe(`S8 continuity result: ${sentinel}.`);
     expect(visibleChunks).toEqual([`S8 continuity result: ${sentinel}.`]);
+    expect(visibleChunks.join('')).not.toContain('PRIVATE PRIMARY PARTIAL');
+    expect(visibleChunks.join('')).not.toContain('I am executing the probe now');
     expect(primaryCreate).toHaveBeenCalledTimes(2);
     expect(fallbackCreate).toHaveBeenCalledTimes(2);
     expect(toolHandler).toHaveBeenCalledTimes(1);
@@ -282,13 +293,13 @@ describe('model failover tool continuity', () => {
       && receipt.requestedModel === primaryModel
       && receipt.selectedProvider === 'lmstudio'
       && receipt.selectedModel === fallbackModel
-      && receipt.fallbackReason === 'provider_unreachable'
+      && Boolean(receipt.fallbackReason)
     ))).toBe(true);
     expect(receipts.every(receipt => (
       receipt.attempts.length === 2
       && receipt.attempts[0].provider === 'deepseek'
       && receipt.attempts[0].status === 'failed'
-      && receipt.attempts[0].reason === 'provider_unreachable'
+      && Boolean(receipt.attempts[0].reason)
       && receipt.attempts[0].visibleOutputCommitted === false
       && receipt.attempts[1].provider === 'lmstudio'
       && receipt.attempts[1].status === 'succeeded'
@@ -323,7 +334,7 @@ describe('model failover tool continuity', () => {
         requestedProvider: 'deepseek',
         requestedModel: primaryModel,
         selectionMode: 'ordered_fallback',
-        fallbackReason: 'provider_unreachable',
+        fallbackReason: expect.stringMatching(/^provider_(?:call_failed|unreachable)$/),
         totalTokens: 14,
       }),
       expect.objectContaining({
@@ -332,7 +343,7 @@ describe('model failover tool continuity', () => {
         requestedProvider: 'deepseek',
         requestedModel: primaryModel,
         selectionMode: 'ordered_fallback',
-        fallbackReason: 'provider_unreachable',
+        fallbackReason: expect.stringMatching(/^provider_(?:call_failed|unreachable)$/),
         totalTokens: 24,
       }),
     ]);

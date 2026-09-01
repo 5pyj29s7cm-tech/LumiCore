@@ -16,8 +16,8 @@ function tool(annotations?: MCPToolDef['annotations']): MCPToolDef {
 }
 
 describe('MCP standard tool annotations', () => {
-  it('allows explicitly read-only tools without weakening unknown tools', () => {
-    expect(resolveMCPToolSecurity(tool({ readOnlyHint: true }))).toBe('safe');
+  it('uses read-only annotations for routing without letting a provider lower host security', () => {
+    expect(resolveMCPToolSecurity(tool({ readOnlyHint: true }))).toBe('confirm');
     expect(resolveMCPToolOperation(tool({ readOnlyHint: true }))).toBe('observe');
     expect(resolveMCPToolSecurity(tool())).toBe('confirm');
     expect(resolveMCPToolOperation(tool())).toBeUndefined();
@@ -69,7 +69,7 @@ describe('MCP standard tool annotations', () => {
       risk: 'high',
       source: 'skill',
       provider: 'cad-drafting',
-      provenance: { trust: 'official' },
+      provenance: { trust: 'user-reviewed' },
       sideEffects: [
         { type: 'desktop_control' },
         { type: 'process_execution' },
@@ -77,11 +77,14 @@ describe('MCP standard tool annotations', () => {
       verification: {
         strategy: 'state_diff',
         requiredFields: ['status', 'visible'],
+        limitations: expect.arrayContaining([
+          expect.stringContaining('cannot independently prove the final business outcome'),
+        ]),
       },
     });
   });
 
-  it('allows a declared read-only network capability but keeps undeclared MCP tools conservative', () => {
+  it('keeps a declared read-only network capability at the confirmation floor', () => {
     const declaredRead: MCPServerConfig = {
       enabled: true,
       source: 'local',
@@ -98,8 +101,38 @@ describe('MCP standard tool annotations', () => {
         },
       },
     };
-    expect(resolveMCPToolSecurity(tool(), declaredRead)).toBe('safe');
+    expect(resolveMCPToolSecurity(tool(), declaredRead)).toBe('confirm');
     expect(resolveMCPToolOperation(tool(), declaredRead)).toBe('observe');
     expect(resolveMCPToolSecurity(tool())).toBe('confirm');
+  });
+
+  it('does not let an external MCP provider claim official host trust', () => {
+    const config: MCPServerConfig = {
+      enabled: true,
+      source: 'external',
+      capabilityDefault: {
+        operation: 'observe',
+        risk: 'low',
+        sideEffects: [],
+        verification: {
+          strategy: 'terminal_receipt',
+          required: true,
+          requiredFields: [],
+          successSignals: ['provider says success'],
+          limitations: [],
+        },
+        trust: 'official',
+      },
+    };
+    expect(resolveMCPToolCapability(tool({ readOnlyHint: true }), config)).toMatchObject({
+      source: 'mcp',
+      provenance: { trust: 'third-party' },
+      verification: {
+        limitations: expect.arrayContaining([
+          expect.stringContaining('cannot independently prove the final business outcome'),
+        ]),
+      },
+    });
+    expect(resolveMCPToolSecurity(tool({ readOnlyHint: true }), config)).toBe('confirm');
   });
 });

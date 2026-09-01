@@ -341,16 +341,25 @@ function selectToolDeclarations(
   declarations: ModelRequestToolDeclaration[],
   currentInput: string,
   budget: number,
+  protectedToolNames: ReadonlySet<string> = new Set(),
 ): { selected: ModelRequestToolDeclaration[]; dropped: string[] } {
   const normalized = normalizeToolDeclarations(declarations);
   if (declarationTokens(normalized.map(item => item.declaration)) <= budget) {
     return { selected: normalized.map(item => item.declaration), dropped: [] };
   }
-  const ranked = [...normalized].sort((left, right) => (
+  const protectedDeclarations = normalized.filter(item => (
+    protectedToolNames.has(item.declaration.function.name)
+  ));
+  if (declarationTokens(protectedDeclarations.map(item => item.declaration)) > budget) {
+    throw new Error('Model request budget cannot retain all protected tool declarations');
+  }
+  const ranked = normalized.filter(item => (
+    !protectedToolNames.has(item.declaration.function.name)
+  )).sort((left, right) => (
     toolRelevanceScore(right.declaration.function.name, currentInput, right.index)
     - toolRelevanceScore(left.declaration.function.name, currentInput, left.index)
   ));
-  const selected: typeof normalized = [];
+  const selected: typeof normalized = [...protectedDeclarations];
   for (const candidate of ranked) {
     const trial = [...selected, candidate].map(item => item.declaration);
     if (declarationTokens(trial) <= budget) selected.push(candidate);
@@ -420,6 +429,13 @@ export function prepareModelRequestContext(input: {
   messages: NormalizedMessage[];
   toolDeclarations: ModelRequestToolDeclaration[];
   inputTokenBudget?: number;
+  /**
+   * Declaration names selected by the server execution plan that must reach
+   * the provider unchanged. Optional schemas may be ranked away, but a
+   * continuation, verification, or recovery door fails closed instead of
+   * silently disappearing at this final request boundary.
+   */
+  protectedToolNames?: readonly string[];
 }): PreparedModelRequestContext {
   const budgetTokens = resolveModelRequestInputBudget(input.inputTokenBudget);
   const originalMessages = (input.messages || []).map(message => ({ ...message }));
@@ -427,6 +443,9 @@ export function prepareModelRequestContext(input: {
     ...declaration,
     function: { ...declaration.function, parameters: { ...(declaration.function.parameters || {}) } },
   }));
+  const protectedToolNames = new Set(
+    (input.protectedToolNames || []).map(name => String(name || '').trim()).filter(Boolean),
+  );
   const sourceUserIndex = resolveAnnotatedSourceUserIndex(originalMessages);
   const originalEstimatedInputTokens = estimateModelRequestInputTokens(originalMessages, originalTools);
   if (originalEstimatedInputTokens <= budgetTokens) {
@@ -463,14 +482,35 @@ export function prepareModelRequestContext(input: {
         Math.max(768, Math.floor(budgetTokens * 0.22)),
       )
     : 0;
-  const toolBudget = originalTools.length > 0
+  const baseToolBudget = originalTools.length > 0
     ? Math.max(512, Math.min(
         9_000,
         Math.floor(budgetTokens * 0.38),
         Math.max(512, budgetTokens - Math.min(originalCurrentCost, Math.floor(budgetTokens * 0.45)) - minimumSystemBudget - 256),
       ))
     : 0;
-  const toolSelection = selectToolDeclarations(originalTools, currentText, toolBudget);
+  const protectedToolCost = declarationTokens(
+    normalizeToolDeclarations(originalTools)
+      .filter(item => protectedToolNames.has(item.declaration.function.name))
+      .map(item => item.declaration),
+  );
+  const minimumProtectedMessageBudget = protectedUserIndexes.length * 64
+    + (systemIndexes.length > 0 ? minimumSystemBudget : 0);
+  const maximumToolBudget = Math.max(0, budgetTokens - minimumProtectedMessageBudget);
+  if (protectedToolCost > maximumToolBudget) {
+    throw new Error(
+      `Model request budget cannot retain ${protectedToolNames.size} protected tool declarations and protected messages`,
+    );
+  }
+  const toolBudget = originalTools.length > 0
+    ? Math.min(maximumToolBudget, Math.max(baseToolBudget, protectedToolCost))
+    : 0;
+  const toolSelection = selectToolDeclarations(
+    originalTools,
+    currentText,
+    toolBudget,
+    protectedToolNames,
+  );
   const tools = toolSelection.selected;
   const toolCost = declarationTokens(tools);
 

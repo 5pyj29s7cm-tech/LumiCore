@@ -1,10 +1,18 @@
-import { getExternalControlCandidate, listExternalControlCandidates } from '../../external_control/candidates';
+import {
+  getExternalControlCandidate,
+  listExternalControlCandidates,
+  type ExternalControlCandidate,
+} from '../../external_control/candidates';
 import { captureNativeUiSnapshot, runNativeUiAction } from '../../external_control/native_ui';
 import {
   createVisibleWpsDocumentWithText,
   WPS_CREATE_DOCUMENT_TOOL,
 } from '../../external_control/wps_automation';
-import { mcpManager, recoverServerTools } from '../../mcp';
+import {
+  mcpManager,
+  requireSafeMCPServerName,
+  updateMCPConfig,
+} from '../../mcp';
 import { ToolRegistry } from '../registry';
 import type { ToolContext } from '../types';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
@@ -26,6 +34,25 @@ const UI_TARGET_PROPERTIES = {
   verify: { type: 'boolean', description: 'Return selected control state after action. Defaults true.' },
   delayAfterMs: { type: 'number', description: 'Delay before verification, default 250ms.' },
 };
+
+function publicExternalControlCandidate(candidate: ExternalControlCandidate): Record<string, unknown> {
+  const { mcp, ...catalog } = candidate;
+  return {
+    ...catalog,
+    ...(mcp ? {
+      mcp: {
+        serverName: mcp.serverName,
+        config: {
+          enabled: mcp.config.enabled,
+          source: mcp.config.source,
+          transport: mcp.config.transport,
+          description: mcp.config.description,
+          pinnedLocalRuntime: true,
+        },
+      },
+    } : {}),
+  };
+}
 
 export function registerExternalControlTools(registry: ToolRegistry): void {
   registry.register({
@@ -90,14 +117,39 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
       required: [],
     },
     handler: async (args) => JSON.stringify({
+      ok: true,
+      status: 'listed',
       candidates: listExternalControlCandidates({
         layer: args.layer,
         industry: args.industry,
-      }),
+      }).map(publicExternalControlCandidate),
       note: 'Prefer browser DOM/Playwright for web platforms, the Windows UIA or macOS Accessibility adapter for native apps, and vision computer_use only as a fallback.',
     }, null, 2),
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'external-control.candidate.list',
+      family: 'external-control',
+      lane: 'system',
+      operation: 'observe',
+      risk: 'low',
+      sideEffects: [],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'candidates'],
+        requiredValues: { ok: true, status: 'listed' },
+        successStatuses: ['listed'],
+        failureStatuses: ['failed'],
+        successSignals: ['curated external-control candidates were listed without changing runtime state'],
+        limitations: ['Listing a candidate does not approve, connect, or execute it.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'external-control.candidate.list',
+      operation: 'observe',
+      limitations: ['Discovery is read-only and does not prove candidate suitability.'],
+    }),
   });
 
   registry.register({
@@ -109,7 +161,7 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
         candidateId: { type: 'string', description: 'Candidate id, e.g. playwright-mcp.' },
         serverName: { type: 'string', description: 'Optional MCP server name override. Defaults to the candidate serverName.' },
         enabled: { type: 'boolean', description: 'Whether to enable the MCP server immediately. Defaults false.' },
-        restart: { type: 'boolean', description: 'Whether to restart/connect the server after writing config. Defaults false.' },
+        restart: { type: 'boolean', description: 'Compatibility flag. Enabled candidates are always connected and registered before this tool reports success.' },
       },
       required: ['candidateId'],
     },
@@ -117,66 +169,83 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
       if (context?.domain === 'work' || context?.orgId) {
         throw new Error('An organization workspace cannot change this computer\'s MCP configuration. Configure host capabilities from the member\'s local personal workspace or desktop settings.');
       }
+      if (
+        context?.authenticated !== true
+        || context.authRole !== 'admin'
+        || context.localExecution !== true
+        || context.executionBoundary !== 'trusted_local'
+      ) {
+        throw new Error('External MCP configuration requires an authenticated local administrator on the trusted native desktop boundary.');
+      }
       const candidate = getExternalControlCandidate(String(args.candidateId || ''));
       if (!candidate) throw new Error(`Unknown external control candidate: ${args.candidateId}`);
       if (!candidate.mcp) {
+        if (candidate.id === 'playwright-mcp') {
+          throw new Error('The pinned local Playwright MCP runtime is missing or failed integrity verification; online npx fallback is disabled.');
+        }
         return JSON.stringify({
           ok: true,
           status: 'not_applicable',
           configured: false,
           persisted: false,
-          candidate,
+          candidate: publicExternalControlCandidate(candidate),
           note: 'This candidate is native or policy-only and does not require MCP configuration.',
         }, null, 2);
       }
 
-      const serverName = String(args.serverName || candidate.mcp.serverName).trim();
-      if (!serverName) throw new Error('serverName is required.');
-      const config = mcpManager.getConfig();
+      const serverName = requireSafeMCPServerName(
+        String(args.serverName || candidate.mcp.serverName).trim(),
+      );
       const nextServer = {
         ...candidate.mcp.config,
         enabled: args.enabled === true,
       };
-      config[serverName] = nextServer;
-      mcpManager.saveConfig(config);
+      const update = await updateMCPConfig({ [serverName]: nextServer }, {
+        mode: 'merge',
+        // A successful enable receipt means the tools are usable in this
+        // process now. Configuration-only success is deliberately forbidden.
+        forceRestartNames: nextServer.enabled ? [serverName] : [],
+      });
+      const service = update.services.find(item => item.serverName === serverName);
+      if (!update.ok || !service || (nextServer.enabled && !service.usable)) {
+        throw new Error(
+          service?.error
+            || service?.rollbackError
+            || `External control candidate ${serverName} could not be made usable.`,
+        );
+      }
       const persistedConfig = mcpManager.getConfig()[serverName];
-      if (!persistedConfig || JSON.stringify(persistedConfig) !== JSON.stringify(nextServer)) {
+      if (!persistedConfig) {
         throw new Error(`External control candidate configuration was not persisted for ${serverName}.`);
       }
 
-      let restarted = false;
-      let tools: unknown[] = [];
-      if (args.restart === true && nextServer.enabled) {
-        tools = await mcpManager.restartServer(serverName);
-        await recoverServerTools(serverName, tools as any);
-        restarted = true;
-        if (!Array.isArray(tools) || tools.length === 0) {
-          throw new Error(`External control candidate ${serverName} restarted without exposing any tools.`);
-        }
-      } else if (args.restart === true && !nextServer.enabled) {
-        await mcpManager.disconnectServer(serverName);
-      }
-
-      const status = nextServer.enabled
-        ? restarted ? 'connected' : 'restart_required'
-        : args.restart === true ? 'disconnected' : 'configured_disabled';
+      const status = nextServer.enabled ? 'connected' : 'configured_disabled';
       return JSON.stringify({
         ok: true,
         status,
         configured: true,
         persisted: true,
-        candidate,
+        candidate: publicExternalControlCandidate(candidate),
         serverName,
         enabled: nextServer.enabled,
-        restarted,
-        toolCount: Array.isArray(tools) ? tools.length : 0,
-        config: nextServer,
+        connected: service.connected,
+        registered: service.registered,
+        usable: service.usable,
+        restarted: nextServer.enabled,
+        toolCount: service.toolCount,
+        registeredToolNames: service.registeredToolNames,
+        config: {
+          enabled: persistedConfig.enabled,
+          source: persistedConfig.source,
+          transport: persistedConfig.transport,
+          description: persistedConfig.description,
+        },
         note: nextServer.enabled
-          ? 'Candidate is enabled. If restart=false, restart the MCP server or Lumi runtime before using its tools.'
+          ? 'Candidate is enabled and its current tools are registered for immediate use.'
           : 'Candidate is configured but disabled. Enable it after reviewing safety and setup.',
       }, null, 2);
     },
-    permission: 'user',
+    permission: 'admin',
     securityLevel: 'confirm',
     capability: capabilityContract({
       id: 'external-control.candidate.configure',
@@ -186,18 +255,17 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
       risk: 'high',
       sideEffects: [
         { type: 'local_state_change', scope: 'host MCP server configuration', reversible: true },
-        { type: 'process_execution', scope: 'optional MCP server restart or disconnect', reversible: true },
-        { type: 'installation', scope: 'candidate package resolved by configured MCP command', reversible: true },
+        { type: 'process_execution', scope: 'optional pinned local candidate MCP start, restart, or disconnect', reversible: true },
       ],
       verification: {
         strategy: 'state_diff',
         required: true,
         requiredFields: ['ok', 'status', 'configured', 'persisted', 'candidate.id'],
         requiredValues: { ok: true },
-        successStatuses: ['not_applicable', 'connected', 'restart_required', 'disconnected', 'configured_disabled'],
+        successStatuses: ['not_applicable', 'connected', 'configured_disabled'],
         failureStatuses: ['failed', 'unverified'],
         successSignals: ['MCP configuration reread matches the requested candidate configuration', 'enabled restart exposes at least one tool'],
-        limitations: ['Native and policy-only candidates require no MCP write and return not_applicable.', 'A restart_required receipt means configuration is durable but the tools are not yet available.'],
+        limitations: ['Native and policy-only candidates require no MCP write and return not_applicable.'],
       },
     }),
     evidence: capabilityEvidence({

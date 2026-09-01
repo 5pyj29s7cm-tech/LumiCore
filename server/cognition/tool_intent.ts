@@ -690,3 +690,23 @@ export function traceToolIntentDecision(text: string, source?: string, operation
     },
   };
 }
+
+/**
+ * A preference or correction about Lumi's own reply/UI behaviour is a
+ * conversation turn, even when it contains words such as "message", "send"
+ * or "show" that also occur in executable tool intents.  Keep this separate
+ * from task corrections (for example "do not open Chrome; open WPS") so an
+ * exact server-bound continuation can still execute the corrected task.
+ */
+export function isConversationalProductFeedback(text: string): boolean {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return false;
+  const replyOrUiSubject = /(?:\u56de\u590d|\u56de\u7b54|\u56de\u5e94|\u6d88\u606f|\u8bdd\u672f|\u8868\u8fbe|\u8bf4\u8bdd\u65b9\u5f0f|\u8f93\u51fa|\u6392\u7248|\u683c\u5f0f|\u6362\u884c|\u5206\u6bb5|\u4e00\u5768|\u4e00\u5927\u6bb5|\u6c14\u6ce1|\u5b57\u4f53|\u663e\u793a|\u754c\u9762|\u63d0\u793a\u8bed|reply|answer|response|message|wording|format|layout|paragraph|line\s*break|bubble|display|ui)/iu.test(normalized);
+  if (!replyOrUiSubject) return false;
+  const preferenceOrCorrection = /(?:\u80fd\u4e0d\u80fd|\u53ef\u4e0d\u53ef\u4ee5|\u4ee5\u540e|\u4e0b\u6b21|\u6bcf\u6b21|\u603b\u662f|\u8001\u662f|\u4e0d\u8981|\u522b\u518d|\u522b\u603b|\u6211\u5e0c\u671b|\u9ebb\u70e6\u4f60|\u5e94\u8be5|can\s+you|could\s+you|please|from\s+now\s+on|stop|don't|do\s+not).{0,100}(?:\u4e0d\u8981|\u522b|\u6539\u6210|\u6362\u6210|\u5206\u6bb5|\u6362\u884c|\u6392\u7248|\u7b80\u6d01|\u6e05\u695a|\u81ea\u7136|\u597d\u770b|\u4e00\u5768|\u4e00\u5927\u6bb5|format|layout|paragraph|line\s*break|concise|clear|natural)|(?:\u4e0d\u8981|\u522b\u518d|\u522b\u603b).{0,100}(?:\u56de\u590d|\u56de\u7b54|\u6d88\u606f|\u8f93\u51fa|\u663e\u793a|reply|answer|message|display)/iu.test(normalized);
+  if (!preferenceOrCorrection) return false;
+  // An explicit replacement target is task correction, not merely a product
+  // preference. It must be handled through the durable continuation relation.
+  const explicitReplacementAction = /(?:\u4e0d\u8981|\u522b).{0,48}(?:\u6253\u5f00|\u542f\u52a8|\u8fd0\u884c|\u53d1\u9001|\u521b\u5efa|\u5220\u9664).{0,48}(?:\u6539\u6210|\u6362\u6210|\u800c\u662f|\u8981|\u8bf7|\u6253\u5f00|\u542f\u52a8|\u8fd0\u884c|\u53d1\u9001|\u521b\u5efa)|(?:don't|do\s+not).{0,48}(?:open|launch|run|send|create|delete).{0,48}(?:instead|but|open|launch|run|send|create)/iu.test(normalized);
+  return !explicitReplacementAction;
+}

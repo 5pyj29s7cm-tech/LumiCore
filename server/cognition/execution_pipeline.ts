@@ -40,6 +40,7 @@ import {
 import { recordRoutingShadowComparison } from '../runtime/capability_metrics';
 import { hasExplicitNoMutationInstruction } from './tool_intent';
 import type { PendingAssistantOfferContext } from './pending_assistant_offer';
+import { buildActionContract } from './action_contract';
 
 export interface LumiCapabilityPlan extends LumiCapabilitySelection {
   schemaVersion: 1;
@@ -57,6 +58,12 @@ export interface LumiExecutionPipeline {
   modelToolProjection: ReturnType<typeof buildModelToolProjection>;
   /** True only when this turn has a concrete, authorized capability to run. */
   executionRequested: boolean;
+  /**
+   * True only when the current request is an exact server-bound continuation
+   * of the unfinished durable task.  Manifest visibility alone can never set
+   * this bit.
+   */
+  trustedActionContinuation: boolean;
   intentTrace: LumiIntentTrace;
   shadowComparison: LumiRoutingShadowComparison;
 }
@@ -343,16 +350,35 @@ export function buildLumiExecutionPipeline(
     actionTaskState: input.actionTaskState,
     trustedActionContinuation,
   }, new Set(input.registry.getToolDeclarations().map(declaration => declaration.function.name)));
+  const workflowRequiredTools = (
+    turnIntent.flow.workflowHint || turnIntent.flow.specialWorkflow
+  )?.requiredTools || [];
+  const actionVerificationTools = buildActionContract(decisionText).verificationTools || [];
   const modelToolProjection = buildModelToolProjection(execution, {
     lane: selection.lane,
     preferredTools: selection.preferredTools,
     pinnedTools: pinnedContinuationTools,
+    requiredTools: [
+      ...workflowRequiredTools,
+      ...actionVerificationTools,
+    ],
   });
-  // Operation modes define the authorization ceiling. They must not create a
-  // task or tool loop on their own. A turn becomes executable only after the
-  // shared semantic route exposes at least one concrete authorized capability.
+  // Operation modes and manifest visibility define the authorization ceiling;
+  // neither is current-turn execution authority. Main Chat deliberately lets
+  // the model know which capabilities exist, but a greeting, correction about
+  // Lumi's behaviour, or ordinary conversation must not become executable
+  // merely because that manifest is visible. Only the current semantic turn,
+  // an exact server-bound continuation, or a task-owned entry may open the
+  // canonical tool loop.
+  const turnOwnsExecution = Boolean(
+    turnIntent.flow.allowToolUseForTurn
+    || trustedActionContinuation
+    || turnIntent.boundary === 'task_center'
+    || turnIntent.boundary === 'work_takeover',
+  );
   const executionRequested = Boolean(
-    execution.allowToolUse
+    turnOwnsExecution
+    && execution.allowToolUse
     && modelToolProjection.toolNames.length > 0,
   );
   const capabilityPlan: LumiCapabilityPlan = {
@@ -401,6 +427,7 @@ export function buildLumiExecutionPipeline(
     authorizationPolicy,
     modelToolProjection,
     executionRequested,
+    trustedActionContinuation,
     intentTrace,
     shadowComparison,
   };

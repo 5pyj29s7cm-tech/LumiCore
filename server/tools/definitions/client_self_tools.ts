@@ -16,7 +16,12 @@ import {
 import { getLumiTechnicalArchitecture } from '../../../shared/technical_architecture';
 import { getGateConfig } from '../../autonomy/safety_gate';
 import { listAutonomousWorkflows } from '../../autonomy/workflows';
-import { mcpManager } from '../../mcp';
+import {
+  mcpManager,
+  registerConnectedSkillTools,
+  requireSafeMCPServerName,
+  unregisterServerTools,
+} from '../../mcp';
 import { isExplicitSensitiveClientActionRequest } from '../action_constitution';
 import { PERSONAL_CLIENT_SURFACE_ACTIONS } from '../../../shared/client_surfaces';
 import {
@@ -159,6 +164,53 @@ function getCapabilityRuntimeSummary(registry: ToolRegistry) {
   };
 }
 
+const CAPABILITY_SEARCH_STOPWORDS = new Set([
+  'and', 'can', 'could', 'for', 'from', 'help', 'please', 'the', 'this', 'use', 'with',
+]);
+
+function capabilitySearchTokens(query: string): string[] {
+  const normalized = query.normalize('NFKC').toLowerCase().slice(0, 500);
+  const tokens: string[] = [];
+  for (const token of normalized.match(/[a-z0-9][a-z0-9._+-]{1,}/g) || []) {
+    if (!CAPABILITY_SEARCH_STOPWORDS.has(token)) tokens.push(token);
+  }
+  for (const run of normalized.match(/[\u3400-\u9fff]+/g) || []) {
+    for (let size = 2; size <= Math.min(5, run.length); size += 1) {
+      for (let index = 0; index <= run.length - size; index += 1) {
+        const token = run.slice(index, index + size);
+        if (!CAPABILITY_SEARCH_STOPWORDS.has(token)) tokens.push(token);
+      }
+    }
+  }
+  return Array.from(new Set(tokens));
+}
+
+function rankCapabilityManifestEntry(
+  entry: ReturnType<ToolRegistry['getCapabilityManifest']>[number],
+  query: string,
+): { score: number; matchedTerms: string[] } {
+  const normalizedQuery = query.normalize('NFKC').toLowerCase().trim().slice(0, 500);
+  if (!normalizedQuery) return { score: 0, matchedTerms: [] };
+  const identity = [entry.toolName, entry.capabilityId, entry.family, entry.provider || '']
+    .join(' ')
+    .normalize('NFKC')
+    .toLowerCase();
+  const haystack = [
+    identity,
+    entry.description,
+    ...entry.domains,
+    ...entry.routingTerms,
+  ].join(' ').normalize('NFKC').toLowerCase();
+  let score = 0;
+  if (haystack.includes(normalizedQuery)) score += 200 + Math.min(100, normalizedQuery.length * 4);
+  const matchedTerms = capabilitySearchTokens(normalizedQuery).filter(token => haystack.includes(token));
+  for (const token of matchedTerms) {
+    score += Math.min(18, token.length * 3);
+    if (identity.includes(token)) score += Math.min(24, token.length * 4);
+  }
+  return { score, matchedTerms };
+}
+
 export function registerClientSelfTools(registry: ToolRegistry): void {
   registry.register({
     name: 'client_get_state',
@@ -275,34 +327,34 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
         registry.getCapabilityManifest(context?.toolPolicy, { executableOnly: true })
           .map(entry => entry.toolName),
       );
-      const query = String(args.query || '').trim().toLowerCase();
+      const query = String(args.query || '').trim().normalize('NFKC').toLowerCase().slice(0, 500);
       const source = String(args.source || '').trim();
       const limit = Math.max(1, Math.min(200, Number(args.limit) || 50));
-      const matches = installed
+      const eligible = installed
         .filter(entry => !source || entry.source === source)
-        .filter(entry => !args.executableOnly || turnExecutable.has(entry.toolName))
-        .filter(entry => {
-          if (!query) return true;
-          return [
-            entry.toolName,
-            entry.capabilityId,
-            entry.family,
-            entry.source,
-            entry.provider || '',
-            entry.description,
-            ...entry.domains,
-            ...entry.routingTerms,
-          ].join(' ').toLowerCase().includes(query);
-        });
+        .filter(entry => !args.executableOnly || turnExecutable.has(entry.toolName));
+      const matches = query
+        ? eligible
+            .map(entry => ({ entry, ...rankCapabilityManifestEntry(entry, query) }))
+            .filter(match => match.score > 0)
+            .sort((left, right) => (
+              right.score - left.score
+              || left.entry.toolName.localeCompare(right.entry.toolName)
+            ))
+        : eligible.map(entry => ({ entry, score: 0, matchedTerms: [] as string[] }));
       return JSON.stringify(sanitizeDiagnosticValue({
         summary: getCapabilityRuntimeSummary(registry),
         query: query || null,
         source: source || null,
         matched: matches.length,
         returned: Math.min(matches.length, limit),
-        capabilities: matches.slice(0, limit).map(entry => ({
-          ...entry,
-          executableThisTurn: turnExecutable.has(entry.toolName),
+        capabilities: matches.slice(0, limit).map(match => ({
+          ...match.entry,
+          executableThisTurn: turnExecutable.has(match.entry.toolName),
+          ...(query ? {
+            matchScore: match.score,
+            matchedTerms: match.matchedTerms.slice(0, 12),
+          } : {}),
         })),
       }), null, 2);
     },
@@ -568,7 +620,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'client_repair_skill',
-    description: 'Repair or restart a Lumi skill/MCP server by name. This may reinstall dependencies or restart a local skill process, so it requires confirmation.',
+    description: 'Restart an already approved Lumi skill/MCP server by name, or restore an exact built-in bundled package when that package is missing. Repair never follows mutable npmPackage/repoUrl metadata and never installs ordinary local dependencies.',
     parameters: {
       type: 'object',
       properties: {
@@ -579,28 +631,81 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
       },
       required: ['skillName'],
     },
-    handler: async (args) => {
-      const skillName = String(args.skillName || '').trim();
-      if (!skillName) throw new Error('skillName is required.');
-      const result = await mcpManager.repairSkill(skillName);
-      if (!result.success) {
-        throw new Error(safeRuntimeError(result.reason) || `Skill "${skillName}" repair failed.`);
+    handler: async (args, context) => {
+      if (
+        context?.authenticated !== true
+        || context.authRole !== 'admin'
+        || context.localExecution !== true
+        || context.executionBoundary !== 'trusted_local'
+        || context.domain === 'work'
+        || Boolean(context.orgId)
+      ) {
+        throw new Error('Skill repair requires the authenticated local desktop administrator in the personal workspace.');
       }
-      const toolCount = Number(result.toolCount || 0);
-      if (!result.action || toolCount < 1) {
-        throw new Error(`Skill "${skillName}" repair returned without a connected tool inventory.`);
+      const skillName = requireSafeMCPServerName(String(args.skillName || ''));
+      const priorConfig = mcpManager.getConfig();
+      const priorServerConfig = Object.prototype.hasOwnProperty.call(priorConfig, skillName)
+        ? structuredClone(priorConfig[skillName])
+        : undefined;
+      try {
+        const result = await mcpManager.repairSkill(skillName);
+        if (!result.success) {
+          throw new Error(safeRuntimeError(result.reason) || `Skill "${skillName}" repair failed.`);
+        }
+        if (!result.action || !Array.isArray(result.tools) || result.tools.length < 1) {
+          throw new Error(`Skill "${skillName}" repair returned without exact connected tool declarations.`);
+        }
+        const activation = await registerConnectedSkillTools(skillName, result.tools, {
+          registry,
+          serverConfig: mcpManager.getConfig()[skillName],
+        });
+        if (mcpManager.getConfig()[skillName]?.installationState === 'pending') {
+          // A bundled restore remains crash-safe/pending until its exact live
+          // declarations are present in the current capability manifest.
+          mcpManager.commitSkillActivation(skillName);
+        }
+        return JSON.stringify(sanitizeDiagnosticValue({
+          ok: true,
+          status: 'repaired',
+          skillName,
+          action: result.action,
+          directory: result.directory,
+          runtimeStatus: activation.runtimeStatus,
+          usable: activation.usable,
+          toolCount: activation.toolCount,
+          registeredToolNames: activation.registeredToolNames,
+          manifestCapabilityIds: activation.manifestCapabilityIds,
+        }), null, 2);
+      } catch (error) {
+        const rollbackErrors: string[] = [];
+        try {
+          unregisterServerTools(skillName, registry);
+        } catch (rollbackError: any) {
+          rollbackErrors.push(`registry: ${rollbackError?.message || rollbackError}`);
+        }
+        try {
+          await mcpManager.disconnectServer(skillName);
+        } catch (rollbackError: any) {
+          rollbackErrors.push(`disconnect: ${rollbackError?.message || rollbackError}`);
+        }
+        try {
+          const currentConfig = mcpManager.getConfig();
+          if (priorServerConfig) currentConfig[skillName] = priorServerConfig;
+          else delete currentConfig[skillName];
+          mcpManager.saveConfig(currentConfig);
+        } catch (rollbackError: any) {
+          rollbackErrors.push(`configuration: ${rollbackError?.message || rollbackError}`);
+        }
+        if (rollbackErrors.length > 0) {
+          throw new Error(
+            `${String((error as any)?.message || error)} Repair rollback incomplete (${rollbackErrors.join(' | ')}).`,
+            { cause: error },
+          );
+        }
+        throw error;
       }
-      return JSON.stringify(sanitizeDiagnosticValue({
-        ok: true,
-        status: 'repaired',
-        skillName,
-        action: result.action,
-        directory: result.directory,
-        runtimeStatus: 'connected',
-        toolCount,
-      }), null, 2);
     },
-    permission: 'user',
+    permission: 'admin',
     securityLevel: 'confirm',
     capability: capabilityContract({
       id: 'skills.runtime.repair',
@@ -609,20 +714,19 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
       operation: 'mutate',
       risk: 'high',
       sideEffects: [
-        { type: 'installation', scope: 'installed skill dependencies or package source when repair requires reinstall', reversible: true },
+        { type: 'installation', scope: 'exact Lumi-bundled package restore only', reversible: true },
         { type: 'local_state_change', scope: 'MCP skill runtime configuration', reversible: true },
         { type: 'process_execution', scope: 'local MCP skill process restart', reversible: true },
-        { type: 'network_read', scope: 'declared package or repository source when reinstall is required', reversible: true },
       ],
       verification: {
         strategy: 'state_diff',
         required: true,
-        requiredFields: ['ok', 'status', 'skillName', 'action', 'runtimeStatus', 'toolCount'],
-        requiredValues: { ok: true, status: 'repaired', runtimeStatus: 'connected' },
+        requiredFields: ['ok', 'status', 'skillName', 'action', 'runtimeStatus', 'usable', 'toolCount', 'registeredToolNames', 'manifestCapabilityIds'],
+        requiredValues: { ok: true, status: 'repaired', runtimeStatus: 'registered', usable: true },
         successStatuses: ['repaired'],
         failureStatuses: ['failed', 'not_found', 'unverified'],
-        successSignals: ['restarted MCP process connected and returned at least one tool'],
-        limitations: ['Connection and tool enumeration do not prove a real user task will succeed.'],
+        successSignals: ['restarted MCP process returned tools and those exact tools are executable in the current capability manifest'],
+        limitations: ['Registration proves the tool is usable by LumiCore; a real task receipt is still required to prove its domain outcome.'],
       },
     }),
     evidence: capabilityEvidence({

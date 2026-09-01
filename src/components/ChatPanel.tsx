@@ -4,6 +4,8 @@ import { Send, Mic, MicOff, Loader2, MessageSquare, Plus, Square, Copy, Trash2, 
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
+import { safeMarkdownComponents } from '@/lib/externalNavigation';
+import { projectAgentActivity } from '@/lib/agentStatusTruth';
 import {
   describeToolProgress,
   describeTurnCompletionProgress,
@@ -280,9 +282,13 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
       pushChatProgress(data.text || '', data.tone || 'tool');
     };
 
-    const onStatus = (data: { status: string; requestId?: string; source?: string }) => {
+    const onStatus = (data: { status: string; requestId?: string; source?: string; executionAccepted?: boolean }) => {
       if (!isCurrentTaskEvent(data)) return;
-      if (['thinking', 'planning', 'acknowledged', 'executing', 'waiting_confirmation', 'cancelling'].includes(data.status)) {
+      const activity = projectAgentActivity(data.status, {
+        executionAccepted: data.executionAccepted,
+        hasToolEvidence: currentRequestHadToolRef.current,
+      });
+      if (activity) {
         setIsTyping(true);
         pushChatProgress(uiMessage('chat-panel.i-am-figuring-out-how.017a8f967e', (isZh) ? 'zh' : 'en'), 'thinking');
       }
@@ -661,7 +667,7 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
                   <div className="flex justify-end group">
                     <div className="max-w-[80%] bg-celestial-glow/20 border border-celestial-glow/30 rounded-lg px-3 py-1.5 relative">
                       <div className="markdown-body text-white/80 text-sm leading-relaxed">
-                          <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                          <Markdown components={safeMarkdownComponents} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
                             {msg.content}
                           </Markdown>
                         </div>
@@ -685,7 +691,7 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
                         <Mic size={10} /> {t?.voice || 'voice'}
                       </div>
                       <div className="markdown-body text-white/80 text-sm leading-relaxed">
-                          <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                          <Markdown components={safeMarkdownComponents} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
                             {msg.content}
                           </Markdown>
                         </div>
@@ -698,7 +704,7 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
                   <div className="flex justify-start group">
                     <div className="max-w-[85%] bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 relative">
                       <div className="markdown-body text-white/80 text-sm leading-relaxed">
-                        <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                        <Markdown components={safeMarkdownComponents} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
                           {msg.content}
                         </Markdown>
                       </div>
@@ -726,7 +732,7 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
               >
                 <div className="max-w-[85%] bg-white/5 border border-celestial-glow/20 rounded-lg px-3 py-1.5">
                   <div className="markdown-body text-white/80 text-sm leading-relaxed">
-                    <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                    <Markdown components={safeMarkdownComponents} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
                       {streamingText}
                     </Markdown>
                   </div>

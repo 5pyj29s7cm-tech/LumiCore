@@ -1,8 +1,8 @@
 import type { MessageRecord } from './manager';
-import { toolRecordSucceeded } from '../cognition/task_execution_ledger';
+import { toolRecordVerifiedForCompletion } from '../cognition/task_execution_ledger';
 
 // i18n-allow: Chinese summary-grounding recognition pattern; not user-visible copy.
-const EXECUTION_OUTCOME_RE = /(?:已(?:经)?(?:完成|执行|检查|测试|切换|生成|打开|发送|读取|确认|配置|注册)|(?:完成了|执行了|进行了).{0,48}(?:检查|测试|诊断|切换|生成|发送|打开|读取)|检查(?:已)?完成|测试(?:已)?通过|执行完毕|运行正常|一切正常|无异常|全部通过|成功切换|(?:检查|测试|结果|状态).{0,24}(?:均|都|全部)?(?:正常|通过|无异常)|(?:检查|测试|诊断).{0,32}(?:确认|判断).{0,32}(?:模型|网络|连接|工具|端口|MCP)|(?:Lumi|助手|系统).{0,20}(?:确认|判断).{0,32}(?:模型|网络|连接|工具|端口|MCP)|\b(?:completed|passed|verified|successfully\s+(?:ran|tested|switched|opened|sent|created)|all\s+checks\s+passed|running\s+normally|no\s+issues)\b)/iu;
+const EXECUTION_OUTCOME_RE = /(?:已(?:经)?(?:完成|执行|检查|测试|切换|生成|打开|启动|运行|播放|保存|创建|写入|发送|读取|关闭|删除|确认|配置|注册)|成功(?:切换|生成|打开|启动|运行|播放|保存|创建|写入|发送|读取|关闭|删除)|(?:完成了|执行了|进行了).{0,48}(?:检查|测试|诊断|切换|生成|发送|打开|读取)|检查(?:已)?完成|测试(?:已)?通过|执行完毕|运行正常|一切正常|无异常|全部通过|(?:检查|测试|结果|状态).{0,24}(?:均|都|全部)?(?:正常|通过|无异常)|(?:检查|测试|诊断).{0,32}(?:确认|判断).{0,32}(?:模型|网络|连接|工具|端口|MCP)|(?:Lumi|助手|系统).{0,20}(?:确认|判断).{0,32}(?:模型|网络|连接|工具|端口|MCP)|\b(?:completed|passed|verified|successfully\s+(?:ran|tested|switched|opened|sent|created)|all\s+checks\s+passed|running\s+normally|no\s+issues)\b)/iu;
 // Plans and in-progress assertions are execution claims too. Without a receipt
 // they must not be replayed into later prompt history as unfinished commands.
 // i18n-allow: Chinese execution-claim recognition; not user-visible copy.
@@ -101,14 +101,16 @@ function normalizeToolCalls(value: unknown): any[] {
   }
 }
 
-function successfulToolNames(value: unknown): string[] {
+function verifiedToolNames(value: unknown): string[] {
   return Array.from(new Set(normalizeToolCalls(value)
-    .filter(call => call && toolRecordSucceeded({
+    .filter(call => call && toolRecordVerifiedForCompletion({
       id: String(call.id || ''),
       name: String(call.name || call.toolName || ''),
       arguments: call.arguments || call.args || {},
       result: typeof call.result === 'string' ? call.result : JSON.stringify(call.result ?? ''),
       error: String(call.error || '').trim() || undefined,
+      terminalVerification: call.terminalVerification,
+      capability: call.capability,
     }))
     .map(call => String(call.name || '').trim())
     .filter(Boolean)));
@@ -227,7 +229,7 @@ export function isUnverifiedExecutionAssistantText(value: unknown): boolean {
 
 export function isUnverifiedExecutionAssistantRecord(message: MessageRecord): boolean {
   if (String(message.role || '').toLowerCase() !== 'assistant') return false;
-  if (successfulToolNames(message.toolCalls).length > 0) return false;
+  if (verifiedToolNames(message.toolCalls).length > 0) return false;
   return isUnverifiedExecutionAssistantText(message.message || message.response || '');
 }
 
@@ -241,7 +243,7 @@ export function buildEvidenceGroundedSummaryTranscript(messages: MessageRecord[]
       const role = String(message.role || 'user').toLowerCase();
       const content = String(message.message || '').slice(0, 260);
       if (role !== 'assistant') return `${role}: ${content}`;
-      const tools = successfulToolNames(message.toolCalls);
+      const tools = verifiedToolNames(message.toolCalls);
       return tools.length
         ? `assistant [verified current-turn tools: ${tools.join(', ')}]: ${content}`
         : `assistant: ${content}`;

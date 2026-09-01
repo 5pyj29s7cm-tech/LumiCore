@@ -819,9 +819,10 @@ export function finalizeConversationActionTask(
   }
   if (
     !input.retainPendingAction
+    && requestId
     &&
     input.conversation.pendingActionContinuation
-    && (!requestId || input.conversation.pendingActionContinuation.requestId === requestId)
+    && input.conversation.pendingActionContinuation.requestId === requestId
   ) {
     delete input.conversation.pendingActionContinuation;
   }
@@ -852,6 +853,8 @@ export function archiveBoundConversationActionReceipts(
     now?: string;
     /** @internal Exact, manager-fenced terminal adjudication for this request. */
     terminalDisposition?: ConversationActionTerminalDisposition;
+    /** @internal Current assistant result owned by currentPairingAuthority. */
+    assistantState?: string;
     /**
      * @internal Legacy requestless compatibility. Only the manager's current
      * user/assistant pairing may use this; stale/replay archive calls omit it.
@@ -1044,6 +1047,9 @@ export function archiveBoundConversationActionReceipts(
           : authoritativeBlocked
             ? undefined
             : state.completionSource,
+        assistantState: input.currentPairingAuthority && input.assistantState !== undefined
+          ? String(input.assistantState || '').replace(/\s+/g, ' ').trim().slice(0, 700)
+          : state.assistantState,
         revision: Math.max(state.revision || 0, task.revision || 0) + 1,
         updatedAt: now,
       });
@@ -1856,6 +1862,27 @@ export function formatConversationActionLedgerStatus(
     ? (db.conversationActionReceipts as ConversationActionReceiptRow[])
       .filter(receipt => receipt.taskId === task.id)
     : [];
+  const activeRequestId = String(state.activeRequestId || task?.activeRequestId || '').trim();
+  const executionActive = Boolean(
+    task
+    && activeRequestId
+    && conversationTaskStatusOwnsExecutionLease(task.status)
+    && (db.conversationActionTurns || []).some((turn: any) => {
+      if (
+        turn.conversationId !== input.conversationId
+        || turn.userId !== input.userId
+        || turn.taskId !== task.id
+        || turn.requestId !== activeRequestId
+        || !['accepted', 'leased'].includes(String(turn.status || ''))
+      ) return false;
+      if (turn.status === 'accepted') return true;
+      const expiresAt = Date.parse(String(turn.leaseExpiresAt || ''));
+      return Number.isFinite(expiresAt) && expiresAt > Date.now();
+    })
+  );
+  const formatAuthoritativeStatus = () => formatConversationActionTaskStatus(state, {
+    executionActive,
+  });
   const normalizedQueryIntent = normalizeActionIntent(query);
   const asksForPreviousAction = normalizedQueryIntent.kind === 'status_query'
     && normalizedQueryIntent.target === 'previous_action';
@@ -1887,7 +1914,7 @@ export function formatConversationActionLedgerStatus(
       const path = writeReceipt?.targetIdentity || state.sourcePaths?.[0] || task.target;
       const finalStatus = task.status === 'completed' && writeReceipt
         ? '\u5df2\u5b8c\u6210\uff08\u6301\u4e45\u56de\u6267\u5df2\u9a8c\u8bc1\uff09'
-        : formatConversationActionTaskStatus(state);
+        : formatAuthoritativeStatus();
       const readbackEnvelope = readReceipt ? parseObject(readReceipt.envelope) : {};
       const readbackText = typeof readbackEnvelope.result === 'string'
         ? readbackEnvelope.result.replace(/\r\n/g, '\n')
@@ -1944,7 +1971,7 @@ export function formatConversationActionLedgerStatus(
         `\u4fdd\u5b58\u72b6\u6001\uff1a${saved ? `\u5df2\u4fdd\u5b58${savePath ? `\uff08${savePath}\uff09` : ''}` : '\u672a\u4fdd\u5b58'}`,
         `\u6700\u7ec8\u72b6\u6001\uff1a${exactTextMatch
           ? '\u5df2\u5b8c\u6210\uff08\u6301\u4e45\u56de\u6267\u5df2\u9a8c\u8bc1\uff09'
-          : formatConversationActionTaskStatus(state)}`,
+          : formatAuthoritativeStatus()}`,
       ].join('\n');
     }
   }
@@ -2001,7 +2028,7 @@ export function formatConversationActionLedgerStatus(
         `\u5b9e\u9645\u8fdb\u7a0b\uff1a${processName || '\u56de\u6267\u672a\u8bb0\u5f55'}`,
         `\u5b9e\u9645\u7a97\u53e3\u6807\u9898\uff1a${windowTitle || '\u56de\u6267\u672a\u8bb0\u5f55'}`,
         `\u7cbe\u786e\u5339\u914d\uff1a${targetMatched ? '\u662f\uff08\u6253\u5f00\u56de\u6267\u4e0e\u6d3b\u52a8\u7a97\u53e3\u56de\u6267\u4e00\u81f4\uff09' : '\u5426\u6216\u56de\u6267\u4e0d\u5b8c\u6574'}`,
-        `\u6700\u7ec8\u72b6\u6001\uff1a${targetMatched && task.status === 'completed' ? '\u5df2\u5b8c\u6210\uff08\u6301\u4e45\u56de\u6267\u5df2\u9a8c\u8bc1\uff09' : formatConversationActionTaskStatus(state)}`,
+        `\u6700\u7ec8\u72b6\u6001\uff1a${targetMatched && task.status === 'completed' ? '\u5df2\u5b8c\u6210\uff08\u6301\u4e45\u56de\u6267\u5df2\u9a8c\u8bc1\uff09' : formatAuthoritativeStatus()}`,
       ].join('\n');
     }
   }
@@ -2038,11 +2065,11 @@ export function formatConversationActionLedgerStatus(
         matchedEvidence.length ? CN_ACTION_LEDGER_MESSAGES.verificationEvidence(matchedEvidence) : '',
         `\u6700\u7ec8\u72b6\u6001\uff1a${task.status === 'completed' && verificationStatus === 'verified'
           ? '\u5df2\u5b8c\u6210\uff08\u6301\u4e45\u56de\u6267\u5df2\u9a8c\u8bc1\uff09'
-          : formatConversationActionTaskStatus(state)}`,
+          : formatAuthoritativeStatus()}`,
       ].filter(Boolean).join('\n');
     }
   }
-  const status = formatConversationActionTaskStatus(state);
+  const status = formatAuthoritativeStatus();
   const asksForArtifactPath = /(?:产物|文件).{0,10}(?:路径|位置|在哪)|(?:路径|位置|在哪).{0,10}(?:产物|文件)|\b(?:artifact|file|output)\s+(?:path|location)\b|\bwhere\s+is\s+(?:the\s+)?(?:artifact|file|output)\b/iu.test(String(input.query || ''));
   if (!asksForArtifactPath || state.status !== 'completed' || !task) return status;
 

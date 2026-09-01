@@ -96,6 +96,9 @@ export interface LumiResultFinalizerInput {
   toolRecords?: ToolExecutionRecord[];
   source: 'chat' | 'voice' | 'task' | 'workflow' | string;
   flow?: LumiTurnFlow;
+  /** Optional durable fences for status-bearing receipts. */
+  taskId?: string;
+  requestId?: string;
 }
 
 export interface LumiResultFinalizerResult {
@@ -207,18 +210,68 @@ function unsupportedToolModeClaim(input: LumiResultFinalizerInput): string | nul
     : 'No such mode switch occurred. Fetcher/System Diagnostics is not a user-selectable runtime mode; the tools actually declared for this turn are authoritative.';
 }
 
+function hasVerifiedOngoingExecutionReceipt(input: LumiResultFinalizerInput): boolean {
+  const records = input.toolRecords || [];
+  const expectedTaskId = String(input.taskId || '').trim();
+  const expectedRequestId = String(input.requestId || '').trim();
+  const task = resultTaskText(input);
+  // i18n-allow: Reviewed multilingual runtime-status query recognition; not user-visible copy.
+  const explicitRuntimeStatusQuery = /(?:任务|工作|后台|运行).{0,24}(?:状态|进度|还在|是否|怎么样)|(?:状态|进度).{0,24}(?:任务|工作|后台|运行)|\b(?:status|progress|still\s+running|active\s+(?:task|work|run))\b/iu.test(task);
+  return records.some(record => {
+    if (
+      !toolRecordSucceeded(record)
+      || record.terminalVerification?.status === 'failed'
+    ) return false;
+    if (expectedTaskId && String(record.taskId || '').trim() !== expectedTaskId) return false;
+    if (expectedRequestId && String(record.requestId || '').trim() !== expectedRequestId) return false;
+    const payload = parseReceiptObject(toolRecordTerminalPayload(record));
+    if (!payload) return false;
+    const status = String(
+      payload.status
+      || payload.task?.status
+      || payload.run?.status
+      || '',
+    ).trim().toLowerCase();
+    const name = String(record.name || '');
+    if (name === 'runtime_work_status') {
+      return explicitRuntimeStatusQuery
+        && status === 'active'
+        && Number(payload.activeCount || 0) > 0;
+    }
+    if (!/(?:work_takeover|autonomy|scheduler|background|runtime_work|task_(?:create|start|run|resume))/i.test(name)) {
+      return false;
+    }
+    const durableIdentity = String(
+      payload.taskId
+      || payload.runId
+      || payload.jobId
+      || payload.task?.id
+      || record.taskId
+      || '',
+    ).trim();
+    return Boolean(durableIdentity)
+      && /^(?:active|running|executing|in_progress)$/.test(status);
+  });
+}
+
 function unsupportedOngoingExecutionClaim(
   input: LumiResultFinalizerInput,
   includeActionPlans = true,
 ): string | null {
-  if ((input.toolRecords || []).length > 0) return null;
   const response = String(input.responseText || '').trim();
   if (!response) return null;
   const task = resultTaskText(input);
   const actionRequested = taskActionContract(input).applies
-    || isDiagnosticOrRepairRequest(task);
+    || isDiagnosticOrRepairRequest(task)
+    || input.flow?.completionEvidenceNeeded === true
+    || (input.toolRecords || []).length > 0;
   // i18n-allow: Chinese execution-plan recognition; not user-visible copy.
   const claimsPendingAction = /(?:^|[\n\u3002\uff01\uff1f.!?])\s*(?:(?:\u597d|\u597d\u7684|\u53ef\u4ee5|\u884c)[\uff0c,\s]*)?(?:(?:\u6211|\u8ba9\u6211|\u8fd9\u8fb9)?\s*(?:\u5148|\u73b0\u5728|\u9a6c\u4e0a|\u7acb\u5373|\u63a5\u4e0b\u6765|\u7ee7\u7eed)\s*(?:\u770b\u770b|\u67e5\u770b|\u68c0\u67e5|\u8bfb\u53d6|\u6253\u5f00|\u6267\u884c|\u5904\u7406|\u91cd\u542f|\u4fee\u590d|\u6062\u590d|\u8c03\u7528|\u5f00\u59cb)|(?:\u6211|\u8fd9\u8fb9)\s*\u6b63\u5728\s*(?:\u770b|\u67e5|\u8bfb|\u6253\u5f00|\u6267\u884c|\u5904\u7406|\u91cd\u542f|\u4fee\u590d|\u6062\u590d))|\b(?:let\s+me|i(?:'ll|\s+will|\s+am\s+going\s+to)|first\s+i(?:'ll|\s+will))\b[^.!?\n]{0,100}\b(?:check|inspect|read|open|execute|handle|restart|repair|recover|start)\b/iu.test(response);
+  // The terminal candidate may also end in a bare status phrase such as
+  // “正在执行——”. At finalization that wording is truthful only when a durable
+  // background execution receipt still reports an active run.
+  // i18n-allow: Reviewed multilingual execution-status recognition; not user-visible copy.
+  const claimsStandaloneOngoing = /(?:^|[\n。！？.!?])\s*正在\s*(?:执行|操作|处理|调用|修复|重启)[—\-\s。！!]*$/iu.test(response);
   // General first-person execution promises are handled by the shared
   // completion guard below, which already excludes quoted explanations and
   // reflective self-assessment. This narrow check covers the distinct false
@@ -226,14 +279,21 @@ function unsupportedOngoingExecutionClaim(
   // restored even though this turn has no tool receipt.
   // i18n-allow: Chinese execution-claim recognition; not user-visible copy.
   const claimsInventedToolChain = /工具(?:链|链路)[^。！？!?\n]{0,20}(?:已经)?(?:恢复|可用)|\btool(?:ing)?\s+(?:chain|pipeline)[^.!?\n]{0,30}\b(?:restored|available|working)\b/iu.test(response);
-  if (!claimsInventedToolChain && !(includeActionPlans && actionRequested && claimsPendingAction)) return null;
+  const claimsExecutionActivity = claimsPendingAction || claimsStandaloneOngoing;
+  if (!claimsInventedToolChain && !(includeActionPlans && actionRequested && claimsExecutionActivity)) return null;
+  if (claimsExecutionActivity && hasVerifiedOngoingExecutionReceipt(input)) return null;
+  const attemptedButEnded = (input.toolRecords || []).length > 0;
   return isChineseText(resultTaskText(input)) || isChineseText(response)
     ? claimsInventedToolChain
       ? CN_RESULT_GROUNDING_MESSAGES.unverifiedExecutionActivity
-      : CN_RESULT_GROUNDING_MESSAGES.actionNotStarted
+      : attemptedButEnded
+        ? CN_RESULT_GROUNDING_MESSAGES.executionEndedWithoutCompletion
+        : CN_RESULT_GROUNDING_MESSAGES.actionNotStarted
     : claimsInventedToolChain
       ? 'No new execution started in this turn; the draft response mixed in an older task.'
-      : 'No tool execution started in this turn. The response described a plan, not an action or result.';
+      : attemptedButEnded
+        ? 'This foreground attempt has ended without verified goal completion; it is not still executing.'
+        : 'No tool execution started in this turn. The response described a plan, not an action or result.';
 }
 
 function unsupportedToolAvailabilityExcuse(input: LumiResultFinalizerInput): string | null {
@@ -2126,6 +2186,12 @@ function preserveModelWordingOnGroundedSuccess(
   // tool/phrase-specific reply patch. A failed or conflicting outcome stays on
   // the structured correction path.
   if (input.source !== 'chat' || grounded.blocked || !modelText) return grounded;
+  // Completion truth comes from the grounded receipt contract. A stray model
+  // tail such as "executing now" is a presentation defect, not grounds for
+  // turning an actually completed durable task back into a blocked one.
+  if (unsupportedOngoingExecutionClaim(input, true)) {
+    return formatStructuredEvidenceCorrection(input, grounded);
+  }
   if (
     claimsCurrentAppSaveCompletion(modelText)
     && !hasCurrentAppSaveEvidence(input.toolRecords || [], resultTaskText(input))
@@ -2449,7 +2515,12 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       },
     };
   }
-  const unsupportedOngoingExecution = unsupportedOngoingExecutionClaim(input, !guard.blocked);
+  const hasGroundedCoreAction = actionContract.applies
+    && hasCoreActionEvidence(actionContract, input.toolRecords || [], actionText);
+  const unsupportedOngoingExecution = unsupportedOngoingExecutionClaim(
+    input,
+    !guard.blocked && !hasGroundedCoreAction,
+  );
   if (unsupportedOngoingExecution) {
     return {
       text: unsupportedOngoingExecution,

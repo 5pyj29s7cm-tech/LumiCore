@@ -25,6 +25,7 @@ import { applyTaskPolicySnapshot } from './task_execution_ledger';
 import { buildActionContract } from './action_contract';
 import { classifyRuntimeWorkIntent } from './runtime_work_intent';
 import type { PendingAssistantOfferContext } from './pending_assistant_offer';
+import { hasExplicitToolIntent } from './tool_intent';
 
 type ToolDeclaration = ReturnType<ToolRegistry['getToolDeclarations']>[number];
 
@@ -260,13 +261,28 @@ function retainSemanticToolsWithinLimit(
 }
 
 const CAPABILITY_LEARNING_SEMANTIC_TOOLS = [
+  'skill_marketplace_search',
+  'extension_registry_list',
   'capability_learning_list',
   'self_extension_plan',
-  'capability_gap_autofix',
   'list_skills',
+  'capability_research',
+  'external_control_candidates',
+  'external_control_configure_candidate',
+  'generate_skill',
+  'skill_marketplace_install',
+  'install_skill',
+  'capability_gap_autofix',
   'adapter_registry_list',
   'external_app_list_adapters',
+];
+
+const CAPABILITY_GAP_DISCOVERY_TOOLS = [
+  'self_extension_plan',
+  'extension_registry_list',
+  'skill_marketplace_search',
   'external_control_candidates',
+  'capability_research',
 ];
 
 const TASK_CENTER_SEMANTIC_TOOLS = [
@@ -358,6 +374,21 @@ function enhanceToolRouteForFlow(
     addAvailable(semanticPriority, available, CAPABILITY_LEARNING_SEMANTIC_TOOLS);
     categories.push('capability_learning');
     reasons.push('capability learning turns must inspect and reuse existing skills/adapters before adding new code');
+  }
+
+  const ordinaryWorkNeedsCapabilityDiscovery = !recoveredCurrentAppEdit
+    && flow.executionGovernance.capabilityLearningIntent === 'none'
+    && (
+      actionContract.applies
+      || classifyRuntimeWorkIntent(semanticText) !== 'none'
+      || hasExplicitToolIntent(semanticText)
+    )
+    && discoveredEvidenceTools.length === 0;
+  if (ordinaryWorkNeedsCapabilityDiscovery) {
+    addAvailable(additions, available, CAPABILITY_GAP_DISCOVERY_TOOLS);
+    addAvailable(semanticPriority, available, CAPABILITY_GAP_DISCOVERY_TOOLS);
+    categories.push('capability_gap_discovery');
+    reasons.push('an ordinary work request without a matched evidence-producing capability may inspect only the read-only reuse chain; installation, configuration, and generation remain separate confirmed actions');
   }
 
   if (flow.workSurfaceRoute.directDesktop) {

@@ -6,6 +6,10 @@ import { mcpManager } from '../server/mcp';
 import { requireLocalRequest } from '../server/middleware/auth';
 import { authenticateMcpUpgradeRequest } from '../server/mcp/auth';
 import { setupMcpServer } from '../server/runtime/mcp_server';
+import {
+  DESKTOP_SESSION_HEADER,
+  issueDesktopSessionProof,
+} from '../server/config/desktop_bootstrap';
 import WebSocket from 'ws';
 
 let url: string;
@@ -16,7 +20,27 @@ const adminToken = jwt.sign({ uid: 'mcp-admin', username: 'admin', role: 'admin'
 const userToken = jwt.sign({ uid: 'mcp-user', username: 'user', role: 'user' }, JWT_SECRET);
 const otherUserToken = jwt.sign({ uid: 'mcp-other-user', username: 'other', role: 'user' }, JWT_SECRET);
 
+function nativeIdentity(pid: number) {
+  const startedAtUnixMs = Math.floor((Date.now() - 30_000) / 1_000) * 1_000;
+  return {
+    schemaVersion: 1 as const,
+    clientKind: 'tauri' as const,
+    pid,
+    startedAtUnixMs,
+    executablePath: process.platform === 'win32' ? 'C:\\LumiCore\\lumi-core.exe' : '/opt/LumiCore/lumi-core',
+    executableSha256: 'a'.repeat(64),
+    binaryHashUnavailable: false,
+    buildId: 'b'.repeat(40),
+    buildIdSemantics: 'baseline_commit' as const,
+    sourceFingerprint: 'c'.repeat(64),
+    sourceDirty: false,
+    appVersion: '3.1.0',
+  };
+}
+
 describe('MCP management route security', () => {
+  let adminDesktopSessionProof = '';
+
   beforeAll(async () => {
     const app = await makeApp();
     url = app.url;
@@ -37,6 +61,10 @@ describe('MCP management route security', () => {
       },
       process.cwd(),
     );
+    adminDesktopSessionProof = issueDesktopSessionProof(
+      'mcp-admin',
+      nativeIdentity(52_101),
+    ).proof;
   });
 
   afterAll(() => cleanup?.());
@@ -92,13 +120,50 @@ describe('MCP management route security', () => {
     expect(nonAdmin.status).toBe(403);
   });
 
+  it('requires a native desktop session proof for every MCP runtime mutation', async () => {
+    const cases = [
+      {
+        path: '/api/mcp',
+        method: 'POST',
+        body: { servers: { proof_probe: { command: 'node', enabled: false } } },
+      },
+      {
+        path: '/api/mcp/proof_probe',
+        method: 'PUT',
+        body: { config: { command: 'node', enabled: false } },
+      },
+      { path: '/api/mcp/proof_probe', method: 'DELETE' },
+      { path: '/api/mcp/proof_probe/state', method: 'POST', body: { enabled: false } },
+      { path: '/api/mcp/restart/proof_probe', method: 'POST' },
+      { path: '/api/remote-devices', method: 'PUT', body: { devices: {} } },
+    ];
+    for (const testCase of cases) {
+      const response = await fetch(`${url}${testCase.path}`, {
+        method: testCase.method,
+        headers: {
+          ...(testCase.body ? { 'Content-Type': 'application/json' } : {}),
+          Authorization: `Bearer ${adminToken}`,
+        },
+        ...(testCase.body ? { body: JSON.stringify(testCase.body) } : {}),
+        signal: AbortSignal.timeout(5000),
+      });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({
+        error: 'A valid native desktop session proof is required for MCP runtime changes.',
+      });
+    }
+  });
+
   it('does not expose restart internals to the local administrator response', async () => {
     const restart = vi.spyOn(mcpManager, 'restartServer').mockRejectedValueOnce(
       new Error('spawn failed api_key=sk-private-restart-secret at C:\\private\\mcp'),
     );
     const response = await fetch(`${url}/api/mcp/restart/not-configured-security-probe`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${adminToken}` },
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+        [DESKTOP_SESSION_HEADER]: adminDesktopSessionProof,
+      },
       signal: AbortSignal.timeout(5000),
     });
     expect(response.status).toBe(500);
@@ -107,6 +172,85 @@ describe('MCP management route security', () => {
     expect(JSON.stringify(payload)).not.toContain('not-configured-security-probe');
     expect(JSON.stringify(payload)).not.toContain('sk-private-restart-secret');
     restart.mockRestore();
+  });
+
+  it('rejects invalid transport config before persistence', async () => {
+    const response = await fetch(`${url}/api/mcp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminToken}`,
+        [DESKTOP_SESSION_HEADER]: adminDesktopSessionProof,
+      },
+      body: JSON.stringify({
+        mode: 'merge',
+        servers: {
+          insecure_remote: {
+            enabled: true,
+            transport: 'http',
+            url: 'http://provider.example/mcp',
+          },
+        },
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'MCP configuration update failed' });
+  });
+
+  it('returns a non-200 per-service failure when live activation rolls back', async () => {
+    let config: Record<string, any> = {};
+    const getConfig = vi.spyOn(mcpManager, 'getConfig').mockImplementation(() => structuredClone(config));
+    const saveConfig = vi.spyOn(mcpManager, 'saveConfig').mockImplementation(next => {
+      config = structuredClone(next);
+    });
+    const restart = vi.spyOn(mcpManager, 'restartServer').mockRejectedValue(
+      new Error('synthetic activation failure'),
+    );
+    const disconnect = vi.spyOn(mcpManager, 'disconnectServer').mockResolvedValue();
+    const connected = vi.spyOn(mcpManager, 'getConnectedServers').mockReturnValue([]);
+    try {
+      const response = await fetch(`${url}/api/mcp`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${adminToken}`,
+          [DESKTOP_SESSION_HEADER]: adminDesktopSessionProof,
+        },
+        body: JSON.stringify({
+          mode: 'merge',
+          servers: {
+            failing_server: {
+              command: 'node',
+              args: ['server.js'],
+              enabled: true,
+              source: 'external',
+              transport: 'stdio',
+            },
+          },
+        }),
+        signal: AbortSignal.timeout(5000),
+      });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        ok: false,
+        mode: 'merge',
+        services: [{
+          serverName: 'failing_server',
+          action: 'rolled_back',
+          configured: false,
+          usable: false,
+          error: expect.stringContaining('synthetic activation failure'),
+        }],
+      });
+      expect(config).toEqual({});
+    } finally {
+      getConfig.mockRestore();
+      saveConfig.mockRestore();
+      restart.mockRestore();
+      disconnect.mockRestore();
+      connected.mockRestore();
+    }
   });
 
   it('keeps remote-device configuration local and administrator-only', async () => {
@@ -135,6 +279,7 @@ describe('MCP management route security', () => {
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${adminToken}`,
+        [DESKTOP_SESSION_HEADER]: adminDesktopSessionProof,
       },
       body: JSON.stringify({ devices: { unsafe: 'https://example.test/not-a-websocket' } }),
       signal: AbortSignal.timeout(5000),

@@ -93,9 +93,24 @@ describe('REST chat remote execution boundary', () => {
       localExecution: false,
       executionBoundary: 'remote_restricted',
       source: 'rest_chat',
+      currentTurnExecutionRequested: false,
+      trustedActionContinuation: false,
     });
     expect(context.toolPolicy.allowedTools.every((name: string) => name === 'web_search')).toBe(true);
     expect(context.toolPolicy.allowedTools).not.toEqual(expect.arrayContaining([
+      'read_file',
+      'list_directory',
+      'search_files',
+      'desktop_capture_screen',
+      'desktop_running_processes',
+      'run_command',
+      'credential_get',
+    ]));
+    expect(context.toolPolicy.maxIterations).toBeLessThanOrEqual(4);
+    expect(context.modelToolProjection.toolNames.every(
+      (name: string) => context.toolPolicy.allowedTools.includes(name),
+    )).toBe(true);
+    expect(context.modelToolProjection.toolNames).not.toEqual(expect.arrayContaining([
       'read_file',
       'list_directory',
       'search_files',
@@ -125,6 +140,8 @@ describe('REST chat remote execution boundary', () => {
       localExecution: true,
       executionBoundary: 'trusted_local',
       source: 'rest_chat_local',
+      currentTurnExecutionRequested: false,
+      trustedActionContinuation: false,
     });
   });
 

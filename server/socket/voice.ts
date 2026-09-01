@@ -12,6 +12,7 @@ import { NormalizedMessage, makeLLMCallStreaming, makeLLMCall } from "../llm/pro
 import {
   buildConfirmedStepContinuationMessages,
   compactToolResultForModel,
+  resolveRequiredToolNamesForModel,
   runWithTools,
 } from "../llm/adapter";
 import {
@@ -22,7 +23,6 @@ import { toolRegistry } from "../tools/registry";
 import { ToolExecutionRecord } from "../tools/types";
 import { executeToolCall } from "../tools/execution_engine";
 import {
-  GENERIC_TOOL_PLANNING_PROMPT,
   GENERIC_TOOL_REPLAN_PROMPT,
   hasRelevantEvidenceTool,
   normalizePlannedToolScope,
@@ -106,10 +106,6 @@ import { buildInternalOpenCommand } from "../i18n/naturalness_messages";
 import { formatDesktopControlPausePresentation } from '../regions/packs/cn/desktop_control_messages';
 import { buildInteractionModeOverlay } from "../cognition/turn_flow";
 import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
-import {
-  buildModelCapabilityPolicy,
-  buildModelToolProjection,
-} from "../cognition/capability_selection";
 import { shouldRunLegacyDirectExecution } from "../cognition/legacy_route_policy";
 import { bindCapabilityExecutionPlanTask } from "../cognition/capability_execution_plan";
 import { buildForegroundMessagingArguments, executeForegroundMessagingAction } from "../cognition/foreground_messaging_execution";
@@ -2034,44 +2030,14 @@ async function processVoiceInput(
   }
 
   const sensoryAudio = sensoryFn(session.userId);
-  const { config: personality, systemPrompt: fullPersonalityPrompt } = personalityRegistry.buildSystemPrompt(
+  const personalityConfig = personalityRegistry.getForUser(
     session.personalityId || 'lumi',
-    { mode: 'task', sensory: sensoryAudio, uiContext: 'voice' },
-    {
-      userId: session.userId,
-      memories: voiceMemories.length > 0 ? voiceMemories : undefined,
-      ragKnowledge: voiceRagKnowledge.length > 0 ? voiceRagKnowledge : undefined,
-      userText: routedUserText,
-      domain: voiceScope.domain,
-      orgId: voiceScope.orgId,
-    },
-  );
+    session.userId,
+    voiceScope.orgId,
+  ) || personalityRegistry.getDefault();
 
   // ── Unified personality prompt + voice-specific overlay ──
   // Same core prompt as text chat — one Lumi, one framework.
-  const toolVoiceOverlay = [
-    '\n## Voice Mode',
-    '- You are SPEAKING, not typing. Be conversational and natural, like talking to a friend.',
-    '- Keep spoken responses concise — the user is listening, not reading.',
-    '',
-    '## Your Tools — Use Them, Don\'t Just Talk About Them',
-    '- **web_search** — Search the internet for real-time information, facts, and data.',
-    '- **url_fetch** — Read and extract content from any URL/webpage.',
-    '- **desktop_open** — Open apps, files, folders, URLs on the user\'s computer.',
-    '- **desktop_run_command** — Execute shell commands (cmd /C on Windows) for system operations.',
-    '- **desktop_list_files** — Browse files and folders on the desktop.',
-    '- **read_file / write_file** — Read existing files or create new ones.',
-    '- **create_ppt** — Generate professional PowerPoint presentations. Provide images array for visuals.',
-    '- **generate_image** — Create AI-generated images (provide local file paths as slide images).',
-    '- **run_workflow** — Execute previously saved multi-step workflows.',
-    '',
-    '## CRITICAL: You MUST Call Tools to Do Real Work',
-    '- When the user asks you to CREATE, SEARCH, OPEN, or DO anything: CALL THE TOOL.',
-    '- Saying "好的" or "我帮你做" without calling the tool = the user gets NOTHING. This is a FAILURE.',
-    '- **Narrate WHILE acting.** Say "正在搜索..." as you call web_search. Say "正在生成PPT..." as you call create_ppt.',
-    '- Only when all tool actions are complete should you summarize the results.',
-  ].join('\n');
-
   const baseVoiceOverlay = [
     '\n## Voice Mode',
     '- You are SPEAKING, not typing. Be conversational and natural, like talking to a friend.',
@@ -2105,6 +2071,16 @@ async function processVoiceInput(
     return 'assistant';
   })();
   const requestedMode = requestedModeHint;
+  const boundaryPersonalityToolPolicy = restrictToolPolicyForExecutionBoundary(
+    personalityConfig.toolPolicy,
+    toolSecurityContext.executionBoundary,
+  );
+  const boundaryAllowedToolNames = new Set(boundaryPersonalityToolPolicy.allowedTools || []);
+  const boundaryForbiddenTools = toolSecurityContext.executionBoundary === 'remote_restricted'
+    ? toolRegistry.getToolDeclarations()
+        .map(declaration => declaration.function.name)
+        .filter(name => !boundaryAllowedToolNames.has('*') && !boundaryAllowedToolNames.has(name))
+    : [];
   const executionPipeline = buildLumiExecutionPipeline({
     dispatch: {
       userId: session.userId,
@@ -2122,8 +2098,9 @@ async function processVoiceInput(
       targetIsLumi: true,
     },
     registry: toolRegistry,
-    personalityToolPolicy: personality.toolPolicy,
+    personalityToolPolicy: boundaryPersonalityToolPolicy,
     actionTaskState: conversationTurn.conversation.actionContinuationState,
+    additionalForbiddenTools: boundaryForbiddenTools,
     pendingAssistantOfferContext,
     traceText: actionIntentText,
     source: 'voice',
@@ -2141,6 +2118,22 @@ async function processVoiceInput(
     text: actionIntentText,
     allowToolUse: requestedToolSession,
   });
+  const { config: personality, systemPrompt: fullPersonalityPrompt } = personalityRegistry.buildSystemPrompt(
+    session.personalityId || 'lumi',
+    {
+      mode: requestedToolSession ? 'task' : 'chat',
+      sensory: sensoryAudio,
+      uiContext: 'voice',
+    },
+    {
+      userId: session.userId,
+      memories: voiceMemories.length > 0 ? voiceMemories : undefined,
+      ragKnowledge: voiceRagKnowledge.length > 0 ? voiceRagKnowledge : undefined,
+      userText: routedUserText,
+      domain: voiceScope.domain,
+      orgId: voiceScope.orgId,
+    },
+  );
   const capabilityMetaResponse = buildCapabilityMetaResponse({
     text: actionIntentText,
     operationMode: turnFlow.effectiveOperationMode,
@@ -2193,23 +2186,13 @@ async function processVoiceInput(
     capabilityExecutionPlan: executionPipeline.executionPlan,
   });
   const desktopExecutionTracker = createDesktopExecutionTracker(desktopExecutionPolicy.executionPlan);
-  const routedToolPolicy = restrictToolPolicyForExecutionBoundary(
-    buildModelCapabilityPolicy(executionDecision),
-    toolSecurityContext.executionBoundary,
-  );
-  executionDecision.baseToolPolicy = routedToolPolicy;
-  executionDecision.toolPolicy = routedToolPolicy;
-  executionDecision.maxIterations = routedToolPolicy.maxIterations;
-  executionDecision.toolRoute = restrictVisibleToolRouteForExecutionBoundary(
+  const routedToolPolicy = executionPipeline.authorizationPolicy;
+  const modelToolProjection = executionPipeline.modelToolProjection;
+  const visibleToolRoute = restrictVisibleToolRouteForExecutionBoundary(
     executionDecision.toolRoute,
     toolSecurityContext.executionBoundary,
   );
-  const modelToolProjection = buildModelToolProjection(executionDecision, {
-    lane: capabilitySelection.lane,
-    preferredTools: capabilitySelection.preferredTools,
-  });
-  const toolSessionActive = requestedToolSession
-    && modelToolProjection.toolNames.length > 0;
+  const toolSessionActive = requestedToolSession;
   const actionFollowupIntent = classifyConversationActionFollowupIntent(
     actionIntentText,
     conversationTurn.conversation.actionContinuationState,
@@ -2232,7 +2215,7 @@ async function processVoiceInput(
         forceResume: Boolean(
           pendingConfirmation
           || interruptedMerge.usedInterruptedTurn
-          || actionFollowupIntent === 'execute'
+          || executionPipeline.trustedActionContinuation
         ),
       });
   if ('bindingFailure' in actionTaskExecution) {
@@ -2439,15 +2422,15 @@ async function processVoiceInput(
     );
   }
   const remoteRestricted = toolSecurityContext.executionBoundary === 'remote_restricted';
-  logger.info(`[Audio] tool gate: ${executionDecision.allowToolUse ? 'authorized' : 'off'} session=${toolSessionActive ? 'active' : 'conversation'} mode=${operationMode} effective=${effectiveOperationMode} surface=${turnFlow.surface} clientActionOnly=${clientActionOnlyTurn} selfRepair=${selfRepairTurn} capabilityLane=${capabilitySelection.lane} trace=${intentTrace.summary} route=${executionDecision.toolRoute ? `${executionDecision.toolRoute.toolNames.length}/${executionDecision.toolRoute.totalAvailable}` : 'none'}`);
+  logger.info(`[Audio] tool gate: ${executionDecision.allowToolUse ? 'authorized' : 'off'} session=${toolSessionActive ? 'active' : 'conversation'} mode=${operationMode} effective=${effectiveOperationMode} surface=${turnFlow.surface} clientActionOnly=${clientActionOnlyTurn} selfRepair=${selfRepairTurn} capabilityLane=${capabilitySelection.lane} trace=${intentTrace.summary} route=${visibleToolRoute ? `${visibleToolRoute.toolNames.length}/${visibleToolRoute.totalAvailable}` : 'none'}`);
   emitAgent('agent:intent_trace', intentTrace);
-  if (executionDecision.toolRoute) {
+  if (visibleToolRoute) {
     emitAgent('agent:tool_route', {
-      categories: executionDecision.toolRoute.categories,
-      reasons: executionDecision.toolRoute.reasons,
-      toolNames: executionDecision.toolRoute.toolNames,
-      totalAvailable: executionDecision.toolRoute.totalAvailable,
-      truncated: executionDecision.toolRoute.truncated,
+      categories: visibleToolRoute.categories,
+      reasons: visibleToolRoute.reasons,
+      toolNames: visibleToolRoute.toolNames,
+      totalAvailable: visibleToolRoute.totalAvailable,
+      truncated: visibleToolRoute.truncated,
       source: 'voice',
       trace: intentTrace,
     });
@@ -2485,7 +2468,7 @@ async function processVoiceInput(
   const interactionOverlay = remoteRestricted
     ? baseVoiceOverlay
     : toolSessionActive
-      ? toolVoiceOverlay
+      ? baseVoiceOverlay + '\n\n## Interaction Mode\nThis turn has an authorized execution plan. Use only the declarations provided for this request, keep spoken progress brief, and do not claim completion without a verified receipt.'
       : baseVoiceOverlay + '\n\n## Interaction Mode\nThis turn is conversational. Do not call tools, operate the desktop, or claim that you are taking actions. Answer naturally unless the user gives an explicit command.';
 
   const clientSelfPrompt = !remoteRestricted && (needsExecutionPrompt || isCapabilityMetaQuestion(actionIntentText))
@@ -2519,13 +2502,14 @@ async function processVoiceInput(
     : '';
   const proactiveContextOverlay = proactiveContextPrompt ? `\n\n${proactiveContextPrompt}` : '';
   const actionContinuationOverlay = actionContinuationBridge ? `\n\n${actionContinuationBridge}` : '';
+  const pendingConfirmationOverlay = pendingConfirmationPrompt ? `\n\n${pendingConfirmationPrompt}` : '';
   const organizationKnowledgeOverlay = voiceOrganizationKnowledge
     ? `\n\n## Company Knowledge Base\n${voiceOrganizationKnowledge}\n\nUse this authorized organization knowledge when relevant and cite article titles when referencing it.`
     : '';
   const voiceSystemPrompt = restrictSystemPromptForExecutionBoundary(
     fullPersonalityPrompt,
     toolSecurityContext.executionBoundary,
-  ) + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + proactiveContextOverlay + actionContinuationOverlay + clientSelfPrompt + topicContext + organizationKnowledgeOverlay + dispatchOverlay + turnFlowOverlay + executionOverlay + capabilitySelectionOverlay + desktopExecutionOverlay + runtimeCapabilityOverlay + operatingKernelOverlay + (toolSessionActive && !remoteRestricted ? `\n${GENERIC_TOOL_PLANNING_PROMPT}` : '');
+  ) + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + proactiveContextOverlay + actionContinuationOverlay + pendingConfirmationOverlay + clientSelfPrompt + topicContext + organizationKnowledgeOverlay + dispatchOverlay + turnFlowOverlay + executionOverlay + capabilitySelectionOverlay + desktopExecutionOverlay + runtimeCapabilityOverlay + operatingKernelOverlay;
 
   const userLLMPrefs = getScopedPreferredLLM(session.userId, voiceScope);
   const provider = userLLMPrefs.provider || 'deepseek';
@@ -2766,7 +2750,7 @@ async function processVoiceInput(
   };
 
   const maxIterations = toolSessionActive
-    ? Math.max(1, executionDecision.maxIterations || 1)
+    ? Math.max(1, routedToolPolicy.maxIterations || 1)
     : 1;
   const toolResultPreviewLimit = 500;
   const formatToolResultForUi = (value?: string) => value?.slice(0, toolResultPreviewLimit) || '';
@@ -2930,6 +2914,8 @@ async function processVoiceInput(
 
   const toolContext = {
     ...toolSecurityContext,
+    currentTurnExecutionRequested: executionPipeline.executionRequested,
+    trustedActionContinuation: executionPipeline.trustedActionContinuation,
     userId: session.userId,
     taskId: actionTaskExecution.state?.taskId,
     conversationId: conversationTurn.conversation.id,
@@ -3597,6 +3583,8 @@ async function processVoiceInput(
       toolRecords: taskAwareRecords(confirmationRecords),
       source: 'voice_confirmation',
       flow: { ...turnFlow, routeText: confirmedTask },
+      taskId: actionTaskExecution.state?.taskId,
+      requestId,
     });
     confirmationRecord.executionOrigin = 'confirmed_action_resume';
     responseText = confirmedFinal.text;
@@ -3710,6 +3698,8 @@ async function processVoiceInput(
       toolRecords: taskAwareRecords(toolResults),
       source: specialWorkflow.source,
       flow: turnFlow,
+      taskId: actionTaskExecution.state?.taskId,
+      requestId,
     });
     responseText = finalizedWorkflow.text;
     const finalizedWorkflowSpeech = finalizedWorkflow.blocked || !workflowSpeechSummary
@@ -3720,6 +3710,8 @@ async function processVoiceInput(
           toolRecords: toolResults,
           source: specialWorkflow.source,
           flow: turnFlow,
+          taskId: actionTaskExecution.state?.taskId,
+          requestId,
         });
     // A blocked independent speech summary must never replace the already
     // finalized primary response. If the primary was blocked, speak its guard.
@@ -3807,6 +3799,8 @@ async function processVoiceInput(
         toolRecords: [modeToolRecord],
         source: 'voice',
         flow: turnFlow,
+        taskId: actionTaskExecution.state?.taskId,
+        requestId,
       });
       responseText = finalizedMode.text;
       const modeCommitted = await commitVoiceTerminal({
@@ -3927,6 +3921,8 @@ async function processVoiceInput(
         toolRecords: quickToolRecords,
         source: 'voice',
         flow: turnFlow,
+        taskId: actionTaskExecution.state?.taskId,
+        requestId,
       });
       quickResponseText = quickFinalized.text;
       const quickCommitted = await commitVoiceTerminal({
@@ -4022,6 +4018,8 @@ async function processVoiceInput(
       toolRecords: [toolRecord],
       source: 'voice',
       flow: turnFlow,
+      taskId: actionTaskExecution.state?.taskId,
+      requestId,
     });
     responseText = directFinal.text;
     const messagingReadCommitted = await commitVoiceTerminal({
@@ -4118,6 +4116,8 @@ async function processVoiceInput(
       toolRecords: [toolRecord],
       source: 'voice',
       flow: turnFlow,
+      taskId: actionTaskExecution.state?.taskId,
+      requestId,
     });
     responseText = directFinal.text;
     const messagingSendCommitted = await commitVoiceTerminal({
@@ -4185,6 +4185,8 @@ async function processVoiceInput(
         toolRecords: directRecords,
         source: 'voice',
         flow: turnFlow,
+        taskId: actionTaskExecution.state?.taskId,
+        requestId,
       });
       responseText = directFinal.text;
       const cognitionCommitted = await commitVoiceTerminal({
@@ -4230,7 +4232,7 @@ async function processVoiceInput(
 
     let recoveryConversationMessages: NormalizedMessage[] = [
       { role: 'system', content: voiceSystemPrompt },
-      { role: 'user', content: routedUserText },
+      { role: 'user', content: userText },
     ];
     // Stream the single LumiCore model/tool loop with bounded conversation history.
       // Include both user & assistant messages with correct roles
@@ -4246,7 +4248,7 @@ async function processVoiceInput(
       const messages: NormalizedMessage[] = [
         { role: 'system', content: voiceSystemPrompt },
         ...voiceHistory,
-        { role: 'user', content: routedUserText, sourceMessageId: voiceUserMessageId },
+        { role: 'user', content: userText, sourceMessageId: voiceUserMessageId },
       ];
       // Keep the same bounded, persisted conversation context for an internal
       // execution recovery pass instead of reducing the task to one sentence.
@@ -4267,6 +4269,12 @@ async function processVoiceInput(
             visibleToolNames: modelToolProjection.toolNames,
           })
         : [];
+      const requiredToolNames = resolveRequiredToolNamesForModel(
+        toolContext,
+        turnFlow.routeText,
+        toolDeclarations,
+        toolResults,
+      );
 
       const streamResult = await makeLLMCallStreaming(
         messages as NormalizedMessage[],
@@ -4279,6 +4287,9 @@ async function processVoiceInput(
           orgId: voiceScope.orgId,
           signal: pipelineAbort?.signal,
           inputTokenBudget: voiceInputTokenBudget,
+          protectedToolNames: requiredToolNames,
+          localRequiredToolNames: requiredToolNames,
+          bufferStreamUntilCandidateSuccess: toolSessionActive,
           ...reasoningRoutePolicy,
         },
         (chunk: string) => {
@@ -4464,6 +4475,8 @@ async function processVoiceInput(
           toolRecords: taskAwareRecords(toolResults),
           source: 'voice',
           flow: turnFlow,
+          taskId: actionTaskExecution.state?.taskId,
+          requestId,
         });
     const desktopPauseBlocksCurrentTask = () => {
       return shouldBlockForDesktopControlPause({
@@ -4586,6 +4599,8 @@ async function processVoiceInput(
             toolRecords: taskAwareRecords(records),
             source: 'voice_guard_recovery',
             flow: turnFlow,
+            taskId: actionTaskExecution.state?.taskId,
+            requestId,
           }),
     });
     if (!isCurrentTurn()) return;

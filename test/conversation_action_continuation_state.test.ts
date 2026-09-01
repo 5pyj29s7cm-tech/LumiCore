@@ -1436,7 +1436,7 @@ describe('conversation action continuation state', () => {
     const db = readDB();
     const archived = (db.conversationActionTasks || []).find((row: any) => row.id === oldTask.state?.taskId);
     expect(archived).toMatchObject({
-      status: 'cancelled', activeRequestId: '', rootUserMessageId: oldUserMessageId,
+      status: 'waiting_confirmation', activeRequestId: '', rootUserMessageId: oldUserMessageId,
     });
     expect((db.conversationActionReceipts || []).filter((row: any) => row.taskId === oldTask.state?.taskId))
       .toHaveLength(0);
@@ -1484,7 +1484,124 @@ describe('conversation action continuation state', () => {
     expect(getOrCreateActiveConversation(userId, 'lumi', 'personal', '').actionContinuationState)
       .toBeUndefined();
     expect((readDB().conversationActionTasks || []).find((row: any) => row.id === oldTask.state?.taskId))
-      .toMatchObject({ status: 'cancelled', activeRequestId: '' });
+      .toMatchObject({ status: 'blocked', activeRequestId: '' });
+  });
+
+  it('resumes a detached blocked task only after an explicit continuation', () => {
+    const userId = `conversation-action-detached-resume-${Date.now()}-${Math.random()}`;
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    const oldTask = prepareConversationActionExecution({
+      conversationId: conversation.id,
+      userId,
+      userText: 'Open NetEase Cloud Music and play a song.',
+      requestId: 'request-old-music',
+      userMessageId: persistActionTurn({
+        conversationId: conversation.id,
+        userId,
+        userText: 'Open NetEase Cloud Music and play a song.',
+        requestId: 'request-old-music',
+      }),
+      toolPolicy: { allowedTools: ['desktop_open', 'keyboard_press'], requireConfirmation: [], forbiddenTools: [], maxIterations: 4 },
+      forceTask: true,
+    });
+    setConversationActionExecutionStatus(conversation.id, userId, 'blocked', {
+      blocker: 'The player opened, but playback was not verified.',
+      requestId: 'request-old-music',
+    });
+    settleConversationActionExecutionRequest(conversation.id, userId, 'request-old-music');
+
+    const plain = prepareConversationActionExecution({
+      conversationId: conversation.id,
+      userId,
+      userText: 'Please format your replies in short paragraphs.',
+      requestId: 'request-format-feedback',
+      userMessageId: persistActionTurn({
+        conversationId: conversation.id,
+        userId,
+        userText: 'Please format your replies in short paragraphs.',
+        requestId: 'request-format-feedback',
+      }),
+      toolPolicy: { allowedTools: [], requireConfirmation: [], forbiddenTools: [], maxIterations: 1 },
+    });
+    expect(plain).toEqual({ state: null, kind: 'conversation' });
+    expect(getOrCreateActiveConversation(userId, 'lumi', 'personal', '').actionContinuationState)
+      .toBeUndefined();
+    settleConversationActionExecutionRequest(conversation.id, userId, 'request-format-feedback');
+
+    const resumed = prepareConversationActionExecution({
+      conversationId: conversation.id,
+      userId,
+      userText: '继续',
+      requestId: 'request-resume-music',
+      userMessageId: persistActionTurn({
+        conversationId: conversation.id,
+        userId,
+        userText: '继续',
+        requestId: 'request-resume-music',
+      }),
+      toolPolicy: { allowedTools: ['desktop_open', 'keyboard_press'], requireConfirmation: [], forbiddenTools: [], maxIterations: 4 },
+      forceResume: true,
+      preserveExistingTask: true,
+    });
+
+    expect(resumed.state).toMatchObject({
+      taskId: oldTask.state?.taskId,
+      goal: 'Open NetEase Cloud Music and play a song.',
+      unfinished: true,
+    });
+  });
+
+  it('treats a terse negative result observation as a correction of the same unfinished task', () => {
+    const userId = `conversation-action-negative-result-${Date.now()}-${Math.random()}`;
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    const initial = prepareConversationActionExecution({
+      conversationId: conversation.id,
+      userId,
+      userText: 'Open NetEase Cloud Music and play a song.',
+      requestId: 'request-negative-result-initial',
+      userMessageId: persistActionTurn({
+        conversationId: conversation.id,
+        userId,
+        userText: 'Open NetEase Cloud Music and play a song.',
+        requestId: 'request-negative-result-initial',
+      }),
+      toolPolicy: { allowedTools: ['desktop_open', 'keyboard_press'], requireConfirmation: [], forbiddenTools: [], maxIterations: 4 },
+      forceTask: true,
+    });
+    setConversationActionExecutionStatus(conversation.id, userId, 'blocked', {
+      blocker: 'The player opened, but playback was not verified.',
+      requestId: 'request-negative-result-initial',
+    });
+    settleConversationActionExecutionRequest(
+      conversation.id,
+      userId,
+      'request-negative-result-initial',
+    );
+
+    const correctionText = '\u8fd8\u6ca1\u64ad\u653e';
+    const correction = prepareConversationActionExecution({
+      conversationId: conversation.id,
+      userId,
+      userText: correctionText,
+      requestId: 'request-negative-result-correction',
+      userMessageId: persistActionTurn({
+        conversationId: conversation.id,
+        userId,
+        userText: correctionText,
+        requestId: 'request-negative-result-correction',
+      }),
+      toolPolicy: { allowedTools: ['desktop_open', 'keyboard_press'], requireConfirmation: [], forbiddenTools: [], maxIterations: 4 },
+      forceTask: true,
+    });
+
+    expect(correction.kind).toBe('resume');
+    expect(correction.state).toMatchObject({
+      taskId: initial.state?.taskId,
+      goal: 'Open NetEase Cloud Music and play a song.',
+      latestInstruction: correctionText,
+      activeRequestId: 'request-negative-result-correction',
+      unfinished: true,
+    });
   });
 
   it('archives a late receipt on its bound task without mutating the newer turn', () => {

@@ -12,6 +12,12 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import { readDB, writeDB } from '../../db_layer';
 import { getTranslation, translateCategory } from '../skills/translations';
+import { mcpManager } from '../mcp/client';
+import {
+  projectOfficialBundledIdentity,
+  type OfficialSkillIdentityStatus,
+} from './official_identity';
+import { getJwtSecret } from '../config/local_identity';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -42,6 +48,8 @@ export interface MarketplaceSkill {
   installSource: 'bundled' | 'community';
   installPath?: string;
   installed: boolean;
+  officialIdentityStatus?: OfficialSkillIdentityStatus;
+  conflictReason?: string;
   version?: string;
   toolCount?: number;
   requiresApiKey?: boolean;
@@ -49,6 +57,7 @@ export interface MarketplaceSkill {
   apiKeyUrl?: string;
   requiresSetup?: boolean;
   setupNote?: string;
+  runtimeInstallable?: boolean;
 }
 
 export interface SkillRating {
@@ -69,6 +78,8 @@ export interface MarketplaceAgentScope {
 function discoverBundledSkills(_scope?: MarketplaceAgentScope): MarketplaceSkill[] {
   const skills: MarketplaceSkill[] = [];
   if (!fs.existsSync(BUNDLED_DIR)) return skills;
+  const runtimeConfig = mcpManager.getConfig();
+  const identitySecret = getJwtSecret();
 
   const entries = fs.readdirSync(BUNDLED_DIR, { withFileTypes: true });
   for (const entry of entries) {
@@ -79,7 +90,26 @@ function discoverBundledSkills(_scope?: MarketplaceAgentScope): MarketplaceSkill
     try {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
       const lumi = pkg.lumi || {};
-      const installed = isInstalledSkill(entry.name, lumi.displayName);
+      const installedDirectory = path.join(SKILLS_DIR, entry.name);
+      let identity = projectOfficialBundledIdentity({
+        skillId: `skill-${entry.name}`,
+        sourceDirectory: path.join(BUNDLED_DIR, entry.name),
+        installedDirectory,
+        config: runtimeConfig[entry.name],
+        identitySecret,
+      });
+      if (identity.identityStatus === 'verified' && runtimeConfig[entry.name]?.source === 'local') {
+        try {
+          mcpManager.assertLocalSkillRuntimeIdentity(entry.name, runtimeConfig[entry.name]);
+        } catch (error: any) {
+          identity = {
+            identityStatus: 'conflict',
+            installed: false,
+            identity: identity.identity,
+            conflictReason: error?.message || 'The official Skill runtime no longer matches the host-derived identity.',
+          };
+        }
+      }
       skills.push({
         id: `skill-${entry.name}`,
         name: lumi.displayName || toDisplayName(entry.name),
@@ -91,7 +121,9 @@ function discoverBundledSkills(_scope?: MarketplaceAgentScope): MarketplaceSkill
         icon: lumi.icon || 'Zap',
         installSource: 'bundled',
         installPath: path.join(BUNDLED_DIR, entry.name),
-        installed,
+        installed: identity.installed,
+        officialIdentityStatus: identity.identityStatus,
+        conflictReason: identity.conflictReason,
         version: pkg.version,
         toolCount: lumi.toolCount || 1,
         requiresApiKey: lumi.requiresApiKey || false,
@@ -99,6 +131,7 @@ function discoverBundledSkills(_scope?: MarketplaceAgentScope): MarketplaceSkill
         apiKeyUrl: lumi.apiKeyUrl,
         requiresSetup: lumi.requiresSetup || false,
         setupNote: lumi.setupNote,
+        runtimeInstallable: !lumi.runCommand,
       });
     } catch { /* skip invalid packages */ }
   }
@@ -108,34 +141,18 @@ function discoverBundledSkills(_scope?: MarketplaceAgentScope): MarketplaceSkill
 /** Community skill registry stored in DB */
 const COMMUNITY_REGISTRY: MarketplaceSkill[] = [];
 
-function toSkillSlug(value?: string): string {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/^skill-/, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-}
-
-function isInstalledSkill(dirName: string, displayName?: string): boolean {
-  const candidates = new Set([dirName, toSkillSlug(displayName)]);
-  for (const candidate of candidates) {
-    if (candidate && fs.existsSync(path.join(SKILLS_DIR, candidate))) return true;
-  }
-  return false;
-}
-
 /** Get community registry from DB */
 function getCommunityRegistry(_scope?: MarketplaceAgentScope): MarketplaceSkill[] {
   const db = readDB();
   if (!db.communitySkills) return [];
   return db.communitySkills.map((s: any) => {
-    const dirName = s.id.replace('skill-', '');
-    const installed = isInstalledSkill(dirName, s.name);
     return {
       ...s,
       installSource: 'community' as const,
       installPath: s.installPath,
-      installed,
+      // Community results remain review-only. A same-name local directory is
+      // not evidence that this mutable registry entry was installed.
+      installed: false,
     };
   });
 }

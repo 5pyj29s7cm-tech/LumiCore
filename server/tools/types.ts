@@ -291,6 +291,14 @@ export interface ToolContext {
   /** Original user/task intent used to classify semantic risk for low-level actions. */
   actionIntent?: string;
   /**
+   * Server-owned current-turn execution decision. False means a model may
+   * answer conversationally but no adapter may start, even if a capability
+   * manifest was visible to it.
+   */
+  currentTurnExecutionRequested?: boolean;
+  /** Exact durable continuation proof produced by the shared execution pipeline. */
+  trustedActionContinuation?: boolean;
+  /**
    * Routed execution text, including trusted continuation state recovered for
    * the current turn. Task-specific guards may use this instead of the shorter
    * visible user message, but it must not replace actionIntent for risk checks.
@@ -323,12 +331,25 @@ export interface ToolContext {
   modelToolProjection?: {
     /** Priority-ordered declaration names selected for this turn. */
     toolNames: string[];
+    /**
+     * Small server-owned subset that the final provider/local context budget
+     * must retain.  This is intentionally narrower than `toolNames`: the
+     * latter is the model's optional choice set, not a request-size pin for
+     * every schema in a hard route or resumed task.
+     */
+    requiredToolNames?: string[];
     /** Hard declaration ceiling, independent from the tool-call budget. */
     maxTools: number;
     /** Allow the manifest discovery receipt to replace low-priority schemas. */
     allowDynamicDiscovery?: boolean;
     /** Canonical discovery tool; defaults to client_capability_manifest. */
     discoveryToolName?: string;
+    /**
+     * Schemas removed by the final provider-input budget. The adapter keeps
+     * this on its private effective projection so later iterations cannot
+     * plan against a declaration the provider never received.
+     */
+    droppedToolNames?: string[];
   };
   /** Returns true if the task has been cancelled — checked between tool iterations */
   isCancelled?: () => boolean;
@@ -447,6 +468,11 @@ export interface NormalizedLLMResponse {
   routing?: ModelRoutingTrace;
   /** Durable id minted only after the exact routing trace is persisted. */
   routingReceiptId?: string;
+  /** Exact schema projection delivered at the final provider boundary. */
+  modelRequestContext?: {
+    deliveredToolNames: string[];
+    droppedToolNames: string[];
+  };
 }
 
 export interface ToolExecutionRecord {

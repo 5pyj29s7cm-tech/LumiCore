@@ -130,7 +130,14 @@ describe('state-changing capability receipts', () => {
       registry,
       name: 'external_control_configure_candidate',
       arguments: { candidateId: 'native-accessibility' },
-      context: { userId: 'external-control-receipt', userConfirmed: true },
+      context: {
+        userId: 'external-control-receipt',
+        authenticated: true,
+        authRole: 'admin',
+        localExecution: true,
+        executionBoundary: 'trusted_local',
+        userConfirmed: true,
+      },
     });
 
     expect(record.terminalVerification?.status).toBe('verified');

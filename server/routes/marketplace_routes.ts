@@ -1,13 +1,12 @@
-import { Router } from "express";
+import { Router, type NextFunction, type Request, type Response } from "express";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
-import { mcpManager, getMCPConfig, updateMCPConfig, SKILLS_DIR } from "../mcp";
+import { activateInstalledSkill, mcpManager } from "../mcp";
 import { getMarketplaceSkills, getSkillById, searchSkills, getCategories, recordInstall, publishSkill, rateSkill, getSkillRatings } from "../marketplace/registry";
 import { translateSkills } from "../skills/translations";
 import { makeLLMCall, type NormalizedMessage } from "../llm/providers";
 import { getUserPreferredLLMConfig } from "../llm/user_preferences";
-import { getDataPath } from "../config/data_path";
 import {
   optionalAuth,
   requireAdmin,
@@ -16,9 +15,31 @@ import {
   resolveDomain,
   type AuthUser,
 } from "../middleware/auth";
+import { DESKTOP_SESSION_HEADER, verifyDesktopSessionProof } from "../config/desktop_bootstrap";
+import { isLoopbackAddress } from "../config/local_identity";
+import { toolRegistry } from "../tools/registry";
+import { getExtensionRuntimeStates } from "../skills/runtime_state";
+import { createBundledSkillIdentity } from "../marketplace/official_identity";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+function requireNativeDesktopSession(req: Request, res: Response, next: NextFunction): void {
+  if (!req.user || !verifyDesktopSessionProof(req.headers[DESKTOP_SESSION_HEADER], req.user.uid)) {
+    res.status(403).json({ error: 'A valid native desktop session proof is required for Skill Hall runtime changes.' });
+    return;
+  }
+  next();
+}
+
+function requirePersonalMarketplaceMutation(req: Request, res: Response, next: NextFunction): void {
+  const scope = resolveDomain(req.user!);
+  if (scope.domain !== 'personal' || Boolean(scope.orgId)) {
+    res.status(403).json({ error: 'Skill Hall host changes are available only in the personal administrator workspace.' });
+    return;
+  }
+  next();
+}
 
 function marketplaceScope(user?: AuthUser) {
   if (!user) return undefined;
@@ -48,6 +69,98 @@ export function resolveMarketplaceSkillDirName(input: {
   return preferred;
 }
 
+export function publicMarketplaceSkill(skill: Record<string, any>): Record<string, any> {
+  return {
+    id: skill.id,
+    name: skill.name,
+    description: skill.description,
+    author: skill.author,
+    downloads: skill.downloads,
+    rating: skill.rating,
+    category: skill.category,
+    icon: skill.icon,
+    installSource: skill.installSource,
+    version: skill.version,
+    toolCount: skill.toolCount,
+    requiresApiKey: skill.requiresApiKey === true,
+    apiKeyUrl: skill.apiKeyUrl,
+    requiresSetup: skill.requiresSetup === true,
+    setupNote: skill.setupNote,
+    runtimeInstallable: skill.runtimeInstallable === true,
+  };
+}
+
+function mayReadMarketplaceRuntime(req: Request): boolean {
+  return req.user?.role === 'admin' && isLoopbackAddress(req.socket?.remoteAddress);
+}
+
+export function projectMarketplaceRuntime<T extends Record<string, any>>(
+  skills: T[],
+  includeOperationalDetails: boolean,
+): Array<Record<string, any>> {
+  if (!includeOperationalDetails) return skills.map(publicMarketplaceSkill);
+  const runtimeByName = new Map(
+    getExtensionRuntimeStates(toolRegistry.getCapabilityManifest())
+      .map(state => [state.name, state]),
+  );
+  return skills.map(skill => {
+    const skillName = resolveMarketplaceSkillDirName({
+      skillId: skill.id,
+      skillName: skill.name,
+      installPath: skill.installPath,
+    });
+    const runtime = runtimeByName.get(skillName);
+    const identityVerified = skill.installSource !== 'bundled'
+      || skill.officialIdentityStatus === 'verified';
+    const { installPath: _installPath, ...safeSkill } = skill;
+    return {
+      ...safeSkill,
+      packagePresent: runtime?.packagePresent ?? false,
+      configured: runtime?.configured ?? false,
+      enabled: identityVerified ? (runtime?.enabled ?? false) : false,
+      keyReady: runtime?.keyReady ?? !skill.requiresApiKey,
+      registered: identityVerified ? (runtime?.registered ?? false) : false,
+      usable: identityVerified ? (runtime?.usable ?? false) : false,
+      registeredToolNames: identityVerified ? (runtime?.toolNames || []) : [],
+      manifestCapabilityIds: identityVerified ? (runtime?.manifestCapabilityIds || []) : [],
+      runtimeStatus: skill.officialIdentityStatus === 'conflict'
+        ? 'identity_conflict'
+        : (runtime?.status || 'not_configured'),
+    };
+  });
+}
+
+async function activateMarketplaceSkill(skillName: string) {
+  const config = mcpManager.getConfig()[skillName];
+  if (config?.enabled !== true && config?.installationState !== 'pending') {
+    return {
+      skillName,
+      runtimeStatus: 'configuration_required' as const,
+      usable: false as const,
+      toolCount: 0,
+      registeredToolNames: [] as string[],
+      manifestCapabilityIds: [] as string[],
+      requiresApiKey: config?.requiresApiKey === true,
+      apiKeyEnv: config?.apiKeyEnv,
+    };
+  }
+  return activateInstalledSkill(skillName, { rollbackInstallOnFailure: true });
+}
+
+function marketplaceInstallMessage(displayName: string, activation: { usable: boolean }): string {
+  return activation.usable
+    ? `Skill "${displayName}" installed, registered, and ready to use.`
+    : `Skill "${displayName}" is installed but still needs its required configuration before Lumi can use it.`;
+}
+
+function recordMarketplaceInstallBestEffort(skillId: string): void {
+  try {
+    recordInstall(skillId);
+  } catch (error: any) {
+    console.warn(`[SkillHall] Runtime activation succeeded, but install analytics could not be recorded for ${skillId}:`, error?.message || error);
+  }
+}
+
 export function mountMarketplaceRoutes(
   router: Router,
   jwtSecret: string,
@@ -74,7 +187,7 @@ export function mountMarketplaceRoutes(
       const lang = req.query.lang as string | undefined;
       const scope = marketplaceScope(req.user);
       const skills = q ? searchSkills(q, lang, scope) : getMarketplaceSkills(lang, scope);
-      res.json(skills);
+      res.json(projectMarketplaceRuntime(skills, mayReadMarketplaceRuntime(req)));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -87,7 +200,7 @@ export function mountMarketplaceRoutes(
       const skill = getSkillById(req.params.id, lang, marketplaceScope(req.user));
       if (!skill) return res.status(404).json({ error: 'Skill not found' });
       const ratings = getSkillRatings(req.params.id);
-      res.json({ ...skill, ratings });
+      res.json({ ...projectMarketplaceRuntime([skill], mayReadMarketplaceRuntime(req))[0], ratings });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -167,117 +280,97 @@ export function mountMarketplaceRoutes(
   });
 
   // Acquire/install a skill from the marketplace
-  router.post("/marketplace/skills/acquire", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
+  router.post("/marketplace/skills/acquire", requireAuth, requireAdmin, requirePersonalMarketplaceMutation, requireLocalRequest, requireNativeDesktopSession, async (req, res) => {
     try {
-      const { skillId, skillName, installSource, installPath: reqInstallPath } = req.body;
+      const { skillId, skillName, installSource } = req.body;
       if (!skillId || !skillName) return res.status(400).json({ error: "skillId and skillName required" });
       const scope = marketplaceScope(req.user);
 
-      // Bundled skills: copy from bundled directory into ~/lumi_skills/
-      if (installSource === 'bundled' && reqInstallPath) {
+      // Bundled skills: install the registry-owned package, then complete the
+      // same connect -> register -> manifest verification transaction used by
+      // Lumi's tool-facing skill lifecycle. A copied directory alone is not a
+      // usable skill.
+      if (installSource === 'bundled') {
         const bundledSkill = getSkillById(skillId, undefined, scope);
+        if (
+          !bundledSkill
+          || bundledSkill.installSource !== 'bundled'
+          || !bundledSkill.installPath
+          || !fs.existsSync(bundledSkill.installPath)
+        ) {
+          return res.status(404).json({ error: 'The requested bundled skill package is unavailable.' });
+        }
+        if (bundledSkill.runtimeInstallable === false) {
+          return res.status(409).json({
+            success: false,
+            usable: false,
+            reviewRequired: true,
+            error: 'This bundled entry depends on an external process whose executable identity is not pinned. Configure it through the reviewed external MCP flow instead.',
+          });
+        }
+        if (bundledSkill.officialIdentityStatus === 'conflict') {
+          return res.status(409).json({
+            success: false,
+            usable: false,
+            identityConflict: true,
+            error: bundledSkill.conflictReason
+              || 'The official Skill Hall id is occupied by a package or configuration with different provenance. Remove it explicitly before installing the official package.',
+          });
+        }
 
         const skillDirName = resolveMarketplaceSkillDirName({
           skillId,
           skillName,
-          installPath: bundledSkill?.installPath || reqInstallPath,
+          installPath: bundledSkill.installPath,
         });
         io.emit('skill:installing', { skillId, name: skillName, stage: 'copying' });
         try {
-          const skillDir = mcpManager.installSkill(skillDirName, reqInstallPath);
+          await mcpManager.installSkillValidated(skillDirName, bundledSkill.installPath, {
+            managedSkill: createBundledSkillIdentity(skillId, bundledSkill.installPath),
+          });
           io.emit('skill:installing', { skillId, name: skillName, stage: 'connecting' });
-          await mcpManager.restartServer(skillDirName);
+          const activation = await activateMarketplaceSkill(skillDirName);
+          recordMarketplaceInstallBestEffort(skillId);
+          io.emit('skill:installed', { skillId, name: skillName, source: 'bundled' });
+          return res.json({
+            success: true,
+            name: skillName,
+            message: marketplaceInstallMessage(skillName, activation),
+            ...activation,
+          });
         } catch (err: any) {
-          // Clean up partial install so user can retry
-          try { mcpManager.uninstallSkill(skillDirName); } catch {}
           return res.status(500).json({ error: `Install failed: ${err.message}` });
         }
-        recordInstall(skillId);
-        io.emit('skill:installed', { skillId, name: skillName, source: 'bundled' });
-        return res.json({ success: true, name: skillName, message: `Skill "${skillName}" installed and activated!` });
       }
 
       // Community skills: copy from bundled dir too (they are implemented there now)
       if (installSource === 'community') {
-        const skillDirName = resolveMarketplaceSkillDirName({
-          skillId,
-          skillName,
+        return res.status(409).json({
+          success: false,
+          usable: false,
+          reviewRequired: true,
+          error: `Community skill "${skillName}" is discoverable but cannot execute until an immutable package review and approval transaction is available. Nothing was installed or activated.`,
         });
-        const comSkill = getSkillById(skillId, undefined, scope);
-        const bundledPath = path.join(__dirname, '..', 'skills', 'bundled', skillDirName);
-        const communityPath = comSkill?.installPath && fs.existsSync(comSkill.installPath)
-          ? comSkill.installPath
-          : '';
-        const sourcePath = communityPath || (fs.existsSync(bundledPath) ? bundledPath : '');
-
-        if (sourcePath) {
-          io.emit('skill:installing', { skillId, name: skillName, stage: 'copying' });
-          try {
-            mcpManager.installSkill(skillDirName, sourcePath);
-            io.emit('skill:installing', { skillId, name: skillName, stage: 'connecting' });
-            await mcpManager.restartServer(skillDirName);
-          } catch (err: any) {
-            try { mcpManager.uninstallSkill(skillDirName); } catch {}
-            return res.status(500).json({ error: `Install failed: ${err.message}` });
-          }
-          recordInstall(skillId);
-          io.emit('skill:installed', { skillId, name: skillName, source: 'community' });
-          return res.json({ success: true, name: skillName, message: `Skill "${skillName}" installed and activated!` });
-        }
-        // Fallback: mark as bookmarked
-        const config = getMCPConfig();
-        if (!config[skillDirName]) {
-          const updated = { ...config };
-          (updated as any)[skillDirName] = {
-            command: '',
-            args: [],
-            description: `Marketplace skill: ${skillId}`,
-            enabled: false,
-            source: 'marketplace',
-            autoGenerated: false,
-          };
-          await updateMCPConfig(updated);
-        }
-        recordInstall(skillId);
-        io.emit('skill:installed', { skillId, name: skillName, source: 'community' });
-        res.json({ success: true, name: skillName, message: `Acquired ${skillName}. Enable it in MCP Settings to activate.` });
-        return;
       }
 
       // npm package install — e.g. "lumi-skill-nanobanana" from npm registry
       if (installSource === 'npm' && req.body.npmPackage) {
-        const npmPkg = req.body.npmPackage;
-        io.emit('skill:installing', { skillId, name: npmPkg, stage: 'downloading' });
-        let skillDirName = '';
-        try {
-          skillDirName = path.basename(await mcpManager.installFromNpm(npmPkg));
-          io.emit('skill:installing', { skillId, name: skillName, stage: 'connecting' });
-          await mcpManager.restartServer(skillDirName);
-        } catch (err: any) {
-          if (skillDirName) try { mcpManager.uninstallSkill(skillDirName); } catch {}
-          return res.status(500).json({ error: `npm install failed: ${err.message}` });
-        }
-        recordInstall(skillId);
-        io.emit('skill:installed', { skillId, name: skillName, source: 'npm' });
-        return res.json({ success: true, name: skillName, message: `Skill "${skillName}" installed from npm and activated!` });
+        return res.status(409).json({
+          success: false,
+          usable: false,
+          reviewRequired: true,
+          error: 'Direct npm execution is disabled. Use a curated MCP candidate or an immutable reviewed package proposal; no package was installed.',
+        });
       }
 
       // GitHub repo install — clone + npm install + register
       if (installSource === 'github' && req.body.repoUrl) {
-        const repoUrl = req.body.repoUrl;
-        io.emit('skill:installing', { skillId, name: skillName, stage: 'cloning' });
-        let skillDirName = '';
-        try {
-          skillDirName = path.basename(await mcpManager.installFromGitHub(repoUrl));
-          io.emit('skill:installing', { skillId, name: skillName, stage: 'connecting' });
-          await mcpManager.restartServer(skillDirName);
-        } catch (err: any) {
-          if (skillDirName) try { mcpManager.uninstallSkill(skillDirName); } catch {}
-          return res.status(500).json({ error: `GitHub install failed: ${err.message}` });
-        }
-        recordInstall(skillId);
-        io.emit('skill:installed', { skillId, name: skillName, source: 'github' });
-        return res.json({ success: true, name: skillName, message: `Skill "${skillName}" installed from GitHub and activated!` });
+        return res.status(409).json({
+          success: false,
+          usable: false,
+          reviewRequired: true,
+          error: 'Direct GitHub execution is disabled. Use a curated MCP candidate or an immutable reviewed package proposal; no repository was installed.',
+        });
       }
 
       res.status(400).json({ error: 'Invalid installSource' });
@@ -287,23 +380,17 @@ export function mountMarketplaceRoutes(
   });
 
   // Publish a community skill
-  router.post("/marketplace/publish", requireAuth, requireAdmin, requireLocalRequest, (req, res) => {
+  router.post("/marketplace/publish", requireAuth, requireAdmin, requirePersonalMarketplaceMutation, requireLocalRequest, requireNativeDesktopSession, (req, res) => {
     try {
-      const { name, description, author, category, icon, installPath, version, toolCount } = req.body;
+      const { name, description, author, category, icon, version, toolCount } = req.body;
       if (!name || !description) return res.status(400).json({ error: 'name and description required' });
-      let resolvedInstallPath = installPath;
-      if (!resolvedInstallPath) {
-        const localSkillDir = path.join(SKILLS_DIR, name);
-        if (fs.existsSync(localSkillDir)) {
-          const safeName = String(name).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'skill';
-          const snapshotDir = getDataPath(path.join('published-skills', safeName));
-          fs.rmSync(snapshotDir, { recursive: true, force: true });
-          fs.cpSync(localSkillDir, snapshotDir, { recursive: true });
-          resolvedInstallPath = snapshotDir;
-        }
-      }
-      const skill = publishSkill({ name, description, author: author || 'Community', category: category || 'Other', icon: icon || 'Zap', installPath: resolvedInstallPath, version, toolCount });
-      res.json({ success: true, skill });
+      const skill = publishSkill({ name, description, author: author || 'Community', category: category || 'Other', icon: icon || 'Zap', version, toolCount });
+      res.json({
+        success: true,
+        skill,
+        executable: false,
+        note: 'Community publication stores discovery metadata only. Executable packages require an immutable reviewed proposal.',
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

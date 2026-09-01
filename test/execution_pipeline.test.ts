@@ -205,6 +205,60 @@ describe('unified execution pipeline', () => {
     expect(voice.executionPlan.planId).toBe(task.executionPlan.planId);
   });
 
+  it('does not turn product feedback into execution merely because chat can see the manifest', () => {
+    const registry = createRegistry();
+    const pipeline = buildLumiExecutionPipeline({
+      dispatch: {
+        userId: 'pipeline-feedback-user',
+        text: '你发消息给我的时候能不能不要一坨丢过来',
+        channel: 'chat',
+        source: 'command-center-chat',
+        operationMode: 'assistant',
+        targetIsLumi: true,
+      },
+      registry,
+      personalityToolPolicy: {
+        allowedTools: ['*'],
+        requireConfirmation: [],
+        forbiddenTools: [],
+        maxIterations: 25,
+      },
+    });
+
+    // The operation mode is an authorization ceiling, not permission to
+    // execute an action in a conversational turn.
+    expect(pipeline.execution.allowToolUse).toBe(false);
+    expect(pipeline.turnIntent.flow.allowToolUseForTurn).toBe(false);
+    expect(pipeline.executionRequested).toBe(false);
+    expect(pipeline.trustedActionContinuation).toBe(false);
+    expect(pipeline.capabilityPlan.taskLedgerRequired).toBe(false);
+  });
+
+  it('keeps an explicit desktop request executable in assistant mode', () => {
+    const registry = createRegistry();
+    const pipeline = buildLumiExecutionPipeline({
+      dispatch: {
+        userId: 'pipeline-explicit-action-user',
+        text: '打开网易云音乐并播放一首歌',
+        channel: 'chat',
+        source: 'command-center-chat',
+        operationMode: 'assistant',
+        targetIsLumi: true,
+      },
+      registry,
+      personalityToolPolicy: {
+        allowedTools: ['*'],
+        requireConfirmation: [],
+        forbiddenTools: [],
+        maxIterations: 25,
+      },
+    });
+
+    expect(pipeline.turnIntent.flow.allowToolUseForTurn).toBe(true);
+    expect(pipeline.executionRequested).toBe(true);
+    expect(pipeline.modelToolProjection.toolNames).toContain('desktop_open');
+  });
+
   it('fails external commits closed and binds confirmation to immutable payload evidence', () => {
     const registry = createRegistry();
     const pipeline = buildLumiExecutionPipeline({

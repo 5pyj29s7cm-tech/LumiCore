@@ -1,4 +1,5 @@
 import { ToolRegistry } from '../registry';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 interface RepoCandidate {
   fullName: string;
@@ -221,6 +222,8 @@ async function capabilityResearchHandler(args: Record<string, any>): Promise<str
   const top = candidates.slice(0, limit);
 
   return JSON.stringify({
+    ok: true,
+    status: 'researched',
     goal,
     domain,
     generatedAt: new Date().toISOString(),
@@ -267,5 +270,29 @@ export function registerCapabilityResearchTools(registry: ToolRegistry): void {
     handler: capabilityResearchHandler,
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'capability.external.research',
+      family: 'capability-research',
+      lane: 'system',
+      operation: 'observe',
+      risk: 'low',
+      sideEffects: [{ type: 'network_read', scope: 'public integration metadata', reversible: true }],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'goal', 'candidates', 'recommendedPlan'],
+        requiredValues: { ok: true, status: 'researched' },
+        successStatuses: ['researched'],
+        failureStatuses: ['failed'],
+        successSignals: ['public integration candidates and a bounded plan were returned'],
+        limitations: ['Research never approves, installs, connects, or executes third-party code.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'capability.external.research',
+      operation: 'observe',
+      subjectArgument: 'goal',
+      limitations: ['Candidate metadata is advisory and is not installation authority.'],
+    }),
   });
 }

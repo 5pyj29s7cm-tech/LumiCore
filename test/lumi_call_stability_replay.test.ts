@@ -37,6 +37,45 @@ function actionState(overrides: Partial<ConversationActionContinuationState>): C
 }
 
 describe('Lumi field-call stability replay', () => {
+  it('reports execution only when the exact task has a server-owned action turn', () => {
+    const db: any = {
+      conversationActionTasks: [],
+      conversationActionReceipts: [],
+      conversationActionTurns: [],
+    };
+    const conversation = { id: 'conv_truth', userId: 'user_truth', domain: 'personal', orgId: '' };
+    const state = actionState({
+      taskId: 'task_truth',
+      status: 'executing',
+      unfinished: true,
+      activeRequestId: 'request_truth',
+      completionSource: undefined,
+    });
+    syncConversationActionTaskLedger(db, { conversation, state });
+
+    const unowned = formatConversationActionLedgerStatus(db, {
+      conversationId: conversation.id,
+      userId: conversation.userId,
+      query: '现在进度怎么样',
+    });
+    expect(unowned).toContain('当前没有正在运行的执行请求');
+    expect(unowned).not.toContain('还在执行链上');
+
+    db.conversationActionTurns.push({
+      conversationId: conversation.id,
+      userId: conversation.userId,
+      taskId: state.taskId,
+      requestId: state.activeRequestId,
+      status: 'accepted',
+    });
+    const owned = formatConversationActionLedgerStatus(db, {
+      conversationId: conversation.id,
+      userId: conversation.userId,
+      query: '现在进度怎么样',
+    });
+    expect(owned).toContain('还在执行链上');
+  });
+
   it('reports desktop relay timeouts as actionable Chinese instead of an opaque failure', () => {
     expect(formatCnToolFailureDetail('Desktop tool "desktop_open" timed out (60s)'))
       .toContain('窗口回执时超时');

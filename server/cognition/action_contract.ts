@@ -337,7 +337,9 @@ export function requiresMediaPlaybackAction(input: string): boolean {
   const text = compact(extractPrimaryTaskText(input));
   if (!text || /(?:AutoCAD|\bCAD\b|\u56de\u653e\u56fe\u7eb8|\u7ed8\u56fe\u56de\u653e)/iu.test(text)) return false;
   const mediaSurface = /(?:\u7f51\u6613\u4e91(?:\u97f3\u4e50)?|QQ\s*\u97f3\u4e50|\u9177\u72d7(?:\u97f3\u4e50)?|\u97f3\u4e50|\u6b4c\u66f2|\u6b4c\u5355)|\b(?:NetEase|CloudMusic|Spotify|Apple\s+Music|music|song|playlist|music\s+player)\b/iu.test(text);
-  const positivePlayback = /(?:\u64ad\u653e|\u653e\u4e00?\u9996|\u542c\u4e00?\u9996|\u7ee7\u7eed\u64ad\u653e)|\b(?:play|resume|listen\s+to|put\s+on)\b/iu.test(text);
+  // Natural follow-ups commonly omit \u201c\u9996\u201d: \u201c\u76f4\u63a5\u653e\u5f53\u524d\u7684\u97f3\u4e50\u201d still asks for
+  // verified playback, not merely for the player/window to be discovered.
+  const positivePlayback = /(?:\u64ad\u653e|\u653e\u4e00?\u9996|\u542c\u4e00?\u9996|\u7ee7\u7eed\u64ad\u653e|(?:\u7ed9\u6211)?\u76f4\u63a5\u653e(?:\u4e00\u4e0b)?(?:\u5f53\u524d(?:\u7684)?|\u73b0\u5728(?:\u7684)?|\u8fd9\u9996|\u97f3\u4e50|\u6b4c\u66f2?|\u5b83))|\b(?:play|resume|listen\s+to|put\s+on)\b/iu.test(text);
   return mediaSurface && positivePlayback;
 }
 
@@ -1712,6 +1714,21 @@ function requestedBrowserTargetAliases(target: string): string[] {
   return Array.from(aliases).filter(Boolean);
 }
 
+/** Compare an adapter-supplied launch target with the exact target named by
+ * the current user/task. Pre-execution guards and terminal evidence use the
+ * same alias rules so a wrong target cannot be executed and later legitimized
+ * by its own successful receipt. */
+export function matchesRequestedDesktopActionTarget(
+  value: unknown,
+  requestedTarget: string,
+  browser = false,
+): boolean {
+  const aliases = browser
+    ? requestedBrowserTargetAliases(requestedTarget)
+    : requestedDesktopTargetAliases(requestedTarget);
+  return aliases.length > 0 && matchesRequestedDesktopTarget(value, aliases);
+}
+
 function hasMatchingBrowserOpenEvidence(record: ToolExecutionRecord, requestedTarget: string): boolean {
   if (record.name !== 'browser_open_task' || record.error || !String(record.result || '').trim()) return false;
   const payload = parseRecordJson(record);
@@ -1745,7 +1762,7 @@ function hasMatchingBrowserOpenEvidence(record: ToolExecutionRecord, requestedTa
   return evidenceValues.some(value => matchesRequestedDesktopTarget(value, aliases));
 }
 
-function requestedMediaPlayerTarget(taskText: string): string {
+export function requestedMediaPlayerTarget(taskText: string): string {
   const text = compact(extractPrimaryTaskText(taskText));
   const named = text.match(/(?:\u7f51\u6613\u4e91(?:\u97f3\u4e50)?|QQ\s*\u97f3\u4e50|\u9177\u72d7(?:\u97f3\u4e50)?|Spotify|Apple\s+Music|NetEase(?:\s+Cloud\s+Music)?|CloudMusic)/iu)?.[0];
   return compact(named || extractDesktopLaunchTarget(text) || extractSimpleDesktopOpenTarget(text));

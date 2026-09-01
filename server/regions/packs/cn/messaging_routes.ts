@@ -2668,6 +2668,7 @@ export async function processWithPersonality(
       initialFinalization,
       allowToolUse: toolSessionActive
         && !callbackReply
+        && !entryHandled
         && !missingOrganizationExternalCommitReceipt,
       pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
       aborted: actionWasCancelled(),
@@ -2770,18 +2771,26 @@ export async function processWithPersonality(
     }
     settleRemoteTask();
     await flushTerminalReply();
-    try {
-      persistRemotePostTurnLearning({
-        message: msg,
-        responseText: correlated.text,
-        llmGetters: llm,
-        modelConfig: {
-          provider: userLLMPrefs.provider,
-          model: userLLMPrefs.model,
-        },
-      });
-    } catch (learningError: any) {
-      console.warn('[Messaging] Remote post-turn learning could not be scheduled:', learningError?.message || learningError);
+    // Native organization commands already have a deterministic server
+    // transaction and a task-bound terminal receipt. Running the generic
+    // post-turn extractor here would invoke a model after the command has
+    // completed, making a model outage look like part of the task and
+    // needlessly competing with receipt persistence. Learned state for these
+    // commands comes from the authoritative organization transaction instead.
+    if (!entryHandled) {
+      try {
+        persistRemotePostTurnLearning({
+          message: msg,
+          responseText: correlated.text,
+          llmGetters: llm,
+          modelConfig: {
+            provider: userLLMPrefs.provider,
+            model: userLLMPrefs.model,
+          },
+        });
+      } catch (learningError: any) {
+        console.warn('[Messaging] Remote post-turn memory extraction could not be scheduled:', learningError?.message || learningError);
+      }
     }
     return correlated.text;
   } catch (err: any) {

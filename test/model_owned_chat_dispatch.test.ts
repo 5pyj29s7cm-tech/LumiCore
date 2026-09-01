@@ -271,9 +271,11 @@ describe('model-owned main chat architecture', () => {
     expect(messaging).toContain('modelToolPolicy.maxIterations || executionDecision.maxIterations');
     expect(messaging).toContain('isPureOperationModeSwitchRequest(requestText, requestedMode)');
 
-    expect(rest).toContain('const restModelToolPolicy = restrictToolPolicyForExecutionBoundary(');
-    expect(rest).toContain('restExecutionPipeline.authorizationPolicy');
-    expect(rest).toContain('const restModelToolProjection = buildModelToolProjection(restExecutionDecision');
+    expect(rest).toContain('const restModelToolPolicy = restExecutionPipeline.authorizationPolicy');
+    expect(rest).toContain('const restModelToolProjection = restExecutionPipeline.modelToolProjection');
+    expect(rest).toContain('additionalForbiddenTools: restBoundaryForbiddenTools');
+    expect(rest).not.toContain('buildModelToolProjection');
+    expect(rest).not.toMatch(/restExecutionDecision\.(?:baseToolPolicy|toolPolicy|maxIterations|toolRoute)\s*=/);
     expect(rest).toContain("'remote_restricted'");
     expect(rest).toContain('toolPolicy: restModelToolPolicy');
     expect(rest).toContain('isSanctuary: !req.user');

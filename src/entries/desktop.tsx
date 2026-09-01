@@ -13,6 +13,7 @@ import { useAppShell } from './useAppShell';
 import { useApp } from '../contexts/AppContext';
 import { StartupSequence } from '../components/StartupSequence';
 import { initializeSharedSocketRuntime } from '../hooks/useSocket';
+import { installExternalNavigationGuards } from '../lib/externalNavigation';
 
 installApiBridge();
 initializeSharedSocketRuntime();
@@ -34,6 +35,7 @@ export function DesktopApp() {
   const [startupVisible, setStartupVisible] = useState(true);
 
   useEffect(() => { document.body.classList.add('overflow-hidden'); return () => document.body.classList.remove('overflow-hidden'); }, []);
+  useEffect(() => installExternalNavigationGuards(), []);
   useEffect(() => { window.scrollTo(0, 0); }, [activeTab]);
   useEffect(() => {
     if (shell.loading) return;

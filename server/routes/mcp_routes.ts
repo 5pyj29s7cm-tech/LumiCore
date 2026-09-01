@@ -1,6 +1,16 @@
-import { Router } from "express";
+import { Router, type NextFunction, type Request, type Response } from "express";
 import { requireAdmin, requireAuth, requireLocalRequest } from "../middleware/auth";
-import { mcpManager, getMCPConfig, updateMCPConfig, recoverServerTools } from "../mcp";
+import { DESKTOP_SESSION_HEADER, verifyDesktopSessionProof } from "../config/desktop_bootstrap";
+import {
+  mcpManager,
+  getMCPConfig,
+  updateMCPConfig,
+  recoverServerTools,
+  getRegisteredMCPToolNames,
+  requireSafeMCPServerName,
+  unregisterServerTools,
+  type MCPConfigUpdateResult,
+} from "../mcp";
 import { logger } from "../../logger";
 import {
   normalizeRemoteDeviceConfig,
@@ -30,6 +40,9 @@ function publicMcpConfig(name: string, cfg: any, connected: boolean) {
     cachedTools: _cachedTools,
     ...safe
   } = cfg || {};
+  const registeredToolNames = getRegisteredMCPToolNames(name);
+  const registered = registeredToolNames.length > 0;
+  const usable = cfg?.enabled === true && registered;
   return {
     name,
     ...safe,
@@ -38,11 +51,43 @@ function publicMcpConfig(name: string, cfg: any, connected: boolean) {
     envConfigured: Boolean(cfg?.env && Object.keys(cfg.env).length),
     headersConfigured: Boolean(cfg?.headers && Object.keys(cfg.headers).length),
     connected,
+    registered,
+    usable,
+    toolCount: registeredToolNames.length,
+    registeredToolNames,
+    runtimeStatus: usable
+      ? 'callable'
+      : cfg?.enabled !== true
+        ? 'disabled'
+        : connected
+          ? 'connected_unregistered'
+          : 'disconnected',
   };
 }
 
 function reportMcpRouteFailure(operation: string, error: unknown): void {
   logger.error(`[MCP Routes] ${operation} failed: ${sanitizeMcpLogValue((error as any)?.message || error)}`);
+}
+
+function publicConfigUpdateResult(result: MCPConfigUpdateResult) {
+  return {
+    ...result,
+    services: result.services.map(service => ({
+      ...service,
+      ...(service.error ? { error: sanitizeMcpLogValue(service.error) } : {}),
+      ...(service.rollbackError ? { rollbackError: sanitizeMcpLogValue(service.rollbackError) } : {}),
+    })),
+  };
+}
+
+function requireNativeDesktopSession(req: Request, res: Response, next: NextFunction): void {
+  if (!req.user || !verifyDesktopSessionProof(req.headers[DESKTOP_SESSION_HEADER], req.user.uid)) {
+    res.status(403).json({
+      error: 'A valid native desktop session proof is required for MCP runtime changes.',
+    });
+    return;
+  }
+  next();
 }
 
 export function mountMcpRoutes(router: Router) {
@@ -55,17 +100,63 @@ export function mountMcpRoutes(router: Router) {
     res.json({ servers });
   });
 
-  router.post("/mcp", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
+  router.post("/mcp", requireAuth, requireAdmin, requireLocalRequest, requireNativeDesktopSession, async (req, res) => {
     try {
-      const { servers } = req.body;
+      const { servers, mode = 'merge' } = req.body || {};
       if (!servers || typeof servers !== 'object' || Array.isArray(servers)) {
         return res.status(400).json({ error: 'Invalid servers config' });
       }
-      const registered = await updateMCPConfig({ ...getMCPConfig(), ...servers });
-      res.json({ registered, count: registered.length });
+      if (mode !== 'merge' && mode !== 'replace') {
+        return res.status(400).json({ error: 'mode must be merge or replace' });
+      }
+      const result = await updateMCPConfig(servers, { mode });
+      res.status(result.ok ? 200 : 409).json(publicConfigUpdateResult(result));
     } catch (err: any) {
       reportMcpRouteFailure('configuration update', err);
-      res.status(500).json({ error: 'MCP configuration update failed' });
+      res.status(400).json({ error: 'MCP configuration update failed' });
+    }
+  });
+
+  router.put("/mcp/:name", requireAuth, requireAdmin, requireLocalRequest, requireNativeDesktopSession, async (req, res) => {
+    try {
+      const name = requireSafeMCPServerName(req.params.name);
+      const result = await updateMCPConfig({ [name]: req.body?.config }, { mode: 'merge' });
+      res.status(result.ok ? 200 : 409).json(publicConfigUpdateResult(result));
+    } catch (err: any) {
+      reportMcpRouteFailure('server configuration replacement', err);
+      res.status(400).json({ error: 'MCP server configuration is invalid' });
+    }
+  });
+
+  router.delete("/mcp/:name", requireAuth, requireAdmin, requireLocalRequest, requireNativeDesktopSession, async (req, res) => {
+    try {
+      const name = requireSafeMCPServerName(req.params.name);
+      const result = await updateMCPConfig({}, { mode: 'merge', removeNames: [name] });
+      res.status(result.ok ? 200 : 409).json(publicConfigUpdateResult(result));
+    } catch (err: any) {
+      reportMcpRouteFailure('server configuration deletion', err);
+      res.status(400).json({ error: 'MCP server deletion failed' });
+    }
+  });
+
+  router.post("/mcp/:name/state", requireAuth, requireAdmin, requireLocalRequest, requireNativeDesktopSession, async (req, res) => {
+    try {
+      const name = requireSafeMCPServerName(req.params.name);
+      if (typeof req.body?.enabled !== 'boolean') {
+        return res.status(400).json({ error: 'enabled must be boolean' });
+      }
+      const current = getMCPConfig()[name];
+      if (!current) return res.status(404).json({ error: 'MCP server not found' });
+      const result = await updateMCPConfig({
+        [name]: { ...current, enabled: req.body.enabled },
+      }, {
+        mode: 'merge',
+        forceRestartNames: req.body.enabled ? [name] : [],
+      });
+      res.status(result.ok ? 200 : 409).json(publicConfigUpdateResult(result));
+    } catch (err: any) {
+      reportMcpRouteFailure('server state update', err);
+      res.status(400).json({ error: 'MCP server state update failed' });
     }
   });
 
@@ -73,12 +164,19 @@ export function mountMcpRoutes(router: Router) {
     res.json({ servers: projectMcpServerHealth(mcpManager.getServerHealth()) });
   });
 
-  router.post("/mcp/restart/:name", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
+  router.post("/mcp/restart/:name", requireAuth, requireAdmin, requireLocalRequest, requireNativeDesktopSession, async (req, res) => {
+    let name = '';
     try {
-      const tools = await mcpManager.restartServer(req.params.name);
-      const registered = await recoverServerTools(req.params.name, tools);
+      name = requireSafeMCPServerName(req.params.name);
+      unregisterServerTools(name);
+      const tools = await mcpManager.restartServer(name);
+      if (!Array.isArray(tools) || tools.length === 0) {
+        throw new Error(`MCP server "${name}" exposed no tools.`);
+      }
+      const registered = await recoverServerTools(name, tools);
       res.json({ tools, registered });
     } catch (err: any) {
+      if (name) unregisterServerTools(name);
       reportMcpRouteFailure('server restart', err);
       res.status(500).json({ error: 'MCP server restart failed' });
     }
@@ -93,7 +191,7 @@ export function mountMcpRoutes(router: Router) {
     }
   });
 
-  router.put("/remote-devices", requireAuth, requireAdmin, requireLocalRequest, (req, res) => {
+  router.put("/remote-devices", requireAuth, requireAdmin, requireLocalRequest, requireNativeDesktopSession, (req, res) => {
     try {
       const { devices } = req.body;
       const normalized = normalizeRemoteDeviceConfig(devices);

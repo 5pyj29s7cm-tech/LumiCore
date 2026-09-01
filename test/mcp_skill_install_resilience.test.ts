@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { createBundledSkillIdentity } from '../server/marketplace/official_identity';
 
 const ORIGINAL_LUMI_DATA_DIR = process.env.LUMI_DATA_DIR;
 
@@ -61,6 +62,14 @@ afterEach(() => {
 });
 
 describe('MCP skill install resilience', () => {
+  it('does not seed the legacy online Playwright npx runtime', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+
+    expect(manager.getConfig()).not.toHaveProperty('playwright');
+  });
+
   it('retries a crashed server with exponential backoff and opens the circuit after five failures', async () => {
     vi.useFakeTimers();
     const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
@@ -105,31 +114,29 @@ describe('MCP skill install resilience', () => {
     const configPath = path.join(tempHome, 'data', 'mcp_config.json');
     const manager = new MCPClientManager(configPath);
     manager.saveConfig({
-      playwright: {
-        command: 'custom-playwright-command',
+      filesystem: {
+        command: 'custom-filesystem-command',
         args: ['--user-profile'],
         enabled: true,
         source: 'external',
       },
     });
 
-    expect(manager.syncFactoryCapabilityMetadata()).toContain('playwright');
-    expect(manager.getConfig().playwright).toMatchObject({
-      command: 'custom-playwright-command',
+    expect(manager.syncFactoryCapabilityMetadata()).toContain('filesystem');
+    expect(manager.getConfig().filesystem).toMatchObject({
+      command: 'custom-filesystem-command',
       args: ['--user-profile'],
       enabled: true,
       capabilityDefault: {
         operation: 'mutate',
         risk: 'high',
-        lane: 'web',
+        lane: 'files',
         trust: 'third-party',
       },
     });
-    expect(manager.getConfig().playwright.capabilityDefault?.sideEffects.map(effect => effect.type)).toEqual([
-      'network_read',
-      'credential_access',
-      'external_state_change',
-      'external_communication',
+    expect(manager.getConfig().filesystem.capabilityDefault?.sideEffects.map(effect => effect.type)).toEqual([
+      'local_read',
+      'local_write',
     ]);
     const persisted = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(persisted.migrations.mcpCapabilityDeclarationsV1).toBe(1);
@@ -138,20 +145,24 @@ describe('MCP skill install resilience', () => {
 
   it('registers cached process tools as available without keeping every skill process resident', async () => {
     const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
-    const { MCPClientManager } = await importClientWithExec(execMock);
+    const { MCPClientManager, mcpServerConfigFingerprint } = await importClientWithExec(execMock);
     const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const serverConfig = {
+      command: process.execPath,
+      args: ['C:\\approved\\cad-drafting-server.js'],
+      enabled: true,
+      source: 'external' as const,
+    };
     manager.saveConfig({
       'cad-drafting': {
-        command: 'npx',
-        args: ['tsx', '~/lumi_skills/cad-drafting/index.ts'],
-        enabled: true,
-        source: 'local',
+        ...serverConfig,
         cachedTools: [{
           serverName: 'cad-drafting',
           name: 'mcp_cad-drafting_autocad_playback_file',
           description: 'Visible AutoCAD playback',
           inputSchema: { type: 'object', properties: {} },
         }],
+        cachedToolsFingerprint: mcpServerConfigFingerprint(serverConfig),
       },
     });
 
@@ -160,7 +171,242 @@ describe('MCP skill install resilience', () => {
     expect(tools.map(tool => tool.name)).toEqual(['mcp_cad-drafting_autocad_playback_file']);
     expect(manager.getConnectedServers()).toEqual([]);
     expect(manager.getAvailableServers()).toEqual(['cad-drafting']);
+    expect(manager.getRoutableServers()).toEqual(['cad-drafting']);
     expect(manager.getServerHealth()['cad-drafting'].status).toBe('idle');
+  });
+
+  it('does not publish cached tools from a legacy enabled npx download runner', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager, mcpServerConfigFingerprint } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const serverConfig = {
+      command: 'npx',
+      args: ['-y', '@playwright/mcp@0.0.79'],
+      enabled: true,
+      source: 'external' as const,
+      transport: 'stdio' as const,
+    };
+    manager.saveConfig({
+      playwright: {
+        ...serverConfig,
+        cachedTools: [{
+          serverName: 'playwright',
+          name: 'mcp_playwright_browser_open',
+          rawName: 'browser_open',
+          inputSchema: { type: 'object', properties: {} },
+        }],
+        cachedToolsFingerprint: mcpServerConfigFingerprint(serverConfig),
+      },
+    });
+    const connect = vi.spyOn(manager as any, 'ensureServerConnected');
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await expect(manager.connectAll()).resolves.toEqual([]);
+
+    expect(connect).not.toHaveBeenCalled();
+    expect(manager.getAvailableServers()).toEqual([]);
+    expect(manager.getRoutableServers()).toEqual([]);
+    expect(warning).toHaveBeenCalledWith(expect.stringMatching(/unsafe package runner/i));
+  });
+
+  it('does not route a cached inventory without the exact current config fingerprint', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    manager.saveConfig({
+      stale_server: {
+        command: 'node',
+        args: ['stale-server.js'],
+        enabled: true,
+        source: 'external',
+        transport: 'stdio',
+        cachedTools: [{
+          serverName: 'stale_server',
+          name: 'mcp_stale_server_old_action',
+          rawName: 'old_action',
+          inputSchema: { type: 'object', properties: {} },
+        }],
+        cachedToolsFingerprint: 'not-the-current-config-fingerprint',
+      },
+    });
+    const connect = vi.spyOn(manager as any, 'ensureServerConnected')
+      .mockRejectedValue(new Error('synthetic live discovery unavailable'));
+
+    const tools = await manager.connectAll();
+
+    expect(connect).toHaveBeenCalledWith('stale_server', expect.any(Object));
+    expect(tools).toEqual([]);
+    expect(manager.getRoutableServers()).toEqual([]);
+    expect(manager.getServerHealth().stale_server.status).toBe('disconnected');
+  });
+
+  it('does not trust cached tools from an unsigned local Skill runtime', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager, mcpServerConfigFingerprint } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const skillDir = path.join(tempHome, 'lumi_skills', 'unsigned-cache');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'index.ts'), 'export {};\n');
+    fs.writeFileSync(path.join(skillDir, 'package.json'), JSON.stringify({
+      name: 'lumi-skill-unsigned-cache',
+      version: '1.0.0',
+      lumi: { status: 'active' },
+    }));
+    const serverConfig = {
+      command: 'npx',
+      args: ['tsx', '~/lumi_skills/unsigned-cache/index.ts'],
+      enabled: true,
+      source: 'local' as const,
+      transport: 'stdio' as const,
+    };
+    manager.saveConfig({
+      'unsigned-cache': {
+        ...serverConfig,
+        cachedTools: [{
+          serverName: 'unsigned-cache',
+          name: 'mcp_unsigned-cache_unreviewed_action',
+          rawName: 'unreviewed_action',
+          inputSchema: { type: 'object', properties: {} },
+        }],
+        cachedToolsFingerprint: mcpServerConfigFingerprint(serverConfig),
+      },
+    });
+    const connect = vi.spyOn(manager as any, 'ensureServerConnected');
+
+    const tools = await manager.connectAll();
+
+    expect(tools).toEqual([]);
+    expect(connect).not.toHaveBeenCalled();
+    expect(manager.getRoutableServers()).toEqual([]);
+    expect(manager.getServerHealth()['unsigned-cache'].status).toBe('failed');
+  });
+
+  it('does not auto-register or connect a directory-only local package on restart', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    manager.saveConfig({});
+    const packageDir = path.join(tempHome, 'lumi_skills', 'directory-only');
+    fs.mkdirSync(packageDir, { recursive: true });
+    fs.writeFileSync(path.join(packageDir, 'index.ts'), 'export {};\n');
+    fs.writeFileSync(path.join(packageDir, 'package.json'), JSON.stringify({
+      name: 'directory-only',
+      version: '1.0.0',
+      lumi: { status: 'active' },
+    }));
+    const connect = vi.spyOn(manager as any, 'ensureServerConnected');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const tools = await manager.connectAll();
+
+    expect(tools).toEqual([]);
+    expect(manager.getConfig()).not.toHaveProperty('directory-only');
+    expect(manager.getConnectedServers()).toEqual([]);
+    expect(manager.getAvailableServers()).toEqual([]);
+    expect(manager.getRoutableServers()).toEqual([]);
+    expect(connect).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('package present without an approved local runtime configuration'));
+    expect(execMock).not.toHaveBeenCalled();
+  });
+
+  it('does not repair a broken third-party skill from mutable npm or repository metadata', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const skillDir = path.join(tempHome, 'lumi_skills', 'mutable-third-party');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'package.json'), JSON.stringify({
+      name: 'mutable-third-party',
+      lumi: {
+        npmPackage: '@vendor/latest-skill',
+        repoUrl: 'https://github.com/vendor/latest-skill.git',
+      },
+    }));
+    manager.saveConfig({
+      'mutable-third-party': {
+        command: 'node',
+        args: ['missing.js'],
+        enabled: true,
+        source: 'local',
+      },
+    });
+
+    const result = await manager.repairSkill('mutable-third-party');
+
+    expect(result).toMatchObject({
+      success: false,
+      reason: expect.stringContaining('immutable staged package proposal'),
+      reviewRequired: true,
+      requiredFlow: 'immutable_package_proposal',
+    });
+    expect(execMock).not.toHaveBeenCalled();
+    expect(fs.existsSync(skillDir)).toBe(true);
+  });
+
+  it('refuses pure restart when a local skill lacks a signed runtime identity', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager, mcpRegistryToolName } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const skillDir = path.join(tempHome, 'lumi_skills', 'restart-only');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'index.ts'), 'export {};\n');
+    fs.writeFileSync(path.join(skillDir, 'package.json'), JSON.stringify({
+      name: 'restart-only',
+      dependencies: { 'mutable-package': 'latest' },
+      lumi: { status: 'active' },
+    }));
+    manager.saveConfig({
+      'restart-only': {
+        command: 'node',
+        args: ['index.ts'],
+        enabled: true,
+        source: 'local',
+        installationState: 'active',
+      },
+    });
+    const tools = [{
+      serverName: 'restart-only',
+      rawName: 'probe',
+      name: mcpRegistryToolName('restart-only', 'probe'),
+      inputSchema: { type: 'object', properties: {} },
+    }];
+    const restart = vi.spyOn(manager, 'restartServer').mockResolvedValue(tools);
+
+    const result = await manager.repairSkill('restart-only');
+
+    expect(result).toMatchObject({ success: false, reviewRequired: true });
+    expect(result.reason).toMatch(/identit/i);
+    expect(restart).not.toHaveBeenCalled();
+    expect(execMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses legacy non-transactional bundled repair and requires explicit reinstall', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager, mcpRegistryToolName } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    manager.saveConfig({
+      'desktop-automation': {
+        command: 'node',
+        args: ['missing.js'],
+        enabled: true,
+        source: 'local',
+        installationState: 'active',
+      },
+    });
+    const tools = [{
+      serverName: 'desktop-automation',
+      rawName: 'probe',
+      name: mcpRegistryToolName('desktop-automation', 'probe'),
+      inputSchema: { type: 'object', properties: {} },
+    }];
+    vi.spyOn(manager, 'restartServer').mockResolvedValue(tools);
+
+    const result = await manager.repairSkill('desktop-automation');
+    const installDir = path.join(tempHome, 'lumi_skills', 'desktop-automation');
+
+    expect(result).toMatchObject({ success: false, reviewRequired: true });
+    expect(result.reason).toMatch(/non-transactional|install the official Skill Hall/i);
+    expect(fs.existsSync(installDir)).toBe(false);
   });
 
   it('throws MCP protocol error results instead of returning them as successful tool text', async () => {
@@ -209,6 +455,86 @@ describe('MCP skill install resilience', () => {
     );
   });
 
+  it('withdraws and closes an MCP runtime when a tool exceeds its wall timeout', async () => {
+    vi.useFakeTimers();
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const close = vi.fn().mockResolvedValue(undefined);
+    const callTool = vi.fn().mockReturnValue(new Promise(() => undefined));
+    const config = { enabled: true, source: 'external' as const };
+    manager.saveConfig({ hanging: config });
+    (manager as any).servers.set('hanging', {
+      client: { callTool },
+      transport: { close },
+      config,
+    });
+
+    const pending = manager.callToolForServer('hanging', 'never_returns', {}, { timeoutMs: 1_000 });
+    const rejection = expect(pending).rejects.toThrow(/wall timeout/i);
+    await vi.advanceTimersByTimeAsync(1_001);
+    await rejection;
+
+    expect(close).toHaveBeenCalledTimes(1);
+    expect((manager as any).servers.has('hanging')).toBe(false);
+  });
+
+  it('actively closes a transport when the MCP initialize handshake times out', async () => {
+    vi.useFakeTimers();
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
+    const connect = vi.spyOn(Client.prototype, 'connect').mockReturnValue(new Promise(() => undefined) as any);
+    const close = vi.spyOn(StdioClientTransport.prototype, 'close').mockResolvedValue(undefined);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const config = {
+      command: process.execPath,
+      args: ['--version'],
+      enabled: true,
+      source: 'external' as const,
+      transport: 'stdio' as const,
+    };
+
+    const pending = (manager as any).connectServer('hanging-connect', config);
+    const rejection = expect(pending).rejects.toThrow(/timed out while connecting/i);
+    await vi.advanceTimersByTimeAsync(15_001);
+    await rejection;
+
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect((manager as any).servers.has('hanging-connect')).toBe(false);
+  });
+
+  it('binds an MCP call to the explicit server instead of guessing by longest prefix', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const fooConfig = { enabled: true, source: 'external' as const };
+    const fooBarConfig = { enabled: true, source: 'external' as const };
+    manager.saveConfig({
+      foo: fooConfig,
+      foo_bar: fooBarConfig,
+    });
+    const fooCall = vi.fn().mockResolvedValue({
+      content: [{ type: 'text', text: '{"status":"completed","owner":"foo"}' }],
+    });
+    const fooBarCall = vi.fn().mockResolvedValue({
+      content: [{ type: 'text', text: '{"status":"completed","owner":"foo_bar"}' }],
+    });
+    (manager as any).servers.set('foo', {
+      client: { callTool: fooCall }, transport: { close: vi.fn() }, config: fooConfig,
+    });
+    (manager as any).servers.set('foo_bar', {
+      client: { callTool: fooBarCall }, transport: { close: vi.fn() }, config: fooBarConfig,
+    });
+
+    await expect(manager.callToolForServer('foo', 'bar_x', {})).resolves.toContain('"foo"');
+    expect(fooCall).toHaveBeenCalledWith({ name: 'bar_x', arguments: {} });
+    expect(fooBarCall).not.toHaveBeenCalled();
+    await expect(manager.callTool('mcp_foo_bar_x', {})).rejects.toThrow(/Ambiguous MCP tool owner/);
+  });
+
   it('removes the npm skill workspace when dependency install fails', async () => {
     const execMock = makeExec((_command, _options, callback) => {
       callback(new Error('registry unavailable'), '', 'registry unavailable');
@@ -219,6 +545,22 @@ describe('MCP skill install resilience', () => {
     await expect(manager.installFromNpm('@scope/bad-skill')).rejects.toThrow('registry unavailable');
 
     expect(fs.existsSync(path.join(tempHome, 'lumi_skills', 'scope-bad-skill'))).toBe(false);
+  });
+
+  it('rejects an empty normalized npm package without touching the installed skills root', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const skillsRoot = path.join(tempHome, 'lumi_skills');
+    fs.mkdirSync(skillsRoot, { recursive: true });
+    const sentinel = path.join(skillsRoot, 'keep-this-skill');
+    fs.mkdirSync(sentinel);
+    fs.writeFileSync(path.join(sentinel, 'index.ts'), 'export {};\n');
+
+    await expect(manager.installFromNpm('@')).rejects.toThrow(/Invalid npm skill package name/);
+
+    expect(fs.existsSync(sentinel)).toBe(true);
+    expect(execMock).not.toHaveBeenCalled();
   });
 
   it('removes the GitHub checkout when npm install fails after clone', async () => {
@@ -363,7 +705,70 @@ describe('MCP skill install resilience', () => {
     expect(fs.readdirSync(path.join(tempHome, 'lumi_skills')).some(name => name.startsWith('.staging-broken-'))).toBe(false);
   });
 
-  it('promotes an explicitly approved generated draft into an installed managed skill', async () => {
+  it('rejects reserved runtime names and sources inside the installed skills root', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const validSource = path.join(tempHome, 'safe-external-source');
+    fs.mkdirSync(validSource, { recursive: true });
+    fs.writeFileSync(path.join(validSource, 'index.ts'), 'export {};\n');
+    fs.writeFileSync(path.join(validSource, 'package.json'), JSON.stringify({
+      name: 'safe-external-source', version: '1.0.0', lumi: { toolCount: 1 },
+    }));
+
+    for (const reserved of ['.', '..', '__proto__', 'constructor', 'prototype']) {
+      await expect(manager.installSkillValidated(reserved, validSource)).rejects.toThrow(/Invalid skill name|Invalid MCP/);
+      await expect(manager.repairSkill(reserved)).resolves.toMatchObject({ success: false, reason: 'Invalid skill name' });
+    }
+
+    const installedRootSource = path.join(tempHome, 'lumi_skills', 'nested-source');
+    fs.mkdirSync(installedRootSource, { recursive: true });
+    fs.writeFileSync(path.join(installedRootSource, 'index.ts'), 'export {};\n');
+    fs.writeFileSync(path.join(installedRootSource, 'package.json'), JSON.stringify({ name: 'nested-source' }));
+    await expect(manager.installSkillValidated('nested-target', installedRootSource))
+      .rejects.toThrow(/outside the installed skills directory/);
+    await expect(manager.installSkillValidated('relative-target', 'relative-source'))
+      .rejects.toThrow(/must be absolute/);
+
+    const linkedSource = path.join(tempHome, 'linked-source');
+    fs.mkdirSync(linkedSource, { recursive: true });
+    fs.writeFileSync(path.join(linkedSource, 'index.ts'), 'export {};\n');
+    fs.writeFileSync(path.join(linkedSource, 'package.json'), JSON.stringify({ name: 'linked-source' }));
+    const linkTarget = path.join(tempHome, 'linked-target');
+    fs.mkdirSync(linkTarget, { recursive: true });
+    fs.symlinkSync(
+      linkTarget,
+      path.join(linkedSource, 'escaped-link'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    await expect(manager.installSkillValidated('linked-target', linkedSource))
+      .rejects.toThrow(/symbolic links or junctions/);
+  });
+
+  it('removes executable config before quarantining a locked uninstall', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const source = path.join(tempHome, 'locked-source');
+    fs.mkdirSync(source, { recursive: true });
+    fs.writeFileSync(path.join(source, 'index.ts'), 'export {};\n');
+    fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({ name: 'locked-skill' }));
+    const installed = manager.installSkill('locked-skill', source);
+    const originalRmSync = fs.rmSync.bind(fs);
+    const rm = vi.spyOn(fs, 'rmSync').mockImplementation(((target: fs.PathLike, options?: fs.RmDirOptions) => {
+      if (path.resolve(String(target)) === path.resolve(installed)) throw new Error('injected lock');
+      return originalRmSync(target, options as any);
+    }) as typeof fs.rmSync);
+
+    expect(() => manager.uninstallSkill('locked-skill')).toThrow(/disabled and quarantined/);
+    rm.mockRestore();
+    expect(manager.getConfig()['locked-skill']).toBeUndefined();
+    expect(fs.existsSync(installed)).toBe(false);
+    const quarantineRoot = path.join(tempHome, 'data', 'quarantine', 'generated-skills');
+    expect(fs.readdirSync(quarantineRoot).some(name => name.startsWith('locked-skill-failed-uninstall-'))).toBe(true);
+  });
+
+  it('stages an explicitly approved generated draft as non-routable until activation commits', async () => {
     const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
     const { MCPClientManager } = await importClientWithExec(execMock);
     const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
@@ -380,12 +785,21 @@ describe('MCP skill install resilience', () => {
         toolCount: 1,
       },
     }));
+    fs.writeFileSync(path.join(draftSource, 'package-lock.json'), JSON.stringify({
+      name: 'lumi-skill-approved-draft',
+      version: '1.0.0',
+      lockfileVersion: 3,
+      packages: {
+        '': { name: 'lumi-skill-approved-draft', version: '1.0.0', dependencies: {} },
+      },
+    }));
 
     const approvedAt = new Date(0).toISOString();
     const installed = await manager.installSkillValidated('approved-draft', draftSource, {
       approvedGeneratedDraft: {
         approvedAt,
         review: {
+          contentHash: 'sha256:approved-generated-draft',
           status: 'draft',
           staticCheck: { passed: true, findings: [] },
           trialRun: { passed: true, note: 'isolated startup passed' },
@@ -400,17 +814,38 @@ describe('MCP skill install resilience', () => {
     expect(installedPackage.lumi).toMatchObject({
       autoGenerated: false,
       generatedByLumi: true,
-      status: 'installed',
+      status: 'pending',
       approvedAt,
     });
     expect(manager.getConfig()['approved-draft']).toMatchObject({
       autoGenerated: false,
-      enabled: true,
+      enabled: false,
       source: 'local',
+      transport: 'stdio',
+      installationState: 'pending',
+      command: process.execPath,
+      cwd: installed,
+      managedSkill: {
+        origin: 'generated',
+        reviewHash: 'sha256:approved-generated-draft',
+        signature: expect.any(String),
+      },
     });
+    expect(() => manager.assertLocalSkillRuntimeIdentity(
+      'approved-draft',
+      manager.getConfig()['approved-draft'],
+    )).not.toThrow();
+    expect(fs.existsSync(path.join(installed, '.lumi-pending'))).toBe(true);
+    expect(await manager.connectAll()).toEqual([]);
+    expect(manager.getRoutableServers()).toEqual([]);
+    expect(execMock).toHaveBeenCalledWith(
+      expect.stringContaining('npm ci --ignore-scripts'),
+      expect.objectContaining({ cwd: expect.stringContaining('.staging-approved-draft-') }),
+      expect.any(Function),
+    );
   });
 
-  it('syncs newer managed bundled skills before MCP startup without downgrading them', async () => {
+  it('disables an outdated managed bundled skill instead of replacing it non-transactionally', async () => {
     const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
     const { MCPClientManager } = await importClientWithExec(execMock);
     const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
@@ -424,7 +859,13 @@ describe('MCP skill install resilience', () => {
       version: '1.5.0',
       lumi: { toolCount: 1 },
     }));
-    manager.installSkill('cad-drafting', originalSource);
+    manager.installSkill('cad-drafting', originalSource, false, {
+      managedSkill: createBundledSkillIdentity('skill-cad-drafting', originalSource),
+    });
+    expect(() => manager.assertLocalSkillRuntimeIdentity(
+      'cad-drafting',
+      manager.getConfig()['cad-drafting'],
+    )).not.toThrow();
 
     fs.mkdirSync(upgradeSource, { recursive: true });
     fs.writeFileSync(path.join(upgradeSource, 'index.ts'), 'export const build = "new";\n');
@@ -434,25 +875,28 @@ describe('MCP skill install resilience', () => {
       lumi: { toolCount: 1 },
     }));
 
-    expect(manager.syncBundledSkillUpgrades(bundledRoot)).toEqual([{
-      name: 'cad-drafting',
-      fromVersion: '1.5.0',
-      toVersion: '1.6.0',
-    }]);
+    expect(manager.syncBundledSkillUpgrades(bundledRoot)).toEqual([]);
     const installedDir = path.join(tempHome, 'lumi_skills', 'cad-drafting');
-    expect(fs.readFileSync(path.join(installedDir, 'index.ts'), 'utf-8')).toContain('"new"');
-    expect(JSON.parse(fs.readFileSync(path.join(installedDir, 'package.json'), 'utf-8')).lumi.installedVersion).toBe('1.6.0');
+    expect(fs.readFileSync(path.join(installedDir, 'index.ts'), 'utf-8')).toContain('"old"');
+    expect(JSON.parse(fs.readFileSync(path.join(installedDir, 'package.json'), 'utf-8')).lumi.installedVersion).toBe('1.5.0');
+    expect(manager.getConfig()['cad-drafting']).toMatchObject({ enabled: false, installationState: 'disabled' });
 
     fs.writeFileSync(path.join(upgradeSource, 'package.json'), JSON.stringify({
       name: 'lumi-skill-cad-drafting',
       version: '1.4.0',
-      lumi: { toolCount: 1 },
+      lumi: {
+        toolCount: 1,
+        capabilityDefault: { operation: 'mutate', risk: 'high', sideEffects: [] },
+        toolCapabilities: { forged_tool: { operation: 'mutate', risk: 'high', sideEffects: [] } },
+      },
     }));
     expect(manager.syncBundledSkillUpgrades(bundledRoot)).toEqual([]);
-    expect(JSON.parse(fs.readFileSync(path.join(installedDir, 'package.json'), 'utf-8')).version).toBe('1.6.0');
+    expect(JSON.parse(fs.readFileSync(path.join(installedDir, 'package.json'), 'utf-8')).version).toBe('1.5.0');
+    expect(manager.getConfig()['cad-drafting'].capabilityDefault).toBeUndefined();
+    expect(manager.getConfig()['cad-drafting'].toolCapabilities).toBeUndefined();
   });
 
-  it('refreshes official capability metadata without forcing a bundled code upgrade', async () => {
+  it('disables same-version bundled source drift instead of trusting new metadata', async () => {
     const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
     const { MCPClientManager } = await importClientWithExec(execMock);
     const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
@@ -466,7 +910,9 @@ describe('MCP skill install resilience', () => {
       version: '1.6.1',
       lumi: { toolCount: 1 },
     }));
-    manager.installSkill('cad-drafting', originalSource);
+    manager.installSkill('cad-drafting', originalSource, false, {
+      managedSkill: createBundledSkillIdentity('skill-cad-drafting', originalSource),
+    });
 
     const capabilityDefault = {
       operation: 'create',
@@ -507,8 +953,138 @@ describe('MCP skill install resilience', () => {
 
     expect(manager.syncBundledSkillUpgrades(bundledRoot)).toEqual([]);
     expect(manager.getConfig()['cad-drafting']).toMatchObject({
-      capabilityDefault,
-      toolCapabilities,
+      enabled: false,
+      installationState: 'disabled',
     });
+    expect(manager.getConfig()['cad-drafting'].capabilityDefault).toBeUndefined();
+    expect(manager.getConfig()['cad-drafting'].toolCapabilities).toBeUndefined();
+  });
+
+  it('revalidates managed package content before activation, restart, and every call', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const source = path.join(tempHome, 'runtime-verified-source');
+    fs.mkdirSync(source, { recursive: true });
+    fs.writeFileSync(path.join(source, 'index.ts'), 'export const value = 1;\n');
+    fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({
+      name: 'lumi-skill-runtime-verified',
+      version: '1.0.0',
+      lumi: { toolCount: 1 },
+    }));
+    manager.installSkill('runtime-verified', source, false, {
+      managedSkill: createBundledSkillIdentity('skill-runtime-verified', source),
+    });
+    const installedEntry = path.join(tempHome, 'lumi_skills', 'runtime-verified', 'index.ts');
+    fs.writeFileSync(installedEntry, 'export const value = 999;\n');
+
+    expect(() => manager.beginSkillActivation('runtime-verified')).toThrow(/content changed|runtime file changed/i);
+    await expect(manager.restartServer('runtime-verified')).rejects.toThrow(/content changed|runtime file changed/i);
+    await expect(manager.callToolForServer('runtime-verified', 'probe', {}))
+      .rejects.toThrow(/content changed|runtime file changed/i);
+  });
+
+  it('rejects a package and config that jointly replace a signed managed runtime command', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const source = path.join(tempHome, 'runtime-signature-source');
+    fs.mkdirSync(source, { recursive: true });
+    fs.writeFileSync(path.join(source, 'index.ts'), 'export {};\n');
+    fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({
+      name: 'lumi-skill-runtime-signature',
+      version: '1.0.0',
+      lumi: { toolCount: 1 },
+    }));
+    manager.installSkill('runtime-signature', source, false, {
+      managedSkill: createBundledSkillIdentity('skill-runtime-signature', source),
+    });
+
+    const config = manager.getConfig();
+    const forgedIdentity = JSON.parse(JSON.stringify(config['runtime-signature'].managedSkill));
+    forgedIdentity.runtime.command = path.resolve(tempHome, 'attacker.exe');
+    config['runtime-signature'].command = forgedIdentity.runtime.command;
+    config['runtime-signature'].managedSkill = forgedIdentity;
+    manager.saveConfig(config);
+    const installedPackagePath = path.join(tempHome, 'lumi_skills', 'runtime-signature', 'package.json');
+    const installedPackage = JSON.parse(fs.readFileSync(installedPackagePath, 'utf8'));
+    installedPackage.lumi.managedSkill = forgedIdentity;
+    fs.writeFileSync(installedPackagePath, JSON.stringify(installedPackage, null, 2));
+
+    expect(() => manager.beginSkillActivation('runtime-signature')).toThrow(/signature is invalid/i);
+  });
+
+  it('rejects launch-affecting environment injection outside the signed runtime identity', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const source = path.join(tempHome, 'runtime-env-source');
+    fs.mkdirSync(source, { recursive: true });
+    fs.writeFileSync(path.join(source, 'index.ts'), 'export {};\n');
+    fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({
+      name: 'lumi-skill-runtime-env', version: '1.0.0', lumi: { toolCount: 1 },
+    }));
+    manager.installSkill('runtime-env', source, false, {
+      managedSkill: createBundledSkillIdentity('skill-runtime-env', source),
+    });
+    const config = manager.getConfig();
+    config['runtime-env'].env = { NODE_OPTIONS: '--require=C:\\attacker.js' };
+    manager.saveConfig(config);
+
+    expect(() => manager.beginSkillActivation('runtime-env')).toThrow(/cwd, or environment/i);
+  });
+
+  it('rejects a forged cached tool inventory for a verified local Skill', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const source = path.join(tempHome, 'runtime-cache-source');
+    fs.mkdirSync(source, { recursive: true });
+    fs.writeFileSync(path.join(source, 'index.ts'), 'export {};\n');
+    fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({
+      name: 'lumi-skill-runtime-cache', version: '1.0.0', lumi: { toolCount: 1 },
+    }));
+    manager.installSkill('runtime-cache', source, false, {
+      managedSkill: createBundledSkillIdentity('skill-runtime-cache', source),
+    });
+    (manager as any).cacheToolDefinitions('runtime-cache', [{
+      serverName: 'runtime-cache',
+      name: 'mcp_runtime-cache_probe',
+      rawName: 'probe',
+      description: 'Approved live declaration',
+      inputSchema: { type: 'object', properties: {} },
+    }]);
+    const config = manager.getConfig();
+    expect(config['runtime-cache'].cachedToolsAttestation).toEqual(expect.any(String));
+    config['runtime-cache'].cachedTools![0].description = 'Forged low-risk declaration';
+    manager.saveConfig(config);
+    const connect = vi.spyOn(manager as any, 'ensureServerConnected')
+      .mockRejectedValue(new Error('synthetic live discovery unavailable'));
+
+    await expect(manager.connectAll()).resolves.toEqual([]);
+    expect(connect).toHaveBeenCalledWith('runtime-cache', expect.any(Object));
+    expect(manager.getRoutableServers()).toEqual([]);
+  });
+
+  it.each([
+    ['npx', ['-y', 'mutable-mcp-package']],
+    ['python', ['-m', 'global_python_mcp']],
+  ])('refuses managed bundled runCommand runtime %s', async (command, runArgs) => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const source = path.join(tempHome, `unbound-${command}`);
+    fs.mkdirSync(source, { recursive: true });
+    fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({
+      name: `lumi-skill-unbound-${command}`,
+      version: '1.0.0',
+      lumi: { runCommand: command, runArgs, toolCount: 1 },
+    }));
+
+    await expect(manager.installSkillValidated(`unbound-${command}`, source, {
+      managedSkill: createBundledSkillIdentity(`skill-unbound-${command}`, source),
+    })).rejects.toThrow(/runCommand|immutable local runtime/i);
+    expect(manager.getConfig()).not.toHaveProperty(`unbound-${command}`);
+    expect(fs.existsSync(path.join(tempHome, 'lumi_skills', `unbound-${command}`))).toBe(false);
   });
 });
