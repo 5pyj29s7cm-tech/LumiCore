@@ -1,10 +1,10 @@
 import fs from 'fs';
 import path from 'path';
-import dns from 'node:dns/promises';
 import { ToolRegistry } from '../registry';
 import type { ToolContext } from '../types';
 import { loadKeys } from '../../config/keys';
 import {
+  DEFAULT_IMAGE_TO_VIDEO_MODELS,
   DEFAULT_VIDEO_GENERATION_MODELS,
   getUserPreferredGenerationModels,
   type VideoGenerationProvider,
@@ -17,26 +17,14 @@ import {
   officialApiPath,
   officialApiRequest,
 } from '../../llm/official_api';
+import { assertPublicMediaUrl, downloadPublicMedia, readResponseBytes } from '../media_artifact';
 
 const OUTPUT_DIR = getGeneratedOutputDir();
 const POLL_DELAY_MS = process.env.NODE_ENV === 'test' ? 0 : 5_000;
 const MAX_POLLS = 120;
 const MAX_REMOTE_VIDEO_BYTES = 100 * 1024 * 1024;
+const MAX_REFERENCE_IMAGE_BYTES = 20 * 1024 * 1024;
 const REMOTE_MEDIA_TIMEOUT_MS = 90_000;
-
-function isPrivateOrLocalAddress(address: string): boolean {
-  const value = String(address || '').trim().toLowerCase();
-  if (!value) return true;
-  if (value === '::1' || value === '0.0.0.0' || value === '::' || value === 'localhost') return true;
-  if (/^127(?:\.\d{1,3}){3}$/.test(value)) return true;
-  if (/^10(?:\.\d{1,3}){3}$/.test(value)) return true;
-  if (/^192\.168(?:\.\d{1,3}){2}$/.test(value)) return true;
-  if (/^169\.254(?:\.\d{1,3}){2}$/.test(value)) return true;
-  if (/^172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}$/.test(value)) return true;
-  if (/^(?:fc|fd)[0-9a-f]{2}:/i.test(value)) return true;
-  if (/^fe80:/i.test(value)) return true;
-  return false;
-}
 
 function ensureOutputDir(): string {
   if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -50,6 +38,50 @@ function waitForNextPoll(): Promise<void> {
 function normalizeSize(value: unknown, separator: 'x' | '*'): string {
   const raw = String(value || '1280x720').trim().replace(/[x*]/i, separator);
   return /^\d{3,4}[x*]\d{3,4}$/i.test(raw) ? raw : `1280${separator}720`;
+}
+
+function imageMimeType(filePath: string): string | null {
+  const extension = path.extname(filePath).toLowerCase();
+  if (extension === '.png') return 'image/png';
+  if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg';
+  if (extension === '.webp') return 'image/webp';
+  if (extension === '.gif') return 'image/gif';
+  return null;
+}
+
+async function normalizeVideoReference(value: unknown, label: string): Promise<string | undefined> {
+  const raw = String(value || '').trim();
+  if (!raw) return undefined;
+  const dataUrl = raw.match(/^data:(image\/(?:png|jpe?g|webp|gif));base64,([A-Za-z0-9+/=\r\n]+)$/i);
+  if (dataUrl) {
+    const normalized = dataUrl[2].replace(/\s+/g, '');
+    if (Math.ceil(normalized.length * 3 / 4) > MAX_REFERENCE_IMAGE_BYTES) {
+      throw new Error(`${label} exceeds the ${MAX_REFERENCE_IMAGE_BYTES} byte limit.`);
+    }
+    return `data:${dataUrl[1].toLowerCase()};base64,${normalized}`;
+  }
+  if (/^https:/i.test(raw)) {
+    return (await assertPublicMediaUrl(raw)).toString();
+  }
+  if (/^https?:/i.test(raw)) throw new Error(`${label} must use HTTPS.`);
+  if (!path.isAbsolute(raw) || !fs.existsSync(raw) || !fs.statSync(raw).isFile()) {
+    throw new Error(`${label} must be an existing local image, an HTTPS URL, or an image data URL.`);
+  }
+  const bytes = fs.readFileSync(raw);
+  if (bytes.length > MAX_REFERENCE_IMAGE_BYTES) {
+    throw new Error(`${label} exceeds the ${MAX_REFERENCE_IMAGE_BYTES} byte limit.`);
+  }
+  const mimeType = imageMimeType(raw);
+  if (!mimeType) throw new Error(`${label} must be a PNG, JPEG, WebP, or GIF image.`);
+  return `data:${mimeType};base64,${bytes.toString('base64')}`;
+}
+
+function isI2VModel(model: string): boolean {
+  return /(?:^|[\/_-])i2v(?:[\/_-]|$)|image[-_]?to[-_]?video/i.test(model);
+}
+
+function isT2VModel(model: string): boolean {
+  return /(?:^|[\/_-])t2v(?:[\/_-]|$)|text[-_]?to[-_]?video/i.test(model);
 }
 
 function providerKey(provider: VideoGenerationProvider): string {
@@ -79,80 +111,17 @@ async function persistRemoteVideo(
   headers: Record<string, string> = {},
 ): Promise<{ outputPath?: string; downloadError?: string }> {
   try {
-    const parsed = new URL(String(url || '').trim());
-    const hostname = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
-    const literalPrivate = hostname === 'localhost'
-      || hostname.endsWith('.localhost')
-      || isPrivateOrLocalAddress(hostname);
-    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.hash || literalPrivate) {
-      throw new Error('Remote video URL must be an HTTPS public URL.');
-    }
-    // A hostname can resolve to an internal address even when its spelling is
-    // public. Resolve all answers before fetching and fail closed for private
-    // ranges. This is not a substitute for provider allowlisting, but closes
-    // the common DNS-to-loopback/metadata SSRF path while retaining signed CDN
-    // URLs from providers whose hostname is not known ahead of time.
-    try {
-      const answers = await dns.lookup(hostname, { all: true, verbatim: true });
-      if (answers.some(answer => isPrivateOrLocalAddress(answer.address))) {
-        throw new Error('Remote video URL resolves to a private or local address.');
-      }
-    } catch (error: any) {
-      if (String(error?.message || '').includes('private or local')) throw error;
-      // In tests and in an offline environment a signed host may not resolve;
-      // let fetch produce its normal network error rather than inventing a
-      // successful download. A successful DNS lookup is always checked above.
-    }
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REMOTE_MEDIA_TIMEOUT_MS);
-    // Provider URLs are normally signed and need no credential header. Never
-    // forward cookies or bearer tokens to a media origin.
-    const safeHeaders = Object.fromEntries(Object.entries(headers).filter(([name]) => !/^(authorization|cookie|proxy-authorization)$/i.test(name)));
-    let response: Response;
-    try {
-      response = await fetch(parsed.toString(), { headers: safeHeaders, signal: controller.signal });
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const declaredLength = Number(response.headers?.get?.('content-length') || 0);
-    if (Number.isFinite(declaredLength) && declaredLength > MAX_REMOTE_VIDEO_BYTES) {
-      throw new Error(`Remote video exceeds the ${MAX_REMOTE_VIDEO_BYTES} byte limit.`);
-    }
-    const bytes = await readResponseBytes(response, MAX_REMOTE_VIDEO_BYTES);
+    const { bytes } = await downloadPublicMedia(url, {
+      headers,
+      maxBytes: MAX_REMOTE_VIDEO_BYTES,
+      timeoutMs: REMOTE_MEDIA_TIMEOUT_MS,
+    });
     const outputPath = path.join(ensureOutputDir(), `${provider}_video_${Date.now()}.mp4`);
     fs.writeFileSync(outputPath, bytes);
     return { outputPath };
   } catch (error: any) {
     return { downloadError: String(error?.message || error).slice(0, 300) };
   }
-}
-
-async function readResponseBytes(response: Response, maxBytes: number): Promise<Buffer> {
-  const reader = response.body?.getReader?.();
-  if (!reader) {
-    const bytes = Buffer.from(await response.arrayBuffer());
-    if (bytes.length > maxBytes) throw new Error(`Remote media exceeds the ${maxBytes} byte limit.`);
-    return bytes;
-  }
-  const chunks: Buffer[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const next = await reader.read();
-      if (next.done) break;
-      const chunk = Buffer.from(next.value);
-      total += chunk.length;
-      if (total > maxBytes) {
-        await reader.cancel().catch(() => {});
-        throw new Error(`Remote media exceeds the ${maxBytes} byte limit.`);
-      }
-      chunks.push(chunk);
-    }
-  } finally {
-    reader.releaseLock?.();
-  }
-  return Buffer.concat(chunks, total);
 }
 
 function completedResult(input: {
@@ -163,6 +132,9 @@ function completedResult(input: {
   videoUrl?: string;
   outputPath?: string;
   downloadError?: string;
+  generationMode?: 'text_to_video' | 'image_to_video';
+  inputReferenceAccepted?: boolean;
+  selectionReason?: 'explicit_model' | 'configured_text_to_video_role' | 'configured_image_to_video_role';
 }): string {
   const artifacts = input.outputPath
     ? [{ type: 'video', path: input.outputPath }]
@@ -177,6 +149,10 @@ function completedResult(input: {
     model: input.model,
     prompt: input.prompt,
     taskId: input.taskId,
+    generationMode: input.generationMode || 'text_to_video',
+    inputReferenceAccepted: input.inputReferenceAccepted === true,
+    selectionReason: input.selectionReason || 'configured_text_to_video_role',
+    artifactDurability: input.outputPath ? 'local_file' : 'remote_only',
     video_url: input.videoUrl,
     outputPath: input.outputPath,
     artifacts,
@@ -185,6 +161,17 @@ function completedResult(input: {
       ? 'Video generation completed and the MP4 was saved locally.'
       : 'Video generation completed. The remote URL may expire; save it locally before expiry.',
   });
+}
+
+function completionMetadata(args: Record<string, any>) {
+  const imageToVideo = Boolean(args.first_frame_image);
+  return {
+    generationMode: imageToVideo ? 'image_to_video' as const : 'text_to_video' as const,
+    inputReferenceAccepted: imageToVideo,
+    selectionReason: (args.__selectionReason || (imageToVideo
+      ? 'configured_image_to_video_role'
+      : 'configured_text_to_video_role')) as 'explicit_model' | 'configured_text_to_video_role' | 'configured_image_to_video_role',
+  };
 }
 
 async function generateQwenVideo(args: Record<string, any>, model: string): Promise<string> {
@@ -229,7 +216,7 @@ async function generateQwenVideo(args: Record<string, any>, model: string): Prom
       const videoUrl = String(status.output?.video_url || '');
       if (!videoUrl) throw new Error('DashScope completed the task but returned no video URL.');
       const saved = await persistRemoteVideo(videoUrl, 'qwen');
-      return completedResult({ provider: 'qwen', model, prompt, taskId, videoUrl, ...saved });
+      return completedResult({ provider: 'qwen', model, prompt, taskId, videoUrl, ...saved, ...completionMetadata(args) });
     }
     if (state === 'FAILED' || status.code) {
       throw new Error(`DashScope video generation failed: ${status.output?.message || status.message || 'unknown error'}`);
@@ -277,7 +264,7 @@ async function generateMiniMaxVideo(args: Record<string, any>, model: string): P
       const videoUrl = String(file.file?.download_url || '');
       if (!videoUrl) throw new Error('MiniMax returned no video download URL.');
       const saved = await persistRemoteVideo(videoUrl, 'minimax');
-      return completedResult({ provider: 'minimax', model, prompt, taskId, videoUrl, ...saved });
+      return completedResult({ provider: 'minimax', model, prompt, taskId, videoUrl, ...saved, ...completionMetadata(args) });
     }
     if (status.status === 'Fail') {
       throw new Error(`MiniMax video generation failed: ${status.error_message || status.base_resp?.status_msg || 'unknown error'}`);
@@ -320,7 +307,7 @@ async function generateSiliconFlowVideo(args: Record<string, any>, model: string
       const videoUrl = String(status.results?.videos?.[0]?.url || '');
       if (!videoUrl) throw new Error('SiliconFlow completed the task but returned no video URL.');
       const saved = await persistRemoteVideo(videoUrl, 'siliconflow');
-      return completedResult({ provider: 'siliconflow', model, prompt, taskId, videoUrl, ...saved });
+      return completedResult({ provider: 'siliconflow', model, prompt, taskId, videoUrl, ...saved, ...completionMetadata(args) });
     }
     if (status.status === 'Failed') {
       throw new Error(`SiliconFlow video generation failed: ${status.reason || status.message || 'unknown error'}`);
@@ -374,7 +361,7 @@ async function generateOpenAIVideo(args: Record<string, any>, model: string): Pr
       if (!response.ok) throw new Error(`OpenAI video download failed: HTTP ${response.status}`);
       const outputPath = path.join(ensureOutputDir(), `openai_video_${Date.now()}.mp4`);
       fs.writeFileSync(outputPath, Buffer.from(await response.arrayBuffer()));
-      return completedResult({ provider: 'openai', model, prompt, taskId, outputPath });
+      return completedResult({ provider: 'openai', model, prompt, taskId, outputPath, ...completionMetadata(args) });
     }
     if (status.status === 'failed') {
       throw new Error(`OpenAI video generation failed: ${status.error?.message || 'unknown error'}`);
@@ -390,6 +377,7 @@ function officialVideoPayload(args: Record<string, any>, model: string): FormDat
   form.set('duration', String(Math.max(1, Math.round(Number(args.duration) || 4))));
   form.set('size', normalizeSize(args.size, 'x'));
   if (args.first_frame_image) form.set('input_reference', String(args.first_frame_image));
+  if (args.last_frame_image) form.set('last_frame_image', String(args.last_frame_image));
   return form;
 }
 
@@ -420,7 +408,11 @@ function saveBase64Video(value: unknown): string | undefined {
 async function generateOfficialVideo(args: Record<string, any>, selectedModel: string): Promise<string> {
   const prompt = String(args.prompt || '').trim();
   if (!prompt) throw new Error('prompt is required');
-  const model = officialApiModel('RELAY_VIDEO_MODEL', selectedModel || DEFAULT_VIDEO_GENERATION_MODELS.relay);
+  const imageToVideo = Boolean(args.first_frame_image);
+  const model = officialApiModel(
+    imageToVideo ? 'RELAY_IMAGE_TO_VIDEO_MODEL' : 'RELAY_VIDEO_MODEL',
+    selectedModel || (imageToVideo ? DEFAULT_IMAGE_TO_VIDEO_MODELS.relay : DEFAULT_VIDEO_GENERATION_MODELS.relay),
+  );
   // ModelDepot documents JSON POST /v1/videos/generations. A deployment can
   // opt into multipart for an OpenAI-compatible gateway with the explicit
   // override rather than making the documented path an accidental fallback.
@@ -446,7 +438,7 @@ async function generateOfficialVideo(args: Record<string, any>, selectedModel: s
   if (!taskId && !immediateUrl && !immediatePath) throw new Error('Lumi Official API video generation returned no task or video reference.');
   if (!taskId) {
     const saved = immediatePath ? { outputPath: immediatePath } : immediateUrl ? await persistRemoteVideo(immediateUrl, 'official') : {};
-    return completedResult({ provider: 'relay', model, prompt, taskId: 'completed', videoUrl: immediateUrl, ...saved });
+    return completedResult({ provider: 'relay', model, prompt, taskId: 'completed', videoUrl: immediateUrl, ...saved, ...completionMetadata(args) });
   }
 
   const statusTemplate = officialApiPath('RELAY_VIDEO_STATUS_PATH', '/videos/generations/{id}');
@@ -461,10 +453,10 @@ async function generateOfficialVideo(args: Record<string, any>, selectedModel: s
     const videoUrl = officialVideoUrl(body);
     const base64Path = saveBase64Video(body?.b64_json || body?.base64 || body?.video_base64);
     if (['completed', 'complete', 'succeeded', 'success', 'done'].includes(state) || videoUrl || base64Path) {
-      if (base64Path) return completedResult({ provider: 'relay', model, prompt, taskId, videoUrl, outputPath: base64Path });
+      if (base64Path) return completedResult({ provider: 'relay', model, prompt, taskId, videoUrl, outputPath: base64Path, ...completionMetadata(args) });
       if (videoUrl) {
         const saved = await persistRemoteVideo(videoUrl, 'official');
-        return completedResult({ provider: 'relay', model, prompt, taskId, videoUrl, ...saved });
+        return completedResult({ provider: 'relay', model, prompt, taskId, videoUrl, ...saved, ...completionMetadata(args) });
       }
       // Some gateways return a completed task without a URL in the status
       // body and expose the bytes at a separate content endpoint.
@@ -472,7 +464,7 @@ async function generateOfficialVideo(args: Record<string, any>, selectedModel: s
         const content = await officialApiBinary(contentTemplate.replace(/\{id\}/gi, encodedId));
         const outputPath = path.join(ensureOutputDir(), `official_video_${Date.now()}.mp4`);
         fs.writeFileSync(outputPath, await readResponseBytes(content, MAX_REMOTE_VIDEO_BYTES));
-        return completedResult({ provider: 'relay', model, prompt, taskId, outputPath });
+        return completedResult({ provider: 'relay', model, prompt, taskId, outputPath, ...completionMetadata(args) });
       } catch (error: any) {
         throw new Error(`Lumi Official API video completed but content download failed: ${String(error?.message || error).slice(0, 300)}`);
       }
@@ -488,22 +480,55 @@ async function generateVideo(args: Record<string, any>, context?: ToolContext): 
   const prompt = String(args.prompt || '').trim();
   if (!prompt) throw new Error('prompt is required');
 
-  const preference = getUserPreferredGenerationModels(context?.userId || 'anonymous').video;
+  const firstFrame = await normalizeVideoReference(args.first_frame_image, 'first_frame_image');
+  const lastFrame = await normalizeVideoReference(args.last_frame_image, 'last_frame_image');
+  if (lastFrame && !firstFrame) throw new Error('last_frame_image requires first_frame_image.');
+  const generationMode = firstFrame ? 'image_to_video' : 'text_to_video';
+  const preferences = getUserPreferredGenerationModels(context?.userId || 'anonymous');
+  const preference = generationMode === 'image_to_video' ? preferences.imageToVideo : preferences.video;
   const provider = preference.provider;
-  const model = String(args.model || preference.model || preference.models[provider] || '').trim();
+  const model = String(
+    args.model
+    || preference.model
+    || preference.models[provider]
+    || (generationMode === 'image_to_video'
+      ? DEFAULT_IMAGE_TO_VIDEO_MODELS[provider]
+      : DEFAULT_VIDEO_GENERATION_MODELS[provider])
+    || '',
+  ).trim();
   if (!model) throw new Error(`No video generation model is configured for ${provider}.`);
+  if (generationMode === 'image_to_video' && isT2VModel(model)) {
+    throw new Error(`The selected model ${model} is text-to-video only. Configure an image-to-video model.`);
+  }
+  if (generationMode === 'text_to_video' && isI2VModel(model)) {
+    throw new Error(`The selected model ${model} requires a reference image.`);
+  }
+  if (generationMode === 'image_to_video' && provider !== 'relay' && provider !== 'minimax') {
+    throw new Error(`${provider} does not have a verified image-to-video input adapter in this build.`);
+  }
 
-  if (provider === 'qwen') return generateQwenVideo(args, model);
-  if (provider === 'minimax') return generateMiniMaxVideo(args, model);
-  if (provider === 'siliconflow') return generateSiliconFlowVideo(args, model);
-  if (provider === 'relay') return generateOfficialVideo(args, model);
-  return generateOpenAIVideo(args, model);
+  const normalizedArgs = {
+    ...args,
+    ...(firstFrame ? { first_frame_image: firstFrame } : {}),
+    ...(lastFrame ? { last_frame_image: lastFrame } : {}),
+    __selectionReason: args.model
+      ? 'explicit_model'
+      : generationMode === 'image_to_video'
+        ? 'configured_image_to_video_role'
+        : 'configured_text_to_video_role',
+  };
+
+  if (provider === 'qwen') return generateQwenVideo(normalizedArgs, model);
+  if (provider === 'minimax') return generateMiniMaxVideo(normalizedArgs, model);
+  if (provider === 'siliconflow') return generateSiliconFlowVideo(normalizedArgs, model);
+  if (provider === 'relay') return generateOfficialVideo(normalizedArgs, model);
+  return generateOpenAIVideo(normalizedArgs, model);
 }
 
 export function registerVideoTools(registry: ToolRegistry): void {
   registry.register({
     name: 'generate_video',
-    description: 'Generate an AI video with the provider and model selected in Settings > Generative Models. Lumi Official API, Qwen/DashScope, MiniMax, SiliconFlow, and OpenAI are supported. An explicitly selected provider never silently switches to another provider.',
+    description: 'Generate text-to-video or image-to-video output with the separately configured model for that mode. A local reference image is safely converted to a bounded data URL before a verified I2V adapter is called; unsupported providers fail instead of silently falling back to text-to-video.',
     parameters: {
       type: 'object',
       properties: {
@@ -512,8 +537,8 @@ export function registerVideoTools(registry: ToolRegistry): void {
         size: { type: 'string', description: 'Requested output size, such as 1280x720, 720x1280, or 960x960.' },
         duration: { type: 'number', description: 'Requested duration in seconds. The selected provider may normalize it to a supported duration.' },
         resolution: { type: 'string', description: 'MiniMax resolution, such as 1080P or 768P.' },
-        first_frame_image: { type: 'string', description: 'Optional MiniMax first-frame image URL.' },
-        last_frame_image: { type: 'string', description: 'Optional MiniMax last-frame image URL.' },
+        first_frame_image: { type: 'string', description: 'Optional first-frame image: absolute local path, HTTPS URL, or image data URL. Its presence selects the image-to-video role.' },
+        last_frame_image: { type: 'string', description: 'Optional last-frame image in the same formats; requires first_frame_image and provider support.' },
         negative_prompt: { type: 'string', description: 'Optional SiliconFlow negative prompt.' },
         prompt_extend: { type: 'boolean', description: 'Qwen prompt expansion. Defaults to true.' },
         seed: { type: 'number', description: 'Random seed when supported by the selected provider.' },
@@ -536,7 +561,7 @@ export function registerVideoTools(registry: ToolRegistry): void {
       verification: {
         strategy: 'provider_ack',
         required: true,
-        requiredFields: ['ok', 'status', 'provider', 'model', 'taskId', 'artifacts'],
+        requiredFields: ['ok', 'status', 'provider', 'model', 'taskId', 'generationMode', 'inputReferenceAccepted', 'selectionReason', 'artifactDurability', 'artifacts'],
         requiredValues: { ok: true },
         successStatuses: ['generated'],
         failureStatuses: ['failed', 'timed_out'],

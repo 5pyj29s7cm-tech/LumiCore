@@ -224,7 +224,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       label: 'E-commerce Operations',
       category: 'client',
       status: !hasState ? 'requires_setup' : staleState ? 'attention' : 'ready',
-      actions: ['mcp_ecommerce-ops_product_listing_optimizer', 'mcp_ecommerce-ops_ecommerce_order_profit', 'mcp_ecommerce-ops_inventory_restock_plan', 'mcp_ecommerce-ops_platform_settlement_reconcile', 'mcp_ecommerce-ops_campaign_roi_analyzer', 'mcp_ecommerce-ops_after_sales_risk_report', 'web_login_run', 'mcp_playwright_browser_snapshot', 'mcp_playwright_browser_navigate', 'mcp_playwright_browser_fill_form', 'mcp_playwright_browser_click', 'create_xlsx', 'create_docx', 'generate_image', 'generate_video', 'wechat_send_message', 'work_product_verify'],
+      actions: ['mcp_ecommerce-ops_product_listing_optimizer', 'mcp_ecommerce-ops_ecommerce_order_profit', 'mcp_ecommerce-ops_inventory_restock_plan', 'mcp_ecommerce-ops_platform_settlement_reconcile', 'mcp_ecommerce-ops_campaign_roi_analyzer', 'mcp_ecommerce-ops_after_sales_risk_report', 'web_login_run', 'mcp_playwright_browser_snapshot', 'mcp_playwright_browser_navigate', 'mcp_playwright_browser_fill_form', 'mcp_playwright_browser_click', 'create_xlsx', 'create_docx', 'generate_image', 'ai_edit_image', 'generate_video', 'wechat_send_message', 'work_product_verify'],
       surfaces: ['Lumi desktop', 'work takeover task record', 'browser', 'WPS or spreadsheet', 'external image/video tools', 'creator platforms', 'store admin pages', 'personal WeChat or WeCom'],
       requiresConfirmation: false,
       setup: hasState ? [] : ['Provide store exports or an authorized platform session so ecommerce work can be grounded in live data.'],

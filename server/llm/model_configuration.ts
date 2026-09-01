@@ -11,10 +11,14 @@ import { getActiveProvider as getActiveTTSProvider } from '../tts/adapter';
 import { analyzeScreen } from './adapter';
 import { generateConfiguredEmbedding } from './embedding_provider';
 import {
+  DEFAULT_IMAGE_EDIT_MODELS,
   DEFAULT_IMAGE_GENERATION_MODELS,
+  DEFAULT_IMAGE_TO_VIDEO_MODELS,
   DEFAULT_VIDEO_GENERATION_MODELS,
   getUserPreferredGenerationModels,
+  isImageEditProvider,
   isImageGenerationProvider,
+  isImageToVideoProvider,
   isVideoGenerationProvider,
   upsertUserPreferredGenerationModels,
 } from './generation_preferences';
@@ -196,8 +200,14 @@ function allRoleConfigurations(userId: string): Record<LumiModelRole, Record<str
         ? ['openai', 'qwen', 'siliconflow', LUMI_OFFICIAL_PROVIDER_ID].some(provider => providerConfigured(provider, userId))
         : providerConfigured(generation.image.provider, userId),
     }),
+    image_edit: roleSelection(generation.imageEdit.provider, generation.imageEdit.model, userId, {
+      configured: providerConfigured(generation.imageEdit.provider, userId),
+    }),
     video_generation: roleSelection(generation.video.provider, generation.video.model, userId, {
       configured: providerConfigured(generation.video.provider, userId),
+    }),
+    image_to_video: roleSelection(generation.imageToVideo.provider, generation.imageToVideo.model, userId, {
+      configured: providerConfigured(generation.imageToVideo.provider, userId),
     }),
     embedding: roleSelection(retrieval.embedding.provider, retrieval.embedding.model, userId, {
       fallbackProvider: retrieval.embedding.fallbackProvider,
@@ -262,6 +272,7 @@ export interface OfficialModelConfigurationRoleReceipt {
   model: string;
   status: 'applied' | 'skipped';
   reason?: 'adapter_not_available' | 'official_api_not_configured';
+  selectionReason?: 'recommended_default' | 'preserved_live_selection' | 'catalog_fallback';
 }
 
 export interface OfficialModelConfigurationApplyResult {
@@ -282,7 +293,9 @@ function officialModelForRole(userId: string, role: LumiModelRole): string {
     vision: 'RELAY_VISION_MODEL',
     world: 'RELAY_WORLD_MODEL',
     image_generation: 'RELAY_IMAGE_MODEL',
+    image_edit: 'RELAY_IMAGE_EDIT_MODEL',
     video_generation: 'RELAY_VIDEO_MODEL',
+    image_to_video: 'RELAY_IMAGE_TO_VIDEO_MODEL',
     embedding: 'RELAY_EMBEDDING_MODEL',
     rerank: 'RELAY_RERANK_MODEL',
     speech_recognition: 'RELAY_STT_MODEL',
@@ -353,12 +366,28 @@ function officialModelForRole(userId: string, role: LumiModelRole): string {
         DEFAULT_IMAGE_GENERATION_MODELS[LUMI_OFFICIAL_PROVIDER_ID],
       );
     }
+    case 'image_edit': {
+      const preference = getUserPreferredGenerationModels(userId).imageEdit;
+      return officialConfiguredModel(
+        preference.provider === LUMI_OFFICIAL_PROVIDER_ID ? preference.model : '',
+        role,
+        DEFAULT_IMAGE_EDIT_MODELS[LUMI_OFFICIAL_PROVIDER_ID],
+      );
+    }
     case 'video_generation': {
       const preference = getUserPreferredGenerationModels(userId).video;
       return officialConfiguredModel(
         preference.provider === LUMI_OFFICIAL_PROVIDER_ID ? preference.model : '',
         role,
         DEFAULT_VIDEO_GENERATION_MODELS[LUMI_OFFICIAL_PROVIDER_ID],
+      );
+    }
+    case 'image_to_video': {
+      const preference = getUserPreferredGenerationModels(userId).imageToVideo;
+      return officialConfiguredModel(
+        preference.provider === LUMI_OFFICIAL_PROVIDER_ID ? preference.model : '',
+        role,
+        DEFAULT_IMAGE_TO_VIDEO_MODELS[LUMI_OFFICIAL_PROVIDER_ID],
       );
     }
     case 'rerank': {
@@ -422,6 +451,35 @@ function restoreModelConfigurationSnapshot(
   } catch {}
 }
 
+function selectOfficialRoleModel(
+  role: LumiModelRole,
+  availableModels: string[],
+  configuredModel: string,
+): { model: string; selectionReason: NonNullable<OfficialModelConfigurationRoleReceipt['selectionReason']> } | null {
+  const recommended = LUMI_OFFICIAL_DEFAULT_MODELS[role];
+  // These lanes have deliberately different model families or latency goals;
+  // one-click adaptation must establish the recommended split even when an
+  // older build persisted a still-live but semantically wrong selection.
+  const recommendedFirst = role === 'vision'
+    || role === 'world'
+    || role === 'image_edit'
+    || role === 'video_generation'
+    || role === 'image_to_video';
+  const ordered = recommendedFirst
+    ? [recommended, configuredModel]
+    : [configuredModel, recommended];
+  for (const candidate of ordered) {
+    if (!candidate || !availableModels.includes(candidate)) continue;
+    return {
+      model: candidate,
+      selectionReason: candidate === recommended ? 'recommended_default' : 'preserved_live_selection',
+    };
+  }
+  return availableModels[0]
+    ? { model: availableModels[0], selectionReason: 'catalog_fallback' }
+    : null;
+}
+
 /**
  * Apply the configured Lumi official API to every model role in one atomic
  * server-side operation. The role manifest is intentionally authoritative:
@@ -459,6 +517,25 @@ export async function applyLumiOfficialModelConfiguration(
   const applied: OfficialModelConfigurationRoleReceipt[] = [];
   const skipped: OfficialModelConfigurationRoleReceipt[] = [];
 
+  // Resolve every supported role before the first write. This prevents a
+  // missing late role (for example I2V) from creating a transient half-applied
+  // configuration that then depends on best-effort rollback.
+  const planned = new Map<LumiModelRole, ReturnType<typeof selectOfficialRoleModel>>();
+  for (const role of LUMI_MODEL_ROLES) {
+    if (!LUMI_OFFICIAL_ROLE_CAPABILITIES[role]) continue;
+    const roleModels = catalog.byRole[role] || [];
+    const availableModels = role === 'image_to_video'
+      ? roleModels.filter(modelId => /(?:^|[\/_-])i2v(?:[\/_-]|$)|image[-_]?to[-_]?video/i.test(modelId))
+      : role === 'video_generation'
+        ? roleModels.filter(modelId => !/(?:^|[\/_-])i2v(?:[\/_-]|$)|image[-_]?to[-_]?video/i.test(modelId))
+        : roleModels;
+    const selection = selectOfficialRoleModel(role, availableModels, officialModelForRole(uid, role));
+    if (!selection) {
+      throw new Error(`Lumi Official API catalog has no compatible model for ${role}. No role configuration was changed.`);
+    }
+    planned.set(role, selection);
+  }
+
   for (const role of LUMI_MODEL_ROLES) {
     if (!LUMI_OFFICIAL_ROLE_CAPABILITIES[role]) {
       const existing = current[role];
@@ -472,17 +549,8 @@ export async function applyLumiOfficialModelConfiguration(
       continue;
     }
 
-    const availableModels = catalog.byRole[role] || [];
-    const configuredModel = officialModelForRole(uid, role);
-    const model = availableModels.includes(configuredModel)
-      ? configuredModel
-      : availableModels.includes(LUMI_OFFICIAL_DEFAULT_MODELS[role])
-        ? LUMI_OFFICIAL_DEFAULT_MODELS[role]
-        : availableModels[0];
-    if (!model) {
-      restoreModelConfigurationSnapshot(uid, snapshot);
-      throw new Error(`Lumi Official API catalog has no compatible model for ${role}. No role configuration was changed.`);
-    }
+    const selection = planned.get(role)!;
+    const model = selection!.model;
     try {
       const update: ModelConfigurationUpdate = {
         role,
@@ -495,6 +563,7 @@ export async function applyLumiOfficialModelConfiguration(
         provider: LUMI_OFFICIAL_PROVIDER_ID,
         model,
         status: 'applied',
+        selectionReason: selection!.selectionReason,
       });
     } catch (error: any) {
       restoreModelConfigurationSnapshot(uid, snapshot);
@@ -565,7 +634,12 @@ export function updateLumiModelConfiguration(userId: string, input: ModelConfigu
       model,
       models: provider === 'inherit_vision' ? current.models : { ...current.models, [provider]: model },
     });
-  } else if (input.role === 'image_generation' || input.role === 'video_generation') {
+  } else if (
+    input.role === 'image_generation'
+    || input.role === 'image_edit'
+    || input.role === 'video_generation'
+    || input.role === 'image_to_video'
+  ) {
     const current = getUserPreferredGenerationModels(uid);
     if (input.role === 'image_generation') {
       const provider = input.provider || current.image.provider;
@@ -578,11 +652,27 @@ export function updateLumiModelConfiguration(userId: string, input: ModelConfigu
         model,
         models: provider === 'auto' ? current.image.models : { ...current.image.models, [provider]: model },
       };
-    } else {
+    } else if (input.role === 'image_edit') {
+      const provider = input.provider || current.imageEdit.provider;
+      if (!isImageEditProvider(provider)) throw new Error(`Unsupported image edit provider: ${provider}`);
+      const model = cleanModel(input.model) || current.imageEdit.models[provider] || DEFAULT_IMAGE_EDIT_MODELS[provider];
+      current.imageEdit = { provider, model, models: { ...current.imageEdit.models, [provider]: model } };
+    } else if (input.role === 'video_generation') {
       const provider = input.provider || current.video.provider;
       if (!isVideoGenerationProvider(provider)) throw new Error(`Unsupported video provider: ${provider}`);
       const model = cleanModel(input.model) || current.video.models[provider] || DEFAULT_VIDEO_GENERATION_MODELS[provider];
       current.video = { provider, model, models: { ...current.video.models, [provider]: model } };
+    } else {
+      const provider = input.provider || current.imageToVideo.provider;
+      if (!isImageToVideoProvider(provider)) throw new Error(`Unsupported image-to-video provider: ${provider}`);
+      const model = cleanModel(input.model)
+        || current.imageToVideo.models[provider]
+        || DEFAULT_IMAGE_TO_VIDEO_MODELS[provider];
+      current.imageToVideo = {
+        provider,
+        model,
+        models: { ...current.imageToVideo.models, [provider]: model },
+      };
     }
     upsertUserPreferredGenerationModels(uid, current);
   } else if (input.role === 'embedding' || input.role === 'rerank') {
@@ -840,6 +930,30 @@ export async function testLumiModelConfiguration(
       latencyMs: Date.now() - startedAt,
       verification: 'live_model_call',
     };
+  }
+  if (
+    role === 'image_generation'
+    || role === 'image_edit'
+    || role === 'video_generation'
+    || role === 'image_to_video'
+  ) {
+    if (config.configured !== true) throw new Error(`${String(config.provider)} is not configured`);
+    if (config.provider === LUMI_OFFICIAL_PROVIDER_ID) {
+      const catalog = await listOfficialApiModels();
+      const available = catalog.byRole[role] || [];
+      if (!available.includes(String(config.model))) {
+        throw new Error(`The configured Lumi Official API model is not live for ${role}.`);
+      }
+      return {
+        ok: true,
+        provider: config.provider,
+        model: config.model,
+        verification: 'live_catalog_model_and_adapter',
+        artifactGenerated: false,
+        note: 'Catalog availability is verified; use the corresponding media tool for a paid artifact test.',
+        latencyMs: Date.now() - startedAt,
+      };
+    }
   }
   if (role === 'speech_recognition' || role === 'speech_synthesis') {
     const effectiveProvider = String(config.effectiveProvider || '');

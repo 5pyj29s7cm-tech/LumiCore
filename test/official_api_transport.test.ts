@@ -63,6 +63,9 @@ describe('official API transport', () => {
         data: [
           { id: 'aliyun/qwen-plus', capability: 'chat', endpoint: '/chat/completions', owned_by: 'Qwen' },
           { id: 'aliyun/qwen3-vl-plus', capability: 'multimodal_chat', endpoint: '/chat/completions' },
+          { id: 'huawei_maas/qwen-image-edit-2509', capability: 'image_edit', endpoint: '/images/generations' },
+          { id: 'huawei_maas/Wan2.2-T2V-A14B', capability: 'video_generation', endpoint: '/video/generations' },
+          { id: 'huawei_maas/Wan2.2-I2V-A14B', capability: 'video_generation', endpoint: '/video/generations' },
           { id: 'aliyun/qwen-audio-3.0-asr-flash-streaming', capability: 'speech_recognition', endpoint: '/api-ws/v1/inference' },
           { id: 'invalid-unqualified-model', capability: 'chat' },
         ],
@@ -72,10 +75,16 @@ describe('official API transport', () => {
       'aliyun/qwen-audio-3.0-asr-flash-streaming',
       'aliyun/qwen-plus',
       'aliyun/qwen3-vl-plus',
+      'huawei_maas/qwen-image-edit-2509',
+      'huawei_maas/Wan2.2-I2V-A14B',
+      'huawei_maas/Wan2.2-T2V-A14B',
     ]);
     expect(catalog.byRole.reasoning).toEqual(['aliyun/qwen-plus']);
     expect(catalog.byRole.vision).toEqual(['aliyun/qwen3-vl-plus']);
     expect(catalog.byRole.world).toEqual(['aliyun/qwen3-vl-plus']);
+    expect(catalog.byRole.image_edit).toEqual(['huawei_maas/qwen-image-edit-2509']);
+    expect(catalog.byRole.video_generation).toEqual(['huawei_maas/Wan2.2-T2V-A14B']);
+    expect(catalog.byRole.image_to_video).toEqual(['huawei_maas/Wan2.2-I2V-A14B']);
     expect(catalog.byRole.speech_recognition).toEqual(['aliyun/qwen-audio-3.0-asr-flash-streaming']);
   });
 

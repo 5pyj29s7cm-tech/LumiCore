@@ -2774,10 +2774,10 @@ function hasCreatedArtifact(records: ToolExecutionRecord[], namePattern: RegExp)
 
 function hasActualMediaEvidence(records: ToolExecutionRecord[], kind: 'image' | 'video' | 'either'): boolean {
   const namePattern = kind === 'image'
-    ? /^(?:generate_image(?:_dalle)?|edit_image|mcp_.+_(?:generate|edit)_image)$/i
+    ? /^(?:generate_image(?:_dalle)?|edit_image|ai_edit_image|mcp_.+_(?:generate|edit)_image)$/i
     : kind === 'video'
       ? /^(?:generate_video|mcp_.+_(?:generate|create)_video)$/i
-      : /^(?:generate_image(?:_dalle)?|edit_image|generate_video|mcp_.+_(?:generate|edit|create)_(?:image|video))$/i;
+      : /^(?:generate_image(?:_dalle)?|edit_image|ai_edit_image|generate_video|mcp_.+_(?:generate|edit|create)_(?:image|video))$/i;
   return records.some(record => {
     if (!namePattern.test(record.name)) return false;
     const result = String(record.result || '');

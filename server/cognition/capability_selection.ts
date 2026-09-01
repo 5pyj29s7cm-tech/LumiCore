@@ -524,7 +524,7 @@ function selectLane(input: LumiCapabilitySelectionInput): Pick<LumiCapabilitySel
     };
   }
 
-  if (routeHas(input, 'cad_design') || routeHasTool(input, /^(cad_|floorplan_|generate_image|edit_image)/)) {
+  if (routeHas(input, 'cad_design') || routeHasTool(input, /^(cad_|floorplan_|generate_image|edit_image|ai_edit_image)/)) {
     return {
       lane: 'design_cad',
       primary: 'design/CAD production',

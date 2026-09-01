@@ -168,7 +168,7 @@ const CAPABILITY_RULES: CapabilityRule[] = [
     id: 'video.content_publish_pack',
     label: '视频内容生成与发布准备',
     kind: 'automation',
-    tools: ['mcp_content-ops_short_video_script', 'mcp_content-ops_content_topic_pipeline', 'mcp_content-ops_content_calendar_builder', 'generate_image', 'generate_video', 'create_docx', 'browser_open_task', 'work_product_verify'],
+    tools: ['mcp_content-ops_short_video_script', 'mcp_content-ops_content_topic_pipeline', 'mcp_content-ops_content_calendar_builder', 'generate_image', 'ai_edit_image', 'generate_video', 'create_docx', 'browser_open_task', 'work_product_verify'],
     confirmationRequired: ['正式发布、账号操作、投放预算前需要确认'],
     keywords: ['视频', '脚本', '标题', '封面', '字幕', '剪辑', '发布', '口播'],
     categoryHints: ['store', 'video_publish', 'account'],

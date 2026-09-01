@@ -22,6 +22,9 @@ export interface ResolvedWorldModel {
 
 export const DEFAULT_WORLD_MODELS: Record<VisionProvider, string> = {
   ...DEFAULT_VISION_MODELS,
+  // Desktop action prediction benefits more from latency than the primary
+  // deep-inspection vision lane. Keep the roles independently selectable.
+  relay: 'aliyun/qwen3-vl-flash',
 };
 
 const WORLD_PROVIDERS = new Set<WorldModelProvider>([

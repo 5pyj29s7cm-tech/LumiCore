@@ -5,17 +5,20 @@ import { ToolRegistry } from '../registry';
 import type { ToolContext } from '../types';
 import { loadKeys } from '../../config/keys';
 import {
+  DEFAULT_IMAGE_EDIT_MODELS,
   DEFAULT_IMAGE_GENERATION_MODELS,
   getUserPreferredGenerationModels,
 } from '../../llm/generation_preferences';
 import {
   isOfficialApiConfigured,
+  listOfficialApiModels,
   officialApiModel,
   officialApiPath,
   officialApiRequest,
 } from '../../llm/official_api';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 import { getGeneratedOutputDir } from '../../config/data_path';
+import { downloadPublicMedia } from '../media_artifact';
 
 const OUTPUT_DIR = getGeneratedOutputDir();
 const MAX_GENERATED_IMAGE_BYTES = 25 * 1024 * 1024;
@@ -203,13 +206,48 @@ function persistOfficialImage(value: unknown, index: number): { value: string; a
     if (Math.ceil(normalized.length * 3 / 4) > MAX_GENERATED_IMAGE_BYTES) {
       throw new Error(`Generated image exceeds the ${MAX_GENERATED_IMAGE_BYTES} byte limit.`);
     }
-    const extension = dataUrl?.[1]?.includes('jpeg') || dataUrl?.[1]?.includes('jpg') ? 'jpg' : 'png';
+    const mime = String(dataUrl?.[1] || '').toLowerCase();
+    const extension = mime.includes('jpeg') || mime.includes('jpg') ? 'jpg'
+      : mime.includes('webp') ? 'webp'
+        : mime.includes('bmp') ? 'bmp'
+          : mime.includes('tiff') ? 'tiff'
+            : 'png';
     const outputPath = path.join(ensureOutputDir(), `official_image_${Date.now()}_${index + 1}.${extension}`);
     fs.writeFileSync(outputPath, Buffer.from(normalized, 'base64'));
     return { value: outputPath, artifact: { type: 'image', path: outputPath } };
   }
   if (/^https?:\/\//i.test(raw)) return { value: raw, artifact: { type: 'image_url', url: raw } };
   return null;
+}
+
+function officialImageCandidates(body: any): any[] {
+  return Array.isArray(body?.data) ? body.data
+    : Array.isArray(body?.images) ? body.images
+      : Array.isArray(body?.output?.images) ? body.output.images
+        : (body?.output && typeof body.output === 'object' ? [body.output]
+          : (body?.url || body?.image_url || body?.b64_json || body?.base64 ? [body] : []));
+}
+
+function officialImageCandidateValue(item: any): unknown {
+  const imageUrl = typeof item?.image_url === 'object' ? item.image_url?.url : item?.image_url;
+  return item?.url || imageUrl || item?.b64_json || item?.base64 || item;
+}
+
+async function persistOfficialEditedImage(value: unknown, index: number): Promise<string> {
+  const resolved = persistOfficialImage(value, index);
+  if (!resolved) throw new Error('Lumi Official API image edit returned an unreadable image result.');
+  if (resolved.artifact.path) return resolved.artifact.path;
+  if (!resolved.artifact.url) throw new Error('Lumi Official API image edit returned no verifiable image artifact.');
+  const downloaded = await downloadPublicMedia(resolved.artifact.url, {
+    maxBytes: MAX_GENERATED_IMAGE_BYTES,
+    timeoutMs: 90_000,
+  });
+  const extension = downloaded.contentType.includes('jpeg') || downloaded.contentType.includes('jpg') ? 'jpg'
+    : downloaded.contentType.includes('webp') ? 'webp'
+      : 'png';
+  const outputPath = path.join(ensureOutputDir(), `official_image_edit_${Date.now()}_${index + 1}.${extension}`);
+  fs.writeFileSync(outputPath, downloaded.bytes);
+  return outputPath;
 }
 
 /** OpenAI-compatible image generation through the Lumi official gateway. */
@@ -230,16 +268,11 @@ async function generateImageOfficial(args: Record<string, any>, selectedModel: s
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  const candidates = Array.isArray(body?.data) ? body.data
-    : Array.isArray(body?.images) ? body.images
-      : Array.isArray(body?.output?.images) ? body.output.images
-        : (body?.output && typeof body.output === 'object' ? [body.output]
-          : (body?.url || body?.image_url || body?.b64_json || body?.base64 ? [body] : []));
+  const candidates = officialImageCandidates(body);
   const images: string[] = [];
   const artifacts: Array<{ type: string; path?: string; url?: string }> = [];
   candidates.forEach((item: any, index: number) => {
-    const imageUrl = typeof item?.image_url === 'object' ? item.image_url?.url : item?.image_url;
-    const resolved = persistOfficialImage(item?.url || imageUrl || item?.b64_json || item?.base64 || item, index);
+    const resolved = persistOfficialImage(officialImageCandidateValue(item), index);
     if (resolved) {
       images.push(resolved.value);
       artifacts.push(resolved.artifact);
@@ -304,6 +337,97 @@ async function generateImage(args: Record<string, any>, context?: ToolContext): 
   }
   const detail = failures.length > 0 ? ' Attempts: ' + failures.join('; ') : '';
   throw new Error('No working image generation provider is available. Configure Lumi Official API, OpenAI, DashScope, or SiliconFlow in Settings, or select a configured provider in Settings > Generative Models.' + detail);
+}
+
+function imageUploadPart(filePath: string, label: string): { dataUrl: string; byteLength: number } {
+  if (!path.isAbsolute(filePath) || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+    throw new Error(`${label} must be an existing absolute image path.`);
+  }
+  const extension = path.extname(filePath).toLowerCase();
+  const mimeType = extension === '.png' ? 'image/png'
+    : extension === '.jpg' || extension === '.jpeg' ? 'image/jpeg'
+      : extension === '.webp' ? 'image/webp'
+        : extension === '.bmp' ? 'image/bmp'
+          : extension === '.tif' || extension === '.tiff' ? 'image/tiff'
+        : '';
+  if (!mimeType) throw new Error(`${label} must be a PNG, JPEG, WebP, BMP, or TIFF image.`);
+  const buffer = fs.readFileSync(filePath);
+  if (buffer.length > MAX_GENERATED_IMAGE_BYTES) {
+    throw new Error(`${label} exceeds the ${MAX_GENERATED_IMAGE_BYTES} byte limit.`);
+  }
+  return { dataUrl: `data:${mimeType};base64,${buffer.toString('base64')}`, byteLength: buffer.length };
+}
+
+async function aiEditImageOfficial(args: Record<string, any>, context?: ToolContext): Promise<string> {
+  const prompt = String(args.prompt || '').trim();
+  if (!prompt) throw new Error('prompt is required');
+  if (!isOfficialApiConfigured()) {
+    throw new Error('Lumi Official API is not configured. Configure it in Settings > AI Providers > Official.');
+  }
+  const preference = getUserPreferredGenerationModels(context?.userId || 'anonymous').imageEdit;
+  if (preference.provider !== 'relay') throw new Error(`Unsupported AI image edit provider: ${preference.provider}`);
+  const model = officialApiModel(
+    'RELAY_IMAGE_EDIT_MODEL',
+    String(args.model || preference.model || preference.models.relay || DEFAULT_IMAGE_EDIT_MODELS.relay),
+  );
+  const catalog = await listOfficialApiModels();
+  if (!(catalog.byRole.image_edit || []).includes(model)) {
+    throw new Error(`Lumi Official API catalog does not currently expose ${model} as an image editing model.`);
+  }
+  const inputPaths = [
+    String(args.filePath || '').trim(),
+    ...(Array.isArray(args.referencePaths) ? args.referencePaths.map((value: unknown) => String(value || '').trim()) : []),
+  ].filter(Boolean).slice(0, 2);
+  if (inputPaths.length === 0) throw new Error('filePath is required');
+
+  const parts = inputPaths.map((inputPath, index) => imageUploadPart(
+    inputPath,
+    index === 0 ? 'filePath' : `referencePaths[${index - 1}]`,
+  ));
+  const totalInputBytes = parts.reduce((sum, part) => sum + part.byteLength, 0);
+  if (totalInputBytes > 20 * 1024 * 1024) {
+    throw new Error('Qwen image edit input images must total no more than 20 MB.');
+  }
+  const payload: Record<string, unknown> = {
+    model,
+    prompt,
+    image: parts.map(part => part.dataUrl).join(','),
+    ...(args.size ? { size: String(args.size).replace('*', 'x') } : {}),
+    ...(Number.isFinite(Number(args.seed)) ? { seed: Math.max(0, Math.min(2_147_483_648, Math.trunc(Number(args.seed)))) } : {}),
+    watermark: args.watermark === true,
+  };
+  const requestBody = JSON.stringify(payload);
+  if (Buffer.byteLength(requestBody, 'utf8') > 30 * 1024 * 1024) {
+    throw new Error('Qwen image edit request body must not exceed 30 MB.');
+  }
+
+  const { body } = await officialApiRequest<any>(
+    officialApiPath(['RELAY_IMAGE_EDIT_PATH', 'RELAY_IMAGE_PATH'], '/images/generations'),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: requestBody,
+      timeoutMs: 120_000,
+    },
+  );
+  const candidates = officialImageCandidates(body);
+  if (candidates.length === 0) throw new Error('Lumi Official API image edit returned no image data.');
+  const outputPaths = await Promise.all(
+    candidates.map((item: any, index: number) => persistOfficialEditedImage(officialImageCandidateValue(item), index)),
+  );
+  return JSON.stringify({
+    ok: true,
+    status: 'edited',
+    success: true,
+    provider: 'relay',
+    model,
+    prompt,
+    inputPaths,
+    outputPath: outputPaths[0],
+    outputPaths,
+    artifacts: outputPaths.map(outputPath => ({ type: 'image', path: outputPath })),
+    verification: 'live_provider_result_saved_locally',
+  });
 }
 
 async function editImage(args: Record<string, any>): Promise<string> {
@@ -474,6 +598,55 @@ export function registerImageTools(registry: ToolRegistry): void {
       id: 'media.image.generate.openai',
       operation: 'create',
       limitations: ['A remote image URL may expire and must not be reported as a saved local artifact.'],
+    }),
+  });
+
+  registry.register({
+    name: 'ai_edit_image',
+    description: 'Generatively edit one to three local images with the separately configured Lumi Official API image-edit model. Use this for semantic changes such as replacing objects, changing backgrounds, preserving a product/person across compositions, or editing text; use edit_image for deterministic crop/resize/rotate operations.',
+    parameters: {
+      type: 'object',
+      properties: {
+        filePath: { type: 'string', description: 'Absolute path to the primary PNG, JPEG, or WebP image.' },
+        referencePaths: { type: 'array', items: { type: 'string' }, description: 'Optional second local reference image. Qwen Image Edit 2509 accepts one or two images.' },
+        prompt: { type: 'string', description: 'Describe the required visual edit and what must remain consistent.' },
+        size: { type: 'string', description: 'Optional output size such as 1024x1024.' },
+        seed: { type: 'number', description: 'Optional deterministic seed from 0 to 2147483648.' },
+        watermark: { type: 'boolean', description: 'Whether the provider should add its watermark. Defaults to false.' },
+        model: { type: 'string', description: 'Optional explicit catalog model override. Otherwise the configured image-edit role is used.' },
+      },
+      required: ['filePath', 'prompt'],
+    },
+    handler: (args, context) => aiEditImageOfficial(args, context),
+    permission: 'user',
+    securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'media.image.ai-edit',
+      family: 'media-editing',
+      lane: 'media',
+      operation: 'create',
+      risk: 'medium',
+      sideEffects: [
+        { type: 'external_state_change', scope: 'configured image editing provider request', reversible: false },
+        { type: 'local_write', scope: 'verified edited image outputs in Lumi output directory', reversible: true },
+      ],
+      verification: {
+        strategy: 'artifact',
+        required: true,
+        requiredFields: ['ok', 'status', 'provider', 'model', 'inputPaths', 'outputPath', 'artifacts', 'verification'],
+        requiredValues: { ok: true, provider: 'relay' },
+        successStatuses: ['edited'],
+        failureStatuses: ['failed', 'timed_out'],
+        requiredArtifacts: ['outputPath'],
+        successSignals: ['provider returned edited image data and Lumi saved a non-empty local image artifact'],
+        limitations: ['Artifact verification does not by itself prove subjective edit quality or identity consistency.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'media.image.ai-edit',
+      operation: 'create',
+      subjectArgument: 'filePath',
+      limitations: ['The receipt proves the provider result was saved locally, not that the edit is aesthetically acceptable.'],
     }),
   });
 

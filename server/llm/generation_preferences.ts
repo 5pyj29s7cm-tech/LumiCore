@@ -1,7 +1,9 @@
 import { readDB, writeDB } from '../../db_layer';
 
 export type ImageGenerationProvider = 'auto' | 'openai' | 'qwen' | 'siliconflow' | 'relay';
+export type ImageEditProvider = 'relay';
 export type VideoGenerationProvider = 'qwen' | 'minimax' | 'siliconflow' | 'openai' | 'relay';
+export type ImageToVideoProvider = VideoGenerationProvider;
 
 export interface GenerationModelSelection<TProvider extends string> {
   provider: TProvider;
@@ -11,7 +13,9 @@ export interface GenerationModelSelection<TProvider extends string> {
 
 export interface GenerationModelPrefs {
   image: GenerationModelSelection<ImageGenerationProvider>;
+  imageEdit: GenerationModelSelection<ImageEditProvider>;
   video: GenerationModelSelection<VideoGenerationProvider>;
+  imageToVideo: GenerationModelSelection<ImageToVideoProvider>;
 }
 
 export const DEFAULT_IMAGE_GENERATION_MODELS: Record<Exclude<ImageGenerationProvider, 'auto'>, string> = {
@@ -19,6 +23,10 @@ export const DEFAULT_IMAGE_GENERATION_MODELS: Record<Exclude<ImageGenerationProv
   qwen: 'wan2.2-t2i-plus',
   siliconflow: 'Kwai-Kolors/Kolors',
   relay: 'huawei_maas/qwen-image',
+};
+
+export const DEFAULT_IMAGE_EDIT_MODELS: Record<ImageEditProvider, string> = {
+  relay: 'huawei_maas/qwen-image-edit-2509',
 };
 
 export const DEFAULT_VIDEO_GENERATION_MODELS: Record<VideoGenerationProvider, string> = {
@@ -29,7 +37,19 @@ export const DEFAULT_VIDEO_GENERATION_MODELS: Record<VideoGenerationProvider, st
   relay: 'huawei_maas/Wan2.2-T2V-A14B',
 };
 
+export const DEFAULT_IMAGE_TO_VIDEO_MODELS: Record<ImageToVideoProvider, string> = {
+  // Existing direct providers keep their current video model unless the user
+  // explicitly selects a provider-specific I2V model. The Lumi official route
+  // has a dedicated, catalog-verifiable I2V default.
+  qwen: DEFAULT_VIDEO_GENERATION_MODELS.qwen,
+  minimax: DEFAULT_VIDEO_GENERATION_MODELS.minimax,
+  siliconflow: 'Wan-AI/Wan2.2-I2V-A14B',
+  openai: DEFAULT_VIDEO_GENERATION_MODELS.openai,
+  relay: 'huawei_maas/Wan2.2-I2V-A14B',
+};
+
 const IMAGE_PROVIDERS = new Set<ImageGenerationProvider>(['auto', 'openai', 'qwen', 'siliconflow', 'relay']);
+const IMAGE_EDIT_PROVIDERS = new Set<ImageEditProvider>(['relay']);
 const VIDEO_PROVIDERS = new Set<VideoGenerationProvider>(['qwen', 'minimax', 'siliconflow', 'openai', 'relay']);
 
 function parseSetting(userId: string): any {
@@ -58,6 +78,14 @@ export function normalizeGenerationModelPrefs(raw: any): GenerationModelPrefs {
     ? String(raw?.image?.model || '').trim()
     : imageModels[imageProvider] || String(raw?.image?.model || '').trim() || DEFAULT_IMAGE_GENERATION_MODELS[imageProvider];
 
+  const imageEditModels = normalizeModels(raw?.imageEdit?.models);
+  const imageEditProvider = IMAGE_EDIT_PROVIDERS.has(raw?.imageEdit?.provider)
+    ? raw.imageEdit.provider as ImageEditProvider
+    : 'relay';
+  const imageEditModel = imageEditModels[imageEditProvider]
+    || String(raw?.imageEdit?.model || '').trim()
+    || DEFAULT_IMAGE_EDIT_MODELS[imageEditProvider];
+
   const videoModels = normalizeModels(raw?.video?.models);
   const videoProvider = VIDEO_PROVIDERS.has(raw?.video?.provider)
     ? raw.video.provider as VideoGenerationProvider
@@ -65,6 +93,14 @@ export function normalizeGenerationModelPrefs(raw: any): GenerationModelPrefs {
   const videoModel = videoModels[videoProvider]
     || String(raw?.video?.model || '').trim()
     || DEFAULT_VIDEO_GENERATION_MODELS[videoProvider];
+
+  const imageToVideoModels = normalizeModels(raw?.imageToVideo?.models);
+  const imageToVideoProvider = VIDEO_PROVIDERS.has(raw?.imageToVideo?.provider)
+    ? raw.imageToVideo.provider as ImageToVideoProvider
+    : 'relay';
+  const imageToVideoModel = imageToVideoModels[imageToVideoProvider]
+    || String(raw?.imageToVideo?.model || '').trim()
+    || DEFAULT_IMAGE_TO_VIDEO_MODELS[imageToVideoProvider];
 
   return {
     image: {
@@ -75,12 +111,28 @@ export function normalizeGenerationModelPrefs(raw: any): GenerationModelPrefs {
         ...imageModels,
       },
     },
+    imageEdit: {
+      provider: imageEditProvider,
+      model: imageEditModel,
+      models: {
+        ...DEFAULT_IMAGE_EDIT_MODELS,
+        ...imageEditModels,
+      },
+    },
     video: {
       provider: videoProvider,
       model: videoModel,
       models: {
         ...DEFAULT_VIDEO_GENERATION_MODELS,
         ...videoModels,
+      },
+    },
+    imageToVideo: {
+      provider: imageToVideoProvider,
+      model: imageToVideoModel,
+      models: {
+        ...DEFAULT_IMAGE_TO_VIDEO_MODELS,
+        ...imageToVideoModels,
       },
     },
   };
@@ -110,6 +162,14 @@ export function isImageGenerationProvider(value: unknown): value is ImageGenerat
   return IMAGE_PROVIDERS.has(value as ImageGenerationProvider);
 }
 
+export function isImageEditProvider(value: unknown): value is ImageEditProvider {
+  return IMAGE_EDIT_PROVIDERS.has(value as ImageEditProvider);
+}
+
 export function isVideoGenerationProvider(value: unknown): value is VideoGenerationProvider {
   return VIDEO_PROVIDERS.has(value as VideoGenerationProvider);
+}
+
+export function isImageToVideoProvider(value: unknown): value is ImageToVideoProvider {
+  return VIDEO_PROVIDERS.has(value as ImageToVideoProvider);
 }

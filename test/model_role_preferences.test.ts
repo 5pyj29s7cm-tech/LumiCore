@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_IMAGE_EDIT_MODELS,
   DEFAULT_IMAGE_GENERATION_MODELS,
+  DEFAULT_IMAGE_TO_VIDEO_MODELS,
   DEFAULT_VIDEO_GENERATION_MODELS,
   normalizeGenerationModelPrefs,
 } from '../server/llm/generation_preferences';
@@ -16,9 +18,17 @@ describe('specialized model role preferences', () => {
 
     expect(prefs.image.provider).toBe('auto');
     expect(prefs.image.models).toMatchObject(DEFAULT_IMAGE_GENERATION_MODELS);
+    expect(prefs.imageEdit).toMatchObject({
+      provider: 'relay',
+      model: DEFAULT_IMAGE_EDIT_MODELS.relay,
+    });
     expect(prefs.video).toMatchObject({
       provider: 'qwen',
       model: DEFAULT_VIDEO_GENERATION_MODELS.qwen,
+    });
+    expect(prefs.imageToVideo).toMatchObject({
+      provider: 'relay',
+      model: DEFAULT_IMAGE_TO_VIDEO_MODELS.relay,
     });
   });
 
@@ -73,6 +83,23 @@ describe('specialized model role preferences', () => {
     expect(prefs.video.model).toBe('MiniMax-Hailuo-02');
     expect(prefs.video.models.openai).toBe('sora-2-pro');
     expect(prefs.video.models.siliconflow).toBe('Wan-AI/Wan2.1-T2V-14B-720P');
+  });
+
+  it('does not migrate a legacy text-to-video selection into the image-to-video lane', () => {
+    const prefs = normalizeGenerationModelPrefs({
+      image: { provider: 'auto' },
+      video: {
+        provider: 'relay',
+        model: 'huawei_maas/Wan2.2-T2V-A14B',
+        models: { relay: 'huawei_maas/Wan2.2-T2V-A14B' },
+      },
+    });
+
+    expect(prefs.video.model).toBe('huawei_maas/Wan2.2-T2V-A14B');
+    expect(prefs.imageToVideo).toMatchObject({
+      provider: 'relay',
+      model: 'huawei_maas/Wan2.2-I2V-A14B',
+    });
   });
 
   it('defaults the World Model to Vision inheritance', () => {

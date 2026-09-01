@@ -1049,11 +1049,16 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
     } catch (err: any) {
       const message = sanitizedProviderError(err);
       const notConfigured = /not configured|RELAY_API_KEY|RELAY_BASE_URL/i.test(message);
-      return res.status(notConfigured ? 400 : 500).json({
+      const catalogIncomplete = /catalog has no compatible model|empty model catalog/i.test(message);
+      return res.status(notConfigured ? 400 : catalogIncomplete ? 409 : 500).json({
         ok: false,
         provider: 'relay',
         configured: isLumiOfficialApiConfigured(uid),
-        ...(notConfigured ? { code: 'OFFICIAL_API_NOT_CONFIGURED' } : {}),
+        ...(notConfigured
+          ? { code: 'OFFICIAL_API_NOT_CONFIGURED' }
+          : catalogIncomplete
+            ? { code: 'OFFICIAL_API_CATALOG_INCOMPLETE' }
+            : {}),
         applied: [],
         skipped: [],
         failed: [],

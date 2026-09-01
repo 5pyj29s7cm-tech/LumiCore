@@ -549,6 +549,7 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
       'mcp_content-ops_short_video_script',
       'mcp_content-ops_content_calendar',
       'generate_image',
+      'ai_edit_image',
       'generate_video',
       'web_login_run',
       'mcp_playwright_browser_snapshot',

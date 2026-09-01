@@ -57,7 +57,7 @@
   },
   "settings.lumi-official-capability-supported.b2c3d4e5f6": {
     "en": "All Lumi model roles are supported after the official endpoint is configured in AI Providers → Official.",
-    "zh": "在“AI 服务商 → 官方”配置 Lumi 官方端点后，九类模型角色均可选择；实际可用性仍以接口健康检查为准。"
+    "zh": "在“AI 服务商 → 官方”配置 Lumi 官方端点后，十一类模型角色均可选择；实际可用性仍以接口健康检查为准。"
   },
   "settings.lumi-official-capability-unavailable.c3d4e5f6a7": {
     "en": "No Lumi model role is unavailable in this build.",
@@ -68,8 +68,8 @@
     "zh": "一键适配 Lumi 官方 API"
   },
   "settings.lumi-official-apply-description.a2b3c4d5e6": {
-    "en": "Apply the configured official endpoint to all nine roles: reasoning, vision, world actions, image/video generation, embeddings, reranking, speech recognition, and speech synthesis.",
-    "zh": "将已配置的官方接口应用到九类角色：推理、视觉、世界操作、图像生成、视频生成、嵌入、重排、语音识别和语音合成。"
+    "en": "Apply the configured official endpoint to all eleven roles: reasoning, vision, world actions, image generation/editing, text/image-to-video, embeddings, reranking, speech recognition, and speech synthesis.",
+    "zh": "将已配置的官方接口应用到十一类角色：推理、视觉、世界操作、图像生成、图像编辑、文生视频、图生视频、嵌入、重排、语音识别和语音合成。"
   },
   "settings.lumi-official-apply-not-configured.b3c4d5e6f7": {
     "en": "Configure and save the official API key and base URL first.",
@@ -539,6 +539,14 @@
     "en": "Creates and edits visual assets",
     "zh": "用于生成和编辑视觉内容"
   },
+  "settings.image-edit-model.4a3f9e82c1": {
+    "en": "AI image editing",
+    "zh": "AI 图像编辑模型"
+  },
+  "settings.image-edit-model-description.72bc0e11a4": {
+    "en": "Semantically edits one or two local images and saves the verified result locally",
+    "zh": "对一至两张本地图片进行语义编辑，并将已验证结果保存到本地"
+  },
   "settings.automatic-provider.58089561bd": {
     "en": "Automatic (configured providers)",
     "zh": "自动选择已配置服务商"
@@ -550,6 +558,14 @@
   "settings.video-generation-model-description.20aed0c099": {
     "en": "Creates motion and video assets",
     "zh": "用于生成动态影像和视频内容"
+  },
+  "settings.image-to-video-model.0b7da532f4": {
+    "en": "Image-to-video",
+    "zh": "图生视频模型"
+  },
+  "settings.image-to-video-model-description.c1e68f204d": {
+    "en": "Uses a verified reference image input instead of silently falling back to text-to-video",
+    "zh": "使用经过验证的参考图片输入，不会静默退化为文生视频"
   },
   "settings.save-model-roles.2f4ed87292": {
     "en": "Save model roles",

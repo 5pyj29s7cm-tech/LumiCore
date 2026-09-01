@@ -52,7 +52,10 @@ const OFFICIAL_MODEL_CAPABILITY_ROLES: Readonly<Record<string, readonly string[]
   chat: ['reasoning'],
   multimodal_chat: ['vision', 'world'],
   image_generation: ['image_generation'],
+  image_edit: ['image_edit'],
+  image_editing: ['image_edit'],
   video_generation: ['video_generation'],
+  image_to_video: ['image_to_video'],
   embedding: ['embedding'],
   rerank: ['rerank'],
   speech_recognition: ['speech_recognition'],
@@ -224,7 +227,12 @@ export async function listOfficialApiModels(
   models.sort((left, right) => left.id.localeCompare(right.id));
   const byRole: Record<string, string[]> = {};
   for (const model of models) {
-    for (const role of OFFICIAL_MODEL_CAPABILITY_ROLES[model.capability] || []) {
+    const roles = model.capability === 'video_generation'
+      ? (/(?:^|[\/_-])i2v(?:[\/_-]|$)|image[-_]?to[-_]?video/i.test(model.id)
+        ? ['image_to_video']
+        : ['video_generation'])
+      : OFFICIAL_MODEL_CAPABILITY_ROLES[model.capability] || [];
+    for (const role of roles) {
       (byRole[role] ||= []).push(model.id);
     }
   }
