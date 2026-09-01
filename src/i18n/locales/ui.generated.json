@@ -32,8 +32,8 @@
     "zh": "\u670d\u52a1\u5546"
   },
   "settings.lumi-official-service.9a4e2d7c10": {
-    "en": "Lumi Official API (official endpoint required)",
-    "zh": "Lumi \u5b98\u65b9 API\uff08\u9700\u5b98\u65b9\u7aef\u70b9\uff09"
+    "en": "Lumi Official API",
+    "zh": "Lumi \u5b98\u65b9 API"
   },
   "settings.lumi-official-service-description.2c8f6a1e05": {
     "en": "Use the documented Lumi/ModelDepot endpoint and keep the API key on the backend. The default endpoint is https://zhuan.huaczy.com/v1. It covers reasoning, vision, world actions, embeddings, reranking, image/video generation, and configurable speech adapters.",
@@ -52,8 +52,8 @@
     "zh": "\u5df2\u4ece\u5b98\u65b9\u7aef\u70b9\u540c\u6b65 {value0} \u4e2a\u6a21\u578b\uff0c\u8986\u76d6 {value1} \u7c7b LumiCore \u6a21\u578b\u804c\u8d23\u3002"
   },
   "settings.lumi-official-api-label.a1b2c3d4e5": {
-    "en": "Lumi Official API (endpoint required)",
-    "zh": "Lumi \u5b98\u65b9 API\uff08\u9700\u5b98\u65b9\u7aef\u70b9\uff09"
+    "en": "Lumi Official API",
+    "zh": "Lumi \u5b98\u65b9 API"
   },
   "settings.lumi-official-capability-supported.b2c3d4e5f6": {
     "en": "All Lumi model roles are supported after the official endpoint is configured in AI Providers → Official.",
