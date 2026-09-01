@@ -673,14 +673,14 @@ export async function runNLChainer(
   llmGetters: LlmGetters,
   onStep?: (step: number, total: number, description: string) => void,
 ): Promise<ChainerResult> {
-  const registeredTools = toolRegistry.getToolDeclarations();
+  const registeredTools = toolRegistry.getToolDeclarations({ context: config.context });
   const policyAllowedNames = new Set(filterChainerToolNamesByPolicy(
     registeredTools.map(tool => tool.function.name),
     config.context?.toolPolicy,
   ));
   const allTools = registeredTools.filter(tool => policyAllowedNames.has(tool.function.name));
   const routed = routeToolsForTurn(userTask, allTools, {
-    capabilityManifest: toolRegistry.getCapabilityManifest(config.context?.toolPolicy),
+    capabilityManifest: toolRegistry.getCapabilityManifest(config.context?.toolPolicy, { context: config.context }),
   });
 
   // The shared capability route is the only category/tool source. If no
@@ -692,7 +692,7 @@ export async function runNLChainer(
     availableDecls = allTools.filter(t => routedNames.has(t.function.name));
   } else {
     const relevantNames = new Set(
-      toolRegistry.findRelevant(userTask, { limit: 24 }).map(tool => tool.name),
+      toolRegistry.findRelevant(userTask, { limit: 24, context: config.context }).map(tool => tool.name),
     );
     const relevant = allTools.filter(tool => relevantNames.has(tool.function.name));
     if (relevant.length > 0) {

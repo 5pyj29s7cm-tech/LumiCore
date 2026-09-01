@@ -104,6 +104,16 @@ import { systemService } from '@/services/systemService';
 import { usePlatform } from '@/hooks/usePlatform';
 import { apiFetch } from '@/services/apiClient';
 import {
+  canUseExternalCapabilitiesForSurface,
+  createExternalCapabilityExecutionCorrelation,
+  executeExternalCapabilityAction,
+  fetchExternalCapabilities,
+  getDesktopExternalCapabilities,
+  type ExternalCapabilityAction,
+  type ExternalCapabilityExecutionCorrelation,
+  type ExternalCapabilityProjection,
+} from '@/services/externalCapabilities';
+import {
   canAccessOrganizationWorkspaceView,
   listOrganizationWorkspaceViewsForRole,
   normalizeOrganizationWorkspaceView,
@@ -122,6 +132,7 @@ import {
 import { queueOrganizationWorkspaceRoute } from '../lib/orgWorkspaceNavigation';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 import { desktopWorkflowCopy } from '../i18n/locales/desktopWorkflows';
+import { externalCapabilityCopy } from '../i18n/locales/externalCapabilities';
 import { chatAttachmentRequestMatchesScope, type ChatAttachmentRequest } from '@/lib/chatAttachmentReferences';
 import {
   getDesktopDockPositionClassName,
@@ -653,6 +664,28 @@ interface DesktopIconProps {
   icon: React.ReactNode;
   colorClass: string;
   onClick: () => void;
+}
+
+interface DesktopIconDefinition {
+  id: string;
+  label?: string;
+  labelKey?: string;
+  icon: React.ReactNode;
+  colorClass: string;
+  windowId?: string;
+  externalLaunch?: {
+    capability: ExternalCapabilityProjection;
+    action: ExternalCapabilityAction;
+  };
+}
+
+function externalCapabilityDesktopIcon(icon: string | undefined): React.ReactNode {
+  const normalized = String(icon || '').toLowerCase();
+  if (/film|video|play|media/.test(normalized)) return <Play size={24} />;
+  if (/document|file|text|contract|legal/.test(normalized)) return <FileText size={24} />;
+  if (/spark|ai|magic|generate/.test(normalized)) return <Sparkles size={24} />;
+  if (/tool|wrench|mcp|plugin/.test(normalized)) return <Wrench size={24} />;
+  return <Box size={24} />;
 }
 
 function DesktopIcon({ label, icon, colorClass, onClick }: DesktopIconProps) {
@@ -1668,6 +1701,9 @@ export function DesktopUI({
   const [isWallpaperMode, setIsWallpaperMode] = useState(false);
   const [isDesktopWidgetMode, setIsDesktopWidgetMode] = useState(false);
   const [isCompactWindowMode, setIsCompactWindowMode] = useState(false);
+  const [externalCapabilities, setExternalCapabilities] = useState<ExternalCapabilityProjection[]>([]);
+  const externalCapabilityLaunchesRef = useRef(new Set<string>());
+  const externalCapabilityExecutionRequestsRef = useRef(new Map<string, ExternalCapabilityExecutionCorrelation>());
   const isWallpaperModeRef = useRef(false);
   const closeToBackgroundSyncRef = useRef(false);
 
@@ -1697,6 +1733,57 @@ export function DesktopUI({
   const isCompactDesktopLayout = useMemo(() => shouldUseCompactDesktopLayout(viewport), [viewport]);
   const dockPositionClassName = getDesktopDockPositionClassName(isCompactDesktopLayout);
   const desktopIconColumns = 3;
+  const canUseExternalCapabilities = canUseExternalCapabilitiesForSurface({
+    isTauri,
+    workDomain,
+    userId: user?.uid,
+  });
+
+  const refreshExternalCapabilities = useCallback(async () => {
+    if (!canUseExternalCapabilities) {
+      setExternalCapabilities([]);
+      return;
+    }
+    try {
+      setExternalCapabilities(await fetchExternalCapabilities());
+    } catch {
+      // The desktop remains usable when the optional reviewed-capability
+      // projection is unavailable. Skill Hall exposes the actionable error.
+      setExternalCapabilities([]);
+    }
+  }, [canUseExternalCapabilities]);
+
+  useEffect(() => {
+    void refreshExternalCapabilities();
+    const refresh = () => { void refreshExternalCapabilities(); };
+    window.addEventListener('lumi:external-capabilities-changed', refresh);
+    return () => window.removeEventListener('lumi:external-capabilities-changed', refresh);
+  }, [refreshExternalCapabilities]);
+
+  const launchExternalCapability = useCallback(async (
+    capability: ExternalCapabilityProjection,
+    action: ExternalCapabilityAction,
+  ) => {
+    if (!canUseExternalCapabilities) return;
+    const key = `${capability.id}:${action.id}`;
+    if (externalCapabilityLaunchesRef.current.has(key)) return;
+    const copy = externalCapabilityCopy(lang);
+    if (action.requiresConfirmation && !window.confirm(copy.launchConfirm(capability.name))) return;
+    const correlation = externalCapabilityExecutionRequestsRef.current.get(key)
+      || createExternalCapabilityExecutionCorrelation();
+    externalCapabilityExecutionRequestsRef.current.set(key, correlation);
+    externalCapabilityLaunchesRef.current.add(key);
+    try {
+      await executeExternalCapabilityAction(capability.id, action.id, {}, correlation);
+      externalCapabilityExecutionRequestsRef.current.delete(key);
+      toast.success(copy.launchCompleted(capability.name));
+      void refreshExternalCapabilities();
+    } catch (error: any) {
+      toast.error(error?.message || copy.loadFailed);
+    } finally {
+      externalCapabilityLaunchesRef.current.delete(key);
+    }
+  }, [canUseExternalCapabilities, lang, refreshExternalCapabilities]);
 
   useEffect(() => {
     isWallpaperModeRef.current = isWallpaperMode;
@@ -1941,10 +2028,23 @@ export function DesktopUI({
   }), [desktopIconColumns, desktopIconLayout]);
 
   // Desktop icon layout: absolute positioning with viewport-aware columns.
-  const desktopIcons = [
+  const reviewedExternalDesktopIcons: DesktopIconDefinition[] = (canUseExternalCapabilities ? getDesktopExternalCapabilities(externalCapabilities) : []).map(({ capability, action }, index) => ({
+    id: `external-capability:${capability.id}`,
+    label: capability.presentation.label || capability.name,
+    icon: externalCapabilityDesktopIcon(capability.presentation.icon || action.icon),
+    colorClass: [
+      'from-cyan-500 to-blue-700',
+      'from-violet-500 to-indigo-700',
+      'from-emerald-500 to-teal-700',
+      'from-amber-500 to-orange-700',
+    ][index % 4],
+    externalLaunch: { capability, action },
+  }));
+  const desktopIcons: DesktopIconDefinition[] = [
     { id: 'tools', labelKey: 'tools', icon: <Wrench size={24} />, colorClass: 'from-amber-500 to-orange-600', windowId: 'tools' },
     { id: 'skills', labelKey: 'skills', icon: <Sparkles size={24} />, colorClass: 'from-emerald-500 to-teal-600', windowId: 'skills' },
     { id: 'personalization', label: t.personalization || (uiMessage('desktop-ui.personalization.2c4d8e1f06', (lang === 'zh') ? 'zh' : 'en')), icon: <Brush size={24} />, colorClass: 'from-cyan-400 to-indigo-600', windowId: 'personalization' },
+    ...reviewedExternalDesktopIcons,
   ];
   const desktopIconAreaHeight = Math.max(
     desktopIconLayout.compact ? 300 : 400,
@@ -4676,9 +4776,9 @@ export function DesktopUI({
     { id: 'settings', label: t.settings || 'OS Integrity', icon: <SettingsIcon size={24} />, color: 'from-gray-400 to-slate-600' },
   ];
 
-  const desktopAppEntries = desktopIcons.map(def => ({
-    id: def.windowId,
-    label: 'label' in def ? def.label : (t as any)[def.labelKey] || def.labelKey,
+  const desktopAppEntries = desktopIcons.filter(def => Boolean(def.windowId)).map(def => ({
+    id: def.windowId!,
+    label: def.label || (def.labelKey ? (t as any)[def.labelKey] || def.labelKey : def.id),
     icon: def.icon,
     color: def.colorClass,
   }));
@@ -5487,18 +5587,26 @@ export function DesktopUI({
             <div className="lumi-desktop-icon-canvas relative flex-1 w-full" style={{ margin: 0, padding: 0, minHeight: desktopIconAreaHeight }}>
               {desktopIcons.map((def, i) => {
                 const { x, y } = getDefaultDesktopIconPosition(i);
-                const label = 'label' in def ? def.label : (t as any)[def.labelKey] || def.labelKey;
-                const isIconOpen = openWindows.includes(def.windowId) || (def.windowId === 'command-center' && chatOpen);
-                const isIconFocused = focusedWindow === def.windowId || (def.windowId === 'command-center' && chatOpen);
+                const label = def.label || (def.labelKey ? (t as any)[def.labelKey] || def.labelKey : def.id);
+                const windowId = def.windowId || '';
+                const isIconOpen = Boolean(windowId) && (openWindows.includes(windowId) || (windowId === 'command-center' && chatOpen));
+                const isIconFocused = Boolean(windowId) && (focusedWindow === windowId || (windowId === 'command-center' && chatOpen));
                 const handleClick = () => {
-                  toggleWindow(def.windowId);
+                  if (def.externalLaunch) {
+                    void launchExternalCapability(def.externalLaunch.capability, def.externalLaunch.action);
+                    return;
+                  }
+                  if (windowId) toggleWindow(windowId);
                 };
                 return (
                   <motion.div
                     key={def.id}
-                    data-lumi-target={def.windowId}
-                    onDoubleClick={handleClick}
-                    onClick={handleClick}
+                    data-lumi-target={windowId || def.id}
+                    onDoubleClick={def.externalLaunch ? event => { event.preventDefault(); event.stopPropagation(); } : handleClick}
+                    onClick={event => {
+                      if (def.externalLaunch && event.detail > 1) return;
+                      handleClick();
+                    }}
                     initial={{ opacity: 0, scale: 0.8 }}
                     animate={{ opacity: 1, scale: 1 }}
                     style={{ position: 'absolute', left: x, top: y }}
@@ -5943,7 +6051,12 @@ export function DesktopUI({
                   ) : windowId === 'tokens' ? (
                     <TokenDashboard />
                   ) : windowId === 'skills' ? (
-                    <SkillCenter t={t} lang={lang} />
+                    <SkillCenter
+                      t={t}
+                      lang={lang}
+                      canUseExternalCapabilities={canUseExternalCapabilities}
+                      canReviewExternalCapabilities={Boolean(isTauri && user?.role === 'admin' && workDomain === 'personal')}
+                    />
                   ) : windowId === 'personalization' ? (
                     <div className="flex h-full min-h-0 flex-col gap-3">
                       <div className="grid shrink-0 grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-black/20 p-1.5" role="tablist" aria-label={t.personalization || 'Personalization'}>

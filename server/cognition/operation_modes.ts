@@ -10,6 +10,7 @@
  */
 import { ToolPolicy } from '../personality/types';
 import type { ToolRegistry } from '../tools/registry';
+import type { ToolContext } from '../tools/types';
 import {
   LUMI_CLIENT_MODE_IDS,
   LUMI_MEETING_CAPTURE_SURFACE,
@@ -154,6 +155,7 @@ export function getOperationModeConfig(mode?: string): OperationModeConfig {
 export function buildOperationModeToolPolicy(
   mode: string | undefined,
   registry?: ToolRegistry,
+  context?: Pick<ToolContext, 'userId' | 'domain' | 'orgId' | 'autonomous' | 'source'>,
 ): ToolPolicy {
   const normalized = normalizeOperationMode(mode);
   const fallback = OPERATION_MODE_CONFIGS[normalized].toolPolicy;
@@ -169,7 +171,7 @@ export function buildOperationModeToolPolicy(
     };
   }
 
-  const manifest = registry.getCapabilityManifest()
+  const manifest = registry.getCapabilityManifest(undefined, { context })
     .filter(entry => (
       !entry.deprecated
       && entry.executable

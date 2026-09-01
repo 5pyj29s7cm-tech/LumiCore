@@ -390,6 +390,27 @@ export interface ToolContext {
 
 export interface ToolDefinition {
   name: string;
+  /** Server-only visibility boundary. Omitted from model/tool manifests. */
+  internalVisibility?: {
+    ownerUserId: string;
+    /** Keep a user-owned capability out of organization/work projections. */
+    personalOnly?: boolean;
+    /** Model inventory gate; direct host/UI execution still uses owner checks. */
+    modelAccess?: 'hidden' | 'foreground' | 'automatic_candidate';
+    /** Host-owned readiness check for an automatic-candidate projection. */
+    automaticReady?: () => boolean;
+  };
+  /**
+   * Server-owned arguments are bound before canonical target checks, policy,
+   * idempotency digests, receipts, and handler admission. This hook is never
+   * exposed in a model declaration.
+   */
+  serverOwnedArgumentBinder?: (
+    args: Record<string, any>,
+    context?: ToolContext,
+  ) => Record<string, any>;
+  /** Underlying semantic identity used by generic safety/timeout machinery. */
+  semanticToolName?: string;
   description: string;
   parameters: Record<string, any>;
   /**

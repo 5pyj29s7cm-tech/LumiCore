@@ -119,6 +119,43 @@ describe('external commit unknown-outcome safety', () => {
     expect(externalCommitInputDigest(name, args)).not.toBe(publicDigest);
   });
 
+  it.each([
+    {
+      name: 'external_commit_plain_text_receipt_test',
+      idempotencyKey: 'plain-text-receipt-key',
+      result: 'Provider says the message was sent.',
+    },
+    {
+      name: 'external_commit_missing_verification_fields_test',
+      idempotencyKey: 'missing-verification-fields-key',
+      result: JSON.stringify({ ok: true, status: 'sent', sent: true, providerReceipt: 'provider-claim-only' }),
+    },
+  ])('keeps an unverifiable external result unknown and blocks resend: $name', async ({
+    name,
+    idempotencyKey,
+    result,
+  }) => {
+    const durable = durableJournalAdapter();
+    configureExternalCommitJournal(durable.adapter);
+    const handler = vi.fn(async () => result);
+    const args = { target: 'Unverified Recipient', payload: 'Never resend automatically' };
+    const context = confirmedContext(idempotencyKey);
+
+    const firstRegistry = new ToolRegistry();
+    registerExternalCommit(firstRegistry, name, handler);
+    await expect(firstRegistry.execute(name, args, context)).resolves.toBe(result);
+
+    expect(durable.rows.get(idempotencyKey)?.state).toBe('unknown');
+    expect(durable.rows.get(idempotencyKey)?.replayResult || '').toBe('');
+
+    resetExternalCommitRuntimeCacheForTests();
+    const restartedRegistry = new ToolRegistry();
+    registerExternalCommit(restartedRegistry, name, handler);
+    await expect(restartedRegistry.execute(name, args, context))
+      .rejects.toThrow(/prior running or unknown attempt.*could not be verified/i);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
   it('marks a timed-out commit unknown but keeps both callers behind the same live handler fence', async () => {
     vi.useFakeTimers();
     const registry = new ToolRegistry();

@@ -144,7 +144,7 @@ async function handleSaveWorkflow(args: Record<string, any>, context?: any): Pro
   const steps = (args.steps || []).map((step: Record<string, any>) => {
     const primaryToolName = String(step.tool || '').trim();
     const primaryManifest = primaryToolName
-      ? context?.toolRegistry?.getCapabilityManifestEntry(primaryToolName, context?.toolPolicy)
+      ? context?.toolRegistry?.getCapabilityManifestEntry(primaryToolName, context?.toolPolicy, context)
       : undefined;
     const primaryDefinition = primaryToolName ? context?.toolRegistry?.get(primaryToolName) : undefined;
     const reconciliationCapabilityId = String(step.reconciliationCapabilityId || '').trim();
@@ -162,6 +162,7 @@ async function handleSaveWorkflow(args: Record<string, any>, context?: any): Pro
     const manifest = context?.toolRegistry?.getCapabilityManifestEntry(
       reconciliationCapabilityId,
       context?.toolPolicy,
+      context,
     );
     if (!manifest
       || (manifest.operation !== 'observe' && manifest.operation !== 'test')
@@ -251,7 +252,7 @@ async function handlePublishWorkflow(args: Record<string, any>, context?: any): 
   if (currentNamed.runtimeHash !== expectedHash) throw new Error('Workflow changed before publication. Review the latest version.');
   if (!context?.toolRegistry) throw new Error('Capability registry is unavailable; the workflow cannot be reviewed safely.');
   const refreshedSteps = currentDefinition.steps.map(step => {
-    const manifest = context.toolRegistry.getCapabilityManifestEntry(step.capabilityId, context.toolPolicy);
+    const manifest = context.toolRegistry.getCapabilityManifestEntry(step.capabilityId, context.toolPolicy, context);
     const definition = context.toolRegistry.get(step.capabilityId);
     if (!manifest || !definition) {
       throw new Error(`Workflow capability '${step.capabilityId}' is unavailable and cannot be published.`);
@@ -592,12 +593,12 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
       });
       continue;
     }
-    const currentManifest = context.toolRegistry.getCapabilityManifestEntry(capabilityId, context.toolPolicy);
+    const currentManifest = context.toolRegistry.getCapabilityManifestEntry(capabilityId, context.toolPolicy, context);
     const currentDefinition = context.toolRegistry.get(capabilityId);
     const currentHandler = currentDefinition?.handler;
     const capabilityContractBlocker = `Workflow step '${step.stepId}' no longer matches its reviewed capability contract. Publish a reviewed workflow version before execution.`;
     const capabilityContractMatchesReviewedDefinition = () => {
-      const latestManifest = context.toolRegistry.getCapabilityManifestEntry(capabilityId, context.toolPolicy);
+      const latestManifest = context.toolRegistry.getCapabilityManifestEntry(capabilityId, context.toolPolicy, context);
       const latestDefinition = context.toolRegistry.get(capabilityId);
       return latestDefinition === currentDefinition
         && latestDefinition?.handler === currentHandler
@@ -1003,7 +1004,7 @@ async function handleEditWorkflowRun(args: Record<string, any>, context?: any): 
   requireWorkflowRunForContext(String(args.runId || ''), context);
   const steps = (args.steps || []).map((step: Record<string, any>, index: number) => {
     const capabilityId = String(step.capabilityId || step.tool || '').trim();
-    const manifest = registry.getCapabilityManifestEntry(capabilityId, context?.toolPolicy);
+    const manifest = registry.getCapabilityManifestEntry(capabilityId, context?.toolPolicy, context);
     const definition = registry.get(capabilityId);
     if (!capabilityId || !manifest || !definition) throw new Error(`Workflow capability '${capabilityId || `step_${index + 1}`}' is unavailable.`);
     return {
@@ -1066,6 +1067,7 @@ async function handleReconcileWorkflowRun(args: Record<string, any>, context?: a
     const currentOriginalManifest = context.toolRegistry.getCapabilityManifestEntry(
       step.attachedReconciliation.toolName,
       context.toolPolicy,
+      context,
     );
     const currentOriginalDefinition = context.toolRegistry.get(step.attachedReconciliation.toolName);
     if (!capabilityContractStillCompatible(
@@ -1101,7 +1103,7 @@ async function handleReconcileWorkflowRun(args: Record<string, any>, context?: a
     if (!(step.onFailure?.fallbackCapabilityIds || []).includes(capabilityId)) {
       throw new Error(`Capability '${capabilityId}' is not declared as a reconciliation adapter for this workflow step.`);
     }
-    const manifest = context.toolRegistry.getCapabilityManifestEntry(capabilityId, context.toolPolicy);
+    const manifest = context.toolRegistry.getCapabilityManifestEntry(capabilityId, context.toolPolicy, context);
     if (!manifest
       || (manifest.operation !== 'observe' && manifest.operation !== 'test')
       || manifest.sideEffects.length > 0

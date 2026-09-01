@@ -544,7 +544,14 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
       });
       const acceptance = buildAcceptanceEvidenceSnapshot({
         db,
-        manifest: toolRegistry.getCapabilityManifest(),
+        manifest: toolRegistry.getCapabilityManifest(undefined, {
+          context: {
+            userId: req.user!.uid,
+            domain: scope.domain,
+            orgId: scope.orgId,
+            source: 'runtime-status',
+          },
+        }),
         toolMetrics: toolMetrics.tools,
         capabilityMetrics,
         mcpHealth: mcpManager.getServerHealth(),

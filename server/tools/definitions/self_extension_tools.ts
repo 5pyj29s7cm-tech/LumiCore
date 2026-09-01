@@ -202,8 +202,8 @@ export function registerSelfExtensionTools(registry: ToolRegistry): void {
         goal: String(args.goal || ''),
         domain: args.domain ? String(args.domain) : undefined,
         clientState: getClientStateForScope(userId, { domain: context?.domain, orgId: context?.orgId }) as Record<string, any> | null,
-        tools: registry.list(),
-        capabilityManifest: registry.getCapabilityManifest(),
+        tools: registry.listForContext(context),
+        capabilityManifest: registry.getCapabilityManifest(undefined, { context }),
       });
       return JSON.stringify({
         ok: true,
@@ -279,8 +279,8 @@ export function registerSelfExtensionTools(registry: ToolRegistry): void {
         allowSkillDraft: args.allowSkillDraft === true,
         record: args.record !== false,
         clientState: getClientStateForScope(userId, { domain: context?.domain, orgId: context?.orgId }) as Record<string, any> | null,
-        tools: registry.list(),
-        capabilityManifest: registry.getCapabilityManifest(),
+        tools: registry.listForContext(context),
+        capabilityManifest: registry.getCapabilityManifest(undefined, { context }),
         executeTool: (name, toolArgs) => executeToolCallOrThrow({
           registry,
           name,

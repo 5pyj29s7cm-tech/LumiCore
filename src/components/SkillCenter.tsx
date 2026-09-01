@@ -10,6 +10,9 @@ import { apiFetch } from '@/services/apiClient';
 import { WORK_RECOMMENDATION_RULES } from '../i18n/locales/skillRecommendations';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 import { getSkillSettingsTarget } from '../../shared/model_service_settings';
+import { ExternalCapabilityIntakeDialog, ExternalCapabilityManagerSection } from './ExternalCapabilityCenter';
+import { externalCapabilityCopy } from '../i18n/locales/externalCapabilities';
+import { fetchExternalCapabilities, type ExternalCapabilityProjection } from '@/services/externalCapabilities';
 
 const GitHubMCPBrowser = lazy(() => import('./GitHubMCPBrowser').then(m => ({ default: m.GitHubMCPBrowser })));
 
@@ -451,7 +454,19 @@ const PROFESSION_RECOMMENDATION_MAP: Record<string, string[]> = {
   estimator: ['skill-construction-tender-cost', 'skill-finance-office'],
 };
 
-export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang: 'en' | 'zh'; initialTab?: SkillCenterTab }) {
+export function SkillCenter({
+  t,
+  lang,
+  initialTab = 'featured',
+  canUseExternalCapabilities = false,
+  canReviewExternalCapabilities = false,
+}: {
+  t: any;
+  lang: 'en' | 'zh';
+  initialTab?: SkillCenterTab;
+  canUseExternalCapabilities?: boolean;
+  canReviewExternalCapabilities?: boolean;
+}) {
   const [activeTab, setActiveTab] = useState<SkillCenterTab>(initialTab);
   const [marketSkills, setMarketSkills] = useState<MarketplaceSkill[]>([]);
   const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([]);
@@ -478,6 +493,10 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
   const [professionProfiles, setProfessionProfiles] = useState<ProfessionProfile[]>([]);
   const [workSignalText, setWorkSignalText] = useState('');
   const [recommendationError, setRecommendationError] = useState('');
+  const [externalCapabilities, setExternalCapabilities] = useState<ExternalCapabilityProjection[]>([]);
+  const [externalCapabilitiesLoading, setExternalCapabilitiesLoading] = useState(true);
+  const [externalCapabilitiesError, setExternalCapabilitiesError] = useState('');
+  const [externalCapabilityIntakeOpen, setExternalCapabilityIntakeOpen] = useState(false);
   const socket = useSocket();
 
   const [translationReady, setTranslationReady] = useState(false);
@@ -554,6 +573,24 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
     } catch {}
   }, []);
 
+  const fetchReviewedExternalCapabilities = useCallback(async () => {
+    if (!canUseExternalCapabilities) {
+      setExternalCapabilities([]);
+      setExternalCapabilitiesError('');
+      setExternalCapabilitiesLoading(false);
+      return;
+    }
+    setExternalCapabilitiesLoading(true);
+    setExternalCapabilitiesError('');
+    try {
+      setExternalCapabilities(await fetchExternalCapabilities());
+    } catch (err: any) {
+      setExternalCapabilitiesError(err?.message || externalCapabilityCopy(lang).loadFailed);
+    } finally {
+      setExternalCapabilitiesLoading(false);
+    }
+  }, [canUseExternalCapabilities, lang]);
+
   const fetchRecommendationSignals = useCallback(async () => {
     setRecommendationError('');
     try {
@@ -583,7 +620,21 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
     }
   }, []);
 
-  useEffect(() => { fetchMarketplace(); fetchInstalled(); fetchCategories(); fetchSavedKeys(); fetchRecommendationSignals(); }, [fetchMarketplace, fetchInstalled, fetchCategories, fetchSavedKeys, fetchRecommendationSignals]);
+  useEffect(() => {
+    fetchMarketplace();
+    fetchInstalled();
+    fetchCategories();
+    fetchSavedKeys();
+    fetchRecommendationSignals();
+    void fetchReviewedExternalCapabilities();
+  }, [fetchMarketplace, fetchInstalled, fetchCategories, fetchSavedKeys, fetchRecommendationSignals, fetchReviewedExternalCapabilities]);
+
+  useEffect(() => {
+    if (!canUseExternalCapabilities) return undefined;
+    const refresh = () => { void fetchReviewedExternalCapabilities(); };
+    window.addEventListener('lumi:external-capabilities-changed', refresh);
+    return () => window.removeEventListener('lumi:external-capabilities-changed', refresh);
+  }, [canUseExternalCapabilities, fetchReviewedExternalCapabilities]);
 
   // Debounced external search
   useEffect(() => {
@@ -885,6 +936,7 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
     { id: 'mcp', label: t.mcp || 'MCP', icon: <Github size={14} /> },
     { id: 'generate', label: t.generateTab || 'Generate', icon: <Sparkles size={14} /> },
   ];
+  const externalCopy = externalCapabilityCopy(lang);
 
   const SAMPLE_PROMPTS = [
     t.skillGeneratePlaceholder || 'e.g. Check if a website is down, generate QR codes...',
@@ -926,6 +978,16 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
           <h3 className="text-xl font-bold uppercase tracking-tighter text-white/90">{t.skillCenter || 'Skill Center'}</h3>
         </div>
         <div className="flex items-center gap-2">
+          {canUseExternalCapabilities && canReviewExternalCapabilities && (
+            <button
+              type="button"
+              onClick={() => setExternalCapabilityIntakeOpen(true)}
+              className="flex h-8 items-center gap-1.5 rounded-lg border border-cyan-300/15 bg-cyan-300/[0.07] px-3 text-xs font-bold text-cyan-100 transition-colors hover:bg-cyan-300/12"
+            >
+              <ShieldCheck size={13} />
+              {externalCopy.intakeAction}
+            </button>
+          )}
           <span className="text-xs text-white/45 font-mono">{sortedMarket.length} {t.available || 'available'}</span>
           <button
             onClick={() => { setLoadError(''); fetchMarketplace(); fetchInstalled(); fetchCategories(); fetchRecommendationSignals(); }}
@@ -1466,6 +1528,16 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
 
         {activeTab === 'installed' && (
           <motion.div key="installed" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.15 }} className="space-y-6">
+            {canUseExternalCapabilities && (externalCapabilities.length > 0 || canReviewExternalCapabilities || externalCapabilitiesError) && (
+              <ExternalCapabilityManagerSection
+                capabilities={externalCapabilities}
+                loading={externalCapabilitiesLoading}
+                error={externalCapabilitiesError}
+                lang={lang}
+                canDeactivate={canReviewExternalCapabilities}
+                onRefresh={fetchReviewedExternalCapabilities}
+              />
+            )}
             <div className="lumi-panel p-5">
               <div className="flex items-center gap-2">
                 <Cpu size={17} className="text-cyan-200" />
@@ -1719,6 +1791,14 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
           <SkillDetailPane detailSkill={detailSkill} setDetailSkill={setDetailSkill} t={t} lang={lang} marketSkills={skillHallMarketSkills} installedSkills={installedSkills} installing={installing} repairing={repairing} savedKeys={savedKeys} handleInstall={handleInstall} handleToggle={handleToggle} handleUninstall={handleUninstall} handleRepair={handleRepair} />
         )}
       </AnimatePresence>
+      {canUseExternalCapabilities && canReviewExternalCapabilities && (
+        <ExternalCapabilityIntakeDialog
+          open={externalCapabilityIntakeOpen}
+          lang={lang}
+          onClose={() => setExternalCapabilityIntakeOpen(false)}
+          onActivated={fetchReviewedExternalCapabilities}
+        />
+      )}
     </div>
   );
 }

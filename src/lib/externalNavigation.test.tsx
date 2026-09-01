@@ -16,9 +16,10 @@ describe('desktop external navigation boundary', () => {
     vi.restoreAllMocks();
   });
 
-  it('only classifies absolute HTTP(S) links as external', () => {
+  it('classifies absolute and protocol-relative HTTP(S) links as external', () => {
     expect(isExternalHttpUrl('https://lumiai.asia/docs')).toBe(true);
     expect(isExternalHttpUrl('http://example.com/path')).toBe(true);
+    expect(isExternalHttpUrl('//example.com/protocol-relative')).toBe(true);
     expect(isExternalHttpUrl('/settings/models')).toBe(false);
     expect(isExternalHttpUrl('#memory')).toBe(false);
     expect(isExternalHttpUrl('javascript:alert(1)')).toBe(false);
@@ -37,6 +38,23 @@ describe('desktop external navigation boundary', () => {
 
     expect(opener).toHaveBeenCalledOnce();
     expect(opener).toHaveBeenCalledWith('https://example.com/guide');
+    remove();
+  });
+
+  it('normalizes a protocol-relative anchor and never leaves it in the WebView', () => {
+    const opener = vi.fn();
+    const remove = installExternalAnchorGuard(document, opener);
+    const anchor = document.createElement('a');
+    anchor.setAttribute('href', '//outside.example/guide');
+    anchor.textContent = 'outside guide';
+    document.body.append(anchor);
+
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true });
+    const stayedInWebView = anchor.dispatchEvent(click);
+
+    expect(stayedInWebView).toBe(false);
+    expect(opener).toHaveBeenCalledOnce();
+    expect(opener).toHaveBeenCalledWith(`${window.location.protocol}//outside.example/guide`);
     remove();
   });
 
@@ -74,6 +92,10 @@ describe('desktop external navigation boundary', () => {
 
     window.open('https://example.com/from-code', '_blank');
     expect(opener).toHaveBeenCalledWith('https://example.com/from-code');
+    expect(original).not.toHaveBeenCalled();
+
+    window.open('//outside.example/from-code', '_blank');
+    expect(opener).toHaveBeenCalledWith(`${window.location.protocol}//outside.example/from-code`);
     expect(original).not.toHaveBeenCalled();
 
     window.open('/api/files/download/report', '_blank');

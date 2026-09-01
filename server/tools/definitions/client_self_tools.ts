@@ -1,4 +1,5 @@
 import { ToolRegistry } from '../registry';
+import type { ToolContext } from '../types';
 import { executeToolCallOrThrow } from '../execution_engine';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 import {
@@ -144,8 +145,8 @@ function getAutonomyWorkflowDiagnostics(userId: string) {
   });
 }
 
-function getCapabilityRuntimeSummary(registry: ToolRegistry) {
-  const manifest = registry.getCapabilityManifest();
+function getCapabilityRuntimeSummary(registry: ToolRegistry, context?: ToolContext) {
+  const manifest = registry.getCapabilityManifest(undefined, { context });
   const countBy = (key: 'source' | 'operation' | 'configuredSecurityLevel') => (
     Object.fromEntries(
       Array.from(manifest.reduce((counts, entry) => {
@@ -233,7 +234,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
       const state = getClientStateForScope(userId, scope);
       const architecture = getLumiTechnicalArchitecture();
       const selfAwareness = getClientSelfAwarenessReport(userId, scope);
-      const capabilityRuntime = getCapabilityRuntimeSummary(registry);
+      const capabilityRuntime = getCapabilityRuntimeSummary(registry, context);
       const health = getClientHealthReport(userId, scope);
       const autonomyGate = isWork ? null : getAutonomyDiagnosticPolicy(userId);
       const autonomyWorkflows = isWork ? [] : getAutonomyWorkflowDiagnostics(userId);
@@ -253,7 +254,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
             ...common,
             architecture,
             selfAwareness,
-            capabilities: getClientCapabilities(registry.getCapabilityManifest(context?.toolPolicy)),
+            capabilities: getClientCapabilities(registry.getCapabilityManifest(context?.toolPolicy, { context })),
             interfaceSurfaces: getClientInterfaceSurfaces(),
             visibleExecutionHabits: getVisibleExecutionHabits(),
             skillRuntimeFindings: getSkillRuntimeFindings(),
@@ -322,9 +323,10 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
       required: [],
     },
     handler: async (args, context) => {
-      const installed = registry.getCapabilityManifest();
+      const userId = context?.userId || 'anonymous';
+      const installed = registry.getCapabilityManifest(undefined, { context });
       const turnExecutable = new Set(
-        registry.getCapabilityManifest(context?.toolPolicy, { executableOnly: true })
+        registry.getCapabilityManifest(context?.toolPolicy, { executableOnly: true, context })
           .map(entry => entry.toolName),
       );
       const query = String(args.query || '').trim().normalize('NFKC').toLowerCase().slice(0, 500);
@@ -343,7 +345,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
             ))
         : eligible.map(entry => ({ entry, score: 0, matchedTerms: [] as string[] }));
       return JSON.stringify(sanitizeDiagnosticValue({
-        summary: getCapabilityRuntimeSummary(registry),
+        summary: getCapabilityRuntimeSummary(registry, context),
         query: query || null,
         source: source || null,
         matched: matches.length,

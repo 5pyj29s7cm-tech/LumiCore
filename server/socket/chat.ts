@@ -2800,7 +2800,9 @@ export function registerChatHandler(
             userText: text,
             defaultChannel: 'chat',
             flow: turnFlow,
-            getToolNames: () => toolRegistry.getToolDeclarations().map(declaration => declaration.function.name),
+            getToolNames: () => toolRegistry.getToolDeclarations({
+              context: { userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource },
+            }).map(declaration => declaration.function.name),
             domain: resolvedDomain,
             orgId: resolvedOrgId,
             defaultSourceInteractionId: interactionId,
@@ -3097,7 +3099,9 @@ export function registerChatHandler(
       const pinnedContinuationTools = trustedContinuationEvidenceTools({
         actionTaskState: existingActionState,
         trustedActionContinuation: executionDecision.resumesPinnedTask === true,
-      }, new Set(toolRegistry.getToolDeclarations().map(declaration => declaration.function.name)));
+      }, new Set(toolRegistry.getToolDeclarations({
+        context: { userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource },
+      }).map(declaration => declaration.function.name)));
       const modelToolProjection = buildModelToolProjection(executionDecision, {
         lane: capabilitySelection.lane,
         preferredTools: capabilitySelection.preferredTools,

@@ -4,6 +4,7 @@ export {
   SKILLS_DIR,
   mcpRegistryToolName,
   mcpServerConfigFingerprint,
+  mcpPublicRuntimeContractFingerprint,
   normalizeSkillInstallName,
   requireSafeMCPServerName,
   requireSafeMCPToolName,
@@ -22,6 +23,7 @@ import {
   assertMCPPackageRunnerPolicy,
   mcpRegistryToolName,
   mcpServerConfigFingerprint,
+  mcpPublicRuntimeContractFingerprint,
   requireSafeMCPServerName,
   requireSafeMCPToolName,
 } from './client';
@@ -232,7 +234,25 @@ function buildRegisteredTool(
   tool: MCPToolDef,
   serverConfig?: MCPServerConfig,
 ): ToolDefinition {
-  const capability = resolveMCPToolCapability(tool, serverConfig);
+  const declaredCapability = resolveMCPToolCapability(tool, serverConfig);
+  const runtimeConfigFingerprint = serverConfig
+    ? mcpPublicRuntimeContractFingerprint(serverConfig)
+    : 'unconfigured';
+  const capability = {
+    ...(declaredCapability || {
+      source: serverConfig?.source === 'local' ? 'skill' as const : 'mcp' as const,
+      provider: tool.serverName,
+      family: tool.serverName,
+      tags: [tool.serverName],
+      ...(resolveMCPToolOperation(tool, serverConfig)
+        ? { operation: resolveMCPToolOperation(tool, serverConfig) }
+        : {}),
+    }),
+    prerequisites: Array.from(new Set([
+      ...(declaredCapability?.prerequisites || []),
+      `mcp runtime config ${runtimeConfigFingerprint}`,
+    ])),
+  };
   const rawToolName = requireSafeMCPToolName(tool.rawName || shortMCPToolName(tool));
   return {
     name: tool.name,
@@ -242,15 +262,7 @@ function buildRegisteredTool(
     // even when the provider annotation marks the individual call read-only.
     permission: 'user',
     securityLevel: resolveMCPToolSecurity(tool, serverConfig),
-    capability: capability || {
-      source: serverConfig?.source === 'local' ? 'skill' : 'mcp',
-      provider: tool.serverName,
-      family: tool.serverName,
-      tags: [tool.serverName],
-      ...(resolveMCPToolOperation(tool, serverConfig)
-        ? { operation: resolveMCPToolOperation(tool, serverConfig) }
-        : {}),
-    },
+    capability,
     parameters: mcpSchemaToParams(tool.inputSchema),
     handler: async (params: Record<string, any>, _ctx: ToolContext) => {
       return mcpManager.callToolForServer(tool.serverName, rawToolName, params, {

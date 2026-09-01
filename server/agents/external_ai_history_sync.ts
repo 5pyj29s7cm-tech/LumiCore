@@ -552,7 +552,7 @@ async function readExportPage(source: ExternalAiHistorySource, cursor: string, p
 function validateHistoryAdapter(source: ExternalAiHistorySource, context?: ToolContext): CapabilityManifestEntry {
   const toolName = String(source.connectorToolName || '');
   if (!toolName || /^external_ai_history_/i.test(toolName)) throw new Error('The registered history adapter is invalid.');
-  const entry = context?.toolRegistry?.getCapabilityManifestEntry(toolName, context.toolPolicy);
+  const entry = context?.toolRegistry?.getCapabilityManifestEntry(toolName, context.toolPolicy, context);
   if (!entry || !entry.executable) throw new Error(`Authorized history adapter ${toolName} is unavailable.`);
   if (!['mcp', 'adapter'].includes(entry.source)) throw new Error('History connectors must be registered MCP or structured adapter capabilities.');
   if (entry.operation !== 'observe') throw new Error('History connectors must declare an observe-only operation.');

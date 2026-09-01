@@ -21,6 +21,7 @@ import { getGateConfig, isAutonomousWorkAllowed, recordAutonomousTokens } from '
 import { runWithTools } from '../llm/adapter';
 import { toolRegistry, type ToolRegistry } from '../tools/registry';
 import { ToolContext, ToolExecutionRecord } from '../tools/types';
+import { attachAutonomousHostAuthority } from '../tools/host_execution_authority';
 import { canAutoApproveAction } from '../tools/action_constitution';
 import { Server as SocketIOServer } from 'socket.io';
 import type { AutonomousTask } from './task_queue';
@@ -582,7 +583,7 @@ export async function executeNextAutonomousTask(
     }
     const toolPolicy = executionPipeline.authorizationPolicy;
 
-    const context: ToolContext = {
+    const context: ToolContext = attachAutonomousHostAuthority({
       userId: task.userId,
       domain: taskScope.domain,
       orgId: taskScope.orgId,
@@ -615,7 +616,7 @@ export async function executeNextAutonomousTask(
       ),
       source: 'autonomous',
       idempotencyKey: running.idempotencyKey,
-    };
+    }, { ownerUserId: task.userId, taskId: running.id });
 
     const messages = [
       { role: 'system' as const, content: [

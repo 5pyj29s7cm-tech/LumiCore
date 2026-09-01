@@ -1208,8 +1208,8 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         exportPacket: args.exportPacket !== false,
         outputDirectory: args.outputDirectory ? String(args.outputDirectory) : undefined,
         record: args.record !== false,
-        tools: registry.list(),
-        capabilityManifest: registry.getCapabilityManifest(),
+        tools: registry.listForContext(context),
+        capabilityManifest: registry.getCapabilityManifest(undefined, { context }),
         desktopRelay: context?.desktopRelay,
       });
       return JSON.stringify(result, null, 2);

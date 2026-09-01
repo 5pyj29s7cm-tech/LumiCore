@@ -115,6 +115,10 @@ const PERFORMANCE_INDEX_SQL = [
   `CREATE INDEX IF NOT EXISTS idx_extension_revisions_active ON extension_revisions(extensionId, status, updatedAt)`,
   `CREATE INDEX IF NOT EXISTS idx_extension_publishers_status ON extension_publishers(status, updatedAt)`,
   `CREATE INDEX IF NOT EXISTS idx_extension_receipts_extension_created ON extension_activation_receipts(extensionId, createdAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_external_capability_packages_owner_status ON external_capability_packages(ownerUserId, status, updatedAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_external_capability_packages_identity ON external_capability_packages(ownerUserId, capabilityId, version)`,
+  `CREATE INDEX IF NOT EXISTS idx_external_capability_receipts_package_created ON external_capability_receipts(packageRowId, createdAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_external_capability_receipts_owner_action ON external_capability_receipts(ownerUserId, capabilityId, actionId, createdAt)`,
   `CREATE INDEX IF NOT EXISTS idx_canvas_sessions_user_domain ON canvas_sessions(userId, domain)`,
   `CREATE INDEX IF NOT EXISTS idx_canvas_sessions_org ON canvas_sessions(orgId, userId)`,
   `CREATE INDEX IF NOT EXISTS idx_org_memberships_user_status ON org_memberships(userId, status)`,
@@ -1099,6 +1103,29 @@ function createTables(): Promise<void> {
         payload TEXT NOT NULL DEFAULT '{}'
       );
 
+      CREATE TABLE IF NOT EXISTS external_capability_packages (
+        id TEXT PRIMARY KEY,
+        ownerUserId TEXT NOT NULL,
+        capabilityId TEXT NOT NULL,
+        version TEXT NOT NULL,
+        status TEXT NOT NULL,
+        packageDigest TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}'
+      );
+
+      CREATE TABLE IF NOT EXISTS external_capability_receipts (
+        id TEXT PRIMARY KEY,
+        packageRowId TEXT NOT NULL,
+        ownerUserId TEXT NOT NULL,
+        capabilityId TEXT NOT NULL,
+        actionId TEXT NOT NULL DEFAULT '',
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        createdAt TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}'
+      );
+
       CREATE TABLE IF NOT EXISTS voice_profiles (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         userId TEXT NOT NULL,
@@ -1439,6 +1466,8 @@ async function loadMemoryDB(): Promise<void> {
   const extensionPublishersRaw = await query<any>('SELECT * FROM extension_publishers');
   const extensionRevisionsRaw = await query<any>('SELECT * FROM extension_revisions');
   const extensionActivationReceiptsRaw = await query<any>('SELECT * FROM extension_activation_receipts');
+  const externalCapabilityPackagesRaw = await query<any>('SELECT * FROM external_capability_packages');
+  const externalCapabilityReceiptsRaw = await query<any>('SELECT * FROM external_capability_receipts');
   const canvasSessionsRaw = await query<any>('SELECT * FROM canvas_sessions');
 
   // Load token usage
@@ -1675,6 +1704,41 @@ async function loadMemoryDB(): Promise<void> {
         const payload = JSON.parse(row.payload || '{}');
         return payload && typeof payload === 'object'
           ? [{ ...payload, id: row.id, extensionId: row.extensionId, revisionId: row.revisionId, status: row.status, createdAt: row.createdAt }]
+          : [];
+      } catch { return []; }
+    }),
+    externalCapabilityPackages: (externalCapabilityPackagesRaw || []).flatMap((row: any) => {
+      try {
+        const payload = JSON.parse(row.payload || '{}');
+        return payload && typeof payload === 'object'
+          ? [{
+              ...payload,
+              id: row.id,
+              ownerUserId: row.ownerUserId,
+              capabilityId: row.capabilityId,
+              version: row.version,
+              status: row.status,
+              packageDigest: row.packageDigest,
+              updatedAt: row.updatedAt,
+            }]
+          : [];
+      } catch { return []; }
+    }),
+    externalCapabilityReceipts: (externalCapabilityReceiptsRaw || []).flatMap((row: any) => {
+      try {
+        const payload = JSON.parse(row.payload || '{}');
+        return payload && typeof payload === 'object'
+          ? [{
+              ...payload,
+              id: row.id,
+              packageRowId: row.packageRowId,
+              ownerUserId: row.ownerUserId,
+              capabilityId: row.capabilityId,
+              actionId: row.actionId || '',
+              kind: row.kind,
+              status: row.status,
+              createdAt: row.createdAt,
+            }]
           : [];
       } catch { return []; }
     }),
@@ -2356,6 +2420,37 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
         receipt.id,
         receipt.extensionId,
         receipt.revisionId,
+        receipt.status || 'unknown',
+        persistenceTimestamp(receipt.createdAt),
+        JSON.stringify(receipt),
+      ]),
+    },
+    {
+      name: 'external_capability_packages',
+      createSQL: `CREATE TABLE _temp_external_capability_packages (id TEXT PRIMARY KEY, ownerUserId TEXT NOT NULL, capabilityId TEXT NOT NULL, version TEXT NOT NULL, status TEXT NOT NULL, packageDigest TEXT NOT NULL, updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
+      insertSQL: `INSERT INTO _temp_external_capability_packages (id, ownerUserId, capabilityId, version, status, packageDigest, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.externalCapabilityPackages || []).map((capability: any) => [
+        capability.id,
+        capability.ownerUserId,
+        capability.capabilityId,
+        capability.version,
+        capability.status || 'reviewed',
+        capability.packageDigest,
+        persistenceTimestamp(capability.updatedAt, capability.createdAt),
+        JSON.stringify(capability),
+      ]),
+    },
+    {
+      name: 'external_capability_receipts',
+      createSQL: `CREATE TABLE _temp_external_capability_receipts (id TEXT PRIMARY KEY, packageRowId TEXT NOT NULL, ownerUserId TEXT NOT NULL, capabilityId TEXT NOT NULL, actionId TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL, status TEXT NOT NULL, createdAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
+      insertSQL: `INSERT INTO _temp_external_capability_receipts (id, packageRowId, ownerUserId, capabilityId, actionId, kind, status, createdAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.externalCapabilityReceipts || []).map((receipt: any) => [
+        receipt.id,
+        receipt.packageRowId,
+        receipt.ownerUserId,
+        receipt.capabilityId,
+        receipt.actionId || '',
+        receipt.kind,
         receipt.status || 'unknown',
         persistenceTimestamp(receipt.createdAt),
         JSON.stringify(receipt),

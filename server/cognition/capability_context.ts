@@ -5,6 +5,7 @@ import { listSkillWorkflows } from '../skills/workflow_registry';
 import { getActiveWorkTakeoverTasksForContinuity } from '../work_takeover/continuity';
 import type { CapabilityManifestEntry } from '../tools/types';
 import type { LumiTurnFlow } from './turn_flow';
+import { buildExternalCapabilityContext } from '../external_capabilities/registry';
 
 export interface LumiRuntimeCapabilityContextInput {
   userId: string;
@@ -169,12 +170,24 @@ function skillLines(flow: LumiTurnFlow): string[] {
 }
 
 export function buildLumiRuntimeCapabilityContext(input: LumiRuntimeCapabilityContextInput): string {
-  const manifest = input.toolRegistry.getCapabilityManifest();
+  const visibilityContext = {
+    userId: input.userId,
+    domain: input.domain,
+    orgId: input.orgId,
+  };
+  const manifest = input.toolRegistry.getCapabilityManifest(undefined, { context: visibilityContext });
   const taskContext = activeTaskContext(input);
   const adapterLines = relevantAdapters(input.flow, input.userId, manifest);
   const workflows = skillLines(input.flow);
   const capabilityGroups = groupCapabilities(manifest);
   const mcpLines = mcpHealthGateLines(manifest);
+  const reviewedExternalCapabilities = buildExternalCapabilityContext(input.userId, input.toolRegistry, {
+    domain: input.domain,
+    orgId: input.orgId,
+    source: input.flow.source || input.flow.channel,
+    autonomous: input.flow.effectiveOperationMode === 'autonomous'
+      || ['autonomy', 'scheduler'].includes(input.flow.channel),
+  });
 
   return [
     '## Lumi Runtime Capability Context',
@@ -190,6 +203,7 @@ export function buildLumiRuntimeCapabilityContext(input: LumiRuntimeCapabilityCo
     adapterLines.length
       ? ['Relevant adapters/external systems:', ...adapterLines.map(line => `- ${line}`)].join('\n')
       : 'Relevant adapters/external systems: none.',
+    reviewedExternalCapabilities,
     'Use this order: understand the turn -> decide chat/work -> if persistent work, bind/create task -> if repeatable pattern, use skill workflow -> if external execution is needed, choose adapter/tool -> verify result -> report humanly.',
   ].join('\n');
 }

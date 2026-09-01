@@ -994,7 +994,16 @@ export function registerTaskHandler(
     );
     const boundaryAllowedToolNames = new Set(boundaryPersonalityToolPolicy.allowedTools || []);
     const boundaryForbiddenTools = toolSecurityContext.executionBoundary === 'remote_restricted'
-      ? toolRegistry.getToolDeclarations()
+      ? toolRegistry.getToolDeclarations({
+          context: {
+            ...toolSecurityContext,
+            userId: uid,
+            domain: taskScope.domain,
+            orgId: taskScope.orgId,
+            source: 'task',
+            autonomous: false,
+          },
+        })
           .map(declaration => declaration.function.name)
           .filter(name => !boundaryAllowedToolNames.has('*') && !boundaryAllowedToolNames.has(name))
       : [];
@@ -1245,6 +1254,8 @@ export function registerTaskHandler(
         text: routedTaskText,
         flow: turnFlow,
         toolRegistry,
+        domain: taskScope.domain,
+        orgId: taskScope.orgId,
       });
     }
     if (workSurfaceRoute.promptOverlay && toolSecurityContext.executionBoundary !== 'remote_restricted') {
@@ -1313,7 +1324,9 @@ export function registerTaskHandler(
           userText: data.text,
           defaultChannel: 'task',
           flow: turnFlow,
-          getToolNames: () => toolRegistry.getToolDeclarations().map(declaration => declaration.function.name),
+          getToolNames: () => toolRegistry.getToolDeclarations({
+            context: { userId: uid, domain: taskScope.domain, orgId: taskScope.orgId, source: 'task' },
+          }).map(declaration => declaration.function.name),
           domain: taskScope.domain,
           orgId: taskScope.orgId,
           defaultSourceInteractionId: interactionId,

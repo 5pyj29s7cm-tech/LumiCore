@@ -427,7 +427,7 @@ function verifiedRuntimeActivatedToolNames(
           .map((name: unknown) => String(name || '').trim())
           .filter((name: string) => {
             if (!name) return false;
-            const manifest = toolRegistry.getCapabilityManifestEntry(name, context?.toolPolicy);
+            const manifest = toolRegistry.getCapabilityManifestEntry(name, context?.toolPolicy, context);
             return manifest?.executable === true;
           });
       } catch {
@@ -882,10 +882,14 @@ function buildMissingVerificationObligationPrompt(
   registry: ToolRegistry,
   exposedToolNames: Set<string>,
   policy?: ToolContext['toolPolicy'],
+  context?: ToolContext,
 ): string {
   const contract = buildActionContract(task);
   if (!hasPendingVerificationObligation(task, records)) return '';
-  const verificationCapabilities = registry.getCapabilityManifest(policy, { executableOnly: true })
+  const verificationCapabilities = registry.getCapabilityManifest(policy, {
+    executableOnly: true,
+    context,
+  })
     .filter(entry => (
       exposedToolNames.has(entry.toolName)
       && (entry.operation === 'observe' || entry.operation === 'test')
@@ -1882,6 +1886,7 @@ export async function runWithTools(
           toolRegistry,
           new Set(retryDeclarations.map(declaration => declaration.function.name)),
           context?.toolPolicy,
+          withoutRuntimeOwnedRecoveryCall(context),
         );
         if (missingVerification) {
           return await runWithToolsInternal(
@@ -2274,6 +2279,7 @@ async function runWithToolsInternal(
         toolRegistry,
         exposedToolNames,
         toolExecutionContext?.toolPolicy,
+        toolExecutionContext,
       );
       if (
         missingVerification

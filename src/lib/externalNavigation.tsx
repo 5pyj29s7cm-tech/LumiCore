@@ -6,28 +6,47 @@ type ExternalUrlOpener = (url: string) => void | Promise<void>;
 let nativeWindowOpen: typeof window.open | null =
   typeof window === 'undefined' ? null : window.open.bind(window);
 
-/**
- * Only absolute HTTP(S) URLs are external. Relative paths, hashes and custom
- * Lumi actions remain owned by the app instead of being sent to a browser.
- */
-export function isExternalHttpUrl(value: string | null | undefined): boolean {
+function currentExternalHttpProtocol(): 'http:' | 'https:' {
+  if (typeof window !== 'undefined') {
+    const protocol = window.location?.protocol;
+    if (protocol === 'http:' || protocol === 'https:') return protocol;
+  }
+  // Tauri may use a custom WebView protocol. Protocol-relative network links
+  // must still leave the WebView, so use HTTPS rather than inheriting it.
+  return 'https:';
+}
+
+function normalizeExternalHttpUrl(value: string | null | undefined): string | null {
   const candidate = String(value || '').trim();
-  if (!candidate) return false;
+  if (!candidate) return null;
 
   try {
-    const parsed = new URL(candidate);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    const parsed = new URL(candidate.startsWith('//')
+      ? `${currentExternalHttpProtocol()}${candidate}`
+      : candidate);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+      ? parsed.href
+      : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
+/**
+ * Absolute and protocol-relative HTTP(S) URLs are external. Relative paths,
+ * hashes and custom Lumi actions remain owned by the app instead of being sent
+ * to a browser.
+ */
+export function isExternalHttpUrl(value: string | null | undefined): boolean {
+  return normalizeExternalHttpUrl(value) !== null;
+}
+
 export async function openExternalHttpUrl(value: string): Promise<void> {
-  if (!isExternalHttpUrl(value)) {
+  const normalized = normalizeExternalHttpUrl(value);
+  if (!normalized) {
     throw new Error('Only absolute HTTP(S) URLs can be opened externally.');
   }
 
-  const normalized = new URL(value).href;
   if (isTauri()) {
     // The Tauri shell plugin applies its URL scope before delegating to the
     // operating system. It never navigates the Lumi WebView.
@@ -56,12 +75,13 @@ export function installExternalAnchorGuard(
     const element = event.target instanceof Element ? event.target : null;
     const anchor = element?.closest<HTMLAnchorElement>('a[href]');
     const href = anchor?.getAttribute('href');
-    if (!anchor || !isExternalHttpUrl(href)) return;
+    const normalized = normalizeExternalHttpUrl(href);
+    if (!anchor || !normalized) return;
 
     event.preventDefault();
     // Stop Tauri's own target=_blank listener from opening the same URL twice.
     event.stopImmediatePropagation();
-    Promise.resolve(opener(new URL(href!).href)).catch(reportExternalOpenFailure);
+    Promise.resolve(opener(normalized)).catch(reportExternalOpenFailure);
   };
 
   documentTarget.addEventListener('click', onClick, true);
@@ -81,8 +101,9 @@ export function installExternalWindowOpenGuard(
 
   windowTarget.open = ((url?: string | URL, target?: string, features?: string) => {
     const value = typeof url === 'string' ? url : url?.href;
-    if (isExternalHttpUrl(value)) {
-      Promise.resolve(opener(new URL(value!).href)).catch(reportExternalOpenFailure);
+    const normalized = normalizeExternalHttpUrl(value);
+    if (normalized) {
+      Promise.resolve(opener(normalized)).catch(reportExternalOpenFailure);
       return null;
     }
     return original.call(windowTarget, url, target, features);

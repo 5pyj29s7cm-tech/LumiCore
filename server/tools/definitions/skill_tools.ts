@@ -137,9 +137,9 @@ async function generateSkillHandler(args: Record<string, any>, context?: ToolCon
   });
 }
 
-async function listSkillsHandler(registry: ToolRegistry): Promise<string> {
+async function listSkillsHandler(registry: ToolRegistry, context?: ToolContext): Promise<string> {
   try {
-    const states = getExtensionRuntimeStates(registry.getCapabilityManifest());
+    const states = getExtensionRuntimeStates(registry.getCapabilityManifest(undefined, { context }));
     return JSON.stringify({
       ok: true,
       status: 'listed',
@@ -285,7 +285,7 @@ async function searchSkillMarketplaceHandler(
   const limit = Math.max(1, Math.min(30, Math.floor(Number(args.limit) || 12)));
   const lang = String(args.language || '').toLowerCase() === 'zh' ? 'zh' : undefined;
   const runtimeByName = new Map(
-    getExtensionRuntimeStates(registry.getCapabilityManifest())
+    getExtensionRuntimeStates(registry.getCapabilityManifest(undefined, { context }))
       .map(state => [state.name, state]),
   );
   const skills = (query
@@ -580,7 +580,7 @@ export function registerSkillTools(registry: ToolRegistry): void {
       properties: {},
       required: [],
     },
-    handler: () => listSkillsHandler(registry),
+    handler: (_args, context) => listSkillsHandler(registry, context),
     permission: 'public',
     securityLevel: 'safe',
     capability: capabilityContract({

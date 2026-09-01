@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   activateInstalledSkill,
+  mcpPublicRuntimeContractFingerprint,
   mcpRegistryToolName,
   mcpServerConfigFingerprint,
   recoverServerTools,
@@ -150,6 +151,56 @@ describe('MCP config reconciliation', () => {
       cachedToolsFingerprint: 'untrusted',
       toolCount: 1,
     })).toBe(mcpServerConfigFingerprint(first));
+  });
+
+  it('publishes only stable non-secret MCP runtime structure', () => {
+    const first: MCPServerConfig = {
+      enabled: true,
+      transport: 'stdio',
+      command: 'C:\\private\\runner-one\\npx.cmd',
+      args: ['--no-install', 'C:\\private\\server-a.js', '--token=secret-a', '--port=3100'],
+      cwd: 'C:\\Users\\alice\\private-workspace',
+      env: { API_TOKEN: 'secret-a', PRIVATE_ROOT: 'C:\\private\\one' },
+      headers: { Authorization: 'Bearer secret-a', 'X-Tenant': 'tenant-a' },
+    };
+    const rotated: MCPServerConfig = {
+      ...first,
+      command: 'D:\\another-private-root\\npx.exe',
+      args: ['--no-install', 'D:\\private\\server-b.js', '--token=secret-b', '--port=9200'],
+      cwd: 'D:\\Users\\bob\\different-private-workspace',
+      env: { API_TOKEN: 'secret-b', PRIVATE_ROOT: 'D:\\private\\two' },
+      headers: { Authorization: 'Bearer secret-b', 'X-Tenant': 'tenant-b' },
+    };
+    expect(mcpServerConfigFingerprint(rotated)).not.toBe(mcpServerConfigFingerprint(first));
+    expect(mcpPublicRuntimeContractFingerprint(rotated))
+      .toBe(mcpPublicRuntimeContractFingerprint(first));
+
+    expect(mcpPublicRuntimeContractFingerprint({ ...first, args: ['--offline', 'private'] }))
+      .not.toBe(mcpPublicRuntimeContractFingerprint(first));
+    expect(mcpPublicRuntimeContractFingerprint({ ...first, args: ['--api-key=secret-a'] }))
+      .not.toBe(mcpPublicRuntimeContractFingerprint({ ...first, args: ['--token=secret-a'] }));
+    expect(mcpPublicRuntimeContractFingerprint({ ...first, command: 'node.exe' }))
+      .not.toBe(mcpPublicRuntimeContractFingerprint(first));
+    expect(mcpPublicRuntimeContractFingerprint({ ...first, env: { OTHER_KEY: 'secret-a' } }))
+      .not.toBe(mcpPublicRuntimeContractFingerprint(first));
+    expect(mcpPublicRuntimeContractFingerprint({ ...first, headers: { 'X-Other': 'secret-a' } }))
+      .not.toBe(mcpPublicRuntimeContractFingerprint(first));
+
+    const remote: MCPServerConfig = {
+      enabled: true,
+      transport: 'http',
+      url: 'https://alice:secret-a@provider.example/mcp?access=secret-a#private',
+      headers: { Authorization: 'Bearer secret-a' },
+    };
+    const remoteRotated: MCPServerConfig = {
+      ...remote,
+      url: 'https://bob:secret-b@provider.example/mcp?access=secret-b#changed',
+      headers: { Authorization: 'Bearer secret-b' },
+    };
+    expect(mcpPublicRuntimeContractFingerprint(remoteRotated))
+      .toBe(mcpPublicRuntimeContractFingerprint(remote));
+    expect(mcpPublicRuntimeContractFingerprint({ ...remote, url: 'https://provider.example/v2/mcp' }))
+      .not.toBe(mcpPublicRuntimeContractFingerprint(remote));
   });
 
   it('adds and live-registers an enabled server', async () => {

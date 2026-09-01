@@ -59,7 +59,7 @@ export function registerAdapterTools(registry: ToolRegistry): void {
         userId,
         clientState: getClientStateForScope(userId, { domain: context?.domain, orgId: context?.orgId }),
         includePlanned: args.includePlanned !== false,
-        capabilityManifest: registry.getCapabilityManifest(context?.toolPolicy),
+        capabilityManifest: registry.getCapabilityManifest(context?.toolPolicy, { context }),
       });
       const adapters = filterAdapters(report.adapters, args);
       return JSON.stringify({
@@ -96,7 +96,7 @@ export function registerAdapterTools(registry: ToolRegistry): void {
         userId,
         clientState: getClientStateForScope(userId, { domain: context?.domain, orgId: context?.orgId }),
         includePlanned: true,
-        capabilityManifest: registry.getCapabilityManifest(context?.toolPolicy),
+        capabilityManifest: registry.getCapabilityManifest(context?.toolPolicy, { context }),
       });
       const adapters = filterAdapters(report.adapters, args)
         .filter(adapter => !args.adapterId || adapter.id === String(args.adapterId));

@@ -2077,7 +2077,16 @@ async function processVoiceInput(
   );
   const boundaryAllowedToolNames = new Set(boundaryPersonalityToolPolicy.allowedTools || []);
   const boundaryForbiddenTools = toolSecurityContext.executionBoundary === 'remote_restricted'
-    ? toolRegistry.getToolDeclarations()
+    ? toolRegistry.getToolDeclarations({
+        context: {
+          ...toolSecurityContext,
+          userId: session.userId,
+          domain: voiceScope.domain,
+          orgId: voiceScope.orgId,
+          source: 'voice',
+          autonomous: false,
+        },
+      })
         .map(declaration => declaration.function.name)
         .filter(name => !boundaryAllowedToolNames.has('*') && !boundaryAllowedToolNames.has(name))
     : [];
@@ -2974,7 +2983,9 @@ async function processVoiceInput(
         userText,
         defaultChannel: 'voice',
         flow: turnFlow,
-        getToolNames: () => toolRegistry.getToolDeclarations().map(declaration => declaration.function.name),
+        getToolNames: () => toolRegistry.getToolDeclarations({
+          context: { userId: session.userId, domain: voiceScope.domain, orgId: voiceScope.orgId, source: 'voice' },
+        }).map(declaration => declaration.function.name),
         domain: voiceScope.domain,
         orgId: voiceScope.orgId,
         defaultSourceInteractionId: `voice_${Date.now()}`,

@@ -165,7 +165,16 @@ export function mountSkillRoutes(
       const localSkills = mcpManager.listLocalSkills();
       const mcpConfig = getMCPConfig();
       const health = mcpManager.getServerHealth();
-      const allSkills = getExtensionRuntimeStates(toolRegistry.getCapabilityManifest()).map((runtime) => {
+      const scope = resolveDomain(req.user!);
+      const scopedManifest = toolRegistry.getCapabilityManifest(undefined, {
+        context: {
+          userId: req.user!.uid,
+          domain: scope.domain,
+          orgId: scope.orgId,
+          source: 'skills-route',
+        },
+      });
+      const allSkills = getExtensionRuntimeStates(scopedManifest).map((runtime) => {
         const name = runtime.name;
         const config = mcpConfig[name];
         const local = localSkills.find(s => s.name === name);

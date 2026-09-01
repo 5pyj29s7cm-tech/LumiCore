@@ -385,6 +385,72 @@ export function mcpServerConfigFingerprint(config: MCPServerConfig): string {
     .digest('hex');
 }
 
+function publicCommandIdentity(command: unknown): { basename: string; runnerCategory: string } {
+  const basename = String(command || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .split('/')
+    .pop()
+    ?.toLowerCase()
+    .replace(/\.(?:exe|cmd|bat|com|ps1)$/i, '') || '';
+  const runnerCategory = (() => {
+    if (['npm', 'npx', 'pnpm', 'yarn', 'bunx'].includes(basename)) return 'package_runner';
+    if (['node', 'nodejs', 'tsx', 'ts-node', 'deno', 'bun'].includes(basename)) return 'javascript_runtime';
+    if (['python', 'python3', 'py', 'pip', 'pip3', 'uv', 'uvx'].includes(basename)) return 'python_runtime';
+    if (['powershell', 'pwsh', 'cmd', 'bash', 'sh', 'zsh', 'fish'].includes(basename)) return 'shell';
+    if (['java', 'dotnet', 'ruby', 'php', 'perl'].includes(basename)) return 'language_runtime';
+    return basename ? 'executable' : 'none';
+  })();
+  return { basename, runnerCategory };
+}
+
+function publicArgumentShape(argument: unknown): string {
+  const value = String(argument || '');
+  const longFlag = value.match(/^(--[A-Za-z][A-Za-z0-9_-]{0,63})(?:=(.*))?$/);
+  if (longFlag) {
+    return `long:${longFlag[1].toLowerCase()}${value.includes('=') ? '=<value>' : ''}`;
+  }
+  const shortFlag = value.match(/^(-[A-Za-z0-9])(?:(?:=)?(.+))?$/);
+  if (shortFlag) {
+    return `short:${shortFlag[1].toLowerCase()}${shortFlag[2] ? '=<value>' : ''}`;
+  }
+  return '<value>';
+}
+
+function publicEndpointIdentity(value: unknown): string {
+  const endpoint = String(value || '').trim();
+  if (!endpoint) return '';
+  try {
+    const parsed = new URL(endpoint);
+    parsed.username = '';
+    parsed.password = '';
+    parsed.search = '';
+    parsed.hash = '';
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+  } catch {
+    return '<invalid-endpoint>';
+  }
+}
+
+/**
+ * Public runtime identity used in capability manifests. Unlike the private
+ * cache fingerprint, it hashes only non-sensitive transport structure. It
+ * intentionally excludes cwd, ordinary argument values, URL credentials and
+ * queries, and every environment/header value so a published capability
+ * manifest cannot become an offline oracle for private configuration.
+ */
+export function mcpPublicRuntimeContractFingerprint(config: MCPServerConfig): string {
+  const contract = {
+    transport: config.transport || 'stdio',
+    endpoint: publicEndpointIdentity(config.url),
+    command: publicCommandIdentity(config.command),
+    argumentShape: (config.args || []).map(publicArgumentShape),
+    envKeys: Object.keys(config.env || {}).sort(),
+    headerKeys: Object.keys(config.headers || {}).map(key => key.toLowerCase()).sort(),
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(contract)).digest('hex');
+}
+
 function ownServerConfig(
   config: Record<string, MCPServerConfig>,
   name: string,

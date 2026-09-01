@@ -111,7 +111,16 @@ function openStateFor(target: string, settingsSection?: string): ClientStateSnap
 describe('complete personal-client surface contract', () => {
   it('registers every launcher entry rendered by the main desktop program', () => {
     const desktop = source('src/components/DesktopUI.tsx');
-    const desktopIcons = sourceBlock(desktop, 'const desktopIcons = [', 'const desktopIconAreaHeight');
+    const reviewedExternalDesktopIcons = sourceBlock(
+      desktop,
+      'const reviewedExternalDesktopIcons: DesktopIconDefinition[] =',
+      'const desktopIcons: DesktopIconDefinition[] =',
+    );
+    const desktopIcons = sourceBlock(
+      desktop,
+      'const desktopIcons: DesktopIconDefinition[] =',
+      'const desktopIconAreaHeight',
+    );
     const appIcons = sourceBlock(desktop, 'const appIcons = [', 'const desktopAppEntries');
     const utilityIcons = sourceBlock(desktop, 'const utilityAppEntries = [', 'const allAppEntries');
     const renderedLauncherIds = Array.from(new Set([
@@ -126,6 +135,17 @@ describe('complete personal-client surface contract', () => {
     expect(quotedPropertyValues(desktopIcons, 'windowId')).not.toContain('runtime-log');
     expect(quotedPropertyValues(desktopIcons, 'windowId')).toContain('personalization');
     expect(quotedPropertyValues(desktopIcons, 'windowId')).not.toEqual(expect.arrayContaining(['avatar-studio', 'sound']));
+    expect(reviewedExternalDesktopIcons).toContain(
+      'canUseExternalCapabilities ? getDesktopExternalCapabilities(externalCapabilities) : []',
+    );
+    expect(reviewedExternalDesktopIcons).toContain('id: `external-capability:${capability.id}`');
+    expect(reviewedExternalDesktopIcons).toContain('externalLaunch: { capability, action }');
+    expect(quotedPropertyValues(reviewedExternalDesktopIcons, 'windowId')).toEqual([]);
+    expect(desktopIcons).toContain('...reviewedExternalDesktopIcons');
+    expect(desktop).toContain('if (def.externalLaunch) {');
+    expect(desktop).toContain(
+      'void launchExternalCapability(def.externalLaunch.capability, def.externalLaunch.action);',
+    );
     expect(quotedPropertyValues(utilityIcons, 'id')).toContain('personalization');
     expect(quotedPropertyValues(appIcons, 'id')).not.toContain('chat');
     expect(desktop).toContain('const desktopIconColumns = 3');

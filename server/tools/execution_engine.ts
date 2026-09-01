@@ -297,7 +297,7 @@ export async function executeAttachedExternalCommitReconciliation(
   input: ExecuteAttachedExternalCommitReconciliationInput,
 ): Promise<ToolExecutionRecord> {
   const definition = input.registry.get(input.originalToolName);
-  const manifest = input.registry.getCapabilityManifestEntry(input.originalToolName, input.context.toolPolicy);
+  const manifest = input.registry.getCapabilityManifestEntry(input.originalToolName, input.context.toolPolicy, input.context);
   if (!definition?.reconcileExternalCommit || !manifest
     || manifest.capabilityId !== input.originalCapabilityId) {
     throw new Error(`Capability '${input.originalToolName}' has no compatible attached reconciliation hook.`);
@@ -492,9 +492,19 @@ export async function executeToolCall(
   const startedAt = new Date().toISOString();
   const startedMs = Date.now();
   const requestedArguments = input.arguments || {};
+  let preparedArguments = requestedArguments;
+  let semanticToolName = input.name;
+  let preparationError = '';
+  try {
+    const prepared = input.registry.prepareExecution(input.name, requestedArguments, input.context);
+    preparedArguments = prepared.arguments;
+    semanticToolName = prepared.semanticToolName;
+  } catch (error: any) {
+    preparationError = String(error?.message || error || 'Tool argument preparation failed.');
+  }
   const capabilityGetter = (input.registry as any)?.getCapabilityManifestEntry;
   const capability = typeof capabilityGetter === 'function'
-    ? capabilityGetter.call(input.registry, input.name, input.context?.toolPolicy)
+    ? capabilityGetter.call(input.registry, input.name, input.context?.toolPolicy, input.context)
     : undefined;
   // Snapshot the server-routed contract before invoking any caller-supplied
   // compatibility preflight. A preflight may narrow arguments, but it cannot
@@ -502,18 +512,20 @@ export async function executeToolCall(
   const targetPolicyTaskText = serverTargetPolicyTaskText(input.context);
   const currentTurnPolicy = guardCurrentTurnToolCall({
     context: input.context,
-    toolName: input.name,
-    arguments: requestedArguments,
+    toolName: semanticToolName,
+    arguments: preparedArguments,
   });
-  const callerPreflight = currentTurnPolicy.allowed
-    ? input.preflight?.(input.name, requestedArguments)
-      || { allowed: true, arguments: requestedArguments }
-    : currentTurnPolicy;
-  const callerArguments = callerPreflight.arguments || requestedArguments;
+  const callerPreflight = preparationError
+    ? { allowed: false, arguments: requestedArguments, reason: preparationError }
+    : currentTurnPolicy.allowed
+      ? input.preflight?.(input.name, preparedArguments)
+        || { allowed: true, arguments: preparedArguments }
+      : currentTurnPolicy;
+  const callerArguments = callerPreflight.arguments || preparedArguments;
   const targetPolicy = callerPreflight.allowed && isFileTargetTask(targetPolicyTaskText)
     ? guardTaskTargetToolCall({
         taskText: targetPolicyTaskText,
-        toolName: input.name,
+        toolName: semanticToolName,
         arguments: callerArguments,
         toolRecords: serverTargetPolicyEvidence(input.context, targetPolicyTaskText),
         enforceStructuredFileRead: Boolean(
@@ -526,7 +538,7 @@ export async function executeToolCall(
         ),
       })
     : { allowed: true, reason: '' };
-  const serverPreflight: ToolExecutionPreflightResult = !callerPreflight.allowed
+  const targetPreflight: ToolExecutionPreflightResult = !callerPreflight.allowed
     ? { ...callerPreflight, arguments: callerArguments }
     : !targetPolicy.allowed
       ? { allowed: false, arguments: callerArguments, reason: targetPolicy.reason }
@@ -534,8 +546,26 @@ export async function executeToolCall(
           allowed: true,
           arguments: targetPolicy.normalizedArguments || callerArguments,
         };
+  let serverPreflight = targetPreflight;
+  if (serverPreflight.allowed) {
+    try {
+      const rebound = input.registry.prepareExecution(
+        input.name,
+        serverPreflight.arguments || callerArguments,
+        input.context,
+      );
+      serverPreflight = { allowed: true, arguments: rebound.arguments };
+      semanticToolName = rebound.semanticToolName;
+    } catch (error: any) {
+      serverPreflight = {
+        allowed: false,
+        arguments: serverPreflight.arguments || callerArguments,
+        reason: String(error?.message || error || 'Tool argument preparation failed.'),
+      };
+    }
+  }
   const desktopAuthorization = serverPreflight.allowed
-    ? input.context?.desktopExecutionTracker?.authorize(input.name, capability)
+    ? input.context?.desktopExecutionTracker?.authorize(semanticToolName, capability)
     : undefined;
   const preflight = desktopAuthorization && !desktopAuthorization.allowed
     ? { allowed: false, arguments: serverPreflight.arguments, reason: desktopAuthorization.reason }

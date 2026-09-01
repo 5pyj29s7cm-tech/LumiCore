@@ -280,6 +280,14 @@ function availablePreferredTools(input: LumiCapabilitySelectionInput, lane: Lumi
   const lanes = new Set(manifestLane[lane] || []);
   const runtimeManifest = (input.registry || toolRegistry).getCapabilityManifest(input.execution.toolPolicy, {
     executableOnly: true,
+    context: {
+      userId: input.userId,
+      domain: input.domain === 'work' ? 'work' : 'personal',
+      orgId: input.orgId,
+      autonomous: input.dispatch.flow.effectiveOperationMode === 'autonomous'
+        || ['autonomy', 'scheduler'].includes(input.dispatch.channel),
+      source: input.dispatch.source || input.dispatch.channel,
+    },
   });
   const manifest = runtimeManifest.length > 0
     ? runtimeManifest
@@ -322,8 +330,16 @@ function essentialToolsForLane(lane: LumiCapabilityLane): string[] {
   }
 }
 
-function isStrictReadOnlyManifestTool(name: string, registry: ToolRegistry = toolRegistry): boolean {
-  const manifest = registry.getCapabilityManifestEntry(name);
+function isStrictReadOnlyManifestTool(name: string, input: LumiCapabilitySelectionInput): boolean {
+  const registry = input.registry || toolRegistry;
+  const manifest = registry.getCapabilityManifestEntry(name, input.execution.toolPolicy, {
+    userId: input.userId,
+    domain: input.domain === 'work' ? 'work' : 'personal',
+    orgId: input.orgId,
+    autonomous: input.dispatch.flow.effectiveOperationMode === 'autonomous'
+      || ['autonomy', 'scheduler'].includes(input.dispatch.channel),
+    source: input.dispatch.source || input.dispatch.channel,
+  });
   if (!manifest || (manifest.operation !== 'observe' && manifest.operation !== 'test')) return false;
   if (manifest.sideEffects.length === 0) return false;
   return manifest.sideEffects.every(effect => (
@@ -650,7 +666,7 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
     && normalizedIntent.relation !== 'correction',
   );
   const strictReadOnlyTools = canUseLearnedReadPattern
-    ? basePreferredTools.filter(name => isStrictReadOnlyManifestTool(name, input.registry || toolRegistry))
+    ? basePreferredTools.filter(name => isStrictReadOnlyManifestTool(name, input))
     : [];
   const readOnlyPattern = strictReadOnlyTools.length > 0
     ? rankReadOnlyToolPatterns({

@@ -105,6 +105,62 @@ describe('MCP management route security', () => {
     }
   });
 
+  it('projects MCP configuration through an explicit non-attesting allowlist', async () => {
+    const getConfig = vi.spyOn(mcpManager, 'getConfig').mockReturnValue({
+      public_projection_probe: {
+        enabled: false,
+        source: 'external',
+        transport: 'http',
+        url: 'https://private-user:private-pass@provider.example/mcp?token=private-query',
+        headers: { Authorization: 'Bearer private-header' },
+        env: { PRIVATE_TOKEN: 'private-env' },
+        cachedTools: [],
+        cachedToolsFingerprint: 'private-cache-fingerprint',
+        cachedToolsAttestation: 'private-cache-attestation',
+        cwd: 'C:\\private\\mcp-workspace',
+        generatedFrom: 'private-conversation-id',
+        managedSkill: { signature: 'private-managed-skill-signature' } as any,
+      },
+    });
+    const connected = vi.spyOn(mcpManager, 'getConnectedServers').mockReturnValue([]);
+    try {
+      const response = await fetch(`${url}/api/mcp`, {
+        headers: { Authorization: `Bearer ${adminToken}` },
+        signal: AbortSignal.timeout(5000),
+      });
+      expect(response.status).toBe(200);
+      const payload = await response.json();
+      expect(payload.servers).toEqual([expect.objectContaining({
+        name: 'public_projection_probe',
+        enabled: false,
+        envConfigured: true,
+        headersConfigured: true,
+      })]);
+      expect(payload.servers[0]).not.toHaveProperty('env');
+      expect(payload.servers[0]).not.toHaveProperty('headers');
+      expect(payload.servers[0]).not.toHaveProperty('cachedTools');
+      expect(payload.servers[0]).not.toHaveProperty('cachedToolsFingerprint');
+      expect(payload.servers[0]).not.toHaveProperty('cachedToolsAttestation');
+      expect(payload.servers[0]).not.toHaveProperty('cwd');
+      expect(payload.servers[0]).not.toHaveProperty('generatedFrom');
+      expect(payload.servers[0]).not.toHaveProperty('managedSkill');
+      const serialized = JSON.stringify(payload);
+      expect(serialized.toLowerCase()).not.toContain('fingerprint');
+      expect(serialized.toLowerCase()).not.toContain('attestation');
+      expect(serialized).not.toContain('private-env');
+      expect(serialized).not.toContain('private-header');
+      expect(serialized).not.toContain('private-cache');
+      expect(serialized).not.toContain('private-pass');
+      expect(serialized).not.toContain('private-query');
+      expect(serialized).not.toContain('private-managed-skill-signature');
+      expect(serialized).not.toContain('private-conversation-id');
+      expect(serialized).not.toContain('private\\mcp-workspace');
+    } finally {
+      getConfig.mockRestore();
+      connected.mockRestore();
+    }
+  });
+
   it('rejects anonymous and non-admin restart requests before touching a server', async () => {
     const anonymous = await fetch(`${url}/api/mcp/restart/not-configured`, {
       method: 'POST',

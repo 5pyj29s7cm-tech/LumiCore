@@ -323,7 +323,15 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     }, executionBoundary);
     const restBoundaryAllowedToolNames = new Set(restBoundaryToolPolicy.allowedTools || []);
     const restBoundaryForbiddenTools = executionBoundary === 'remote_restricted'
-      ? toolRegistry.getToolDeclarations()
+      ? toolRegistry.getToolDeclarations({
+          context: {
+            userId,
+            domain,
+            orgId,
+            source: 'rest_chat',
+            autonomous: false,
+          },
+        })
           .map(declaration => declaration.function.name)
           .filter(name => !restBoundaryAllowedToolNames.has('*') && !restBoundaryAllowedToolNames.has(name))
       : [];

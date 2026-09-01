@@ -1609,9 +1609,15 @@ export function getSelfModelSnapshot(
         : {}),
     };
   });
-  const manifest = toolRegistry.getCapabilityManifest();
+  const manifest = toolRegistry.getCapabilityManifest(undefined, {
+    context: { userId, domain, orgId: domain === 'work' ? scope.orgId : '' },
+  });
   const extensionProviders = listRegisteredProviders(userId);
-  const adapters = getAdapterRegistry({ userId, clientState: state as Record<string, any> | null });
+  const adapters = getAdapterRegistry({
+    userId,
+    clientState: state as Record<string, any> | null,
+    capabilityManifest: manifest,
+  });
   const knowledge = state?.knowledge || {};
   const totalFiles = Number(knowledge.totalFiles || 0);
   const indexedFiles = Number(knowledge.indexedFiles || 0);
@@ -2062,7 +2068,18 @@ export function formatClientSelfPrompt(
   const enabledWorkflows = workflows.filter(workflow => workflow.enabled);
   const memoryFirewall = getMemoryFirewallPolicy();
   const actionConstitution = getActionConstitutionPolicy();
-  const adapterRegistry = getAdapterRegistry({ userId, clientState: state as Record<string, any> | null });
+  const scopedCapabilityManifest = toolRegistry.getCapabilityManifest(undefined, {
+    context: {
+      userId,
+      domain: isWork ? 'work' : 'personal',
+      orgId: isWork ? scope.orgId : '',
+    },
+  });
+  const adapterRegistry = getAdapterRegistry({
+    userId,
+    clientState: state as Record<string, any> | null,
+    capabilityManifest: scopedCapabilityManifest,
+  });
   const desktopAwareness = isWork
     ? '### Organization Desktop Boundary\nThe server-host exploration profile and the member\'s personal desktop snapshot are not organization knowledge. Use only the verified live organization client state above and refresh the authenticated member desktop through relay tools when the task requires it.'
     : formatDesktopAwarenessForPrompt(userId);
@@ -2070,7 +2087,7 @@ export function formatClientSelfPrompt(
     domain: isWork ? 'work' : 'personal',
     orgId: isWork ? String(scope.orgId || '') : '',
   });
-  const capabilityLines = getClientCapabilities().map(cap => (
+  const capabilityLines = getClientCapabilities(scopedCapabilityManifest).map(cap => (
     `- ${cap.label} [${cap.kind}]: ${cap.notes} Actions: ${cap.actions.join(', ')}${cap.requiresConfirmation ? ' (hard-boundary-sensitive)' : ''}`
   ));
   const interfaceLines = CLIENT_INTERFACE_SURFACES.map(surface => (
