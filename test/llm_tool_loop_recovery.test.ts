@@ -1,3 +1,5 @@
+import os from 'node:os';
+import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -803,7 +805,9 @@ describe('LLM tool-loop recovery and terminal truth', () => {
 
   it('stops after verified current-document evidence instead of recovering an old discovery failure', async () => {
     const registry = new ToolRegistry();
-    const exactPath = 'C:\\Users\\Administrator\\Desktop\\Lumi_\u8def\u6f14.pptx';
+    const desktopDirectory = path.join(os.homedir(), 'Desktop');
+    const documentsDirectory = path.join(os.homedir(), 'Documents');
+    const exactPath = path.join(desktopDirectory, 'Lumi_\u8def\u6f14.pptx');
     registerReadOnlyProbe(registry, 'search_files', async () => encodeToolResult(
       JSON.stringify({ files: [] }),
       { ok: true, status: 'verified' },
@@ -833,7 +837,7 @@ describe('LLM tool-loop recovery and terminal truth', () => {
         toolCalls: [{
           id: 'premature-search',
           name: 'search_files',
-          arguments: { path: 'C:\\Users\\Administrator\\Documents', pattern: 'Lumi_\u8def\u6f14.pptx' },
+          arguments: { path: documentsDirectory, pattern: 'Lumi_\u8def\u6f14.pptx' },
         }],
       })
       .mockResolvedValueOnce({
@@ -845,7 +849,7 @@ describe('LLM tool-loop recovery and terminal truth', () => {
         toolCalls: [{
           id: 'desktop-files',
           name: 'desktop_list_files',
-          arguments: { directory: 'C:\\Users\\Administrator\\Desktop' },
+          arguments: { directory: desktopDirectory },
         }],
       })
       .mockResolvedValueOnce({

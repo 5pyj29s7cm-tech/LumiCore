@@ -44,6 +44,7 @@ await build({
     'lightningcss',
     'playwright-core',
     '@larksuiteoapi/node-sdk',
+    'typescript',
   ],
   banner: {
     js: "import { createRequire as __lumiCreateRequire } from 'module'; const require = __lumiCreateRequire(import.meta.url);",
@@ -64,11 +65,17 @@ await build({
     'lightningcss',
     'playwright-core',
     '@larksuiteoapi/node-sdk',
+    'typescript',
   ],
   banner: {
     js: "import { createRequire as __lumiCreateRequire } from 'module'; const require = __lumiCreateRequire(import.meta.url);",
   },
 });
+
+const serverBundleSource = readFileSync('dist-server/server.mjs', 'utf8');
+if (/function isFileSystemCaseSensitive\(\)[\s\S]{0,500}swapCase\(__filename\)/u.test(serverBundleSource)) {
+  throw new Error('TypeScript CommonJS runtime was bundled into the ESM server output. Keep typescript external.');
+}
 
 // Generate entry.cjs for CommonJS environments (Tauri node.exe, production serve)
 mkdirSync('dist-server', { recursive: true });

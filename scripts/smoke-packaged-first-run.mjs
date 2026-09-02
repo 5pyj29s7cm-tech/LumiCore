@@ -5,7 +5,10 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { bootstrapDesktopTestSession } from './lib/desktop-bootstrap.mjs';
+import {
+  bootstrapDesktopTestSession,
+  DESKTOP_SESSION_HEADER,
+} from './lib/desktop-bootstrap.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const root = path.resolve(path.dirname(__filename), '..');
@@ -134,6 +137,7 @@ async function main() {
   const mcpFactoryConfig = path.join(distServer, 'server', 'mcp', 'config.example.json');
   const mcpRuntimeConfig = path.join(distServer, 'server', 'mcp', 'config.json');
   const tsxCli = path.join(distServer, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  const typescriptPkg = path.join(distServer, 'node_modules', 'typescript', 'package.json');
   const larkSdkPkg = path.join(distServer, 'node_modules', '@larksuiteoapi', 'node-sdk', 'package.json');
   const mcpSdkPkg = path.join(distServer, 'node_modules', '@modelcontextprotocol', 'sdk', 'package.json');
   const zodPkg = path.join(distServer, 'node_modules', 'zod', 'package.json');
@@ -146,6 +150,7 @@ async function main() {
   await assertPath(bundledSkillsDir, 'bundled skills directory');
   await assertPath(mcpFactoryConfig, 'factory MCP config');
   await assertPath(tsxCli, 'packaged tsx CLI');
+  await assertPath(typescriptPkg, 'packaged TypeScript runtime');
   await assertPath(larkSdkPkg, 'packaged Lark SDK');
   await assertPath(mcpSdkPkg, 'packaged MCP SDK');
   await assertPath(zodPkg, 'packaged zod');
@@ -226,10 +231,13 @@ async function main() {
     if (!socketHandshake.startsWith('0{')) throw new Error(`Unexpected Socket.IO handshake: ${socketHandshake.slice(0, 120)}`);
 
     const bootstrap = await bootstrapDesktopTestSession(baseUrl, dataRoot, { timeoutMs: 15000 });
-    if (!bootstrap?.success || !bootstrap?.token) {
+    if (!bootstrap?.success || !bootstrap?.token || !bootstrap?.desktopSessionProof) {
       throw new Error(`Local identity bootstrap failed: ${JSON.stringify(bootstrap)}`);
     }
-    const authHeaders = { Authorization: `Bearer ${bootstrap.token}` };
+    const authHeaders = {
+      Authorization: `Bearer ${bootstrap.token}`,
+      [DESKTOP_SESSION_HEADER]: bootstrap.desktopSessionProof,
+    };
 
     const marketplace = await fetchJson(`${baseUrl}/marketplace/skills?lang=zh`, { timeoutMs: 8000 });
     const bundledSkillCount = (await fs.readdir(bundledSkillsDir, { withFileTypes: true }))
@@ -274,7 +282,10 @@ async function main() {
       return items.find(item => item.name === dirName && item.connected);
     });
 
-    const marketplaceAfterInstall = await fetchJson(`${baseUrl}/marketplace/skills?lang=zh`, { timeoutMs: 8000 });
+    const marketplaceAfterInstall = await fetchJson(`${baseUrl}/marketplace/skills?lang=zh`, {
+      headers: authHeaders,
+      timeoutMs: 8000,
+    });
     const installedSkill = marketplaceAfterInstall.find(item => item.id === args.skillId);
     if (!installedSkill?.installed) {
       throw new Error(`Marketplace did not mark ${args.skillId} as installed`);

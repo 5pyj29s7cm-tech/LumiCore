@@ -11,6 +11,9 @@ const includeLocalVoice = process.env.LUMI_DESKTOP_WITH_LOCAL_VOICE === '1';
 const runtimeNodeModules = ['sqlite3', 'bindings', 'file-uri-to-path', 'sharp', 'detect-libc', 'semver'];
 const runtimePackageTrees = [
   'tsx',
+  // Skill validation imports the TypeScript compiler at runtime. Keep its
+  // CommonJS package external to server.mjs so Node provides CJS globals.
+  'typescript',
   // build-server.mjs keeps this CommonJS SDK external so Node supplies
   // __dirname and the rest of the CommonJS module wrapper at runtime.
   '@larksuiteoapi/node-sdk',

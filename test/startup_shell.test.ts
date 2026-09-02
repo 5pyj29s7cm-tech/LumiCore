@@ -83,6 +83,19 @@ describe('desktop startup shell', () => {
     expect(packagedSmoke).toContain("'packaged Lark SDK'");
   });
 
+  it('keeps the CommonJS TypeScript compiler outside the ESM server bundle and packages it', () => {
+    const buildScript = fs.readFileSync(path.join(process.cwd(), 'scripts/build-server.mjs'), 'utf8');
+    const resourceScript = fs.readFileSync(path.join(process.cwd(), 'scripts/prepare-desktop-resources.mjs'), 'utf8');
+    const packagedSmoke = fs.readFileSync(path.join(process.cwd(), 'scripts/smoke-packaged-first-run.mjs'), 'utf8');
+
+    expect(buildScript).toContain("'typescript'");
+    expect(buildScript).toContain('TypeScript CommonJS runtime was bundled into the ESM server output');
+    expect(resourceScript).toContain("'typescript'");
+    expect(packagedSmoke).toContain("'packaged TypeScript runtime'");
+    expect(packagedSmoke).toContain('DESKTOP_SESSION_HEADER');
+    expect(packagedSmoke).toContain('bootstrap.desktopSessionProof');
+  });
+
   it('packages immutable runtime version metadata and verifies it on first run', () => {
     const buildScript = fs.readFileSync(path.join(process.cwd(), 'scripts/build-server.mjs'), 'utf8');
     const resourceScript = fs.readFileSync(path.join(process.cwd(), 'scripts/prepare-desktop-resources.mjs'), 'utf8');
