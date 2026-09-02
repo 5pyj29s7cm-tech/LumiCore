@@ -35,8 +35,16 @@ import { transcribeAudioFile } from "../stt/file_transcription";
 import { computeAdaptiveEndpointSilenceMs } from "../stt/adaptive_endpointing";
 import { getMeetingAudioDir } from "../stt/artifact_paths";
 import { isVoiceProfileAccessible, listScopedVoiceProfiles, voiceProfileScope } from '../tts/profile_store';
-import { synthesizeSpeech, getActiveProvider as getTTSProvider, listVoices as listTTSVoices, resolveEmotionVoice } from "../tts/adapter";
+import {
+  synthesizeSpeech,
+  getActiveProvider as getTTSProvider,
+  getFallbackProvider as getTTSFallbackProvider,
+  isTtsCancellationError,
+  listVoices as listTTSVoices,
+  resolveEmotionVoice,
+} from "../tts/adapter";
 import type { TTSProvider } from '../tts/types';
+import { getConfiguredVoiceModel, getVoicePreference } from '../config/voice_preference';
 import { extractFirstCompleteSpeechSentence } from "../tts/speculative_sentence";
 import { recordLatency } from "../monitor/latency_store";
 import { markVoiceLatencyMilestone, startVoiceLatencyTrace } from "../monitor/voice_latency_store";
@@ -63,6 +71,7 @@ import {
   setConversationActionExecutionStatus,
   startConversationActionExecutionHeartbeat,
   supersedeConversationActionExecutionRequest,
+  updateAssistantMessageTerminalPresentation,
   updateConversationActionFocus,
   type ConvergeConversationActionRequestLeaseResult,
   type FinalizeForegroundRequestResult,
@@ -154,7 +163,6 @@ import { formatProactiveSuggestionForPrompt, getRecentProactiveSuggestion } from
 import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { createDesktopRelay } from "./desktop_relay";
 import {
-  canReuseSpeculativeVoiceSpeech,
   resolveVoiceModelInputBudget,
   VOICE_CHAT_INPUT_BUDGET_TOKENS,
   VOICE_DESKTOP_LEASE_WAIT_MS,
@@ -227,6 +235,7 @@ import {
   shouldForwardPreFinalizationProgress,
 } from "../cognition/response_delivery";
 import { normalizeSpeechCommand, speechCommandKey } from '../cognition/speech_normalization';
+import { assessVoiceTranscriptForExecution } from '../cognition/voice_transcript_guard';
 import { isCurrentVoiceInputSource, isRepeatedVoiceFinal } from '../cognition/voice_input_guard';
 import { normalizeVoiceHistory } from './voice_history';
 import { buildSocketNativeRequestBinding } from './native_request_binding';
@@ -487,6 +496,37 @@ export type VoiceSwitchSession = Pick<
   'isActive' | 'sessionId' | 'userId' | 'domain' | 'orgId' | 'currentVoiceId'
 >;
 
+/** Drop provider-specific speaker identity when the realtime call ends. */
+export function clearVoiceSessionTtsSelection(
+  session: Pick<AudioSession, 'currentVoiceId' | 'voiceSwitchGeneration'>,
+): void {
+  session.currentVoiceId = null;
+  session.voiceSwitchGeneration += 1;
+}
+
+export type VoiceStartAsyncFence = 'current' | 'stale_voice_selection' | 'abandon_start';
+
+/**
+ * An in-call voice switch invalidates only the pending speaker resolution.
+ * The same audio:start request still owns STT initialization. A stopped call
+ * or a newer session id, by contrast, invalidates the whole start handler.
+ */
+export function resolveVoiceStartAsyncFence(input: {
+  sessionActive: boolean;
+  currentSessionId: string;
+  startSessionId: string;
+  currentVoiceSwitchGeneration: number;
+  startVoiceSwitchGeneration: number;
+}): VoiceStartAsyncFence {
+  if (!input.sessionActive || input.currentSessionId !== input.startSessionId) {
+    return 'abandon_start';
+  }
+  if (input.currentVoiceSwitchGeneration !== input.startVoiceSwitchGeneration) {
+    return 'stale_voice_selection';
+  }
+  return 'current';
+}
+
 export type VoiceSwitchResolution =
   | {
       accepted: true;
@@ -561,6 +601,36 @@ export interface ProviderVoiceResolution {
   replaced: boolean;
 }
 
+export interface LockedVoiceTurnTtsRoute {
+  readonly provider: TTSProvider;
+  readonly voiceId: string;
+  readonly model?: string;
+  readonly speechRate?: number;
+  readonly pitch?: number;
+  readonly volume?: number;
+}
+
+/**
+ * The identity of a speaker is immutable for one assistant response. Provider
+ * settings and live voice changes are intentionally observed by the next
+ * response, never half way through a sentence queue already being played.
+ */
+export function lockVoiceTurnTtsRoute(input: LockedVoiceTurnTtsRoute): LockedVoiceTurnTtsRoute {
+  return Object.freeze({ ...input });
+}
+
+/** A real provider failure may fall back only before this reply emitted audio. */
+export function canFallbackVoiceTurnTtsRoute(input: {
+  emittedSegments: number;
+  fallbackAttempted: boolean;
+  error: unknown;
+  signal?: AbortSignal;
+}): boolean {
+  return input.emittedSegments === 0
+    && !input.fallbackAttempted
+    && !isTtsCancellationError(input.error, input.signal);
+}
+
 /**
  * Keep a live call's voice on the same provider as the active TTS route.
  * Preview requests carry provider/model explicitly, while the realtime socket
@@ -619,6 +689,35 @@ async function resolveVoiceForProvider(
     logger.warn(`[Audio] Could not load ${provider} voice catalogue: ${error?.message || String(error)}`);
   }
   return chooseVoiceForProvider(requestedVoiceId, provider, profiles, providerVoices);
+}
+
+async function resolveSingleVoiceTtsRoute(
+  session: Pick<AudioSession, 'userId' | 'domain' | 'orgId' | 'currentVoiceId' | 'personalityId'>,
+  provider: TTSProvider,
+  requestedVoiceId: string | null,
+  emotional = true,
+): Promise<LockedVoiceTurnTtsRoute | null> {
+  const resolution = await resolveVoiceForProvider(
+    voiceProfileScope(session.userId, session.domain, session.orgId),
+    provider,
+    requestedVoiceId,
+  );
+  if (!resolution.voiceId) return null;
+  const emotionVoice = emotional
+    ? (() => {
+        try { return resolveEmotionVoice(resolution.voiceId!, loadEmotionalState(getVoiceStateKey(session as AudioSession))); }
+        catch { return { voiceId: resolution.voiceId! }; }
+      })()
+    : { voiceId: resolution.voiceId };
+  const preference = getVoicePreference();
+  return lockVoiceTurnTtsRoute({
+    provider,
+    voiceId: emotionVoice.voiceId,
+    ...(provider === 'relay' ? { model: getConfiguredVoiceModel('tts', preference) } : {}),
+    ...('speechRate' in emotionVoice && emotionVoice.speechRate !== undefined ? { speechRate: emotionVoice.speechRate } : {}),
+    ...('pitch' in emotionVoice && emotionVoice.pitch !== undefined ? { pitch: emotionVoice.pitch } : {}),
+    ...('volume' in emotionVoice && emotionVoice.volume !== undefined ? { volume: emotionVoice.volume } : {}),
+  });
 }
 
 interface VoiceInputTiming {
@@ -715,6 +814,18 @@ export function isPureInterruptCommand(text: string): boolean {
   return /^(停|停下|停止|停止任务|终止任务|取消任务|打断|闭嘴|别说|不要说|先别说|别讲|不要讲|等下|等一下|暂停|好了|行了|够了|停一下|停一停|先停|先停一下|别说了|不要说了|先别说了|别讲了|不要讲了|打断一下|等我一下|暂停一下|可以了|不用说了|先这样|stop|stoptask|canceltask|wait|pause|interrupt|holdon|shutup)$/.test(normalized);
 }
 
+export function quiesceActiveVoiceTransport(session: Pick<
+  AudioSession,
+  'bgGeneration' | 'isSpeaking' | 'ttsPlaybackUntil' | 'ttsAbortController' | 'pipelineAbortController' | 'sidecarAbortController'
+>): void {
+  session.bgGeneration += 1;
+  session.isSpeaking = false;
+  session.ttsPlaybackUntil = 0;
+  session.ttsAbortController?.abort();
+  session.pipelineAbortController?.abort();
+  session.sidecarAbortController?.abort();
+}
+
 async function cancelActiveVoiceTurn(
   session: AudioSession,
   preserveInterruptedTurn = false,
@@ -722,6 +833,11 @@ async function cancelActiveVoiceTurn(
   preserveInputQueue = false,
 ): Promise<boolean> {
   const foregroundIdentity = session.activeForegroundRequestIdentity;
+  const interruptedRoutingText = session.activeRoutingText.trim();
+  // Quiesce the old transport owner before the first awaited durability step.
+  // Previously barge-in waited for convergence while the old model/TTS lane
+  // remained live, allowing it to publish or speak after the new utterance.
+  quiesceActiveVoiceTransport(session);
   const releaseReason = preserveDurableTask
     ? 'The voice request yielded to an exact continuation before terminal delivery.'
     : 'The active voice request was cancelled before transport resources were released.';
@@ -762,9 +878,9 @@ async function cancelActiveVoiceTurn(
     assistantState: session.activeWorkStep || undefined,
   });
   if (foregroundIdentity && !durableRelease?.converged) return false;
-  if (preserveInterruptedTurn && session.activeRoutingText.trim()) {
+  if (preserveInterruptedTurn && interruptedRoutingText) {
     session.pendingInterruptedTurn = {
-      text: session.activeRoutingText.trim(),
+      text: interruptedRoutingText,
       interruptedAt: Date.now(),
     };
   } else if (!preserveInterruptedTurn) {
@@ -1335,6 +1451,7 @@ async function respondAlongsideActiveVoiceWork(
   userText: string,
   llmGetters: LlmGetters,
   kind: ReturnType<typeof classifyVoiceWorkInterruption>,
+  deterministicResponse?: { text: string; cognitiveIntent: string },
 ): Promise<void> {
   const workRequestId = session.activeTurnRequestId;
   if (!workRequestId) return;
@@ -1348,7 +1465,9 @@ async function respondAlongsideActiveVoiceWork(
   let responseText = '';
   let llmWasCalled = false;
   try {
-    if (kind === 'progress_query') {
+    if (deterministicResponse) {
+      responseText = deterministicResponse.text;
+    } else if (kind === 'progress_query') {
       responseText = buildActiveVoiceWorkProgressReply(session, userText);
     } else if (kind === 'new_work') {
       const isEnglish = /[a-z]/i.test(userText) && !/[\u3400-\u9fff]/u.test(userText);
@@ -1441,7 +1560,8 @@ async function respondAlongsideActiveVoiceWork(
       responseText,
       userReceivedAt,
       responseAt,
-      cognitiveIntent: kind === 'new_work' ? 'queued_work' : kind,
+      cognitiveIntent: deterministicResponse?.cognitiveIntent
+        || (kind === 'new_work' ? 'queued_work' : kind),
       llmWasCalled,
       // A queued command is persisted by its own execution turn so it is not
       // duplicated as an ordinary conversational aside.
@@ -1471,7 +1591,7 @@ async function respondAlongsideActiveVoiceWork(
           mode: 'voice',
           source: 'voice_sidecar',
           channel: 'voice',
-          cognitiveIntent: kind,
+          cognitiveIntent: deterministicResponse?.cognitiveIntent || kind,
           llmWasCalled: false,
           receivedAt: userReceivedAt,
           timestamp: userReceivedAt,
@@ -1489,7 +1609,7 @@ async function respondAlongsideActiveVoiceWork(
           mode: 'voice',
           source: 'voice_sidecar',
           channel: 'voice',
-          cognitiveIntent: kind,
+          cognitiveIntent: deterministicResponse?.cognitiveIntent || kind,
           llmWasCalled,
           receivedAt: responseAt,
           timestamp: responseAt,
@@ -1530,13 +1650,11 @@ async function respondAlongsideActiveVoiceWork(
       if (session.isActive) emitVoiceTtsFailure(socket, workRequestId, 'conversation');
       return;
     }
-    const emotionVoice = (() => {
-      try {
-        return resolveEmotionVoice(session.currentVoiceId || 'longxiaochun_v3', loadEmotionalState(getVoiceStateKey(session)));
-      } catch {
-        return { voiceId: session.currentVoiceId || 'longxiaochun_v3' };
-      }
-    })();
+    const ttsRoute = await resolveSingleVoiceTtsRoute(session, ttsProvider, session.currentVoiceId);
+    if (!ttsRoute) {
+      emitVoiceTtsFailure(socket, workRequestId, 'conversation');
+      return;
+    }
     const speechGeneration = ++session.bgGeneration;
     session.ttsAbortController?.abort();
     session.ttsAbortController = controller;
@@ -1544,11 +1662,12 @@ async function respondAlongsideActiveVoiceWork(
     ttsSpeakingCount++;
     ttsCountIncremented = true;
     const ttsResult = await synthesizeSpeech(responseText, {
-      provider: ttsProvider,
-      voiceId: emotionVoice.voiceId,
-      speechRate: emotionVoice.speechRate,
-      pitch: emotionVoice.pitch,
-      volume: emotionVoice.volume,
+      provider: ttsRoute.provider,
+      voiceId: ttsRoute.voiceId,
+      model: ttsRoute.model,
+      speechRate: ttsRoute.speechRate,
+      pitch: ttsRoute.pitch,
+      volume: ttsRoute.volume,
       signal: controller.signal,
       allowFallback: false,
     });
@@ -1569,7 +1688,7 @@ async function respondAlongsideActiveVoiceWork(
       requestId: workRequestId,
     });
   } catch (err: any) {
-    if (err?.name !== 'AbortError') {
+    if (!isTtsCancellationError(err, controller.signal)) {
       logger.warn(`[Audio Sidecar] ${err?.message || String(err)}`);
       emitVoiceTtsFailure(socket, workRequestId, 'conversation');
     }
@@ -1600,6 +1719,24 @@ async function processVoiceInput(
     blockUnverifiedVoice(socket, session, 'Rejected voice command from unverified speaker');
     return;
   }
+
+  const transcriptExecutionGuard = assessVoiceTranscriptForExecution(userText);
+  if (transcriptExecutionGuard.action === 'clarify') {
+    logger.warn(
+      `[Audio] Guarded uncertain final transcript reason=${transcriptExecutionGuard.reason} chars=${userText.length}; no tool route will be admitted`,
+    );
+  }
+
+  // Snapshot the whole TTS selection before any awaited work. A settings or
+  // voice change received while this turn is planning/generating belongs to
+  // the next assistant response and cannot split this one across speakers.
+  const turnVoicePreference = getVoicePreference();
+  const turnTtsSelection = Object.freeze({
+    provider: getTTSProvider(),
+    requestedVoiceId: session.currentVoiceId,
+    switchGeneration: session.voiceSwitchGeneration,
+    model: getConfiguredVoiceModel('tts', turnVoicePreference),
+  });
 
   const pendingInterruptedTurn = session.pendingInterruptedTurn;
   const interruptedTurnAge = pendingInterruptedTurn
@@ -1889,7 +2026,9 @@ async function processVoiceInput(
   session.pendingInterruptedTurn = null;
   session.isSpeaking = false;
   session.isProcessing = true;
-  session.isBackgroundWork = !isCapabilityMetaQuestion(actionIntentText) && hasExplicitToolIntent(actionIntentText);
+  session.isBackgroundWork = transcriptExecutionGuard.action !== 'clarify'
+    && !isCapabilityMetaQuestion(actionIntentText)
+    && hasExplicitToolIntent(actionIntentText);
   session.activeWorkStatus = session.isBackgroundWork ? 'planning' : 'idle';
   session.activeWorkStep = '';
   session.activeWorkToolCalls = 0;
@@ -1913,20 +2052,25 @@ async function processVoiceInput(
   }
   const routedUserText = [actionIntentText, actionContinuationBridge, proactiveContextPrompt, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
   session.activeRoutingText = actionIntentText;
-  let preMatchedQuickResult: Awaited<ReturnType<typeof matchQuickCommand>> = null;
-  try {
-    preMatchedQuickResult = shouldRunLegacyDirectExecution() ? await matchQuickCommand(
-      continuationOpenTarget ? buildInternalOpenCommand(userText, continuationOpenTarget) : userText,
-      session.userId,
-      {
-      domain: voiceScope.domain,
-      orgId: voiceScope.orgId,
-      surface: 'voice',
-      currentAppTarget: getRecoveredApplicationContinuationTarget(actionContinuationBridge),
-      pendingAssistantOfferContext,
-      },
-    ) : null;
-  } catch {}
+  let preMatchedQuickResult: Awaited<ReturnType<typeof matchQuickCommand>> =
+    transcriptExecutionGuard.action === 'clarify'
+      ? { matched: true, responseText: transcriptExecutionGuard.responseText }
+      : null;
+  if (!preMatchedQuickResult) {
+    try {
+      preMatchedQuickResult = shouldRunLegacyDirectExecution() ? await matchQuickCommand(
+        continuationOpenTarget ? buildInternalOpenCommand(userText, continuationOpenTarget) : userText,
+        session.userId,
+        {
+        domain: voiceScope.domain,
+        orgId: voiceScope.orgId,
+        surface: 'voice',
+        currentAppTarget: getRecoveredApplicationContinuationTarget(actionContinuationBridge),
+        pendingAssistantOfferContext,
+        },
+      ) : null;
+    } catch {}
+  }
   const requestedModeHint = detectRequestedOperationMode(userText);
   const skipKnowledgeRetrieval = Boolean(preMatchedQuickResult)
     || Boolean(requestedModeHint)
@@ -2122,7 +2266,9 @@ async function processVoiceInput(
   const workSurfaceRoute = turnFlow.workSurfaceRoute;
   const visionIntent = turnFlow.visionIntent;
   const executionDecision = executionPipeline.execution;
-  const requestedToolSession = executionPipeline.executionRequested;
+  const requestedToolSession = transcriptExecutionGuard.action === 'clarify'
+    ? false
+    : executionPipeline.executionRequested;
   const voiceInputTokenBudget = resolveVoiceModelInputBudget({
     text: actionIntentText,
     allowToolUse: requestedToolSession,
@@ -2148,7 +2294,7 @@ async function processVoiceInput(
     operationMode: turnFlow.effectiveOperationMode,
     source: 'voice',
   });
-  if (capabilityMetaResponse) {
+  if (!preMatchedQuickResult && capabilityMetaResponse) {
     preMatchedQuickResult = { matched: true, responseText: capabilityMetaResponse };
   }
   if (!preMatchedQuickResult && clientActionOnlyTurn) {
@@ -2207,6 +2353,7 @@ async function processVoiceInput(
     conversationTurn.conversation.actionContinuationState,
   );
   const actionTaskExecution = turnFlow.conceptualCapabilityQuestion
+    || transcriptExecutionGuard.action === 'clarify'
     ? { state: null, kind: 'conversation' as const }
     : userObservedCompletion
     ? {
@@ -2300,12 +2447,18 @@ async function processVoiceInput(
     try {
       const ttsProvider = getTTSProvider();
       if (bindingCommitted && ttsProvider && session.currentVoiceId && session.isActive) {
+        const ttsRoute = await resolveSingleVoiceTtsRoute(session, ttsProvider, session.currentVoiceId);
+        if (!ttsRoute) throw new Error(`Provider ${ttsProvider} has no compatible voice`);
         session.isSpeaking = true;
         ttsSpeakingCount++;
         bindingSpeechCounted = true;
         const ttsResult = await synthesizeSpeech(staleText, {
-          provider: ttsProvider,
-          voiceId: session.currentVoiceId,
+          provider: ttsRoute.provider,
+          voiceId: ttsRoute.voiceId,
+          model: ttsRoute.model,
+          speechRate: ttsRoute.speechRate,
+          pitch: ttsRoute.pitch,
+          volume: ttsRoute.volume,
           signal: pipelineAbort.signal,
           allowFallback: false,
         });
@@ -2322,7 +2475,7 @@ async function processVoiceInput(
         }
       }
     } catch (bindingSpeechError: any) {
-      if (bindingSpeechError?.name !== 'AbortError') {
+      if (!isTtsCancellationError(bindingSpeechError, pipelineAbort.signal)) {
         logger.warn(`[Audio] Failed to speak stale/busy turn response: ${bindingSpeechError?.message || String(bindingSpeechError)}`);
         emitVoiceTtsFailure(socket, requestId, 'conversation');
       }
@@ -2653,6 +2806,10 @@ async function processVoiceInput(
     persistTerminalState?: () => T;
     publishAfter?: (terminalState: T | undefined) => void;
   }): Promise<boolean> => {
+    // An interrupted/superseded turn no longer owns persistence, publication,
+    // or speech. Its cancellation terminal is committed by the transport
+    // handler against the captured request identity instead.
+    if (!isCurrentTurn()) return false;
     if (actionLeaseHeartbeat?.isLeaseLost()) {
       await actionLeaseHeartbeat.leaseLoss;
       return false;
@@ -2667,11 +2824,13 @@ async function processVoiceInput(
     });
     const committed = await commitChatTerminalBoundary<T | undefined>({
       persistTerminalState: () => {
+        if (!isCurrentTurn()) throw Object.assign(new Error('Voice turn superseded'), { name: 'AbortError' });
         persistVoiceUserMessage(input.cognitiveIntent);
         persistSidecarConversation(conversationTurn.conversation.id);
         return input.persistTerminalState?.();
       },
       persistAssistantMessage: () => {
+        if (!isCurrentTurn()) throw Object.assign(new Error('Voice turn superseded'), { name: 'AbortError' });
         // Keep the request lease alive until the assistant row has consumed
         // the terminal tool receipts. Settling it first clears the pending
         // turn and makes the durable transcript lose the very evidence needed
@@ -2710,6 +2869,7 @@ async function processVoiceInput(
         executionUnknownPayload,
       ),
       publishCommitted: terminalState => {
+        if (!isCurrentTurn()) return;
         if (input.notification) {
           publishRecordedAgent(
             'agent:notification',
@@ -2957,15 +3117,9 @@ async function processVoiceInput(
     modelToolProjection,
     desktopExecutionTracker,
   };
-  // Resolve at synthesis time so a live switch also applies to sentences that
-  // were queued while the model was still generating this turn.
-  const resolveCurrentEmotionVoice = (): { voiceId: string; speechRate?: number; pitch?: number; volume?: number } => {
-    try {
-      const es = loadEmotionalState(voiceStateKey);
-      if (es) return resolveEmotionVoice(session.currentVoiceId || 'longxiaochun_v3', es);
-    } catch {}
-    return { voiceId: session.currentVoiceId || 'longxiaochun_v3' };
-  };
+  const turnEmotionState = (() => {
+    try { return loadEmotionalState(voiceStateKey); } catch { return undefined; }
+  })();
   let responseText = '';
   let toolResults: ToolExecutionRecord[] = [];
   const persistVoiceLearning = (
@@ -3045,13 +3199,119 @@ async function processVoiceInput(
   let turnSpeechAbort: AbortController | null = null;
   let ttsQueue: Promise<void> = Promise.resolve();
   type SynthesizedSpeech = Awaited<ReturnType<typeof synthesizeSpeech>>;
+  let lockedTurnTtsRoute: LockedVoiceTurnTtsRoute | null | undefined;
+  let lockedTurnTtsRoutePromise: Promise<LockedVoiceTurnTtsRoute | null> | null = null;
+  let turnTtsEmittedSegments = 0;
+  let turnTtsFallbackAttempted = false;
+  let turnTtsUnavailable = false;
+
+  const resolveLockedRoute = async (
+    provider: TTSProvider,
+    requestedVoiceId: string | null,
+  ): Promise<LockedVoiceTurnTtsRoute | null> => {
+    const voiceResolution = await resolveVoiceForProvider(
+      voiceProfileScope(session.userId, session.domain, session.orgId),
+      provider,
+      requestedVoiceId,
+    );
+    if (!voiceResolution.voiceId) return null;
+    const emotionVoice = resolveEmotionVoice(voiceResolution.voiceId, turnEmotionState);
+    return lockVoiceTurnTtsRoute({
+      provider,
+      voiceId: emotionVoice.voiceId,
+      ...(provider === 'relay' && turnTtsSelection.model ? { model: turnTtsSelection.model } : {}),
+      ...(emotionVoice.speechRate !== undefined ? { speechRate: emotionVoice.speechRate } : {}),
+      ...(emotionVoice.pitch !== undefined ? { pitch: emotionVoice.pitch } : {}),
+      ...(emotionVoice.volume !== undefined ? { volume: emotionVoice.volume } : {}),
+    });
+  };
+
+  const getLockedTurnTtsRoute = (): Promise<LockedVoiceTurnTtsRoute | null> => {
+    if (lockedTurnTtsRoute !== undefined) return Promise.resolve(lockedTurnTtsRoute);
+    if (lockedTurnTtsRoutePromise) return lockedTurnTtsRoutePromise;
+    lockedTurnTtsRoutePromise = (async () => {
+      if (!turnTtsSelection.provider || !turnTtsSelection.requestedVoiceId) return null;
+      const route = await resolveLockedRoute(
+        turnTtsSelection.provider,
+        turnTtsSelection.requestedVoiceId,
+      );
+      // Reconcile the server selection for future turns, but never overwrite a
+      // newer explicit switch that arrived while this route was resolving.
+      if (
+        route
+        && route.voiceId !== turnTtsSelection.requestedVoiceId
+        && session.voiceSwitchGeneration === turnTtsSelection.switchGeneration
+        && session.currentVoiceId === turnTtsSelection.requestedVoiceId
+      ) {
+        const previousVoiceId = session.currentVoiceId;
+        session.currentVoiceId = route.voiceId;
+        session.voiceSwitchGeneration += 1;
+        socket.emit('audio:voice_changed', {
+          voiceId: route.voiceId,
+          previousVoiceId,
+          sessionId: session.sessionId,
+          provider: route.provider,
+          fallback: true,
+          reason: 'provider_compatibility',
+        });
+      }
+      return route;
+    })().then(route => {
+      lockedTurnTtsRoute = route;
+      lockedTurnTtsRoutePromise = null;
+      return route;
+    }, error => {
+      lockedTurnTtsRoutePromise = null;
+      throw error;
+    });
+    return lockedTurnTtsRoutePromise;
+  };
+
+  const tryLockTurnTtsFallback = async (
+    failedRoute: LockedVoiceTurnTtsRoute,
+    error: unknown,
+    signal: AbortSignal,
+  ): Promise<LockedVoiceTurnTtsRoute | null> => {
+    if (!canFallbackVoiceTurnTtsRoute({
+      emittedSegments: turnTtsEmittedSegments,
+      fallbackAttempted: turnTtsFallbackAttempted,
+      error,
+      signal,
+    })) return null;
+    turnTtsFallbackAttempted = true;
+    const fallbackProvider = getTTSFallbackProvider(failedRoute.provider, { requireWarmLocal: true });
+    if (!fallbackProvider || fallbackProvider === failedRoute.provider) return null;
+    const fallbackRoute = await resolveLockedRoute(
+      fallbackProvider,
+      turnTtsSelection.requestedVoiceId,
+    );
+    if (!fallbackRoute) return null;
+    lockedTurnTtsRoute = fallbackRoute;
+    logger.warn(
+      `[Audio TTS] Primary route failed before playback; locked request=${requestId} fallback=${fallbackRoute.provider} voice=${fallbackRoute.voiceId}`,
+    );
+    return fallbackRoute;
+  };
+
+  const synthesizeOnRoute = (
+    text: string,
+    route: LockedVoiceTurnTtsRoute,
+    signal: AbortSignal,
+  ) => synthesizeSpeech(text, {
+    provider: route.provider,
+    voiceId: route.voiceId,
+    model: route.model,
+    speechRate: route.speechRate,
+    pitch: route.pitch,
+    volume: route.volume,
+    signal,
+    allowFallback: false,
+  });
+
   let speculativeSpeech: {
     text: string;
-    provider: TTSProvider;
-    voiceId: string;
-    switchGeneration: number;
     controller: AbortController;
-    promise: Promise<{ result?: SynthesizedSpeech; error?: unknown }>;
+    promise: Promise<{ result?: SynthesizedSpeech; route?: LockedVoiceTurnTtsRoute; error?: unknown }>;
   } | null = null;
 
   const ensureTurnSpeechController = () => {
@@ -3095,46 +3355,59 @@ async function processVoiceInput(
   };
 
   const maybeStartSpeculativeSpeech = () => {
-    const ttsProvider = getTTSProvider();
     if (
       speculativeSpeech
       || toolSessionActive
       || deferCompletionSpeech
-      || !ttsProvider
-      || !session.currentVoiceId
+      || !turnTtsSelection.provider
+      || !turnTtsSelection.requestedVoiceId
       || pipelineAbort?.signal.aborted
     ) return;
     const firstSentence = extractFirstCompleteSpeechSentence(responseText);
     if (!firstSentence) return;
-    const currentEmotionVoice = resolveCurrentEmotionVoice();
-    const switchGeneration = session.voiceSwitchGeneration;
     const controller = new AbortController();
     pipelineAbort?.signal.addEventListener('abort', () => controller.abort(), { once: true });
-    const promise = synthesizeSpeech(firstSentence, {
-      provider: ttsProvider,
-      voiceId: currentEmotionVoice.voiceId,
-      speechRate: currentEmotionVoice.speechRate,
-      pitch: currentEmotionVoice.pitch,
-      volume: currentEmotionVoice.volume,
-      signal: controller.signal,
-      allowFallback: false,
-    }).then(result => {
-      markVoiceLatencyMilestone(requestId, 'firstTtsReadyAt');
-      return { result };
-    }).catch(error => ({ error }));
+    const promise = getLockedTurnTtsRoute()
+      .then(async route => {
+        if (!route) return { error: new Error('No compatible TTS route is available') };
+        const result = await synthesizeOnRoute(firstSentence, route, controller.signal);
+        markVoiceLatencyMilestone(requestId, 'firstTtsReadyAt');
+        return { result, route };
+      })
+      .catch(error => ({ error }));
     speculativeSpeech = {
       text: firstSentence,
-      provider: ttsProvider,
-      voiceId: currentEmotionVoice.voiceId,
-      switchGeneration,
       controller,
       promise,
     };
   };
 
+  const synthesizeWithLockedTurnRoute = async (
+    text: string,
+    signal: AbortSignal,
+    preparedFailure?: { route?: LockedVoiceTurnTtsRoute; error: unknown },
+  ): Promise<{ result: SynthesizedSpeech; route: LockedVoiceTurnTtsRoute }> => {
+    let route = preparedFailure?.route || await getLockedTurnTtsRoute();
+    if (!route) throw preparedFailure?.error || new Error('No compatible TTS route is available');
+
+    if (preparedFailure) {
+      const fallback = await tryLockTurnTtsFallback(route, preparedFailure.error, signal);
+      if (!fallback) throw preparedFailure.error;
+      route = fallback;
+    }
+
+    try {
+      return { result: await synthesizeOnRoute(text, route, signal), route };
+    } catch (error) {
+      const fallback = await tryLockTurnTtsFallback(route, error, signal);
+      if (!fallback) throw error;
+      return { result: await synthesizeOnRoute(text, fallback, signal), route: fallback };
+    }
+  };
+
   const flushSentence = (sentence: string): Promise<number> => {
     const txt = sentence.trim();
-    if (!txt || txt.length <= 1 || !session.isActive || session.suppressedSpeechRequestIds.has(requestId)) return Promise.resolve(0);
+    if (!txt || txt.length <= 1 || turnTtsUnavailable || !session.isActive || session.suppressedSpeechRequestIds.has(requestId)) return Promise.resolve(0);
     if (!/[a-zA-Z一-鿿㐀-䶿\d]/.test(txt)) return Promise.resolve(0);
     const speech = ensureTurnSpeechController();
     if (speech.controller.signal.aborted) return Promise.resolve(0);
@@ -3151,83 +3424,40 @@ async function processVoiceInput(
         resolvePlayback(0);
         return;
       }
+      if (turnTtsUnavailable) {
+        resolvePlayback(0);
+        return;
+      }
       session.isSpeaking = true;
       ttsSpeakingCount++;
       try {
-        const ttsProvider = getTTSProvider();
-        if (!ttsProvider) {
+        const initialRoute = await getLockedTurnTtsRoute();
+        if (!initialRoute) {
+          turnTtsUnavailable = true;
           logger.warn('[Audio TTS] No configured healthy provider; delivering text and reporting the unavailable audio lane');
           emitVoiceTtsFailure(socket, requestId, 'conversation');
           resolvePlayback(0);
           return;
         }
-        const voiceResolution = await resolveVoiceForProvider(
-          voiceProfileScope(session.userId, session.domain, session.orgId),
-          ttsProvider,
-          session.currentVoiceId,
-        );
-        if (!voiceResolution.voiceId) {
-          logger.warn(`[Audio TTS] Provider ${ttsProvider} has no available voice; delivering text only`);
-          emitVoiceTtsFailure(socket, requestId, 'conversation');
-          resolvePlayback(0);
-          return;
-        }
-        if (session.currentVoiceId !== voiceResolution.voiceId) {
-          const previousVoiceId = session.currentVoiceId;
-          session.currentVoiceId = voiceResolution.voiceId;
-          session.voiceSwitchGeneration += 1;
-          socket.emit('audio:voice_changed', {
-            voiceId: voiceResolution.voiceId,
-            previousVoiceId,
-            sessionId: session.sessionId,
-            provider: ttsProvider,
-            fallback: true,
-            reason: 'provider_compatibility',
-          });
-        }
-        let ttsResult: SynthesizedSpeech;
-        const currentEmotionVoice = resolveCurrentEmotionVoice();
-        if (
-          speculativeSpeech?.text === txt
-          && speculativeSpeech.provider === ttsProvider
-          && canReuseSpeculativeVoiceSpeech({
-            preparedVoiceId: speculativeSpeech.voiceId,
-            currentVoiceId: currentEmotionVoice.voiceId,
-            preparedSwitchGeneration: speculativeSpeech.switchGeneration,
-            currentSwitchGeneration: session.voiceSwitchGeneration,
-          })
-        ) {
+        let synthesized: { result: SynthesizedSpeech; route: LockedVoiceTurnTtsRoute };
+        if (speculativeSpeech?.text === txt) {
           const prepared = await speculativeSpeech.promise;
-          if (prepared.result) {
-            ttsResult = prepared.result;
+          if (prepared.result && prepared.route === initialRoute) {
+            synthesized = { result: prepared.result, route: prepared.route };
           } else {
-            // Speculation is an optimization only. A stale provider/voice or
-            // transient speculative failure must not suppress finalized TTS.
-            ttsResult = await synthesizeSpeech(txt, {
-              provider: ttsProvider,
-              voiceId: currentEmotionVoice.voiceId,
-              speechRate: currentEmotionVoice.speechRate,
-              pitch: currentEmotionVoice.pitch,
-              volume: currentEmotionVoice.volume,
-              signal: speech.controller.signal,
-              allowFallback: false,
-            });
+            synthesized = await synthesizeWithLockedTurnRoute(
+              txt,
+              speech.controller.signal,
+              { route: prepared.route || initialRoute, error: prepared.error || new Error('Speculative TTS route changed') },
+            );
           }
           speculativeSpeech = null;
         } else {
-          if (speculativeSpeech?.text === txt) {
+          if (speculativeSpeech) {
             speculativeSpeech.controller.abort();
             speculativeSpeech = null;
           }
-          ttsResult = await synthesizeSpeech(txt, {
-            provider: ttsProvider,
-            voiceId: currentEmotionVoice.voiceId,
-            speechRate: currentEmotionVoice.speechRate,
-            pitch: currentEmotionVoice.pitch,
-            volume: currentEmotionVoice.volume,
-            signal: speech.controller.signal,
-            allowFallback: false,
-          });
+          synthesized = await synthesizeWithLockedTurnRoute(txt, speech.controller.signal);
         }
         if (!speech.controller.signal.aborted && session.bgGeneration === speech.generation) {
           markVoiceLatencyMilestone(requestId, 'firstTtsReadyAt');
@@ -3235,26 +3465,28 @@ async function processVoiceInput(
           addEchoText(txt, voiceEchoScope(session));
           const volumeGain = computeVolumeGain();
           socket.emit("audio:response", {
-            buffer: ttsResult.audioBuffer,
-            format: ttsResult.format,
+            buffer: synthesized.result.audioBuffer,
+            format: synthesized.result.format,
             volumeGain,
             requestId,
             lane: 'conversation',
           });
+          turnTtsEmittedSegments += 1;
           logger.info(
-            `[Audio TTS] Emitted request=${requestId} provider=${ttsProvider} voice=${currentEmotionVoice.voiceId} bytes=${ttsResult.audioBuffer.length}`,
+            `[Audio TTS] Emitted request=${requestId} provider=${synthesized.route.provider} voice=${synthesized.route.voiceId} bytes=${synthesized.result.audioBuffer.length}`,
           );
-          const playbackMs = estimatePlaybackMs(ttsResult.audioBuffer, txt);
+          const playbackMs = estimatePlaybackMs(synthesized.result.audioBuffer, txt);
           setTimeout(() => resolvePlayback(0), playbackMs);
         } else {
           resolvePlayback(0);
         }
       } catch (e: any) {
-        if (e?.name === 'AbortError') {
+        if (isTtsCancellationError(e, speech.controller.signal)) {
           resolvePlayback(0);
           return;
         }
         logger.warn(`[Audio TTS] ${e.message?.slice(0, 80)}`);
+        turnTtsUnavailable = true;
         emitVoiceTtsFailure(socket, requestId, 'conversation');
         resolvePlayback(0);
       } finally {
@@ -3358,6 +3590,26 @@ async function processVoiceInput(
     reason = 'Voice turn reached its release boundary.',
   ): Promise<boolean> => voiceReleaseGate.release(reason);
 
+  if (transcriptExecutionGuard.action === 'clarify') {
+    // Resolve uncertain STT before any deterministic confirmation, workflow,
+    // mode switch, or tool branch.  Setting the tool projection to hard-off is
+    // necessary but not sufficient because isolated workflows do not enter the
+    // model tool loop at all.
+    responseText = transcriptExecutionGuard.responseText;
+    await commitVoiceTerminal({
+      text: responseText,
+      source: 'voice_transcript_guard',
+      blocked: false,
+      reason: transcriptExecutionGuard.reason,
+      cognitiveIntent: 'voice_transcript_clarification',
+      llmWasCalled: false,
+      speechText: responseText,
+    });
+    await Promise.allSettled(ttsPromises);
+    await releaseVoiceTurnResources('Voice transcript clarification completed without tool admission.');
+    return;
+  }
+
   const deterministicConversationResponse = (() => {
     if (isConversationExecutionFactQuestion(actionIntentText)) {
       return {
@@ -3366,6 +3618,10 @@ async function processVoiceInput(
           userId: session.userId,
           domain: voiceScope.domain,
           orgId: voiceScope.orgId,
+          currentRequestId: requestId,
+          taskId: actionTaskExecution.state?.taskId
+            || conversationTurn.conversation.actionContinuationState?.taskId
+            || undefined,
         }), actionIntentText),
         intent: 'execution_facts',
         source: 'voice_conversation_execution_facts',
@@ -3852,10 +4108,14 @@ async function processVoiceInput(
 
   const foregroundWeChatReadArgs = buildForegroundMessagingArguments('read', executionPipeline.normalizedIntent);
   const foregroundWeChatSendArgs = buildForegroundMessagingArguments('send', executionPipeline.normalizedIntent);
-
   try {
     const quickResult = preMatchedQuickResult;
-    if (!foregroundWeChatReadArgs && !foregroundWeChatSendArgs && quickResult?.matched && (!quickResult.toolCall || toolSessionActive)) {
+    if (
+      !foregroundWeChatReadArgs
+      && !foregroundWeChatSendArgs
+      && quickResult?.matched
+      && (!quickResult.toolCall || toolSessionActive)
+    ) {
       logger.info(`[Audio] Quick command: "${userText}" → "${quickResult.responseText.slice(0, 50)}"`);
       let quickResponseText = quickResult.responseText;
       let quickToolResult = '';
@@ -3938,7 +4198,7 @@ async function processVoiceInput(
       quickResponseText = quickFinalized.text;
       const quickCommitted = await commitVoiceTerminal({
         text: quickResponseText,
-        source: "quick_command",
+        source: 'quick_command',
         blocked: quickFinalized.blocked,
         reason: quickFinalized.reason || '',
         cognitiveIntent: quickFinalized.blocked ? 'work_product_guard' : 'quick_command',
@@ -4707,7 +4967,7 @@ async function processVoiceInput(
     }
 
   } catch (err: any) {
-    if (err?.name === 'AbortError') {
+    if (isTtsCancellationError(err, pipelineAbort.signal)) {
       logger.info('[Audio] Pipeline aborted (barge-in or stop)');
     } else {
       logger.error("[Audio Error]:", err);
@@ -4952,6 +5212,9 @@ export function registerVoiceHandlers(
       await cancelActiveVoiceTurn(session, options.preserveInterruptedTurn === true);
       return false;
     }
+    // Cancellation owns the terminal now. Abort the old transport pipeline
+    // before persistence can yield, so it cannot race in a late success.
+    quiesceActiveVoiceTransport(session);
     const conversationId = session.activeTaskConversationId || getOrCreateActiveConversation(
       session.userId,
       session.agentId,
@@ -4998,21 +5261,41 @@ export function registerVoiceHandlers(
           : 'The active voice request was cancelled.',
         requestId,
       ),
-      persistAssistantMessage: () => addMessageIdempotent({
-        userId: session.userId,
-        agentId: session.agentId,
-        conversationId,
-        role: 'assistant',
-        content: text,
-        personality: session.personalityId,
-        mode: 'voice',
-        channel: 'voice',
-        cognitiveIntent: 'voice_turn_cancelled',
-        llmWasCalled: false,
-        domain: session.domain,
-        orgId: session.orgId,
-        requestId,
-      }),
+      persistAssistantMessage: () => {
+        const updated = updateAssistantMessageTerminalPresentation({
+          userId: session.userId,
+          conversationId,
+          requestId,
+          content: text,
+          channel: 'voice',
+          completionFeedback: {
+            status: 'cancelled',
+            incomplete: [text],
+            nextSteps: [],
+          },
+        });
+        if (updated) return;
+        addMessageIdempotent({
+          userId: session.userId,
+          agentId: session.agentId,
+          conversationId,
+          role: 'assistant',
+          content: text,
+          personality: session.personalityId,
+          mode: 'voice',
+          channel: 'voice',
+          cognitiveIntent: 'voice_turn_cancelled',
+          llmWasCalled: false,
+          domain: session.domain,
+          orgId: session.orgId,
+          requestId,
+          completionFeedback: {
+            status: 'cancelled',
+            incomplete: [text],
+            nextSteps: [],
+          },
+        });
+      },
       flush: flushDBOrThrow,
       persistTerminalReceipt: () => recordChatExecutionTerminalEventDurably(
         scope,
@@ -5175,36 +5458,46 @@ export function registerVoiceHandlers(
             activeTtsProvider,
             requestedVoiceId,
           );
-          if (
-            !session.isActive
-            || session.voiceSwitchGeneration !== voiceStartGeneration
-            || session.sessionId !== voiceStartSessionId
-          ) return;
-          session.currentVoiceId = voiceResolution.voiceId;
-          if (voiceResolution.voiceId && voiceResolution.voiceId !== requestedVoiceId) {
-            logger.info(
-              `[Audio] Reconciled live voice for provider=${activeTtsProvider} requested=${requestedVoiceId || 'none'} resolved=${voiceResolution.voiceId}`,
-            );
-            socket.emit('audio:voice_changed', {
-              voiceId: voiceResolution.voiceId,
-              previousVoiceId: requestedVoiceId,
-              sessionId: session.sessionId,
-              provider: activeTtsProvider,
-              fallback: true,
-              reason: 'provider_compatibility',
-            });
+          const voiceStartFence = resolveVoiceStartAsyncFence({
+            sessionActive: session.isActive,
+            currentSessionId: session.sessionId,
+            startSessionId: voiceStartSessionId,
+            currentVoiceSwitchGeneration: session.voiceSwitchGeneration,
+            startVoiceSwitchGeneration: voiceStartGeneration,
+          });
+          if (voiceStartFence === 'abandon_start') return;
+          if (voiceStartFence === 'current') {
+            session.currentVoiceId = voiceResolution.voiceId;
+            if (voiceResolution.voiceId && voiceResolution.voiceId !== requestedVoiceId) {
+              logger.info(
+                `[Audio] Reconciled live voice for provider=${activeTtsProvider} requested=${requestedVoiceId || 'none'} resolved=${voiceResolution.voiceId}`,
+              );
+              socket.emit('audio:voice_changed', {
+                voiceId: voiceResolution.voiceId,
+                previousVoiceId: requestedVoiceId,
+                sessionId: session.sessionId,
+                provider: activeTtsProvider,
+                fallback: true,
+                reason: 'provider_compatibility',
+              });
+            }
           }
         } catch (error: any) {
-          if (
-            !session.isActive
-            || session.voiceSwitchGeneration !== voiceStartGeneration
-            || session.sessionId !== voiceStartSessionId
-          ) return;
-          session.currentVoiceId = requestedVoiceId;
-          logger.warn(
-            `[Audio] Could not reconcile live voice for provider=${activeTtsProvider}: ${error?.message || String(error)}`,
-          );
-          if (!session.transcriptionOnly) emitVoiceTtsFailure(socket, undefined, 'conversation');
+          const voiceStartFence = resolveVoiceStartAsyncFence({
+            sessionActive: session.isActive,
+            currentSessionId: session.sessionId,
+            startSessionId: voiceStartSessionId,
+            currentVoiceSwitchGeneration: session.voiceSwitchGeneration,
+            startVoiceSwitchGeneration: voiceStartGeneration,
+          });
+          if (voiceStartFence === 'abandon_start') return;
+          if (voiceStartFence === 'current') {
+            session.currentVoiceId = requestedVoiceId;
+            logger.warn(
+              `[Audio] Could not reconcile live voice for provider=${activeTtsProvider}: ${error?.message || String(error)}`,
+            );
+            if (!session.transcriptionOnly) emitVoiceTtsFailure(socket, undefined, 'conversation');
+          }
         }
       } else {
         // Preserve the requested id so a provider that recovers during this
@@ -5406,8 +5699,39 @@ export function registerVoiceHandlers(
             session.lastAcceptedCommandKey = commandKey;
             session.lastAcceptedCommandAt = Date.now();
             session.lastAcceptedCommandChunkAt = session.lastChunkTime;
+            const transcriptExecutionGuard = assessVoiceTranscriptForExecution(text);
+            const activeWorkRunning = session.isBackgroundWork && session.activeWorkStatus !== 'completed';
+            if (
+              transcriptExecutionGuard.action === 'clarify'
+              && activeWorkRunning
+              && session.activeTurnRequestId
+            ) {
+              // Contaminated/incomplete STT must not cancel, modify, or queue
+              // tools behind the task that already owns the work lane. Keep
+              // that task alive and answer on the non-tool sidecar instead.
+              logger.warn(
+                `[Audio] Guarded uncertain transcript beside active work reason=${transcriptExecutionGuard.reason} chars=${text.length}`,
+              );
+              const workRequestId = session.activeTurnRequestId;
+              interruptVoiceSpeech(session);
+              socket.emit('audio:status', { status: 'interrupted' });
+              socket.emit('audio:interrupt-ack', { workContinues: true, requestId: workRequestId });
+              socket.emit('audio:confirm', { text });
+              void respondAlongsideActiveVoiceWork(
+                socket,
+                session,
+                text,
+                llmGetters,
+                'side_chat',
+                {
+                  text: transcriptExecutionGuard.responseText,
+                  cognitiveIntent: 'voice_transcript_clarification',
+                },
+              );
+              resetSilenceTimer(session, socket);
+              return;
+            }
             if (session.isProcessing || session.isSpeaking) {
-              const activeWorkRunning = session.isBackgroundWork && session.activeWorkStatus !== 'completed';
               if (activeWorkRunning) {
                 const activeConfirmationConversationId = session.activeTaskConversationId
                   || getOrCreateActiveConversation(
@@ -5867,6 +6191,7 @@ export function registerVoiceHandlers(
       publish: false,
     });
     session.isActive = false;
+    clearVoiceSessionTtsSelection(session);
     setRealtimeVoiceSessionActive(session.userId, socket.id, false);
     session.transcriptionOnly = false;
     if (session.silenceTimer) { clearTimeout(session.silenceTimer); session.silenceTimer = null; }
@@ -5971,8 +6296,8 @@ export function registerVoiceHandlers(
 
     const ttsProvider = getTTSProvider();
     if (!ttsProvider) { resetSpeaking(); return; }
-
-    const proactiveVoice = resolveEmotionVoice(voiceId, es);
+    const proactiveRoute = await resolveSingleVoiceTtsRoute(session, ttsProvider, voiceId);
+    if (!proactiveRoute) { resetSpeaking(); return; }
 
     let proactiveTtsCounted = false;
     try {
@@ -5980,11 +6305,12 @@ export function registerVoiceHandlers(
       proactiveTtsCounted = true;
       addEchoText(proactiveText, voiceEchoScope(session));
       const result = await synthesizeSpeech(proactiveText, {
-        provider: ttsProvider,
-        voiceId: proactiveVoice.voiceId,
-        speechRate: proactiveVoice.speechRate,
-        pitch: proactiveVoice.pitch,
-        volume: proactiveVoice.volume,
+        provider: proactiveRoute.provider,
+        voiceId: proactiveRoute.voiceId,
+        model: proactiveRoute.model,
+        speechRate: proactiveRoute.speechRate,
+        pitch: proactiveRoute.pitch,
+        volume: proactiveRoute.volume,
         allowFallback: false,
       });
       const proactiveGain = computeVolumeGain();
@@ -6072,6 +6398,12 @@ export function registerVoiceHandlers(
       `\nDo NOT sound like a report or template. Sound like a friend who noticed they're back. Vary your phrasing — never repeat the same greeting.`,
     ].filter(Boolean).join('\n');
 
+    const greetingTtsProvider = getTTSProvider();
+    const greetingTtsRoute = greetingTtsProvider
+      ? await resolveSingleVoiceTtsRoute(session, greetingTtsProvider, voiceId, false)
+      : null;
+    if (!greetingTtsRoute) return;
+
     try {
       const greetingLLM = {
         ...getUserPreferredLLMConfig(session.userId, {
@@ -6114,10 +6446,12 @@ export function registerVoiceHandlers(
       }
       const spokenGreeting = finalizedGreeting.text;
 
-      const ttsProvider = getTTSProvider();
-      if (!ttsProvider) return;
-
-      const result = await synthesizeSpeech(spokenGreeting, { provider: ttsProvider, voiceId, allowFallback: false });
+      const result = await synthesizeSpeech(spokenGreeting, {
+        provider: greetingTtsRoute.provider,
+        voiceId: greetingTtsRoute.voiceId,
+        model: greetingTtsRoute.model,
+        allowFallback: false,
+      });
       socket.emit("audio:proactive_speak", {
         audioBuffer: result.audioBuffer,
         text: spokenGreeting,
@@ -6140,11 +6474,13 @@ export function registerVoiceHandlers(
       const hour = new Date().getHours();
       const fallback = hour < 6 ? '夜深了，还在忙吗？' : hour < 12 ? '早上好，欢迎回来。' : hour < 18 ? '下午好，继续吧。' : '晚上好，欢迎回来。';
       try {
-        const ttsProvider = getTTSProvider();
-        if (ttsProvider) {
-          const result = await synthesizeSpeech(fallback, { provider: ttsProvider, voiceId, allowFallback: false });
-          socket.emit("audio:proactive_speak", { audioBuffer: result.audioBuffer, text: fallback, timestamp: new Date().toISOString(), volumeGain: computeVolumeGain() });
-        }
+        const result = await synthesizeSpeech(fallback, {
+          provider: greetingTtsRoute.provider,
+          voiceId: greetingTtsRoute.voiceId,
+          model: greetingTtsRoute.model,
+          allowFallback: false,
+        });
+        socket.emit("audio:proactive_speak", { audioBuffer: result.audioBuffer, text: fallback, timestamp: new Date().toISOString(), volumeGain: computeVolumeGain() });
       } catch {}
     }
   });
@@ -6165,6 +6501,7 @@ export function registerVoiceHandlers(
         publish: false,
       });
       session.isActive = false;
+      clearVoiceSessionTtsSelection(session);
       setRealtimeVoiceSessionActive(session.userId, socket.id, false);
       if (session.silenceTimer) { clearTimeout(session.silenceTimer); session.silenceTimer = null; }
       if (session.bargeinTimer) { clearTimeout(session.bargeinTimer); session.bargeinTimer = null; }

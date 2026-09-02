@@ -75,6 +75,10 @@ describe('chat prior-action status handler', () => {
   const exactReceiptRequestId = `chat-prior-action-exact-receipt-${suffix}`;
   const recordedReceiptStatusRequestId = `chat-recorded-receipt-status-${suffix}`;
   const recordedReceiptSeedRequestId = `chat-recorded-receipt-seed-${suffix}`;
+  const fileReadSeedRequestId = `chat-file-read-seed-${suffix}`;
+  const fileReadFollowupRequestId = `chat-file-read-followup-${suffix}`;
+  const failureSeedRequestId = `chat-failure-seed-${suffix}`;
+  const failureExplanationRequestId = `chat-failure-explanation-${suffix}`;
   const cancelSeedRequestId = `chat-durable-cancel-seed-${suffix}`;
   const cancelRequestId = `chat-durable-cancel-${suffix}`;
   const terminalCancelRequestId = `chat-terminal-cancel-noop-${suffix}`;
@@ -463,6 +467,185 @@ describe('chat prior-action status handler', () => {
     expect(llmTripwire).not.toHaveBeenCalled();
     expect(queryMemoriesVector).not.toHaveBeenCalled();
     expect(retrieveChunks).not.toHaveBeenCalled();
+  });
+
+  it('uses the adjacent verified file receipt when the follow-up forbids re-reading', async () => {
+    const isolated = startIsolatedConversation(userId, 'lumi', 'personal', '');
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: isolated.id,
+      role: 'user',
+      content: '读取 D:\\lumiOS\\package.json，只告诉我项目 name 和 version。',
+      domain: 'personal',
+      source: 'e2e-formal-client',
+      channel: 'chat',
+      requestId: fileReadSeedRequestId,
+      deferActionPreparation: true,
+    });
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: isolated.id,
+      role: 'assistant',
+      content: '项目 name 为 lumi-core，version 为 3.1.0。',
+      domain: 'personal',
+      source: 'e2e-formal-client',
+      channel: 'chat',
+      requestId: fileReadSeedRequestId,
+      llmWasCalled: true,
+      toolCalls: [{
+        name: 'read_file',
+        arguments: { path: 'D:\\lumiOS\\package.json' },
+        result: JSON.stringify({ kind: 'structured_result_summary', resultOmitted: true }),
+        error: '',
+        outcome: 'success',
+        terminalVerification: { status: 'verified' },
+        envelope: {
+          status: 'verified_success',
+          toolName: 'read_file',
+          requestId: fileReadSeedRequestId,
+          targetIdentity: 'D:\\lumiOS\\package.json',
+          result: { name: 'lumi-core', version: '3.1.0' },
+          verification: { status: 'verified' },
+        },
+      }],
+    });
+
+    const baselineReceiptCount = (readDB().conversationActionReceipts || []).length;
+    const eventStart = observedEvents.length;
+    const response = await sendStatusQuestion(
+      fileReadFollowupRequestId,
+      '刚才读取的是哪个精确文件？把路径、name 和 version 分三行告诉我，不要重新读取。',
+      isolated.id,
+    );
+
+    expect(response).toMatchObject({
+      requestId: fileReadFollowupRequestId,
+      conversationId: isolated.id,
+      reason: 'execution_facts',
+      finalized: true,
+      blocked: false,
+      text: [
+        '刚才读取的是 `D:\\lumiOS\\package.json`。',
+        '- name：`lumi-core`',
+        '- version：`3.1.0`',
+      ].join('\n'),
+    });
+    expect(response.text).not.toMatch(/lumiOS\s+1\.2\.0|重新读取|No successful current-turn tool execution/iu);
+    expect(observedEvents.slice(eventStart).filter(item => (
+      String(item.payload.requestId || '') === fileReadFollowupRequestId
+      && (item.event === 'agent:tool_call' || item.event === 'agent:tool')
+    ))).toEqual([]);
+    expect((readDB().conversationActionReceipts || []).length).toBe(baselineReceiptCount);
+
+    const reply = (readDB().interactions || []).find((item: any) => (
+      item.role === 'assistant'
+      && String(item.requestId || item.externalMessageId || '') === fileReadFollowupRequestId
+    ));
+    expect(reply).toMatchObject({
+      source: 'chat_conversation_execution_facts',
+      cognitiveIntent: 'execution_facts',
+      llmWasCalled: false,
+    });
+    expect(storedToolCalls(reply?.toolCalls)).toEqual([]);
+    expect(llmTripwire).not.toHaveBeenCalled();
+  });
+
+  it('explains the adjacent failed receipt instead of a stale completed task', async () => {
+    const isolated = startIsolatedConversation(userId, 'lumi', 'personal', '');
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: isolated.id,
+      role: 'user',
+      content: '识别当前屏幕里的文字。',
+      domain: 'personal',
+      source: 'command-center-chat',
+      channel: 'chat',
+      requestId: failureSeedRequestId,
+      deferActionPreparation: true,
+    });
+    addMessage({
+      userId,
+      agentId: 'lumi',
+      conversationId: isolated.id,
+      role: 'assistant',
+      content: '这次没有取得可用的识别结果。',
+      domain: 'personal',
+      source: 'command-center-chat',
+      channel: 'chat',
+      requestId: failureSeedRequestId,
+      toolCalls: [{
+        name: 'ocr_screen',
+        arguments: {},
+        result: '',
+        error: '400 status code (no body)',
+        terminalVerification: {
+          status: 'failed',
+          strategy: 'terminal_receipt',
+          reason: 'OCR provider rejected the request',
+        },
+      }],
+    });
+
+    const staleTaskId = `stale-completed-task-${suffix}`;
+    const staleState = {
+      version: 2,
+      taskId: staleTaskId,
+      status: 'completed',
+      unfinished: false,
+      receipts: [],
+      revision: 1,
+      goal: '乱码旧任务',
+      latestInstruction: '乱码旧任务',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    };
+    const db = readDB();
+    const storedConversation = db.conversations.find((item: any) => item.id === isolated.id);
+    storedConversation.actionContinuationState = staleState;
+    db.conversationActionTasks.push({
+      id: staleTaskId,
+      conversationId: isolated.id,
+      userId,
+      domain: 'personal',
+      orgId: '',
+      parentTaskId: '',
+      rootUserMessageId: '',
+      intentKind: 'desktop_operation',
+      operation: 'read',
+      goal: staleState.goal,
+      target: '',
+      status: 'completed',
+      blocker: '',
+      activeRequestId: '',
+      completionSource: 'tool_receipt',
+      context: JSON.stringify({ actionState: staleState }),
+      revision: 1,
+      createdAt: staleState.updatedAt,
+      updatedAt: staleState.updatedAt,
+      completedAt: staleState.updatedAt,
+    });
+
+    const response = await sendStatusQuestion(
+      failureExplanationRequestId,
+      '为什么失败？',
+      isolated.id,
+    );
+
+    expect(response).toMatchObject({
+      requestId: failureExplanationRequestId,
+      conversationId: isolated.id,
+      reason: 'execution_facts',
+      finalized: true,
+      blocked: false,
+      text: '刚才失败在视觉识别：服务返回 HTTP 400，但没有提供错误正文。',
+    });
+    expect(response.text).not.toMatch(/completed|乱码旧任务|undefined|ocr_screen/iu);
+    expect(storedConversation.actionContinuationState).toBeUndefined();
+    expect(db.conversationActionTasks.find((task: any) => task.id === staleTaskId)?.status)
+      .toBe('completed');
+    expect(llmTripwire).not.toHaveBeenCalled();
   });
 
   it('answers an already-recorded observation receipt with its real task status and window title', async () => {

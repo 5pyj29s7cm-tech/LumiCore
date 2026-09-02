@@ -81,6 +81,27 @@ describe('Lumi field-call stability replay', () => {
       .toContain('窗口回执时超时');
   });
 
+  it.each([
+    '',
+    'undefined',
+    'null',
+    '[object Object]',
+  ])('normalizes an empty or undefined adapter failure: %s', (detail) => {
+    const message = formatCnToolFailureDetail(detail);
+    expect(message).toBe('系统没有返回可核实的失败原因。');
+    expect(message).not.toMatch(/undefined|null|\[object Object\]|No successful|execution-status/iu);
+  });
+
+  it('normalizes internal guard copy and an HTTP response with no body', () => {
+    const internal = formatCnToolFailureDetail(
+      'No successful current-turn tool execution was recorded for that execution-status claim.',
+    );
+    expect(internal).toBe('这一步没有拿到可执行的入口或可验证的结果，已停止，没有冒充完成。');
+    expect(internal).not.toMatch(/No successful|current-turn|execution-status|tool execution/iu);
+    expect(formatCnToolFailureDetail('400 status code (no body)'))
+      .toBe('服务返回 HTTP 400，但没有提供错误正文。');
+  });
+
   it('treats inbound sender language as read-only in both channel routes', () => {
     const variants = [
       '看一下张勇最近给我发什么消息了',

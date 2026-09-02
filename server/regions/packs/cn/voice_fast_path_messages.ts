@@ -6,7 +6,24 @@ export function isInternalExecutionDetail(value: string): boolean {
 
 export function formatCnToolFailureDetail(error: string): string {
   const raw = String(error || '').trim();
-  if (!raw) return '系统没有返回可核实的失败原因。';
+  if (!raw || /^(?:undefined|null|unknown|\[object Object\])$/iu.test(raw)) {
+    return '系统没有返回可核实的失败原因。';
+  }
+  const httpStatus = raw.match(/(?:HTTP\s*)?(\d{3})(?:\s+status(?:\s+code)?)?/iu)?.[1]
+    || raw.match(/status(?:\s+code)?\s*[:=]?\s*(\d{3})/iu)?.[1];
+  if (httpStatus && /(?:no\s+body|empty\s+(?:body|response)|without\s+(?:a\s+)?(?:body|message))/iu.test(raw)) {
+    return `服务返回 HTTP ${httpStatus}，但没有提供错误正文。`;
+  }
+  if (
+    httpStatus
+    && /(?:ocr|vision|visual|图像|视觉|识别)/iu.test(raw)
+    && !/account is in good standing|overdue[- ]?payment|insufficient (?:balance|credit)/iu.test(raw)
+  ) {
+    return `视觉识别服务返回 HTTP ${httpStatus}，这次没有取得可用的识别结果。`;
+  }
+  if (/\bAbortError\b|operation was aborted|request was aborted/iu.test(raw)) {
+    return '这次请求被新的输入或停止操作打断，旧请求已经结束。';
+  }
   if (/previous runtime ended|pending confirmation expired/i.test(raw)) {
     return '上一次客户端运行结束时任务尚未收尾，已停在最后一个可验证步骤，可以从这里继续。';
   }

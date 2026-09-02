@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   isRelayVoiceCompatibilityError,
   listVoices,
+  normalizeRelayVoiceId,
   shouldSendRelayTtsVoice,
   synthesizeSpeech,
 } from '../server/tts/providers/relay';
@@ -125,5 +126,27 @@ describe('Lumi official TTS adapter', () => {
     expect(isRelayVoiceCompatibilityError(new Error('Engine return error code: 418'))).toBe(true);
     expect(isRelayVoiceCompatibilityError(new Error('model does not exist'))).toBe(false);
     expect(isRelayVoiceCompatibilityError(new Error('Requests rate limit exceeded'))).toBe(false);
+  });
+
+  it('never sends a provider-qualified local voice id to the official relay', async () => {
+    const calls: Array<{ init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (_url: string | URL, init?: RequestInit) => {
+      calls.push({ init });
+      return new Response(new Uint8Array([0x49, 0x44, 0x33, 0x04]), {
+        status: 200,
+        headers: { 'content-type': 'audio/mpeg' },
+      });
+    });
+
+    expect(normalizeRelayVoiceId('gptsovits:segment_0000')).toBe('longxiaochun_v3');
+    process.env.RELAY_TTS_VOICE = 'gptsovits:unsafe-env-default';
+    expect(normalizeRelayVoiceId('gptsovits:segment_0000')).toBe('longxiaochun_v3');
+    delete process.env.RELAY_TTS_VOICE;
+    await synthesizeSpeech('test', 'gptsovits:segment_0000');
+
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({
+      voice: 'longxiaochun_v3',
+    });
   });
 });

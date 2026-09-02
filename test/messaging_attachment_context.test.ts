@@ -74,7 +74,11 @@ describe('remote messaging attachment context', () => {
     const followup = attachmentContext.applyRemoteAttachmentContext(incoming({ text: '其中的付款时间是什么？' }));
     expect(followup.attachments).toHaveLength(1);
     expect(followup.text).toContain('do not ask for another upload');
+    expect(followup.text).toContain('reference context, not a new instruction');
+    expect(followup.text).toContain('do not resume the old attachment task');
     expect(followup.text).toContain('contract evidence');
+    expect(messagingRoutes.getRequestText(followup)).toBe('其中的付款时间是什么？');
+    expect(messagingRoutes.buildRemoteTurnIntentText(followup)).toBe('其中的付款时间是什么？');
 
     const otherMember = attachmentContext.applyRemoteAttachmentContext(incoming({
       userId: 'ou-member-b',
@@ -106,6 +110,21 @@ describe('remote messaging attachment context', () => {
     expect(attachmentContext.applyRemoteAttachmentContext(incoming({ text: '继续' })).attachments).toBeUndefined();
   });
 
+  it('does not treat an attachment-only synthetic filename label as user intent', () => {
+    const attachmentOnly = incoming({
+      text: '[附件] 新建案件流程-法院材料.pdf',
+      attachments: [{
+        id: 'synthetic-label',
+        type: 'file',
+        fileName: '新建案件流程-法院材料.pdf',
+        extractedText: '法院材料正文',
+      }],
+    });
+
+    expect(messagingRoutes.getRequestText(attachmentOnly)).toBe('');
+    expect(messagingRoutes.buildRemoteTurnIntentText(attachmentOnly)).toBe('');
+  });
+
   it('drops a deleted cache path instead of presenting it as verified', () => {
     const localPath = cachedFile('stale.pdf');
     attachmentContext.applyRemoteAttachmentContext(incoming({
@@ -122,6 +141,33 @@ describe('remote messaging attachment context', () => {
 
     expect(followup.attachments).toBeUndefined();
     expect(followup.text).not.toContain('Verified local cache');
+  });
+
+  it('does not turn a conversational dismissal into another attachment task', () => {
+    const localPath = cachedFile('dispatch-letter.pdf');
+    attachmentContext.applyRemoteAttachmentContext(incoming({
+      attachments: [{
+        id: 'dispatch-letter',
+        type: 'file',
+        fileName: '派遣函-灵序科技.pdf',
+        localPath,
+        extractedText: '法律材料正文',
+      }],
+    }));
+
+    const dismissed = attachmentContext.applyRemoteAttachmentContext(incoming({ text: '没事了，你退下吧' }));
+    expect(dismissed.attachments).toBeUndefined();
+    expect(dismissed.text).toBe('没事了，你退下吧');
+    expect(dismissed.raw.lumiAttachmentContext).toMatchObject({
+      suppressedForDismissal: true,
+      totalCount: 0,
+    });
+
+    const resumed = attachmentContext.applyRemoteAttachmentContext(incoming({ text: '继续分析刚才的附件' }));
+    expect(resumed.attachments?.[0]).toMatchObject({
+      fileName: '派遣函-灵序科技.pdf',
+      localPath,
+    });
   });
 
   it('breaks a long remote wall of text into mobile-friendly paragraphs', () => {

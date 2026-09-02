@@ -51,6 +51,18 @@ function safeVoiceForLog(value: string): string {
   return String(value || '').replace(/[^A-Za-z0-9_.:-]/g, '_').slice(0, 80) || 'unknown';
 }
 
+/** Provider-qualified local speaker ids must never leave the machine. */
+export function normalizeRelayVoiceId(voiceId: unknown): string {
+  const requested = String(voiceId || '').trim();
+  const configuredDefault = String(process.env.RELAY_TTS_VOICE || '').trim();
+  const safeDefault = configuredDefault && !/^(?:gptsovits|local-cosyvoice|local):/i.test(configuredDefault)
+    ? configuredDefault
+    : DEFAULT_RELAY_TTS_VOICE;
+  if (!requested || requested === 'default') return safeDefault;
+  if (/^(?:gptsovits|local-cosyvoice|local):/i.test(requested)) return safeDefault;
+  return requested;
+}
+
 export async function synthesizeSpeech(
   text: string,
   voiceId?: string,
@@ -69,9 +81,7 @@ export async function synthesizeSpeech(
   );
   const requestedFormat = String(process.env.RELAY_TTS_FORMAT || 'mp3').trim().toLowerCase();
   const format = ['mp3', 'wav', 'opus', 'aac', 'flac', 'pcm'].includes(requestedFormat) ? requestedFormat : 'mp3';
-  const resolvedVoice = voiceId && voiceId !== 'default'
-    ? voiceId
-    : process.env.RELAY_TTS_VOICE || DEFAULT_RELAY_TTS_VOICE;
+  const resolvedVoice = normalizeRelayVoiceId(voiceId);
   const endpoint = officialApiPath('RELAY_TTS_PATH', '/audio/speech');
   const send = (voiceOverride: string, includeSpeed: boolean) => {
     const voice = shouldSendRelayTtsVoice(resolvedModel) ? { voice: voiceOverride } : {};

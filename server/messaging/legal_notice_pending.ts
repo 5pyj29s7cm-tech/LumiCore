@@ -114,6 +114,15 @@ export function consumePendingLegalNotice(id: string): PendingLegalNotice | null
   return item;
 }
 
+export function clearPendingLegalNotice(message: IncomingMessage, userId: string): boolean {
+  const store = readStore();
+  prune(store);
+  const before = store.items.length;
+  store.items = store.items.filter(item => !routeMatches(item, message, userId));
+  if (store.items.length !== before) writeStore(store);
+  return store.items.length !== before;
+}
+
 export function resetPendingLegalNoticesForTest(): void {
   try { fs.rmSync(STORE_PATH, { force: true }); } catch {}
 }

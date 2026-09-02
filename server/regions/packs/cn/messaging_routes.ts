@@ -47,6 +47,7 @@ import { handleRemoteLegalNoticeIntake } from './legal_notice_intake';
 import { getUserPreferredLLMConfig } from '../../../llm/user_preferences';
 import {
   addMessageIdempotent,
+  cancelConversationActionExecution,
   getConversationActionStatus,
   getMessagesByTokenBudget,
   getMessagesThroughExternalMessage,
@@ -64,15 +65,25 @@ import {
   recordMessagingIngress,
   updateMessagingJournal,
 } from '../../../messaging/message_journal';
-import { applyRemoteAttachmentContext } from '../../../messaging/attachment_context';
+import {
+  applyRemoteAttachmentContext,
+  isRemoteConversationDismissalRequest,
+} from '../../../messaging/attachment_context';
+import { clearPendingLegalNotice } from '../../../messaging/legal_notice_pending';
 import { runWithTools } from '../../../llm/adapter';
 import { makeLLMCall, type NormalizedMessage } from '../../../llm/providers';
 import { resolveModelRequestInputBudget } from '../../../llm/request_context_budget';
 import { toolRegistry } from '../../../tools/registry';
 import { executeToolCall } from '../../../tools/execution_engine';
 import type { ToolExecutionRecord } from '../../../tools/types';
+import { parseNestedJson } from '../../../tools/receipt_payload';
 import { buildUnifiedLegalEntryPrompt } from '../../../cognition/legal_entry';
 import { finalizeLumiResponse } from '../../../cognition/result_finalizer';
+import {
+  formatConversationExecutionFactAnswer,
+  getConversationExecutionFacts,
+  isConversationExecutionFactQuestion,
+} from '../../../conversation/execution_facts';
 import {
   finalizeExecutionForOutboundDelivery,
   type ExecutionGuardRecoveryRunInput,
@@ -107,6 +118,7 @@ import {
 } from './remote_memory';
 import {
   buildTransportNeutralConfirmationScope,
+  clearPendingConfirmationDurably,
   consumePendingConfirmationDurably,
   formatPendingConfirmationRequest,
   recordPendingConfirmationDurably,
@@ -130,8 +142,14 @@ const messageRouteActivity = new Map<string, {
   latestText: string;
   updatedAt: number;
 }>();
+const activeMessageRouteControllers = new Map<string, {
+  messageId: string;
+  routeSequence: number;
+  controller: AbortController;
+}>();
 const MAX_MESSAGING_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const MESSAGE_ACTIVITY_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_MESSAGE_ROUTE_ACTIVITY = 4_096;
 
 export class MessagingReplyDurabilityError extends Error {
   readonly stage: 'accepted_turn' | 'terminal_reply';
@@ -159,11 +177,55 @@ async function flushMessagingStateOrThrow(
 
 type MessagingFinalization = ReturnType<typeof finalizeLumiResponse>;
 
-async function finalizeMessagingResponseForDelivery(input: {
+function currentMessagingFinalizationRecords(input: {
+  toolRecords: ToolExecutionRecord[];
+  taskId?: string;
+  requestId: string;
+}): ToolExecutionRecord[] {
+  const taskId = String(input.taskId || '').trim();
+  const requestId = String(input.requestId || '').trim();
+  return input.toolRecords.filter(record => {
+    const recordTaskIds = [record.taskId, record.envelope?.taskId]
+      .map(value => String(value || '').trim())
+      .filter(Boolean);
+    const recordRequestIds = [record.requestId, record.envelope?.requestId]
+      .map(value => String(value || '').trim())
+      .filter(Boolean);
+    if (taskId && (recordTaskIds.length === 0 || recordTaskIds.some(value => value !== taskId))) {
+      return false;
+    }
+    return Boolean(
+      requestId
+      && recordRequestIds.length > 0
+      && recordRequestIds.every(value => value === requestId),
+    );
+  });
+}
+
+function withCurrentMessagingDesktopExecutionReceipt(
+  records: ToolExecutionRecord[],
+  tracker: ReturnType<typeof createDesktopExecutionTracker>,
+  taskId: string | undefined,
+  requestId: string,
+): ToolExecutionRecord[] {
+  return withDesktopExecutionReceipt(records, tracker).map(record => (
+    record.name === 'desktop_execution_plan_receipt' && !record.requestId
+      ? {
+          ...record,
+          taskId: record.taskId || taskId,
+          requestId,
+        }
+      : record
+  ));
+}
+
+export async function finalizeMessagingResponseForDelivery(input: {
   taskText: string;
   responseText: string;
   toolRecords: ToolExecutionRecord[];
   source: string;
+  taskId?: string;
+  requestId: string;
   flow?: LumiTurnFlow;
   initialFinalization?: MessagingFinalization;
   allowToolUse?: boolean;
@@ -174,12 +236,15 @@ async function finalizeMessagingResponseForDelivery(input: {
   attempt?: ExecutionGuardRecoveryRunInput<MessagingFinalization>['attempt'];
   refinalize?: ExecutionGuardRecoveryRunInput<MessagingFinalization>['finalize'];
 }) {
+  const currentToolRecords = currentMessagingFinalizationRecords(input);
   const finalization = input.initialFinalization || finalizeLumiResponse({
     taskText: input.taskText,
     responseText: input.responseText,
-    toolRecords: input.toolRecords,
+    toolRecords: currentToolRecords,
     source: input.source,
     flow: input.flow,
+    taskId: input.taskId,
+    requestId: input.requestId,
   });
   return finalizeExecutionForOutboundDelivery({
     task: input.taskText,
@@ -190,7 +255,7 @@ async function finalizeMessagingResponseForDelivery(input: {
     aborted: input.aborted,
     isPendingConfirmation: input.isPendingConfirmation,
     isAborted: input.isAborted,
-    toolRecords: input.toolRecords,
+    toolRecords: currentToolRecords,
     attempt: input.attempt,
     finalize: input.refinalize || ((candidateText, records) => finalizeLumiResponse({
         taskText: input.taskText,
@@ -198,6 +263,8 @@ async function finalizeMessagingResponseForDelivery(input: {
         toolRecords: records,
         source: `${input.source}_guard_recovery`,
         flow: input.flow,
+        taskId: input.taskId,
+        requestId: input.requestId,
       })),
   });
 }
@@ -259,12 +326,25 @@ function registerMessageRouteActivity(message: IncomingMessage): IncomingMessage
     receivedAt: message.receivedAt || new Date(currentTime).toISOString(),
     routeSequence,
   };
+  // Refresh insertion order for active conversations, then evict the oldest
+  // inactive keys if a long-lived backend sees more unique chats than the TTL
+  // window can reclaim promptly.
+  if (previous) messageRouteActivity.delete(key);
+  while (messageRouteActivity.size >= MAX_MESSAGE_ROUTE_ACTIVITY) {
+    const oldestKey = messageRouteActivity.keys().next().value;
+    if (typeof oldestKey !== 'string') break;
+    messageRouteActivity.delete(oldestKey);
+  }
   messageRouteActivity.set(key, {
     latestSequence: routeSequence,
     latestMessageId: tracked.messageId,
     latestText: getRequestText(tracked),
     updatedAt: currentTime,
   });
+  const active = activeMessageRouteControllers.get(key);
+  if (active && active.routeSequence < routeSequence && !active.controller.signal.aborted) {
+    active.controller.abort(new Error('A newer remote message superseded this turn.'));
+  }
   return tracked;
 }
 
@@ -274,13 +354,24 @@ function newerMessageActivity(message: IncomingMessage) {
   return activity;
 }
 
-function newerMessageCancelsThisTurn(message: IncomingMessage): boolean {
-  const activity = newerMessageActivity(message);
-  if (!activity) return false;
-  const text = activity.latestText.trim();
-  return /^(?:\u53d6\u6d88|\u505c\u6b62|\u505c\u4e0b|\u5148\u522b|\u4e0d\u8981\u4e86|cancel|stop|never\s*mind)\b/iu.test(text)
-    || /(?:\u521a\u521a|\u521a\u624d|\u4e0a\u4e00\u6761|\u524d\u9762|\u90a3\u53e5|\u90a3\u6761).{0,40}(?:\u4e0d\u662f(?:\u6307\u4ee4|\u4efb\u52a1)|\u522b(?:\u6267\u884c|\u505a)|\u4e0d\u8981(?:\u6267\u884c|\u505a)|\u53d6\u6d88|\u505c\u6b62|\u7406\u89e3\u9519|\u4e0d\u662f\u8fd9\u4e2a\u610f\u601d)/u.test(text)
-    || /(?:that|previous|last)\s+(?:message|line|turn).{0,48}(?:wasn't|was\s+not|isn't|is\s+not).{0,16}(?:an?\s+)?(?:instruction|task|command)/iu.test(text);
+function newerMessageSupersedesThisTurn(message: IncomingMessage): boolean {
+  return Boolean(newerMessageActivity(message));
+}
+
+function registerActiveMessageRouteController(
+  message: IncomingMessage,
+  controller: AbortController,
+): () => void {
+  const key = visibleMessageRouteKey(message);
+  const routeSequence = Number(message.routeSequence || 0);
+  const entry = { messageId: message.messageId, routeSequence, controller };
+  activeMessageRouteControllers.set(key, entry);
+  if (newerMessageSupersedesThisTurn(message) && !controller.signal.aborted) {
+    controller.abort(new Error('A newer remote message superseded this turn.'));
+  }
+  return () => {
+    if (activeMessageRouteControllers.get(key) === entry) activeMessageRouteControllers.delete(key);
+  };
 }
 
 export function correlateMessagingReply(
@@ -290,15 +381,11 @@ export function correlateMessagingReply(
   const readableReply = formatRemoteReplyForReadability(reply);
   const activity = newerMessageActivity(message);
   if (!activity) return { text: readableReply, superseded: false, delayed: false };
-  if (newerMessageCancelsThisTurn(message)) {
-    return { text: '', superseded: true, delayed: true };
-  }
-  const original = getRequestText(message).replace(/\s+/g, ' ').trim().slice(0, 72);
-  if (!original) return { text: readableReply, superseded: false, delayed: true };
-  const prefix = /[\u3400-\u9fff]/u.test(original)
-    ? `\u5173\u4e8e\u4f60\u5148\u524d\u7684\u8fd9\u6761\u6d88\u606f\uff1a\u300c${original}\u300d`
-    : `Regarding your earlier message: "${original}"`;
-  return { text: `${prefix}\n\n${readableReply}`.trim(), superseded: false, delayed: true };
+  // Remote transports cannot retract an already delivered message. Once a
+  // newer user turn is accepted, an older completion must therefore be
+  // suppressed before both persistence and delivery. Prefixing a late answer
+  // still lets obsolete work talk over a correction or a topic switch.
+  return { text: '', superseded: true, delayed: true };
 }
 
 export function formatRemoteReplyForReadability(value: string): string {
@@ -366,17 +453,144 @@ function parsePersistedToolRecords(value: unknown): any[] {
   return Array.isArray(current) ? current : [];
 }
 
-function summarizeRemoteToolRecord(record: any): string {
+function isFileReceiptToolName(name: string): boolean {
+  return /(?:^|_)(?:file|files|filesystem|directory|directories|folder|folders|path)(?:_|$)/i.test(name)
+    || /(?:list|search|find|scan|read|open|get).*(?:file|directory|folder)/i.test(name)
+    || /^(?:create|generate|export|save|write|convert)_(?:docx?|pdf|pptx?|xlsx?|txt|markdown|md|csv|rtf|wps|et|dps)(?:_|$)/i.test(name);
+}
+
+function exactRemoteFileFacts(payload: unknown, allowGenericName: boolean): string[] {
+  const parsed = payload && typeof payload === 'object' ? payload as Record<string, any> : null;
+  const candidates = Array.isArray(payload)
+    ? payload
+    : parsed
+      ? [
+          parsed,
+          ...['file', 'artifact', 'document', 'output', 'createdFile', 'savedFile']
+            .flatMap(key => parsed[key] && typeof parsed[key] === 'object' && !Array.isArray(parsed[key])
+              ? [parsed[key]]
+              : []),
+          ...['files', 'entries', 'items', 'children', 'results', 'artifacts', 'outputs']
+            .flatMap(key => Array.isArray(parsed[key]) ? parsed[key] : []),
+        ]
+      : [];
+  const facts: string[] = [];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue;
+    const fileName = String(
+      candidate.fileName
+      || candidate.filename
+      || (allowGenericName ? candidate.name : '')
+      || '',
+    ).trim();
+    const exactPath = String(
+      candidate.fullPath
+      || candidate.filePath
+      || candidate.outputPath
+      || candidate.targetPath
+      || candidate.savedPath
+      || candidate.createdPath
+      || candidate.artifactPath
+      || candidate.downloadPath
+      || candidate.path
+      || '',
+    ).trim();
+    if (!fileName && !exactPath) continue;
+    const fact = [
+      fileName ? `name=${JSON.stringify(fileName)}` : '',
+      exactPath ? `path=${JSON.stringify(exactPath)}` : '',
+    ].filter(Boolean).join(', ');
+    if (fact && !facts.includes(fact)) facts.push(fact);
+    if (facts.length >= 12) break;
+  }
+  return facts;
+}
+
+type RemoteFileFactSource = 'terminal receipt' | 'execution envelope' | 'terminal result' | 'tool arguments';
+
+function structuredRemoteReceipt(value: unknown): unknown {
+  const parsed = parseNestedJson(value);
+  return parsed && typeof parsed === 'object' ? parsed : null;
+}
+
+function remoteToolRecordCorrelationMatchesMessage(record: any, message: any): boolean {
+  const envelope = record?.envelope && typeof record.envelope === 'object' && !Array.isArray(record.envelope)
+    ? record.envelope as Record<string, any>
+    : null;
+  const name = String(record?.name || '').trim();
+  if (envelope?.toolName && String(envelope.toolName).trim() !== name) return false;
+
+  const taskIds = [record?.taskId, envelope?.taskId]
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  if (new Set(taskIds).size > 1) return false;
+
+  const requestIds = [record?.requestId, envelope?.requestId]
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  if (new Set(requestIds).size > 1) return false;
+  const messageRequestId = String(message?.requestId || '').trim();
+  if (messageRequestId && requestIds.length > 0 && requestIds.some(value => value !== messageRequestId)) {
+    return false;
+  }
+  return true;
+}
+
+function trustedRemoteFileFacts(
+  record: any,
+  message: any,
+  allowGenericName: boolean,
+): { facts: string[]; source: RemoteFileFactSource } | null {
+  if (!remoteToolRecordCorrelationMatchesMessage(record, message)) return null;
+  if (record?.adapterStarted === false || record?.error) return null;
+  if (record?.terminalVerification && record.terminalVerification.status !== 'verified') return null;
+
+  const envelope = record?.envelope && typeof record.envelope === 'object' && !Array.isArray(record.envelope)
+    ? record.envelope as Record<string, any>
+    : null;
+  if (envelope && (
+    envelope.status !== 'verified_success'
+    || (envelope.verification?.status && envelope.verification.status !== 'verified')
+  )) return null;
+
+  const sources: Array<{ source: RemoteFileFactSource; payload: unknown }> = [
+    { source: 'terminal receipt', payload: structuredRemoteReceipt(record?.receipt) },
+    { source: 'execution envelope', payload: structuredRemoteReceipt(envelope?.result) },
+    ...(envelope?.targetIdentity
+      ? [{ source: 'execution envelope' as const, payload: { path: envelope.targetIdentity } }]
+      : []),
+    { source: 'terminal result', payload: structuredRemoteReceipt(record?.result) },
+    { source: 'tool arguments', payload: structuredRemoteReceipt(record?.arguments) },
+  ];
+  for (const source of sources) {
+    const facts = exactRemoteFileFacts(source.payload, allowGenericName);
+    if (facts.length > 0) return { facts, source: source.source };
+  }
+  return null;
+}
+
+function summarizeRemoteToolRecord(record: any, message?: any): string {
   const name = String(record?.name || '').trim();
   if (!name) return '';
+  // A persisted tool blob cannot supply context for a different message/task.
+  // Reject the whole record before even low-risk chronology is summarized.
+  if (!remoteToolRecordCorrelationMatchesMessage(record, message)) return '';
   if (record?.error) return `${name}: failed`;
 
-  let payload: Record<string, any> | null = null;
+  let payload: unknown = null;
   try {
     const parsed = typeof record?.result === 'string' ? JSON.parse(record.result) : record?.result;
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) payload = parsed;
+    if (parsed && typeof parsed === 'object') payload = parsed;
   } catch {}
 
+  const exactFiles = trustedRemoteFileFacts(record, message, isFileReceiptToolName(name));
+  const exactFileSummary = exactFiles
+    ? `exact file identities from ${exactFiles.source}; ${exactFiles.facts.join('; ')}`
+    : '';
+
+  const payloadRecord = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload as Record<string, any>
+    : null;
   const facts: string[] = [];
   const allowedKeys = [
     'sent',
@@ -388,28 +602,31 @@ function summarizeRemoteToolRecord(record: any): string {
     'verificationStatus',
     'verificationMethod',
     'completionMarkerExists',
-    'fileName',
     'messageId',
     'contact',
     'method',
   ];
   for (const key of allowedKeys) {
-    const value = payload?.[key];
+    const value = payloadRecord?.[key];
     if (value === undefined || value === null || value === '') continue;
     facts.push(`${key}=${JSON.stringify(value).slice(0, 180)}`);
   }
   if (facts.length === 0 && /"sent"\s*:\s*true|sent:\s*true/i.test(String(record?.result || ''))) {
     facts.push('sent=true');
   }
-  if (facts.length > 0) return `${name}: ${facts.join(', ')}`;
+  if (facts.length > 0) {
+    return `${name}: ${[exactFileSummary, facts.join(', ')].filter(Boolean).join('; ')}`;
+  }
 
   const rawResult = String(record?.result || '').trim();
   const explicitlyFailed =
-    payload?.ok === false
-    || payload?.success === false
-    || /^(?:blocked|cancelled|canceled|error|failed|partial|pending|queued|requires_setup|submitted_unverified|timeout|timed_out)$/i.test(String(payload?.status || ''))
+    payloadRecord?.ok === false
+    || payloadRecord?.success === false
+    || /^(?:blocked|cancelled|canceled|error|failed|partial|pending|queued|requires_setup|submitted_unverified|timeout|timed_out)$/i.test(String(payloadRecord?.status || ''))
     || /(?:^|\b)(?:failed|error|blocked|timed?\s*out|not\s+completed|manual_required)(?:\b|$)|(?:失败|错误|受阻|超时|未完成|需要人工|需要确认)/iu.test(rawResult);
   if (explicitlyFailed) return `${name}: failed or incomplete`;
+
+  if (exactFileSummary) return `${name}: ${exactFileSummary}`;
 
   // A tool record without an error is not, by itself, completion evidence.
   // Keep unknown/plain results available as chronology without teaching the
@@ -420,7 +637,8 @@ function summarizeRemoteToolRecord(record: any): string {
 export function buildRemoteRuntimeEvidenceContext(messages: any[]): string {
   const lines = messages
     .slice(-12)
-    .flatMap(message => parsePersistedToolRecords(message?.toolCalls).map(summarizeRemoteToolRecord))
+    .flatMap(message => parsePersistedToolRecords(message?.toolCalls)
+      .map(record => summarizeRemoteToolRecord(record, message)))
     .filter(Boolean)
     .slice(-10);
   if (lines.length === 0) return '';
@@ -428,6 +646,7 @@ export function buildRemoteRuntimeEvidenceContext(messages: any[]): string {
     'Authoritative runtime evidence persisted from recent turns:',
     ...lines.map(line => `- ${line}`),
     'Use this evidence when explaining prior outcomes. Do not replace a successful provider acknowledgement with a guess based on the visible assistant wording.',
+    'File names and paths in this evidence are immutable identifiers. Copy them exactly; do not remove punctuation, underscores, spaces, extensions, or directory components.',
   ].join('\n');
 }
 
@@ -488,6 +707,30 @@ export function persistBoundMessagingMessage(
   };
   onConversationUpdated?.(update);
   return update;
+}
+
+function removeSupersededAssistantMessage(update: MessagingConversationUpdate | null): void {
+  if (!update) return;
+  const db = readDB();
+  const index = (db.interactions || []).findIndex((row: any) => (
+    row.id === update.messageId
+    && row.conversationId === update.conversationId
+    && row.userId === update.userId
+    && row.role === 'assistant'
+  ));
+  if (index < 0) return;
+  db.interactions.splice(index, 1);
+  const conversation = (db.conversations || []).find((item: any) => (
+    item.id === update.conversationId && item.userId === update.userId
+  ));
+  if (conversation) conversation.messageCount = Math.max(0, Number(conversation.messageCount || 0) - 1);
+}
+
+function notifyMessagingConversationUpdated(
+  update: MessagingConversationUpdate | null,
+  callback?: MessagingRouteOptions['onConversationUpdated'],
+): void {
+  if (update) callback?.(update);
 }
 
 async function admitBoundMessagingTurnDurably(
@@ -788,9 +1031,35 @@ function isParseableAttachment(fileName: string, attachmentType: string): boolea
   return ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.csv', '.txt', '.md'].includes(ext);
 }
 
-function getRequestText(msg: IncomingMessage): string {
-  const marker = '\n\n以下是用户通过';
-  return msg.text.includes(marker) ? msg.text.slice(0, msg.text.indexOf(marker)).trim() : msg.text.trim();
+export function getRequestText(msg: IncomingMessage): string {
+  const markers = [
+    '\n以下是用户通过',
+    '\nThe following materials were sent earlier',
+  ];
+  const markerIndex = markers
+    .map(marker => msg.text.indexOf(marker))
+    .filter(index => index >= 0)
+    .sort((left, right) => left - right)[0];
+  const request = markerIndex === undefined ? msg.text.trim() : msg.text.slice(0, markerIndex).trim();
+  const attachmentLabels = new Set((msg.attachments || []).flatMap(attachment => {
+    const name = String(attachment.fileName || '').trim();
+    return name ? [`[附件] ${name}`, `[Attachment] ${name}`] : [];
+  }));
+  const requestLines = request.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  // Feishu, WeCom and WeChat synthesize these labels for an attachment-only
+  // event. A filename is material metadata, not user authorization to execute
+  // verbs that happen to appear inside that filename.
+  if (attachmentLabels.size > 0 && requestLines.length > 0 && requestLines.every(line => attachmentLabels.has(line))) {
+    return '';
+  }
+  return request;
+}
+
+export function buildRemoteTurnIntentText(
+  msg: IncomingMessage,
+  pendingConfirmationPrompt = '',
+): string {
+  return [getRequestText(msg), pendingConfirmationPrompt].filter(Boolean).join('\n');
 }
 
 function getDisplayText(msg: IncomingMessage): string {
@@ -948,7 +1217,13 @@ export function dispatchIncomingMessage(
         retryableBindingTurn = true;
         retryableReplyDelivery = true;
         updateMessagingJournal(trackedMessage, { status: 'processing' });
-        const replyMessageId = await transport.reply(trackedMessage, interruptedDelivery.replyText);
+        const interruptedCorrelation = correlateMessagingReply(trackedMessage, interruptedDelivery.replyText);
+        if (interruptedCorrelation.superseded) {
+          retryableReplyDelivery = false;
+          finalJournalStatus = 'superseded';
+          return;
+        }
+        const replyMessageId = await transport.reply(trackedMessage, interruptedCorrelation.text);
         retryableReplyDelivery = false;
         updateMessagingJournal(trackedMessage, {
           status: 'replied',
@@ -984,7 +1259,12 @@ export function dispatchIncomingMessage(
               await flushMessagingStateOrThrow('terminal_reply');
               terminalReplyDurable = true;
             }
-            const replyMessageId = await transport.reply(trackedMessage, correlated.text);
+            const deliveryCorrelation = correlateMessagingReply(trackedMessage, correlated.text);
+            if (deliveryCorrelation.superseded) {
+              finalJournalStatus = 'superseded';
+              return;
+            }
+            const replyMessageId = await transport.reply(trackedMessage, deliveryCorrelation.text);
             updateMessagingJournal(trackedMessage, {
               status: 'replied',
               replyText: correlated.text,
@@ -1003,7 +1283,12 @@ export function dispatchIncomingMessage(
             );
             if (!refreshedPlan) {
               const invalidReply = `绑定码无效或已过期。请在 Lumi 桌面端重新生成${remotePlatformLabel(trackedMessage.platform)}绑定码。`;
-              const replyMessageId = await transport.reply(trackedMessage, invalidReply);
+              const invalidCorrelation = correlateMessagingReply(trackedMessage, invalidReply);
+              if (invalidCorrelation.superseded) {
+                finalJournalStatus = 'superseded';
+                return;
+              }
+              const replyMessageId = await transport.reply(trackedMessage, invalidCorrelation.text);
               updateMessagingJournal(trackedMessage, {
                 status: 'replied',
                 replyText: invalidReply,
@@ -1046,7 +1331,14 @@ export function dispatchIncomingMessage(
               replyRetryable: true,
             });
             retryableReplyDelivery = true;
-            const replyMessageId = await transport.reply(trackedMessage, correlated.text);
+            const deliveryCorrelation = correlateMessagingReply(trackedMessage, correlated.text);
+            if (deliveryCorrelation.superseded) {
+              retryableReplyDelivery = false;
+              updateMessagingJournal(trackedMessage, { replyRetryable: false });
+              finalJournalStatus = 'superseded';
+              return;
+            }
+            const replyMessageId = await transport.reply(trackedMessage, deliveryCorrelation.text);
             retryableReplyDelivery = false;
             updateMessagingJournal(trackedMessage, {
               status: 'replied',
@@ -1075,6 +1367,11 @@ export function dispatchIncomingMessage(
         ? Promise.resolve(routeBaseMessage)
         : transport.enrich(routeBaseMessage);
       await enqueueMessageRoute(trackedMessage, async () => {
+        if (newerMessageSupersedesThisTurn(trackedMessage)) {
+          void enrichment.catch(() => undefined);
+          finalJournalStatus = 'superseded';
+          return;
+        }
         commitPersonalOrganizationScopePlan(scopePlan);
         updateMessagingJournal(trackedMessage, {
           boundUserId: routeBaseMessage.boundUserId || '',
@@ -1098,11 +1395,18 @@ export function dispatchIncomingMessage(
             finalJournalStatus = 'superseded';
             return;
           }
-          persistBoundMessagingExchange(target, correlated.text, options?.onConversationUpdated);
+          const persistedReply = persistBoundMessagingExchange(target, correlated.text);
           if (target.boundUserId) {
             await flushMessagingStateOrThrow('terminal_reply');
             terminalReplyDurable = true;
           }
+          if (newerMessageSupersedesThisTurn(target)) {
+            removeSupersededAssistantMessage(persistedReply);
+            if (target.boundUserId) await flushMessagingStateOrThrow('terminal_reply');
+            finalJournalStatus = 'superseded';
+            return;
+          }
+          notifyMessagingConversationUpdated(persistedReply, options?.onConversationUpdated);
           const replyMessageId = await transport.reply(target, correlated.text);
           updateMessagingJournal(trackedMessage, {
             status: 'replied',
@@ -1123,11 +1427,16 @@ export function dispatchIncomingMessage(
           finalJournalStatus = 'superseded';
           return;
         }
+        const deliveryCorrelation = correlateMessagingReply(routedMessage, replyText);
+        if (deliveryCorrelation.superseded) {
+          finalJournalStatus = 'superseded';
+          return;
+        }
         terminalReplyDurable = Boolean(routedMessage.boundUserId);
-        const replyMessageId = await transport.reply(routedMessage, replyText);
+        const replyMessageId = await transport.reply(routedMessage, deliveryCorrelation.text);
         updateMessagingJournal(trackedMessage, {
           status: 'replied',
-          replyText,
+          replyText: deliveryCorrelation.text,
           replyMessageId: String(replyMessageId || ''),
         });
       });
@@ -1406,6 +1715,63 @@ function extractCaseArchiveTarget(text: string): string {
   return '';
 }
 
+function normalizeCaseArchiveIdentity(value: string): string {
+  return String(value || '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/^(?:案件|案号|案卷|卷宗)[:：]?/u, '')
+    .replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+function selectReliableArchiveCase(
+  candidates: LegalCases.OrgLegalCaseFile[],
+  target: string,
+): { selected: LegalCases.OrgLegalCaseFile | null; alternatives: LegalCases.OrgLegalCaseFile[] } {
+  const normalizedTarget = normalizeCaseArchiveIdentity(target);
+  if (!normalizedTarget) return { selected: null, alternatives: [] };
+  const caseIdentities = (caseFile: LegalCases.OrgLegalCaseFile) => [
+    caseFile.id,
+    caseFile.caseNumber,
+    caseFile.title,
+  ].map(normalizeCaseArchiveIdentity).filter(Boolean);
+
+  const exact = candidates.filter(caseFile => caseIdentities(caseFile).includes(normalizedTarget));
+  if (exact.length === 1) return { selected: exact[0], alternatives: exact };
+  if (exact.length > 1) return { selected: null, alternatives: exact };
+
+  // A partial name is reliable only when it identifies exactly one case by
+  // title/case number. Matches found solely in notes, parties or materials are
+  // search hints, never sufficient authority for a write.
+  const identityPartial = normalizedTarget.length >= 4
+    ? candidates.filter(caseFile => [caseFile.caseNumber, caseFile.title]
+        .map(normalizeCaseArchiveIdentity)
+        .filter(Boolean)
+        .some(identity => identity.includes(normalizedTarget) || normalizedTarget.includes(identity)))
+    : [];
+  return identityPartial.length === 1
+    ? { selected: identityPartial[0], alternatives: identityPartial }
+    : { selected: null, alternatives: identityPartial.length > 1 ? identityPartial : [] };
+}
+
+export type RemoteCaseAttachmentWriteIntent = 'none' | 'archive_existing' | 'create_case';
+
+function stripNegatedRemoteWritePhrases(text: string): string {
+  return String(text || '')
+    .replace(/(?:不要|别|无需|不用|不需要|请勿|禁止)[^，。；;！？!?\n]{0,12}?(?:建案|入案|归档|保存|导入|上传|收录|加入|添加|放入|放到|新建|创建|写入|修改|更新|删除)/gu, ' ')
+    .replace(/\b(?:do\s+not|don't|never|without)\b[^\n.!?;]{0,20}?\b(?:file|archive|save|import|upload|add|create|write|modify|update|delete)\b/giu, ' ');
+}
+
+export function classifyRemoteCaseAttachmentWriteIntent(text: string): RemoteCaseAttachmentWriteIntent {
+  const request = String(text || '').trim();
+  if (!request) return 'none';
+  const affirmativeRequest = stripNegatedRemoteWritePhrases(request);
+  const explicitlyCreatesCase = /(?:建案|入案|(?:新建|创建|建立|建)(?:一个|一份|该|这个)?(?:案件|案卷|卷宗)|(?:案件|案卷|卷宗).{0,8}(?:新建|创建|建立)|\b(?:create|start)\s+(?:a\s+)?new\s+case\b)/iu.test(affirmativeRequest);
+  if (explicitlyCreatesCase) return 'create_case';
+  const explicitlyArchives = /(?:归档|保存|导入|上传|收录|加入|添加|放入|放到)|\b(?:archive|save|import|upload|add)\b/iu.test(affirmativeRequest);
+  const namesExistingCaseTarget = /(?:已有|现有|当前|指定)?(?:案件|案号|案卷|卷宗)|\b(?:existing|current|specified)\s+case\b/iu.test(affirmativeRequest);
+  return explicitlyArchives && namesExistingCaseTarget ? 'archive_existing' : 'none';
+}
+
 function inferMaterialType(fileName: string, text: string): LegalCases.LegalCaseMaterialType {
   const lower = fileName.toLowerCase();
   if (/合同|协议|contract/.test(fileName) || lower.includes('contract')) return 'contract';
@@ -1440,8 +1806,12 @@ export async function handleRemoteOrgCommand(msg: IncomingMessage): Promise<stri
   if (!membership || membership.status !== 'active') {
     return '当前 Lumi 身份的组织成员权限已经失效，请重新进入组织或联系管理员。';
   }
-  const writeRequest = /(归档|保存|导入|上传|新建|创建|添加|写入|修改|更新|删除)/.test(requestText)
-    || Boolean(msg.attachments?.length && /(案件|材料|卷宗|知识库|资料库|文档库)/.test(requestText));
+  const caseAttachmentWriteIntent = msg.attachments?.length
+    ? classifyRemoteCaseAttachmentWriteIntent(requestText)
+    : 'none';
+  const affirmativeWriteText = stripNegatedRemoteWritePhrases(requestText);
+  const writeRequest = /(归档|保存|导入|上传|新建|创建|添加|写入|修改|更新|删除)/.test(affirmativeWriteText)
+    || caseAttachmentWriteIntent !== 'none';
   if (writeRequest && membership.role === 'viewer') {
     return '当前 Lumi 身份在该组织中只有查看权限，不能归档、创建或修改组织数据。';
   }
@@ -1462,7 +1832,9 @@ export async function handleRemoteOrgCommand(msg: IncomingMessage): Promise<stri
     return formatCaseResults(cases);
   }
 
-  const wantsKbArchive = textAttachments.length > 0 && /(知识库|文档库|资料库)/.test(requestText) && /(归档|保存|导入|上传|收录)/.test(requestText);
+  const wantsKbArchive = textAttachments.length > 0
+    && /(知识库|文档库|资料库)/.test(requestText)
+    && /(归档|保存|导入|上传|收录)/.test(affirmativeWriteText);
   if (wantsKbArchive) {
     const articles = textAttachments.map(attachment => OrgKB.createArticle(msg.boundOrgId!, msg.boundUserId!, {
       title: attachment.fileName || requestText.slice(0, 80) || `${platformLabel}远程文档`,
@@ -1480,16 +1852,21 @@ export async function handleRemoteOrgCommand(msg: IncomingMessage): Promise<stri
     ].join('\n');
   }
 
-  const wantsArchive = /(归档|保存|导入|上传|新建|创建|案件|案情|材料|卷宗)/.test(requestText);
-  if (textAttachments.length > 0 && wantsArchive) {
+  if (textAttachments.length > 0 && caseAttachmentWriteIntent !== 'none') {
     const first = textAttachments[0];
     const combined = textAttachments
       .map(item => `# ${item.fileName}\n\n${item.extractedText}`)
       .join('\n\n---\n\n');
     const target = extractCaseArchiveTarget(requestText);
-    const targetCases = target ? LegalCases.listCases(msg.boundOrgId, target, 3, msg.boundUserId) : [];
-    if (targetCases.length > 0) {
-      const targetCase = targetCases[0];
+    const targetCases = caseAttachmentWriteIntent === 'archive_existing' && target
+      ? Array.from(new Map([
+          ...LegalCases.listCases(msg.boundOrgId, target, 200, msg.boundUserId),
+          ...LegalCases.listCases(msg.boundOrgId, '', 200, msg.boundUserId),
+        ].map(caseFile => [caseFile.id, caseFile])).values())
+      : [];
+    const archiveSelection = selectReliableArchiveCase(targetCases, target);
+    if (caseAttachmentWriteIntent === 'archive_existing' && archiveSelection.selected) {
+      const targetCase = archiveSelection.selected;
       for (const attachment of textAttachments) {
         LegalCases.addMaterial(msg.boundOrgId, msg.boundUserId, targetCase.id, {
           type: inferMaterialType(attachment.fileName, attachment.extractedText || ''),
@@ -1513,6 +1890,19 @@ export async function handleRemoteOrgCommand(msg: IncomingMessage): Promise<stri
         '',
         '后续可以继续发送材料，或说“查案件 <关键词>”。',
         '注意：此归档和分析只辅助律师工作，最终法律意见由执业律师确认。',
+      ].join('\n');
+    }
+
+    if (caseAttachmentWriteIntent === 'archive_existing') {
+      return [
+        '附件尚未归档，也没有创建新案件。',
+        '',
+        archiveSelection.alternatives.length > 1
+          ? `找到 ${archiveSelection.alternatives.length} 个可能的已有案件，请提供完整案号或准确案件名称：\n${archiveSelection.alternatives.slice(0, 8).map((item, index) => `${index + 1}. ${item.title || '未命名案件'}｜${item.caseNumber || '未填案号'}`).join('\n')}`
+          : target
+          ? `没有找到“${target}”对应的已有案件。请提供准确案号或案件名称。`
+          : '请指定要归档到的已有案件名称或案号。',
+        '只有你明确说“新建案件并归档附件”时，Lumi 才会创建新案件。',
       ].join('\n');
     }
 
@@ -1946,6 +2336,34 @@ export async function processWithPersonality(
         taskId: conversation.actionContinuationState?.taskId,
       })
     : undefined;
+  if (isRemoteConversationDismissalRequest(requestText)) {
+    if (isIdentityBound) {
+      clearPendingLegalNotice(msg, effectiveUserId);
+      if (confirmationScope) {
+        await clearPendingConfirmationDurably(effectiveUserId, confirmationScope);
+      }
+      if (confirmationChannelScope) {
+        await clearPendingConfirmationDurably(effectiveUserId, confirmationChannelScope);
+      }
+      if (conversation?.actionContinuationState?.unfinished) {
+        cancelConversationActionExecution(
+          conversation.id,
+          effectiveUserId,
+          'The user ended the current remote foreground exchange.',
+        );
+      }
+    }
+    const dismissalReply = /[\u3400-\u9fff]/u.test(requestText)
+      ? '好，有需要再叫我。'
+      : 'Okay. I\'m here when you need me.';
+    const correlated = correlateMessagingReply(msg, dismissalReply);
+    if (correlated.superseded) return '';
+    if (isIdentityBound) {
+      persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
+      await flushTerminalReply();
+    }
+    return correlated.text;
+  }
   const confirmationResolution = isIdentityBound
     && acceptedTurnAdmission
     && confirmationScope
@@ -1966,11 +2384,11 @@ export async function processWithPersonality(
     confirmationResolution?.correctionRequiresFreshConfirmation === true;
   const organizationMembership = isOrganizationBound ? getMember(orgId, effectiveUserId) : null;
   const canWriteOrganization = organizationMembership?.status === 'active' && organizationMembership.role !== 'viewer';
-  const routingText = [
-    requestText,
-    ...(msg.attachments || []).flatMap(attachment => [attachment.fileName, attachment.localPath || '', attachment.extractedText || '']),
-    pendingConfirmationPrompt,
-  ].filter(Boolean).join('\n');
+  // Capability selection is authorized by this user turn, not by words inside
+  // an attachment or its cache path. The full attachment remains available in
+  // the model's user message for read-only analysis, while planning, task
+  // relation, tool projection and confirmation bind only to current wording.
+  const routingText = buildRemoteTurnIntentText(msg, pendingConfirmationPrompt);
   const operationMode = isIdentityBound ? getStoredOperationMode(effectiveUserId) : 'chat';
   const provisionalPlan = buildRemoteLumiExecutionPlan({
     userId: effectiveUserId,
@@ -2005,7 +2423,7 @@ export async function processWithPersonality(
       console.warn('[Messaging] Explicit remote relationship memory failed:', error?.message || error);
     }
   }
-  if (newerMessageCancelsThisTurn(msg)) return '';
+  if (newerMessageSupersedesThisTurn(msg)) return '';
 
   const requestedMode = provisionalPlan.dispatch.flow.requestedMode;
   // A semantic action match is only a planning hint. It must not silently
@@ -2116,16 +2534,17 @@ export async function processWithPersonality(
     const staleText = actionTaskExecution.bindingFailure === 'busy'
       ? CN_TASK_EXECUTION_MESSAGES.actionTurnBusy
       : CN_TASK_EXECUTION_MESSAGES.actionTurnStale;
-    persistBoundMessagingMessage(
-      msg,
-      'assistant',
-      staleText,
-      options?.onConversationUpdated,
-    );
+    const correlated = correlateMessagingReply(msg, staleText);
+    if (correlated.superseded) return '';
+    persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
     await flushTerminalReply();
-    return staleText;
+    return correlated.text;
   }
   const actionAbortController = new AbortController();
+  const releaseActiveMessageRouteController = registerActiveMessageRouteController(
+    msg,
+    actionAbortController,
+  );
   const actionLeaseHeartbeat = isIdentityBound && conversation
     ? startConversationActionExecutionHeartbeat({
         conversationId: conversation.id,
@@ -2137,7 +2556,7 @@ export async function processWithPersonality(
     : null;
   const actionLeaseWasLost = () => Boolean(actionLeaseHeartbeat?.isLeaseLost());
   const actionWasCancelled = () => (
-    actionAbortController.signal.aborted || newerMessageCancelsThisTurn(msg)
+    actionAbortController.signal.aborted || newerMessageSupersedesThisTurn(msg)
   );
   const throwIfActionLeaseWasLost = () => {
     if (!actionLeaseWasLost()) return;
@@ -2158,15 +2577,35 @@ export async function processWithPersonality(
     });
   }
   if (isIdentityBound && conversation && actionFollowupIntent === 'status') {
-    const statusText = getConversationActionStatus(
-      conversation.id,
-      effectiveUserId,
-      requestText,
-      conversation.actionContinuationState,
-    );
+    const executionFactQuestion = isConversationExecutionFactQuestion(requestText);
+    const statusText = executionFactQuestion
+      ? formatConversationExecutionFactAnswer(getConversationExecutionFacts({
+          conversationId: conversation.id,
+          userId: effectiveUserId,
+          domain,
+          orgId,
+          currentRequestId: requestId,
+          taskId: conversation.actionContinuationState?.taskId || '',
+        }), requestText)
+      : getConversationActionStatus(
+          conversation.id,
+          effectiveUserId,
+          requestText,
+          conversation.actionContinuationState,
+        );
     const correlated = correlateMessagingReply(msg, statusText);
-    if (correlated.superseded) return '';
+    if (correlated.superseded) {
+      settleConversationActionExecutionRequest(
+        conversation.id,
+        effectiveUserId,
+        requestId,
+        'The remote status turn was superseded by a newer user message.',
+      );
+      await flushTerminalReply();
+      return '';
+    }
     persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
+    settleConversationActionExecutionRequest(conversation.id, effectiveUserId, requestId);
     await flushTerminalReply();
     return correlated.text;
   }
@@ -2306,6 +2745,7 @@ export async function processWithPersonality(
   systemPrompt += '\n\nRemote continuity rule: prior assistant statements about installed tool counts, missing desktop access, or mode availability are conversational history, not runtime evidence. Use the current capability map, client state, scoped relay, and actual tool results as the source of truth.';
   systemPrompt += '\nRemote embodiment rule: WeChat, Feishu, and WeCom are transport channels into the same Lumi runtime. Do not claim that a remote channel inherently cannot reach the desktop. A no-client result for one data scope proves only that the scoped device route did not match; report that exact fact and check the personal/work scope before inferring that the desktop client is offline.';
   systemPrompt += '\nRemote memory rule: authenticated personal remote chat participates in the same personal memory system. Organization turns remain organization-scoped. Do not ask the user to repeat an explicit relationship or trust statement merely to make it memorable, and do not claim a memory was stored unless the memory pipeline accepted it.';
+  systemPrompt += '\nExact file identity rule: a filename or path returned by a tool is an immutable identifier. Copy it character-for-character, including underscores, spaces, punctuation, extension, and parent directories. Never invent a size, timestamp, path, copy, upload, or send result; if the exact requested file is not in a receipt, say it was not verified.';
   systemPrompt += '\nRemote reply layout rule: make replies easy to scan in mobile chat. Use short paragraphs of 2-4 sentences separated by a blank line. For multiple points, use brief numbered labels or bullet lines. Do not send a dense wall of text.';
   if (explicitRemoteMemoryIds.length > 0) {
     systemPrompt += '\nCurrent-turn memory receipt: the explicit personal relationship/trust statement was accepted into durable personal memory. You may acknowledge that fact naturally; do not expose internal memory IDs.';
@@ -2378,7 +2818,11 @@ export async function processWithPersonality(
     return false;
   };
   const settleRemoteTask = (fallbackBlocker?: string) => {
-    if (!conversation || !actionTaskExecution.state?.taskId) return;
+    if (!conversation) return;
+    // Every accepted remote turn owns a durable request lease, including a
+    // conversation-only turn with no task id. Leaving that lease pending after
+    // an abort makes the next user message receive a false "still finishing"
+    // response even though the obsolete generation was already suppressed.
     if (fallbackBlocker) {
       settleConversationActionExecutionRequest(
         conversation.id,
@@ -2462,11 +2906,18 @@ export async function processWithPersonality(
           toolRecords: taskAwareRecords(toolRecords),
           source,
           flow: turnFlow,
+          taskId: actionTaskExecution.state?.taskId,
+          requestId,
           pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
           isPendingConfirmation: () => Boolean(pendingConfirmationCreatedThisTurn),
         });
         const finalizedMode = modeOutbound.finalization;
-        toolRecords = withDesktopExecutionReceipt(modeOutbound.toolRecords, desktopExecutionTracker);
+        toolRecords = withCurrentMessagingDesktopExecutionReceipt(
+          modeOutbound.toolRecords,
+          desktopExecutionTracker,
+          actionTaskExecution.state?.taskId,
+          requestId,
+        );
         const correlated = correlateMessagingReply(msg, finalizedMode.text);
         if (correlated.superseded) {
           settleRemoteTask('The remote turn was superseded by a newer user message.');
@@ -2623,12 +3074,21 @@ export async function processWithPersonality(
       }
     }
 
-    toolRecords = withDesktopExecutionReceipt(toolRecords, desktopExecutionTracker);
+    toolRecords = withCurrentMessagingDesktopExecutionReceipt(
+      toolRecords,
+      desktopExecutionTracker,
+      actionTaskExecution.state?.taskId,
+      requestId,
+    );
     if (pendingConfirmationCreatedThisTurn) {
       responseText = formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn);
     }
     const deliveryText = responseText || '这次没有生成可用回复，请稍后重试。';
-    const preDeliveryRecords = taskAwareRecords(toolRecords);
+    const preDeliveryRecords = currentMessagingFinalizationRecords({
+      toolRecords: taskAwareRecords(toolRecords),
+      taskId: actionTaskExecution.state?.taskId,
+      requestId,
+    });
     const organizationVerifiedTerminalReceipt = preDeliveryRecords.some(record => {
       const verified = record.envelope?.status === 'verified_success'
         || record.terminalVerification?.status === 'verified';
@@ -2658,6 +3118,8 @@ export async function processWithPersonality(
             toolRecords: preDeliveryRecords,
             source,
             flow: turnFlow,
+            taskId: actionTaskExecution.state?.taskId,
+            requestId,
           });
     const outbound = await finalizeMessagingResponseForDelivery({
       taskText: routingText,
@@ -2665,6 +3127,8 @@ export async function processWithPersonality(
       toolRecords: preDeliveryRecords,
       source,
       flow: turnFlow,
+      taskId: actionTaskExecution.state?.taskId,
+      requestId,
       initialFinalization,
       allowToolUse: toolSessionActive
         && !callbackReply
@@ -2698,9 +3162,11 @@ export async function processWithPersonality(
         }
         return {
           text: recovery.text,
-          toolRecords: withDesktopExecutionReceipt(
+          toolRecords: withCurrentMessagingDesktopExecutionReceipt(
             recovery.toolCalls || [],
             desktopExecutionTracker,
+            actionTaskExecution.state?.taskId,
+            requestId,
           ),
         };
       },
@@ -2713,12 +3179,28 @@ export async function processWithPersonality(
         : finalizeLumiResponse({
             taskText: routingText,
             responseText: candidateText,
-            toolRecords: withDesktopExecutionReceipt(records, desktopExecutionTracker),
+            toolRecords: currentMessagingFinalizationRecords({
+              toolRecords: withCurrentMessagingDesktopExecutionReceipt(
+                records,
+                desktopExecutionTracker,
+                actionTaskExecution.state?.taskId,
+                requestId,
+              ),
+              taskId: actionTaskExecution.state?.taskId,
+              requestId,
+            }),
             source: `${source}_guard_recovery`,
             flow: turnFlow,
+            taskId: actionTaskExecution.state?.taskId,
+            requestId,
           }),
     });
-    toolRecords = withDesktopExecutionReceipt(outbound.toolRecords, desktopExecutionTracker);
+    toolRecords = withCurrentMessagingDesktopExecutionReceipt(
+      outbound.toolRecords,
+      desktopExecutionTracker,
+      actionTaskExecution.state?.taskId,
+      requestId,
+    );
     const finalized = outbound.finalization;
     if (actionLeaseWasLost()) {
       await actionLeaseHeartbeat!.leaseLoss;
@@ -2739,7 +3221,7 @@ export async function processWithPersonality(
       await flushTerminalReply();
       return '';
     }
-    persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated, toolRecords);
+    const persistedTerminalReply = persistBoundMessagingMessage(msg, 'assistant', correlated.text, undefined, toolRecords);
     if (pendingConfirmationCreatedThisTurn && conversation) {
       setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'waiting_confirmation', {
         assistantState: formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn),
@@ -2771,6 +3253,12 @@ export async function processWithPersonality(
     }
     settleRemoteTask();
     await flushTerminalReply();
+    if (newerMessageSupersedesThisTurn(msg)) {
+      removeSupersededAssistantMessage(persistedTerminalReply);
+      await flushTerminalReply();
+      return '';
+    }
+    notifyMessagingConversationUpdated(persistedTerminalReply, options?.onConversationUpdated);
     // Native organization commands already have a deterministic server
     // transaction and a task-bound terminal receipt. Running the generic
     // post-turn extractor here would invoke a model after the command has
@@ -2834,6 +3322,7 @@ export async function processWithPersonality(
   }
   } finally {
     actionLeaseHeartbeat?.stop();
+    releaseActiveMessageRouteController();
   }
 }
 

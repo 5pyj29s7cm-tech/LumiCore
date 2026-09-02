@@ -36,6 +36,8 @@ import {
   buildActionContract,
   buildActionEvidenceContract,
   claimsCurrentAppSaveCompletion,
+  documentReadMatchesRequestedTarget,
+  isSuccessfulExactDocumentRead,
   extractDesktopLaunchTarget,
   extractExplicitArtifactTextRequirements,
   extractSimpleDesktopOpenTarget,
@@ -70,6 +72,7 @@ import { coalesceToolExecutionRecords, toolRecordSucceeded } from './task_execut
 import { parseReceiptObject, toolRecordTerminalPayload, toolRecordTerminalText } from '../tools/receipt_payload';
 import { isExplicitRuntimeCleanupProposal } from './pending_assistant_offer';
 import { sanitizeUserFacingExecutionOutput } from './user_output_protection';
+import { formatVerifiedTaskResultForReadability } from './reply_style';
 import {
   hasContinuousStockWatchIntent,
   hasContinuousStockWatchEvidence,
@@ -118,6 +121,308 @@ const TOOL_ITERATION_LIMIT_RESPONSE_RE =
 function resultTaskText(input: LumiResultFinalizerInput): string {
   const routed = String(input.flow?.routeText || '').trim();
   return routed || String(input.taskText || '').trim();
+}
+
+function recordMatchesCurrentTurnIdentity(
+  input: LumiResultFinalizerInput,
+  record: ToolExecutionRecord,
+): boolean {
+  const expectedTaskId = String(input.taskId || '').trim();
+  const expectedRequestId = String(input.requestId || '').trim();
+  const actualTaskIds = [record.taskId, record.envelope?.taskId]
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  const actualRequestIds = [record.requestId, record.envelope?.requestId]
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  if (
+    expectedTaskId
+    && (actualTaskIds.length === 0 || actualTaskIds.some(value => value !== expectedTaskId))
+  ) return false;
+  if (
+    expectedRequestId
+    && (actualRequestIds.length === 0 || actualRequestIds.some(value => value !== expectedRequestId))
+  ) return false;
+  return true;
+}
+
+/** A completion/progress claim may consume only receipts fenced to this turn. */
+function isVerifiedCurrentTurnRecord(
+  input: LumiResultFinalizerInput,
+  record: ToolExecutionRecord,
+): boolean {
+  if (!toolRecordSucceeded(record) || !recordMatchesCurrentTurnIdentity(input, record)) return false;
+  const receipt = parseReceiptObject(record.receipt);
+  const result = parseReceiptObject(record.result);
+  return record.terminalVerification?.status === 'verified'
+    || (
+      record.envelope?.status === 'verified_success'
+      && record.envelope.verification?.status === 'verified'
+    )
+    || receipt?.status === 'verified_success'
+    || receipt?.status === 'verified'
+    || receipt?.verification?.status === 'verified'
+    || receipt?.terminalVerification?.status === 'verified'
+    || result?.status === 'verified_success'
+    || result?.status === 'verified'
+    || result?.verification?.status === 'verified'
+    || result?.terminalVerification?.status === 'verified';
+}
+
+type RealWorldClaimKind =
+  | 'communication'
+  | 'reminder'
+  | 'playback'
+  | 'open'
+  | 'file_mutation'
+  | 'runtime_configuration';
+
+function realWorldClaimKind(value: string): RealWorldClaimKind | '' {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  // Do not turn denials, hypotheticals, quotations, or explanations of the
+  // policy into positive execution claims.
+  const positive = text
+    .replace(/[“”][^“”\r\n]{0,240}[“”]/gu, ' ')
+    .replace(/[‘’][^‘’\r\n]{0,240}[‘’]/gu, ' ')
+    .replace(/"[^"\r\n]{0,240}"/gu, ' ')
+    .split(/[\n。！!]+/u)
+    .map(clause => clause.trim())
+    // i18n-allow: Chinese negated/hypothetical execution-claim recognition; not user-visible copy.
+    .filter(clause => clause
+      && !/[？?]/u.test(clause)
+      && !/^(?:没有|没|未|并未|不能|无法|如果|假如|例如|比如|假设)|(?:没有|并未|未曾|不能|不应|不可).{0,16}(?:完成|发送|创建|打开|播放|执行)|\b(?:did\s+not|didn't|cannot|can't|if|for\s+example)\b/iu.test(clause) // i18n-allow: reviewed execution-claim input recognition.
+      && !/(?:你|他|她|它|用户|模型|系统|文档|消息).{0,10}(?:说|声称|表示|写着|显示|回复|提到).{0,24}(?:已|已经|成功)|\b(?:you|they|the\s+(?:model|system|message|document))\s+(?:said|claimed|reported|shows?)\b/iu.test(clause)) // i18n-allow: reviewed reported-speech input recognition.
+    .join('\n');
+  if (!positive) return '';
+  // i18n-allow: Chinese real-world execution-claim recognition; not user-visible copy.
+  if (/(?:已|已经|成功).{0,14}(?:发送|发出|上传|提交|发布|送达)|(?:发送|上传|提交|发布)成功|\b(?:sent|uploaded|submitted|published|delivered)\b/iu.test(positive)) return 'communication';
+  // i18n-allow: Chinese reminder-creation claim recognition; not user-visible copy.
+  if (/(?:已|已经|成功).{0,16}(?:创建|设置|新建).{0,12}(?:提醒|定时|日程|计划|任务)|(?:提醒|定时任务|日程).{0,16}(?:已创建|已设置)|\b(?:reminder|schedule|calendar).{0,24}(?:created|set)\b/iu.test(positive)) return 'reminder';
+  // i18n-allow: Chinese media-state claim recognition; not user-visible copy.
+  if (/(?:播放|暂停).{0,12}(?:已|已经|启动|开始|成功|正在)|(?:已|已经|成功).{0,12}(?:播放|暂停)|(?:音量|声音)\s*(?:已经)?\s*(?:调到|设为|设置为)?\s*\d{1,3}\s*%?|\b(?:playing|playback started|volume\s*(?:is|set to)?\s*\d+)\b/iu.test(positive)) return 'playback';
+  // i18n-allow: Chinese file-mutation claim recognition; not user-visible copy.
+  if (/(?:已|已经|成功).{0,12}(?:复制|保存|写入|删除|移动)|(?:复制|保存|写入|删除|移动)成功|\b(?:copied|saved|written|deleted|moved)\b/iu.test(positive)) return 'file_mutation';
+  // i18n-allow: Chinese launch/open claim recognition; not user-visible copy.
+  if (
+    /(?:已|已经|成功).{0,12}(?:打开|启动)|(?:打开|启动)成功|\b(?:opened|launched)\b/iu.test(positive)
+    && !/(?:打开|启动)(?:了)?(?:思路|话题|心扉|眼界|想象|局面|新篇章)|\bopen(?:ed)?\s+(?:my\s+)?(?:mind|thinking|perspective)\b/iu.test(positive) // i18n-allow: reviewed abstract-expression input recognition.
+  ) return 'open';
+  // i18n-allow: Chinese runtime-provider claim recognition; not user-visible copy.
+  if (/(?:Lumi[-\s‑]?Neutral\s*v?2|(?:当前|现在|这次|始终|一直|实际)?[^。！？!?\n]{0,24}(?:音色|声线|TTS|STT|语音|模型|提供商|供应商|云端)[^。！？!?\n]{0,36}(?:使用|采用|调用|接入|来自|切到|切换到|是|为)[^。！？!?\n]{0,36}(?:本地|云端|官方|relay|GPT[- ]?SoVITS|CosyVoice|Lumi[-\s‑]?Neutral|long[a-z0-9_-]+))/iu.test(positive)) return 'runtime_configuration';
+  return '';
+}
+
+function isExecutionClaimGuardTurn(input: LumiResultFinalizerInput, contractApplies: boolean): boolean {
+  if (contractApplies || (input.toolRecords || []).length > 0) return true;
+  if (
+    input.flow?.completionEvidenceNeeded === true
+    || input.flow?.clientActionOnlyTurn === true
+    || input.flow?.selfRepairTurn === true
+  ) return true;
+  const task = resultTaskText(input).trim();
+  // A terse confirmation can carry an already server-bound action even though
+  // it has no standalone action contract of its own.
+  return /^(?:嗯|对|是|好|好的|可以|确认|继续|执行|重试|yes|ok(?:ay)?|confirm|continue|retry)[，,。.!！\s]*(?:对|是|的)?[，,。.!！\s]*$/iu.test(task); // i18n-allow: reviewed terse action-followup input recognition.
+}
+
+function isFirstPersonConcreteRealWorldClaim(value: string, kind: RealWorldClaimKind): boolean {
+  const text = String(value || '').trim();
+  if (!/(?:^|[\s，,。；;！!])(?:我|我们)(?=[^\s，,。；;！!])|\b(?:I|we|Lumi)\b/iu.test(text)) return false; // i18n-allow: reviewed first-person claim recognition.
+  if (kind === 'communication') {
+    return /(?:给|向|发到|上传到|提交到|发布到).{1,40}|(?:文件|文档|消息|邮件|帖子|链接).{0,16}(?:发送|上传|提交|发布)|\b(?:sent|uploaded|submitted|published)\b.{0,40}\b(?:file|document|message|email|post|link|to)\b/iu.test(text); // i18n-allow: reviewed communication-target recognition.
+  }
+  if (kind === 'file_mutation') {
+    return /(?:文件|文档|目录|文件夹|表格|合同|报告|[A-Za-z0-9_ -]+\.[A-Za-z0-9]{1,12}|[A-Za-z]:[\\/]).{0,24}(?:复制|保存|写入|删除|移动)|(?:复制|保存|写入|删除|移动).{0,24}(?:文件|文档|目录|文件夹|表格|合同|报告|[A-Za-z0-9_ -]+\.[A-Za-z0-9]{1,12}|[A-Za-z]:[\\/])/iu.test(text); // i18n-allow: reviewed file-target recognition.
+  }
+  if (kind === 'open') {
+    return /(?:打开|启动).{0,24}(?:浏览器|网页|网站|应用|程序|客户端|文件|文档|窗口|设置|[A-Za-z0-9_ -]+\.[A-Za-z0-9]{1,12}|https?:\/\/)|\b(?:opened|launched)\b.{0,40}\b(?:browser|page|site|app|application|client|file|document|window|settings)\b/iu.test(text); // i18n-allow: reviewed open-target recognition.
+  }
+  if (kind === 'playback') return /(?:音乐|歌曲|播放器|音量|声音|\d{1,3}\s*%|\b(?:music|song|player|volume)\b)/iu.test(text); // i18n-allow: reviewed playback-target recognition.
+  if (kind === 'reminder') return /(?:提醒|定时|日程|计划|\b(?:reminder|schedule|calendar)\b)/iu.test(text); // i18n-allow: reviewed reminder-target recognition.
+  return /(?:音色|声线|TTS|STT|语音|模型|提供商|供应商|Lumi[-\s‑]?Neutral|GPT[- ]?SoVITS|CosyVoice|relay|long[a-z0-9_-]+)/iu.test(text); // i18n-allow: reviewed runtime-provider recognition.
+}
+
+function normalizedClaimSlot(value: unknown): string {
+  return String(value || '')
+    .normalize('NFKC')
+    .toLocaleLowerCase('en-US')
+    .replace(/^[\s“”‘’"']+|[\s“”‘’"'，。！？!?]+$/gu, '')
+    .trim();
+}
+
+function messagingReceiptMatchesRequestedTarget(
+  record: ToolExecutionRecord,
+  taskText: string,
+): boolean {
+  const payload = parseReceiptObject(toolRecordTerminalPayload(record)) || {};
+  if (payload.targetMatched === true || payload.verification?.targetMatched === true) return true;
+  const expectedIntent = normalizeActionIntent(taskText);
+  const expectedTarget = normalizedClaimSlot(expectedIntent.kind === 'messaging_send'
+    ? expectedIntent.target
+    : '');
+  const candidates = [
+    record.arguments?.contact,
+    record.arguments?.recipient,
+    record.arguments?.target,
+    record.arguments?.to,
+    payload.contact,
+    payload.recipient,
+    payload.target,
+  ].map(normalizedClaimSlot).filter(Boolean);
+  if (String(record.name || '') === 'wechat_send_file') {
+    const requestedFile = taskText.match(/([^\\/\s，。！？!?]+\.[A-Za-z0-9]{1,12})/u)?.[1];
+    const acknowledgedFile = String(payload.fileName || payload.filename || '').trim();
+    if (requestedFile && acknowledgedFile && normalizedClaimSlot(requestedFile) === normalizedClaimSlot(acknowledgedFile)) {
+      return true;
+    }
+    const acknowledgedStem = acknowledgedFile.replace(/\.[^.\\/]+$/u, '');
+    if (acknowledgedStem.length >= 2 && normalizedClaimSlot(taskText).includes(normalizedClaimSlot(acknowledgedStem))) {
+      return true;
+    }
+  }
+  if (expectedTarget) return candidates.some(candidate => candidate === expectedTarget);
+  const normalizedTask = normalizedClaimSlot(taskText);
+  return candidates.some(candidate => candidate.length >= 2 && normalizedTask.includes(candidate));
+}
+
+function hasVerifiedEvidenceForRealWorldClaim(
+  input: LumiResultFinalizerInput,
+  kind: RealWorldClaimKind,
+): boolean {
+  const taskText = resultTaskText(input);
+  const hasExplicitTurnIdentity = Boolean(String(input.taskId || '').trim() || String(input.requestId || '').trim());
+  const records = (input.toolRecords || []).filter(record => (
+    isVerifiedCurrentTurnRecord(input, record)
+    || (!hasExplicitTurnIdentity && toolRecordSucceeded(record))
+  ));
+  if (records.length === 0) return false;
+  const contract = taskActionContract(input);
+
+  if (kind === 'open') {
+    const requestedTarget = extractDesktopLaunchTarget(taskText)
+      || extractSimpleDesktopOpenTarget(taskText);
+    return Boolean(requestedTarget) && records.some(record => (
+      isVerifiedPrimaryDesktopOpen(record, requestedTarget)
+      || (
+        record.name === 'browser_open_task'
+        && parseReceiptObject(toolRecordTerminalPayload(record))?.opened === true
+        && hasRequestedDesktopOpenEvidence([record], taskText, requestedTarget)
+      )
+    ));
+  }
+  if (kind === 'playback') {
+    return requiresMediaPlaybackAction(taskText)
+      && hasMediaPlaybackEvidence(records, taskText);
+  }
+  if (kind === 'communication') {
+    if (!['messaging_send', 'public_post'].includes(contract.kind)) return false;
+    if (!hasCoreActionEvidence(contract, records, taskText)) return false;
+    if (contract.kind === 'public_post') return true;
+    return records.some(record => (
+      /^(?:wechat_send_message|wechat_send_file)$/i.test(String(record.name || ''))
+      && messagingReceiptMatchesRequestedTarget(record, taskText)
+    ));
+  }
+  if (kind === 'file_mutation') {
+    return ['artifact_work', 'desktop_operation'].includes(contract.kind)
+      && hasCoreActionEvidence(contract, records, taskText);
+  }
+  if (kind === 'reminder') {
+    return records.some(record => {
+      if (!/^(?:reminder_create|calendar_event_create|schedule_create|task_create)$/i.test(String(record.name || ''))) {
+        return false;
+      }
+      const payload = parseReceiptObject(toolRecordTerminalPayload(record)) || {};
+      const status = String(payload.status || payload.verification?.status || '').toLowerCase();
+      return payload.created === true || /^(?:created|scheduled|verified|completed)$/.test(status);
+    });
+  }
+
+  // Runtime configuration reads and mutations have several specialized
+  // grounders earlier in this finalizer. A generic settings/client-state read
+  // must never be promoted here into proof of a model or voice switch.
+  return false;
+}
+
+function unsupportedRealWorldClaim(
+  input: LumiResultFinalizerInput,
+): LumiResultFinalizerResult | null {
+  const kind = realWorldClaimKind(input.responseText);
+  if (!kind) return null;
+  const verified = hasVerifiedEvidenceForRealWorldClaim(input, kind);
+  if (verified) return null;
+  const zh = isChineseText(resultTaskText(input)) || isChineseText(input.responseText);
+  const text = zh
+    ? kind === 'communication'
+      ? CN_EXECUTION_EVIDENCE_MESSAGES.unsupportedCommunicationClaim
+      : kind === 'reminder'
+        ? CN_EXECUTION_EVIDENCE_MESSAGES.unsupportedReminderClaim
+        : kind === 'playback'
+          ? CN_EXECUTION_EVIDENCE_MESSAGES.unsupportedPlaybackClaim
+          : kind === 'file_mutation'
+            ? CN_EXECUTION_EVIDENCE_MESSAGES.unsupportedFileMutationClaim
+            : kind === 'open'
+              ? CN_EXECUTION_EVIDENCE_MESSAGES.unsupportedOpenClaim
+              : kind === 'runtime_configuration'
+                ? CN_EXECUTION_EVIDENCE_MESSAGES.unsupportedRuntimeConfigurationClaim
+                : CN_EXECUTION_EVIDENCE_MESSAGES.unsupportedRealWorldClaim
+    : 'No verified receipt from this task and turn supports that execution claim.';
+  return {
+    text,
+    blocked: true,
+    reason: `${taskActionContract(input).kind}: unsupported current-turn real-world claim: ${kind}.`,
+  };
+}
+
+const VERIFIED_DOCUMENT_OBSERVATION_TOOL_RE = /^(?:read_file|read_files_batch|read_pdf|read_docx|read_xlsx|pdf_to_text|extract_document_text|ocr_image_file)$/iu;
+
+function groundedVerifiedDocumentObservation(
+  input: LumiResultFinalizerInput,
+): LumiResultFinalizerResult | null {
+  const task = resultTaskText(input);
+  // i18n-allow: Chinese read-only document intent recognition; not user-visible copy.
+  if (!/(?:读取|阅读|查看|看看|分析|审查|审阅|总结|概括|附件|文件|文档|PDF|\b(?:read|review|inspect|analy[sz]e|summari[sz]e|attachment|document|file)\b)/iu.test(task)) {
+    return null;
+  }
+  // i18n-allow: Chinese document-mutation intent recognition; not user-visible copy.
+  if (/(?:创建|新建|写入|保存|导出|复制|移动|删除|生成|另存|\b(?:creat(?:e|ed|ing)|writ(?:e|ing|ten)|sav(?:e|ed|ing)|export(?:ed|ing)?|cop(?:y|ied|ying)|mov(?:e|ed|ing)|delet(?:e|ed|ing)|generat(?:e|ed|ing))\b)/iu.test(task)) {
+    return null;
+  }
+  const record = [...(input.toolRecords || [])].reverse().find(candidate => (
+    VERIFIED_DOCUMENT_OBSERVATION_TOOL_RE.test(String(candidate.name || ''))
+    && isVerifiedCurrentTurnRecord(input, candidate)
+    && isSuccessfulExactDocumentRead(candidate)
+    && documentReadMatchesRequestedTarget(candidate, task)
+  ));
+  if (!record) return null;
+  const response = String(input.responseText || '').trim();
+  if (unsupportedRealWorldClaim(input)) return null;
+  const unusableNarration = !response
+    || isInternalRuntimeWorkNarration(response)
+    // i18n-allow: Chinese stale/internal blocked-result recognition; not user-visible copy.
+    || /(?:^|\n)\s*(?:状态\s*[：:]\s*(?:受阻|失败)|这次还没完成|没有取得可用的分析结果)|\b(?:blocked|execution_recovery_incomplete)\b/iu.test(response);
+  // A verified read is terminal for a plain read/view request. It is only an
+  // intermediate step when the user asked Lumi to interpret or synthesize the
+  // document and no usable analysis prose was produced.
+  // i18n-allow: Chinese document-analysis intent recognition; not user-visible copy.
+  const analysisRequested = /(?:分析|审查|审阅|总结|概括|提炼|解读|\b(?:review|analy[sz]e|summari[sz]e|interpret|synthesize)\b)/iu.test(task);
+  const analysisMissing = unusableNarration && analysisRequested;
+  return {
+    text: unusableNarration
+      ? analysisMissing
+        ? (isChineseText(task)
+            ? CN_EXECUTION_EVIDENCE_MESSAGES.verifiedDocumentReadWithoutAnalysis
+            : 'The file content was read successfully, but no analysis result was generated. Only the read step is verified; the overall analysis is not complete.')
+        : (isChineseText(task)
+            ? CN_EXECUTION_EVIDENCE_MESSAGES.verifiedDocumentObservation
+            : 'The file content was read successfully.')
+      : formatVerifiedTaskResultForReadability(response),
+    blocked: analysisMissing,
+    reason: analysisMissing
+      ? 'Verified document read completed, but no usable analysis was generated.'
+      : 'Grounded read-only document observation from a verified current-turn receipt.',
+  };
 }
 
 function leakedLegacyToolProtocol(input: LumiResultFinalizerInput): LumiResultFinalizerResult | null {
@@ -212,8 +517,6 @@ function unsupportedToolModeClaim(input: LumiResultFinalizerInput): string | nul
 
 function hasVerifiedOngoingExecutionReceipt(input: LumiResultFinalizerInput): boolean {
   const records = input.toolRecords || [];
-  const expectedTaskId = String(input.taskId || '').trim();
-  const expectedRequestId = String(input.requestId || '').trim();
   const task = resultTaskText(input);
   // i18n-allow: Reviewed multilingual runtime-status query recognition; not user-visible copy.
   const explicitRuntimeStatusQuery = /(?:任务|工作|后台|运行).{0,24}(?:状态|进度|还在|是否|怎么样)|(?:状态|进度).{0,24}(?:任务|工作|后台|运行)|\b(?:status|progress|still\s+running|active\s+(?:task|work|run))\b/iu.test(task);
@@ -222,8 +525,7 @@ function hasVerifiedOngoingExecutionReceipt(input: LumiResultFinalizerInput): bo
       !toolRecordSucceeded(record)
       || record.terminalVerification?.status === 'failed'
     ) return false;
-    if (expectedTaskId && String(record.taskId || '').trim() !== expectedTaskId) return false;
-    if (expectedRequestId && String(record.requestId || '').trim() !== expectedRequestId) return false;
+    if (!recordMatchesCurrentTurnIdentity(input, record)) return false;
     const payload = parseReceiptObject(toolRecordTerminalPayload(record));
     if (!payload) return false;
     const status = String(
@@ -368,7 +670,7 @@ function isInternalRuntimeWorkNarration(value: string): boolean {
   if (!text) return true;
   // These are model/tool-loop control messages, not useful user feedback. A
   // verified runtime receipt must still produce a concise visible answer.
-  return /(?:模型不得重新快照|无法形成已验证.*(?:提议|清理)|当前模型请求没有声明|只能由运行时采用|工具结果已收到|no response|no (?:verified|actual) .*result|cannot .*reconstruct .*target)/iu.test(text); // i18n-allow: internal execution-narration recognition; not user-visible copy.
+  return /(?:内部调度没有形成可用结果|模型不得重新快照|无法形成已验证.*(?:提议|清理)|当前模型请求没有声明|只能由运行时采用|工具结果已收到|no response|no (?:verified|actual) .*result|cannot .*reconstruct .*target)/iu.test(text); // i18n-allow: internal execution-narration recognition; not user-visible copy.
 }
 
 /**
@@ -810,7 +1112,10 @@ function isVerifiedPrimaryDesktopOpen(record: ToolExecutionRecord, requestedTarg
     || payload.opened === false
     || /^(?:failed|error|blocked|denied|forbidden|timeout|timed_out|cancelled|canceled|target_mismatch)$/.test(status)
   ) return false;
-  if (!(envelopeVerified || (terminalVerified && targetMatched) || payloadVerified)) return false;
+  const browserOpenedReceipt = record.name === 'browser_open_task'
+    && payload.opened === true
+    && /opened\s*:/iu.test(String(record.result || ''));
+  if (!(envelopeVerified || (terminalVerified && targetMatched) || payloadVerified || browserOpenedReceipt)) return false;
   return desktopOpenTargetMatches(requestedTarget, record, payload);
 }
 
@@ -2210,7 +2515,7 @@ function preserveModelWordingOnGroundedSuccess(
   }
   return {
     ...grounded,
-    text: input.responseText,
+    text: formatVerifiedTaskResultForReadability(input.responseText),
   };
 }
 
@@ -2448,6 +2753,20 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   }
   const goalSpecificDesktopResult = formatGoalSpecificDesktopResult(input);
   if (goalSpecificDesktopResult) return goalSpecificDesktopResult;
+  const verifiedDocumentObservation = groundedVerifiedDocumentObservation(input);
+  if (verifiedDocumentObservation) return verifiedDocumentObservation;
+  const hasMismatchedVerifiedDocumentRead = /(?:附件|文件|文档|PDF|\.(?:pdf|docx?|xlsx?|pptx?|txt|md|csv)\b|\b(?:attachment|document|file)\b)/iu.test(actionText) // i18n-allow: reviewed document-target intent.
+    && (input.toolRecords || []).some(record => VERIFIED_DOCUMENT_OBSERVATION_TOOL_RE.test(String(record.name || '')) && isVerifiedCurrentTurnRecord(input, record))
+    && !(input.toolRecords || []).some(record => VERIFIED_DOCUMENT_OBSERVATION_TOOL_RE.test(String(record.name || '')) && isVerifiedCurrentTurnRecord(input, record) && documentReadMatchesRequestedTarget(record, actionText));
+  if (hasMismatchedVerifiedDocumentRead) {
+    return {
+      text: isChineseText(actionText)
+        ? CN_EXECUTION_EVIDENCE_MESSAGES.mismatchedDocumentReadTarget
+        : 'The verified read receipt is for a different file, so it cannot complete this analysis.',
+      blocked: true,
+      reason: 'Verified document read target did not match the requested document.',
+    };
+  }
   const chatOnlyConversationTurn = Boolean(
     (input.toolRecords || []).length === 0
     && input.flow?.allowToolUseForTurn === false
@@ -2515,6 +2834,29 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       },
     };
   }
+  // Domain contracts below have stronger target-specific verdicts (for
+  // example exact desktop windows, legal gates, and in-app saves). This guard
+  // closes the dangerous gap left by terse continuation turns whose task text
+  // has no standalone contract, such as “嗯，对” followed by a fictional send.
+  const responseClaimKind = realWorldClaimKind(input.responseText);
+  const claimGuardEligible = responseClaimKind && (
+    isExecutionClaimGuardTurn(input, actionContract.applies)
+    || isFirstPersonConcreteRealWorldClaim(input.responseText, responseClaimKind)
+  );
+  const unsupportedWorldClaim = claimGuardEligible && (
+    !actionContract.applies
+    || ['messaging_send', 'public_post'].includes(actionContract.kind)
+    || (actionContract.kind === 'desktop_operation' && responseClaimKind === 'runtime_configuration')
+    || (
+      actionContract.kind === 'desktop_operation'
+      && responseClaimKind === 'open'
+      && hasRequestedDesktopOpenEvidence(input.toolRecords || [], actionText)
+      && !hasVerifiedEvidenceForRealWorldClaim(input, 'open')
+    )
+  )
+    ? unsupportedRealWorldClaim(input)
+    : null;
+  if (unsupportedWorldClaim) return unsupportedWorldClaim;
   const hasGroundedCoreAction = actionContract.applies
     && hasCoreActionEvidence(actionContract, input.toolRecords || [], actionText);
   const unsupportedOngoingExecution = unsupportedOngoingExecutionClaim(

@@ -10,6 +10,23 @@ import { getVoicePreference } from '../config/voice_preference';
 import { isCircuitClosed, isCircuitHealthy, recordFailure, recordSuccess } from '../cloud/circuit_breaker';
 import { relayConfigured } from '../relay/config';
 
+/**
+ * A user barge-in, call stop, or request supersession is transport control,
+ * not evidence that a TTS provider is unhealthy.  Fetch implementations do
+ * not always surface cancellation as the same concrete error class, so keep
+ * the predicate deliberately small but accept the common wrapped variants.
+ */
+export function isTtsCancellationError(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true;
+  let current: any = error;
+  for (let depth = 0; current && depth < 4; depth++) {
+    if (String(current?.name || '') === 'AbortError') return true;
+    if (String(current?.code || '').toUpperCase() === 'ABORT_ERR') return true;
+    current = current?.cause;
+  }
+  return false;
+}
+
 function circuitProvider(provider: TTSProvider): string {
   if (provider === 'ark') return 'doubao-tts';
   if (provider === 'relay') return 'relay-tts';
@@ -56,6 +73,10 @@ export async function synthesizeSpeech(text: string, config: TTSConfig): Promise
     if (config.provider === 'local-cosyvoice' || config.provider === 'relay') recordSuccess(circuit);
     return result;
   } catch (error: any) {
+    // Cancellation is an expected voice-transport transition. In particular,
+    // never open relay-tts here: doing so made the next sentence of the same
+    // answer silently jump to a local provider and a different speaker.
+    if (isTtsCancellationError(error, config.signal)) throw error;
     // Cloud providers own their resilience/circuit state. Recording the same
     // failure here used to turn one invalid voice into a provider-wide outage.
     if (config.provider === 'local-cosyvoice' || config.provider === 'relay') {
@@ -64,9 +85,15 @@ export async function synthesizeSpeech(text: string, config: TTSConfig): Promise
     if (config.allowFallback !== false) {
       const fallbackProvider = getFallbackProvider(config.provider, { requireWarmLocal: true });
       if (fallbackProvider && fallbackProvider !== config.provider) {
+        const fallbackVoiceId = await resolveProviderCompatibleFallbackVoice(
+          fallbackProvider,
+          config.voiceId,
+        );
         return synthesizeSpeech(text, {
           ...config,
           provider: fallbackProvider,
+          voiceId: fallbackVoiceId,
+          model: undefined,
           allowFallback: false,
         });
       }
@@ -75,7 +102,22 @@ export async function synthesizeSpeech(text: string, config: TTSConfig): Promise
   }
 }
 
-function getFallbackProvider(
+async function resolveProviderCompatibleFallbackVoice(
+  provider: TTSProvider,
+  requestedVoiceId: string,
+): Promise<string> {
+  try {
+    const voices = await listVoices(provider);
+    const ids = voices.map(voice => String(voice.voiceId || '').trim()).filter(Boolean);
+    if (requestedVoiceId && ids.includes(requestedVoiceId)) return requestedVoiceId;
+    if (ids[0]) return ids[0];
+  } catch {}
+  // Every provider adapter treats `default` as its own safe local default;
+  // never forward a provider-qualified speaker from the failed route.
+  return 'default';
+}
+
+export function getFallbackProvider(
   excluded: TTSProvider,
   options: { requireWarmLocal?: boolean } = {},
 ): TTSProvider | null {

@@ -6,6 +6,7 @@ import {
   conversationActionStateFromTask,
   finalizeConversationActionTask,
   repairContradictoryConversationActionReceipts,
+  repairTerminalConversationActionPointers,
   repairTerminalConversationActionTaskLeases,
   settleBackgroundConversationActionTask,
   syncConversationActionTaskLedger,
@@ -1053,6 +1054,54 @@ describe('conversation action receipt ids', () => {
     });
     expect(JSON.parse(String(completedTask.context)).actionState.activeRequestId).toBeUndefined();
     expect(repairTerminalConversationActionTaskLeases(db)).toBe(0);
+  });
+
+  it('detaches terminal durable tasks from the live conversation pointer', () => {
+    const completedTask = task('task-terminal-pointer');
+    completedTask.status = 'completed';
+    completedTask.updatedAt = '2026-08-16T00:00:05.000Z';
+    const stalePointer = {
+      version: 2,
+      taskId: completedTask.id,
+      status: 'executing',
+      unfinished: true,
+      receipts: [],
+      revision: 1,
+      goal: '乱码旧任务',
+      latestInstruction: '乱码旧任务',
+      updatedAt: '2026-08-16T00:00:01.000Z',
+    };
+    const livePointer = {
+      ...stalePointer,
+      taskId: 'task-live-pointer',
+      status: 'blocked',
+      goal: '继续当前任务',
+      latestInstruction: '继续当前任务',
+    };
+    const terminalConversation: any = {
+      id: 'conversation-1',
+      userId: 'user-1',
+      actionContinuationState: stalePointer,
+    };
+    const liveConversation: any = {
+      id: 'conversation-2',
+      userId: 'user-1',
+      actionContinuationState: livePointer,
+    };
+    const db: any = {
+      conversations: [terminalConversation, liveConversation],
+      conversationActionTasks: [completedTask],
+      conversationActionReceipts: [],
+    };
+
+    expect(repairTerminalConversationActionPointers(db)).toBe(1);
+    expect(terminalConversation.actionContinuationState).toBeUndefined();
+    expect(liveConversation.actionContinuationState).toEqual(livePointer);
+    expect(completedTask).toMatchObject({
+      status: 'completed',
+      updatedAt: '2026-08-16T00:00:05.000Z',
+    });
+    expect(repairTerminalConversationActionPointers(db)).toBe(0);
   });
 
   it('repairs an already-persisted cancelled task that still has a confirmation blocker', () => {

@@ -35,7 +35,7 @@ describe('execution guard user-feedback sequence', () => {
 
   it('turns a guard-blocked casual turn into one natural clarification without tools', async () => {
     let attempts = 0;
-    const result = await recoverBlockedExecutionOnce<ExecutionGuardRecoveryFinalization>({
+    const result = await finalizeExecutionForOutboundDelivery<ExecutionGuardRecoveryFinalization>({
       task: '\u4f60\u597d\uff0c\u4ecb\u7ecd\u4e00\u4e0b\u81ea\u5df1',
       responseText: INTERNAL_GUARD,
       finalization: { text: INTERNAL_GUARD, blocked: true, reason: INTERNAL_GUARD },
@@ -56,6 +56,52 @@ describe('execution guard user-feedback sequence', () => {
       finalization: { blocked: false, reason: 'clarification_needed' },
     });
     expect(result.responseText).toContain('\u666e\u901a\u5bf9\u8bdd');
+    expectNoGuardLeak(result);
+  });
+
+  it('preserves a model answer for an explicit conceptual evidence question without tools', async () => {
+    let attempts = 0;
+    const answer = '文件保存成功应以目标路径存在、内容与预期一致，并且写入工具返回可核验回执为依据。';
+    const result = await finalizeExecutionForOutboundDelivery<ExecutionGuardRecoveryFinalization>({
+      task: '“文件保存成功”应该依据什么证据判断？请只解释，不执行任何操作。',
+      responseText: answer,
+      finalization: { text: INTERNAL_GUARD, blocked: true, reason: INTERNAL_GUARD },
+      allowToolUse: true,
+      toolRecords: [],
+      attempt: async () => {
+        attempts += 1;
+        return { text: 'must not execute', toolRecords: [] };
+      },
+      finalize: text => ({ text, blocked: false }),
+    });
+
+    expect(attempts).toBe(0);
+    expect(result).toMatchObject({
+      attempted: false,
+      recoveryFailed: false,
+      decision: { intent: 'conversation' },
+      responseText: answer,
+      finalization: { text: answer, blocked: false, reason: '' },
+    });
+    expect(result.responseText).not.toContain('确认你的意图');
+    expectNoGuardLeak(result);
+  });
+
+  it('does not unlock a bare terminal action claim merely because the task is conceptual', async () => {
+    const result = await finalizeExecutionForOutboundDelivery<ExecutionGuardRecoveryFinalization>({
+      task: '“文件保存成功”怎么判断？只解释，不执行任何操作。',
+      responseText: '文件已经保存成功。',
+      finalization: { text: INTERNAL_GUARD, blocked: true, reason: INTERNAL_GUARD },
+      allowToolUse: true,
+      toolRecords: [],
+      attempt: async () => ({ text: 'must not execute', toolRecords: [] }),
+      finalize: text => ({ text, blocked: false }),
+    });
+
+    expect(result.attempted).toBe(false);
+    expect(result.finalization.blocked).toBe(false);
+    expect(result.responseText).not.toContain('文件已经保存成功');
+    expect(result.responseText).toContain('确认你的意图');
     expectNoGuardLeak(result);
   });
 

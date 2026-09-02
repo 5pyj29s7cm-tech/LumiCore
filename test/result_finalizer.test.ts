@@ -2793,6 +2793,401 @@ describe('Lumi result finalizer', () => {
     }
   });
 
+  it.each([
+    ['播放已启动，音量 72%。', '没有确认音乐已经开始播放'],
+    ['文件已发送成功。', '没有取得发送成功的确认'],
+    ['已经创建明早 7:30 的提醒。', '没有记录到提醒'],
+    ['当前使用本地 TTS，音色是 Lumi‑Neutral v2。', '还没有读取当前语音或模型配置'],
+  ])('blocks a terse-turn real-world claim without a verified receipt: %s', async (responseText, expected) => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '嗯，对。',
+      responseText,
+      toolRecords: [],
+      source: 'voice',
+      taskId: 'task-current',
+      requestId: 'request-current',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.text).toContain(expected);
+    expect(result.text).not.toMatch(/No successful|allowedTools|undefined|execution-status claim|tool execution/iu);
+  });
+
+  it.each([
+    '文件保存成功的判断标准是什么？',
+    '你说“文件已发送成功”，依据是什么？',
+    '我已经打开思路了，我们继续聊。',
+    '现在官方模型使用云端是什么意思？',
+  ])('does not mistake an ordinary question, quotation, or abstract expression for execution: %s', async responseText => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '解释一下。',
+      responseText,
+      toolRecords: [],
+      source: 'chat',
+      flow: { allowToolUseForTurn: false } as any,
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(responseText);
+  });
+
+  it('still blocks a concrete first-person completion claim without a receipt', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '随便聊聊。',
+      responseText: '我已经打开浏览器了。',
+      toolRecords: [],
+      source: 'chat',
+      flow: { allowToolUseForTurn: false } as any,
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.text).toContain('没有确认目标已经打开');
+  });
+
+  it('does not let an unrelated or stale receipt prove a terse send claim', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '确认。',
+      responseText: '文件已发送成功。',
+      toolRecords: [{
+        name: 'wechat_send_file',
+        arguments: { target: 'customer' },
+        result: JSON.stringify({ ok: true, status: 'verified', sent: true }),
+        taskId: 'task-stale',
+        requestId: 'request-stale',
+        terminalVerification: { status: 'verified', strategy: 'provider_ack', reason: 'old send' },
+      }],
+      source: 'wechat_bot',
+      taskId: 'task-current',
+      requestId: 'request-current',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.text).toContain('没有取得发送成功的确认');
+  });
+
+  it('rejects a receipt whose top-level and envelope request identities conflict', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '确认。',
+      responseText: '文件已发送成功。',
+      toolRecords: [{
+        name: 'wechat_send_file',
+        arguments: { target: 'customer' },
+        result: JSON.stringify({ ok: true, status: 'verified', sent: true }),
+        taskId: 'task-current',
+        requestId: 'request-current',
+        terminalVerification: { status: 'verified', strategy: 'provider_ack', reason: 'provider acknowledged send' },
+        envelope: {
+          version: 1,
+          status: 'verified_success',
+          toolName: 'wechat_send_file',
+          taskId: 'task-current',
+          turnId: 'turn-current',
+          requestId: 'request-stale',
+          idempotencyKey: 'send-stale-envelope',
+          targetIdentity: 'customer',
+          completedAt: new Date().toISOString(),
+          result: { sent: true },
+          verification: { status: 'verified', reason: 'stale envelope' },
+        },
+      }],
+      source: 'wechat_bot',
+      taskId: 'task-current',
+      requestId: 'request-current',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.text).toContain('没有取得发送成功的确认');
+  });
+
+  it('accepts a terse send claim only with a verified receipt from the same task and request', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const responseText = '文件已发送成功。';
+    const result = finalizeLumiResponse({
+      taskText: '把 D:\\documents\\sample.pdf 发给 customer。',
+      responseText,
+      toolRecords: [{
+        name: 'wechat_send_file',
+        arguments: { target: 'customer', contact: 'customer', filePath: 'D:\\documents\\sample.pdf' },
+        result: JSON.stringify({ ok: true, status: 'verified', sent: true, fileName: 'sample.pdf' }),
+        taskId: 'task-current',
+        requestId: 'request-current',
+        terminalVerification: { status: 'verified', strategy: 'provider_ack', reason: 'provider acknowledged send' },
+      }],
+      source: 'wechat_bot',
+      taskId: 'task-current',
+      requestId: 'request-current',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(responseText);
+  });
+
+  it('does not let a verified active-window observation masquerade as an open action', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '打开记事本。',
+      responseText: '记事本已打开。',
+      toolRecords: [{
+        name: 'desktop_active_window',
+        arguments: {},
+        result: JSON.stringify({ ok: true, title: '无标题 - 记事本', processName: 'notepad.exe' }),
+        taskId: 'task-open-current',
+        requestId: 'request-open-current',
+        terminalVerification: { status: 'verified', strategy: 'terminal_receipt', reason: 'active window observed' },
+      }],
+      source: 'chat',
+      taskId: 'task-open-current',
+      requestId: 'request-open-current',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.text).toContain('没有确认目标已经打开');
+  });
+
+  it('does not let a generic computer-use receipt masquerade as verified playback', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '打开网易云音乐并播放歌曲。',
+      responseText: '播放已启动。',
+      toolRecords: [{
+        name: 'computer_use',
+        arguments: { instruction: '看一下桌面' },
+        result: JSON.stringify({ ok: true, status: 'completed' }),
+        taskId: 'task-play-current',
+        requestId: 'request-play-current',
+        terminalVerification: { status: 'verified', strategy: 'terminal_receipt', reason: 'desktop command returned' },
+      }],
+      source: 'chat',
+      taskId: 'task-play-current',
+      requestId: 'request-play-current',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.text).toMatch(/没有确认.*播放/);
+  });
+
+  it('does not let message or settings reads masquerade as sends or runtime switches', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const baseRecord = {
+      taskId: 'task-read-only-current',
+      requestId: 'request-read-only-current',
+      terminalVerification: { status: 'verified' as const, strategy: 'terminal_receipt' as const, reason: 'read completed' },
+    };
+    const sent = finalizeLumiResponse({
+      taskText: '给 customer 发消息“你好”。',
+      responseText: '消息已发送成功。',
+      toolRecords: [{
+        ...baseRecord,
+        name: 'wechat_read_recent_chat',
+        arguments: { contact: 'customer' },
+        result: JSON.stringify({ ok: true, read: true }),
+      }],
+      source: 'chat',
+      taskId: baseRecord.taskId,
+      requestId: baseRecord.requestId,
+    });
+    const switched = finalizeLumiResponse({
+      taskText: '把音色切换到 Lumi‑Neutral v2。',
+      responseText: '已切换到 Lumi‑Neutral v2 音色。',
+      toolRecords: [{
+        ...baseRecord,
+        name: 'settings_get',
+        arguments: { section: 'voice' },
+        result: JSON.stringify({ ok: true, voice: 'Lumi‑Neutral v2' }),
+      }],
+      source: 'chat',
+      taskId: baseRecord.taskId,
+      requestId: baseRecord.requestId,
+    });
+
+    expect(sent.blocked).toBe(true);
+    expect(sent.text).toContain('没有取得发送成功的确认');
+    expect(switched.blocked).toBe(true);
+    expect(switched.text).toContain('还没有读取当前语音或模型配置');
+  });
+
+  it('keeps a verified same-turn PDF observation usable instead of relabeling it blocked', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const responseText = '这份文档的核心是项目交付边界和双方责任。';
+    const result = finalizeLumiResponse({
+      taskText: '分析一下 sample.pdf 附件。',
+      responseText,
+      toolRecords: [{
+        name: 'read_pdf',
+        arguments: { path: 'D:\\documents\\sample.pdf' },
+        result: JSON.stringify({ ok: true, content: '项目交付边界与双方责任' }),
+        taskId: 'task-read-pdf',
+        requestId: 'request-read-pdf',
+        terminalVerification: { status: 'verified', strategy: 'terminal_receipt', reason: 'PDF text returned' },
+      }],
+      source: 'wechat_bot',
+      taskId: 'task-read-pdf',
+      requestId: 'request-read-pdf',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(responseText);
+  });
+
+  it('accepts a verified read_file for the same complete Windows path in a Chinese request with follow-up constraints', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const responseText = '项目 name 是 lumi-core，version 是 3.1.0。';
+    const result = finalizeLumiResponse({
+      taskText: '请读取 D:\\lumiOS\\package.json，只告诉我项目 name 和 version；不要修改任何文件。',
+      responseText,
+      toolRecords: [{
+        name: 'read_file',
+        arguments: { path: 'D:\\lumiOS\\package.json' },
+        result: JSON.stringify({ kind: 'structured_result_summary', originalChars: 8192, resultOmitted: true }),
+        taskId: 'task-windows-json',
+        requestId: 'request-windows-json',
+        terminalVerification: { status: 'verified', strategy: 'terminal_receipt', reason: 'file content returned' },
+        envelope: {
+          version: 1, status: 'verified_success', toolName: 'read_file',
+          taskId: 'task-windows-json', turnId: 'turn-windows-json', requestId: 'request-windows-json',
+          idempotencyKey: 'read-windows-json', targetIdentity: 'D:\\lumiOS\\package.json',
+          completedAt: new Date().toISOString(), result: { name: 'lumi-core', version: '3.1.0' },
+          verification: { status: 'verified', reason: 'exact path read' },
+        },
+      }],
+      source: 'chat',
+      taskId: 'task-windows-json',
+      requestId: 'request-windows-json',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(responseText);
+    expect(result.reason).toContain('Grounded read-only document observation');
+  });
+
+  it('still rejects a verified read_file for a different complete Windows path', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '请读取 D:\\lumiOS\\package.json，只告诉我项目 name 和 version；不要修改任何文件。',
+      responseText: '项目 name 是 other，version 是 0.0.0。',
+      toolRecords: [{
+        name: 'read_file',
+        arguments: { path: 'D:\\other\\package.json' },
+        result: JSON.stringify({ name: 'other', version: '0.0.0' }),
+        taskId: 'task-wrong-windows-json',
+        requestId: 'request-wrong-windows-json',
+        terminalVerification: { status: 'verified', strategy: 'terminal_receipt', reason: 'other file content returned' },
+        envelope: {
+          version: 1, status: 'verified_success', toolName: 'read_file',
+          taskId: 'task-wrong-windows-json', turnId: 'turn-wrong-windows-json', requestId: 'request-wrong-windows-json',
+          idempotencyKey: 'read-wrong-windows-json', targetIdentity: 'D:\\other\\package.json',
+          completedAt: new Date().toISOString(), result: { read: true },
+          verification: { status: 'verified', reason: 'different exact path read' },
+        },
+      }],
+      source: 'chat',
+      taskId: 'task-wrong-windows-json',
+      requestId: 'request-wrong-windows-json',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain('target did not match');
+  });
+
+  it('does not let a verified read of another PDF complete the requested document analysis', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '分析 D:\\documents\\requested.pdf。',
+      responseText: '这份文档的核心是错误目标里的内容。',
+      toolRecords: [{
+        name: 'read_pdf',
+        arguments: { path: 'D:\\documents\\other.pdf' },
+        result: JSON.stringify({ ok: true, content: '错误文件内容' }),
+        taskId: 'task-wrong-pdf',
+        requestId: 'request-wrong-pdf',
+        terminalVerification: { status: 'verified', strategy: 'terminal_receipt', reason: 'other PDF text returned' },
+      }],
+      source: 'wechat_bot',
+      taskId: 'task-wrong-pdf',
+      requestId: 'request-wrong-pdf',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).not.toContain('Grounded read-only document observation');
+  });
+
+  it('accepts a generic attachment request when trusted attachment identities bind the read receipt', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const responseText = '附件说明了项目交付边界和双方责任。';
+    const result = finalizeLumiResponse({
+      taskText: '分析这个附件。', responseText, source: 'chat',
+      taskId: 'task-attachment', requestId: 'request-attachment',
+      toolRecords: [{
+        name: 'read_pdf',
+        arguments: { path: 'D:\\documents\\sample.pdf', attachmentId: 'attachment-123' },
+        result: JSON.stringify({ ok: true, content: '项目交付边界与双方责任' }),
+        taskId: 'task-attachment', requestId: 'request-attachment',
+        terminalVerification: { status: 'verified', strategy: 'terminal_receipt', reason: 'PDF text returned' },
+        envelope: {
+          version: 1, status: 'verified_success', toolName: 'read_pdf',
+          taskId: 'task-attachment', turnId: 'turn-attachment', requestId: 'request-attachment',
+          idempotencyKey: 'attachment-read-123', targetIdentity: 'attachment-123',
+          completedAt: new Date().toISOString(), result: { content: '项目交付边界与双方责任' },
+          verification: { status: 'verified', reason: 'bound attachment read' },
+        },
+      }],
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(responseText);
+  });
+
+  it('keeps a PDF analysis incomplete when only the read step has a verified receipt', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '分析一下 sample.pdf 附件。',
+      responseText: '状态：受阻。这次还没完成。',
+      toolRecords: [{
+        name: 'read_pdf',
+        arguments: { path: 'D:\\documents\\sample.pdf' },
+        result: JSON.stringify({ ok: true, content: '项目交付边界与双方责任' }),
+        taskId: 'task-read-only-pdf',
+        requestId: 'request-read-only-pdf',
+        terminalVerification: { status: 'verified', strategy: 'terminal_receipt', reason: 'PDF text returned' },
+      }],
+      source: 'wechat_bot',
+      taskId: 'task-read-only-pdf',
+      requestId: 'request-read-only-pdf',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.text).toContain('文件内容已经成功读取');
+    expect(result.text).toContain('分析结论还没有生成');
+    expect(result.text).not.toMatch(/No successful|current-turn|execution-status|undefined/iu);
+    expect(result.reason).toContain('no usable analysis');
+  });
+
+  it('completes a plain document read from its verified receipt even when narration is empty', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '读取 sample.pdf 文件。',
+      responseText: '',
+      toolRecords: [{
+        name: 'read_pdf',
+        arguments: { path: 'D:\\documents\\sample.pdf' },
+        result: JSON.stringify({ ok: true, content: '项目交付边界与双方责任' }),
+        taskId: 'task-plain-read-pdf',
+        requestId: 'request-plain-read-pdf',
+        terminalVerification: { status: 'verified', strategy: 'terminal_receipt', reason: 'PDF text returned' },
+      }],
+      source: 'wechat_bot',
+      taskId: 'task-plain-read-pdf',
+      requestId: 'request-plain-read-pdf',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe('文件内容已成功读取。');
+  });
+
   it('keeps socket entrypoints on the shared finalizer path', () => {
     const root = process.cwd();
     const chatSource = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');

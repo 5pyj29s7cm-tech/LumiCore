@@ -2,7 +2,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { makeApp } from './helpers';
 import { toolRegistry } from '../server/tools/registry';
 import { registerLegalTools } from '../server/tools/definitions/legal_tools';
-import { handleRemoteLegalNoticeIntake } from '../server/messaging/legal_notice_intake';
+import {
+  classifyRemoteLegalNoticeIntakeIntent,
+  handleRemoteLegalNoticeIntake,
+} from '../server/messaging/legal_notice_intake';
 import * as LegalCases from '../server/org/legal_cases';
 import { addMember, createOrg } from '../server/org/db';
 import { readDB } from '../db_layer';
@@ -52,7 +55,7 @@ describe('remote messaging legal notice intake', () => {
       const reply = await handleRemoteLegalNoticeIntake(message({
         boundOrgId: orgId,
         boundUserId: userId,
-        text: '【人民法院】上海市黄浦区人民法院通知：（2026）沪0101民初123号将于2026年7月15日开庭，请查看 https://court.example.test/notice/123',
+        text: '请建案并归档以下通知：【人民法院】上海市黄浦区人民法院通知：（2026）沪0101民初123号将于2026年7月15日开庭，请查看 https://court.example.test/notice/123',
       }));
 
       expect(reply).toContain('远程法律消息已入案');
@@ -142,7 +145,7 @@ describe('remote messaging legal notice intake', () => {
         userId: 'wechat-personal-owner',
         chatId: 'wechat-personal-owner',
         boundUserId: userId,
-        text: `【人民法院】${caseNumber} 有新的开庭通知，请查看 https://court.example.test/notice/personal-321`,
+        text: `请归档到已有案件：【人民法院】${caseNumber} 有新的开庭通知，请查看 https://court.example.test/notice/personal-321`,
       });
       const reply = await handleRemoteLegalNoticeIntake(incoming);
 
@@ -192,10 +195,119 @@ describe('remote messaging legal notice intake', () => {
     expect(reply).toBeNull();
   });
 
+  it('keeps legal-looking attachments read-only when the user only asks for analysis', async () => {
+    const userId = `read-only-legal-${Date.now()}`;
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const orgId = createOrg('Read Only Attachment', `read-only-attachment-${suffix}`, userId).id;
+    addMember(orgId, userId, 'owner');
+    const before = LegalCases.listCases(orgId, '', 20, userId).length;
+
+    const reply = await handleRemoteLegalNoticeIntake(message({
+      platform: 'wechat',
+      boundUserId: userId,
+      boundOrgId: orgId,
+      text: '分析一下这份附件',
+      attachments: [{
+        id: 'dispatch-letter',
+        type: 'file',
+        fileName: '派遣函-灵序科技.pdf',
+        extractedText: '某人民法院案件材料，包含案号（2026）沪0101民初888号。',
+      }],
+    }));
+
+    expect(reply).toBeNull();
+    expect(LegalCases.listCases(orgId, '', 20, userId)).toHaveLength(before);
+
+    const syntheticAttachmentLabel = await handleRemoteLegalNoticeIntake(message({
+      platform: 'wechat',
+      boundUserId: userId,
+      boundOrgId: orgId,
+      text: '[附件] 新建案件流程-法院材料.pdf',
+      attachments: [{
+        id: 'synthetic-attachment-label',
+        type: 'file',
+        fileName: '新建案件流程-法院材料.pdf',
+        extractedText: '某人民法院案件材料，包含案号（2026）沪0101民初889号。',
+      }],
+    }));
+    expect(syntheticAttachmentLabel).toBeNull();
+    expect(LegalCases.listCases(orgId, '', 20, userId)).toHaveLength(before);
+
+    const explicitlyReadOnly = await handleRemoteLegalNoticeIntake(message({
+      platform: 'wechat',
+      boundUserId: userId,
+      boundOrgId: orgId,
+      text: '不要归档，也不要建案，只分析附件',
+      attachments: [{
+        id: 'dispatch-letter-read-only',
+        type: 'file',
+        fileName: '派遣函-灵序科技.pdf',
+        extractedText: '某人民法院案件材料，包含案号（2026）沪0101民初888号。',
+      }],
+    }));
+    expect(explicitlyReadOnly).toBeNull();
+    expect(LegalCases.listCases(orgId, '', 20, userId)).toHaveLength(before);
+  });
+
+  it('archives into an existing case but never creates one from archive wording alone', async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const userId = `archive-existing-only-${suffix}`;
+    const orgId = createOrg('Archive Existing Only', `archive-existing-${suffix}`, userId).id;
+    addMember(orgId, userId, 'owner');
+    const missingCaseNumber = '（2026）沪0101民初901号';
+
+    const missingReply = await handleRemoteLegalNoticeIntake(message({
+      platform: 'wechat',
+      boundUserId: userId,
+      boundOrgId: orgId,
+      text: `请归档这份法院通知，案号${missingCaseNumber}`,
+      attachments: [{
+        id: 'archive-missing-case',
+        type: 'file',
+        fileName: '法院通知.pdf',
+        extractedText: `上海市黄浦区人民法院送达通知，案号${missingCaseNumber}`,
+      }],
+    }));
+
+    expect(missingReply).toContain('没有创建新案件');
+    expect(LegalCases.listCases(orgId, '', 20, userId)).toHaveLength(0);
+
+    const existingCaseNumber = '（2026）沪0101民初902号';
+    const existing = LegalCases.createCase(orgId, userId, {
+      title: '甲公司诉乙公司合同纠纷',
+      caseNumber: existingCaseNumber,
+      stage: 'filing',
+    });
+    const beforeMaterials = existing.materials.length;
+    const archivedReply = await handleRemoteLegalNoticeIntake(message({
+      platform: 'wechat',
+      boundUserId: userId,
+      boundOrgId: orgId,
+      text: `请归档到已有案件，案号${existingCaseNumber}`,
+      attachments: [{
+        id: 'archive-existing-case',
+        type: 'file',
+        fileName: '补充送达通知.pdf',
+        extractedText: `上海市黄浦区人民法院补充送达通知，案号${existingCaseNumber}`,
+      }],
+    }));
+
+    expect(archivedReply).toContain(`案件ID：${existing.id}`);
+    expect(LegalCases.getCase(orgId, existing.id, userId)!.materials.length).toBeGreaterThan(beforeMaterials);
+    expect(LegalCases.listCases(orgId, '', 20, userId)).toHaveLength(1);
+  });
+
+  it('requires unambiguous creation wording instead of treating open as create', () => {
+    expect(classifyRemoteLegalNoticeIntakeIntent('open the attached case file and analyze it')).toBe('none');
+    expect(classifyRemoteLegalNoticeIntakeIntent('create a new case and archive this notice')).toBe('create_case');
+    expect(classifyRemoteLegalNoticeIntakeIntent('不要归档，也不要建案，只分析附件')).toBe('none');
+    expect(classifyRemoteLegalNoticeIntakeIntent('不要分析，直接建案并归档')).toBe('create_case');
+  });
+
   it('asks unbound WeChat users to bind before writing legal notice links into cases', async () => {
     const reply = await handleRemoteLegalNoticeIntake(message({
       platform: 'wechat',
-      text: '【人民法院】你有一份开庭通知，请查看 https://court.example.test/notice/456',
+      text: '请归档：【人民法院】你有一份开庭通知，请查看 https://court.example.test/notice/456',
     }));
 
     expect(reply).toContain('识别到这是一条法院短信/通知链接');
@@ -205,7 +317,7 @@ describe('remote messaging legal notice intake', () => {
   it('asks unbound WeCom users to bind before writing legal notice links into cases', async () => {
     const reply = await handleRemoteLegalNoticeIntake(message({
       platform: 'wecom',
-      text: '【人民法院】你有一份送达通知，请查看 https://court.example.test/notice/789',
+      text: '请归档：【人民法院】你有一份送达通知，请查看 https://court.example.test/notice/789',
     }));
 
     expect(reply).toContain('当前企微账号还没有绑定');

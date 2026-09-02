@@ -2,13 +2,30 @@ import type { MessageRecord } from './manager';
 import { toolRecordVerifiedForCompletion } from '../cognition/task_execution_ledger';
 
 // i18n-allow: Chinese summary-grounding recognition pattern; not user-visible copy.
-const EXECUTION_OUTCOME_RE = /(?:已(?:经)?(?:完成|执行|检查|测试|切换|生成|打开|启动|运行|播放|保存|创建|写入|发送|读取|关闭|删除|确认|配置|注册)|成功(?:切换|生成|打开|启动|运行|播放|保存|创建|写入|发送|读取|关闭|删除)|(?:完成了|执行了|进行了).{0,48}(?:检查|测试|诊断|切换|生成|发送|打开|读取)|检查(?:已)?完成|测试(?:已)?通过|执行完毕|运行正常|一切正常|无异常|全部通过|(?:检查|测试|结果|状态).{0,24}(?:均|都|全部)?(?:正常|通过|无异常)|(?:检查|测试|诊断).{0,32}(?:确认|判断).{0,32}(?:模型|网络|连接|工具|端口|MCP)|(?:Lumi|助手|系统).{0,20}(?:确认|判断).{0,32}(?:模型|网络|连接|工具|端口|MCP)|\b(?:completed|passed|verified|successfully\s+(?:ran|tested|switched|opened|sent|created)|all\s+checks\s+passed|running\s+normally|no\s+issues)\b)/iu;
+const EXECUTION_OUTCOME_RE = /(?:(?:我|Lumi|助手|系统)?\s*(?:已经|已)(?:经)?\s*(?:完成|执行|检查|测试|切换|生成|打开|启动|运行|恢复|播放|暂停|保存|复制|创建|写入|发送|上传|提交|发布|读取|关闭|删除|确认|配置|注册|设置)|(?:播放|上传|发送|创建|保存|切换|恢复|检查|测试)\s*(?:已经)?\s*(?:成功|完成|启动)|(?:音量|声音)\s*(?:已经)?\s*(?:调到|设为|设置为)?\s*\d{1,3}\s*%?|(?:完成了|执行了|进行了).{0,48}(?:检查|测试|诊断|切换|生成|发送|打开|读取)|检查(?:已)?完成|测试(?:已)?通过|执行完毕|运行正常|一切正常|无异常|全部通过|(?:检查|测试|结果|状态).{0,24}(?:均|都|全部)?(?:正常|通过|无异常)|(?:检查|测试|诊断).{0,32}(?:确认|判断).{0,32}(?:模型|网络|连接|工具|端口|MCP)|(?:Lumi|助手|系统).{0,20}(?:确认|判断).{0,32}(?:模型|网络|连接|工具|端口|MCP)|\b(?:completed|passed|verified|successfully\s+(?:ran|tested|switched|opened|sent|created|uploaded|saved)|all\s+checks\s+passed|running\s+normally|no\s+issues)\b)/iu;
 // Plans and in-progress assertions are execution claims too. Without a receipt
 // they must not be replayed into later prompt history as unfinished commands.
 // i18n-allow: Chinese execution-claim recognition; not user-visible copy.
-const EXECUTION_ACTIVITY_RE = /(?:(?:我|Lumi|这边)[^。！？!?\n]{0,28}(?:现在|马上|正在|开始|继续|并行)[^。！？!?\n]{0,36}(?:执行|处理|打开|启动|创建|新建|发送|检查|操作)|(?:现在|马上|正在|开始|继续)[^。！？!?\n]{0,24}(?:按顺序|并行)?[^。！？!?\n]{0,24}(?:执行|处理|打开|启动|创建|新建|发送|检查|操作)|工具(?:链|链路)[^。！？!?\n]{0,20}(?:恢复|可用)|\b(?:I(?:'m| am| will)|Lumi is)\b[^.!?\n]{0,48}\b(?:executing|processing|opening|starting|creating|sending|checking|working on)\b)/iu;
+const EXECUTION_ACTIVITY_RE = /(?:(?:我|Lumi|这边)[^。！？!?\n]{0,28}(?:现在|马上|正在|开始|继续|并行)[^。！？!?\n]{0,36}(?:执行|处理|打开|启动|恢复|播放|创建|新建|发送|检查|操作)|(?:现在|马上|正在|开始|继续)[^。！？!?\n]{0,24}(?:按顺序|并行)?[^。！？!?\n]{0,24}(?:执行|处理|打开|启动|恢复|播放|创建|新建|发送|检查|操作)|工具(?:链|链路)[^。！？!?\n]{0,20}(?:恢复|可用)|\b(?:I(?:'m| am| will)|Lumi is)\b[^.!?\n]{0,48}\b(?:executing|processing|opening|starting|creating|sending|checking|working on)\b)/iu;
 // i18n-allow: Chinese user-action recognition pattern; not user-visible copy.
-const EXPLICIT_USER_OWN_ACTION_RE = /^(?:用户|\buser\b)(?:此前|之前|先前|已经|已|亲自|\s|previously|already){0,4}(?:完成|执行|测试|检查|completed|ran|tested|checked)/iu;
+const EXPLICIT_USER_OWN_ACTION_RE = /^(?:(?:长期有效信息|用户事实|用户状态|stable user fact|user state)[：:]\s*)?(?:用户|\buser\b)\s*(?:(?:此前|之前|先前|已经|已|亲自|正在|正|目前|当前|准备|计划|将要|previously|already|currently|is|was)\s*){0,4}(?:完成|执行|处理|测试|检查|打开|启动|发送|创建|切换|使用|completed|ran|processed|tested|checked|checking|opened|started|sent|created|switched|using)/iu;
+// Stable user preferences are useful memory, not claims about the live runtime.
+// Keep them even when the preferred provider/model/voice name resembles a
+// configuration fact that an assistant would need to verify.
+// i18n-allow: Chinese user-preference recognition pattern; not user-visible copy.
+const EXPLICIT_USER_RUNTIME_PREFERENCE_RE = /^(?:用户|\buser\b)[^。！？!?\n]{0,32}(?:偏好|喜欢|希望|想要|倾向|优先|prefer(?:s|red)?|likes?|wants?|would like)[^。！？!?\n]{0,100}(?:本地|云端|官方|模型|音色|声线|TTS|STT|relay|GPT[- ]?SoVITS|CosyVoice|Lumi[-\s‑]?Neutral)/iu;
+const RUNTIME_PREFERENCE_RE = /(?:偏好|喜欢|希望|想要|倾向|优先|prefer(?:s|red)?|likes?|wants?|would like)[^。！？!?\n]{0,100}(?:本地|云端|官方|模型|音色|声线|TTS|STT|relay|GPT[- ]?SoVITS|CosyVoice|Lumi[-\s‑]?Neutral)/iu;
+const LIVE_RUNTIME_STATE_RE = /(?:当前|现在|这次|实际|正在|已经|已)[^。！？!?\n]{0,56}(?:使用|采用|调用|接入|切到|切换到|是|为)[^。！？!?\n]{0,56}(?:本地|云端|官方|模型|音色|声线|TTS|STT|relay|GPT[- ]?SoVITS|CosyVoice|Lumi[-\s‑]?Neutral)/iu; // i18n-allow -- reviewed Chinese live-runtime input recognition; not user-visible copy.
+// Live provider/model/voice assignments are runtime facts and need a matching
+// configuration receipt before they can become long-term conversation memory.
+// i18n-allow: Chinese runtime-state claim recognition; not user-visible copy.
+const RUNTIME_CONFIGURATION_FACT_RE = /(?:Lumi[-\s‑]?Neutral\s*v?2|(?:当前|现在|这次|始终|一直|实际)?[^。！？!?\n]{0,24}(?:音色|声线|TTS|STT|语音|模型|提供商|供应商|云端)[^。！？!?\n]{0,36}(?:使用|采用|调用|接入|来自|切到|切换到|是|为)[^。！？!?\n]{0,36}(?:本地|云端|官方|relay|GPT[- ]?SoVITS|CosyVoice|Lumi[-\s‑]?Neutral|long[a-z0-9_-]+))/iu;
+
+function isRuntimeConfigurationFact(value: unknown): boolean {
+  const text = String(value || '').trim();
+  if (!RUNTIME_CONFIGURATION_FACT_RE.test(text)) return false;
+  return !RUNTIME_PREFERENCE_RE.test(text) || LIVE_RUNTIME_STATE_RE.test(text);
+}
 
 /** Reserved server-generated marker copied through prompt compaction. */
 export const COMPACT_TOOL_EVIDENCE_PREFIX = '[LUMI_INTERNAL_RECEIPT_LEDGER_V1:';
@@ -114,6 +131,40 @@ function verifiedToolNames(value: unknown): string[] {
     }))
     .map(call => String(call.name || '').trim())
     .filter(Boolean)));
+}
+
+function relevantVerifiedToolExists(text: string, toolNames: string[]): boolean {
+  if (toolNames.length === 0) return false;
+  const names = toolNames.join('\n');
+  // i18n-allow: Chinese communication-claim recognition; not user-visible copy.
+  const requiresCommunication = /(?:发送|发出|上传|提交|发布|送达|sent|uploaded|submitted|published|delivered)/iu.test(text);
+  if (requiresCommunication) {
+    return /(?:send|message|wechat|mail|upload|submit|publish|deliver)/iu.test(names);
+  }
+  // i18n-allow: Chinese reminder-claim recognition; not user-visible copy.
+  const requiresReminder = /(?:创建|设置|新建).{0,18}(?:提醒|定时|日程|计划|任务)|(?:提醒|定时任务|日程).{0,18}(?:已创建|已设置)|\b(?:reminder|schedule|calendar).{0,24}(?:created|set)\b/iu.test(text);
+  if (requiresReminder) {
+    return /(?:remind|schedule|calendar|plan|task_create|work_takeover_task_create)/iu.test(names);
+  }
+  // i18n-allow: Chinese media-state claim recognition; not user-visible copy.
+  const requiresPlayback = /(?:播放|暂停|音量|声音).{0,20}(?:启动|开始|正在|已|调到|设为|设置为)|\b(?:playback|playing|paused|volume)\b/iu.test(text);
+  if (requiresPlayback) {
+    return /(?:media|music|audio|volume|keyboard|computer_use|desktop_ui)/iu.test(names);
+  }
+  // i18n-allow: Chinese open/launch claim recognition; not user-visible copy.
+  const requiresOpen = /(?:已|已经|成功).{0,10}(?:打开|启动|运行|恢复)|(?:打开|启动|恢复)成功|\b(?:opened|launched|started|restored)\b/iu.test(text);
+  if (requiresOpen) {
+    return /(?:open|launch|start|client_action|desktop|browser)/iu.test(names);
+  }
+  // i18n-allow: Chinese read/inspection claim recognition; not user-visible copy.
+  const requiresRead = /(?:已|已经|成功).{0,10}(?:读取|检查|分析|识别)|(?:读取|检查|分析|识别)(?:完成|成功)|\b(?:read|checked|analy[sz]ed|inspected)\b/iu.test(text);
+  if (requiresRead) {
+    return /(?:read|extract|inspect|check|ocr|vision|desktop|client_get_state)/iu.test(names);
+  }
+  if (isRuntimeConfigurationFact(text)) {
+    return /(?:voice|tts|stt|provider|model_configuration|client_get_state|settings)/iu.test(names);
+  }
+  return true;
 }
 
 function parseToolResult(value: unknown): any {
@@ -223,14 +274,19 @@ export function isUnverifiedExecutionAssistantText(value: unknown): boolean {
   const text = String(value || '').trim();
   return Boolean(
     text
-    && (EXECUTION_OUTCOME_RE.test(text) || EXECUTION_ACTIVITY_RE.test(text)),
+    && (
+      EXECUTION_OUTCOME_RE.test(text)
+      || EXECUTION_ACTIVITY_RE.test(text)
+      || isRuntimeConfigurationFact(text)
+    ),
   );
 }
 
 export function isUnverifiedExecutionAssistantRecord(message: MessageRecord): boolean {
   if (String(message.role || '').toLowerCase() !== 'assistant') return false;
-  if (verifiedToolNames(message.toolCalls).length > 0) return false;
-  return isUnverifiedExecutionAssistantText(message.message || message.response || '');
+  const text = String(message.message || message.response || '');
+  if (!isUnverifiedExecutionAssistantText(text)) return false;
+  return !relevantVerifiedToolExists(text, verifiedToolNames(message.toolCalls));
 }
 
 /** Keep outcomes only when the same record carries successful tool receipts. */
@@ -262,8 +318,15 @@ export function sanitizeSummaryForPrompt(value: unknown): string {
     .map(clause => clause.trim())
     .filter(Boolean);
   const clean = clauses.filter(clause => {
-    if (EXPLICIT_USER_OWN_ACTION_RE.test(clause)) return true;
-    if (!EXECUTION_OUTCOME_RE.test(clause)) return true;
+    if (
+      EXPLICIT_USER_OWN_ACTION_RE.test(clause)
+      || EXPLICIT_USER_RUNTIME_PREFERENCE_RE.test(clause)
+    ) return true;
+    if (!(
+      EXECUTION_OUTCOME_RE.test(clause)
+      || EXECUTION_ACTIVITY_RE.test(clause)
+      || isRuntimeConfigurationFact(clause)
+    )) return true;
     return false;
   });
   return clean.join(' ').trim();

@@ -2270,16 +2270,16 @@ export function registerChatHandler(
           )
         )
       ) {
-        const priorToolReceiptQuestion = isPriorTurnToolReceiptQuestion(visibleUserText);
-        const statusText = priorToolReceiptQuestion
+        const executionFactQuestion = isConversationExecutionFactQuestion(visibleUserText);
+        const statusText = executionFactQuestion
           ? formatConversationExecutionFactAnswer(getConversationExecutionFacts({
               conversationId: conversation.id,
               userId: uid,
               domain: resolvedDomain,
-            orgId: resolvedOrgId,
-            currentRequestId: requestId,
-            taskId: serverBoundRecheckTaskId || previousActionState?.taskId || '',
-          }), visibleUserText)
+              orgId: resolvedOrgId,
+              currentRequestId: requestId,
+              taskId: serverBoundRecheckTaskId || previousActionState?.taskId || '',
+            }), visibleUserText)
           : getConversationActionStatus(
               conversation.id,
               uid,
@@ -2287,7 +2287,7 @@ export function registerChatHandler(
               conversation.actionContinuationState,
               resolvedTaskRelation.taskId || '',
             );
-        const responseIntent = priorToolReceiptQuestion
+        const responseIntent = executionFactQuestion
           ? 'execution_facts'
           : confirmationNeedsFreshReview
             ? 'reconfirmation_required'
@@ -2308,7 +2308,7 @@ export function registerChatHandler(
             content: statusText,
             domain: resolvedDomain,
             orgId: resolvedOrgId,
-            source: priorToolReceiptQuestion ? 'chat_conversation_execution_facts' : 'chat_task_status',
+            source: executionFactQuestion ? 'chat_conversation_execution_facts' : 'chat_task_status',
             channel: 'chat',
             cognitiveIntent: responseIntent,
             llmWasCalled: false,
@@ -2319,7 +2319,7 @@ export function registerChatHandler(
             emitConversationUpdated({
             conversationId: conversation.id,
             agentId: conversationAgentId,
-            source: priorToolReceiptQuestion ? 'chat_conversation_execution_facts' : 'chat_task_status',
+            source: executionFactQuestion ? 'chat_conversation_execution_facts' : 'chat_task_status',
             rolledOver: conversationTurn.rolledOver,
               previousConversationId: conversationTurn.previousConversationId,
             });

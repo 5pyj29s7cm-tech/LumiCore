@@ -10,6 +10,7 @@ import {
   hasMixedStatusExecutionIntent,
   normalizeActionIntent,
 } from './normalized_action_intent';
+import { formatUserVisibleReplyForReadability } from './reply_style';
 
 export type ExecutionGuardIntent = 'conversation' | 'status_query' | 'action_execution';
 
@@ -117,7 +118,22 @@ const PUBLIC_RECOVERY_FAILURE_REASON = 'execution_recovery_incomplete';
 const MAX_RECEIPTS_IN_RECOVERY_PROMPT = 40;
 const PUBLIC_REASON_CODE = /^[a-z][a-z0-9_]{0,79}$/;
 // i18n-allow -- deterministic intent recognition; not user-visible copy.
-const STATUS_QUERY = /\b(?:status|progress|result|evidence|done yet|finished yet|what (?:did you|happened)|did (?:it|that|you).{0,20}(?:work|finish|complete|open|send|save))\b|\u72b6\u6001|\u8fdb\u5ea6|\u7ed3\u679c|\u8bc1\u636e|\u5b8c\u6210\u4e86\u5417|\u6210\u529f\u4e86\u5417|\u662f\u5426\u6210\u529f|\u5f04\u597d\u4e86\u5417|\u505a\u597d\u4e86\u5417|\u521a\u624d.{0,12}\u505a|\u6267\u884c\u5230\u54ea|\u600e\u4e48\u56de\u4e8b/iu;
+const DIRECT_STATUS_QUERY = /(?:完成了吗|成功了吗|是否成功|弄好了吗|做好了吗|执行到哪|怎么回事|怎么样了|还在(?:执行|处理|运行)吗)|\b(?:done yet|finished yet|what (?:is the task status|happened)|still (?:running|working)|did (?:it|that|you).{0,20}(?:work|finish|complete|open|send|save))\b/iu;
+const STATUS_SUBJECT_ANCHOR = /(?:当前|这次|本次|这轮|刚才|刚刚|之前|上次|那个|任务|操作|执行|处理|工作|回执)|\b(?:current|this|that|previous|last|earlier|task|operation|execution|run|receipt)\b/iu;
+const STATUS_ASPECT = /(?:状态|进度|结果|证据|回执|完成|成功|失败|受阻)|\b(?:status|progress|result|evidence|receipt|completed?|finished?|succeeded?|failed?|blocked)\b/iu; // i18n-allow: reviewed execution-status input recognition.
+const CONCEPTUAL_STATUS_DISCUSSION = /(?:什么是|什么意思|概念|定义|标准|原则|应该|应当|如何|怎么判断|依据什么|怎样才算|请只解释|仅解释|不要执行|不执行任何操作)|\b(?:what (?:is|does)|meaning|concept|definition|criteria|standard|principle|should|how (?:to|should)|explain only|do not (?:execute|run|perform))\b/iu; // i18n-allow: reviewed conceptual-question input recognition.
+const UNVERIFIED_TERMINAL_ACTION_ANSWER = /(?:我|文件|消息|任务|操作|提醒|应用|网页)?[^。！？!?\n]{0,12}(?:已|已经|成功)[^。！？!?\n]{0,12}(?:保存|写入|发送|提交|发布|创建|打开|启动|执行|完成)|(?:保存|写入|发送|提交|发布|创建|打开|启动|执行|完成)成功(?:了)?[。！？!?\s]*$|\b(?:I\s+(?:have\s+)?|the\s+(?:file|message|task)\s+(?:has\s+)?)?(?:saved|sent|submitted|published|created|opened|launched|executed|completed)\s+(?:it|successfully)?[.!?\s]*$/iu; // i18n-allow: reviewed unverified terminal-action claim recognition.
+
+function isExecutionStatusQuery(text: string): boolean {
+  if (!text) return false;
+  // A quoted execution phrase can be the subject of a conceptual question.
+  // Terms such as “evidence” and “result” are not task pointers by themselves.
+  if (DIRECT_STATUS_QUERY.test(text)) return true;
+  if (CONCEPTUAL_STATUS_DISCUSSION.test(text)) return false;
+  return (
+    STATUS_SUBJECT_ANCHOR.test(text) && STATUS_ASPECT.test(text)
+  );
+}
 // i18n-allow -- deterministic conversational intent recognition; not user-visible copy.
 const CONVERSATION_ONLY = /^(?:hi|hello|hey|thanks|thank you|who are you|what can you do|tell me about yourself|how are you)[\s!?.]*$|^(?:\u4f60\u597d|\u55e8|\u8c22\u8c22|\u4f60\u662f\u8c01|\u4f60\u80fd\u505a\u4ec0\u4e48|\u4ecb\u7ecd\u4e00\u4e0b\u81ea\u5df1|\u804a\u804a)[\s\uff01\uff1f\u3002]*$/iu;
 // i18n-allow -- fallback imperative recognition for action contracts not yet catalogued.
@@ -223,7 +239,8 @@ export function classifyExecutionGuardIntent(
     && normalizedIntent.operation !== 'status'
   ) return 'action_execution';
   if (hasMixedStatusExecutionIntent(clean)) return 'action_execution';
-  if (STATUS_QUERY.test(clean)) return 'status_query';
+  if (CONCEPTUAL_STATUS_DISCUSSION.test(clean) && !DIRECT_STATUS_QUERY.test(clean)) return 'conversation';
+  if (isExecutionStatusQuery(clean)) return 'status_query';
   if (CONVERSATION_ONLY.test(clean)) return 'conversation';
   const contract = buildActionContract(clean);
   if ((contract.applies && contract.kind !== 'none') || ACTION_IMPERATIVE.test(clean)) {
@@ -503,7 +520,15 @@ export function sanitizeExecutionResponseForDelivery<
         ? formatExecutionStatusFeedback(task, options.toolRecords || [])
         : formatExecutionRecoveryFailure(task, options.toolRecords || [])
     : String(delivery.text || '');
-  const protectedText = sanitizeUserFacingExecutionOutput(fallbackText, options);
+  const sanitizedText = sanitizeUserFacingExecutionOutput(fallbackText, options);
+  // The exact confirmation envelope is equality-bound to its pending action;
+  // changing its bytes here would break that security contract. Every other
+  // response gets the same final layout pass, including deterministic replies
+  // and conceptual answers preserved after execution-guard recovery.
+  const protectedText = options.trustedConfirmationRequestText
+    && sanitizedText === options.trustedConfirmationRequestText
+    ? sanitizedText
+    : formatUserVisibleReplyForReadability(sanitizedText, { task });
   const protectedNotification = notificationLeaks
     ? undefined
     : sanitizeUserFacingNotification(delivery.notification, options);
@@ -657,6 +682,31 @@ export async function recoverBlockedExecutionOnce<
     toolRecords: priorToolRecords,
   });
   const unchanged = (): ExecutionGuardRecoveryRunResult<TFinalization> => {
+    const preserveConceptualAnswer = decision.intent === 'conversation'
+      && CONCEPTUAL_STATUS_DISCUSSION.test(input.task)
+      && Boolean(String(input.responseText || '').trim())
+      && !containsInternalGuardDetail(input.responseText)
+      && !UNVERIFIED_TERMINAL_ACTION_ANSWER.test(String(input.responseText || '').trim());
+    if (preserveConceptualAnswer) {
+      const finalization = {
+        ...initialFinalization,
+        text: sanitizeUserFacingExecutionOutput(input.responseText, {
+          task: input.task,
+          toolRecords: priorToolRecords,
+        }),
+        blocked: false,
+        reason: '',
+        notification: undefined,
+      } as TFinalization;
+      return {
+        attempted: false,
+        recoveryFailed: false,
+        decision,
+        responseText: finalization.text,
+        toolRecords: priorToolRecords,
+        finalization,
+      };
+    }
     const finalization = sanitizeLeakingFinalization(
       initialFinalization,
       input.task,

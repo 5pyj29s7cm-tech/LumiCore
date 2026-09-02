@@ -142,6 +142,7 @@ describe('live voice runtime stability policy', () => {
     expect(hook).toContain("detail?.kind === 'input'");
     expect(voice).toContain('inputTokenBudget: voiceInputTokenBudget');
     expect(voice).toContain('leaseTimeoutMs: VOICE_DESKTOP_LEASE_WAIT_MS');
-    expect(voice).toContain('canReuseSpeculativeVoiceSpeech');
+    expect(voice).toContain('lockVoiceTurnTtsRoute');
+    expect(voice).toContain('turnTtsSelection');
   });
 });

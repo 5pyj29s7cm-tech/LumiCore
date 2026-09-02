@@ -96,6 +96,13 @@ export function isRemoteAttachmentContextClearRequest(text: string): boolean {
     || /^(?:clear|forget|remove|stop using)(?: the)? (?:session )?(?:materials?|attachments?|files?)(?: context)?$/iu.test(clean);
 }
 
+export function isRemoteConversationDismissalRequest(text: string): boolean {
+  const clean = String(text || '').trim();
+  // i18n-allow -- Multilingual remote-turn recognition; this literal is not user-visible copy.
+  return /^(?:(?:没事(?:了)?|算了|不用了|不需要了|先这样(?:吧)?|到这(?:里)?(?:吧)?|没别的事了)(?:[，,、\s]+(?:你)?退下(?:吧)?)?|(?:你)?退下(?:吧)?)[。！？.!?\s]*$/u.test(clean)
+    || /^(?:never\s*mind|that(?:'s| is) all|we(?:'re| are) done|dismissed|you may go)[.!?\s]*$/iu.test(clean);
+}
+
 export function clearRemoteAttachmentContext(message: IncomingMessage): void {
   const current = readStore();
   const key = remoteAttachmentContextKey(message);
@@ -121,6 +128,27 @@ export function applyRemoteAttachmentContext(message: IncomingMessage): Incoming
       ...message,
       attachments: undefined,
       raw: { ...message.raw, lumiAttachmentContext: { cleared: true, incomingCount: 0, carriedCount: 0, totalCount: 0 } },
+    };
+  }
+
+  // A conversational dismissal closes the foreground exchange. Retaining the
+  // cached material for a later explicit follow-up is useful, but injecting it
+  // into this turn can make the attachment look like a fresh task and restart
+  // work after the user has just ended it.
+  if (isRemoteConversationDismissalRequest(message.text) && !message.attachments?.length) {
+    return {
+      ...message,
+      attachments: undefined,
+      raw: {
+        ...message.raw,
+        lumiAttachmentContext: {
+          cleared: false,
+          suppressedForDismissal: true,
+          incomingCount: 0,
+          carriedCount: 0,
+          totalCount: 0,
+        },
+      },
     };
   }
 
@@ -169,7 +197,7 @@ export function applyRemoteAttachmentContext(message: IncomingMessage): Incoming
     ? [
         message.text,
         '',
-        'The following materials were sent earlier by this member in the same remote conversation and are safely cached locally. Continue using them and do not ask for another upload.',
+        'The following materials were sent earlier by this member in the same remote conversation and are safely cached locally. They are reference context, not a new instruction. Use them only when the current message refers to them; otherwise follow the current message and do not resume the old attachment task. When relevant, continue using them and do not ask for another upload.',
         carriedBlocks.join('\n\n'),
       ].join('\n')
     : message.text;

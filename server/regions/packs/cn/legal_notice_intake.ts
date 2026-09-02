@@ -31,8 +31,29 @@ function text(value: unknown): string {
 }
 
 function originalMessageText(value: string): string {
-  const marker = '\n\n以下是用户通过';
-  return value.includes(marker) ? value.slice(0, value.indexOf(marker)).trim() : value.trim();
+  const markers = [
+    '\n以下是用户通过',
+    '\nThe following materials were sent earlier',
+  ];
+  const markerIndex = markers
+    .map(marker => value.indexOf(marker))
+    .filter(index => index >= 0)
+    .sort((left, right) => left - right)[0];
+  return markerIndex === undefined ? value.trim() : value.slice(0, markerIndex).trim();
+}
+
+function currentUserRequestText(message: IncomingMessage): string {
+  const request = originalMessageText(text(message.text));
+  const attachmentLabels = new Set((message.attachments || []).flatMap(attachment => {
+    const name = text(attachment.fileName);
+    return name ? [`[附件] ${name}`, `[Attachment] ${name}`] : [];
+  }));
+  const requestLines = request.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  return attachmentLabels.size > 0
+    && requestLines.length > 0
+    && requestLines.every(line => attachmentLabels.has(line))
+    ? ''
+    : request;
 }
 
 function legalSignalText(message: IncomingMessage): string {
@@ -72,6 +93,24 @@ export function isLegalNoticeIntakeCandidate(input: string): boolean {
   const hasLegalSignal = /(人民法院|法院|12368|开庭|传票|送达|应诉|举证|立案|审判|诉讼|案号|民初|民终|执|裁定|判决|通知|短信|起诉|答辩|证据|律师|法律|合同纠纷|侵权|仲裁)/.test(body);
   if (extractFirstUrl(body) && hasLegalSignal) return true;
   return hasLegalSignal && /(入案|归档|保存|导入|收录|放入|放到|加入|新建|创建|发给\s*Lumi|给\s*Lumi|Lumi\s*bot)/i.test(body);
+}
+
+export type RemoteLegalNoticeIntakeIntent = 'none' | 'archive_existing' | 'create_case';
+
+export function classifyRemoteLegalNoticeIntakeIntent(input: string): RemoteLegalNoticeIntakeIntent {
+  const request = text(input);
+  if (!request) return 'none';
+  const affirmative = request
+    .replace(/(?:不要|别|无需|不用|不需要|请勿|禁止)[^，。；;！？!?\n]{0,12}?(?:建案|入案|归档|保存|导入|收录|放入|放到|加入|新建|创建)/gu, ' ')
+    .replace(/\b(?:do\s+not|don't|never|without)\b[^\n.!?;]{0,20}?\b(?:file|archive|save|import|add|create|start)\b/giu, ' ');
+  const explicitlyCreatesCase = /(?:建案|入案|(?:新建|创建|建立|建)(?:一个|一份|该|这个)?(?:案件|案卷|卷宗)|(?:案件|案卷|卷宗).{0,8}(?:新建|创建|建立)|\b(?:create|start)\s+(?:a\s+)?new\s+case\b)/iu.test(affirmative);
+  if (explicitlyCreatesCase) return 'create_case';
+  const explicitlyArchives = /(?:归档)|(?:(?:保存|导入|收录|放入|放到|加入).{0,18}(?:案件|案号|案卷|卷宗|案件库))|(?:(?:案件|案号|案卷|卷宗|案件库).{0,18}(?:保存|导入|收录|放入|放到|加入))|\b(?:file|archive|save|import|add)\b.{0,30}\b(?:to|into|in)\b.{0,12}\b(?:existing|current|specified)?\s*case\b/iu.test(affirmative);
+  return explicitlyArchives ? 'archive_existing' : 'none';
+}
+
+export function isExplicitLegalNoticeIntakeRequest(input: string): boolean {
+  return classifyRemoteLegalNoticeIntakeIntent(input) !== 'none';
 }
 
 function findOrCreateCaseFromNotice(params: {
@@ -378,29 +417,46 @@ async function runOrganizationLegalIntake(
   }
   msg.boundOrgId = target.orgId;
 
+  let resolvedTarget = target;
+  const intakeIntent = classifyRemoteLegalNoticeIntakeIntent(messageText);
+  if (!resolvedTarget.caseId && intakeIntent !== 'create_case') {
+    const matches = caseCandidates(userId, legalSignalText({ ...msg, text: messageText }))
+      .filter(candidate => candidate.orgId === target.orgId && candidate.caseId);
+    if (matches.length === 1) {
+      resolvedTarget = matches[0];
+    } else if (matches.length > 1) {
+      return [
+        '找到多个可能的已有案件，本轮没有归档，也没有创建新案件。请明确回复案件名称或案号：',
+        ...matches.slice(0, 8).map((candidate, index) => `${index + 1}. ${candidateLabel(candidate)}`),
+      ].join('\n');
+    } else {
+      return '没有找到可唯一匹配的已有案件，本轮没有归档，也没有创建新案件。请提供已有案件名称/案号，或明确说“新建案件并归档”。';
+    }
+  }
+
   if (toolRegistry.get('legal_message_intake_to_case')) {
     const report = await executeRegisteredTool('legal_message_intake_to_case', {
-      orgId: target.orgId,
+      orgId: resolvedTarget.orgId,
       userId,
       platform: msg.platform,
       sender: msg.userName || msg.userId,
       message: messageText,
       attachments: msg.attachments || [],
       receivedAt: msg.timestamp,
-      caseId: target.caseId || undefined,
-      caseName: target.caseId ? undefined : target.caseTitle,
+      caseId: resolvedTarget.caseId || undefined,
+      caseName: resolvedTarget.caseId ? undefined : resolvedTarget.caseTitle,
       processLinks: true,
       persistCase: true,
     }, {
       userId,
-      orgId: target.orgId,
+      orgId: resolvedTarget.orgId,
       domain: 'work',
       source: `${msg.platform}-legal-notice-intake`,
     });
-    const caseId = parseCaseId(report) || target.caseId || '';
-    const caseFile = caseId ? LegalCases.getCase(target.orgId, caseId, userId) : null;
+    const caseId = parseCaseId(report) || resolvedTarget.caseId || '';
+    const caseFile = caseId ? LegalCases.getCase(resolvedTarget.orgId, caseId, userId) : null;
     const reminderCount = caseFile
-      ? createCaseAlerts({ userId, orgId: target.orgId, caseFile, content: `${messageText}\n${report}` })
+      ? createCaseAlerts({ userId, orgId: resolvedTarget.orgId, caseFile, content: `${messageText}\n${report}` })
       : 0;
     return `${report}\n\n- 案件提醒：${reminderCount ? `已生成/更新 ${reminderCount} 条` : '未识别到未来期限，请人工核对通知日期'}`;
   }
@@ -408,12 +464,12 @@ async function runOrganizationLegalIntake(
   const url = extractFirstUrl(messageText);
   if (!url) return '已识别法律入案请求，但当前法律消息入案工具未注册。';
   const { caseFile, hints, rawMaterialId } = findOrCreateCaseFromNotice({
-    orgId: target.orgId,
+    orgId: resolvedTarget.orgId,
     userId,
     message: messageText,
   });
   const report = await executeRegisteredTool('legal_process_notice_link', {
-    orgId: target.orgId,
+    orgId: resolvedTarget.orgId,
     userId,
     caseId: caseFile.id,
     caseName: caseFile.title,
@@ -427,12 +483,12 @@ async function runOrganizationLegalIntake(
     extractedTextLimit: 6000,
   }, {
     userId,
-    orgId: target.orgId,
+    orgId: resolvedTarget.orgId,
     domain: 'work',
     source: `${msg.platform}-legal-notice-intake`,
   });
-  const refreshed = LegalCases.getCase(target.orgId, caseFile.id, userId) || caseFile;
-  const reminderCount = createCaseAlerts({ userId, orgId: target.orgId, caseFile: refreshed, content: `${messageText}\n${report}` });
+  const refreshed = LegalCases.getCase(resolvedTarget.orgId, caseFile.id, userId) || caseFile;
+  const reminderCount = createCaseAlerts({ userId, orgId: resolvedTarget.orgId, caseFile: refreshed, content: `${messageText}\n${report}` });
   return [
     `已收到${platformLabel(msg.platform)}转发的法院短信链接，并写入案件。`,
     `案件：${refreshed.title}`,
@@ -500,11 +556,20 @@ async function handlePersonalLegalNotice(
 }
 
 export async function handleRemoteLegalNoticeIntake(msg: IncomingMessage): Promise<string | null> {
-  const messageText = originalMessageText(text(msg.text));
+  const messageText = currentUserRequestText(msg);
   const signalText = legalSignalText(msg);
   const hasCourtNoticeAttachment = Boolean(msg.attachments?.length)
     && /(人民法院|12368|开庭通知|传票|送达通知|应诉通知|举证通知|[（(]\d{4}[）)].{2,50}号)/.test(signalText);
-  const legalCandidate = isLegalNoticeIntakeCandidate(signalText) || hasCourtNoticeAttachment;
+  const explicitIntakeRequest = isExplicitLegalNoticeIntakeRequest(messageText);
+  const hasLegalMaterialSignal = isLegalNoticeIntakeCandidate(signalText)
+    || hasCourtNoticeAttachment
+    || /(人民法院|法院|12368|开庭|传票|送达|应诉|举证|立案|诉讼|案号|民初|民终|裁定|判决|律师|法律|合同纠纷|侵权|仲裁)/.test(signalText);
+  // Attachment content establishes what the material is, never what the user
+  // authorized. Analysis/read requests remain read-only even when the filename
+  // or extracted body looks like a court notice. Case creation/archiving opens
+  // only from the current user's explicit wording (or a durable pending target
+  // selection handled below).
+  const legalCandidate = explicitIntakeRequest && hasLegalMaterialSignal;
 
   if (msg.boundUserId && !msg.boundOrgId && !legalCandidate) {
     const pending = getPendingLegalNotice(msg, msg.boundUserId);

@@ -2511,7 +2511,20 @@ function exactDocumentReadTarget(record: ToolExecutionRecord): string {
 }
 
 function actualDocumentReadContent(record: ToolExecutionRecord): string {
-  const rawResult = String(record.result || '').trim();
+  const persistedResult = String(record.result || '').trim();
+  let rawResult = persistedResult;
+  try {
+    const compacted = JSON.parse(persistedResult || '{}');
+    const envelopeResult = record.envelope?.status === 'verified_success'
+      && record.envelope.verification?.status === 'verified'
+      ? record.envelope.result
+      : undefined;
+    if (compacted?.resultOmitted === true && envelopeResult !== undefined) {
+      rawResult = typeof envelopeResult === 'string'
+        ? envelopeResult.trim()
+        : JSON.stringify(envelopeResult);
+    }
+  } catch {}
   if (!rawResult) return '';
   // The durable receipt may carry byte-count/digest metadata alongside the
   // actual semantic result. Inspect the result itself here: generic
@@ -2545,6 +2558,10 @@ function actualDocumentReadContent(record: ToolExecutionRecord): string {
       || FAILED_DOCUMENT_READ_STATUS_RE.test(status)
       || compact(payload.error || verification.error)
     ) return '';
+    // read_file returns the file bytes as UTF-8 text. A JSON object here is
+    // therefore the document itself (for example package.json), not a generic
+    // adapter receipt. Wrapped desktop reads are unwrapped by the handler.
+    if (record.name === 'read_file') return rawResult;
     const structuredContent = [
       payload.content,
       payload.text,
@@ -2583,7 +2600,7 @@ function hasActualDocumentReadContent(record: ToolExecutionRecord): boolean {
   return Boolean(actualDocumentReadContent(record));
 }
 
-function isSuccessfulExactDocumentRead(record: ToolExecutionRecord): boolean {
+export function isSuccessfulExactDocumentRead(record: ToolExecutionRecord): boolean {
   return CURRENT_DOCUMENT_READER_RE.test(record.name)
     && !record.error
     && record.terminalVerification?.status !== 'failed'
@@ -2704,6 +2721,66 @@ function taskTextAnchorsExactDocumentTarget(taskText: string, target: string): b
     : normalizedTask.includes(normalizedTarget);
 }
 
+/**
+ * Bind a semantic document-read receipt to the exact file identity supplied
+ * by the accepted task. A reader choosing some other file is useful evidence
+ * about that file, but can never complete this request.
+ */
+export function documentReadMatchesRequestedTarget(
+  record: ToolExecutionRecord,
+  taskText: string,
+): boolean {
+  // Target correlation is independent from content retention. Large structured
+  // reads may be compacted before a later finalization pass, but their exact
+  // path and verified envelope remain authoritative for deciding whether this
+  // was the requested file. Callers that require semantic read completion must
+  // separately require isSuccessfulExactDocumentRead.
+  if (
+    !CURRENT_DOCUMENT_READER_RE.test(record.name)
+    || Boolean(record.error)
+    || record.terminalVerification?.status === 'failed'
+  ) return false;
+  const target = exactDocumentReadTarget(record);
+  const primaryTask = compact(extractPrimaryTaskText(taskText));
+  if (!target || !primaryTask) return false;
+
+  // When the user supplied an absolute document path, basename equality is
+  // insufficient: two directories may legitimately contain the same name.
+  const absoluteTargets = primaryTask.match(
+    /(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+[\\/]|\/(?!\/))[^\r\n<>|*?"']+?\.(?:pptx?|docx?|xlsx?|pdf|rtf|txt|md|csv|json|wps|et|dps)\b/giu,
+  ) || [];
+  if (absoluteTargets.length > 0) {
+    return absoluteTargets.some(candidate => sameExactDocumentTarget(candidate, target));
+  }
+
+  const targetName = documentBasename(target);
+  if (targetName) {
+    const normalizedTask = primaryTask.normalize('NFKC').toLocaleLowerCase('en-US');
+    if (normalizedTask.includes(targetName.normalize('NFKC').toLocaleLowerCase('en-US'))) {
+      return true;
+    }
+  }
+
+  const args = record.arguments || {};
+  const explicitAttachmentIdentities = [
+    args.attachmentId,
+    args.attachmentID,
+    args.fileId,
+    args.fileID,
+    args.sourceId,
+    args.sourceID,
+  ].map(value => compact(value)).filter(value => value.length >= 4);
+  const normalizedTask = primaryTask.normalize('NFKC').toLocaleLowerCase('en-US');
+  if (explicitAttachmentIdentities.some(identity => (
+    normalizedTask.includes(identity.normalize('NFKC').toLocaleLowerCase('en-US'))
+  ))) return true;
+  const envelopeTarget = compact(record.envelope?.targetIdentity);
+  const refersToAttachment = /(?:附件|这个文件|该文件|\b(?:this\s+)?attachment\b)/iu.test(primaryTask); // i18n-allow: reviewed attachment-reference intent.
+  return refersToAttachment
+    && envelopeTarget.length >= 4
+    && explicitAttachmentIdentities.some(identity => identity === envelopeTarget);
+}
+
 function hasVerifiedExactReadOnlyArtifactEvidence(
   records: ToolExecutionRecord[],
   taskText: string,
@@ -2715,7 +2792,7 @@ function hasVerifiedExactReadOnlyArtifactEvidence(
       || record.terminalVerification?.status !== 'verified'
       || !isSuccessfulExactDocumentRead(record)
     ) return false;
-    return taskTextAnchorsExactDocumentTarget(taskText, exactDocumentReadTarget(record));
+    return documentReadMatchesRequestedTarget(record, taskText);
   });
 }
 
@@ -2976,11 +3053,16 @@ export function hasCoreActionEvidence(
 ): boolean {
   if (!contract.applies) return true;
   const successful = expandSuccessfulRecords(records);
-  const observedExactOpenWithoutVerifiedReceipt = contract.kind === 'desktop_operation'
-    && !requiresVisualModelAvailabilityCheck(taskText)
-    && !requiresMediaPlaybackAction(taskText)
-    && hasRequestedDesktopOpenEvidence(records, taskText);
-  if (successful.length === 0 && !observedExactOpenWithoutVerifiedReceipt) return false;
+  const recoverableObservedOpen = contract.kind === 'desktop_operation'
+    ? (() => {
+        const target = extractDesktopLaunchTarget(taskText) || extractSimpleDesktopOpenTarget(taskText);
+        return Boolean(target) && records.some(record => (
+          /^(?:desktop_open|browser_open_task)$/iu.test(String(record.name || ''))
+          && hasRequestedDesktopOpenEvidence([record], taskText, target)
+        ));
+      })()
+    : false;
+  if (successful.length === 0 && !recoverableObservedOpen) return false;
   const toolNames = successful.map(record => record.name);
   if (contract.kind === 'task_control') {
     const intent = classifyRuntimeWorkIntent(taskText);
@@ -3173,6 +3255,11 @@ export function hasCoreActionEvidence(
     if (desktopLaunchTarget) {
       const openedExactTarget = hasRequestedDesktopOpenEvidence(records, taskText, desktopLaunchTarget);
       if (!openedExactTarget) return false;
+      const hasBoundOpenAction = records.some(record => (
+        /^(?:desktop_open|browser_open_task)$/iu.test(String(record.name || ''))
+        && hasRequestedDesktopOpenEvidence([record], taskText, desktopLaunchTarget)
+      ));
+      if (!hasBoundOpenAction) return false;
       if (needsActiveWindow && !successful.some(record => hasMatchingDesktopObservationEvidence(record, desktopLaunchTarget))) {
         return false;
       }
@@ -3195,7 +3282,11 @@ export function hasCoreActionEvidence(
       return successful.some(record => /^(?:desktop_running_processes|get_running_processes)$/i.test(record.name));
     }
     if (isSimpleDesktopOpenRequest(taskText)) {
-      return hasRequestedDesktopOpenEvidence(records, taskText, extractSimpleDesktopOpenTarget(taskText));
+      const target = extractSimpleDesktopOpenTarget(taskText);
+      return successful.some(record => (
+        /^(?:desktop_open|browser_open_task)$/iu.test(String(record.name || ''))
+        && hasRequestedDesktopOpenEvidence([record], taskText, target)
+      ));
     }
     return hasVerifiedGenericDesktopMutation(successful)
       || hasVerifiedManifestCapabilityEvidence(contract, successful);

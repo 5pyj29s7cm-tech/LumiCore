@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   buildExecutionGuardRecoveryInstruction,
+  classifyExecutionGuardIntent,
   decideExecutionGuardRecovery,
   formatExecutionRecoveryFailure,
   recoverBlockedExecutionOnce,
@@ -28,6 +29,19 @@ function record(patch: Partial<ToolExecutionRecord> = {}): ToolExecutionRecord {
 }
 
 describe('execution guard recovery', () => {
+  it('keeps conceptual evidence questions in conversation while preserving real task-status queries', () => {
+    expect(classifyExecutionGuardIntent('“文件保存成功”应该依据什么证据判断？请只解释，不执行任何操作。'))
+      .toBe('conversation');
+    expect(classifyExecutionGuardIntent('什么是任务完成证据？只解释概念。'))
+      .toBe('conversation');
+    expect(classifyExecutionGuardIntent('What evidence should count as a successful file save? Explain only; do not execute anything.'))
+      .toBe('conversation');
+
+    expect(classifyExecutionGuardIntent('刚才任务的结果是什么？')).toBe('status_query');
+    expect(classifyExecutionGuardIntent('当前任务进度怎么样了？')).toBe('status_query');
+    expect(classifyExecutionGuardIntent('刚才那次执行有什么证据？')).toBe('status_query');
+  });
+
   it('turns a missing current-turn receipt into an internal retry decision', () => {
     const decision = decideExecutionGuardRecovery({
       blocked: true,
@@ -281,6 +295,22 @@ describe('execution guard recovery', () => {
       type: 'warning',
       details: { apiToken: '[redacted]', stack: '[internal detail omitted]' },
     });
+  });
+
+  it('applies one readable layout at the final delivery boundary for model and deterministic replies', () => {
+    const concept = sanitizeExecutionResponseForDelivery({
+      text: '需要三类证据：- **视觉证据**：看见结果。- **系统证据**：读取状态。',
+      finalized: true,
+      blocked: false,
+    }, { task: '只解释判断成功需要哪些证据，不要执行工具。' });
+    expect(concept.text).toBe('需要三类证据：\n\n- **视觉证据**：看见结果。\n- **系统证据**：读取状态。');
+
+    const fields = sanitizeExecutionResponseForDelivery({
+      text: 'D:\\lumiOS\\package.json  lumi-core  3.1.0',
+      finalized: true,
+      blocked: false,
+    }, { task: '把路径、name 和 version 分三行告诉我，不要重新读取。' });
+    expect(fields.text).toBe('D:\\lumiOS\\package.json\nlumi-core\n3.1.0');
   });
 
   it('routes every socket notification event through the shared sanitizer', () => {

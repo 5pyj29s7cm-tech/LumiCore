@@ -354,16 +354,16 @@ describe('remote reply durability boundary', () => {
       onConversationUpdated: update => {
         const record = conversations.getMessages(update.conversationId)
           .find(item => item.id === update.messageId);
-        order.push(`persist:${record?.role || 'missing'}`);
+        order.push(`notify:${record?.role || 'missing'}`);
       },
     })).toBe(true);
 
     await waitFor(() => journalStatus(message.messageId) === 'completed');
     expect(order).toEqual([
-      'persist:user',
+      'notify:user',
       'flush:accepted',
-      'persist:assistant',
       'flush:terminal',
+      'notify:assistant',
       'reply:true',
     ]);
   });
@@ -434,17 +434,17 @@ describe('remote reply durability boundary', () => {
       onConversationUpdated: update => {
         const record = conversations.getMessages(update.conversationId)
           .find(item => item.id === update.messageId);
-        order.push(`persist:${record?.role || 'missing'}`);
+        order.push(`notify:${record?.role || 'missing'}`);
       },
     });
 
     await waitFor(() => journalStatus(message.messageId) === 'completed');
     expect(order).toEqual([
-      'persist:user',
+      'notify:user',
       'flush:accepted',
       'callback',
-      'persist:assistant',
       'flush:terminal',
+      'notify:assistant',
       'reply:true:false',
     ]);
   });

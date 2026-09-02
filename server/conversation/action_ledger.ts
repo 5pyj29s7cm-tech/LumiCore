@@ -2098,6 +2098,34 @@ export function migrateLegacyConversationActionLedger(db: any): number {
 }
 
 /**
+ * A terminal task belongs in durable history, never in the conversation's
+ * live continuation slot. Older builds could persist that stale projection;
+ * clear it without deleting the task or changing its ordering timestamps.
+ */
+export function repairTerminalConversationActionPointers(db: any): number {
+  ensureTables(db);
+  let repaired = 0;
+  for (const conversation of db.conversations || []) {
+    const state = normalizeConversationActionState(conversation.actionContinuationState);
+    if (!state) continue;
+    const durableTask = state.taskId
+      ? (db.conversationActionTasks as ConversationActionTaskRow[]).find(task => (
+          task.id === state.taskId
+          && task.conversationId === conversation.id
+          && task.userId === conversation.userId
+        ))
+      : null;
+    const pointerIsTerminal = !state.unfinished
+      || isTerminalConversationTaskStatus(state.status)
+      || Boolean(durableTask && isTerminalConversationTaskStatus(durableTask.status));
+    if (!pointerIsTerminal) continue;
+    delete conversation.actionContinuationState;
+    repaired += 1;
+  }
+  return repaired;
+}
+
+/**
  * One-version repair for terminal rows created before request-lease cleanup was
  * enforced at the normalization and ledger boundaries. Keep ordering
  * timestamps intact so a repair cannot make old work look newly completed.

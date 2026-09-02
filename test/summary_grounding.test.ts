@@ -99,11 +99,92 @@ describe('evidence-grounded conversation summaries', () => {
     )).toBe(true);
   });
 
+  it('keeps explicitly user-owned activity as context without admitting assistant execution claims', () => {
+    const sanitized = sanitizeSummaryForPrompt([
+      '长期有效信息：用户正在检查 Lumi 桌面端。',
+      'Lumi 正在检查桌面端，稍后给出结果。',
+    ].join(' '));
+
+    expect(sanitized).toContain('长期有效信息：用户正在检查 Lumi 桌面端。');
+    expect(sanitized).not.toContain('Lumi 正在检查桌面端');
+    expect(isUnverifiedExecutionAssistantText('Lumi 正在检查桌面端，稍后给出结果。')).toBe(true);
+  });
+
   it('quarantines the unsupported outcomes seen in the real network/model summary', () => {
     const sanitized = sanitizeSummaryForPrompt('用户多次要求进行连接稳定性测试，并明确偏好直接响应。用户询问并切换至工具模式后，完成了外网可达性、MCP 链路和系统服务的实际测试。最后检查视觉模型状态，确认当前模型为 DeepSeek v4 Pro。');
     expect(sanitized).toContain('偏好直接响应');
     expect(sanitized).not.toContain('完成了外网可达性');
     expect(sanitized).not.toContain('DeepSeek v4 Pro');
+  });
+
+  it('keeps stable user model and voice preferences without treating them as live runtime claims', () => {
+    const preference = '用户喜欢使用本地模型，并希望使用 Lumi‑Neutral v2 音色。';
+    const sanitized = sanitizeSummaryForPrompt(preference);
+
+    expect(sanitized).toContain('喜欢使用本地模型');
+    expect(sanitized).toContain('希望使用 Lumi‑Neutral v2 音色');
+    expect(isUnverifiedExecutionAssistantText(preference)).toBe(false);
+    expect(isUnverifiedExecutionAssistantText('你希望使用 Lumi‑Neutral v2 音色。')).toBe(false);
+    expect(isUnverifiedExecutionAssistantText('当前使用本地 TTS，音色为 Lumi‑Neutral v2。')).toBe(true);
+  });
+
+  it.each([
+    '正在恢复网易云，3 秒内给你结果。',
+    '播放已启动，音量 72%。',
+    '文件已发送成功。',
+    '已经创建明早 7:30 的提醒。',
+    '当前使用的是本地 TTS，音色为 Lumi‑Neutral v2。',
+  ])('does not retain a real-world unsupported assistant claim: %s', (claim) => {
+    const transcript = buildEvidenceGroundedSummaryTranscript([
+      message({ role: 'user', message: '继续。' }),
+      message({ role: 'assistant', message: claim }),
+    ]);
+    expect(isUnverifiedExecutionAssistantText(claim)).toBe(true);
+    expect(transcript).not.toContain(claim);
+    expect(sanitizeSummaryForPrompt(`用户希望继续。${claim}`)).not.toContain(claim);
+  });
+
+  it('does not let an unrelated verified receipt ground a fictional send', () => {
+    const claim = '文件已发送成功。';
+    const transcript = buildEvidenceGroundedSummaryTranscript([
+      message({
+        role: 'assistant',
+        message: claim,
+        toolCalls: [{
+          name: 'desktop_list_files',
+          arguments: { path: 'C:\\Users\\ExampleUser\\Desktop' },
+          result: JSON.stringify({ files: ['Lumi_路演.pptx'] }),
+          terminalVerification: {
+            status: 'verified',
+            strategy: 'terminal_receipt',
+            reason: 'directory returned',
+          },
+        }],
+      }),
+    ]);
+    expect(transcript).not.toContain(claim);
+  });
+
+  it('keeps a communication outcome only with a relevant verified receipt', () => {
+    const claim = '文件已发送成功。';
+    const transcript = buildEvidenceGroundedSummaryTranscript([
+      message({
+        role: 'assistant',
+        message: claim,
+        toolCalls: [{
+          name: 'wechat_send_file',
+          arguments: { target: 'customer' },
+          result: JSON.stringify({ ok: true, status: 'verified', sent: true }),
+          terminalVerification: {
+            status: 'verified',
+            strategy: 'provider_ack',
+            reason: 'provider acknowledged send',
+          },
+        }],
+      }),
+    ]);
+    expect(transcript).toContain(claim);
+    expect(transcript).toContain('verified current-turn tools: wechat_send_file');
   });
 
   it('keeps a compact factual receipt ledger for later turns', () => {

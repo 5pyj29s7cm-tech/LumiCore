@@ -45,6 +45,7 @@ import {
   attachConversationExecutionPlan,
   migrateLegacyConversationActionLedger,
   recoverConversationActionTaskLeases,
+  repairTerminalConversationActionPointers,
   repairTerminalConversationActionTaskLeases,
   repairContradictoryConversationActionReceipts,
   compactLegacyScheduledCapabilityExecutions,
@@ -3146,6 +3147,7 @@ export function recoverOrphanedConversationActionExecutions(
 ): number {
   const db = readDB();
   const migrated = migrateLegacyConversationActionLedger(db);
+  const repairedTerminalPointers = repairTerminalConversationActionPointers(db);
   const repairedTerminalLeases = repairTerminalConversationActionTaskLeases(db);
   const recoveredLedgerLeases = recoverConversationActionTaskLeases(db, now, {
     hasExactPendingConfirmation: hasExactPendingConfirmationForTask,
@@ -3241,6 +3243,7 @@ export function recoverOrphanedConversationActionExecutions(
   }
   if (
     migrated > 0
+    || repairedTerminalPointers > 0
     || repairedTerminalLeases > 0
     || recoveredLedgerLeases > 0
     || repairedReceipts > 0
@@ -3250,7 +3253,8 @@ export function recoverOrphanedConversationActionExecutions(
     || recoveredPendingTurns > 0
     || recovered > 0
   ) writeDB(db);
-  return repairedTerminalLeases
+  return repairedTerminalPointers
+    + repairedTerminalLeases
     + recoveredLedgerLeases
     + reconciledActionTurns
     + recoveredActionTurnLeases

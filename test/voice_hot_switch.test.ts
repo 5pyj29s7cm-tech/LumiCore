@@ -8,7 +8,12 @@ import {
 } from '../src/hooks/useVoiceCall';
 import {
   applyVoiceSwitchRequest,
+  canFallbackVoiceTurnTtsRoute,
+  clearVoiceSessionTtsSelection,
   chooseVoiceForProvider,
+  lockVoiceTurnTtsRoute,
+  quiesceActiveVoiceTransport,
+  resolveVoiceStartAsyncFence,
   type VoiceSwitchSession,
 } from '../server/socket/voice';
 
@@ -167,6 +172,111 @@ describe('live voice selection', () => {
       requestedVoiceId: 'alloy',
       replaced: true,
     });
+  });
+
+  it('locks provider and speaker identity for the lifetime of one assistant response', () => {
+    const mutable: { provider: 'relay'; voiceId: string } = {
+      provider: 'relay',
+      voiceId: 'longxiaochun_v3',
+    };
+    const route = lockVoiceTurnTtsRoute(mutable);
+    mutable.voiceId = 'longhan_v3';
+
+    expect(route).toEqual({ provider: 'relay', voiceId: 'longxiaochun_v3' });
+    expect(Object.isFrozen(route)).toBe(true);
+  });
+
+  it('allows a genuine fallback only before any audio from the response was emitted', () => {
+    expect(canFallbackVoiceTurnTtsRoute({
+      emittedSegments: 0,
+      fallbackAttempted: false,
+      error: new Error('upstream unavailable'),
+    })).toBe(true);
+    expect(canFallbackVoiceTurnTtsRoute({
+      emittedSegments: 1,
+      fallbackAttempted: false,
+      error: new Error('upstream unavailable'),
+    })).toBe(false);
+    expect(canFallbackVoiceTurnTtsRoute({
+      emittedSegments: 0,
+      fallbackAttempted: false,
+      error: Object.assign(new Error('aborted'), { name: 'AbortError' }),
+    })).toBe(false);
+  });
+
+  it('forgets a provider-specific voice when the call ends', () => {
+    const session = { currentVoiceId: 'gptsovits:segment_0000', voiceSwitchGeneration: 7 };
+    clearVoiceSessionTtsSelection(session);
+    expect(session).toEqual({ currentVoiceId: null, voiceSwitchGeneration: 8 });
+  });
+
+  it('keeps audio:start alive when an in-flight voice resolution is superseded by a voice switch', () => {
+    expect(resolveVoiceStartAsyncFence({
+      sessionActive: true,
+      currentSessionId: 'call-1',
+      startSessionId: 'call-1',
+      currentVoiceSwitchGeneration: 9,
+      startVoiceSwitchGeneration: 8,
+    })).toBe('stale_voice_selection');
+
+    expect(resolveVoiceStartAsyncFence({
+      sessionActive: false,
+      currentSessionId: 'call-1',
+      startSessionId: 'call-1',
+      currentVoiceSwitchGeneration: 8,
+      startVoiceSwitchGeneration: 8,
+    })).toBe('abandon_start');
+    expect(resolveVoiceStartAsyncFence({
+      sessionActive: true,
+      currentSessionId: 'call-2',
+      startSessionId: 'call-1',
+      currentVoiceSwitchGeneration: 8,
+      startVoiceSwitchGeneration: 8,
+    })).toBe('abandon_start');
+
+    const source = fs.readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
+    const startHandler = source.slice(
+      source.indexOf('socket.on("audio:start"'),
+      source.indexOf("socket.on('audio:switch-voice'"),
+    );
+    expect(startHandler).toContain("if (voiceStartFence === 'abandon_start') return;");
+    expect(startHandler).toContain("if (voiceStartFence === 'current') {");
+    expect(startHandler).not.toContain('session.voiceSwitchGeneration !== voiceStartGeneration\n          ) return');
+  });
+
+  it('does not re-resolve the provider for every queued sentence', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
+    const flush = source.slice(
+      source.indexOf('const flushSentence ='),
+      source.indexOf('const queueFinalizedSpeech ='),
+    );
+
+    expect(flush).toContain('getLockedTurnTtsRoute()');
+    expect(flush).not.toContain('getTTSProvider()');
+    expect(flush).not.toContain('session.currentVoiceId');
+  });
+
+  it('quiesces an interrupted turn before durability work can yield', () => {
+    const tts = new AbortController();
+    const pipeline = new AbortController();
+    const sidecar = new AbortController();
+    const session = {
+      bgGeneration: 3,
+      isSpeaking: true,
+      ttsPlaybackUntil: 900,
+      ttsAbortController: tts,
+      pipelineAbortController: pipeline,
+      sidecarAbortController: sidecar,
+    };
+
+    quiesceActiveVoiceTransport(session as any);
+
+    expect(session.bgGeneration).toBe(4);
+    expect(session.isSpeaking).toBe(false);
+    expect(session.ttsPlaybackUntil).toBe(0);
+    expect(tts.signal.aborted).toBe(true);
+    expect(pipeline.signal.aborted).toBe(true);
+    expect(sidecar.signal.aborted).toBe(true);
   });
 
   it('wires one shared UI state to the live switch protocol and acknowledgements', () => {
