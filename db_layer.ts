@@ -22,12 +22,6 @@ import {
   serializeCompletionFeedbackForPersistence,
 } from './server/conversation/completion_feedback';
 
-// Production persistence is process-exclusive per canonical Lumi data root.
-// Acquire synchronously before even the legacy migration can inspect/copy data.
-// Vitest isolates intentionally share/reload modules; subprocess lease tests
-// opt back in explicitly through LUMI_ENFORCE_DATA_ROOT_LEASE.
-prepareRuntimeDataRoot();
-
 // Auto-migrate data from old location (project directory) to user directory on first run
 function migrateDataFromOldLocation() {
   const oldDir = path.join(process.cwd(), 'data');
@@ -54,12 +48,30 @@ function migrateDataFromOldLocation() {
     console.warn('[Data] Migration failed (non-fatal):', (err as Error).message);
   }
 }
-// An explicit data root is an isolation boundary (tests, containers, managed
-// deployments). Never import cwd data into it implicitly.
-if (!hasExplicitDataRoot()) migrateDataFromOldLocation();
 
-const DB_PATH = getDataPath('lumi.db');
-assertSafeSqliteDataPath(DB_PATH);
+let databaseRuntimePrepared = false;
+let databasePath = '';
+
+/**
+ * Importing database-backed tool definitions must remain side-effect free.
+ * Build-time capability inventory imports those modules only to register
+ * metadata, so acquire the process lease and inspect legacy data only when a
+ * caller actually initializes persistence.
+ */
+function prepareDatabaseRuntime(): string {
+  if (databaseRuntimePrepared) return databasePath;
+  // Production persistence is process-exclusive per canonical Lumi data
+  // root. This also remains the fallback for direct initDatabase() callers
+  // that did not enter through runtime/server_entry.ts.
+  prepareRuntimeDataRoot();
+  // An explicit data root is an isolation boundary (tests, containers,
+  // managed deployments). Never import cwd data into it implicitly.
+  if (!hasExplicitDataRoot()) migrateDataFromOldLocation();
+  databasePath = getDataPath('lumi.db');
+  assertSafeSqliteDataPath(databasePath);
+  databaseRuntimePrepared = true;
+  return databasePath;
+}
 
 let db: sqlite3.Database | null = null;
 let startupQuickCheckPassed = false;
@@ -438,6 +450,7 @@ async function requireSqliteQuickCheck(phase: 'before' | 'after'): Promise<void>
 export function initDatabase(): Promise<void> {
   if (db && memoryDB) return Promise.resolve();
   if (initPromise) return initPromise;
+  const dbPath = prepareDatabaseRuntime();
   const pending = new Promise<void>((resolve, reject) => {
     const rejectAndClose = (error: unknown) => {
       startupQuickCheckPassed = false;
@@ -450,7 +463,7 @@ export function initDatabase(): Promise<void> {
       }
       failedDatabase.close(() => reject(error));
     };
-    db = new sqlite3.Database(DB_PATH, (err) => {
+    db = new sqlite3.Database(dbPath, (err) => {
       if (err) { rejectAndClose(err); return; }
       // Runtime services and parallel diagnostics can briefly overlap on the
       // same local database. Wait for the active writer instead of surfacing a

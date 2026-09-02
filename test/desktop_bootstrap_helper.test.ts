@@ -42,4 +42,19 @@ describe('desktop bootstrap acceptance harness identity', () => {
       '::error file=scripts/smoke-windows-installer.ps1,title=$AnnotationTitle::$AnnotationMessage',
     );
   });
+
+  it('carries the bootstrap desktop-session proof on installer owner-scoped requests', () => {
+    const script = fs.readFileSync(
+      path.resolve(process.cwd(), 'scripts/smoke-windows-installer.ps1'),
+      'utf8',
+    );
+
+    expect(script).toContain('$DesktopSessionHeader = "X-Lumi-Desktop-Session"');
+    expect(script).toContain('$DesktopSessionHeader = [string]$Bootstrap.desktopSessionProof');
+    expect(script).toContain('$DesktopSessionHeader = [string]$RestartBootstrap.desktopSessionProof');
+    expect(script).toContain('marketplace/skills?lang=zh" -Headers $AuthHeaders');
+    expect(script).toContain('marketplace/skills?lang=zh" -Headers $RestartHeaders');
+    expect(script).toContain('-Headers $AuthHeaders');
+    expect(script).toContain('-Headers $RestartHeaders');
+  });
 });

@@ -10,6 +10,9 @@ const LEASE_VERSION = 1;
 const MAX_COORDINATION_FILE_BYTES = 8 * 1024;
 const MAX_ACQUIRE_ATTEMPTS = 8;
 const OWNER_TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,128}$/;
+const WINDOWS_PROCESS_PROBE_ATTEMPTS = 2;
+const WINDOWS_PROCESS_PROBE_TIMEOUT_MS = 10_000;
+const TRANSIENT_WINDOWS_PROCESS_PROBE_ERRORS = new Set(['ETIMEDOUT', 'EAGAIN', 'EBUSY']);
 
 export interface DataRootLeaseRecord {
   version: 1;
@@ -50,6 +53,15 @@ type ProcessProbe =
   | { state: 'alive'; startIdentity: string }
   | { state: 'dead' }
   | { state: 'unknown'; reason: string };
+
+interface WindowsProcessProbeAttempt {
+  status: number | null;
+  stdout?: string | Buffer | null;
+  stderr?: string | Buffer | null;
+  error?: NodeJS.ErrnoException;
+}
+
+type WindowsProcessProbeRunner = (pid: number, timeoutMs: number) => WindowsProcessProbeAttempt;
 
 export class DataRootLeaseError extends Error {
   readonly code: string;
@@ -93,7 +105,7 @@ function isMissingError(error: unknown): boolean {
   return (error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT';
 }
 
-function probeWindowsProcess(pid: number): ProcessProbe {
+function runWindowsProcessProbe(pid: number, timeoutMs: number): WindowsProcessProbeAttempt {
   const script = [
     'try {',
     `  $p = [System.Diagnostics.Process]::GetProcessById(${pid});`,
@@ -105,7 +117,7 @@ function probeWindowsProcess(pid: number): ProcessProbe {
     '  exit 4;',
     '}',
   ].join(' ');
-  const result = spawnSync('powershell.exe', [
+  return spawnSync('powershell.exe', [
     '-NoLogo',
     '-NoProfile',
     '-NonInteractive',
@@ -114,19 +126,37 @@ function probeWindowsProcess(pid: number): ProcessProbe {
   ], {
     encoding: 'utf8',
     windowsHide: true,
-    timeout: 5_000,
+    timeout: timeoutMs,
     maxBuffer: 16 * 1024,
   });
+}
 
-  if (result.status === 3) return { state: 'dead' };
-  const ticks = String(result.stdout || '').trim();
-  if (result.status === 0 && /^\d{10,}$/.test(ticks)) {
-    return { state: 'alive', startIdentity: `win-start-ticks:${ticks}` };
+function probeWindowsProcess(
+  pid: number,
+  runner: WindowsProcessProbeRunner = runWindowsProcessProbe,
+): ProcessProbe {
+  let lastReason = 'Windows process probe did not run';
+  for (let attempt = 1; attempt <= WINDOWS_PROCESS_PROBE_ATTEMPTS; attempt += 1) {
+    const result = runner(pid, WINDOWS_PROCESS_PROBE_TIMEOUT_MS);
+    if (result.status === 3) return { state: 'dead' };
+    const ticks = String(result.stdout || '').trim();
+    if (result.status === 0 && /^\d{10,}$/.test(ticks)) {
+      return { state: 'alive', startIdentity: `win-start-ticks:${ticks}` };
+    }
+
+    lastReason = String(
+      result.error?.message || result.stderr || `PowerShell exited with ${result.status}`,
+    ).trim();
+    const errorCode = String(result.error?.code || '').toUpperCase();
+    const retryable = TRANSIENT_WINDOWS_PROCESS_PROBE_ERRORS.has(errorCode);
+    if (!retryable || attempt === WINDOWS_PROCESS_PROBE_ATTEMPTS) {
+      return {
+        state: 'unknown',
+        reason: attempt > 1 ? `${lastReason} after ${attempt} bounded attempts` : lastReason,
+      };
+    }
   }
-  return {
-    state: 'unknown',
-    reason: String(result.error?.message || result.stderr || `PowerShell exited with ${result.status}`).trim(),
-  };
+  return { state: 'unknown', reason: lastReason };
 }
 
 function probeLinuxProcess(pid: number): ProcessProbe {
@@ -704,3 +734,9 @@ export function releaseDataRootLease(): boolean {
 export function getDataRootLeasePath(): string {
   return path.join(getDataRoot(), 'runtime', 'backend-instance.lock');
 }
+
+export const __dataRootLeaseProcessProbeForTests = Object.freeze({
+  probeWindowsProcess: (pid: number, runner: WindowsProcessProbeRunner): ProcessProbe => (
+    probeWindowsProcess(pid, runner)
+  ),
+});

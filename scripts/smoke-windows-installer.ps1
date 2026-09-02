@@ -6,6 +6,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$DesktopSessionHeader = "X-Lumi-Desktop-Session"
 
 $ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 if ([string]::IsNullOrWhiteSpace($Installer)) {
@@ -445,12 +446,19 @@ try {
     -DataRoot $DataRoot `
     -NativeClientIdentity $NativeClientIdentity `
     -TimeoutSec 15
-  if (-not $Bootstrap.success -or [string]::IsNullOrWhiteSpace($Bootstrap.token)) {
+  if (
+    -not $Bootstrap.success -or
+    [string]::IsNullOrWhiteSpace($Bootstrap.token) -or
+    [string]::IsNullOrWhiteSpace($Bootstrap.desktopSessionProof)
+  ) {
     throw "Installed app local identity bootstrap failed"
   }
-  $AuthHeaders = @{ Authorization = "Bearer $($Bootstrap.token)" }
+  $AuthHeaders = @{
+    Authorization = "Bearer $($Bootstrap.token)"
+    $DesktopSessionHeader = [string]$Bootstrap.desktopSessionProof
+  }
 
-  $Marketplace = Invoke-JsonRequest -Uri "$BaseUrl/marketplace/skills?lang=zh" -TimeoutSec 8
+  $Marketplace = Invoke-JsonRequest -Uri "$BaseUrl/marketplace/skills?lang=zh" -Headers $AuthHeaders -TimeoutSec 8
   if (@($Marketplace).Count -lt 48) {
     throw "Installed marketplace contains fewer than 48 built-in skills"
   }
@@ -553,8 +561,18 @@ try {
     -DataRoot $DataRoot `
     -NativeClientIdentity $NativeClientIdentity `
     -TimeoutSec 15
-  $RestartHeaders = @{ Authorization = "Bearer $($RestartBootstrap.token)" }
-  $RestartMarketplace = Invoke-JsonRequest -Uri "$BaseUrl/marketplace/skills?lang=zh" -TimeoutSec 8
+  if (
+    -not $RestartBootstrap.success -or
+    [string]::IsNullOrWhiteSpace($RestartBootstrap.token) -or
+    [string]::IsNullOrWhiteSpace($RestartBootstrap.desktopSessionProof)
+  ) {
+    throw "Restarted app local identity bootstrap failed"
+  }
+  $RestartHeaders = @{
+    Authorization = "Bearer $($RestartBootstrap.token)"
+    $DesktopSessionHeader = [string]$RestartBootstrap.desktopSessionProof
+  }
+  $RestartMarketplace = Invoke-JsonRequest -Uri "$BaseUrl/marketplace/skills?lang=zh" -Headers $RestartHeaders -TimeoutSec 8
   if (-not [bool](@($RestartMarketplace | Where-Object { $_.id -eq $SkillId -and $_.installed }).Count)) {
     throw "Installed skill state did not persist across restart"
   }
