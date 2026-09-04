@@ -90,4 +90,27 @@ describe('native chat terminal event receipts', () => {
     expect(removePersistedPendingChatExecution(withAB, 'A').pending.map(item => item.requestId))
       .toEqual(['B']);
   });
+
+  it('round-trips bounded media recovery metadata without persisting the prompt', () => {
+    const state = upsertPersistedPendingChatExecution(null, {
+      requestId: 'media-1',
+      source: 'command-center-chat',
+      domain: 'personal',
+      startedAt: '2026-09-04T00:00:00.000Z',
+      mediaGeneration: {
+        mode: 'video',
+        size: '1280x720',
+        duration: 6,
+        referenceImage: 'D:\\media\\first.png',
+      },
+    });
+
+    expect(normalizePersistedPendingChatExecutions(JSON.parse(JSON.stringify(state)))[0]?.mediaGeneration).toEqual({
+      mode: 'video',
+      size: '1280x720',
+      duration: 6,
+      referenceImage: 'D:\\media\\first.png',
+    });
+    expect(JSON.stringify(state)).not.toContain('prompt');
+  });
 });

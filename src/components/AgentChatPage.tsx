@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
-import { Send, Loader2, ArrowLeft, Ghost, Castle, Zap, Cpu, Sparkles, FileText, Mic, CheckCircle2, Square, ChevronDown, ChevronRight, XCircle, Copy, Check, Paperclip, Image as ImageIcon, MessageCircle, Briefcase, User, ExternalLink, FolderOpen, Upload, Plus, History, CalendarClock, Trash2 } from 'lucide-react';
+import { Send, Loader2, ArrowLeft, Ghost, Castle, Zap, Cpu, Sparkles, FileText, Mic, CheckCircle2, Square, ChevronDown, ChevronRight, XCircle, Copy, Check, Paperclip, Image as ImageIcon, Video, MessageCircle, Briefcase, User, ExternalLink, FolderOpen, Upload, Plus, History, CalendarClock, Trash2 } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -86,6 +86,20 @@ import { ActiveTaskWidget } from './ActiveTaskWidget';
 import { useRuntimeStatus } from '@/hooks/useRuntimeStatus';
 import { CommandCenterPlanner } from './CommandCenterPlanner';
 import { commandCenterPlannerCopy } from '@/i18n/locales/commandCenterPlanner';
+import { mediaGenerationCopy } from '@/i18n/locales/mediaGeneration';
+import {
+  MediaGenerationStudio,
+  type MediaGenerationRequest,
+  type MediaGenerationStudioStatus,
+} from './MediaGenerationStudio';
+import {
+  extractMediaGenerationArtifacts,
+  mediaGenerationArgumentsMatch,
+  mediaGenerationReceiptSettingsMatch,
+  type MediaGenerationArtifact,
+  type MediaGenerationExpectation,
+  type MediaGenerationKind,
+} from '@/lib/mediaGenerationArtifacts';
 
 const CHAT_HISTORY_LIMIT = 300;
 // Conversation index pages are deliberately small; the left rail keeps
@@ -152,7 +166,11 @@ type GeneratedFileLink = {
   fileName: string;
   path: string;
   url: string;
-  kind: 'image' | 'document' | 'deck' | 'sheet' | 'pdf' | 'cad' | 'file';
+  kind: 'image' | 'video' | 'document' | 'deck' | 'sheet' | 'pdf' | 'cad' | 'file';
+};
+
+type ChatSendOptions = {
+  onRequestCreated?: (requestId: string) => void;
 };
 
 type ChatFilePanelItem = {
@@ -380,13 +398,21 @@ const CHAT_ATTACHMENT_ACCEPT = [
   '.txt,.md,.json,.csv,.pdf,.docx,.xlsx,.xls,.pptx,.ppt,.rtf,.ts,.tsx,.js,.jsx,.py,.html,.css,.yaml,.yml,.xml,.log',
 ].join(',');
 
-const GENERATED_FILE_EXTS = 'docx|pptx|xlsx|xls|pdf|txt|md|csv|json|png|jpe?g|webp|gif|svg|html|dxf|dwg';
+const GENERATED_FILE_EXTS = 'docx|pptx|xlsx|xls|pdf|txt|md|csv|json|png|jpe?g|webp|gif|svg|html|dxf|dwg|mp4|mov';
 const WINDOWS_GENERATED_FILE_RE = new RegExp(`[A-Za-z]:\\\\[^\\n\\r"'<>|]+?\\.(?:${GENERATED_FILE_EXTS})\\b`, 'gi');
 const LUMI_OUTPUT_FILE_RE = new RegExp(`/lumi_output/[^\\s\\])"'<>]+?\\.(?:${GENERATED_FILE_EXTS})\\b`, 'gi');
+const MEDIA_GENERATION_TOOL_NAMES = new Set(['generate_image', 'ai_edit_image', 'generate_video']);
+
+function isExpectedMediaGenerationTool(mode: MediaGenerationKind, toolName: string): boolean {
+  return mode === 'video'
+    ? toolName === 'generate_video'
+    : toolName === 'generate_image';
+}
 
 function generatedFileKind(fileName: string): GeneratedFileLink['kind'] {
   const lower = fileName.toLowerCase();
   if (/\.(png|jpe?g|webp|gif|svg)$/i.test(lower)) return 'image';
+  if (/\.(mp4|mov)$/i.test(lower)) return 'video';
   if (/\.pptx?$/i.test(lower)) return 'deck';
   if (/\.xlsx?$/i.test(lower)) return 'sheet';
   if (/\.pdf$/i.test(lower)) return 'pdf';
@@ -397,7 +423,7 @@ function generatedFileKind(fileName: string): GeneratedFileLink['kind'] {
 
 function buildGeneratedFileUrl(filePath: string): string {
   if (filePath.startsWith('/lumi_output/')) return filePath;
-  return `/api/files/generated?path=${encodeURIComponent(filePath)}`;
+  return `/api/files/generated?path=${encodeURIComponent(filePath)}&inline=1`;
 }
 
 function extractGeneratedFiles(text: string): GeneratedFileLink[] {
@@ -478,6 +504,7 @@ export function AgentChatPage({
   const chatExecutionSource = layout === 'command-center' ? 'command-center-chat' : 'chat';
   const isZh = t?.langCode !== 'en';
   const commandCenterPlannerText = commandCenterPlannerCopy(isZh ? 'zh' : 'en');
+  const mediaGenerationText = mediaGenerationCopy(isZh ? 'zh' : 'en');
   const ui = (zh: string, en: string) => isZh ? zh : en;
   const { platform, isElectron } = usePlatform();
   const {
@@ -729,6 +756,7 @@ export function AgentChatPage({
   }, [showAttachmentMenu]);
 
   const messageInputRef = useRef<HTMLInputElement>(null);
+  const mediaStudioOpenRef = useRef(false);
   const draftTextRef = useRef('');
   const [hasDraftText, setHasDraftText] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
@@ -740,7 +768,9 @@ export function AgentChatPage({
 
   useEffect(() => {
     if (!isOpen) return;
-    const frame = requestAnimationFrame(() => messageInputRef.current?.focus({ preventScroll: true }));
+    const frame = requestAnimationFrame(() => {
+      if (!mediaStudioOpenRef.current) messageInputRef.current?.focus({ preventScroll: true });
+    });
     return () => cancelAnimationFrame(frame);
   }, [isOpen]);
 
@@ -748,6 +778,7 @@ export function AgentChatPage({
     if (!isOpen) return;
     let focusFrame: number | null = null;
     const focusCommandInput = () => {
+      if (mediaStudioOpenRef.current) return;
       messageInputRef.current?.focus({ preventScroll: true });
       if (focusFrame !== null) cancelAnimationFrame(focusFrame);
       focusFrame = requestAnimationFrame(() => {
@@ -793,6 +824,26 @@ export function AgentChatPage({
   const [restoringConversationId, setRestoringConversationId] = useState('');
   const [deletingConversationId, setDeletingConversationId] = useState('');
   const [conversationContextMenu, setConversationContextMenu] = useState<ConversationHistoryContextMenu | null>(null);
+  const [mediaStudioMode, setMediaStudioMode] = useState<MediaGenerationKind | null>(null);
+  const [mediaGenerationStatus, setMediaGenerationStatus] = useState<MediaGenerationStudioStatus>('idle');
+  const [mediaGenerationDetail, setMediaGenerationDetail] = useState('');
+  const [mediaGenerationArtifacts, setMediaGenerationArtifacts] = useState<MediaGenerationArtifact[]>([]);
+  const activeMediaGenerationRef = useRef<{
+    requestId: string;
+    mode: MediaGenerationKind;
+    request: MediaGenerationExpectation;
+  } | null>(null);
+  const mediaGenerationArtifactsRef = useRef<MediaGenerationArtifact[]>([]);
+  const mediaGenerationArtifactValidationRef = useRef<{
+    expectedIds: Set<string>;
+    readyIds: Set<string>;
+    failedIds: Set<string>;
+    requiredCount: number;
+    contractValid: boolean;
+    finalized: boolean;
+    terminalSucceeded: boolean;
+    terminalBlocked: boolean;
+  } | null>(null);
   const [workflowStatus, setWorkflowStatus] = useState<WorkflowStatus>('idle');
   const [workflowSteps, setWorkflowSteps] = useState<WorkflowStep[]>([]);
   const [chatProgressLines, setChatProgressLines] = useState<ChatProgressLine[]>([]);
@@ -818,9 +869,28 @@ export function AgentChatPage({
   const conversationHistoryLoadingRef = useRef(false);
   const conversationHistoryRequestRef = useRef(0);
 
+  const resetMediaGenerationSurface = useCallback(() => {
+    mediaStudioOpenRef.current = false;
+    activeMediaGenerationRef.current = null;
+    mediaGenerationArtifactsRef.current = [];
+    mediaGenerationArtifactValidationRef.current = null;
+    setMediaStudioMode(null);
+    setMediaGenerationArtifacts([]);
+    setMediaGenerationStatus('idle');
+    setMediaGenerationDetail('');
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen || !isOfficeCommandCenter) resetMediaGenerationSurface();
+  }, [isOfficeCommandCenter, isOpen, resetMediaGenerationSurface]);
+
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useEffect(() => {
+    if (!isOpen || !isOfficeCommandCenter) setMediaStudioMode(null);
+  }, [isOfficeCommandCenter, isOpen]);
 
   useEffect(() => {
     pendingAttachmentsRef.current = pendingAttachments;
@@ -1267,6 +1337,7 @@ export function AgentChatPage({
       if (kind === 'pdf') return 'PDF';
       if (kind === 'cad') return 'CAD';
       if (kind === 'image') return uiMessage('agent-chat-page.image.07bb82eb07');
+      if (kind === 'video') return mediaGenerationText.video;
       if (kind === 'document') return uiMessage('agent-chat-page.document.c4e0476ce2');
       return uiMessage('agent-chat-page.file.9588151a85');
     };
@@ -1276,16 +1347,26 @@ export function AgentChatPage({
         {files.map(file => (
           <div
             key={file.id}
-            className="group flex min-w-0 max-w-[300px] items-center gap-2 rounded-2xl border border-emerald-400/15 bg-emerald-400/10 px-3 py-2.5 text-left transition-all hover:border-emerald-300/35 hover:bg-emerald-400/15"
+            className={`group flex min-w-0 max-w-[360px] gap-2 overflow-hidden rounded-2xl border border-emerald-400/15 bg-emerald-400/10 text-left transition-all hover:border-emerald-300/35 hover:bg-emerald-400/15 ${
+              file.kind === 'video' ? 'w-full flex-col p-2' : 'items-center px-3 py-2.5'
+            }`}
             title={file.path}
           >
+            {file.kind === 'video' && (
+              <video
+                src={file.url}
+                controls
+                preload="metadata"
+                className="aspect-video w-full rounded-xl bg-black/45 object-contain"
+              />
+            )}
             <button
               type="button"
               onClick={() => openChatFile({ fileName: file.fileName, path: file.path, openUrl: file.url, saveUrl: file.url })}
               className="flex min-w-0 flex-1 items-center gap-3 text-left"
             >
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-400/15 text-emerald-200">
-              {file.kind === 'image' ? <ImageIcon size={17} /> : <FileText size={17} />}
+              {file.kind === 'image' ? <ImageIcon size={17} /> : file.kind === 'video' ? <Video size={17} /> : <FileText size={17} />}
             </div>
             <div className="min-w-0 flex-1">
               <div className="truncate text-xs font-semibold text-white/80">{file.fileName}</div>
@@ -1299,7 +1380,7 @@ export function AgentChatPage({
         ))}
       </div>
     );
-  }, [openChatFile]);
+  }, [mediaGenerationText, openChatFile]);
 
   const buildSearchDisplayMessages = useCallback(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -1390,6 +1471,7 @@ export function AgentChatPage({
       activeChatViewDetachersRef.current.clear();
       activeChatRequestIdRef.current = null;
       textChatActiveRef.current = false;
+      resetMediaGenerationSurface();
       try {
         // Remove the pre-fix scope-only key, which could contain plaintext and
         // could incorrectly survive into a different conversation.
@@ -1450,7 +1532,7 @@ export function AgentChatPage({
     })();
 
     return () => { cancelled = true; };
-  }, [activeDomain, activeOrgId, agentId, attachmentContextStoragePrefix, bindAttachmentContextToConversation, isFounder, normalizePersistedMessages, scopedConversationUrl, user?.id, user?.username]);
+  }, [activeDomain, activeOrgId, agentId, attachmentContextStoragePrefix, bindAttachmentContextToConversation, isFounder, normalizePersistedMessages, resetMediaGenerationSurface, scopedConversationUrl, user?.id, user?.username]);
 
   useEffect(() => {
     const query = searchQuery.trim();
@@ -1507,6 +1589,9 @@ export function AgentChatPage({
         orgId: activeOrgId || undefined,
         conversationId: attachmentConversationIdRef.current || undefined,
         startedAt: new Date().toISOString(),
+        ...(activeMediaGenerationRef.current?.requestId === requestId
+          ? { mediaGeneration: { ...activeMediaGenerationRef.current.request } }
+          : {}),
       };
       const current = JSON.parse(localStorage.getItem(activeExecutionStorageKey) || 'null');
       localStorage.setItem(
@@ -1625,18 +1710,84 @@ export function AgentChatPage({
       }
     };
 
-    const onTool = (data: { correlationId?: string; name: string; args?: any; arguments?: any; result?: string; error?: string; requestId?: string; source?: string; conversationId?: string; taskRelation?: unknown }) => {
+    const onTool = (data: { correlationId?: string; name: string; args?: any; arguments?: any; result?: string; artifactReceipt?: unknown; error?: string; requestId?: string; source?: string; conversationId?: string; taskRelation?: unknown }) => {
       if (!isCurrentChatEvent(data)) return;
       recordTaskRelation(data);
       const requestId = String(data.requestId || '').trim();
       const args = data.arguments ?? data.args;
-      const phase = data.error !== undefined ? 'error' : data.result !== undefined ? 'result' : 'start';
+      const phase = data.error !== undefined
+        ? 'error'
+        : data.artifactReceipt !== undefined || data.result !== undefined
+          ? 'result'
+          : 'start';
       const eventRequestKey = requestId || '__legacy__';
       const workflowEventKey = data.correlationId
         ? `${eventRequestKey}:${data.correlationId}:${phase}`
         : `${eventRequestKey}:${data.name}:${phase}:${String(data.result ?? data.error ?? '').slice(0, 120)}`;
       if (seenWorkflowToolEvents.current.has(workflowEventKey)) return;
       seenWorkflowToolEvents.current.add(workflowEventKey);
+
+      const activeMediaGeneration = activeMediaGenerationRef.current;
+      if (
+        activeMediaGeneration?.requestId === requestId
+        && MEDIA_GENERATION_TOOL_NAMES.has(data.name)
+        && isExpectedMediaGenerationTool(activeMediaGeneration.mode, data.name)
+      ) {
+        if (data.error !== undefined) {
+          mediaGenerationArtifactValidationRef.current = null;
+          setMediaGenerationStatus('error');
+          setMediaGenerationDetail(String(data.error || mediaGenerationText.toolFailed));
+        } else if (data.artifactReceipt !== undefined || data.result !== undefined) {
+          if (!mediaGenerationArgumentsMatch(activeMediaGeneration.request, args)) {
+            mediaGenerationArtifactValidationRef.current = null;
+            setMediaGenerationStatus('error');
+            setMediaGenerationDetail(mediaGenerationText.settingsMismatch);
+          } else {
+            const nextArtifacts = extractMediaGenerationArtifacts(
+              data.artifactReceipt ?? data.result,
+              activeMediaGeneration.mode,
+            ).filter(artifact => artifact.kind === activeMediaGeneration.mode);
+            if (nextArtifacts.length > 0) {
+              const existing = mediaGenerationArtifactsRef.current;
+              const merged = [...existing, ...nextArtifacts].filter((artifact, index, all) => (
+                all.findIndex(candidate => candidate.kind === artifact.kind && candidate.url === artifact.url) === index
+              ));
+              const requiredCount = activeMediaGeneration.mode === 'image'
+                ? Math.max(1, Number(activeMediaGeneration.request.count) || 1)
+                : 1;
+              const priorReady = mediaGenerationArtifactValidationRef.current?.readyIds || new Set<string>();
+              const priorFailed = mediaGenerationArtifactValidationRef.current?.failedIds || new Set<string>();
+              const expectedIds = new Set(merged.map(artifact => artifact.id));
+              mediaGenerationArtifactValidationRef.current = {
+                expectedIds,
+                readyIds: new Set([...priorReady].filter(id => expectedIds.has(id))),
+                failedIds: new Set([...priorFailed].filter(id => expectedIds.has(id))),
+                requiredCount,
+                contractValid: merged.length >= requiredCount,
+                finalized: mediaGenerationArtifactValidationRef.current?.finalized || false,
+                terminalSucceeded: mediaGenerationArtifactValidationRef.current?.terminalSucceeded || false,
+                terminalBlocked: mediaGenerationArtifactValidationRef.current?.terminalBlocked || false,
+              };
+              mediaGenerationArtifactsRef.current = merged;
+              setMediaGenerationArtifacts(merged);
+              if (merged.length < requiredCount) {
+                setMediaGenerationStatus('error');
+                setMediaGenerationDetail(mediaGenerationText.artifactCountMismatch);
+              } else {
+                setMediaGenerationStatus('generating');
+                setMediaGenerationDetail(mediaGenerationText.validatingArtifact);
+              }
+            } else {
+              mediaGenerationArtifactValidationRef.current = null;
+              setMediaGenerationStatus('generating');
+              setMediaGenerationDetail(mediaGenerationText.toolReturnedNoArtifact);
+            }
+          }
+        } else {
+          setMediaGenerationStatus('generating');
+          setMediaGenerationDetail('');
+        }
+      }
 
       setWorkflowStatus('executing');
       const turnMeta = chatTurnUiMetaRef.current.get(requestId);
@@ -1700,6 +1851,7 @@ export function AgentChatPage({
       sidecar?: boolean;
       taskRelation?: unknown;
       completionFeedback?: unknown;
+      artifactReceipt?: unknown;
     }) => {
       if (!isCurrentChatEvent(data)) return;
       recordTaskRelation(data);
@@ -1736,6 +1888,79 @@ export function AgentChatPage({
           type: 'agent',
           ...(completionFeedback ? { completionFeedback } : {}),
         }]);
+      }
+
+      const activeMediaGeneration = activeMediaGenerationRef.current;
+      if (activeMediaGeneration?.requestId === requestId) {
+        // Only an agent:tool result can complete the studio. Model-authored
+        // response text may describe an artifact, but is not execution proof.
+        let hasArtifact = mediaGenerationArtifactsRef.current.some(
+          artifact => artifact.kind === activeMediaGeneration.mode,
+        );
+        let replayReceiptRejected = false;
+        if (data.artifactReceipt !== undefined && !mediaGenerationReceiptSettingsMatch(activeMediaGeneration.request, data.artifactReceipt)) {
+          replayReceiptRejected = true;
+          setMediaGenerationStatus('error');
+          setMediaGenerationDetail(mediaGenerationText.settingsMismatch);
+        } else if (!hasArtifact && data.artifactReceipt !== undefined) {
+          const recoveredArtifacts = extractMediaGenerationArtifacts(
+            data.artifactReceipt,
+            activeMediaGeneration.mode,
+          ).filter(artifact => artifact.kind === activeMediaGeneration.mode);
+          const requiredCount = activeMediaGeneration.mode === 'image'
+            ? Math.max(1, Number(activeMediaGeneration.request.count) || 1)
+            : 1;
+          if (recoveredArtifacts.length > 0) {
+            mediaGenerationArtifactsRef.current = recoveredArtifacts;
+            mediaGenerationArtifactValidationRef.current = {
+              expectedIds: new Set(recoveredArtifacts.map(artifact => artifact.id)),
+              readyIds: new Set(),
+              failedIds: new Set(),
+              requiredCount,
+              contractValid: recoveredArtifacts.length >= requiredCount,
+              finalized: false,
+              terminalSucceeded: false,
+              terminalBlocked: false,
+            };
+            setMediaGenerationArtifacts(recoveredArtifacts);
+            hasArtifact = true;
+            if (recoveredArtifacts.length < requiredCount) {
+              setMediaGenerationStatus('error');
+              setMediaGenerationDetail(mediaGenerationText.artifactCountMismatch);
+            } else {
+              setMediaGenerationStatus('generating');
+              setMediaGenerationDetail(mediaGenerationText.validatingArtifact);
+            }
+          }
+        }
+        const validation = mediaGenerationArtifactValidationRef.current;
+        const terminalSucceeded = isFinalizedSuccessfulResponse(data);
+        if (!terminalSucceeded) {
+          if (validation) {
+            validation.finalized = true;
+            validation.terminalSucceeded = false;
+            validation.terminalBlocked = Boolean(data.blocked);
+          }
+          setMediaGenerationStatus('error');
+          setMediaGenerationDetail(String(data.reason || data.text || mediaGenerationText.taskBlocked));
+        } else if (replayReceiptRejected) {
+          // Preserve the exact settings mismatch reported above.
+        } else if (!hasArtifact || !validation?.contractValid) {
+          setMediaGenerationStatus('error');
+          setMediaGenerationDetail(mediaGenerationText.taskEndedNoArtifact);
+        } else {
+          validation.finalized = true;
+          validation.terminalSucceeded = true;
+          validation.terminalBlocked = false;
+          if (validation.readyIds.size >= validation.requiredCount) {
+            setMediaGenerationStatus('completed');
+            setMediaGenerationDetail('');
+          } else {
+            setMediaGenerationStatus('generating');
+            setMediaGenerationDetail(mediaGenerationText.validatingArtifact);
+          }
+        }
+        activeMediaGenerationRef.current = null;
       }
 
       if (hasRemainingRequests) {
@@ -1877,6 +2102,11 @@ export function AgentChatPage({
     const onError = (data: { message: string; code?: string; requestId?: string; source?: string; conversationId?: string; sidecar?: boolean }) => {
       if (!isCurrentChatEvent(data)) return;
       if (!terminalReceiptsRef.current.claim(data)) return;
+      if (activeMediaGenerationRef.current?.requestId === String(data.requestId || '').trim()) {
+        setMediaGenerationStatus('error');
+        setMediaGenerationDetail(data.message || mediaGenerationText.taskFailed);
+        activeMediaGenerationRef.current = null;
+      }
       const tracked = settleTrackedChatRequest(data.requestId);
       const hasRemainingRequests = tracked.remaining > 0;
       setIsTyping(hasRemainingRequests);
@@ -2029,6 +2259,7 @@ export function AgentChatPage({
     finishChatProgress,
     isFounder,
     isZh,
+    mediaGenerationText,
     normalizePersistedMessages,
     pushChatProgress,
     scheduleWorkflowReset,
@@ -2064,6 +2295,25 @@ export function AgentChatPage({
         return valid;
       });
       if (pending.length === 0) return;
+
+      const mediaExecution = isOfficeCommandCenter
+        ? [...pending].reverse().find(execution => execution.mediaGeneration)
+        : undefined;
+      if (mediaExecution?.mediaGeneration) {
+        const request = mediaExecution.mediaGeneration;
+        activeMediaGenerationRef.current = {
+          requestId: mediaExecution.requestId,
+          mode: request.mode,
+          request,
+        };
+        mediaStudioOpenRef.current = true;
+        mediaGenerationArtifactsRef.current = [];
+        mediaGenerationArtifactValidationRef.current = null;
+        setMediaGenerationArtifacts([]);
+        setMediaGenerationStatus('generating');
+        setMediaGenerationDetail(mediaGenerationText.statusGenerating);
+        setMediaStudioMode(request.mode);
+      }
 
       for (const execution of pending) {
         if (!chatRequestLedgerRef.current.has(execution.requestId)) {
@@ -2131,7 +2381,7 @@ export function AgentChatPage({
     socket.on('connect', resumeActiveExecution);
     if (socket.connected) resumeActiveExecution();
     return () => { socket.off('connect', resumeActiveExecution); };
-  }, [activeExecutionStorageKey, bindAttachmentContextToConversation, chatExecutionSource, clearPersistedExecution, isFounder, isZh, persistActiveExecution, pushChatProgress, scopedConversationUrl, settleTrackedChatRequest, socket]);
+  }, [activeExecutionStorageKey, bindAttachmentContextToConversation, chatExecutionSource, clearPersistedExecution, isFounder, isOfficeCommandCenter, isZh, mediaGenerationText.statusGenerating, persistActiveExecution, pushChatProgress, scopedConversationUrl, settleTrackedChatRequest, socket]);
 
   const startNewTextConversation = useCallback(async () => {
     if (isCreatingConversation) return;
@@ -2162,6 +2412,7 @@ export function AgentChatPage({
       streamingMsgIdsRef.current.clear();
       chatTurnTimerGuardRef.current.invalidate();
       currentResponseFinalizationRef.current = null;
+      resetMediaGenerationSurface();
       bindAttachmentContextToConversation(result.conversation.id);
       setConversationHistory(previous => [result.conversation, ...previous.filter(item => item.id !== result.conversation.id)]);
       setMessages([]);
@@ -2183,7 +2434,7 @@ export function AgentChatPage({
     } finally {
       setIsCreatingConversation(false);
     }
-  }, [activeDomain, agentId, bindAttachmentContextToConversation, clearChatProgress, clearPersistedExecution, isCreatingConversation, scopedConversationUrl, setDraftText]);
+  }, [activeDomain, agentId, bindAttachmentContextToConversation, clearChatProgress, clearPersistedExecution, isCreatingConversation, resetMediaGenerationSurface, scopedConversationUrl, setDraftText]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -2350,6 +2601,7 @@ export function AgentChatPage({
       streamingMsgIdsRef.current.clear();
       chatTurnTimerGuardRef.current.invalidate();
       currentResponseFinalizationRef.current = null;
+      resetMediaGenerationSurface();
       bindAttachmentContextToConversation(conversationId);
       const restoredMessages = normalizePersistedMessages(Array.isArray(messageResult?.messages) ? messageResult.messages : []);
       setMessages(restoredMessages);
@@ -2376,7 +2628,7 @@ export function AgentChatPage({
     } finally {
       setRestoringConversationId('');
     }
-  }, [activeDomain, agentId, bindAttachmentContextToConversation, clearChatProgress, clearPersistedExecution, normalizePersistedMessages, restoringConversationId, scopedConversationUrl, setDraftText]);
+  }, [activeDomain, agentId, bindAttachmentContextToConversation, clearChatProgress, clearPersistedExecution, normalizePersistedMessages, resetMediaGenerationSurface, restoringConversationId, scopedConversationUrl, setDraftText]);
 
   const deleteConversationFromHistory = useCallback(async (conversationId: string) => {
     const id = String(conversationId || '').trim();
@@ -2484,7 +2736,11 @@ export function AgentChatPage({
     toast.success(uiMessage('agent-chat-page.session-materials-cleared.53bea199b2'));
   }, [attachmentContextStorageKey]);
 
-  const sendText = useCallback(async (text: string, attachments: ChatAttachment[] = pendingAttachments) => {
+  const sendText = useCallback(async (
+    text: string,
+    attachments: ChatAttachment[] = pendingAttachments,
+    options: ChatSendOptions = {},
+  ) => {
     const trimmedText = text.trim();
     const directAttachments = attachments.map(serializeChatAttachment);
     const attachmentMerge = mergeChatAttachmentReferences(
@@ -2510,6 +2766,7 @@ export function AgentChatPage({
     };
     const priorMessages = messagesRef.current.length > 0 ? messagesRef.current : messages;
     const requestId = `chat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    options.onRequestCreated?.(requestId);
     const wasIdle = chatRequestLedgerRef.current.size === 0;
     const initialTurnStep: WorkflowStep = {
       id: makeChatMessageId('chat-start'),
@@ -2624,6 +2881,11 @@ export function AgentChatPage({
         if (resolved) return;
         if (!socketAcknowledged) {
           streamingMsgIdsRef.current.delete(requestId);
+          if (activeMediaGenerationRef.current?.requestId === requestId) {
+            setMediaGenerationStatus('error');
+            setMediaGenerationDetail(mediaGenerationText.backendNoAck);
+            activeMediaGenerationRef.current = null;
+          }
           resolve();
           return;
         }
@@ -2661,6 +2923,11 @@ export function AgentChatPage({
               'error',
             );
             streamingMsgIdsRef.current.delete(requestId);
+            if (activeMediaGenerationRef.current?.requestId === requestId) {
+              setMediaGenerationStatus('error');
+              setMediaGenerationDetail(result?.error || mediaGenerationText.backendLostTask);
+              activeMediaGenerationRef.current = null;
+            }
             resolve();
             return;
           }
@@ -2714,6 +2981,10 @@ export function AgentChatPage({
         detail: socket.connected ? undefined : (uiMessage('agent-chat-page.socket-is-currently-disconnected.8f04ddd3b7', (isZh) ? 'zh' : 'en')),
         time: Date.now(),
       }]);
+      if (activeMediaGenerationRef.current?.requestId === requestId) {
+        setMediaGenerationStatus('error');
+        setMediaGenerationDetail(mediaGenerationText.backendNoAck);
+      }
     }, 5000);
 
     // Always try socket first. The ack lets the UI distinguish "received and working"
@@ -2727,18 +2998,28 @@ export function AgentChatPage({
       if (resolved) return;
       if (ack?.ok) {
         pushChatProgress(uiMessage('agent-chat-page.the-backend-has-received-this.859b50e7ed', (isZh) ? 'zh' : 'en'), 'thinking');
+        if (activeMediaGenerationRef.current?.requestId === requestId) {
+          setMediaGenerationStatus('submitting');
+          setMediaGenerationDetail('');
+        }
       } else {
         setWorkflowStatus('error');
         pushChatProgress(
           ack?.error || (uiMessage('agent-chat-page.the-backend-did-not-accept.44d78fa21a', (isZh) ? 'zh' : 'en')),
           'error'
         );
+        if (activeMediaGenerationRef.current?.requestId === requestId) {
+          setMediaGenerationStatus('error');
+          setMediaGenerationDetail(ack?.error || mediaGenerationText.backendRejected);
+          activeMediaGenerationRef.current = null;
+        }
         resolve();
       }
     });
 
     // No frontend AI fallback here. If the realtime backend is down, show the
     // connection problem instead of generating a second, inconsistent answer.
+    return requestId;
   }, [
     acceptChatExecutionEvent,
     activeDomain,
@@ -2748,6 +3029,7 @@ export function AgentChatPage({
     chatExecutionSource,
     clearChatProgress,
     isZh,
+    mediaGenerationText,
     messages,
     operationMode,
     pendingAttachments,
@@ -2761,6 +3043,118 @@ export function AgentChatPage({
     t.workflowAnalyzing,
     user,
   ]);
+
+  const openMediaGenerationStudio = useCallback((mode: MediaGenerationKind) => {
+    const activeRequest = activeMediaGenerationRef.current;
+    mediaStudioOpenRef.current = true;
+    if (activeRequest) {
+      // A long-running generation may be hidden, but reopening either media
+      // entry always returns to that same request. This prevents the other
+      // studio from inheriting an unrelated request status or artifact.
+      setMediaStudioMode(activeRequest.mode);
+      return;
+    }
+    const hasSameKindArtifacts = mediaGenerationArtifactsRef.current.some(artifact => artifact.kind === mode);
+    if (!hasSameKindArtifacts) {
+      mediaGenerationArtifactsRef.current = [];
+      setMediaGenerationArtifacts([]);
+      setMediaGenerationStatus('idle');
+      setMediaGenerationDetail('');
+    }
+    setMediaStudioMode(mode);
+  }, []);
+
+  const generateMediaFromStudio = useCallback((request: MediaGenerationRequest) => {
+    if (isTyping || activeMediaGenerationRef.current) {
+      setMediaGenerationStatus('error');
+      setMediaGenerationDetail(mediaGenerationText.anotherTaskRunning);
+      return;
+    }
+
+    mediaGenerationArtifactsRef.current = [];
+    mediaGenerationArtifactValidationRef.current = null;
+    setMediaGenerationArtifacts([]);
+    setMediaGenerationStatus('submitting');
+    setMediaGenerationDetail('');
+    const requestText = request.mode === 'image'
+      ? mediaGenerationText.imageRequest({
+          prompt: request.prompt,
+          size: request.size,
+          count: request.count || 1,
+        })
+      : mediaGenerationText.videoRequest({
+          prompt: request.prompt,
+          size: request.size,
+          duration: request.duration || 6,
+          referenceImage: request.referenceImage,
+        });
+
+    void sendText(requestText, [], {
+      onRequestCreated: requestId => {
+        activeMediaGenerationRef.current = {
+          requestId,
+          mode: request.mode,
+          request: {
+            mode: request.mode,
+            size: request.size,
+            ...(request.mode === 'image'
+              ? { count: request.count || 1 }
+              : {
+                  duration: request.duration || 6,
+                  referenceImage: request.referenceImage,
+                }),
+          },
+        };
+      },
+    }).then(requestId => {
+      if (requestId) return;
+      activeMediaGenerationRef.current = null;
+      setMediaGenerationStatus('error');
+      setMediaGenerationDetail(mediaGenerationText.requestNotCreated);
+    });
+  }, [isTyping, mediaGenerationText, sendText]);
+
+  const closeMediaGenerationStudio = useCallback(() => {
+    mediaStudioOpenRef.current = false;
+    setMediaStudioMode(null);
+  }, []);
+
+  const markMediaGenerationArtifactReady = useCallback((artifact: MediaGenerationArtifact) => {
+    const validation = mediaGenerationArtifactValidationRef.current;
+    if (!validation?.expectedIds.has(artifact.id) || !validation.contractValid) return;
+    validation.failedIds.delete(artifact.id);
+    validation.readyIds.add(artifact.id);
+    if (
+      validation.finalized
+      && validation.terminalSucceeded
+      && !validation.terminalBlocked
+      && validation.readyIds.size >= validation.requiredCount
+    ) {
+      setMediaGenerationStatus('completed');
+      setMediaGenerationDetail('');
+    }
+  }, []);
+
+  const markMediaGenerationArtifactFailed = useCallback((artifact: MediaGenerationArtifact) => {
+    const validation = mediaGenerationArtifactValidationRef.current;
+    if (!validation?.expectedIds.has(artifact.id)) return;
+    validation.readyIds.delete(artifact.id);
+    validation.failedIds.add(artifact.id);
+    const remainingPossible = validation.expectedIds.size - validation.failedIds.size;
+    if (!validation.contractValid || remainingPossible < validation.requiredCount) {
+      setMediaGenerationStatus('error');
+      setMediaGenerationDetail(mediaGenerationText.artifactLoadFailed);
+    }
+  }, [mediaGenerationText.artifactLoadFailed]);
+
+  const openMediaGenerationArtifact = useCallback((artifact: MediaGenerationArtifact) => {
+    void openChatFile({
+      fileName: artifact.fileName || (artifact.kind === 'image' ? 'generated-image' : 'generated-video'),
+      path: artifact.path,
+      openUrl: artifact.url,
+      saveUrl: artifact.url,
+    });
+  }, [openChatFile]);
 
   const cancelActiveChat = () => {
     const requestId = activeChatRequestIdRef.current;
@@ -3261,6 +3655,33 @@ export function AgentChatPage({
         accept={CHAT_ATTACHMENT_ACCEPT}
         onChange={(e) => { void uploadChatAttachments(e.target.files); e.target.value = ''; }}
       />
+      <AnimatePresence>
+        {isOfficeCommandCenter && mediaStudioMode && (
+          <motion.div
+            data-media-generation-studio
+            initial={prefersReducedMotion ? false : { opacity: 0, x: '3%' }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, x: '3%' }}
+            transition={{ duration: prefersReducedMotion ? 0 : 0.22, ease: [0.25, 0.1, 0.25, 1] }}
+            className="absolute inset-0 z-[214]"
+          >
+            <MediaGenerationStudio
+              mode={mediaStudioMode}
+              locale={isZh ? 'zh' : 'en'}
+              busy={isTyping || mediaGenerationStatus === 'submitting' || mediaGenerationStatus === 'generating'}
+              status={mediaGenerationStatus}
+              statusDetail={mediaGenerationDetail}
+              artifacts={mediaGenerationArtifacts.filter(artifact => artifact.kind === mediaStudioMode)}
+              onModeChange={openMediaGenerationStudio}
+              onClose={closeMediaGenerationStudio}
+              onGenerate={generateMediaFromStudio}
+              onOpenArtifact={openMediaGenerationArtifact}
+              onArtifactReady={markMediaGenerationArtifactReady}
+              onArtifactError={markMediaGenerationArtifactFailed}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
       <AnimatePresence>
         {isDraggingFiles && (
           <motion.div
@@ -3820,26 +4241,32 @@ export function AgentChatPage({
                   {/* Image / file previews */}
                   {(() => {
                     const messageText = getDisplayText(msg);
-                    let imageUrls: string[] = [];
-                    try {
-                      const parsed = JSON.parse(messageText || '');
-                      if (parsed.images && Array.isArray(parsed.images)) imageUrls = parsed.images;
-                      if (parsed.image_base64) imageUrls = [`data:image/png;base64,${parsed.image_base64}`];
-                    } catch {}
+                    const embeddedMedia = extractMediaGenerationArtifacts(messageText);
+                    const embeddedImages = embeddedMedia.filter(artifact => artifact.kind === 'image');
+                    const embeddedVideos = embeddedMedia.filter(artifact => artifact.kind === 'video');
                     const generatedFiles = extractGeneratedFiles(messageText);
-                    if (imageUrls.length === 0 && generatedFiles.length === 0) return null;
+                    if (embeddedMedia.length === 0 && generatedFiles.length === 0) return null;
                     return (
                       <div className="max-w-[85%] mb-1 space-y-2">
-                        {imageUrls.length > 0 && (
+                        {embeddedImages.length > 0 && (
                           <div className="flex flex-wrap gap-2">
-                            {imageUrls.map((url, i) => (
-                              <a key={i} href={url} target="_blank" rel="noopener noreferrer"
+                            {embeddedImages.map((artifact, i) => (
+                              <button key={artifact.id} type="button" onClick={() => openMediaGenerationArtifact(artifact)}
                                 className="block w-36 h-36 rounded-2xl overflow-hidden border-2 border-white/10 hover:border-celestial-saturn/60 transition-all shadow-lg">
-                                <img src={url} alt={`Generated ${i + 1}`} className="w-full h-full object-cover" loading="lazy" />
-                              </a>
+                                <img src={artifact.url} alt={`Generated ${i + 1}`} className="w-full h-full object-cover" loading="lazy" />
+                              </button>
                             ))}
                           </div>
                         )}
+                        {embeddedVideos.map(artifact => (
+                          <video
+                            key={artifact.id}
+                            src={artifact.url}
+                            controls
+                            preload="metadata"
+                            className="aspect-video w-full max-w-md rounded-2xl border-2 border-white/10 bg-black/45 object-contain shadow-lg"
+                          />
+                        ))}
                         {renderGeneratedFiles(generatedFiles, msg.type === 'agent' ? 'start' : 'end')}
                       </div>
                     );
@@ -4185,7 +4612,7 @@ export function AgentChatPage({
             </form>
           </div>
         </motion.div>
-        {isOfficeCommandCenter && (onOpenMemoryAvatar || onOpenNexus || onOpenKnowledge) && (
+        {isOfficeCommandCenter && (
           <aside
             data-command-center-switcher
             data-command-center-right-rail="true"
@@ -4246,6 +4673,38 @@ export function AgentChatPage({
                 </span>
               </button>
             )}
+            <button
+              type="button"
+              data-image-generation-switch
+              onClick={() => openMediaGenerationStudio('image')}
+              className="lumi-command-center-switcher-button lumi-command-center-image-generation-switch group flex items-center gap-3 rounded-2xl border border-rose-300/20 bg-rose-300/[0.08] px-3 py-3 text-left text-rose-50/80 transition-all hover:-translate-x-1 hover:border-rose-200/45 hover:bg-rose-300/[0.16] hover:text-white"
+              title={mediaGenerationText.imageGeneration}
+              aria-label={mediaGenerationText.openImageStudio}
+            >
+              <span className="lumi-command-center-switcher-icon flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-200/20 bg-rose-200/10 text-rose-100 transition-transform group-hover:scale-105">
+                <ImageIcon className="h-5 w-5" />
+              </span>
+              <span className="lumi-command-center-switcher-copy min-w-0">
+                <span className="block text-xs font-black tracking-[0.12em]">{mediaGenerationText.imageGeneration}</span>
+                <span className="mt-1 block truncate text-[10px] text-rose-100/45">{mediaGenerationText.imageHint}</span>
+              </span>
+            </button>
+            <button
+              type="button"
+              data-video-generation-switch
+              onClick={() => openMediaGenerationStudio('video')}
+              className="lumi-command-center-switcher-button lumi-command-center-video-generation-switch group flex items-center gap-3 rounded-2xl border border-amber-300/20 bg-amber-300/[0.08] px-3 py-3 text-left text-amber-50/80 transition-all hover:-translate-x-1 hover:border-amber-200/45 hover:bg-amber-300/[0.16] hover:text-white"
+              title={mediaGenerationText.videoGeneration}
+              aria-label={mediaGenerationText.openVideoStudio}
+            >
+              <span className="lumi-command-center-switcher-icon flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-200/20 bg-amber-200/10 text-amber-100 transition-transform group-hover:scale-105">
+                <Video className="h-5 w-5" />
+              </span>
+              <span className="lumi-command-center-switcher-copy min-w-0">
+                <span className="block text-xs font-black tracking-[0.12em]">{mediaGenerationText.videoGeneration}</span>
+                <span className="mt-1 block truncate text-[10px] text-amber-100/45">{mediaGenerationText.videoHint}</span>
+              </span>
+            </button>
           </aside>
         )}
         </div>

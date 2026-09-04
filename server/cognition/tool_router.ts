@@ -933,6 +933,60 @@ export function routeToolsForTurn(
     && !isDirectAutocadOperationsPlayback(instructionText);
   const extensionRegistryOnly = actionContract.kind === 'extension_registry';
   const forbiddenToolNames = new Set<string>();
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  const structuredMediaCategory = /^(?:生成|创建|制作)图片\s*(?:\r?\n|$)/u.test(instructionText)
+    || /^(?:generate|create|make) (?:an? |some )?images?\s*(?:\r?\n|$)/iu.test(instructionText)
+    ? 'image_generation'
+    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    : /^(?:生成|创建|制作)视频\s*(?:\r?\n|$)/u.test(instructionText)
+      || /^(?:generate|create|make) (?:a )?video\s*(?:\r?\n|$)/iu.test(instructionText)
+      ? 'video_generation'
+      : null;
+  const mediaGenerationExplicitlyNegated = !structuredMediaCategory && (
+    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    /(?:不要|别|无需|不用|不需要|禁止)[\s\S]{0,18}(?:实际)?(?:生成|创建|制作|产出|做)[\s\S]{0,28}(?:图片|图像|插画|海报|视频|短视频|短片|动画|成片)/u.test(instructionText)
+    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    || /(?:不要|别|无需|不用|不需要)[\s\S]{0,8}(?:实际)?(?:生成|创建|制作|产出)/u.test(instructionText)
+    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    || /(?:不是|并非)(?:想|要)?[\s\S]{0,8}(?:生成|创建|制作|产出)/u.test(instructionText)
+    || /\b(?:do\s+not|don't|never)\b[\s\S]{0,28}\b(?:generate|create|make|produce|render)\b[\s\S]{0,36}\b(?:image|picture|poster|video|clip|animation|movie|short\s+film|reel)\b/i.test(instructionText)
+    || /\bwithout\b[\s\S]{0,20}\b(?:generating|creating|making|producing|rendering)\b[\s\S]{0,36}\b(?:image|picture|poster|video|clip|animation|movie|short\s+film|reel)\b/i.test(instructionText)
+  );
+  const mediaGenerationMetaQuestion = !structuredMediaCategory && (
+    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    /^(?:为什么|怎么|如何|是否|能否|图片生成|图像生成|视频生成|短视频生成)[\s\S]{0,80}(?:图片生成|图像生成|视频生成|短视频生成|模型|配置|失败|可用|费用|价格|多少钱|前端|容器|怎么|如何|为什么|是否|能否|吗|？|\?)/u.test(instructionText)
+    || /^\s*(?:why|how|what|which|is|are|can|could|does|did)\b[\s\S]{0,100}\b(?:image|video)\s+generation\b/i.test(instructionText)
+    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    || /^(?:介绍|说明|解释|讲讲|告诉我)[\s\S]{0,60}(?:图片|图像|视频|短视频)生成(?:功能|能力|模型)?/u.test(instructionText)
+    || /^\s*(?:image|video)\s+generation\b[\s\S]{0,100}\b(?:model|configure|configuration|fail|available|cost|price|pricing|frontend|container|why|how)\b/i.test(instructionText)
+    || /^\s*(?:explain|describe|introduce|tell\s+me\s+about)\b[\s\S]{0,80}\b(?:image|video)\s+generation\b/i.test(instructionText)
+  );
+  const existingMediaArtifactAction = !structuredMediaCategory && (
+    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    /^(?:请|麻烦)?(?:帮我)?(?:查看|打开|删除|分析|检查|编辑|修改|发布|上传|发送|保存|下载|分享|播放)[\s\S]{0,32}(?:刚|已|已经|先前|之前)?(?:生成|创建|制作|产出)(?:的)?[\s\S]{0,20}(?:图|图片|图像|视频|短视频|短片|动画|成片)/u.test(instructionText)
+    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    || /^(?:请|麻烦)?(?:帮我)?(?:把|将)[\s\S]{0,20}(?:刚|已|已经|先前|之前)?(?:生成|创建|制作|产出)[\s\S]{0,20}(?:图片|图像|视频|短视频|短片|动画|成片)[\s\S]{0,24}(?:查看|打开|删除|分析|检查|编辑|修改|发布|上传|发送|保存|下载|分享|播放)/u.test(instructionText)
+    || /^\s*(?:please\s+)?(?:view|open|delete|analy[sz]e|inspect|check|edit|modify|publish|upload|send|save|download|share|play)\b[\s\S]{0,48}\b(?:generated|created|rendered)\b[\s\S]{0,24}\b(?:image|picture|video|clip|animation|movie)\b/i.test(instructionText)
+  );
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  const requestsCombinedVideoArtifact = /(?:脚本[\s\S]{0,40}(?:再|然后|并|以及|同时)[\s\S]{0,30}(?:生成|创建|制作|产出)[\s\S]{0,24}(?:视频|短视频|成片)|脚本[\s\S]{0,24}(?:和|并|以及|同时)[\s\S]{0,16}(?:视频|短视频|成片))/u.test(instructionText)
+    || /\b(?:script|copy|outline|prompt)\b[\s\S]{0,48}\b(?:and\s+then|then|and)\b[\s\S]{0,32}\b(?:generate|create|make|produce|render)\b[\s\S]{0,24}\b(?:video|clip|movie)\b/i.test(instructionText);
+  const mediaTextDeliverableOnly = !structuredMediaCategory && !requestsCombinedVideoArtifact && (
+    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    /^(?:请|麻烦)?(?:帮我)?(?:生成|创建|制作|编写|写)[\s\S]{0,40}(?:图片|图像|海报|封面|视频|短视频|动画)[\s\S]{0,16}(?:提示词|文案|脚本|大纲|方案|字幕|标题|文字|旁白|分镜)/u.test(instructionText)
+    || /^\s*(?:please\s+)?(?:generate|create|make|produce|write)\b[\s\S]{0,52}\b(?:copy|brief|prompt|script|outline|plan|subtitles?|titles?|caption|text|narration|storyboard)\b[\s\S]{0,52}\b(?:image|picture|poster|cover|thumbnail|video|clip|movie|animation|short\s+film|reel)\b/i.test(instructionText)
+    || /^\s*(?:please\s+)?(?:generate|create|make|produce|write)\b[\s\S]{0,52}\b(?:image|picture|poster|cover|thumbnail|video|clip|movie|animation|short\s+film|reel)\b[\s\S]{0,32}\b(?:copy|brief|prompt|script|outline|plan|subtitles?|titles?|caption|text|narration|storyboard)\b/i.test(instructionText)
+  );
+  const mediaCodeOrOfficeDeliverable = !structuredMediaCategory
+    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    && /(?:CSS|HTML|JavaScript|TypeScript|React|Vue|PPT|PowerPoint|组件|网页|页面|幻灯片|演示文稿|播放器|画廊|上传组件)/iu.test(instructionText)
+    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    && /(?:图片|图像|视频|动画|image|video|animation|gallery|player)/iu.test(instructionText);
+  const mediaGenerationShouldBeForbidden = mediaGenerationExplicitlyNegated
+    || mediaGenerationMetaQuestion
+    || existingMediaArtifactAction
+    || mediaTextDeliverableOnly
+    || mediaCodeOrOfficeDeliverable;
 
   if (!currentAppEdit) {
     for (const name of BASELINE_TOOLS) addIfAvailable(selected, available, name);
@@ -940,6 +994,10 @@ export function routeToolsForTurn(
 
   for (const route of ROUTES) {
     if (currentAppEdit) continue;
+    // The media workbench emits a structured first line. Treat that explicit
+    // envelope as authoritative even when the creative brief mentions CAD,
+    // music, legal work, or another broad domain keyword.
+    if (structuredMediaCategory && route.category !== structuredMediaCategory) continue;
     const matchesTrustedCadContinuation = route.category === 'cad_design'
       && trustedCadContinuation;
     if (!routeMatches(route, instructionText) && !matchesTrustedCadContinuation) continue;
@@ -965,6 +1023,31 @@ export function routeToolsForTurn(
       !/(?:文件|文档|表格|幻灯片|导出|保存|PPT|PDF|DOCX|XLSX|document|file|spreadsheet|presentation|export|save)/iu.test(instructionText)
     ) continue;
     if (route.category === 'documents' && isDirectAutocadOperationsPlayback(instructionText)) continue;
+    if (
+      route.category === 'video_generation'
+      && categories.includes('image_generation')
+      // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+      && /(?:视频|短视频|video|clip|movie)[\s\S]{0,36}(?:封面|主图|缩略图|海报|图片|图像|cover|thumbnail|poster|image|picture)|(?:封面|主图|缩略图|海报|图片|图像|cover|thumbnail|poster|image|picture)[\s\S]{0,36}(?:来自|根据|用于|for|from)[\s\S]{0,20}(?:视频|短视频|video|clip|movie)/iu.test(instructionText)
+    ) continue;
+    if (route.category === 'image_generation' || route.category === 'video_generation') {
+      if (mediaGenerationShouldBeForbidden) continue;
+      // The studio's structured envelope deliberately exposes one generator.
+      // Natural compound instructions retain later document/upload routes.
+      if (structuredMediaCategory) {
+        selected.clear();
+        for (const name of BASELINE_TOOLS) addIfAvailable(selected, available, name);
+        categories.splice(0, categories.length);
+        reasons.splice(0, reasons.length);
+        manifestPriorities.splice(0, manifestPriorities.length);
+      }
+    }
+    if (
+      route.category === 'cad_design'
+      && !structuredMediaCategory
+      && (categories.includes('image_generation') || categories.includes('video_generation'))
+      // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+      && !/(?:CAD|DXF|DWG|AutoCAD|平面图|户型|施工图|水电|布置图|工程图|图纸|蓝图|立面图|剖面图|零件图|电气原理图|结构详图|管线图|\b(?:cad|dxf|dwg|autocad|floor\s*plan|blueprint|construction\s+drawing|elevation\s+drawing|section\s+drawing|mechanical\s+(?:part\s+)?drawing|electrical\s+schematic|structural\s+detail|piping\s+diagram)\b)/iu.test(instructionText)
+    ) continue;
     categories.push(route.category);
     reasons.push(route.reason);
 
@@ -976,13 +1059,17 @@ export function routeToolsForTurn(
     for (const pattern of route.namePatterns || []) addNamePattern(selected, availableNames, pattern);
   }
 
-  if (actionContract.applies && !currentAppEdit) {
+  const directMediaGeneration = categories.includes('image_generation')
+    || categories.includes('video_generation');
+  if (actionContract.applies && !currentAppEdit && !directMediaGeneration) {
     manifestPriorities.push(...addActionContractCapabilities(
       selected,
       available,
       actionContract,
       routingManifest,
     ));
+  } else if (directMediaGeneration) {
+    reasons.push('direct media generation keeps the tool envelope on the selected image or video generator');
   }
 
   // Add this before the restrictive route branches below.  Those branches
@@ -1284,6 +1371,16 @@ export function routeToolsForTurn(
     reasons.push('a compound mode-and-work request needs both client mode control and the task tools selected for the remaining instruction');
   }
 
+  if (mediaGenerationShouldBeForbidden) {
+    const mediaGeneratorName = /^(?:generate_image(?:_dalle)?|ai_edit_image|generate_video|mcp_.+_(?:generate|create)_(?:image|video))$/i;
+    for (const name of availableNames) {
+      if (!mediaGeneratorName.test(name)) continue;
+      selected.delete(name);
+      forbiddenToolNames.add(name);
+    }
+    reasons.push('media generation is hard-forbidden for negation, configuration questions, text-only requests, and actions on existing artifacts');
+  }
+
   if (
     runtimeWorkIntent === 'none'
     && isRuntimeCleanupOfferAcceptanceText(instructionText)
@@ -1349,6 +1446,8 @@ export function routeToolsForTurn(
       : undefined,
     maxIterations: selected.has('cad_draw_floorplan_in_autocad')
       ? 2
+      : Boolean(structuredMediaCategory)
+      ? 1
       : readOnlyKnowledgeInspection
       ? Math.max(2, selected.size)
       : confirmationOnlyExternalCommit

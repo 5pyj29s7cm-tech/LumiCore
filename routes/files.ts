@@ -278,7 +278,7 @@ const RTF_KNOWLEDGE_EXTS = /\.rtf$/i;
 const EXTRACTABLE_KNOWLEDGE_EXTS = /\.(docx|xlsx|xls|pptx|pdf)$/i;
 const IMAGE_KNOWLEDGE_EXTS = /\.(png|jpe?g|webp|gif|bmp|tiff?)$/i;
 const AUDIO_KNOWLEDGE_EXTS = AUDIO_FILE_EXTS;
-const GENERATED_FILE_EXTS = /\.(docx?|pptx?|xlsx?|pdf|txt|md|csv|json|png|jpe?g|webp|gif|svg|html|dxf|dwg)$/i;
+const GENERATED_FILE_EXTS = /\.(docx?|pptx?|xlsx?|pdf|txt|md|csv|json|png|jpe?g|webp|gif|svg|html|dxf|dwg|mp4|mov)$/i;
 const OBSIDIAN_NOTE_EXTS = /\.(md|markdown)$/i;
 const OBSIDIAN_MAX_NOTE_BYTES = Math.max(256 * 1024, Number(process.env.OBSIDIAN_NOTE_MAX_BYTES || 5 * 1024 * 1024));
 const OBSIDIAN_DEFAULT_MAX_FILES = Math.max(50, Number(process.env.OBSIDIAN_SYNC_MAX_FILES || 500));
@@ -329,6 +329,8 @@ const DOWNLOAD_MIME_TYPES: Record<string, string> = {
   '.aac': 'audio/aac',
   '.wma': 'audio/x-ms-wma',
   '.webm': 'audio/webm',
+  '.mp4': 'video/mp4',
+  '.mov': 'video/quicktime',
   '.dxf': 'application/dxf',
   '.dwg': 'application/octet-stream',
 };
@@ -2149,6 +2151,36 @@ router.get('/files/generated', requireUnifiedAuth, requireUnifiedAdmin, requireU
     const inline = req.query.inline === '1';
     const disposition = inline ? 'inline' : 'attachment';
     res.setHeader('Content-Disposition', `${disposition}; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+    const stats = fs.statSync(filePath);
+    if (mime?.startsWith('video/')) {
+      res.setHeader('Accept-Ranges', 'bytes');
+      const range = String(req.headers.range || '').trim();
+      if (range) {
+        const match = /^bytes=(\d*)-(\d*)$/i.exec(range);
+        const rawStart = match?.[1] || '';
+        const rawEnd = match?.[2] || '';
+        let start = rawStart ? Number(rawStart) : NaN;
+        let end = rawEnd ? Number(rawEnd) : NaN;
+        if (!rawStart && rawEnd) {
+          const suffixLength = Number(rawEnd);
+          start = Math.max(0, stats.size - suffixLength);
+          end = stats.size - 1;
+        } else if (rawStart && !rawEnd) {
+          end = stats.size - 1;
+        }
+        if (!match || !Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || start >= stats.size) {
+          res.status(416).setHeader('Content-Range', `bytes */${stats.size}`);
+          return res.end();
+        }
+        end = Math.min(end, stats.size - 1);
+        res.status(206);
+        res.setHeader('Content-Range', `bytes ${start}-${end}/${stats.size}`);
+        res.setHeader('Content-Length', String(end - start + 1));
+        fs.createReadStream(filePath, { start, end }).pipe(res);
+        return;
+      }
+    }
+    res.setHeader('Content-Length', String(stats.size));
     fs.createReadStream(filePath).pipe(res);
   } catch (err: any) {
     sendRouteError(res, err);

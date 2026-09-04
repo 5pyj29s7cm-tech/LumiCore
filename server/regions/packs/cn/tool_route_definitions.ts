@@ -47,6 +47,43 @@ export const ROUTES: RouteDefinition[] = [
     groups: ['music'],
   },
   {
+    category: 'image_generation',
+    reason: 'direct image-generation request',
+    patterns: [
+      // Keep ordinary media creation separate from CAD/desktop production.
+      /^(?:生成|创建|制作)图片\s*(?:\r?\n|$)/u,
+      /^(?:generate|create|make) (?:an? |some )?images?\s*(?:\r?\n|$)/iu,
+      /^(?![\s\S]*(?:CAD|DXF|DWG|AutoCAD|平面图|户型|施工图|水电|布置图|工程图|图纸|蓝图|立面图|剖面图|零件图|电气原理图|结构详图|管线图))(?:(?:请|麻烦)(?:你)?|可以|能否|能不能|能|我想|我需要)?(?:帮我|给我|替我|为我)?(?:生成|创建|制作|产出|画|绘制)[\s\S]{0,72}(?:视频|短视频)[\s\S]{0,28}(?:封面(?:图|图片)?|主图|缩略图|海报图片?)/iu,
+      /^(?![\s\S]*(?:CAD|DXF|DWG|AutoCAD|平面图|户型|施工图|水电|布置图|工程图|图纸|蓝图|立面图|剖面图|零件图|电气原理图|结构详图|管线图))(?:(?:请|麻烦)(?:你)?|可以|能否|能不能|能|我想|我需要)?(?:帮我|给我|替我|为我)?(?:为|根据|用|把|将)[\s\S]{0,36}(?:视频|短视频)[\s\S]{0,36}(?:生成|创建|制作|产出)[\s\S]{0,28}(?:图片|图像|封面(?:图|图片)?|主图|缩略图|海报)/iu,
+      /^(?![\s\S]*(?:CAD|DXF|DWG|AutoCAD|平面图|户型|施工图|水电|布置图|工程图|图纸|蓝图|立面图|剖面图|零件图|电气原理图|结构详图|管线图))(?:(?:请|麻烦)(?:你)?|可以|能否|能不能|能|我想|我需要)?(?:帮我|给我|替我|为我)?(?:生成|创建|制作|产出|画|绘制)(?:一张|一个|一些|几张)?[\s\S]{0,80}(?:图片|图像|插画|海报|封面|壁纸|主图|效果图|缩略图|图)(?:吗)?(?:[，。！？,.!?\s]|$)/iu,
+      /^(?![\s\S]*\b(?:cad|dxf|dwg|autocad|floor\s*plan|blueprint|construction\s+drawing|elevation\s+drawing|section\s+drawing|mechanical\s+(?:part\s+)?drawing|electrical\s+schematic|structural\s+detail|piping\s+diagram)\b)(?:please\s+)?(?:(?:could|can|would|will)\s+you\s+)?(?:please\s+)?(?:generate|create|make|produce|draw|illustrate)\b.{0,72}\b(?:video|clip|movie|short\s+film|reel)\b.{0,24}\b(?:cover|thumbnail|poster)\s*(?:image|picture)?\b/iu,
+      /^(?![\s\S]*\b(?:cad|dxf|dwg|autocad|floor\s*plan|blueprint|construction\s+drawing|elevation\s+drawing|section\s+drawing|mechanical\s+(?:part\s+)?drawing|electrical\s+schematic|structural\s+detail|piping\s+diagram)\b)(?:please\s+)?(?:(?:could|can|would|will)\s+you\s+)?(?:please\s+)?(?:generate|create|make|produce|draw|illustrate)\b.{0,48}\b(?:cover|thumbnail|poster)\s*(?:image|picture)?\b.{0,28}\b(?:for|from)\b.{0,16}\b(?:video|clip|movie|short\s+film|reel)\b/iu,
+      /^(?![\s\S]*\b(?:cad|dxf|dwg|autocad|floor\s*plan|blueprint|construction\s+drawing|elevation\s+drawing|section\s+drawing|mechanical\s+(?:part\s+)?drawing|electrical\s+schematic|structural\s+detail|piping\s+diagram)\b)(?:please\s+)?(?:(?:could|can|would|will)\s+you\s+)?(?:please\s+)?(?:generate|create|make|produce|draw|illustrate)\b.{0,56}\b(?:image|picture|illustration|poster|cover|wallpaper|thumbnail|artwork)\b.{0,36}\bfrom\b.{0,20}\b(?:video|clip|movie|short\s+film|reel)\b/iu,
+      /^(?![\s\S]*\b(?:cad|dxf|dwg|autocad|floor\s*plan|blueprint|construction\s+drawing|elevation\s+drawing|section\s+drawing|mechanical\s+(?:part\s+)?drawing|electrical\s+schematic|structural\s+detail|piping\s+diagram|video|clip|movie|short\s+film|reel)\b)(?:please\s+)?(?:(?:could|can|would|will)\s+you\s+)?(?:please\s+)?(?:generate|create|make|produce|draw|illustrate)\b.{0,80}\b(?:image|picture|illustration|poster|cover|wallpaper|thumbnail|artwork)\b/iu,
+    ],
+    exact: ['generate_image'],
+  },
+  {
+    category: 'video_generation',
+    reason: 'direct video-generation request',
+    patterns: [
+      /^(?:生成|创建|制作)视频\s*(?:\r?\n|$)/u,
+      /^(?:generate|create|make) (?:a )?video\s*(?:\r?\n|$)/iu,
+      /^(?:根据|用)[\s\S]{0,36}(?:视频|短视频)脚本[\s\S]{0,36}(?:生成|创建|制作|产出)[\s\S]{0,24}(?:视频|短视频|短片|动画|成片)/u,
+      /^先[\s\S]{0,48}(?:视频|短视频)脚本[\s\S]{0,40}(?:再|然后)[\s\S]{0,24}(?:生成|创建|制作|产出)[\s\S]{0,24}(?:视频|短视频|短片|动画|成片)/u,
+      /^(?:生成|创建|制作|产出)[\s\S]{0,16}(?:视频|短视频)脚本[\s\S]{0,16}(?:和|并|以及|同时)[\s\S]{0,16}(?:视频|短视频|成片)/u,
+      /^(?:(?:请|麻烦)(?:你)?|可以|能否|能不能|能|我想|我需要)?(?:帮我|给我|替我|为我)?(?:把|将|用|根据)[\s\S]{0,32}(?:图片|图像|照片|首帧)[\s\S]{0,32}(?:生成|制作|变成|转成|转换为)[\s\S]{0,20}(?:视频|短视频|短片|动画|成片)/iu,
+      /^(?![\s\S]*(?:视频|短视频).{0,8}(?:脚本|文案|大纲|方案|提示词|字幕|标题|旁白|分镜))(?![\s\S]*(?:怎么|如何|为什么|是否|能否|可用吗|多少钱|费用|价格|前端容器|模型配置))(?:(?:请|麻烦)(?:你)?|可以|能否|能不能|能|我想|我需要)?(?:帮我|给我|替我|为我)?(?:生成|创建|制作|产出|做)(?:一段|一个|一条)?[\s\S]{0,72}(?:视频|短视频|短片|动画|成片)(?:吗)?(?:[，。！？,.!?\s]|$)/iu,
+      /^(?:using|from)\b.{0,32}\b(?:video|clip)\s+script\b.{0,36}\b(?:generate|create|make|produce|render)\b.{0,24}\b(?:video|clip|animation|movie)\b/iu,
+      /^first\b.{0,40}\b(?:video|clip)\s+script\b.{0,40}\bthen\b.{0,24}\b(?:generate|create|make|produce|render)\b.{0,24}\b(?:video|clip|animation|movie)\b/iu,
+      /^(?:create|write|make|generate)\b.{0,32}\b(?:video|clip)\s+script\b.{0,36}\b(?:and\s+then|then|and)\b.{0,24}\b(?:generate|create|make|produce|render)\b.{0,24}\b(?:video|clip|animation|movie)\b/iu,
+      /^(?:please\s+)?(?:(?:could|can|would|will)\s+you\s+)?(?:please\s+)?(?:turn|convert|transform|animate)\b.{0,40}\b(?:image|picture|photo|frame)\b.{0,24}\b(?:into|as|to)?\s*(?:a\s+)?(?:video|clip|animation|movie|short\s+film|reel)\b/iu,
+      /^(?:image|picture|photo|frame)[-\s]+to[-\s]+video\b/iu,
+      /^(?![\s\S]*\b(?:video|clip|animation|movie|short\s+film|reel)\s+(?:script|copy|outline|plan|prompt|subtitles?|titles?|caption|text|narration|storyboard)\b)(?![\s\S]*\b(?:why|how|whether|available|cost|price|pricing|configure|configuration|frontend|container)\b)(?:please\s+)?(?:(?:could|can|would|will)\s+you\s+)?(?:please\s+)?(?:generate|create|make|produce|render)\b.{0,72}\b(?:video|clip|animation|movie|short\s+film|reel)\b/iu,
+    ],
+    exact: ['generate_video'],
+  },
+  {
     category: 'cad_design',
     reason: 'CAD, design, image, or visual production request',
     patterns: [

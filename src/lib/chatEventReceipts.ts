@@ -15,6 +15,13 @@ export type PersistedPendingChatExecution = {
   orgId?: string;
   conversationId?: string;
   startedAt: string;
+  mediaGeneration?: {
+    mode: 'image' | 'video';
+    size: string;
+    count?: number;
+    duration?: number;
+    referenceImage?: string;
+  };
 };
 
 export type PersistedPendingChatExecutionState = {
@@ -30,6 +37,21 @@ function normalizePendingExecution(value: unknown): PersistedPendingChatExecutio
   const requestId = compact(candidate.requestId);
   const startedAt = compact(candidate.startedAt);
   if (!requestId || !startedAt) return null;
+  const rawMedia = candidate.mediaGeneration && typeof candidate.mediaGeneration === 'object'
+    ? candidate.mediaGeneration
+    : undefined;
+  const mode = rawMedia?.mode === 'image' || rawMedia?.mode === 'video' ? rawMedia.mode : undefined;
+  const size = compact(rawMedia?.size).slice(0, 40);
+  const mediaGeneration = mode && size ? {
+    mode,
+    size,
+    ...(mode === 'image'
+      ? { count: Math.min(4, Math.max(1, Number(rawMedia?.count) || 1)) }
+      : { duration: Math.min(120, Math.max(1, Number(rawMedia?.duration) || 6)) }),
+    ...(compact(rawMedia?.referenceImage)
+      ? { referenceImage: compact(rawMedia?.referenceImage).slice(0, 2048) }
+      : {}),
+  } : undefined;
   return {
     requestId,
     source: compact(candidate.source) || 'chat',
@@ -37,6 +59,7 @@ function normalizePendingExecution(value: unknown): PersistedPendingChatExecutio
     orgId: compact(candidate.orgId) || undefined,
     conversationId: compact(candidate.conversationId) || undefined,
     startedAt,
+    ...(mediaGeneration ? { mediaGeneration } : {}),
   };
 }
 

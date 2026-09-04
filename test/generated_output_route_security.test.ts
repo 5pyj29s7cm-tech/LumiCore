@@ -10,6 +10,8 @@ let testUrl = '';
 let generatedDir = '';
 let dataDir = '';
 let artifactPath = '';
+let mp4ArtifactPath = '';
+let movArtifactPath = '';
 let keysPath = '';
 let envPath = '';
 
@@ -40,11 +42,15 @@ describe('Generated-output route security boundary', () => {
     generatedDir = getGeneratedOutputDir();
     dataDir = path.dirname(getDataPath('.route-security-marker'));
     artifactPath = path.join(generatedDir, 'route-security-artifact.txt');
+    mp4ArtifactPath = path.join(generatedDir, 'route-security-video.mp4');
+    movArtifactPath = path.join(generatedDir, 'route-security-video.mov');
     keysPath = getDataPath('keys.json');
     envPath = path.join(path.dirname(dataDir), '.env');
 
     fs.mkdirSync(generatedDir, { recursive: true });
     fs.writeFileSync(artifactPath, 'generated-artifact-ok', 'utf8');
+    fs.writeFileSync(mp4ArtifactPath, 'generated-mp4-ok', 'utf8');
+    fs.writeFileSync(movArtifactPath, 'generated-mov-ok', 'utf8');
     fs.writeFileSync(keysPath, '{"secret":"must-not-leak"}', 'utf8');
     fs.writeFileSync(envPath, 'PRIVATE_TOKEN=must-not-leak', 'utf8');
 
@@ -113,6 +119,39 @@ describe('Generated-output route security boundary', () => {
     );
     expect(generatedResponse.status).toBe(200);
     expect(await generatedResponse.text()).toBe('generated-artifact-ok');
+  });
+
+  it.each([
+    ['MP4', () => mp4ArtifactPath, 'video/mp4', 'generated-mp4-ok'],
+    ['MOV', () => movArtifactPath, 'video/quicktime', 'generated-mov-ok'],
+  ])('serves a generated %s video inline with the correct MIME type', async (_label, getArtifactPath, mime, body) => {
+    const response = await fetch(
+      `${testUrl}/api/files/generated?path=${encodeURIComponent(getArtifactPath())}&inline=1`,
+      { headers: { Cookie: adminCookie } },
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain(mime);
+    expect(response.headers.get('content-disposition')).toContain('inline');
+    expect(await response.text()).toBe(body);
+  });
+
+  it('supports bounded byte ranges for generated video previews', async () => {
+    const response = await fetch(
+      `${testUrl}/api/files/generated?path=${encodeURIComponent(mp4ArtifactPath)}&inline=1`,
+      {
+        headers: {
+          Cookie: adminCookie,
+          Range: 'bytes=0-8',
+        },
+      },
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get('accept-ranges')).toBe('bytes');
+    expect(response.headers.get('content-range')).toBe('bytes 0-8/16');
+    expect(response.headers.get('content-length')).toBe('9');
+    expect(await response.text()).toBe('generated');
   });
 
   it('cannot read data/keys.json through generated or knowledge download paths', async () => {

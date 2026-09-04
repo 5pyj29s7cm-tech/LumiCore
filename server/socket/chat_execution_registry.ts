@@ -1,5 +1,6 @@
 import { ensureDatabaseInitialized, querySQL, runSQL } from '../../db_layer';
 import { normalizeCompletionFeedbackForPersistence } from '../conversation/completion_feedback';
+import { sanitizeMediaArtifactReceipt } from './media_artifact_receipt';
 
 export type ChatExecutionStatus =
   | 'acknowledged'
@@ -210,6 +211,8 @@ function sanitizeTerminalPayload(
   if (agentName) sanitized.agentName = agentName;
   const completionFeedback = normalizeCompletionFeedbackForPersistence(payload.completionFeedback);
   if (completionFeedback) sanitized.completionFeedback = completionFeedback;
+  const artifactReceipt = sanitizeMediaArtifactReceipt(payload.artifactReceipt);
+  if (artifactReceipt) sanitized.artifactReceipt = artifactReceipt;
   const taskBinding = exactTerminalTaskBinding(payload.taskRelation, record.requestId);
   if (taskBinding) sanitized.taskBinding = taskBinding;
   if (record.sidecar === true && record.controlIntentTarget) {

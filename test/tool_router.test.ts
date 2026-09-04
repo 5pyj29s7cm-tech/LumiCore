@@ -851,6 +851,119 @@ describe('tool router', () => {
     expect(route.toolNames).not.toContain('legal_search_case');
   });
 
+  it.each([
+    '生成一张夜空下的猫图片',
+    '帮我画一张夜空下的猫图',
+    '生成图片\n创作描述：为短视频制作一张封面图片\n画面尺寸：1024x1024',
+    '生成图片\n创作描述：一张 CAD 软件的启动封面\n画面尺寸：1024x1024',
+    'Generate an image of a cat under the night sky.',
+    'Generate an image\nDescription: a launch cover for CAD software\nSize: 1024x1024',
+    'Draw a picture of a cat under the night sky.',
+  ])('routes ordinary image generation only to the image generator: %s', (prompt) => {
+    const route = routeToolsForTurn(prompt, DECLARATIONS, { enableMcpHealthGate: false });
+
+    expect(route.categories).toEqual(['image_generation']);
+    expect(route.toolNames).toContain('generate_image');
+    expect(route.toolNames).not.toContain('generate_video');
+    expect(route.toolNames).not.toEqual(expect.arrayContaining([
+      'desktop_list_apps',
+      'desktop_open',
+      'desktop_ui_click',
+      'cad_generate_dxf',
+      'cad_prepare_autocad_operations',
+      'mcp_cad-drafting_autocad_playback_file',
+      'mcp_cad-drafting_cad_space_program',
+    ]));
+  });
+
+  it.each([
+    '生成一段星空穿梭的短视频',
+    '做一个星空穿梭的视频',
+    '生成视频\n创作描述：把这张图片变成一段运镜视频\n画面尺寸：1280x720',
+    '生成视频\n创作描述：展示 CAD 软件启动界面的动画\n画面尺寸：1280x720',
+    'Create a short video of travelling through space.',
+    'Generate a video\nDescription: animate a CAD software launch screen\nSize: 1280x720',
+    'Render a video of travelling through space.',
+  ])('routes ordinary video generation only to the video generator: %s', (prompt) => {
+    const route = routeToolsForTurn(prompt, DECLARATIONS, { enableMcpHealthGate: false });
+
+    expect(route.categories).toEqual(['video_generation']);
+    expect(route.toolNames).toContain('generate_video');
+    expect(route.toolNames).not.toContain('generate_image');
+    expect(route.toolNames).not.toEqual(expect.arrayContaining([
+      'desktop_list_apps',
+      'desktop_open',
+      'desktop_ui_click',
+      'cad_generate_dxf',
+      'cad_prepare_autocad_operations',
+      'mcp_cad-drafting_autocad_playback_file',
+      'mcp_cad-drafting_cad_space_program',
+    ]));
+  });
+
+  it.each([
+    '绘制一张平面图',
+    '根据尺寸绘制一张户型平面图',
+    '生成一张施工图',
+    '生成一张水电布置图',
+    'Create a floor plan image',
+  ])('keeps CAD drawing requests out of the image-generation-only route: %s', (prompt) => {
+    const route = routeToolsForTurn(prompt, DECLARATIONS, { enableMcpHealthGate: false });
+    expect(route.categories).toContain('cad_design');
+    expect(route.categories).not.toContain('image_generation');
+    expect(route.toolNames).toContain('cad_prepare_autocad_operations');
+  });
+
+  it.each([
+    '生成一张短视频封面图片',
+    '为视频生成封面图',
+    '根据视频生成图片',
+    'Generate a thumbnail image for a video',
+    'Create an image from this video',
+  ])('routes video-derived still-image requests to image generation: %s', (prompt) => {
+    const route = routeToolsForTurn(prompt, DECLARATIONS, { enableMcpHealthGate: false });
+    expect(route.categories).toEqual(['image_generation']);
+    expect(route.toolNames).toContain('generate_image');
+    expect(route.toolNames).not.toContain('generate_video');
+  });
+
+  it.each([
+    '根据这个视频脚本生成一段视频',
+    '先写视频脚本，再生成视频',
+    '生成视频脚本和成片',
+    'Create a video script and then generate the video',
+  ])('keeps script-to-finished-video requests on the video generator: %s', (prompt) => {
+    const route = routeToolsForTurn(prompt, DECLARATIONS, { enableMcpHealthGate: false });
+    expect(route.categories).toContain('video_generation');
+    expect(route.toolNames).toContain('generate_video');
+  });
+
+  it.each([
+    '不要生成图片，只告诉我怎么写提示词',
+    '生成图片的提示词，不要实际生成',
+    'Do not generate an image; explain the prompt',
+    'Do not create a video, just write the script',
+    '图片生成模型怎么配置？',
+    '为什么图片生成失败？',
+    '图片生成需要前端容器吗？',
+    '视频生成模型目前可用吗？',
+    '视频生成一次多少钱？',
+    'Why did video generation fail?',
+    '生成海报文案',
+    '生成海报设计方案',
+    'Create copy for a poster',
+    'Generate a design brief for a poster',
+    'Generate a prompt for an image',
+    '查看刚生成的图片',
+    '打开刚生成的视频',
+    '把刚生成的视频发布到抖音',
+  ])('hard-forbids paid generation for negation, meta, text-only, and existing-artifact actions: %s', (prompt) => {
+    const route = routeToolsForTurn(prompt, DECLARATIONS, { enableMcpHealthGate: false });
+    expect(route.toolNames).not.toContain('generate_image');
+    expect(route.toolNames).not.toContain('generate_video');
+    expect(route.forbiddenToolNames).toEqual(expect.arrayContaining(['generate_image', 'generate_video']));
+  });
+
   it('routes renovation drafting folders to CAD and document tools', () => {
     const route = routeToolsForTurn(
       '读取桌面装修草稿图文件夹，生成 DXF 底图、平面布置方案、水电点位和装修方案',

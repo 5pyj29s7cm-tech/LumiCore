@@ -320,6 +320,42 @@ describe('chat execution registry', () => {
       .toMatchObject({ status: 'completed', evidence: ['The current execution result was recorded.'] });
   });
 
+  it('persists and replays only the allowlisted media artifact receipt fields', async () => {
+    const persistence = memoryPersistence();
+    await initializeChatExecutionRegistryPersistence(persistence.adapter, Date.now());
+    beginChatExecution(scope, 'strict-terminal-media');
+
+    await expect(recordChatExecutionTerminalEventDurably(
+      scope,
+      'strict-terminal-media',
+      'agent:response',
+      {
+        text: 'Media task completed.',
+        finalized: true,
+        artifactReceipt: {
+          version: 1,
+          toolName: 'generate_video',
+          settings: { size: '1280x720', duration: 6, hasReference: false, prompt: 'must-not-persist' },
+          artifacts: [{ kind: 'video', url: 'https://media.example.test/result.mp4' }],
+          providerToken: 'must-not-persist',
+        },
+      },
+    )).resolves.toBe(true);
+
+    expect(persistence.rows[0].payload.artifactReceipt).toEqual({
+      version: 1,
+      toolName: 'generate_video',
+      settings: { size: '1280x720', duration: 6, hasReference: false },
+      artifacts: [{ kind: 'video', url: 'https://media.example.test/result.mp4' }],
+    });
+    expect(JSON.stringify(persistence.rows[0].payload.artifactReceipt)).not.toContain('must-not-persist');
+
+    resetChatExecutionRegistryForTests();
+    await initializeChatExecutionRegistryPersistence(persistence.adapter, Date.now());
+    expect(getChatExecution(scope, 'strict-terminal-media')?.terminalEvent?.payload.artifactReceipt)
+      .toEqual(persistence.rows[0].payload.artifactReceipt);
+  });
+
   it('quarantines a failed strict terminal as persistence_unknown and never exposes or rebinds its success', async () => {
     const adapter: ChatExecutionPersistenceAdapter = {
       async loadRecoverable() { return []; },

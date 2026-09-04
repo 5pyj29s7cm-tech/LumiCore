@@ -7,6 +7,7 @@ import { pushNotification } from "../routes/notifications";
 import { NormalizedMessage, makeLLMCall, makeLLMCallStreaming, StreamCallback } from "../llm/providers";
 import { resolveModelRequestInputBudget } from "../llm/request_context_budget";
 import { LLMUsage, ToolExecutionRecord } from "../tools/types";
+import { buildMediaArtifactReceipt, type MediaArtifactReceipt } from './media_artifact_receipt';
 import { toolRegistry } from "../tools/registry";
 import { executeToolCall } from "../tools/execution_engine";
 import { buildConfirmedStepContinuationMessages, runWithTools } from "../llm/adapter";
@@ -751,6 +752,17 @@ export function registerChatHandler(
     const eventSource = source || 'chat';
     const toolResultPreviewLimit = 500;
     const formatToolResultForUi = (value?: string) => value?.slice(0, toolResultPreviewLimit) || '';
+    let latestMediaArtifactReceipt: MediaArtifactReceipt | undefined;
+    const formatMediaArtifactReceiptForUi = (
+      name: string,
+      args?: Record<string, any>,
+      result?: string,
+      error?: string,
+    ) => {
+      const receipt = buildMediaArtifactReceipt(name, args, result, error);
+      if (receipt) latestMediaArtifactReceipt = receipt;
+      return receipt;
+    };
     const requestedAgentId = typeof agentId === 'string' ? agentId.trim() : '';
     const uid = userIdFn(socket);
     const nativeRequestBinding = buildSocketNativeRequestBinding(socket);
@@ -940,6 +952,9 @@ export function registerChatHandler(
       delete boundedPublicPayload.completionFeedback;
       return {
         ...boundedPublicPayload,
+        ...(event === 'agent:response' && latestMediaArtifactReceipt
+          ? { artifactReceipt: latestMediaArtifactReceipt }
+          : {}),
         // Every client-visible event carries the conversation owner.  The
         // desktop shell shares one user-level socket across Lumi, LAP, and
         // Memory Avatar surfaces; consumers must be able to reject a late
@@ -2743,6 +2758,7 @@ export function registerChatHandler(
         args?: Record<string, any>;
         result?: string;
         error?: string;
+        artifactReceipt?: MediaArtifactReceipt;
       }) => {
         const normalized = { ...payload, args: payload.args ?? payload.arguments };
         emitAgent("agent:tool_call", normalized);
@@ -3660,7 +3676,10 @@ export function registerChatHandler(
             arguments: confirmedArgs,
             ...(confirmedRecord.error
               ? { error: confirmedRecord.error }
-              : { result: formatToolResultForUi(confirmedRecord.result) }),
+              : {
+                  result: formatToolResultForUi(confirmedRecord.result),
+                  artifactReceipt: formatMediaArtifactReceiptForUi(confirmedRecord.name, confirmedArgs, confirmedRecord.result),
+                }),
           });
         }
         let confirmationRecords: ToolExecutionRecord[] = [confirmedRecord];
@@ -3704,6 +3723,7 @@ export function registerChatHandler(
                 arguments: record.arguments || {},
                 result: record.error ? undefined : formatToolResultForUi(record.result),
                 error: record.error,
+                artifactReceipt: formatMediaArtifactReceiptForUi(record.name, record.arguments, record.result, record.error),
               });
             },
             Math.max(1, modelCapabilityPolicy.maxIterations || 5),
@@ -4173,6 +4193,7 @@ export function registerChatHandler(
                 args: record.arguments,
                 result: formatToolResultForUi(record.result),
                 error: record.error,
+                artifactReceipt: formatMediaArtifactReceiptForUi(record.name, record.arguments, record.result, record.error),
               };
               emitAgent("agent:tool_call", toolPayload);
               emitAgent("agent:tool", toolPayload);
@@ -4355,6 +4376,7 @@ export function registerChatHandler(
                 args: record.arguments,
                 result: formatToolResultForUi(record.result),
                 error: record.error,
+                artifactReceipt: formatMediaArtifactReceiptForUi(record.name, record.arguments, record.result, record.error),
               };
               emitAgent('agent:tool_call', toolPayload);
               emitAgent('agent:tool', toolPayload);
