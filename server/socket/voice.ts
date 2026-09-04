@@ -3102,6 +3102,7 @@ async function processVoiceInput(
     actionIntent: actionIntentText,
     routedTaskText: turnFlow.routeText,
     ...(effectiveOperationMode === 'assistant' || effectiveOperationMode === 'autonomous' || clientActionOnlyTurn || selfRepairTurn ? { requestConfirmation } : {}),
+    executionSignal: pipelineAbort?.signal,
     isCancelled: () => pipelineAbort?.signal.aborted ?? false,
     onProgress: (step: string) => {
       if (session.isBackgroundWork && step.trim()) {

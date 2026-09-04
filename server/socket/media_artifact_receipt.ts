@@ -2,12 +2,15 @@ export type MediaArtifactReceiptKind = 'image' | 'video';
 
 export type MediaArtifactReceipt = {
   version: 1;
+  verified: true;
+  verificationStatus: 'verified';
   toolName: 'generate_image' | 'ai_edit_image' | 'generate_video';
   settings: {
     size?: string;
     count?: number;
     duration?: number;
     hasReference: boolean;
+    hasSource?: boolean;
   };
   artifacts: Array<{
     kind: MediaArtifactReceiptKind;
@@ -23,7 +26,6 @@ const MEDIA_TOOL_KIND = new Map<string, MediaArtifactReceiptKind>([
 ]);
 const MAX_ARTIFACTS = 4;
 const MAX_LOCAL_PATH_LENGTH = 2048;
-const MAX_REMOTE_URL_LENGTH = 8192;
 const FAILED_MEDIA_RESULT_STATUS_RE = /^(?:failed|failure|error|errored|timed_out|timeout|cancelled|canceled|aborted|blocked|rejected)$/i;
 
 function parseResult(result: unknown): Record<string, any> | null {
@@ -40,9 +42,6 @@ function parseResult(result: unknown): Record<string, any> | null {
 function safeArtifactLocation(value: unknown): { path?: string; url?: string } | null {
   const location = typeof value === 'string' ? value.trim() : '';
   if (!location || /^data:/i.test(location)) return null;
-  if (/^https?:\/\//i.test(location)) {
-    return location.length <= MAX_REMOTE_URL_LENGTH ? { url: location } : null;
-  }
   if (/^[A-Za-z]:[\\/]/.test(location) || location.startsWith('/')) {
     return location.length <= MAX_LOCAL_PATH_LENGTH ? { path: location } : null;
   }
@@ -53,7 +52,13 @@ export function sanitizeMediaArtifactReceipt(value: unknown): MediaArtifactRecei
   if (!value || typeof value !== 'object') return undefined;
   const candidate = value as Record<string, any>;
   const kind = MEDIA_TOOL_KIND.get(String(candidate.toolName || ''));
-  if (candidate.version !== 1 || !kind || !Array.isArray(candidate.artifacts)) return undefined;
+  if (
+    candidate.version !== 1
+    || candidate.verified !== true
+    || candidate.verificationStatus !== 'verified'
+    || !kind
+    || !Array.isArray(candidate.artifacts)
+  ) return undefined;
   const artifacts: MediaArtifactReceipt['artifacts'] = [];
   const seen = new Set<string>();
   for (const artifact of candidate.artifacts) {
@@ -75,12 +80,17 @@ export function sanitizeMediaArtifactReceipt(value: unknown): MediaArtifactRecei
   const duration = Number(rawSettings.duration);
   return {
     version: 1,
+    verified: true,
+    verificationStatus: 'verified',
     toolName: candidate.toolName,
     settings: {
       ...(size ? { size } : {}),
       ...(kind === 'image' && Number.isInteger(count) ? { count: Math.min(4, Math.max(1, count)) } : {}),
       ...(kind === 'video' && Number.isFinite(duration) ? { duration: Math.min(120, Math.max(1, duration)) } : {}),
       hasReference: rawSettings.hasReference === true,
+      ...(candidate.toolName === 'ai_edit_image' && typeof rawSettings.hasSource === 'boolean'
+        ? { hasSource: rawSettings.hasSource }
+        : {}),
     },
     artifacts,
   };
@@ -104,6 +114,8 @@ export function buildMediaArtifactReceipt(
     !payload
     || payload.ok === false
     || payload.success === false
+    || payload.verified !== true
+    || payload.verificationStatus !== 'verified'
     || Boolean(payload.error)
     || FAILED_MEDIA_RESULT_STATUS_RE.test(String(payload.status || '').trim())
   ) {
@@ -148,12 +160,17 @@ export function buildMediaArtifactReceipt(
 
   return sanitizeMediaArtifactReceipt({
     version: 1,
+    verified: true,
+    verificationStatus: 'verified',
     toolName: toolName as MediaArtifactReceipt['toolName'],
     settings: {
       ...(size ? { size } : {}),
       ...(kind === 'image' && Number.isInteger(count) ? { count } : {}),
       ...(kind === 'video' && Number.isFinite(duration) ? { duration } : {}),
       hasReference: Boolean(String(parameters.first_frame_image || '').trim()),
+      ...(toolName === 'ai_edit_image'
+        ? { hasSource: Boolean(String(parameters.filePath || '').trim()) }
+        : {}),
     },
     artifacts,
   });

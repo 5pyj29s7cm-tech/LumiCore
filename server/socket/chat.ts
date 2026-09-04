@@ -6,8 +6,12 @@ import { flushDBOrThrow, readDB, writeDB } from "../../db_layer";
 import { pushNotification } from "../routes/notifications";
 import { NormalizedMessage, makeLLMCall, makeLLMCallStreaming, StreamCallback } from "../llm/providers";
 import { resolveModelRequestInputBudget } from "../llm/request_context_budget";
-import { LLMUsage, ToolExecutionRecord } from "../tools/types";
+import { LLMUsage, ToolExecutionRecord, type ToolContext } from "../tools/types";
 import { buildMediaArtifactReceipt, type MediaArtifactReceipt } from './media_artifact_receipt';
+import {
+  normalizeStructuredMediaRequest,
+  structuredMediaRoutingEnvelope,
+} from '../../shared/media_generation';
 import { toolRegistry } from "../tools/registry";
 import { executeToolCall } from "../tools/execution_engine";
 import { buildConfirmedStepContinuationMessages, runWithTools } from "../llm/adapter";
@@ -151,7 +155,10 @@ import {
   pendingRuntimeCancellationRecheck,
   RECONFIRMATION_REQUIRED_BLOCKER,
 } from "../cognition/action_continuation";
-import { buildDurableTaskDeterministicToolRecoveryCall } from '../cognition/deterministic_tool_recovery';
+import {
+  buildDurableTaskDeterministicToolRecoveryCall,
+  buildStructuredMediaDeterministicToolRecoveryCall,
+} from '../cognition/deterministic_tool_recovery';
 import {
   isPriorTurnToolReceiptQuestion,
   normalizeActionIntent,
@@ -727,10 +734,18 @@ export function registerChatHandler(
   });
 
   socket.on("agent:chat", async (
-    data: { text?: string; history?: any[]; attachments?: any[]; personalityId?: string; category?: string; agentId?: string; domain?: string; orgId?: string | null; mode?: string; operationMode?: string; source?: string; requestId?: string; conversationId?: string; controlTargetRequestId?: string; controlTargetTaskId?: string; controlTargetRevision?: number },
+    data: { text?: string; history?: any[]; attachments?: any[]; personalityId?: string; category?: string; agentId?: string; domain?: string; orgId?: string | null; mode?: string; operationMode?: string; source?: string; requestId?: string; conversationId?: string; controlTargetRequestId?: string; controlTargetTaskId?: string; controlTargetRevision?: number; mediaRequest?: unknown },
     ack?: (payload: { ok: boolean; requestId?: string; receivedAt?: string; error?: string }) => void,
   ) => {
-    console.log('[ChatHandler] agent:chat RECEIVED:', JSON.stringify(data).slice(0, 300));
+    console.log('[ChatHandler] agent:chat RECEIVED:', JSON.stringify({
+      requestId: String(data?.requestId || '').slice(0, 120),
+      source: String(data?.source || '').slice(0, 80),
+      textLength: String(data?.text || '').length,
+      attachmentCount: Array.isArray(data?.attachments) ? data.attachments.length : 0,
+      mediaOperation: data?.mediaRequest && typeof data.mediaRequest === 'object'
+        ? String((data.mediaRequest as Record<string, unknown>).operation || '').slice(0, 40)
+        : '',
+    }));
     const { history, personalityId = "lumi", category, agentId, mode: payloadMode, source } = data;
     const attachments = normalizeIncomingAttachments(data.attachments);
     const rawUserText = typeof data.text === 'string' ? data.text.trim() : '';
@@ -748,6 +763,14 @@ export function registerChatHandler(
     const requestId = typeof data.requestId === 'string' && data.requestId.trim()
       ? data.requestId.trim().slice(0, 120)
       : `chat_${crypto.randomUUID()}`;
+    const structuredMediaRequest = normalizeStructuredMediaRequest(data.mediaRequest);
+    if (data.mediaRequest !== undefined && !structuredMediaRequest) {
+      try { ack?.({ ok: false, requestId, error: 'Invalid media workbench request' }); } catch {}
+      return;
+    }
+    const mediaRoutingEnvelope = structuredMediaRequest
+      ? structuredMediaRoutingEnvelope(structuredMediaRequest)
+      : '';
     const requestReceivedAt = new Date().toISOString();
     const eventSource = source || 'chat';
     const toolResultPreviewLimit = 500;
@@ -2168,6 +2191,7 @@ export function registerChatHandler(
               // accepted in the immediately preceding cancellation receipt,
               // not fresh mutation authority and never a cancel-all request.
               userConfirmed: true,
+              executionSignal: abortController.signal,
               isCancelled: () => abortController.signal.aborted,
             },
           });
@@ -2673,15 +2697,19 @@ export function registerChatHandler(
       const routingText = attachments.length > 0
         ? [effectiveRoutedVisibleUserText, attachmentContext].filter(Boolean).join('\n\n')
         : (effectiveRoutedVisibleUserText || text);
-      const currentTurnDecisionText = attachments.length > 0
-        ? [visibleUserText || text, attachmentContext].filter(Boolean).join('\n\n')
-        : (visibleUserText || text);
+      const currentTurnDecisionText = [
+        visibleUserText || text,
+        ...(attachments.length > 0 ? [attachmentContext] : []),
+        mediaRoutingEnvelope,
+      ].filter(Boolean).join('\n\n');
       const continuationContext = [chatContextBridge, actionContinuationBridge, pendingConfirmationPrompt]
         .filter(Boolean)
         .join('\n\n');
-      const executionTaskText = actionContinuationBridge
-        ? [text, actionContinuationBridge].filter(Boolean).join('\n\n')
-        : text;
+      const executionTaskText = [
+        text,
+        actionContinuationBridge,
+        mediaRoutingEnvelope,
+      ].filter(Boolean).join('\n\n');
 
       const executionPipeline = buildLumiExecutionPipeline({
         dispatch: {
@@ -2996,7 +3024,7 @@ export function registerChatHandler(
       }
 
       let pendingConfirmationCreatedThisTurn: Awaited<ReturnType<typeof recordPendingConfirmationDurably>> | null = null;
-      let runtimeOwnedDeterministicRecoveryCall: ReturnType<typeof buildDurableTaskDeterministicToolRecoveryCall> = null;
+      let runtimeOwnedDeterministicRecoveryCall: ToolContext['runtimeOwnedDeterministicRecoveryCall'] | null = null;
       let pendingConfirmationAssistantState = '';
       const requestToolConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
         if (pendingConfirmationCreatedThisTurn) return false;
@@ -3145,7 +3173,7 @@ export function registerChatHandler(
         !preparesExistingAction
         && !preparesConfirmedAction
         && conversationId
-        && (executionPipeline.capabilityPlan.taskLedgerRequired || Boolean(pendingConfirmation)),
+        && (executionPipeline.capabilityPlan.taskLedgerRequired || Boolean(pendingConfirmation) || structuredMediaRequest),
       );
       // Reading the runtime ledger and accepting its cleanup proposal are
       // separate operations. The latter owns a new mutate task; resuming the
@@ -3240,11 +3268,26 @@ export function registerChatHandler(
         return;
       }
       const durableTaskId = actionTaskExecution.state?.taskId;
-      runtimeOwnedDeterministicRecoveryCall = buildDurableTaskDeterministicToolRecoveryCall(
-        actionTaskExecution.state,
-        requestId,
-        confirmationResolution.revokedCorrectionBasis,
-      );
+      if (structuredMediaRequest && actionTaskExecution.state?.taskId) {
+        const structuredMediaRecoveryCall = buildStructuredMediaDeterministicToolRecoveryCall(
+          structuredMediaRequest,
+          {
+            taskId: actionTaskExecution.state.taskId,
+            taskRevision: Math.max(0, Math.trunc(Number(actionTaskExecution.state.revision) || 0)),
+            requestId,
+          },
+        );
+        if (!structuredMediaRecoveryCall) {
+          throw new Error('Unable to bind the structured media request to its durable task');
+        }
+        runtimeOwnedDeterministicRecoveryCall = structuredMediaRecoveryCall;
+      } else {
+        runtimeOwnedDeterministicRecoveryCall = buildDurableTaskDeterministicToolRecoveryCall(
+          actionTaskExecution.state,
+          requestId,
+          confirmationResolution.revokedCorrectionBasis,
+        );
+      }
       foregroundRequestIdentity = Object.freeze({
         conversationId: conversation.id,
         userId: uid,
@@ -3409,6 +3452,7 @@ export function registerChatHandler(
             trustedActionContinuation: executionPipeline.trustedActionContinuation,
             routedTaskText: visibleUserText,
             requestConfirmation: requestToolConfirmation,
+            executionSignal: abortController.signal,
             isCancelled: () => abortController.signal.aborted,
           },
         });
@@ -3652,6 +3696,7 @@ export function registerChatHandler(
             supervisedExternalCommits: true,
             allowLocalFileWrites,
             localWriteIntentReason,
+            executionSignal: abortController.signal,
             isCancelled: () => abortController.signal.aborted,
             userConfirmed: true,
             actionIntent: confirmedTask,
@@ -3748,6 +3793,7 @@ export function registerChatHandler(
               supervisedExternalCommits: true,
               allowLocalFileWrites,
               localWriteIntentReason,
+              executionSignal: abortController.signal,
               isCancelled: () => abortController.signal.aborted,
               requestConfirmation: requestToolConfirmation,
               actionIntent: confirmedTask,
@@ -4217,6 +4263,7 @@ export function registerChatHandler(
               supervisedExternalCommits: true,
               allowLocalFileWrites,
               localWriteIntentReason,
+              executionSignal: abortController.signal,
               isCancelled: () => abortController.signal.aborted,
               onToolStart: (call) => {
                 if (isDirectDesktopTool(call.name)) return;
@@ -4251,7 +4298,7 @@ export function registerChatHandler(
           );
 
           responseText = result.text || '';
-          llmWasCalled = true;
+          llmWasCalled = result.usageRecords.length > 0;
           // Record provider/model analytics. Product billing is not part of the local execution path.
           for (const u of result.usageRecords) {
             recordTokenUsage(uid, u.provider, u.model, { promptTokens: u.promptTokens, completionTokens: u.completionTokens, totalTokens: u.totalTokens }, interactionId);
@@ -4404,6 +4451,7 @@ export function registerChatHandler(
               supervisedExternalCommits: true,
               allowLocalFileWrites,
               localWriteIntentReason,
+              executionSignal: abortController.signal,
               isCancelled: () => abortController.signal.aborted,
               onToolStart: call => {
                 if (isDirectDesktopTool(call.name)) return;

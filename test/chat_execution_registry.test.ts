@@ -334,9 +334,11 @@ describe('chat execution registry', () => {
         finalized: true,
         artifactReceipt: {
           version: 1,
+          verified: true,
+          verificationStatus: 'verified',
           toolName: 'generate_video',
           settings: { size: '1280x720', duration: 6, hasReference: false, prompt: 'must-not-persist' },
-          artifacts: [{ kind: 'video', url: 'https://media.example.test/result.mp4' }],
+          artifacts: [{ kind: 'video', path: 'D:\\LumiCore\\data\\generated\\result.mp4' }],
           providerToken: 'must-not-persist',
         },
       },
@@ -344,9 +346,11 @@ describe('chat execution registry', () => {
 
     expect(persistence.rows[0].payload.artifactReceipt).toEqual({
       version: 1,
+      verified: true,
+      verificationStatus: 'verified',
       toolName: 'generate_video',
       settings: { size: '1280x720', duration: 6, hasReference: false },
-      artifacts: [{ kind: 'video', url: 'https://media.example.test/result.mp4' }],
+      artifacts: [{ kind: 'video', path: 'D:\\LumiCore\\data\\generated\\result.mp4' }],
     });
     expect(JSON.stringify(persistence.rows[0].payload.artifactReceipt)).not.toContain('must-not-persist');
 

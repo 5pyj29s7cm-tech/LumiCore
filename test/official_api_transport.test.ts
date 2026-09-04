@@ -88,6 +88,43 @@ describe('official API transport', () => {
     expect(catalog.byRole.speech_recognition).toEqual(['aliyun/qwen-audio-3.0-asr-flash-streaming']);
   });
 
+  it('merges repeated and array capabilities for one public model id', async () => {
+    process.env.RELAY_API_KEY = 'test-relay-key';
+    process.env.RELAY_BASE_URL = 'https://relay.example.test/v1';
+    const catalog = await listOfficialApiModels({
+      fetchImpl: async () => jsonResponse({
+        data: [
+          null,
+          { id: 'huawei_maas/qwen-image-3.0', capability: 'image_generation' },
+          { id: 'huawei_maas/qwen-image-3.0', capability: 'image_edit' },
+          {
+            id: 'huawei_maas/qwen-image-multi',
+            capability: [' image_generation ', null, 7],
+            capabilities: ['image_editing', { invalid: true }, 'IMAGE_GENERATION'],
+            endpoint: 42,
+            owned_by: { invalid: true },
+          },
+        ],
+      }),
+    });
+
+    expect(catalog.models).toHaveLength(2);
+    expect(catalog.models.find(model => model.id === 'huawei_maas/qwen-image-multi')).toMatchObject({
+      capability: 'image_generation',
+      capabilities: ['image_generation', 'image_editing'],
+      endpoint: '',
+      ownedBy: '',
+    });
+    expect(catalog.byRole.image_generation).toEqual([
+      'huawei_maas/qwen-image-3.0',
+      'huawei_maas/qwen-image-multi',
+    ]);
+    expect(catalog.byRole.image_edit).toEqual([
+      'huawei_maas/qwen-image-3.0',
+      'huawei_maas/qwen-image-multi',
+    ]);
+  });
+
   it('preserves a rooted /api/v1 rerank override against a /v1 base', async () => {
     process.env.RELAY_API_KEY = 'test-relay-key';
     process.env.RELAY_BASE_URL = 'https://relay.example.test/v1';

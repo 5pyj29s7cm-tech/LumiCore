@@ -666,6 +666,42 @@ describe('execution guard recovery', () => {
     });
   });
 
+  it('persists media operation evidence without source paths or signed URL credentials', () => {
+    const records = sanitizeToolRecordsForPersistence([record({
+      name: 'generate_video',
+      arguments: {
+        prompt: 'animate the selected portrait',
+        size: '1280x720',
+        duration: 6,
+        first_frame_image: 'C:\\Users\\Alice\\Private\\portrait.png',
+        last_frame_image: 'https://media.example.test/end.png?X-Amz-Signature=source-secret',
+      },
+      result: JSON.stringify({
+        ok: true,
+        verified: true,
+        verificationStatus: 'verified',
+        inputPath: 'C:\\Users\\Alice\\Private\\portrait.png',
+        providerDebugUrl: 'https://media.example.test/result.mp4?X-Amz-Signature=result-secret&Expires=60',
+        outputPath: 'C:\\LumiCore\\data\\generated\\verified.mp4',
+        artifacts: [{ type: 'video', path: 'C:\\LumiCore\\data\\generated\\verified.mp4' }],
+      }),
+    })]);
+    const serialized = JSON.stringify(records);
+
+    expect(records?.[0].arguments).toMatchObject({
+      operation: 'image_to_video',
+      prompt: 'animate the selected portrait',
+      size: '1280x720',
+      duration: 6,
+      hasReference: true,
+    });
+    expect(records?.[0].arguments).not.toHaveProperty('first_frame_image');
+    expect(records?.[0].arguments).not.toHaveProperty('last_frame_image');
+    expect(serialized).not.toMatch(/Alice|portrait\.png|source-secret|result-secret/u);
+    expect(serialized).toContain('verified.mp4');
+    expect(JSON.parse(records?.[0].result || '{}')).not.toHaveProperty('inputPath');
+  });
+
   it('returns only a human-readable blocker when the single recovery remains blocked', async () => {
     let attempts = 0;
     const recovered = await recoverBlockedExecutionOnce<ExecutionGuardRecoveryFinalization>({

@@ -1,20 +1,67 @@
 export type MediaGenerationKind = 'image' | 'video';
 
+export type MediaGenerationOperation =
+  | 'text_to_image'
+  | 'image_edit'
+  | 'text_to_video'
+  | 'image_to_video';
+
+export type MediaGenerationSourceOperation = Extract<
+  MediaGenerationOperation,
+  'image_edit' | 'image_to_video'
+>;
+
 export type MediaGenerationArtifact = {
   id: string;
   kind: MediaGenerationKind;
   url: string;
   path?: string;
   fileName?: string;
+  requestId?: string;
+  operation?: MediaGenerationOperation;
+  prompt?: string;
+  model?: string;
+  createdAt?: string;
 };
 
 export type MediaGenerationExpectation = {
   mode: MediaGenerationKind;
+  operation?: MediaGenerationOperation;
   size: string;
   count?: number;
   duration?: number;
+  primaryImage?: string;
+  referenceImages?: string[];
   referenceImage?: string;
+  primaryArtifactId?: string;
+  referenceArtifactIds?: string[];
+  referenceArtifactId?: string;
 };
+
+export function mediaGenerationKindForOperation(operation: MediaGenerationOperation): MediaGenerationKind {
+  return operation === 'text_to_image' || operation === 'image_edit' ? 'image' : 'video';
+}
+
+export function defaultMediaGenerationOperation(kind: MediaGenerationKind): MediaGenerationOperation {
+  return kind === 'image' ? 'text_to_image' : 'text_to_video';
+}
+
+export function resolveMediaGenerationOperation(
+  expectation: MediaGenerationExpectation,
+): MediaGenerationOperation {
+  if (expectation.operation) return expectation.operation;
+  if (expectation.mode === 'image') {
+    return String(expectation.primaryImage || '').trim() ? 'image_edit' : 'text_to_image';
+  }
+  return String(expectation.referenceImage || '').trim() ? 'image_to_video' : 'text_to_video';
+}
+
+export function mediaGenerationToolForOperation(
+  operation: MediaGenerationOperation,
+): 'generate_image' | 'ai_edit_image' | 'generate_video' {
+  if (operation === 'image_edit') return 'ai_edit_image';
+  return mediaGenerationKindForOperation(operation) === 'image' ? 'generate_image' : 'generate_video';
+}
 
 const IMAGE_EXTENSION_RE = /\.(?:png|jpe?g|webp|gif|bmp|tiff?|svg)(?:$|[?#])/i;
 const VIDEO_EXTENSION_RE = /\.(?:mp4|mov|m4v|webm)(?:$|[?#])/i;
@@ -48,7 +95,6 @@ function inferKind(value: string, declaredType: string, fallbackKind?: MediaGene
 function artifactUrl(value: string): { url: string; path?: string } | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
-  if (/^https?:\/\//i.test(trimmed) || /^data:(?:image|video)\//i.test(trimmed)) return { url: trimmed };
   if (trimmed.startsWith('/api/files/generated?') || trimmed.startsWith('/lumi_output/')) {
     return { url: trimmed, path: trimmed.startsWith('/lumi_output/') ? trimmed : undefined };
   }
@@ -81,6 +127,8 @@ export function extractMediaGenerationArtifacts(
   if (
     payload.ok === false
     || payload.success === false
+    || payload.verified !== true
+    || payload.verificationStatus !== 'verified'
     || Boolean(payload.error)
     || /^(?:failed|failure|error|errored|timed_out|timeout|cancelled|canceled|aborted|blocked|rejected)$/i.test(String(payload.status || ''))
   ) return [];
@@ -153,19 +201,39 @@ export function mediaGenerationArgumentsMatch(
 ): boolean {
   if (!args || typeof args !== 'object') return false;
   const values = args as Record<string, unknown>;
+  const operation = resolveMediaGenerationOperation(expectation);
+  if (mediaGenerationKindForOperation(operation) !== expectation.mode) return false;
   if (normalizedSize(values.size) !== normalizedSize(expectation.size)) return false;
 
-  if (expectation.mode === 'image') {
+  if (operation === 'text_to_image') {
     const requestedCount = Math.max(1, Number(expectation.count) || 1);
     const actualCount = values.n == null ? 1 : Number(values.n);
     return Number.isInteger(actualCount) && actualCount === requestedCount;
+  }
+
+  if (operation === 'image_edit') {
+    const expectedSource = String(expectation.primaryImage || '').trim();
+    const actualSource = String(values.filePath || '').trim();
+    const expectedReferences = Array.isArray(expectation.referenceImages)
+      ? expectation.referenceImages.map(value => String(value || '').trim()).filter(Boolean)
+      : [];
+    const actualReferences = Array.isArray(values.referencePaths)
+      ? values.referencePaths.map(value => String(value || '').trim()).filter(Boolean)
+      : [];
+    return Boolean(expectedSource)
+      && actualSource === expectedSource
+      && expectedReferences.length === actualReferences.length
+      && expectedReferences.every((value, index) => value === actualReferences[index]);
   }
 
   const actualDuration = Number(values.duration);
   if (!Number.isFinite(actualDuration) || actualDuration !== Number(expectation.duration)) return false;
   const expectedReference = String(expectation.referenceImage || '').trim();
   const actualReference = String(values.first_frame_image || '').trim();
-  return expectedReference ? actualReference === expectedReference : !actualReference;
+  if (operation === 'image_to_video') {
+    return Boolean(expectedReference) && actualReference === expectedReference;
+  }
+  return !expectedReference && !actualReference;
 }
 
 export function mediaGenerationReceiptSettingsMatch(
@@ -173,14 +241,30 @@ export function mediaGenerationReceiptSettingsMatch(
   receipt: unknown,
 ): boolean {
   if (!receipt || typeof receipt !== 'object') return false;
-  const expectedToolName = expectation.mode === 'image' ? 'generate_image' : 'generate_video';
+  if (
+    (receipt as Record<string, any>).verified !== true
+    || (receipt as Record<string, any>).verificationStatus !== 'verified'
+  ) return false;
+  const operation = resolveMediaGenerationOperation(expectation);
+  if (mediaGenerationKindForOperation(operation) !== expectation.mode) return false;
+  const expectedToolName = mediaGenerationToolForOperation(operation);
   if (String((receipt as Record<string, any>).toolName || '') !== expectedToolName) return false;
   const settings = (receipt as Record<string, any>).settings;
   if (!settings || typeof settings !== 'object') return false;
   if (normalizedSize(settings.size) !== normalizedSize(expectation.size)) return false;
-  if (expectation.mode === 'image') {
+  if (operation === 'text_to_image') {
     return Number(settings.count ?? 1) === Math.max(1, Number(expectation.count) || 1);
   }
+
+  if (operation === 'image_edit') {
+    const expectedSource = String(expectation.primaryImage || '').trim();
+    if (!expectedSource) return false;
+    // Older receipts only expose `hasReference` for video first frames. Newer
+    // image-edit receipts may additionally assert `hasSource`; consume that
+    // assertion when present without rejecting safe legacy receipts.
+    return settings.hasSource == null || settings.hasSource === true;
+  }
+  const expectsReference = operation === 'image_to_video';
   return Number(settings.duration) === Number(expectation.duration)
-    && Boolean(settings.hasReference) === Boolean(String(expectation.referenceImage || '').trim());
+    && Boolean(settings.hasReference) === expectsReference;
 }

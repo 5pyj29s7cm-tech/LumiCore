@@ -152,11 +152,92 @@ function correctedWriteState(requestId: string): {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  mocks.makeLLMCall.mockReset();
   mocks.makeLLMCall.mockResolvedValue({ text: 'I will continue with the file request.' });
 });
 
 describe('deterministic missing-tool recovery', () => {
+  it('executes a server-owned structured media request directly without waiting for a model', async () => {
+    const registry = new ToolRegistry();
+    const handler = vi.fn(async () => JSON.stringify({
+      ok: true,
+      status: 'generated',
+      verified: true,
+      verificationStatus: 'verified',
+      images: ['D:\\lumi_output\\exact.png'],
+    }));
+    registry.register({
+      name: 'generate_image',
+      description: 'Generate a verified image artifact.',
+      parameters: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string' },
+          size: { type: 'string' },
+          n: { type: 'number' },
+        },
+        required: ['prompt'],
+      },
+      permission: 'user',
+      securityLevel: 'safe',
+      handler,
+    });
+    mocks.makeLLMCall.mockRejectedValueOnce(new Error('the reasoning model is unavailable'));
+    const exactArguments = { prompt: 'quiet moonlit harbor', size: '1024x1024', n: 1 };
+
+    const result = await runWithTools(
+      [{ role: 'user', content: 'Generate the requested image.' }],
+      registry,
+      { provider: 'deepseek', model: 'test-model' },
+      undefined,
+      1,
+      ...getters,
+      undefined,
+      {
+        userId: 'user-1',
+        authenticated: true,
+        taskId: 'task-media-1',
+        taskRevision: 2,
+        requestId: 'request-media-1',
+        source: 'chat',
+        actionIntent: 'Generate the requested image.',
+        routedTaskText: 'Generate images',
+        runtimeOwnedDeterministicRecoveryCall: {
+          source: 'structured_media_request',
+          taskId: 'task-media-1',
+          taskRevision: 2,
+          requestId: 'request-media-1',
+          name: 'generate_image',
+          arguments: exactArguments,
+        },
+        requestConfirmation: async () => true,
+        toolPolicy: {
+          allowedTools: ['generate_image'],
+          requireConfirmation: [],
+          forbiddenTools: [],
+          maxIterations: 1,
+        },
+        modelToolProjection: {
+          toolNames: ['generate_image'],
+          maxTools: 1,
+          allowDynamicDiscovery: false,
+        },
+      },
+    );
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(mocks.makeLLMCall).not.toHaveBeenCalled();
+    expect(handler).toHaveBeenCalledWith(exactArguments, expect.not.objectContaining({
+      runtimeOwnedDeterministicRecoveryCall: expect.anything(),
+    }));
+    expect(result.toolCalls[0]).toMatchObject({
+      name: 'generate_image',
+      arguments: exactArguments,
+      executionOrigin: 'deterministic_route',
+      result: expect.stringContaining('"verificationStatus":"verified"'),
+    });
+  });
+
   it('parses one explicit absolute path and exact content without executing it', () => {
     const target = 'C:\\Users\\ExampleUser\\LumiCore\\confirmation.txt';
     expect(buildDeterministicExplicitToolRecoveryCall(exactWriteTask(target, 'receipt-51fe050f'), ['write_file']))

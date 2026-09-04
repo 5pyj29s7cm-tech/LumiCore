@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { ToolRegistry } from '../tools/registry';
-import { ToolExecutionRecord, ToolContext, LLMUsage } from '../tools/types';
+import { ToolExecutionRecord, ToolContext, LLMUsage, type NormalizedLLMResponse } from '../tools/types';
 import {
   NormalizedMessage,
   makeLLMCall,
@@ -2071,6 +2071,24 @@ async function runWithToolsInternal(
       },
     );
     const exposedToolNames = new Set(toolDeclarations.map(declaration => declaration.function.name));
+    const noNewExecutionRecord = executionLog.length === priorExecutionRecords.length;
+    const runtimeRecovery = noNewExecutionRecord
+      ? validateRuntimeOwnedDeterministicToolRecoveryCall(
+          context?.runtimeOwnedDeterministicRecoveryCall,
+          context,
+          exposedToolNames,
+        )
+      : null;
+    const runtimeRecoveryAlreadyRecorded = runtimeRecovery
+      ? priorExecutionRecords.some(record => (
+          toolCallSignature(record) === toolCallSignature({
+            name: runtimeRecovery.name,
+            arguments: runtimeRecovery.arguments,
+          })
+        ))
+      : false;
+    const directStructuredMediaRecovery = runtimeRecovery?.reason === 'structured_media_request'
+      && !runtimeRecoveryAlreadyRecorded;
     const llmStart = Date.now();
     const modelMessages = compactMessagesForModel(conversationHistory);
     const invokeModel = async (attempt: ModelBudgetAttempt) => {
@@ -2129,14 +2147,28 @@ async function runWithToolsInternal(
             getRelay || (() => null),
           );
     };
-    const response = modelBudget
-      ? await modelBudget.runModelAttempt(config.attemptTimeouts, onStreamChunk, invokeModel)
-      : await invokeModel({
-          signal: config.signal || new AbortController().signal,
-          attemptTimeouts: resolveModelAttemptTimeouts(config.attemptTimeouts),
-          onChunk: onStreamChunk,
-        });
-    recordLatency('llm', Date.now() - llmStart);
+    let response: NormalizedLLMResponse;
+    if (directStructuredMediaRecovery) {
+      const id = `deterministic_media_${iteration}_${Date.now().toString(36)}`;
+      deterministicRecoveryToolCallIds.add(id);
+      response = {
+        text: null,
+        toolCalls: [{
+          id,
+          name: runtimeRecovery.name,
+          arguments: runtimeRecovery.arguments,
+        }],
+      };
+    } else {
+      response = modelBudget
+        ? await modelBudget.runModelAttempt(config.attemptTimeouts, onStreamChunk, invokeModel)
+        : await invokeModel({
+            signal: config.signal || new AbortController().signal,
+            attemptTimeouts: resolveModelAttemptTimeouts(config.attemptTimeouts),
+            onChunk: onStreamChunk,
+          });
+      recordLatency('llm', Date.now() - llmStart);
+    }
 
     const providerDroppedToolNames = response.modelRequestContext?.droppedToolNames || [];
     if (providerDroppedToolNames.length > 0) {
@@ -2186,28 +2218,12 @@ async function runWithToolsInternal(
     }
 
     let plannedToolCalls = response.toolCalls || [];
-    const noNewExecutionRecord = executionLog.length === priorExecutionRecords.length;
-    const runtimeRecovery = noNewExecutionRecord
-      ? validateRuntimeOwnedDeterministicToolRecoveryCall(
-          context?.runtimeOwnedDeterministicRecoveryCall,
-          context,
-          exposedToolNames,
-        )
-      : null;
-    const runtimeRecoveryAlreadyRecorded = runtimeRecovery
-      ? priorExecutionRecords.some(record => (
-          toolCallSignature(record) === toolCallSignature({
-            name: runtimeRecovery.name,
-            arguments: runtimeRecovery.arguments,
-          })
-        ))
-      : false;
     if (runtimeRecovery) {
       // The accepted correction has one server-owned exact action. Model tool
       // output cannot change its path/content or substitute another tool.
       if (runtimeRecoveryAlreadyRecorded) {
         plannedToolCalls = [];
-      } else {
+      } else if (!directStructuredMediaRecovery) {
         const id = `deterministic_correction_${iteration}_${Date.now().toString(36)}`;
         deterministicRecoveryToolCallIds.add(id);
         plannedToolCalls = [{
@@ -2615,6 +2631,19 @@ async function runWithToolsInternal(
           usageRecords,
         };
       }
+    }
+
+    if (directStructuredMediaRecovery) {
+      // A workbench action is already fully specified and server-bound. Once
+      // its one canonical tool call settles, return the receipt immediately;
+      // neither initial planning nor a second summarization model call is
+      // allowed to delay, mutate, duplicate, or hide that execution outcome.
+      recordWorkflowIfToolsUsed(executionLog, messages, config);
+      return {
+        text: '',
+        toolCalls: executionLog,
+        usageRecords,
+      };
     }
 
     const readyWorkProduct = buildReadyWorkProductSummary(messages, executionLog);

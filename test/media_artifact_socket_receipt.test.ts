@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildMediaArtifactReceipt } from '../server/socket/media_artifact_receipt';
 
 describe('media artifact socket receipt', () => {
-  it('keeps long remote media URLs intact without forwarding prompt or provider metadata', () => {
+  it('rejects a remote-only result so signed provider URLs never enter a terminal receipt', () => {
     const url = `https://media.example.test/video.mp4?signature=${'a'.repeat(900)}`;
     const receipt = buildMediaArtifactReceipt('generate_video', {
       size: '1280x720',
@@ -10,26 +10,23 @@ describe('media artifact socket receipt', () => {
     }, JSON.stringify({
       ok: true,
       status: 'generated',
+      verified: true,
+      verificationStatus: 'verified',
       prompt: 'private creative prompt',
       provider: 'relay',
       video_url: url,
       artifacts: [{ type: 'video_url', url }],
     }));
 
-    expect(receipt).toEqual({
-      version: 1,
-      toolName: 'generate_video',
-      settings: { size: '1280x720', duration: 6, hasReference: false },
-      artifacts: [{ kind: 'video', url }],
-    });
-    expect(JSON.stringify(receipt)).not.toContain('private creative prompt');
-    expect(JSON.stringify(receipt)).not.toContain('relay');
+    expect(receipt).toBeUndefined();
   });
 
   it('returns bounded, deduplicated local image artifacts and ignores base64', () => {
     const result = JSON.stringify({
       ok: true,
       status: 'generated',
+      verified: true,
+      verificationStatus: 'verified',
       images: ['D:\\LumiCore\\generated\\one.png', 'data:image/png;base64,secret'],
       artifacts: [
         { type: 'image', path: 'D:\\LumiCore\\generated\\one.png' },
@@ -42,6 +39,25 @@ describe('media artifact socket receipt', () => {
       { kind: 'image', path: 'D:\\LumiCore\\generated\\one.png' },
       { kind: 'image', path: 'D:\\LumiCore\\generated\\two.png' },
     ]);
+  });
+
+  it('proves an image edit had a source without exposing that private source path', () => {
+    const receipt = buildMediaArtifactReceipt('ai_edit_image', {
+      size: '1024x1024',
+      filePath: 'D:\\private\\source.png',
+    }, JSON.stringify({
+      ok: true,
+      verified: true,
+      verificationStatus: 'verified',
+      outputPath: 'D:\\lumi_output\\edited.png',
+    }));
+
+    expect(receipt).toMatchObject({
+      verified: true,
+      verificationStatus: 'verified',
+      settings: { size: '1024x1024', hasReference: false, hasSource: true },
+    });
+    expect(JSON.stringify(receipt)).not.toContain('private');
   });
 
   it('does not create receipts for failures, unknown tools, prose, or oversized locations', () => {

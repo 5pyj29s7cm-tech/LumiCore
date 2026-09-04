@@ -99,6 +99,7 @@ describe('native chat terminal event receipts', () => {
       startedAt: '2026-09-04T00:00:00.000Z',
       mediaGeneration: {
         mode: 'video',
+        operation: 'image_to_video',
         size: '1280x720',
         duration: 6,
         referenceImage: 'D:\\media\\first.png',
@@ -107,6 +108,7 @@ describe('native chat terminal event receipts', () => {
 
     expect(normalizePersistedPendingChatExecutions(JSON.parse(JSON.stringify(state)))[0]?.mediaGeneration).toEqual({
       mode: 'video',
+      operation: 'image_to_video',
       size: '1280x720',
       duration: 6,
       referenceImage: 'D:\\media\\first.png',

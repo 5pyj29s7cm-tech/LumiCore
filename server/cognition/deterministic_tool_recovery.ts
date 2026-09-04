@@ -4,14 +4,38 @@ import type { ConversationActionContinuationState } from './action_continuation'
 import { normalizeTaskCapsuleV1 } from '../conversation/task_capsule';
 import type { ToolContext } from '../tools/types';
 import type { PendingToolConfirmation } from '../tools/pending_confirmation';
+import {
+  structuredMediaToolCall,
+  type StructuredMediaRequest,
+} from '../../shared/media_generation';
 
 export interface DeterministicToolRecoveryCall {
   name: string;
   arguments: Record<string, unknown>;
-  reason: 'explicit_exact_text_write' | 'durable_task_capsule_exact_text_write';
+  reason: 'explicit_exact_text_write' | 'durable_task_capsule_exact_text_write' | 'structured_media_request';
 }
 
 type RuntimeOwnedRecoveryCall = NonNullable<ToolContext['runtimeOwnedDeterministicRecoveryCall']>;
+type RuntimeOwnedStructuredMediaCall = Extract<RuntimeOwnedRecoveryCall, { source: 'structured_media_request' }>;
+
+export function buildStructuredMediaDeterministicToolRecoveryCall(
+  request: StructuredMediaRequest,
+  binding: { taskId?: unknown; taskRevision?: unknown; requestId?: unknown },
+): RuntimeOwnedStructuredMediaCall | null {
+  const taskId = String(binding.taskId || '').trim();
+  const requestId = String(binding.requestId || '').trim();
+  const taskRevision = Number(binding.taskRevision);
+  if (!taskId || !requestId || !Number.isSafeInteger(taskRevision) || taskRevision < 0) return null;
+  const exact = structuredMediaToolCall(request);
+  return {
+    source: 'structured_media_request',
+    taskId,
+    taskRevision,
+    requestId,
+    name: exact.name,
+    arguments: exact.arguments,
+  };
+}
 
 const WINDOWS_TEXT_PATH_RE = /[A-Za-z]:[\\/][^\r\n"'<>|?*]+?\.(?:txt|md)(?=$|[\s,.;:)}\]，。；：）】])/giu; // i18n-allow: Multilingual punctuation boundary; not user-visible copy.
 const POSIX_TEXT_PATH_RE = /\/(?:[^/\r\n"'<>|?*]+\/)*[^/\r\n"'<>|?*]+?\.(?:txt|md)(?=$|[\s,.;:)}\]，。；：）】])/gu; // i18n-allow: Multilingual punctuation boundary; not user-visible copy.
@@ -179,6 +203,24 @@ export function validateRuntimeOwnedDeterministicToolRecoveryCall(
   context: Pick<ToolContext, 'taskId' | 'taskRevision' | 'requestId'> | undefined,
   exposedToolNames: Iterable<string>,
 ): DeterministicToolRecoveryCall | null {
+  if (candidate?.source === 'structured_media_request') {
+    if (
+      !candidate.taskId
+      || candidate.taskId !== String(context?.taskId || '').trim()
+      || !candidate.requestId
+      || candidate.requestId !== String(context?.requestId || '').trim()
+      || !Number.isSafeInteger(candidate.taskRevision)
+      || candidate.taskRevision < 0
+      || !Number.isSafeInteger(context?.taskRevision)
+      || candidate.taskRevision !== context?.taskRevision
+      || !new Set(Array.from(exposedToolNames)).has(candidate.name)
+    ) return null;
+    return {
+      name: candidate.name,
+      arguments: { ...candidate.arguments },
+      reason: 'structured_media_request',
+    };
+  }
   if (
     !candidate
     || candidate.source !== 'durable_task_capsule'

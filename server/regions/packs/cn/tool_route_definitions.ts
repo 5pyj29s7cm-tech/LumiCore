@@ -64,6 +64,17 @@ export const ROUTES: RouteDefinition[] = [
     exact: ['generate_image'],
   },
   {
+    category: 'image_editing',
+    reason: 'generative edit of an existing image',
+    patterns: [
+      /^Edit image\s*(?:\r?\n|$)/iu,
+      /^(?:\u8bf7)?(?:\u5e2e\u6211)?(?:\u7f16\u8f91|\u4fee\u6539|\u91cd\u505a|\u91cd\u7ed8|\u66ff\u6362|\u53d8\u66f4).{0,48}(?:\u56fe\u7247|\u56fe\u50cf|\u7167\u7247|\u6d77\u62a5|\u4e3b\u56fe)/u,
+      /^(?:please\s+)?(?:edit|modify|rework|redraw|replace|change)\b.{0,64}\b(?:image|picture|photo|poster|artwork)\b/iu,
+      /^(?:please\s+)?(?:make|turn)\b.{0,48}\b(?:generated|existing|this|that|previous)\b.{0,24}\b(?:image|picture|photo)\b/iu,
+    ],
+    exact: ['ai_edit_image'],
+  },
+  {
     category: 'video_generation',
     reason: 'direct video-generation request',
     patterns: [

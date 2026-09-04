@@ -163,6 +163,7 @@ const DECLARATIONS = [
   'mcp_cad-drafting_autocad_playback_file',
   'cad_draw_floorplan_in_autocad',
   'generate_image',
+  'ai_edit_image',
   'generate_video',
   'mcp_sales-customer-ops_lead_score',
   'mcp_sales-customer-ops_sales_followup_draft',
@@ -874,6 +875,19 @@ describe('tool router', () => {
       'mcp_cad-drafting_autocad_playback_file',
       'mcp_cad-drafting_cad_space_program',
     ]));
+  });
+
+  it.each([
+    'Edit image\nCreative brief: keep the person and replace the background\nCanvas size: 1024x1024',
+    '请帮我修改刚生成的图片，把背景换成蓝色',
+    'Edit the generated image and make the lighting warmer.',
+  ])('routes generative image edits only to the AI image editor: %s', (prompt) => {
+    const route = routeToolsForTurn(prompt, DECLARATIONS, { enableMcpHealthGate: false });
+
+    expect(route.categories).toEqual(['image_editing']);
+    expect(route.toolNames).toContain('ai_edit_image');
+    expect(route.toolNames).not.toContain('generate_image');
+    expect(route.toolNames).not.toContain('generate_video');
   });
 
   it.each([

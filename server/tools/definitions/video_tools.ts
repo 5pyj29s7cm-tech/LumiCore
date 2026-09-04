@@ -1,5 +1,7 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
+import { createRequire } from 'module';
 import { ToolRegistry } from '../registry';
 import type { ToolContext } from '../types';
 import { loadKeys } from '../../config/keys';
@@ -17,22 +19,133 @@ import {
   officialApiPath,
   officialApiRequest,
 } from '../../llm/official_api';
-import { assertPublicMediaUrl, downloadPublicMedia, readResponseBytes } from '../media_artifact';
+import { downloadPublicMedia, readResponseBytes } from '../media_artifact';
+import { cancelDashScopeTaskBestEffort } from '../dashscope_async_task';
+import { CN_MEDIA_PROGRESS } from '../../regions/packs/cn/media_progress';
 
 const OUTPUT_DIR = getGeneratedOutputDir();
 const POLL_DELAY_MS = process.env.NODE_ENV === 'test' ? 0 : 5_000;
 const MAX_POLLS = 120;
 const MAX_REMOTE_VIDEO_BYTES = 100 * 1024 * 1024;
 const MAX_REFERENCE_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_DECODED_REFERENCE_PIXELS = 40_000_000;
 const REMOTE_MEDIA_TIMEOUT_MS = 90_000;
+const require = createRequire(import.meta.url);
+
+type VideoProgressReporter = ToolContext['onProgress'];
+
+function reportVideoProgress(onProgress: VideoProgressReporter, message: string): void {
+  try { onProgress?.(message); } catch {
+    // Progress reporting is observational and must not change the generation outcome.
+  }
+}
+
+function reportSubmitted(onProgress: VideoProgressReporter, provider: string): void {
+  reportVideoProgress(onProgress, CN_MEDIA_PROGRESS.providerVideoSubmitted(provider));
+  reportVideoProgress(onProgress, CN_MEDIA_PROGRESS.providerVideoRunning(provider));
+}
+
+async function tryCancelDashScopeVideoTask(
+  taskId: string,
+  apiKey: string,
+  onProgress?: VideoProgressReporter,
+): Promise<void> {
+  const { outcome } = await cancelDashScopeTaskBestEffort(taskId, apiKey);
+  if (outcome === 'remote_cancelled') {
+    reportVideoProgress(onProgress, CN_MEDIA_PROGRESS.qwenRemoteCancelled);
+    return;
+  }
+  if (outcome === 'remote_cancel_rejected_state') {
+    reportVideoProgress(onProgress, CN_MEDIA_PROGRESS.qwenRemoteCancelUnavailable);
+    return;
+  }
+  reportVideoProgress(onProgress, CN_MEDIA_PROGRESS.qwenRemoteCancelFailed);
+}
 
 function ensureOutputDir(): string {
   if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
   return OUTPUT_DIR;
 }
 
-function waitForNextPoll(): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, POLL_DELAY_MS));
+class InvalidVideoContainerError extends Error {
+  constructor() {
+    super('Generated video bytes are not a valid MP4 or WebM container.');
+    this.name = 'InvalidVideoContainerError';
+  }
+}
+
+function detectVideoContainer(bytes: Buffer): 'mp4' | 'webm' {
+  if (
+    bytes.length >= 8
+    && bytes[0] === 0x1a
+    && bytes[1] === 0x45
+    && bytes[2] === 0xdf
+    && bytes[3] === 0xa3
+  ) return 'webm';
+
+  if (bytes.length >= 12 && bytes.toString('ascii', 4, 8) === 'ftyp') {
+    const declaredSize = bytes.readUInt32BE(0);
+    const regularSizeIsValid = declaredSize === 0
+      || (declaredSize >= 12 && declaredSize <= bytes.length);
+    const extendedSizeIsValid = declaredSize === 1
+      && bytes.length >= 20
+      && bytes.readBigUInt64BE(8) >= 20n
+      && bytes.readBigUInt64BE(8) <= BigInt(bytes.length);
+    if (regularSizeIsValid || extendedSizeIsValid) return 'mp4';
+  }
+
+  throw new InvalidVideoContainerError();
+}
+
+function writeVideoAtomically(
+  bytes: Buffer,
+  provider: string,
+  signal?: AbortSignal,
+  onBeforeWrite?: () => void,
+): string {
+  const extension = detectVideoContainer(bytes);
+  throwIfAborted(signal);
+  onBeforeWrite?.();
+  const outputDir = ensureOutputDir();
+  const uniqueSuffix = `${Date.now()}_${crypto.randomUUID()}`;
+  const outputPath = path.join(outputDir, `${provider}_video_${uniqueSuffix}.${extension}`);
+  const temporaryPath = path.join(outputDir, `.${provider}_video_${uniqueSuffix}.${crypto.randomUUID()}.partial`);
+  let descriptor: number | undefined;
+  try {
+    descriptor = fs.openSync(temporaryPath, 'wx');
+    fs.writeFileSync(descriptor, bytes);
+    fs.fsyncSync(descriptor);
+    fs.closeSync(descriptor);
+    descriptor = undefined;
+    throwIfAborted(signal);
+    fs.renameSync(temporaryPath, outputPath);
+    return outputPath;
+  } catch (error) {
+    if (descriptor !== undefined) {
+      try { fs.closeSync(descriptor); } catch {}
+    }
+    try { fs.unlinkSync(temporaryPath); } catch {}
+    throw error;
+  }
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw signal.reason || new DOMException('Video generation cancelled', 'AbortError');
+}
+
+function waitForNextPoll(signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }, POLL_DELAY_MS);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason || new DOMException('Video generation cancelled', 'AbortError'));
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+  });
 }
 
 function normalizeSize(value: unknown, separator: 'x' | '*'): string {
@@ -40,39 +153,67 @@ function normalizeSize(value: unknown, separator: 'x' | '*'): string {
   return /^\d{3,4}[x*]\d{3,4}$/i.test(raw) ? raw : `1280${separator}720`;
 }
 
-function imageMimeType(filePath: string): string | null {
-  const extension = path.extname(filePath).toLowerCase();
-  if (extension === '.png') return 'image/png';
-  if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg';
-  if (extension === '.webp') return 'image/webp';
-  if (extension === '.gif') return 'image/gif';
-  return null;
+async function verifiedReferenceMimeType(
+  bytes: Buffer,
+  label: string,
+  signal?: AbortSignal,
+): Promise<'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'> {
+  throwIfAborted(signal);
+  if (bytes.length === 0) throw new Error(`${label} is empty.`);
+  if (bytes.length > MAX_REFERENCE_IMAGE_BYTES) {
+    throw new Error(`${label} exceeds the ${MAX_REFERENCE_IMAGE_BYTES} byte limit.`);
+  }
+  try {
+    const sharp = require('sharp');
+    const inputOptions = { failOn: 'error' as const, limitInputPixels: MAX_DECODED_REFERENCE_PIXELS };
+    const metadata = await sharp(bytes, inputOptions).metadata();
+    const format = String(metadata?.format || '').toLowerCase();
+    const mimeType = format === 'png' ? 'image/png'
+      : format === 'jpeg' || format === 'jpg' ? 'image/jpeg'
+        : format === 'webp' ? 'image/webp'
+          : format === 'gif' ? 'image/gif'
+            : null;
+    if (!mimeType || !metadata?.width || !metadata?.height) throw new Error('unsupported image format');
+    // metadata alone only proves a plausible container; stats forces a real
+    // pixel decode before the bytes are sent to a paid video provider.
+    await sharp(bytes, inputOptions).stats();
+    throwIfAborted(signal);
+    return mimeType;
+  } catch (error) {
+    throwIfAborted(signal);
+    throw new Error(`${label} is not a decodable PNG, JPEG, WebP, or GIF image.`, { cause: error });
+  }
 }
 
-async function normalizeVideoReference(value: unknown, label: string): Promise<string | undefined> {
+async function normalizeVideoReference(
+  value: unknown,
+  label: string,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
   const raw = String(value || '').trim();
   if (!raw) return undefined;
   const dataUrl = raw.match(/^data:(image\/(?:png|jpe?g|webp|gif));base64,([A-Za-z0-9+/=\r\n]+)$/i);
   if (dataUrl) {
     const normalized = dataUrl[2].replace(/\s+/g, '');
-    if (Math.ceil(normalized.length * 3 / 4) > MAX_REFERENCE_IMAGE_BYTES) {
-      throw new Error(`${label} exceeds the ${MAX_REFERENCE_IMAGE_BYTES} byte limit.`);
-    }
-    return `data:${dataUrl[1].toLowerCase()};base64,${normalized}`;
+    const bytes = Buffer.from(normalized, 'base64');
+    const mimeType = await verifiedReferenceMimeType(bytes, label, signal);
+    return `data:${mimeType};base64,${bytes.toString('base64')}`;
   }
   if (/^https:/i.test(raw)) {
-    return (await assertPublicMediaUrl(raw)).toString();
+    const { bytes } = await downloadPublicMedia(raw, {
+      maxBytes: MAX_REFERENCE_IMAGE_BYTES,
+      timeoutMs: REMOTE_MEDIA_TIMEOUT_MS,
+      signal,
+    });
+    const mimeType = await verifiedReferenceMimeType(bytes, label, signal);
+    return `data:${mimeType};base64,${bytes.toString('base64')}`;
   }
   if (/^https?:/i.test(raw)) throw new Error(`${label} must use HTTPS.`);
   if (!path.isAbsolute(raw) || !fs.existsSync(raw) || !fs.statSync(raw).isFile()) {
     throw new Error(`${label} must be an existing local image, an HTTPS URL, or an image data URL.`);
   }
   const bytes = fs.readFileSync(raw);
-  if (bytes.length > MAX_REFERENCE_IMAGE_BYTES) {
-    throw new Error(`${label} exceeds the ${MAX_REFERENCE_IMAGE_BYTES} byte limit.`);
-  }
-  const mimeType = imageMimeType(raw);
-  if (!mimeType) throw new Error(`${label} must be a PNG, JPEG, WebP, or GIF image.`);
+  const mimeType = await verifiedReferenceMimeType(bytes, label, signal);
   return `data:${mimeType};base64,${bytes.toString('base64')}`;
 }
 
@@ -109,18 +250,24 @@ async function persistRemoteVideo(
   url: string,
   provider: string,
   headers: Record<string, string> = {},
-): Promise<{ outputPath?: string; downloadError?: string }> {
+  signal?: AbortSignal,
+): Promise<{ outputPath: string }> {
   try {
     const { bytes } = await downloadPublicMedia(url, {
       headers,
       maxBytes: MAX_REMOTE_VIDEO_BYTES,
       timeoutMs: REMOTE_MEDIA_TIMEOUT_MS,
+      signal,
     });
-    const outputPath = path.join(ensureOutputDir(), `${provider}_video_${Date.now()}.mp4`);
-    fs.writeFileSync(outputPath, bytes);
+    throwIfAborted(signal);
+    const outputPath = writeVideoAtomically(bytes, provider, signal);
     return { outputPath };
   } catch (error: any) {
-    return { downloadError: String(error?.message || error).slice(0, 300) };
+    throwIfAborted(signal);
+    throw new Error(
+      `${provider} completed video generation, but LumiCore could not verify and save the returned media: ${String(error?.message || error).slice(0, 300)}`,
+      { cause: error },
+    );
   }
 }
 
@@ -130,21 +277,21 @@ function completedResult(input: {
   prompt: string;
   taskId: string;
   videoUrl?: string;
-  outputPath?: string;
-  downloadError?: string;
+  outputPath: string;
   generationMode?: 'text_to_video' | 'image_to_video';
   inputReferenceAccepted?: boolean;
   selectionReason?: 'explicit_model' | 'configured_text_to_video_role' | 'configured_image_to_video_role';
+  signal?: AbortSignal;
+  onProgress?: VideoProgressReporter;
 }): string {
-  const artifacts = input.outputPath
-    ? [{ type: 'video', path: input.outputPath }]
-    : input.videoUrl
-      ? [{ type: 'video_url', url: input.videoUrl }]
-      : [];
-  return JSON.stringify({
+  throwIfAborted(input.signal);
+  const artifacts = [{ type: 'video', path: input.outputPath }];
+  const result = JSON.stringify({
     ok: true,
     status: 'generated',
     success: true,
+    verified: true,
+    verificationStatus: 'verified',
     provider: input.provider,
     model: input.model,
     prompt: input.prompt,
@@ -152,15 +299,16 @@ function completedResult(input: {
     generationMode: input.generationMode || 'text_to_video',
     inputReferenceAccepted: input.inputReferenceAccepted === true,
     selectionReason: input.selectionReason || 'configured_text_to_video_role',
-    artifactDurability: input.outputPath ? 'local_file' : 'remote_only',
-    video_url: input.videoUrl,
+    artifactDurability: 'local_file',
     outputPath: input.outputPath,
     artifacts,
-    downloadError: input.downloadError,
-    tip: input.outputPath
-      ? 'Video generation completed and the MP4 was saved locally.'
-      : 'Video generation completed. The remote URL may expire; save it locally before expiry.',
+    tip: 'Video generation completed and a verified MP4 or WebM artifact was saved locally.',
   });
+  reportVideoProgress(
+    input.onProgress,
+    CN_MEDIA_PROGRESS.videoCompleteSaved,
+  );
+  return result;
 }
 
 function completionMetadata(args: Record<string, any>) {
@@ -174,7 +322,12 @@ function completionMetadata(args: Record<string, any>) {
   };
 }
 
-async function generateQwenVideo(args: Record<string, any>, model: string): Promise<string> {
+async function generateQwenVideo(
+  args: Record<string, any>,
+  model: string,
+  signal?: AbortSignal,
+  onProgress?: VideoProgressReporter,
+): Promise<string> {
   const apiKey = providerKey('qwen');
   if (!apiKey) throw new Error('DASHSCOPE_API_KEY is not configured in Settings > AI Providers.');
   const prompt = String(args.prompt || '').trim();
@@ -197,35 +350,51 @@ async function generateQwenVideo(args: Record<string, any>, model: string): Prom
           seed: Number.isFinite(Number(args.seed)) ? Number(args.seed) : Math.floor(Math.random() * 2_147_483_647),
         },
       }),
+      signal,
     },
     'Qwen / DashScope',
   );
   if (task.code) throw new Error(`DashScope video error (${task.code}): ${task.message || 'unknown error'}`);
   const taskId = String(task.output?.task_id || '');
   if (!taskId) throw new Error('DashScope video generation returned no task ID.');
+  reportSubmitted(onProgress, 'DashScope');
 
-  for (let attempt = 0; attempt < MAX_POLLS; attempt++) {
-    await waitForNextPoll();
-    const status = await fetchJson(
-      `https://dashscope.aliyuncs.com/api/v1/tasks/${encodeURIComponent(taskId)}`,
-      { headers: { Authorization: `Bearer ${apiKey}` } },
-      'Qwen / DashScope',
-    );
-    const state = status.output?.task_status;
-    if (state === 'SUCCEEDED') {
-      const videoUrl = String(status.output?.video_url || '');
-      if (!videoUrl) throw new Error('DashScope completed the task but returned no video URL.');
-      const saved = await persistRemoteVideo(videoUrl, 'qwen');
-      return completedResult({ provider: 'qwen', model, prompt, taskId, videoUrl, ...saved, ...completionMetadata(args) });
+  try {
+    for (let attempt = 0; attempt < MAX_POLLS; attempt++) {
+      await waitForNextPoll(signal);
+      const status = await fetchJson(
+        `https://dashscope.aliyuncs.com/api/v1/tasks/${encodeURIComponent(taskId)}`,
+        { headers: { Authorization: `Bearer ${apiKey}` }, signal },
+        'Qwen / DashScope',
+      );
+      const state = status.output?.task_status;
+      if (state === 'SUCCEEDED') {
+        const videoUrl = String(status.output?.video_url || '');
+        if (!videoUrl) throw new Error('DashScope completed the task but returned no video URL.');
+        reportVideoProgress(onProgress, CN_MEDIA_PROGRESS.videoDownloading);
+        const saved = await persistRemoteVideo(videoUrl, 'qwen', {}, signal);
+        return completedResult({ provider: 'qwen', model, prompt, taskId, videoUrl, ...saved, ...completionMetadata(args), signal, onProgress });
+      }
+      if (state === 'FAILED' || status.code) {
+        throw new Error(`DashScope video generation failed: ${status.output?.message || status.message || 'unknown error'}`);
+      }
     }
-    if (state === 'FAILED' || status.code) {
-      throw new Error(`DashScope video generation failed: ${status.output?.message || status.message || 'unknown error'}`);
+  } catch (error: any) {
+    if (signal?.aborted) {
+      await tryCancelDashScopeVideoTask(taskId, apiKey, onProgress);
+      throw signal?.reason || error;
     }
+    throw error;
   }
   throw new Error(`DashScope video generation timed out. Task: ${taskId}`);
 }
 
-async function generateMiniMaxVideo(args: Record<string, any>, model: string): Promise<string> {
+async function generateMiniMaxVideo(
+  args: Record<string, any>,
+  model: string,
+  signal?: AbortSignal,
+  onProgress?: VideoProgressReporter,
+): Promise<string> {
   const apiKey = providerKey('minimax');
   if (!apiKey) throw new Error('MINIMAX_API_KEY is not configured in Settings > AI Providers.');
   const prompt = String(args.prompt || '').trim();
@@ -242,29 +411,32 @@ async function generateMiniMaxVideo(args: Record<string, any>, model: string): P
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
+    signal,
   }, 'MiniMax');
   const taskId = String(task.task_id || '');
   if (!taskId) throw new Error(`MiniMax video generation returned no task ID: ${task.base_resp?.status_msg || 'unknown response'}`);
+  reportSubmitted(onProgress, 'MiniMax');
 
   for (let attempt = 0; attempt < MAX_POLLS; attempt++) {
-    await waitForNextPoll();
+    await waitForNextPoll(signal);
     const status = await fetchJson(
       `https://api.minimaxi.com/v1/query/video_generation?task_id=${encodeURIComponent(taskId)}`,
-      { headers: { Authorization: `Bearer ${apiKey}` } },
+      { headers: { Authorization: `Bearer ${apiKey}` }, signal },
       'MiniMax',
     );
     if (status.status === 'Success') {
+      reportVideoProgress(onProgress, CN_MEDIA_PROGRESS.videoRetrieving);
       const fileId = String(status.file_id || '');
       if (!fileId) throw new Error('MiniMax completed the task but returned no file ID.');
       const file = await fetchJson(
         `https://api.minimaxi.com/v1/files/retrieve?file_id=${encodeURIComponent(fileId)}`,
-        { headers: { Authorization: `Bearer ${apiKey}` } },
+        { headers: { Authorization: `Bearer ${apiKey}` }, signal },
         'MiniMax',
       );
       const videoUrl = String(file.file?.download_url || '');
       if (!videoUrl) throw new Error('MiniMax returned no video download URL.');
-      const saved = await persistRemoteVideo(videoUrl, 'minimax');
-      return completedResult({ provider: 'minimax', model, prompt, taskId, videoUrl, ...saved, ...completionMetadata(args) });
+      const saved = await persistRemoteVideo(videoUrl, 'minimax', {}, signal);
+      return completedResult({ provider: 'minimax', model, prompt, taskId, videoUrl, ...saved, ...completionMetadata(args), signal, onProgress });
     }
     if (status.status === 'Fail') {
       throw new Error(`MiniMax video generation failed: ${status.error_message || status.base_resp?.status_msg || 'unknown error'}`);
@@ -277,7 +449,12 @@ function siliconFlowBaseUrl(): string {
   return String(process.env.SILICONFLOW_BASE_URL || 'https://api.siliconflow.cn/v1').replace(/\/+$/, '');
 }
 
-async function generateSiliconFlowVideo(args: Record<string, any>, model: string): Promise<string> {
+async function generateSiliconFlowVideo(
+  args: Record<string, any>,
+  model: string,
+  signal?: AbortSignal,
+  onProgress?: VideoProgressReporter,
+): Promise<string> {
   const apiKey = providerKey('siliconflow');
   if (!apiKey) throw new Error('SILICONFLOW_API_KEY is not configured in Settings > AI Providers.');
   const prompt = String(args.prompt || '').trim();
@@ -292,22 +469,26 @@ async function generateSiliconFlowVideo(args: Record<string, any>, model: string
       negative_prompt: args.negative_prompt ? String(args.negative_prompt) : undefined,
       seed: Number.isFinite(Number(args.seed)) ? Number(args.seed) : undefined,
     }),
+    signal,
   }, 'SiliconFlow');
   const taskId = String(task.requestId || '');
   if (!taskId) throw new Error(`SiliconFlow video generation returned no request ID: ${task.message || 'unknown response'}`);
+  reportSubmitted(onProgress, 'SiliconFlow');
 
   for (let attempt = 0; attempt < MAX_POLLS; attempt++) {
-    await waitForNextPoll();
+    await waitForNextPoll(signal);
     const status = await fetchJson(`${baseUrl}/video/status`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ requestId: taskId }),
+      signal,
     }, 'SiliconFlow');
     if (status.status === 'Succeed') {
       const videoUrl = String(status.results?.videos?.[0]?.url || '');
       if (!videoUrl) throw new Error('SiliconFlow completed the task but returned no video URL.');
-      const saved = await persistRemoteVideo(videoUrl, 'siliconflow');
-      return completedResult({ provider: 'siliconflow', model, prompt, taskId, videoUrl, ...saved, ...completionMetadata(args) });
+      reportVideoProgress(onProgress, CN_MEDIA_PROGRESS.videoDownloading);
+      const saved = await persistRemoteVideo(videoUrl, 'siliconflow', {}, signal);
+      return completedResult({ provider: 'siliconflow', model, prompt, taskId, videoUrl, ...saved, ...completionMetadata(args), signal, onProgress });
     }
     if (status.status === 'Failed') {
       throw new Error(`SiliconFlow video generation failed: ${status.reason || status.message || 'unknown error'}`);
@@ -329,7 +510,12 @@ function openAIDuration(value: unknown): string {
   ), 4));
 }
 
-async function generateOpenAIVideo(args: Record<string, any>, model: string): Promise<string> {
+async function generateOpenAIVideo(
+  args: Record<string, any>,
+  model: string,
+  signal?: AbortSignal,
+  onProgress?: VideoProgressReporter,
+): Promise<string> {
   const apiKey = providerKey('openai');
   if (!apiKey) throw new Error('OPENAI_API_KEY is not configured in Settings > AI Providers.');
   const prompt = String(args.prompt || '').trim();
@@ -343,25 +529,30 @@ async function generateOpenAIVideo(args: Record<string, any>, model: string): Pr
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}` },
     body: form,
+    signal,
   }, 'OpenAI');
   const taskId = String(task.id || '');
   if (!taskId) throw new Error('OpenAI video generation returned no video ID.');
+  reportSubmitted(onProgress, 'OpenAI');
 
   for (let attempt = 0; attempt < MAX_POLLS; attempt++) {
-    await waitForNextPoll();
+    await waitForNextPoll(signal);
     const status = await fetchJson(
       `${baseUrl}/videos/${encodeURIComponent(taskId)}`,
-      { headers: { Authorization: `Bearer ${apiKey}` } },
+      { headers: { Authorization: `Bearer ${apiKey}` }, signal },
       'OpenAI',
     );
     if (status.status === 'completed') {
+      reportVideoProgress(onProgress, CN_MEDIA_PROGRESS.videoDownloading);
       const response = await fetch(`${baseUrl}/videos/${encodeURIComponent(taskId)}/content`, {
         headers: { Authorization: `Bearer ${apiKey}` },
+        signal,
       });
       if (!response.ok) throw new Error(`OpenAI video download failed: HTTP ${response.status}`);
-      const outputPath = path.join(ensureOutputDir(), `openai_video_${Date.now()}.mp4`);
-      fs.writeFileSync(outputPath, Buffer.from(await response.arrayBuffer()));
-      return completedResult({ provider: 'openai', model, prompt, taskId, outputPath, ...completionMetadata(args) });
+      const bytes = await readResponseBytes(response, MAX_REMOTE_VIDEO_BYTES, signal);
+      throwIfAborted(signal);
+      const outputPath = writeVideoAtomically(bytes, 'openai', signal);
+      return completedResult({ provider: 'openai', model, prompt, taskId, outputPath, ...completionMetadata(args), signal, onProgress });
     }
     if (status.status === 'failed') {
       throw new Error(`OpenAI video generation failed: ${status.error?.message || 'unknown error'}`);
@@ -391,7 +582,12 @@ function officialVideoUrl(body: any): string {
     || body?.result?.url || body?.result_url || body?.data?.result_url || '').trim();
 }
 
-function saveBase64Video(value: unknown): string | undefined {
+function saveBase64Video(
+  value: unknown,
+  signal?: AbortSignal,
+  onBeforeWrite?: () => void,
+): string | undefined {
+  throwIfAborted(signal);
   const raw = String(value || '').trim();
   const match = raw.match(/^data:[^;,]+;base64,(.+)$/i);
   const encoded = match?.[1] || (/^[A-Za-z0-9+/=\r\n]+$/.test(raw) && raw.length > 100 ? raw : '');
@@ -399,13 +595,22 @@ function saveBase64Video(value: unknown): string | undefined {
   if (Math.ceil(encoded.replace(/\s+/g, '').length * 3 / 4) > MAX_REMOTE_VIDEO_BYTES) {
     throw new Error(`Generated video exceeds the ${MAX_REMOTE_VIDEO_BYTES} byte limit.`);
   }
-  const outputPath = path.join(ensureOutputDir(), `official_video_${Date.now()}.mp4`);
-  fs.writeFileSync(outputPath, Buffer.from(encoded.replace(/\s+/g, ''), 'base64'));
-  return outputPath;
+  throwIfAborted(signal);
+  return writeVideoAtomically(
+    Buffer.from(encoded.replace(/\s+/g, ''), 'base64'),
+    'official',
+    signal,
+    onBeforeWrite,
+  );
 }
 
 /** OpenAI-compatible asynchronous video generation through Lumi's gateway. */
-async function generateOfficialVideo(args: Record<string, any>, selectedModel: string): Promise<string> {
+async function generateOfficialVideo(
+  args: Record<string, any>,
+  selectedModel: string,
+  signal?: AbortSignal,
+  onProgress?: VideoProgressReporter,
+): Promise<string> {
   const prompt = String(args.prompt || '').trim();
   if (!prompt) throw new Error('prompt is required');
   const imageToVideo = Boolean(args.first_frame_image);
@@ -431,41 +636,57 @@ async function generateOfficialVideo(args: Record<string, any>, selectedModel: s
     headers: useJson ? { 'Content-Type': 'application/json' } : {},
     body: useJson ? JSON.stringify(payload) : officialVideoPayload(args, model),
     timeoutMs: 90_000,
+    signal,
   });
   const taskId = officialVideoTaskId(request.body);
   const immediateUrl = officialVideoUrl(request.body);
-  const immediatePath = saveBase64Video(request.body?.b64_json || request.body?.base64 || request.body?.video_base64);
+  const immediatePath = saveBase64Video(
+    request.body?.b64_json || request.body?.base64 || request.body?.video_base64,
+    signal,
+    () => reportVideoProgress(onProgress, CN_MEDIA_PROGRESS.officialVideoSaving),
+  );
   if (!taskId && !immediateUrl && !immediatePath) throw new Error('Lumi Official API video generation returned no task or video reference.');
   if (!taskId) {
-    const saved = immediatePath ? { outputPath: immediatePath } : immediateUrl ? await persistRemoteVideo(immediateUrl, 'official') : {};
-    return completedResult({ provider: 'relay', model, prompt, taskId: 'completed', videoUrl: immediateUrl, ...saved, ...completionMetadata(args) });
+    if (!immediatePath) reportVideoProgress(onProgress, CN_MEDIA_PROGRESS.officialVideoDownloading);
+    const outputPath = immediatePath
+      || (immediateUrl ? (await persistRemoteVideo(immediateUrl, 'official', {}, signal)).outputPath : '');
+    if (!outputPath) throw new Error('Lumi Official API returned no durable video artifact.');
+    return completedResult({ provider: 'relay', model, prompt, taskId: 'completed', videoUrl: immediateUrl, outputPath, ...completionMetadata(args), signal, onProgress });
   }
+  reportSubmitted(onProgress, CN_MEDIA_PROGRESS.officialProvider);
 
   const statusTemplate = officialApiPath('RELAY_VIDEO_STATUS_PATH', '/videos/generations/{id}');
   const contentTemplate = officialApiPath('RELAY_VIDEO_CONTENT_PATH', '/videos/generations/{id}/content');
   const maxPolls = Math.max(1, Math.min(120, Number(process.env.RELAY_VIDEO_MAX_POLLS) || MAX_POLLS));
   for (let attempt = 0; attempt < maxPolls; attempt += 1) {
-    await waitForNextPoll();
+    await waitForNextPoll(signal);
     const encodedId = encodeURIComponent(taskId);
     const statusPath = statusTemplate.replace(/\{id\}/gi, encodedId);
-    const { body } = await officialApiRequest<any>(statusPath, { timeoutMs: 90_000 });
+    const { body } = await officialApiRequest<any>(statusPath, { timeoutMs: 90_000, signal });
     const state = String(body?.status || body?.state || body?.output?.status || '').toLowerCase();
     const videoUrl = officialVideoUrl(body);
-    const base64Path = saveBase64Video(body?.b64_json || body?.base64 || body?.video_base64);
+    const base64Path = saveBase64Video(
+      body?.b64_json || body?.base64 || body?.video_base64,
+      signal,
+      () => reportVideoProgress(onProgress, CN_MEDIA_PROGRESS.videoSaving),
+    );
     if (['completed', 'complete', 'succeeded', 'success', 'done'].includes(state) || videoUrl || base64Path) {
-      if (base64Path) return completedResult({ provider: 'relay', model, prompt, taskId, videoUrl, outputPath: base64Path, ...completionMetadata(args) });
+      if (!base64Path) reportVideoProgress(onProgress, CN_MEDIA_PROGRESS.videoDownloading);
+      if (base64Path) return completedResult({ provider: 'relay', model, prompt, taskId, videoUrl, outputPath: base64Path, ...completionMetadata(args), signal, onProgress });
       if (videoUrl) {
-        const saved = await persistRemoteVideo(videoUrl, 'official');
-        return completedResult({ provider: 'relay', model, prompt, taskId, videoUrl, ...saved, ...completionMetadata(args) });
+        const saved = await persistRemoteVideo(videoUrl, 'official', {}, signal);
+        return completedResult({ provider: 'relay', model, prompt, taskId, videoUrl, ...saved, ...completionMetadata(args), signal, onProgress });
       }
       // Some gateways return a completed task without a URL in the status
       // body and expose the bytes at a separate content endpoint.
       try {
-        const content = await officialApiBinary(contentTemplate.replace(/\{id\}/gi, encodedId));
-        const outputPath = path.join(ensureOutputDir(), `official_video_${Date.now()}.mp4`);
-        fs.writeFileSync(outputPath, await readResponseBytes(content, MAX_REMOTE_VIDEO_BYTES));
-        return completedResult({ provider: 'relay', model, prompt, taskId, outputPath, ...completionMetadata(args) });
+        const content = await officialApiBinary(contentTemplate.replace(/\{id\}/gi, encodedId), { signal });
+        const bytes = await readResponseBytes(content, MAX_REMOTE_VIDEO_BYTES, signal);
+        throwIfAborted(signal);
+        const outputPath = writeVideoAtomically(bytes, 'official', signal);
+        return completedResult({ provider: 'relay', model, prompt, taskId, outputPath, ...completionMetadata(args), signal, onProgress });
       } catch (error: any) {
+        throwIfAborted(signal);
         throw new Error(`Lumi Official API video completed but content download failed: ${String(error?.message || error).slice(0, 300)}`);
       }
     }
@@ -477,19 +698,20 @@ async function generateOfficialVideo(args: Record<string, any>, selectedModel: s
 }
 
 async function generateVideo(args: Record<string, any>, context?: ToolContext): Promise<string> {
+  const signal = context?.executionSignal;
+  throwIfAborted(signal);
   const prompt = String(args.prompt || '').trim();
   if (!prompt) throw new Error('prompt is required');
 
-  const firstFrame = await normalizeVideoReference(args.first_frame_image, 'first_frame_image');
-  const lastFrame = await normalizeVideoReference(args.last_frame_image, 'last_frame_image');
-  if (lastFrame && !firstFrame) throw new Error('last_frame_image requires first_frame_image.');
-  const generationMode = firstFrame ? 'image_to_video' : 'text_to_video';
+  const hasFirstFrame = Boolean(String(args.first_frame_image || '').trim());
+  const hasLastFrame = Boolean(String(args.last_frame_image || '').trim());
+  if (hasLastFrame && !hasFirstFrame) throw new Error('last_frame_image requires first_frame_image.');
+  const generationMode = hasFirstFrame ? 'image_to_video' : 'text_to_video';
   const preferences = getUserPreferredGenerationModels(context?.userId || 'anonymous');
   const preference = generationMode === 'image_to_video' ? preferences.imageToVideo : preferences.video;
   const provider = preference.provider;
   const model = String(
-    args.model
-    || preference.model
+    preference.model
     || preference.models[provider]
     || (generationMode === 'image_to_video'
       ? DEFAULT_IMAGE_TO_VIDEO_MODELS[provider]
@@ -507,22 +729,28 @@ async function generateVideo(args: Record<string, any>, context?: ToolContext): 
     throw new Error(`${provider} does not have a verified image-to-video input adapter in this build.`);
   }
 
+  // Resolve role/model admission before reading or downloading a reference.
+  // A misconfigured T2V/I2V route must fail without touching the source image.
+  const firstFrame = await normalizeVideoReference(args.first_frame_image, 'first_frame_image', signal);
+  const lastFrame = await normalizeVideoReference(args.last_frame_image, 'last_frame_image', signal);
+  throwIfAborted(signal);
+
   const normalizedArgs = {
     ...args,
     ...(firstFrame ? { first_frame_image: firstFrame } : {}),
     ...(lastFrame ? { last_frame_image: lastFrame } : {}),
-    __selectionReason: args.model
-      ? 'explicit_model'
-      : generationMode === 'image_to_video'
+    __selectionReason: generationMode === 'image_to_video'
         ? 'configured_image_to_video_role'
         : 'configured_text_to_video_role',
   };
 
-  if (provider === 'qwen') return generateQwenVideo(normalizedArgs, model);
-  if (provider === 'minimax') return generateMiniMaxVideo(normalizedArgs, model);
-  if (provider === 'siliconflow') return generateSiliconFlowVideo(normalizedArgs, model);
-  if (provider === 'relay') return generateOfficialVideo(normalizedArgs, model);
-  return generateOpenAIVideo(normalizedArgs, model);
+  const onProgress = context?.onProgress;
+
+  if (provider === 'qwen') return generateQwenVideo(normalizedArgs, model, signal, onProgress);
+  if (provider === 'minimax') return generateMiniMaxVideo(normalizedArgs, model, signal, onProgress);
+  if (provider === 'siliconflow') return generateSiliconFlowVideo(normalizedArgs, model, signal, onProgress);
+  if (provider === 'relay') return generateOfficialVideo(normalizedArgs, model, signal, onProgress);
+  return generateOpenAIVideo(normalizedArgs, model, signal, onProgress);
 }
 
 export function registerVideoTools(registry: ToolRegistry): void {
@@ -533,7 +761,6 @@ export function registerVideoTools(registry: ToolRegistry): void {
       type: 'object',
       properties: {
         prompt: { type: 'string', description: 'Describe the scene, motion, lighting, camera angle, and style.' },
-        model: { type: 'string', description: 'Optional explicit model override. Otherwise the configured video model is used.' },
         size: { type: 'string', description: 'Requested output size, such as 1280x720, 720x1280, or 960x960.' },
         duration: { type: 'number', description: 'Requested duration in seconds. The selected provider may normalize it to a supported duration.' },
         resolution: { type: 'string', description: 'MiniMax resolution, such as 1080P or 768P.' },
@@ -559,20 +786,21 @@ export function registerVideoTools(registry: ToolRegistry): void {
         { type: 'local_write', scope: 'generated MP4 when provider output can be downloaded', reversible: true },
       ],
       verification: {
-        strategy: 'provider_ack',
+        strategy: 'artifact',
         required: true,
-        requiredFields: ['ok', 'status', 'provider', 'model', 'taskId', 'generationMode', 'inputReferenceAccepted', 'selectionReason', 'artifactDurability', 'artifacts'],
-        requiredValues: { ok: true },
+        requiredFields: ['ok', 'verified', 'verificationStatus', 'status', 'provider', 'model', 'taskId', 'generationMode', 'inputReferenceAccepted', 'selectionReason', 'artifactDurability', 'artifacts'],
+        requiredValues: { ok: true, verified: true, verificationStatus: 'verified' },
         successStatuses: ['generated'],
         failureStatuses: ['failed', 'timed_out'],
-        successSignals: ['provider task completed and returned a local artifact or remote video reference'],
-        limitations: ['A remote video URL is provider completion evidence, not proof of a durable local MP4.'],
+        requiredArtifactCollections: ['artifacts'],
+        successSignals: ['provider completed video generation and Lumi decoded and atomically saved a local MP4 or WebM artifact'],
+        limitations: ['Artifact verification does not by itself prove subjective video quality or prompt fidelity.'],
       },
     }),
     evidence: capabilityEvidence({
       id: 'media.video.generate',
       operation: 'create',
-      limitations: ['If local download fails, completion is limited to the provider result and must be reported as such.'],
+      limitations: ['The receipt proves local container validation and persistence, not subjective video quality.'],
     }),
   });
 }

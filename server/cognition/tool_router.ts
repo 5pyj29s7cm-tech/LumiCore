@@ -937,11 +937,18 @@ export function routeToolsForTurn(
   const structuredMediaCategory = /^(?:生成|创建|制作)图片\s*(?:\r?\n|$)/u.test(instructionText)
     || /^(?:generate|create|make) (?:an? |some )?images?\s*(?:\r?\n|$)/iu.test(instructionText)
     ? 'image_generation'
+    : /^edit image\s*(?:\r?\n|$)/iu.test(instructionText)
+      ? 'image_editing'
     // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
     : /^(?:生成|创建|制作)视频\s*(?:\r?\n|$)/u.test(instructionText)
       || /^(?:generate|create|make) (?:a )?video\s*(?:\r?\n|$)/iu.test(instructionText)
       ? 'video_generation'
       : null;
+  // i18n-allow: Reviewed Chinese image-editing input recognition; not user-visible copy.
+  const generativeImageEditRequest = structuredMediaCategory === 'image_editing' || (
+    /^(?:请)?(?:帮我)?(?:编辑|修改|重做|重绘|替换|变更).{0,48}(?:图片|图像|照片|海报|主图)/u.test(instructionText)
+    || /^(?:please\s+)?(?:edit|modify|rework|redraw|replace|change)\b.{0,64}\b(?:image|picture|photo|poster|artwork)\b/iu.test(instructionText)
+  );
   const mediaGenerationExplicitlyNegated = !structuredMediaCategory && (
     // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
     /(?:不要|别|无需|不用|不需要|禁止)[\s\S]{0,18}(?:实际)?(?:生成|创建|制作|产出|做)[\s\S]{0,28}(?:图片|图像|插画|海报|视频|短视频|短片|动画|成片)/u.test(instructionText)
@@ -961,7 +968,7 @@ export function routeToolsForTurn(
     || /^\s*(?:image|video)\s+generation\b[\s\S]{0,100}\b(?:model|configure|configuration|fail|available|cost|price|pricing|frontend|container|why|how)\b/i.test(instructionText)
     || /^\s*(?:explain|describe|introduce|tell\s+me\s+about)\b[\s\S]{0,80}\b(?:image|video)\s+generation\b/i.test(instructionText)
   );
-  const existingMediaArtifactAction = !structuredMediaCategory && (
+  const existingMediaArtifactAction = !structuredMediaCategory && !generativeImageEditRequest && (
     // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
     /^(?:请|麻烦)?(?:帮我)?(?:查看|打开|删除|分析|检查|编辑|修改|发布|上传|发送|保存|下载|分享|播放)[\s\S]{0,32}(?:刚|已|已经|先前|之前)?(?:生成|创建|制作|产出)(?:的)?[\s\S]{0,20}(?:图|图片|图像|视频|短视频|短片|动画|成片)/u.test(instructionText)
     // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
@@ -1029,7 +1036,7 @@ export function routeToolsForTurn(
       // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
       && /(?:视频|短视频|video|clip|movie)[\s\S]{0,36}(?:封面|主图|缩略图|海报|图片|图像|cover|thumbnail|poster|image|picture)|(?:封面|主图|缩略图|海报|图片|图像|cover|thumbnail|poster|image|picture)[\s\S]{0,36}(?:来自|根据|用于|for|from)[\s\S]{0,20}(?:视频|短视频|video|clip|movie)/iu.test(instructionText)
     ) continue;
-    if (route.category === 'image_generation' || route.category === 'video_generation') {
+    if (route.category === 'image_generation' || route.category === 'image_editing' || route.category === 'video_generation') {
       if (mediaGenerationShouldBeForbidden) continue;
       // The studio's structured envelope deliberately exposes one generator.
       // Natural compound instructions retain later document/upload routes.
@@ -1044,7 +1051,7 @@ export function routeToolsForTurn(
     if (
       route.category === 'cad_design'
       && !structuredMediaCategory
-      && (categories.includes('image_generation') || categories.includes('video_generation'))
+      && (categories.includes('image_generation') || categories.includes('image_editing') || categories.includes('video_generation'))
       // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
       && !/(?:CAD|DXF|DWG|AutoCAD|平面图|户型|施工图|水电|布置图|工程图|图纸|蓝图|立面图|剖面图|零件图|电气原理图|结构详图|管线图|\b(?:cad|dxf|dwg|autocad|floor\s*plan|blueprint|construction\s+drawing|elevation\s+drawing|section\s+drawing|mechanical\s+(?:part\s+)?drawing|electrical\s+schematic|structural\s+detail|piping\s+diagram)\b)/iu.test(instructionText)
     ) continue;
@@ -1060,6 +1067,7 @@ export function routeToolsForTurn(
   }
 
   const directMediaGeneration = categories.includes('image_generation')
+    || categories.includes('image_editing')
     || categories.includes('video_generation');
   if (actionContract.applies && !currentAppEdit && !directMediaGeneration) {
     manifestPriorities.push(...addActionContractCapabilities(

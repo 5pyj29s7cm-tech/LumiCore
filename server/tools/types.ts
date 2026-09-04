@@ -231,17 +231,26 @@ export interface ToolContext {
    * The adapter still intersects it with the exposed manifest and executes it
    * through the ordinary policy, confirmation, lifecycle and receipt path.
    */
-  runtimeOwnedDeterministicRecoveryCall?: {
-    source: 'durable_task_capsule';
-    taskId: string;
-    taskRevision: number;
-    requestId: string;
-    name: 'write_file';
-    arguments: {
-      path: string;
-      content: string;
-    };
-  };
+  runtimeOwnedDeterministicRecoveryCall?:
+    | {
+        source: 'durable_task_capsule';
+        taskId: string;
+        taskRevision: number;
+        requestId: string;
+        name: 'write_file';
+        arguments: {
+          path: string;
+          content: string;
+        };
+      }
+    | {
+        source: 'structured_media_request';
+        taskId: string;
+        taskRevision: number;
+        requestId: string;
+        name: 'generate_image' | 'ai_edit_image' | 'generate_video';
+        arguments: Record<string, unknown>;
+      };
   conversationId?: string;
   /** Owning Lumi conversation/personality for durable work. */
   conversationAgentId?: string;

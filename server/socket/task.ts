@@ -1488,6 +1488,7 @@ export function registerTaskHandler(
           llmGetters,
           source: 'task_confirmation',
           supervisedExternalCommits: true,
+          executionSignal: taskAbortController.signal,
           isCancelled: () => taskAbortController.signal.aborted,
           userConfirmed: true,
           actionIntent: confirmedTask,
@@ -1569,6 +1570,7 @@ export function registerTaskHandler(
             modelToolProjection,
             priorToolRecords: [confirmationRecord],
             desktopExecutionTracker,
+            executionSignal: taskAbortController.signal,
             isCancelled: () => taskAbortController.signal.aborted,
             llmGetters,
             source: 'task_confirmation_resume',
@@ -1806,7 +1808,7 @@ export function registerTaskHandler(
             }
           }
         },
-        { ...toolSecurityContext, ...pipelineToolContext, userId: uid, taskId: actionTaskExecution.state?.taskId, taskRevision: actionTaskExecution.state?.revision, conversationId: convForHistory.id, turnId: requestId, requestId, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: data.text, routedTaskText, ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}), toolPolicy: modelToolPolicy, modelToolProjection, desktopExecutionTracker, isCancelled: () => taskLease.signal.aborted, llmGetters, source: 'task', supervisedExternalCommits: true },
+        { ...toolSecurityContext, ...pipelineToolContext, userId: uid, taskId: actionTaskExecution.state?.taskId, taskRevision: actionTaskExecution.state?.revision, conversationId: convForHistory.id, turnId: requestId, requestId, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: data.text, routedTaskText, ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}), toolPolicy: modelToolPolicy, modelToolProjection, desktopExecutionTracker, executionSignal: taskLease.signal, isCancelled: () => taskLease.signal.aborted, llmGetters, source: 'task', supervisedExternalCommits: true },
         llmGetters.getOllama,
         llmGetters.getLmStudio,
         llmGetters.getArk,
@@ -1973,6 +1975,7 @@ export function registerTaskHandler(
               modelToolProjection,
               priorToolRecords,
               desktopExecutionTracker,
+              executionSignal: taskLease.signal,
               isCancelled: () => taskLease.signal.aborted,
               llmGetters,
               taskRevision: actionTaskExecution.state?.revision,

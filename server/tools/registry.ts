@@ -389,6 +389,7 @@ export function isToolNameAllowedByPolicy(toolName: string, policy?: ToolPolicy)
 export function getToolExecutionTimeoutMs(name: string): number {
   if (name === 'computer_use') return 10 * 60_000;
   if (name === 'generate_video') return 15 * 60_000;
+  if (name === 'generate_image' || name === 'generate_image_dalle' || name === 'ai_edit_image') return 3 * 60_000;
   if (/^model_configuration_(?:update|test)$/i.test(name)) return 2 * 60_000;
   if (name === 'transcribe_audio_to_text_file') return 60 * 60_000;
   if (/^mcp_cad-drafting_autocad_playback_file$/i.test(name)) return 30 * 60_000;

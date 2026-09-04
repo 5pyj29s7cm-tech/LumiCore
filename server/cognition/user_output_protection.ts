@@ -35,6 +35,8 @@ const GENERIC_STRUCTURED_FIELD_RE = /(["']?([A-Za-z][A-Za-z0-9_-]{0,80})["']?\s*
 const BEARER_SECRET_RE = /\bBearer\s+\S+/giu;
 const NOTIFICATION_ABSOLUTE_PATH_RE = /(?:\b[A-Za-z]:[\\/][^\s,;]+|(?<![\p{L}\p{N}_])\/(?:Users|home|root|srv|etc|var|opt|tmp|private)\/[^\s,;]+)/giu;
 const NOTIFICATION_RAW_KEY_RE = /^(?:raw|stack|stackTrace|toolRecords?|receipts?|arguments?|exactArgs|ciphertext|debug|diagnostic)$/iu;
+const SENSITIVE_URL_PARAMETER_RE = /(?:^|[-_])(?:access[-_]?token|api[-_]?key|auth|authorization|credential|expires?|key|secret|signature|sig|token)(?:$|[-_])/iu;
+const MEDIA_SOURCE_FIELD_RE = /^(?:filePath|referencePaths?|first_frame_image|last_frame_image|input_reference|inputPaths?|sourcePaths?|sourceUrl)$/iu;
 
 function isSensitivePersistenceKey(value: string): boolean {
   const key = String(value || '').replace(/[^a-z0-9]/giu, '').toLowerCase();
@@ -59,6 +61,26 @@ function isSensitivePersistenceKey(value: string): boolean {
     || key.includes('secret')
     || key.includes('captcha')
     || key.includes('verificationcode');
+}
+
+function redactSignedUrl(value: string): string {
+  if (!/^https?:\/\//iu.test(value)) return value;
+  try {
+    const parsed = new URL(value);
+    let changed = false;
+    for (const key of Array.from(parsed.searchParams.keys())) {
+      if (!SENSITIVE_URL_PARAMETER_RE.test(key)) continue;
+      parsed.searchParams.set(key, '[redacted]');
+      changed = true;
+    }
+    return changed ? parsed.toString() : value;
+  } catch {
+    return value;
+  }
+}
+
+function redactEmbeddedSignedUrls(value: string): string {
+  return value.replace(/https?:\/\/[^\s"'<>]+/giu, candidate => redactSignedUrl(candidate));
 }
 
 function stringify(value: unknown): string {
@@ -98,7 +120,7 @@ export function containsUnsafeToolPayload(value: unknown): boolean {
 }
 
 function redactSensitive(value: string): string {
-  return value
+  return redactEmbeddedSignedUrls(value)
     .replace(GENERIC_STRUCTURED_FIELD_RE, (match, prefix: string, key: string, secretValue: string) => {
       if (!isSensitivePersistenceKey(key)) return match;
       const quote = secretValue.startsWith('"')
@@ -118,6 +140,62 @@ function redactSensitive(value: string): string {
     .replace(/(?<![A-Za-z0-9])(?:sk|key)-[A-Za-z0-9_-]{8,}/giu, '[redacted]')
     .replace(/data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\r\n]+/giu, '[image omitted]')
     .replace(/(["']?image_base64["']?\s*[:=]\s*["'])[^"']+(["'])/giu, '$1[image omitted]$2');
+}
+
+function compactMediaValue(value: unknown, key = '', depth = 0): unknown {
+  if (depth > 6) return '[nested value omitted]';
+  if (key && MEDIA_SOURCE_FIELD_RE.test(key)) return '[media source omitted]';
+  if (typeof value === 'string') return redactSensitive(value);
+  if (Array.isArray(value)) return value.map(item => compactMediaValue(item, key, depth + 1));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([nestedKey]) => !MEDIA_SOURCE_FIELD_RE.test(nestedKey))
+      .map(([nestedKey, nested]) => [nestedKey, compactMediaValue(nested, nestedKey, depth + 1)]),
+  );
+}
+
+function compactMediaToolRecordForPersistence(candidate: Record<string, any>, toolName: string): Record<string, any> {
+  const rawArgs = candidate.arguments && typeof candidate.arguments === 'object'
+    ? candidate.arguments as Record<string, unknown>
+    : {};
+  const operation = toolName === 'ai_edit_image'
+    ? 'image_edit'
+    : toolName === 'generate_video'
+      ? (String(rawArgs.first_frame_image || '').trim() ? 'image_to_video' : 'text_to_video')
+      : 'text_to_image';
+  const safeArguments = compactMediaValue({
+    operation,
+    ...(rawArgs.prompt !== undefined ? { prompt: rawArgs.prompt } : {}),
+    ...(rawArgs.size !== undefined ? { size: rawArgs.size } : {}),
+    ...(rawArgs.n !== undefined ? { n: rawArgs.n } : {}),
+    ...(rawArgs.duration !== undefined ? { duration: rawArgs.duration } : {}),
+    ...(rawArgs.model !== undefined ? { model: rawArgs.model } : {}),
+    ...(rawArgs.seed !== undefined ? { seed: rawArgs.seed } : {}),
+    ...(rawArgs.negative_prompt !== undefined ? { negative_prompt: rawArgs.negative_prompt } : {}),
+    hasSource: toolName === 'ai_edit_image' && Boolean(String(rawArgs.filePath || '').trim()),
+    hasReference: toolName === 'generate_video'
+      ? Boolean(String(rawArgs.first_frame_image || '').trim())
+      : Array.isArray(rawArgs.referencePaths) && rawArgs.referencePaths.length > 0,
+    ...(Array.isArray(rawArgs.referencePaths) ? { referenceCount: rawArgs.referencePaths.length } : {}),
+  }) as Record<string, unknown>;
+  const parsedResult = parseJson(candidate.result);
+  const compactedResult = parsedResult === null
+    ? compactMediaValue(candidate.result)
+    : JSON.stringify(compactMediaValue(parsedResult));
+  const envelope = candidate.envelope && typeof candidate.envelope === 'object'
+    ? compactMediaValue(candidate.envelope)
+    : candidate.envelope;
+  const receipt = candidate.receipt && typeof candidate.receipt === 'object'
+    ? compactMediaValue(candidate.receipt)
+    : candidate.receipt;
+  return {
+    ...candidate,
+    arguments: safeArguments,
+    result: compactedResult,
+    ...(envelope !== undefined ? { envelope } : {}),
+    ...(receipt !== undefined ? { receipt } : {}),
+  };
 }
 
 function looksLikeLargeBase64(value: string): boolean {
@@ -346,6 +424,9 @@ function compactToolRecordForPersistence(record: unknown): unknown {
   if (!record || typeof record !== 'object' || Array.isArray(record)) return record;
   const candidate = record as Record<string, any>;
   const toolName = String(candidate.name || candidate.toolName || '');
+  if (/^(?:generate_image|ai_edit_image|generate_video)$/iu.test(toolName)) {
+    return compactMediaToolRecordForPersistence(candidate, toolName);
+  }
   if (/^(?:desktop_list_files|search_files|list_directory|desktop_running_processes|get_running_processes)$/iu.test(toolName)) {
     const compactResult = compactDesktopCollectionResult(candidate.result, toolName);
     if (!compactResult) return candidate;

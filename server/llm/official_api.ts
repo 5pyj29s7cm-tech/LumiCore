@@ -39,6 +39,7 @@ export interface OfficialApiResponse<T = any> {
 export interface OfficialApiModelDescriptor {
   id: string;
   capability: string;
+  capabilities?: string[];
   endpoint: string;
   ownedBy: string;
 }
@@ -61,6 +62,16 @@ const OFFICIAL_MODEL_CAPABILITY_ROLES: Readonly<Record<string, readonly string[]
   speech_recognition: ['speech_recognition'],
   speech_synthesis: ['speech_synthesis'],
 };
+
+function catalogString(value: unknown, maxLength: number): string {
+  return typeof value === 'string' ? value.trim().slice(0, maxLength) : '';
+}
+
+function catalogRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
 
 /** Return credentials without exposing them in logs or public receipts. */
 export function getOfficialApiConfig(): OfficialApiConfig {
@@ -209,31 +220,54 @@ export async function listOfficialApiModels(
     signal: options.signal,
     timeoutMs: options.timeoutMs || 15_000,
   });
-  const rawModels = Array.isArray(body) ? body : Array.isArray(body?.data) ? body.data : [];
-  const models: OfficialApiModelDescriptor[] = [];
-  const seen = new Set<string>();
-  for (const raw of rawModels.slice(0, 2_000)) {
-    const id = String(raw?.id || '').trim().slice(0, 200);
-    const capability = String(raw?.capability || '').trim().toLowerCase().slice(0, 80);
-    if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._:-]+$/.test(id) || !capability || seen.has(id)) continue;
-    seen.add(id);
-    models.push({
+  const responseRecord = catalogRecord(body);
+  const rawModels: unknown[] = Array.isArray(body)
+    ? body
+    : Array.isArray(responseRecord.data) ? responseRecord.data : [];
+  const modelsById = new Map<string, OfficialApiModelDescriptor>();
+  for (const candidate of rawModels.slice(0, 2_000)) {
+    const raw = catalogRecord(candidate);
+    const id = catalogString(raw.id, 200);
+    const rawCapabilities: unknown[] = [];
+    for (const value of [raw.capability, raw.capabilities]) {
+      if (Array.isArray(value)) rawCapabilities.push(...value);
+      else rawCapabilities.push(value);
+    }
+    const capabilities: string[] = Array.from(new Set<string>(rawCapabilities
+      .map(value => catalogString(value, 80).toLowerCase())
+      .filter((value): value is string => value.length > 0)));
+    if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._:-]+$/.test(id) || capabilities.length === 0) continue;
+    const existing = modelsById.get(id);
+    if (existing) {
+      const merged = Array.from(new Set([...(existing.capabilities || [existing.capability]), ...capabilities]));
+      existing.capability = merged[0];
+      existing.capabilities = merged;
+      if (!existing.endpoint) existing.endpoint = catalogString(raw.endpoint, 240);
+      if (!existing.ownedBy) existing.ownedBy = catalogString(raw.owned_by, 120)
+        || catalogString(raw.ownedBy, 120);
+      continue;
+    }
+    modelsById.set(id, {
       id,
-      capability,
-      endpoint: String(raw?.endpoint || '').trim().slice(0, 240),
-      ownedBy: String(raw?.owned_by || raw?.ownedBy || '').trim().slice(0, 120),
+      capability: capabilities[0],
+      capabilities,
+      endpoint: catalogString(raw.endpoint, 240),
+      ownedBy: catalogString(raw.owned_by, 120) || catalogString(raw.ownedBy, 120),
     });
   }
+  const models = [...modelsById.values()];
   models.sort((left, right) => left.id.localeCompare(right.id));
   const byRole: Record<string, string[]> = {};
   for (const model of models) {
-    const roles = model.capability === 'video_generation'
-      ? (/(?:^|[\/_-])i2v(?:[\/_-]|$)|image[-_]?to[-_]?video/i.test(model.id)
-        ? ['image_to_video']
-        : ['video_generation'])
-      : OFFICIAL_MODEL_CAPABILITY_ROLES[model.capability] || [];
+    const roles = (model.capabilities || [model.capability]).flatMap(capability => (
+      capability === 'video_generation'
+        ? (/(?:^|[\/_-])i2v(?:[\/_-]|$)|image[-_]?to[-_]?video/i.test(model.id)
+          ? ['image_to_video']
+          : ['video_generation'])
+        : OFFICIAL_MODEL_CAPABILITY_ROLES[capability] || []
+    ));
     for (const role of roles) {
-      (byRole[role] ||= []).push(model.id);
+      if (!(byRole[role] ||= []).includes(model.id)) byRole[role].push(model.id);
     }
   }
   return { models, byRole };
