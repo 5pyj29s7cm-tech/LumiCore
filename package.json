@@ -134,8 +134,17 @@
     "zod": "^3.25.0"
   },
   "overrides": {
+    "@xmldom/xmldom": "0.8.15",
     "axios": "$axios",
+    "fast-uri": "3.1.7",
     "node-fetch": "npm:node-fetch-native",
+    "qs": "6.16.0",
+    "@types/three": {
+      "fflate": "0.8.3"
+    },
+    "three-stdlib": {
+      "fflate": "0.6.11"
+    },
     "uuid": "^11.1.1"
   },
   "devDependencies": {
