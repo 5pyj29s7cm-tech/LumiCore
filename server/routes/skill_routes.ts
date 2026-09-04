@@ -363,7 +363,8 @@ export function mountSkillRoutes(
     }
   });
 
-  // Repair is a pure restart, except for an exact package bundled with this build.
+  // Repair is a pure restart, except for an explicitly requested rebind of an
+  // unchanged signed package bundled with this build.
   router.post("/skills/:name/repair", requireAuth, requireAdmin, requirePersonalHostSkillScope, requireLocalRequest, requireNativeDesktopSession, async (req, res) => {
     try {
       const result = await mcpManager.repairSkill(req.params.name);

@@ -622,7 +622,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'client_repair_skill',
-    description: 'Restart an already approved Lumi skill/MCP server by name, or restore an exact built-in bundled package when that package is missing. Repair never follows mutable npmPackage/repoUrl metadata and never installs ordinary local dependencies.',
+    description: 'Restart an already approved Lumi skill/MCP server by name. When explicitly requested, repair may also rebind an unchanged, signed built-in skill to the current trusted LumiCore host runtime. Repair never follows mutable npmPackage/repoUrl metadata and never installs ordinary local dependencies.',
     parameters: {
       type: 'object',
       properties: {
@@ -716,7 +716,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
       operation: 'mutate',
       risk: 'high',
       sideEffects: [
-        { type: 'installation', scope: 'exact Lumi-bundled package restore only', reversible: true },
+        { type: 'installation', scope: 'exact signed Lumi-bundled package runtime rebind', reversible: true },
         { type: 'local_state_change', scope: 'MCP skill runtime configuration', reversible: true },
         { type: 'process_execution', scope: 'local MCP skill process restart', reversible: true },
       ],

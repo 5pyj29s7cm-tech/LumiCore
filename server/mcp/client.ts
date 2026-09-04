@@ -120,7 +120,7 @@ export interface SkillPackage {
 
 export interface SkillRepairResult {
   success: boolean;
-  action?: 'reinstalled' | 'restarted';
+  action?: 'reinstalled' | 'restarted' | 'runtime_rebound';
   reason?: string;
   directory?: string;
   toolCount?: number;
@@ -885,6 +885,84 @@ export class MCPClientManager {
     return signManagedSkillIdentity({ ...identity, runtime, signature: undefined }, getJwtSecret());
   }
 
+  /**
+   * An explicit repair may rebind a still-identical official package to a
+   * changed LumiCore host runtime. This is deliberately narrower than install:
+   * it never adopts an unsigned/legacy/generated package and never repairs
+   * package, command, entry-point, cwd, or environment drift.
+   */
+  private deriveBundledHostRuntimeRebind(
+    name: string,
+    directory: string,
+    pkg: any,
+    config: MCPServerConfig,
+    assertionError: unknown,
+  ): ManagedSkillIdentity | undefined {
+    const failure = String((assertionError as any)?.message || assertionError || '');
+    const runtimeDigestChanged = failure.includes(
+      'runtime identity failed: Managed Skill runtime file changed:',
+    );
+    const hostRuntimeChanged = failure.includes(
+      'runtime no longer matches the host-derived execution identity.',
+    );
+    if (!runtimeDigestChanged && !hostRuntimeChanged) return undefined;
+
+    const packageIdentity = pkg.lumi?.managedSkill as ManagedSkillIdentity | undefined;
+    const configIdentity = config.managedSkill;
+    if (
+      !packageIdentity
+      || !configIdentity
+      || JSON.stringify(packageIdentity) !== JSON.stringify(configIdentity)
+      || packageIdentity.origin !== 'bundled'
+      || !verifyManagedSkillIdentitySignature(packageIdentity, getJwtSecret())
+    ) return undefined;
+
+    const bundledDirectory = path.join(process.cwd(), 'server', 'skills', 'bundled', name);
+    if (!fs.existsSync(bundledDirectory) || !fs.statSync(bundledDirectory).isDirectory()) {
+      return undefined;
+    }
+
+    let expectedIdentity: ManagedSkillIdentity;
+    try {
+      expectedIdentity = createBundledSkillIdentity(`skill-${name}`, bundledDirectory);
+      if (
+        packageIdentity.origin !== expectedIdentity.origin
+        || packageIdentity.skillId !== expectedIdentity.skillId
+        || packageIdentity.packageName !== expectedIdentity.packageName
+        || packageIdentity.packageVersion !== expectedIdentity.packageVersion
+        || packageIdentity.contentDigest !== expectedIdentity.contentDigest
+        || packageIdentity.reviewHash !== expectedIdentity.reviewHash
+        || pkg.name !== expectedIdentity.packageName
+        || String(pkg.lumi?.installedVersion || pkg.version || '') !== expectedIdentity.packageVersion
+        || computeSkillContentDigest(directory) !== expectedIdentity.contentDigest
+      ) return undefined;
+    } catch {
+      return undefined;
+    }
+
+    const oldRuntime = packageIdentity.runtime;
+    const installedEntry = path.resolve(directory, 'index.ts');
+    if (
+      !oldRuntime
+      || oldRuntime.transport !== 'stdio'
+      || config.transport !== 'stdio'
+      || Boolean(config.url)
+      || Boolean(config.headers)
+      || path.resolve(String(config.command || '')) !== oldRuntime.command
+      || JSON.stringify(config.args || []) !== JSON.stringify(oldRuntime.args)
+      || path.resolve(String(config.cwd || '')) !== oldRuntime.cwd
+      || JSON.stringify(config.env || null) !== JSON.stringify(oldRuntime.env || null)
+      || oldRuntime.cwd !== path.resolve(directory)
+      || !oldRuntime.args.includes(installedEntry)
+    ) return undefined;
+
+    try {
+      return this.bindManagedSkillRuntime(directory, expectedIdentity);
+    } catch {
+      return undefined;
+    }
+  }
+
   /** Fail closed before activation, process start, restart, or tool use. */
   assertLocalSkillRuntimeIdentity(
     name: string,
@@ -1274,8 +1352,9 @@ export class MCPClientManager {
 
   /**
    * Repair never follows mutable package metadata. Repository/npm changes must
-   * enter a separately reviewed immutable proposal. Official bundled packages
-   * may be restored from this build; otherwise repair is a pure restart.
+   * enter a separately reviewed immutable proposal. An explicit repair may
+   * rebind an unchanged, signed official bundle after only its trusted host
+   * runtime changed; every other existing package receives a pure restart.
    */
   async repairSkill(name: string): Promise<SkillRepairResult> {
     this.ensureSkillsDir();
@@ -1357,19 +1436,101 @@ export class MCPClientManager {
           : 'The skill is disabled. Enable it explicitly before requesting a restart.',
       };
     }
+    let action: SkillRepairResult['action'] = 'restarted';
+    let reboundRollback: {
+      identity: ManagedSkillIdentity;
+      serverConfig: MCPServerConfig;
+      originalFailure: string;
+    } | undefined;
     if (latestServer.source === 'local') {
       try {
         this.assertLocalSkillRuntimeIdentity(safeName, latestServer);
       } catch (error: any) {
-        return {
-          success: false,
-          reason: error?.message || 'The local Skill runtime identity could not be verified.',
-          reviewRequired: true,
+        const reboundIdentity = this.deriveBundledHostRuntimeRebind(
+          safeName,
+          skillDir,
+          pkg,
+          latestServer,
+          error,
+        );
+        if (!reboundIdentity?.runtime) {
+          return {
+            success: false,
+            reason: error?.message || 'The local Skill runtime identity could not be verified.',
+            reviewRequired: true,
+          };
+        }
+
+        const previousIdentity = pkg.lumi?.managedSkill as ManagedSkillIdentity;
+        const previousServerConfig = structuredClone(latestServer);
+        this.stampManagedSkillIdentity(skillDir, reboundIdentity);
+        try {
+          latestServer.command = reboundIdentity.runtime.command;
+          latestServer.args = reboundIdentity.runtime.args;
+          latestServer.cwd = reboundIdentity.runtime.cwd;
+          latestServer.transport = 'stdio';
+          if (reboundIdentity.runtime.env) latestServer.env = reboundIdentity.runtime.env;
+          else delete latestServer.env;
+          delete latestServer.url;
+          delete latestServer.headers;
+          latestServer.managedSkill = reboundIdentity;
+          delete latestServer.cachedTools;
+          delete latestServer.cachedToolsFingerprint;
+          delete latestServer.cachedToolsAttestation;
+          latest[safeName] = latestServer;
+          this.saveConfig(latest);
+        } catch (writeError) {
+          try {
+            this.stampManagedSkillIdentity(skillDir, previousIdentity);
+          } catch (rollbackError: any) {
+            throw new Error(
+              `Managed Skill "${safeName}" host-runtime rebind failed and its package identity rollback also failed: `
+              + `${rollbackError?.message || rollbackError}. Original write error: ${(writeError as any)?.message || writeError}`,
+            );
+          }
+          throw writeError;
+        }
+        reboundRollback = {
+          identity: previousIdentity,
+          serverConfig: previousServerConfig,
+          originalFailure: String(error?.message || error),
         };
+        action = 'runtime_rebound';
       }
     }
-    const tools = await this.restartServer(safeName);
-    return { success: true, action: 'restarted', directory: exists ? skillDir : undefined, toolCount: tools.length, tools };
+    try {
+      const tools = await this.restartServer(safeName);
+      return { success: true, action, directory: exists ? skillDir : undefined, toolCount: tools.length, tools };
+    } catch (restartError: any) {
+      if (!reboundRollback) throw restartError;
+      try { await this.disconnectServer(safeName); } catch {}
+
+      const rollbackFailures: string[] = [];
+      try {
+        this.stampManagedSkillIdentity(skillDir, reboundRollback.identity);
+      } catch (error: any) {
+        rollbackFailures.push(`package identity: ${error?.message || error}`);
+      }
+      try {
+        const rollbackConfig = this.getConfig();
+        rollbackConfig[safeName] = reboundRollback.serverConfig;
+        this.saveConfig(rollbackConfig);
+      } catch (error: any) {
+        rollbackFailures.push(`runtime configuration: ${error?.message || error}`);
+      }
+      this.invalidManagedRuntimes.set(safeName, reboundRollback.originalFailure);
+
+      if (rollbackFailures.length > 0) {
+        throw new Error(
+          `Managed Skill "${safeName}" restart failed after host-runtime rebind, and rollback was incomplete `
+          + `(${rollbackFailures.join('; ')}). Original restart error: ${restartError?.message || restartError}`,
+        );
+      }
+      throw new Error(
+        `Managed Skill "${safeName}" restart failed after host-runtime rebind; package identity and runtime configuration were rolled back. `
+        + `${restartError?.message || restartError}`,
+      );
+    }
   }
 
   private repairGeneratedSkillSource(skillDir: string, pkg: any): boolean {

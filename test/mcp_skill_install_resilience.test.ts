@@ -409,6 +409,158 @@ describe('MCP skill install resilience', () => {
     expect(fs.existsSync(installDir)).toBe(false);
   });
 
+  it('rebinds an unchanged signed bundled skill after only its host runtime digest changes', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager, mcpRegistryToolName } = await importClientWithExec(execMock);
+    const { signManagedSkillIdentity } = await import('../server/marketplace/official_identity');
+    const { getJwtSecret } = await import('../server/config/local_identity');
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const skillName = 'content-ops';
+    const source = path.resolve('server', 'skills', 'bundled', skillName);
+    const installed = manager.installSkill(skillName, source, false, {
+      managedSkill: createBundledSkillIdentity(`skill-${skillName}`, source),
+    });
+    const config = manager.getConfig();
+    const staleUnsigned = JSON.parse(JSON.stringify(config[skillName].managedSkill));
+    const staleRuntimeFile = staleUnsigned.runtime.files.find(
+      (file: { path: string }) => file.path.endsWith(path.join('node_modules', 'fast-uri')),
+    );
+    expect(staleRuntimeFile).toBeTruthy();
+    staleRuntimeFile.digest = `sha256:${'0'.repeat(64)}`;
+    delete staleUnsigned.signature;
+    const staleIdentity = signManagedSkillIdentity(staleUnsigned, getJwtSecret());
+    config[skillName].managedSkill = staleIdentity;
+    manager.saveConfig(config);
+    const installedPackagePath = path.join(installed, 'package.json');
+    const installedPackage = JSON.parse(fs.readFileSync(installedPackagePath, 'utf8'));
+    installedPackage.lumi.managedSkill = staleIdentity;
+    fs.writeFileSync(installedPackagePath, `${JSON.stringify(installedPackage, null, 2)}\n`);
+    expect(() => manager.assertLocalSkillRuntimeIdentity(skillName, config[skillName]))
+      .toThrow(/runtime file changed/i);
+
+    const tools = [{
+      serverName: skillName,
+      rawName: 'probe',
+      name: mcpRegistryToolName(skillName, 'probe'),
+      inputSchema: { type: 'object', properties: {} },
+    }];
+    const restart = vi.spyOn(manager, 'restartServer').mockResolvedValue(tools);
+
+    const result = await manager.repairSkill(skillName);
+
+    expect(result).toMatchObject({
+      success: true,
+      action: 'runtime_rebound',
+      directory: installed,
+      toolCount: 1,
+      tools,
+    });
+    expect(restart).toHaveBeenCalledWith(skillName);
+    const reboundConfig = manager.getConfig()[skillName];
+    const reboundPackage = JSON.parse(fs.readFileSync(installedPackagePath, 'utf8'));
+    expect(reboundPackage.lumi.managedSkill).toEqual(reboundConfig.managedSkill);
+    expect(reboundConfig.managedSkill.signature).not.toBe(staleIdentity.signature);
+    expect(() => manager.assertLocalSkillRuntimeIdentity(skillName, reboundConfig)).not.toThrow();
+  });
+
+  it('rolls back both managed identities and the full server config when rebound restart fails', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const { signManagedSkillIdentity } = await import('../server/marketplace/official_identity');
+    const { getJwtSecret } = await import('../server/config/local_identity');
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const skillName = 'content-ops';
+    const source = path.resolve('server', 'skills', 'bundled', skillName);
+    const installed = manager.installSkill(skillName, source, false, {
+      managedSkill: createBundledSkillIdentity(`skill-${skillName}`, source),
+    });
+    const config = manager.getConfig();
+    const staleUnsigned = JSON.parse(JSON.stringify(config[skillName].managedSkill));
+    const staleRuntimeFile = staleUnsigned.runtime.files.find(
+      (file: { path: string }) => file.path.endsWith(path.join('node_modules', 'fast-uri')),
+    );
+    expect(staleRuntimeFile).toBeTruthy();
+    staleRuntimeFile.digest = `sha256:${'0'.repeat(64)}`;
+    delete staleUnsigned.signature;
+    const staleIdentity = signManagedSkillIdentity(staleUnsigned, getJwtSecret());
+    config[skillName].managedSkill = staleIdentity;
+    config[skillName].cachedTools = [{
+      serverName: skillName,
+      rawName: 'old_probe',
+      name: 'mcp_content-ops_old_probe',
+      inputSchema: { type: 'object', properties: {} },
+    }];
+    config[skillName].cachedToolsFingerprint = 'old-fingerprint';
+    config[skillName].cachedToolsAttestation = 'old-attestation';
+    manager.saveConfig(config);
+    const installedPackagePath = path.join(installed, 'package.json');
+    const installedPackage = JSON.parse(fs.readFileSync(installedPackagePath, 'utf8'));
+    installedPackage.lumi.managedSkill = staleIdentity;
+    fs.writeFileSync(installedPackagePath, `${JSON.stringify(installedPackage, null, 2)}\n`);
+    const previousServerConfig = structuredClone(config[skillName]);
+    vi.spyOn(manager, 'restartServer').mockRejectedValue(new Error('injected restart failure'));
+
+    await expect(manager.repairSkill(skillName)).rejects.toThrow(
+      /restart failed after host-runtime rebind.*rolled back.*injected restart failure/i,
+    );
+
+    const rolledBackConfig = manager.getConfig()[skillName];
+    const rolledBackPackage = JSON.parse(fs.readFileSync(installedPackagePath, 'utf8'));
+    expect(rolledBackConfig).toEqual(previousServerConfig);
+    expect(rolledBackPackage.lumi.managedSkill).toEqual(staleIdentity);
+    expect(() => manager.assertLocalSkillRuntimeIdentity(skillName, rolledBackConfig))
+      .toThrow(/runtime file changed/i);
+  });
+
+  it.each(['generated identity', 'command drift', 'content drift'] as const)(
+    'does not use bundled host-runtime rebinding for %s',
+    async (scenario) => {
+      const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+      const { MCPClientManager } = await importClientWithExec(execMock);
+      const {
+        createGeneratedSkillIdentity,
+        signManagedSkillIdentity,
+      } = await import('../server/marketplace/official_identity');
+      const { getJwtSecret } = await import('../server/config/local_identity');
+      const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+      const skillName = 'content-ops';
+      const source = path.resolve('server', 'skills', 'bundled', skillName);
+      const sourceIdentity = scenario === 'generated identity'
+        ? createGeneratedSkillIdentity(skillName, source, 'sha256:reviewed-generated-fixture')
+        : createBundledSkillIdentity(`skill-${skillName}`, source);
+      const installed = manager.installSkill(skillName, source, false, { managedSkill: sourceIdentity });
+      const config = manager.getConfig();
+      const installedPackagePath = path.join(installed, 'package.json');
+
+      if (scenario === 'generated identity') {
+        const staleUnsigned = JSON.parse(JSON.stringify(config[skillName].managedSkill));
+        const staleRuntimeFile = staleUnsigned.runtime.files.find(
+          (file: { path: string }) => file.path.endsWith(path.join('node_modules', 'fast-uri')),
+        );
+        expect(staleRuntimeFile).toBeTruthy();
+        staleRuntimeFile.digest = `sha256:${'0'.repeat(64)}`;
+        delete staleUnsigned.signature;
+        const staleIdentity = signManagedSkillIdentity(staleUnsigned, getJwtSecret());
+        config[skillName].managedSkill = staleIdentity;
+        const installedPackage = JSON.parse(fs.readFileSync(installedPackagePath, 'utf8'));
+        installedPackage.lumi.managedSkill = staleIdentity;
+        fs.writeFileSync(installedPackagePath, `${JSON.stringify(installedPackage, null, 2)}\n`);
+      } else if (scenario === 'command drift') {
+        config[skillName].command = path.join(tempHome, 'unapproved-node.exe');
+      } else {
+        fs.appendFileSync(path.join(installed, 'index.ts'), '\n// unapproved content drift\n');
+      }
+      manager.saveConfig(config);
+      const restart = vi.spyOn(manager, 'restartServer').mockResolvedValue([]);
+
+      const result = await manager.repairSkill(skillName);
+
+      expect(result).toMatchObject({ success: false, reviewRequired: true });
+      expect(restart).not.toHaveBeenCalled();
+      expect(manager.getConfig()[skillName].managedSkill).toEqual(config[skillName].managedSkill);
+    },
+  );
+
   it('throws MCP protocol error results instead of returning them as successful tool text', async () => {
     const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
     const { MCPClientManager } = await importClientWithExec(execMock);
