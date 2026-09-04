@@ -101,6 +101,35 @@ function desktopExecHandler(data: {
   if (socket) void handleDesktopExec(socket, data);
 }
 
+function dispatchWallpaperModeAction(detail: {
+  enabled: boolean;
+  source: string;
+  presentation: 'desktop-control';
+  timeoutMs: number;
+}): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timeout = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error('Wallpaper mode transition timed out'));
+    }, 10_000);
+    const settle = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      callback();
+    };
+    window.dispatchEvent(new CustomEvent('lumi:set-wallpaper-mode', {
+      detail: {
+        ...detail,
+        respond: (result: Record<string, unknown>) => settle(() => resolve(result)),
+        reject: (message: string) => settle(() => reject(new Error(message))),
+      },
+    }));
+  });
+}
+
 async function handleDesktopExec(socket: Socket, data: {
   correlationId: string;
   name: string;
@@ -412,14 +441,17 @@ async function handleDesktopExec(socket: Socket, data: {
           output = 'Wallpaper mode request ignored: only controlled desktop sessions may toggle it.';
           break;
         }
-        window.dispatchEvent(new CustomEvent('lumi:set-wallpaper-mode', {
-          detail: {
-            enabled: Boolean(args.enabled),
-            source,
-            timeoutMs: Number(args.timeoutMs || 190000),
-          },
-        }));
-        output = `Wallpaper mode ${args.enabled ? 'enabled' : 'disabled'} for ${source}`;
+        const state = await dispatchWallpaperModeAction({
+          enabled: Boolean(args.enabled),
+          source,
+          presentation: 'desktop-control',
+          timeoutMs: Number(args.timeoutMs || 190000),
+        });
+        output = JSON.stringify({
+          ...state,
+          source,
+          verified: true,
+        });
         break;
       }
       case 'desktop_cursor_glow_show': {

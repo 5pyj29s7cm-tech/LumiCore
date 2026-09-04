@@ -1084,7 +1084,7 @@ describe('Lumi execution decision', () => {
 
     const poster = decide('\u753b\u4e00\u5f20\u6d77\u62a5');
     expect(poster.decision.allowToolUse).toBe(true);
-    expect(poster.decision.toolRoute?.categories).toContain('cad_design');
+    expect(poster.decision.toolRoute?.categories).toContain('image_generation');
 
     const importKb = decide('\u628a\u8fd9\u4efd\u8d44\u6599\u5bfc\u5165\u77e5\u8bc6\u5e93');
     expect(importKb.decision.allowToolUse).toBe(true);

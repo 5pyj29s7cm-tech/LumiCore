@@ -3627,6 +3627,7 @@ export function AgentChatPage({
         <motion.div
           data-lumi-rendered-surface={layout === 'command-center' ? 'command-center' : 'chat'}
           data-lumi-command-center-view={layout === 'command-center' ? commandCenterView : undefined}
+          data-command-center-appearance={layout === 'command-center' ? resolvedAppearanceMode : undefined}
           initial={prefersReducedMotion ? false : layout === 'command-center'
             ? { opacity: 0, scale: 0.94, x: '-2.5%' }
             : { opacity: 0, y: 18, scale: 0.985 }}
@@ -3644,6 +3645,7 @@ export function AgentChatPage({
             '--color-celestial-glow': chatAccentTheme.glow,
             '--color-celestial-nebula': chatAccentTheme.nebula,
             '--color-celestial-mars': chatAccentTheme.mars,
+            '--lumi-chat-background': chatAccentTheme.background,
             willChange: 'opacity, transform',
           } as React.CSSProperties}
         >
@@ -3880,6 +3882,7 @@ export function AgentChatPage({
         {isOfficeCommandCenter && (
           <motion.section
             data-command-center-cosmos-stage
+            data-wallpaper-tool="command-core"
             initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.82, x: '-7%' }}
             animate={{ opacity: 1, scale: 1, x: 0 }}
             transition={{ duration: prefersReducedMotion ? 0 : 0.48, ease: [0.2, 0.75, 0.2, 1] }}
@@ -3915,10 +3918,11 @@ export function AgentChatPage({
         )}
 
         {/* Chat Panel and the command-center destination rail. */}
-        <div className={isOfficeCommandCenter ? 'lumi-command-center-conversation-layout relative z-20 flex min-h-0 w-full flex-1' : 'contents'}>
+        <div data-wallpaper-tool={isOfficeCommandCenter ? 'command-workspace' : undefined} className={isOfficeCommandCenter ? 'lumi-command-center-conversation-layout relative z-20 flex min-h-0 w-full flex-1' : 'contents'}>
         {isOfficeCommandCenter && conversationHistoryOpen && (
           <aside
             data-command-center-history-rail
+            data-wallpaper-tool="command-history"
             data-command-center-history-selector
             data-command-center-history-selector-expanded={conversationHistorySelectorExpanded ? 'true' : 'false'}
             onMouseEnter={() => setConversationHistorySelectorExpanded(true)}
@@ -4041,6 +4045,7 @@ export function AgentChatPage({
           </aside>
         )}
         <motion.div
+          data-wallpaper-tool={isOfficeCommandCenter ? 'command-dialogue' : undefined}
           data-command-center-chat-rail={isOfficeCommandCenter ? 'true' : undefined}
           initial={isOfficeCommandCenter && !prefersReducedMotion ? { opacity: 0, x: '100%' } : false}
           animate={{ opacity: 1, x: 0 }}
@@ -4616,6 +4621,7 @@ export function AgentChatPage({
           <aside
             data-command-center-switcher
             data-command-center-right-rail="true"
+            data-wallpaper-tool="command-tools"
             className="lumi-command-center-switcher relative z-30 flex shrink-0 flex-col justify-center gap-3"
             aria-label={uiMessage('command-center.switcher.4b7c2d1e09', isZh ? 'zh' : 'en')}
           >

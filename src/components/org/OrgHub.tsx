@@ -174,9 +174,9 @@ export function OrgHub() {
   };
 
   return (
-    <div className="lumi-work-surface lumi-surface flex h-full overflow-hidden rounded-none border-0 bg-black/20">
+    <div data-organization-wallpaper-surface className="lumi-work-surface lumi-surface flex h-full overflow-hidden rounded-none border-0 bg-black/20">
       {/* Sidebar */}
-      <div className="lumi-org-sidebar flex w-16 shrink-0 flex-col border-r border-white/[0.08] bg-black/25 sm:w-60">
+      <div data-wallpaper-tool="organization-navigation" className="lumi-org-sidebar flex w-16 shrink-0 flex-col border-r border-white/[0.08] bg-black/25 sm:w-60">
         <div className="space-y-3 border-b border-white/[0.08] p-2 sm:p-4">
           <h3 className="flex items-center justify-center gap-2 text-sm font-black uppercase tracking-[0.12em] text-white/85 sm:justify-start">
             <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-blue-300/15 bg-blue-400/10 text-blue-200">
@@ -281,8 +281,8 @@ export function OrgHub() {
       </div>
 
       {/* Content */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b border-white/[0.08] bg-black/30 px-3 py-3 backdrop-blur-xl sm:gap-4 sm:px-5">
+      <div data-wallpaper-tool="organization-workspace" className="lumi-org-workspace flex min-w-0 flex-1 flex-col">
+        <div data-wallpaper-tool="organization-context" className="lumi-org-context-bar sticky top-0 z-20 flex items-center justify-between gap-3 border-b border-white/[0.08] bg-black/30 px-3 py-3 backdrop-blur-xl sm:gap-4 sm:px-5">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-white/85">
               <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-blue-300/15 bg-blue-400/10 text-blue-200">{currentItem.icon}</span>

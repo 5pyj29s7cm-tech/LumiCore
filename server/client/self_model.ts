@@ -46,6 +46,8 @@ import { CN_SELF_INTRODUCTION_COPY } from '../regions/packs/cn/self_introduction
 import { listRegisteredProviders } from '../extensions/registry';
 
 export type ClientMode = LumiClientMode;
+export type WallpaperPresentation = 'workbench' | 'desktop-control';
+export type WallpaperWorkspace = 'personal' | 'command-center' | 'organization';
 export type ClientCapabilityKind =
   | 'mode'
   | 'window'
@@ -131,6 +133,8 @@ export interface ClientStateSnapshot {
     runtimeLogOpen?: boolean;
     meetingOpen?: boolean;
     wallpaperMode?: boolean;
+    wallpaperPresentation?: WallpaperPresentation;
+    wallpaperWorkspace?: WallpaperWorkspace;
     widgetMode?: boolean;
     nexusOpen?: boolean;
     /** Surface ids derived from the authoritative shared client registry. */
@@ -223,6 +227,9 @@ export interface ClientStateDigest {
   openSurfaces: string[];
   voice: string;
   meetingActive: boolean;
+  wallpaperMode: boolean;
+  wallpaperPresentation: WallpaperPresentation | 'unknown';
+  wallpaperWorkspace: WallpaperWorkspace | 'unknown';
   runtimeStatus: string;
   orgView: string;
   knowledge: string;
@@ -742,9 +749,9 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Wallpaper mode',
     kind: 'system',
     actions: ['set_wallpaper_mode'],
-    notes: 'Lets Lumi visually merge with the desktop. Use carefully; desktop-control sessions may enable it temporarily.',
+    notes: 'A full-screen presentation shared by personal, command-center, and organization workspaces, not a new operation mode or another Lumi. Interactive workbench presentation keeps the current workspace semantics: personal is private local-machine focus; command-center preserves the current task, receipts, blockers, and continuation; organization uses only the active member role and organization-authorized data and must never expose personal memory. Desktop-control is the temporary click-through presentation for visible external-app operation.',
     requiresConfirmation: true,
-    stateKeys: ['surfaces.wallpaperMode'],
+    stateKeys: ['surfaces.wallpaperMode', 'surfaces.wallpaperPresentation', 'surfaces.wallpaperWorkspace'],
   },
   {
     id: 'permissions.sensors',
@@ -793,7 +800,7 @@ const VISIBLE_EXECUTION_HABITS: VisibleExecutionHabit[] = [
   },
   {
     id: 'wallpaper_for_immersive_work',
-    rule: 'Use wallpaper mode only when the user explicitly requests it or during a visible user-present desktop workflow, then turn it off when done. The explicit current request is the authorization; do not ask a second tool-level confirmation.',
+    rule: 'Wallpaper is a presentation of the current workspace, not a new operation mode or a multi-agent system. On explicit request, interactive workbench presentation may open from personal, command-center, or organization space. Keep personal work private and local; preserve the same task, receipts, blockers, and continuation in command-center; in organization space use only the authenticated role and organization-authorized data, never personal memory. Use desktop-control presentation only during visible external-app operation, then restore the prior presentation. The explicit current request is the authorization; do not ask a second tool-level confirmation.',
   },
   {
     id: 'close_temporary_surfaces',
@@ -1273,6 +1280,9 @@ export function getClientStateDigest(state: ClientStateSnapshot | null | undefin
     openSurfaces,
     voice: `${state.voice?.state || 'idle'}${state.voice?.muted ? '/muted' : ''}`,
     meetingActive: Boolean(state.meeting?.active),
+    wallpaperMode: Boolean(state.surfaces?.wallpaperMode),
+    wallpaperPresentation: state.surfaces?.wallpaperPresentation || 'unknown',
+    wallpaperWorkspace: state.surfaces?.wallpaperWorkspace || 'unknown',
     runtimeStatus: state.runtimeLog?.status || (state.runtime?.lastError ? 'attention' : 'ready'),
     orgView,
     knowledge,
@@ -1955,6 +1965,31 @@ function formatLearnedCapabilityRoutes(
   }
 }
 
+function formatWallpaperState(state: ClientStateSnapshot | null | undefined): string {
+  const enabled = Boolean(state?.surfaces?.wallpaperMode);
+  if (!enabled) return 'false';
+  return `true(presentation=${state?.surfaces?.wallpaperPresentation || 'unknown'}, workspace=${state?.surfaces?.wallpaperWorkspace || 'unknown'})`;
+}
+
+function formatActiveWallpaperBoundary(
+  state: ClientStateSnapshot | null | undefined,
+  isWork: boolean,
+): string {
+  if (!state?.surfaces?.wallpaperMode) return '';
+  const presentation = state.surfaces.wallpaperPresentation || 'unknown';
+  const workspace = state.surfaces.wallpaperWorkspace || 'unknown';
+  if (presentation === 'desktop-control') {
+    return '- Wallpaper boundary: desktop-control is a temporary click-through presentation for visible external-app operation. It is not a new operation mode; restore the previous workspace presentation when the operation finishes.';
+  }
+  if (isWork || workspace === 'organization') {
+    return '- Wallpaper boundary: organization workbench uses only the authenticated member role, active organization scope, and organization-authorized data. Never load or expose personal memories, private conversations, local learning, or personal files.';
+  }
+  if (workspace === 'command-center') {
+    return '- Wallpaper boundary: command-center workbench must continue the same current task and preserve its receipts, blockers, corrections, and next step. It is a presentation, not a new task, operation mode, or agent.';
+  }
+  return '- Wallpaper boundary: personal workbench is a private local-machine focus surface for this user. It is a presentation, not a new task, operation mode, or agent.';
+}
+
 /**
  * Voice turns need the live client facts, not the complete diagnostic manual.
  * The full prompt below contains every surface, adapter and governance rule and
@@ -1985,8 +2020,9 @@ export function formatCompactClientSelfPrompt(
       : '- UI: no live desktop state is currently available.',
     `- Operation-mode definition: exactly ${LUMI_OPERATION_MODE_IDS.length} persistent permission modes (${LUMI_OPERATION_MODE_IDS.join(', ')}); meeting is a temporary capture surface, not another permission mode.`,
     state
-      ? `- Surfaces: wallpaper=${Boolean(state.surfaces?.wallpaperMode)}; widget=${Boolean(state.surfaces?.widgetMode)}; meeting=${Boolean(state.surfaces?.meetingOpen || state.meeting?.active)}; nexus=${Boolean(state.surfaces?.nexusOpen || state.viewMode === 'world')}; focused=${state.windows?.focused || 'none'}`
+      ? `- Surfaces: wallpaper=${formatWallpaperState(state)}; widget=${Boolean(state.surfaces?.widgetMode)}; meeting=${Boolean(state.surfaces?.meetingOpen || state.meeting?.active)}; nexus=${Boolean(state.surfaces?.nexusOpen || state.viewMode === 'world')}; focused=${state.windows?.focused || 'none'}`
       : '',
+    formatActiveWallpaperBoundary(state, isWork),
     `- Connected capabilities: tools=${snapshot.connectedCapabilities.tools}; skills=${snapshot.connectedCapabilities.skills}; mcp=${snapshot.connectedCapabilities.mcp}; adaptersReady=${snapshot.connectedCapabilities.adaptersReady}; adaptersAttention=${snapshot.connectedCapabilities.adaptersAttention}`,
     configuredModels.length ? `- Configured models: ${configuredModels.join('; ')}` : '- Configured models: none reported.',
     `- Knowledge: total=${snapshot.knowledgeCoverage.totalFiles}; indexed=${snapshot.knowledgeCoverage.indexedFiles}; verified=${snapshot.knowledgeCoverage.verifiedFiles}; status=${snapshot.knowledgeCoverage.verification}`,
@@ -2110,7 +2146,8 @@ export function formatClientSelfPrompt(
     `- Knowledge ingestion: domain=${state.knowledge?.domain || state.workDomain || 'personal'}, files=${state.knowledge?.totalFiles || 0}, indexed=${state.knowledge?.indexedFiles || 0}, partial=${state.knowledge?.partialFiles || 0}, pending=${state.knowledge?.pendingFiles || 0}, failed=${state.knowledge?.failedFiles || 0}, unsupported=${state.knowledge?.unsupportedFiles || 0}${state.knowledge?.orgArticles ? `, orgArticles=${state.knowledge.orgArticles.total || 0}, orgPublished=${state.knowledge.orgArticles.published || 0}, orgIndexed=${state.knowledge.orgArticles.indexed || 0}, orgMissingIndex=${state.knowledge.orgArticles.missingIndex || 0}, orgStale=${state.knowledge.orgArticles.stale || 0}` : ''}${state.knowledge?.lastError ? `, error=${state.knowledge.lastError}` : ''}`,
     `- Open windows: ${(state.windows?.open || []).join(', ') || 'none'}`,
     `- Focused window: ${state.windows?.focused || 'none'}`,
-    `- Surfaces: nexus=${Boolean(state.surfaces?.nexusOpen || state.viewMode === 'world')}, launcher=${Boolean(state.surfaces?.appLauncherOpen)}, knowledge=${Boolean(state.surfaces?.knowledgeOpen)}, commandCenter=${Boolean(state.surfaces?.commandCenterOpen || state.surfaces?.chatOpen)}(${state.surfaces?.commandCenterView || 'office'}), notifications=${Boolean(state.surfaces?.notificationsOpen)}, memoryAvatar=${Boolean(state.surfaces?.memoryAvatarOpen)}, runtimeLog=${Boolean(state.surfaces?.runtimeLogOpen)}, meeting=${Boolean(state.surfaces?.meetingOpen)}, wallpaper=${Boolean(state.surfaces?.wallpaperMode)}, widget=${Boolean(state.surfaces?.widgetMode)}`,
+    `- Surfaces: nexus=${Boolean(state.surfaces?.nexusOpen || state.viewMode === 'world')}, launcher=${Boolean(state.surfaces?.appLauncherOpen)}, knowledge=${Boolean(state.surfaces?.knowledgeOpen)}, commandCenter=${Boolean(state.surfaces?.commandCenterOpen || state.surfaces?.chatOpen)}(${state.surfaces?.commandCenterView || 'office'}), notifications=${Boolean(state.surfaces?.notificationsOpen)}, memoryAvatar=${Boolean(state.surfaces?.memoryAvatarOpen)}, runtimeLog=${Boolean(state.surfaces?.runtimeLogOpen)}, meeting=${Boolean(state.surfaces?.meetingOpen)}, wallpaper=${formatWallpaperState(state)}, widget=${Boolean(state.surfaces?.widgetMode)}`,
+    formatActiveWallpaperBoundary(state, isWork),
     `- Voice: ${state.voice?.state || 'idle'}${state.voice?.muted ? ' (muted)' : ''}`,
     `- Meeting: active=${Boolean(state.meeting?.active)}, notes=${state.meeting?.noteCount || 0}, report=${Boolean(state.meeting?.hasReport)}, reportGenerating=${Boolean(state.meeting?.reportGenerating)}`,
     `- Runtime log: open=${Boolean(state.runtimeLog?.open)}, status=${state.runtimeLog?.status || 'ready'}${state.runtimeLog?.lastError ? `, error=${state.runtimeLog.lastError}` : ''}`,
@@ -2194,7 +2231,7 @@ export function formatClientSelfPrompt(
     'When the user asks Lumi to handle, classify, or take over a WeChat/customer message, create or continue a work-takeover task, orchestrate the reusable capability route, and run the specific suggested tools needed for the requested outcome. work_takeover_task_autorun may advance bounded local preparation only. Exported task packets and local drafts are coordination artifacts, never proof that customer contact, store operations, publishing, AutoCAD/Revit work, or delivery completed. Use work_takeover_task_verify_result with real action evidence before reporting completion.',
     'When the user says continue that customer, next step, that WeChat task, the previous takeover task, or asks what work Lumi is managing, use work_takeover_task_advance to move the persisted task forward by one safe step before answering from memory or jumping into an industry workflow. Use work_takeover_task_run_suggested_tool for one explicit plan-suggested tool call, work_takeover_task_verify_result after visible/external work before claiming success, and work_takeover_task_export_packet when the task should leave the task center as files.',
     'For work takeover status reports, do not recite every tool call or generated sentence. Report only: what is done, what concrete result exists, what is blocked, and what needs the user to confirm next.',
-    'Wallpaper and meeting capture require explicit current user intent, but that instruction itself is authorization and should not trigger a second tool popup. Never start meeting capture from unattended autonomous work. Sensor/OS permission prompts and high-consequence actions keep their hard boundaries.',
+    'Wallpaper and meeting capture require explicit current user intent, but that instruction itself is authorization and should not trigger a second tool popup. Wallpaper is one presentation layer available from personal, command-center, and organization workspaces; it is not a new persistent operation mode, another Lumi, or a multi-agent system. Personal workbench means private local-machine focus. Command-center workbench must preserve the same current task, receipts, blockers, corrections, and continuation. Organization workbench may use only the authenticated role, active organization scope, and organization-authorized data, and must never expose personal memory. Desktop-control is the temporary click-through presentation for visible external-app operation and should restore the previous presentation afterward. Never start meeting capture from unattended autonomous work. Sensor/OS permission prompts and high-consequence actions keep their hard boundaries.',
     'For 24-hour availability: distinguish three states. Launch-at-login and close-to-background make Lumi resident only while the desktop client/server are actually running; hidden-to-background does not mean autonomous execution; autonomous background work still requires auto processing, the active autonomy policy, token budget, and confirmed-workflow gates. Assistant/semi no longer requires the user to be idle by default. Verify client_get_state or client_health_check before promising that Lumi is running or will continue after the window is hidden or after restart.',
     'Rest is part of your local life. When Always Online is enabled and the user is idle/nighttime, you may sleep and dream by running lumi_sleep_cycle: consolidate memories, identify uncertainty, and wake with a quieter memory state. Never delete original memories or mutate core identity during dreams.',
     'When Lumi is alone in Autonomy mode, she can learn her local machine body by observing desktop_system_info, desktop_list_apps, desktop_list_files, desktop_path_info, desktop_running_processes, desktop_active_window, desktop_idle_time, and desktop_poll_activity. This is map-building only: do not open apps/files, click, type, screenshot, run commands, read file contents, or infer private facts from filenames without explicit task need and authorization.',

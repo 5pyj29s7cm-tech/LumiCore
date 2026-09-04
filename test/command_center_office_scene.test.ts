@@ -34,14 +34,31 @@ describe('single-core command center', () => {
     expect(styles).toContain('@media (prefers-reduced-motion: reduce)');
   });
 
-  it('keeps the app topmost when either Command Center or Wallpaper is active', () => {
+  it('keeps the app topmost for Command Center and controlled desktop overlays only', () => {
     const desktop = source('src/components/DesktopUI.tsx');
     const systemService = source('src/services/systemService.ts');
 
-    expect(desktop).toContain('chatOpen || isWallpaperMode || isDesktopWidgetMode');
+    expect(desktop).toContain("(isWallpaperMode && wallpaperPresentation === 'desktop-control')");
     expect(desktop).toContain('systemService.setAlwaysOnTop(shouldStayOnTop)');
-    expect(desktop).toContain('systemService.setAlwaysOnTop(chatOpen || isWallpaperModeRef.current)');
+    expect(desktop).toContain('(!isWallpaperMode && chatOpen)');
+    expect(desktop).toContain("isWallpaperModeRef.current && wallpaperPresentationRef.current === 'desktop-control'");
     expect(systemService).toContain('getCurrentWindow().setAlwaysOnTop(enabled)');
+  });
+
+  it('inherits the global light appearance at compact and full window sizes', () => {
+    const chatPage = source('src/components/AgentChatPage.tsx');
+    const panel = source('src/components/CommandCenterPanel.tsx');
+    const styles = source('src/index.css');
+
+    expect(chatPage).toContain('data-command-center-appearance={');
+    expect(chatPage).toContain("'--lumi-chat-background': chatAccentTheme.background");
+    expect(panel).toContain('lumi-command-center-panel');
+    expect(styles).toContain('[data-compact-layout="true"] .lumi-chat-root {\n  background: var(--lumi-chat-background');
+    expect(styles).toContain('html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view]');
+    expect(styles).toContain('--cc-layer-bg: #f7faf7');
+    expect(styles).toContain('background: var(--cc-office-bg');
+    expect(styles).toContain('background: var(--cc-layer-field-bg');
+    expect(styles).not.toContain('[data-compact-layout="true"] .lumi-chat-root {\n  background: #02050a !important;');
   });
 
   it('does not manufacture a fake working state or random activity', () => {

@@ -11,6 +11,7 @@ import {
   getClientInterfaceSurfaces,
   getClientSelfAwarenessReport,
   getClientStateForScope,
+  getClientStateDigest,
   normalizeClientActionTarget,
   updateClientState,
   verifyClientActionResult,
@@ -432,6 +433,59 @@ describe('Lumi client self model', () => {
     expect(prompt).toContain('Present-Moment Client Awareness');
     expect(prompt).toContain('Client Action Verification Contract');
     expect(prompt).toContain('verification.status');
+  });
+
+  it('reports the interactive wallpaper presentation without turning it into a new mode', () => {
+    const state = updateClientState('client_self_model_wallpaper_workbench_user', {
+      platform: 'desktop',
+      mode: 'assistant',
+      activeTab: 'command-center',
+      workDomain: 'personal',
+      windows: { open: ['command-center'], focused: 'command-center', minimized: [] },
+      surfaces: {
+        wallpaperMode: true,
+        wallpaperPresentation: 'workbench',
+        wallpaperWorkspace: 'command-center',
+        commandCenterOpen: true,
+      },
+    });
+
+    const digest = getClientStateDigest(state);
+    const prompt = formatCompactClientSelfPrompt('client_self_model_wallpaper_workbench_user');
+
+    expect(digest).toMatchObject({
+      wallpaperMode: true,
+      wallpaperPresentation: 'workbench',
+      wallpaperWorkspace: 'command-center',
+    });
+    expect(digest?.openSurfaces).toContain('wallpaper');
+    expect(prompt).toContain('wallpaper=true(presentation=workbench, workspace=command-center)');
+    expect(prompt).toContain('preserve its receipts, blockers, corrections, and next step');
+    expect(prompt).toContain('not a new task, operation mode, or agent');
+  });
+
+  it('keeps organization wallpaper context inside the organization memory boundary', () => {
+    const userId = 'client_self_model_wallpaper_organization_user';
+    updateClientState(userId, {
+      platform: 'desktop',
+      mode: 'assistant',
+      activeTab: 'org',
+      workDomain: 'work',
+      org: { connected: true, id: 'wallpaper-org', name: 'Wallpaper Org', role: 'member' },
+      orgWorkspace: { activeView: 'dashboard', availableViews: ['dashboard'], visible: true },
+      windows: { open: ['org'], focused: 'org', minimized: [] },
+      surfaces: {
+        wallpaperMode: true,
+        wallpaperPresentation: 'workbench',
+        wallpaperWorkspace: 'organization',
+      },
+    });
+
+    const prompt = formatCompactClientSelfPrompt(userId, { domain: 'work', orgId: 'wallpaper-org' });
+
+    expect(prompt).toContain('wallpaper=true(presentation=workbench, workspace=organization)');
+    expect(prompt).toContain('organization-authorized data');
+    expect(prompt).toContain('Never load or expose personal memories');
   });
 
   it('describes one Lumi with scoped knowledge and hides live work state from personal context', () => {

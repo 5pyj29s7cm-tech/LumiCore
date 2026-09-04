@@ -30,7 +30,12 @@ export interface LiveStats {
 
 export interface WallpaperModeState {
   enabled: boolean;
+  presentation: WallpaperPresentation;
+  workspace: WallpaperWorkspace;
 }
+
+export type WallpaperPresentation = 'workbench' | 'desktop-control';
+export type WallpaperWorkspace = 'personal' | 'command-center' | 'organization';
 
 class SystemService {
   private isTauri: boolean;
@@ -107,46 +112,110 @@ class SystemService {
     }
   }
 
-  syncWallpaperDocumentMode(enabled: boolean): void {
+  syncWallpaperDocumentMode(
+    enabled: boolean,
+    presentation: WallpaperPresentation = 'workbench',
+    workspace: WallpaperWorkspace = 'personal',
+  ): void {
     if (enabled) {
       document.documentElement.classList.add('lumi-wallpaper-mode');
+      document.documentElement.dataset.wallpaperPresentation = presentation;
+      document.documentElement.dataset.wallpaperWorkspace = workspace;
+      try { sessionStorage.setItem('lumi.wallpaper.workspace', workspace); } catch {}
     } else {
       document.documentElement.classList.remove('lumi-wallpaper-mode');
+      delete document.documentElement.dataset.wallpaperPresentation;
+      delete document.documentElement.dataset.wallpaperWorkspace;
+      try { sessionStorage.removeItem('lumi.wallpaper.workspace'); } catch {}
     }
   }
 
   /**
-   * Toggle the transparent desktop overlay and native click-through window.
+   * Toggle the full-screen wallpaper surface. Workbench remains interactive;
+   * desktop-control preserves the legacy click-through overlay behavior.
    */
-  async setWallpaperMode(enabled: boolean): Promise<boolean> {
+  async setWallpaperMode(
+    enabled: boolean,
+    presentation: WallpaperPresentation = 'workbench',
+    workspace: WallpaperWorkspace = this.getDocumentWallpaperWorkspace(),
+  ): Promise<WallpaperModeState> {
     const previous = document.documentElement.classList.contains('lumi-wallpaper-mode');
-    this.syncWallpaperDocumentMode(enabled);
+    const previousPresentation = this.getDocumentWallpaperPresentation();
+    const previousWorkspace = this.getDocumentWallpaperWorkspace();
+    this.syncWallpaperDocumentMode(enabled, presentation, workspace);
 
     if (this.isTauri) {
       try {
         const { invoke } = await import('@tauri-apps/api/core');
-        const state = await invoke<WallpaperModeState | null>('set_wallpaper_mode', { enabled });
+        const state = await invoke<WallpaperModeState | null>('set_wallpaper_mode', {
+          enabled,
+          presentation,
+          workspace,
+        });
         const resolved = typeof state?.enabled === 'boolean' ? state.enabled : enabled;
-        this.syncWallpaperDocumentMode(resolved);
-        return resolved;
+        const resolvedPresentation = this.isWallpaperPresentation(state?.presentation)
+          ? state.presentation
+          : presentation;
+        const resolvedWorkspace = this.isWallpaperWorkspace(state?.workspace)
+          ? state.workspace
+          : workspace;
+        this.syncWallpaperDocumentMode(resolved, resolvedPresentation, resolvedWorkspace);
+        return { enabled: resolved, presentation: resolvedPresentation, workspace: resolvedWorkspace };
       } catch (err) {
-        this.syncWallpaperDocumentMode(previous);
+        this.syncWallpaperDocumentMode(previous, previousPresentation, previousWorkspace);
         console.error('Failed to set wallpaper mode:', err);
         throw err;
       }
     }
-    return enabled;
+    return { enabled, presentation, workspace };
   }
 
-  async getWallpaperMode(): Promise<boolean> {
+  async getWallpaperMode(): Promise<WallpaperModeState> {
     if (this.isTauri) {
       const { invoke } = await import('@tauri-apps/api/core');
       const state = await invoke<WallpaperModeState>('get_wallpaper_mode');
       const enabled = Boolean(state?.enabled);
-      this.syncWallpaperDocumentMode(enabled);
-      return enabled;
+      const presentation = this.isWallpaperPresentation(state?.presentation)
+        ? state.presentation
+        : 'workbench';
+      const storedWorkspace = this.getStoredWallpaperWorkspace();
+      const workspace = storedWorkspace
+        || (this.isWallpaperWorkspace(state?.workspace) ? state.workspace : 'personal');
+      this.syncWallpaperDocumentMode(enabled, presentation, workspace);
+      return { enabled, presentation, workspace };
     }
-    return document.documentElement.classList.contains('lumi-wallpaper-mode');
+    return {
+      enabled: document.documentElement.classList.contains('lumi-wallpaper-mode'),
+      presentation: this.getDocumentWallpaperPresentation(),
+      workspace: this.getDocumentWallpaperWorkspace(),
+    };
+  }
+
+  private isWallpaperPresentation(value: unknown): value is WallpaperPresentation {
+    return value === 'workbench' || value === 'desktop-control';
+  }
+
+  private getDocumentWallpaperPresentation(): WallpaperPresentation {
+    const value = document.documentElement.dataset.wallpaperPresentation;
+    return this.isWallpaperPresentation(value) ? value : 'workbench';
+  }
+
+  private isWallpaperWorkspace(value: unknown): value is WallpaperWorkspace {
+    return value === 'personal' || value === 'command-center' || value === 'organization';
+  }
+
+  private getDocumentWallpaperWorkspace(): WallpaperWorkspace {
+    const value = document.documentElement.dataset.wallpaperWorkspace;
+    return this.isWallpaperWorkspace(value) ? value : 'personal';
+  }
+
+  private getStoredWallpaperWorkspace(): WallpaperWorkspace | null {
+    try {
+      const value = sessionStorage.getItem('lumi.wallpaper.workspace');
+      return this.isWallpaperWorkspace(value) ? value : null;
+    } catch {
+      return null;
+    }
   }
 
   async setAlwaysOnTop(enabled: boolean): Promise<void> {

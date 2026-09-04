@@ -1648,12 +1648,48 @@ body,
 }
 
 [data-compact-layout="true"] .lumi-chat-root {
-  background: #02050a !important;
+  background: var(--lumi-chat-background, #02050a) !important;
+}
+
+.lumi-chat-root[data-lumi-command-center-view] {
+  --cc-workspace-bg: #04080e;
+  --cc-layer-bg: #02040b;
+  --cc-office-bg: radial-gradient(ellipse at 50% 0%, rgba(129, 140, 248, .08), transparent 44%), linear-gradient(155deg, #070a15 0%, #030611 54%, #010208 100%);
+  --cc-field-bg: radial-gradient(circle at 50% 47%, rgba(44, 52, 112, .32), transparent 30%), radial-gradient(circle at 20% 12%, rgba(96, 72, 164, .14), transparent 33%), linear-gradient(145deg, #070a18 0%, #030611 53%, #010208 100%);
+  --cc-layer-field-bg: radial-gradient(circle at 50% 42%, rgba(44, 52, 112, .24), transparent 34%), linear-gradient(145deg, rgba(7, 10, 24, .74) 0%, rgba(3, 6, 17, .70) 53%, rgba(1, 2, 8, .78) 100%);
+  --cc-vignette: radial-gradient(ellipse at center, transparent 35%, rgba(0, 0, 0, .42) 100%);
+  --cc-ink: rgba(255, 255, 255, .90);
+  --cc-muted: rgba(226, 232, 240, .54);
+  --cc-faint: rgba(226, 232, 240, .34);
+  --cc-card: rgba(10, 35, 46, .72);
+  --cc-card-secondary: rgba(9, 28, 39, .62);
+  --cc-card-tertiary: rgba(8, 23, 33, .5);
+  --cc-card-current: rgba(12, 63, 75, .82);
+  --cc-code-bg: rgba(5, 18, 28, .42);
+  --cc-shadow: rgba(0, 0, 0, .22);
+}
+
+html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view] {
+  --cc-workspace-bg: #f4f7f3;
+  --cc-layer-bg: #f7faf7;
+  --cc-office-bg: radial-gradient(ellipse at 50% 0%, rgba(14, 165, 163, .10), transparent 45%), radial-gradient(circle at 12% 88%, rgba(37, 99, 235, .07), transparent 32%), linear-gradient(155deg, #fbfcf9 0%, #f2f7f3 54%, #eaf2ed 100%);
+  --cc-field-bg: radial-gradient(circle at 50% 47%, rgba(14, 165, 163, .13), transparent 31%), radial-gradient(circle at 20% 12%, rgba(99, 102, 241, .08), transparent 34%), linear-gradient(145deg, #fbfdfb 0%, #f1f7f3 53%, #e8f1ec 100%);
+  --cc-layer-field-bg: radial-gradient(circle at 50% 42%, rgba(14, 165, 163, .11), transparent 35%), linear-gradient(145deg, rgba(253, 255, 253, .88) 0%, rgba(242, 248, 244, .82) 53%, rgba(233, 242, 236, .88) 100%);
+  --cc-vignette: radial-gradient(ellipse at center, transparent 38%, rgba(45, 76, 59, .10) 100%);
+  --cc-ink: rgba(20, 38, 30, .90);
+  --cc-muted: rgba(38, 63, 51, .60);
+  --cc-faint: rgba(38, 63, 51, .40);
+  --cc-card: rgba(255, 255, 255, .86);
+  --cc-card-secondary: rgba(246, 251, 248, .80);
+  --cc-card-tertiary: rgba(239, 247, 242, .72);
+  --cc-card-current: rgba(219, 242, 233, .92);
+  --cc-code-bg: rgba(226, 239, 231, .72);
+  --cc-shadow: rgba(38, 63, 51, .12);
 }
 
 .lumi-command-center-workspace {
   flex-direction: row;
-  background: #04080e;
+  background: var(--cc-workspace-bg, #04080e);
 }
 
 /*
@@ -1663,10 +1699,7 @@ body,
  */
 .lumi-core-command-field {
   isolation: isolate;
-  background:
-    radial-gradient(circle at 50% 47%, rgba(44, 52, 112, .32), transparent 30%),
-    radial-gradient(circle at 20% 12%, rgba(96, 72, 164, .14), transparent 33%),
-    linear-gradient(145deg, #070a18 0%, #030611 53%, #010208 100%);
+  background: var(--cc-field-bg, radial-gradient(circle at 50% 47%, rgba(44, 52, 112, .32), transparent 30%), linear-gradient(145deg, #070a18 0%, #030611 53%, #010208 100%));
 }
 
 .lumi-core-command-field::before {
@@ -1675,7 +1708,7 @@ body,
   z-index: 1;
   content: "";
   pointer-events: none;
-  background: radial-gradient(ellipse at center, transparent 35%, rgba(0, 0, 0, .42) 100%);
+  background: var(--cc-vignette, radial-gradient(ellipse at center, transparent 35%, rgba(0, 0, 0, .42) 100%));
 }
 
 .lumi-core-command-field__backdrop,
@@ -1791,7 +1824,7 @@ body,
   display: flex;
   align-items: center;
   gap: 9px;
-  color: rgba(226, 232, 240, .54);
+  color: var(--cc-muted, rgba(226, 232, 240, .54));
   font-size: 9px;
   font-weight: 800;
   letter-spacing: .22em;
@@ -1799,7 +1832,7 @@ body,
 }
 
 .lumi-core-command-field__hud-title {
-  color: rgba(255, 255, 255, .72);
+  color: var(--cc-ink, rgba(255, 255, 255, .72));
 }
 
 .lumi-core-command-field__hud-divider {
@@ -1829,7 +1862,7 @@ body,
   display: flex;
   align-items: baseline;
   gap: 7px;
-  color: rgba(255, 255, 255, .72);
+  color: var(--cc-ink, rgba(255, 255, 255, .72));
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 18px;
   font-weight: 700;
@@ -1932,11 +1965,11 @@ body,
 .lumi-core-command-field__core-label {
   min-width: 104px;
   border-color: rgba(196, 181, 253, .16);
-  background: linear-gradient(145deg, rgba(9, 13, 31, .86), rgba(3, 6, 16, .72));
+  background: var(--cc-card, linear-gradient(145deg, rgba(9, 13, 31, .86), rgba(3, 6, 16, .72)));
 }
 
 .lumi-core-command-field__beacon {
-  background: linear-gradient(145deg, rgba(10, 16, 34, .88), rgba(4, 7, 18, .7));
+  background: var(--cc-card, linear-gradient(145deg, rgba(10, 16, 34, .88), rgba(4, 7, 18, .7)));
   box-shadow: 0 8px 28px rgba(1, 2, 8, .4), 0 0 18px rgba(165, 243, 252, .08);
   box-shadow: 0 8px 28px rgba(1, 2, 8, .4), 0 0 22px color-mix(in srgb, var(--beacon-color) 16%, transparent);
   transition: background-color .2s ease, border-color .2s ease, box-shadow .2s ease;
@@ -1962,8 +1995,8 @@ body,
 
 .lumi-core-command-field__empty {
   border-color: rgba(196, 181, 253, .12);
-  background: rgba(5, 8, 21, .42);
-  color: rgba(255, 255, 255, .34);
+  background: var(--cc-card-tertiary, rgba(5, 8, 21, .42));
+  color: var(--cc-faint, rgba(255, 255, 255, .34));
 }
 
 @keyframes lumi-core-nebula-drift {
@@ -1992,9 +2025,7 @@ body,
 
 .lumi-command-center-office {
   isolation: isolate;
-  background:
-    radial-gradient(ellipse at 50% 0%, rgba(129, 140, 248, .08), transparent 44%),
-    linear-gradient(155deg, #070a15 0%, #030611 54%, #010208 100%) !important;
+  background: var(--cc-office-bg, linear-gradient(155deg, #070a15 0%, #030611 54%, #010208 100%)) !important;
 }
 
 .lumi-command-center-office--orbital {
@@ -2027,8 +2058,8 @@ body,
 .lumi-command-center-chat-rail {
   position: relative;
   border-radius: 0;
-  background-image: linear-gradient(180deg, rgba(13, 18, 30, .34), rgba(4, 7, 14, .18));
-  box-shadow: inset 18px 0 38px rgba(1, 2, 8, .16);
+  background-image: linear-gradient(180deg, color-mix(in srgb, var(--cc-card) 38%, transparent), color-mix(in srgb, var(--cc-layer-bg) 18%, transparent));
+  box-shadow: inset 18px 0 38px var(--cc-shadow, rgba(1, 2, 8, .16));
 }
 
 .lumi-command-center-chat-rail--entering {
@@ -2069,7 +2100,12 @@ body,
   position: relative;
   isolation: isolate;
   flex-direction: column;
-  background: #02040b;
+  background: var(--cc-layer-bg, #02040b);
+}
+
+.lumi-command-center-panel:not([data-command-center-background="true"]) {
+  background: var(--cc-layer-bg, #02040b) !important;
+  color: var(--cc-ink, rgba(255, 255, 255, .9));
 }
 
 .lumi-command-center-layered .lumi-command-center-cosmos-stage {
@@ -2091,9 +2127,7 @@ body,
 
 .lumi-command-center-layered .lumi-command-center-cosmos-stage [data-lumi-core-command-field] {
   min-height: 100% !important;
-  background:
-    radial-gradient(circle at 50% 42%, rgba(44, 52, 112, .24), transparent 34%),
-    linear-gradient(145deg, rgba(7, 10, 24, .74) 0%, rgba(3, 6, 17, .70) 53%, rgba(1, 2, 8, .78) 100%);
+  background: var(--cc-layer-field-bg, linear-gradient(145deg, rgba(7, 10, 24, .74) 0%, rgba(3, 6, 17, .70) 53%, rgba(1, 2, 8, .78) 100%));
 }
 
 /* Task progress is already surfaced in the conversation stream; keep the
@@ -2246,14 +2280,14 @@ body,
  * opened. */
 .lumi-command-center-layered .lumi-command-center-history-item:nth-child(1) {
   z-index: 3;
-  background: rgba(10, 35, 46, .72);
+  background: var(--cc-card, rgba(10, 35, 46, .72));
   border-color: rgba(103, 232, 249, .22);
   transform: translateY(0) scale(1);
 }
 
 .lumi-command-center-layered .lumi-command-center-history-item:nth-child(2) {
   z-index: 2;
-  background: rgba(9, 28, 39, .62);
+  background: var(--cc-card-secondary, rgba(9, 28, 39, .62));
   border-color: rgba(103, 232, 249, .14);
   transform: translate3d(.65rem, 1.35rem, -12px) rotateY(-5deg) scale(.94);
   opacity: .72;
@@ -2261,14 +2295,14 @@ body,
 
 .lumi-command-center-layered .lumi-command-center-history-item:nth-child(3) {
   z-index: 1;
-  background: rgba(8, 23, 33, .5);
+  background: var(--cc-card-tertiary, rgba(8, 23, 33, .5));
   border-color: rgba(103, 232, 249, .09);
   transform: translate3d(1.2rem, 2.6rem, -24px) rotateY(-9deg) scale(.88);
   opacity: .42;
 }
 
 .lumi-command-center-layered .lumi-command-center-history-item--current {
-  background: rgba(12, 63, 75, .82) !important;
+  background: var(--cc-card-current, rgba(12, 63, 75, .82)) !important;
   border-color: rgba(103, 232, 249, .28) !important;
 }
 
@@ -2390,7 +2424,7 @@ body,
   z-index: 2;
   transform: scale(1.025);
   background: rgba(103, 232, 249, .09);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, .18);
+  box-shadow: 0 10px 28px var(--cc-shadow, rgba(0, 0, 0, .18));
   outline: none;
 }
 
@@ -2409,12 +2443,12 @@ body,
   white-space: normal;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 4;
-  color: rgba(255, 255, 255, .58);
+  color: var(--cc-muted, rgba(255, 255, 255, .58));
 }
 
 .lumi-command-center-layered .lumi-command-center-history-item:hover .lumi-command-center-history-item-title,
 .lumi-command-center-layered .lumi-command-center-history-item:focus-visible .lumi-command-center-history-item-title {
-  color: rgba(255, 255, 255, .95);
+  color: var(--cc-ink, rgba(255, 255, 255, .95));
 }
 
 .lumi-command-center-layered .lumi-command-center-history-item-meta {
@@ -2589,7 +2623,7 @@ body,
 .lumi-command-center-layered .lumi-command-center-message-text .chat-message-markdown code {
   border: 1px solid rgba(103, 232, 249, .12);
   border-radius: .35rem;
-  background: rgba(5, 18, 28, .42);
+  background: var(--cc-code-bg, rgba(5, 18, 28, .42));
   padding: .1rem .3rem;
 }
 
@@ -2597,7 +2631,7 @@ body,
   max-width: 92%;
   border-left: 1px solid rgba(103, 232, 249, .42);
   padding-left: .75rem;
-  color: rgba(226, 232, 240, .62);
+  color: var(--cc-muted, rgba(226, 232, 240, .62));
 }
 
 .lumi-command-center-layered .lumi-command-center-task-feedback [data-task-feedback-presentation="chat-attention"] {
@@ -2615,7 +2649,23 @@ body,
 .lumi-command-center-layered .lumi-command-center-message-meta {
   font-size: .62rem;
   letter-spacing: .18em;
-  color: rgba(226, 232, 240, .34);
+  color: var(--cc-faint, rgba(226, 232, 240, .34));
+}
+
+html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view] .lumi-core-command-field__backdrop,
+html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view] .lumi-core-command-field__stars {
+  opacity: .34;
+}
+
+html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view] .lumi-command-center-cosmos-stage {
+  opacity: .58;
+}
+
+html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view] .lumi-command-center-history-item-marker::before,
+html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view] .lumi-command-center-history-item-marker::after,
+html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view] .lumi-command-center-history-item-marker > span,
+html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view] .lumi-command-center-history-selector-mark span {
+  background: rgba(13, 148, 136, .72);
 }
 
 .lumi-command-center-layered .lumi-command-center-chat-rail .lumi-chat-agent-mark {
@@ -3078,5 +3128,212 @@ body,
   .lumi-command-center-office--orbital::before,
   .lumi-command-center-chat-rail--entering::after {
     animation: none !important;
+  }
+}
+
+/* Wallpaper is a transparent presentation of the surface it was entered
+ * from. It does not add another navigation shell: the personal core, command
+ * center rails, and organization workspace become the wallpaper tools. */
+[data-wallpaper-presentation="workbench"] [data-wallpaper-source-surface],
+[data-wallpaper-presentation="workbench"] [data-wallpaper-tool] {
+  transition: opacity .42s ease, transform .58s cubic-bezier(.2, .8, .2, 1), background-color .3s ease, border-color .3s ease;
+}
+
+[data-wallpaper-presentation="workbench"] [data-wallpaper-exit] {
+  pointer-events: auto;
+  animation: lumi-wallpaper-tool-arrive .42s cubic-bezier(.2, .8, .2, 1) both;
+}
+
+/* Personal keeps the original transparent Lumi embodiment. The central core
+ * is the tool; desktop icons, windows, dock, and decorative wallpaper stay
+ * retracted by DesktopUI while this presentation is active. */
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="personal"] [data-wallpaper-tool="personal-core"] {
+  inset: 0 !important;
+  transform: scale(1.04);
+  filter: drop-shadow(0 28px 64px rgba(34, 211, 238, .12));
+}
+
+/* Command Center keeps its own core, history, dialogue and destination tools,
+ * but removes the page canvas so those existing elements float on the system
+ * desktop. The rails expand toward the viewport edges from their normal
+ * in-client positions. */
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="command-center"] [data-wallpaper-source-surface="personal"] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="command-center"] .lumi-chat-root.lumi-work-surface {
+  top: 0 !important;
+  background: transparent !important;
+}
+
+html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="command-center"] .lumi-chat-root.lumi-work-surface {
+  background: transparent !important;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="command-center"] .lumi-command-center-workspace,
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="command-center"] .lumi-command-center-layered,
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="command-center"] .lumi-command-center-office,
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="command-center"] .lumi-command-center-panel,
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="command-center"] .lumi-core-command-field,
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="command-center"] .lumi-command-center-cosmos-stage [data-lumi-core-command-field] {
+  background: transparent !important;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="command-center"] .lumi-core-command-field::before {
+  opacity: .22;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="command-center"] [data-wallpaper-tool="command-history"] {
+  transform: translateX(clamp(-1rem, -1.4vw, -.25rem));
+  animation: lumi-wallpaper-tool-spread-left .62s cubic-bezier(.2, .8, .2, 1) both;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="command-center"] [data-wallpaper-tool="command-tools"] {
+  transform: translateX(clamp(.25rem, 1.4vw, 1rem));
+  animation: lumi-wallpaper-tool-spread-right .62s cubic-bezier(.2, .8, .2, 1) both;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="command-center"] .lumi-command-center-history-item,
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="command-center"] .lumi-command-center-switcher-button,
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="command-center"] .lumi-chat-composer-row {
+  backdrop-filter: blur(18px) saturate(118%);
+  box-shadow: 0 18px 54px rgba(0, 0, 0, .14);
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="command-center"] .lumi-chat-composer-row {
+  border-radius: 1.1rem;
+  background: rgba(3, 12, 20, .48);
+}
+
+html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="command-center"] .lumi-chat-composer-row {
+  background: rgba(248, 252, 249, .68);
+}
+
+/* Organization uses its existing role navigation and current workspace as the
+ * wallpaper tools. Nothing new is introduced; the same authorized controls
+ * become translucent modules and move outward to expose the desktop. */
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-source-surface="personal"] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-organization-fullscreen-surface {
+  top: 0 !important;
+  padding: clamp(.75rem, 1.8vw, 1.5rem);
+  background: transparent !important;
+  overflow: auto;
+  scrollbar-width: none;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-organization-fullscreen-surface::-webkit-scrollbar {
+  display: none;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-organization-wallpaper-surface].lumi-work-surface {
+  gap: clamp(.75rem, 1.4vw, 1.5rem);
+  background: transparent !important;
+}
+
+html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-organization-wallpaper-surface].lumi-work-surface {
+  background: transparent !important;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-navigation"] {
+  height: 100%;
+  border: 1px solid rgba(96, 165, 250, .18);
+  border-radius: 1.5rem;
+  background: rgba(3, 11, 22, .42) !important;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .18);
+  backdrop-filter: blur(22px) saturate(118%);
+  animation: lumi-wallpaper-tool-spread-left .62s cubic-bezier(.2, .8, .2, 1) both;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-workspace"] {
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent !important;
+  box-shadow: none;
+  backdrop-filter: none;
+  animation: lumi-wallpaper-tool-spread-right .62s cubic-bezier(.2, .8, .2, 1) both;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-context"] {
+  align-self: stretch;
+  margin: 0 0 .75rem;
+  border: 1px solid rgba(96, 165, 250, .14);
+  border-radius: 1rem;
+  background: rgba(2, 9, 18, .44) !important;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-workspace"] .glass,
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-workspace"] .glass-dark,
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-workspace"] .lumi-panel,
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-workspace"] .lumi-surface,
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-portal"] .glass,
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-portal"] .glass-dark,
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-portal"] .lumi-panel,
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-portal"] .lumi-surface {
+  background: rgba(3, 11, 22, .54) !important;
+  border-color: rgba(96, 165, 250, .14) !important;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, .12) !important;
+  backdrop-filter: blur(18px) saturate(114%);
+}
+
+html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-navigation"] {
+  border-color: rgba(30, 64, 175, .14);
+  background: rgba(248, 251, 249, .58) !important;
+  box-shadow: 0 24px 70px rgba(39, 67, 56, .12);
+}
+
+html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-workspace"] {
+  background: transparent !important;
+  box-shadow: none;
+}
+
+html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-context"] {
+  background: rgba(248, 251, 249, .62) !important;
+}
+
+html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-workspace"] .glass,
+html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-workspace"] .glass-dark,
+html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-workspace"] .lumi-panel,
+html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-workspace"] .lumi-surface,
+html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-portal"] .glass,
+html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-portal"] .glass-dark,
+html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-portal"] .lumi-panel,
+html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-portal"] .lumi-surface {
+  background: rgba(248, 251, 249, .74) !important;
+  border-color: rgba(30, 64, 175, .12) !important;
+  box-shadow: 0 16px 48px rgba(39, 67, 56, .09) !important;
+}
+
+/* Controlled desktop operation preserves the original click-through view and
+ * never leaves command-center or organization canvases covering the desktop. */
+[data-wallpaper-presentation="desktop-control"] .lumi-chat-root,
+[data-wallpaper-presentation="desktop-control"] .lumi-organization-fullscreen-surface {
+  opacity: 0 !important;
+  visibility: hidden;
+}
+
+@keyframes lumi-wallpaper-tool-spread-left {
+  from { opacity: 0; transform: translateX(3rem) scale(.96); }
+}
+
+@keyframes lumi-wallpaper-tool-spread-right {
+  from { opacity: 0; transform: translateX(-3rem) scale(.96); }
+}
+
+@keyframes lumi-wallpaper-tool-arrive {
+  from { opacity: 0; transform: scale(.82); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-wallpaper-presentation="workbench"] [data-wallpaper-source-surface],
+  [data-wallpaper-presentation="workbench"] [data-wallpaper-tool],
+  [data-wallpaper-presentation="workbench"] [data-wallpaper-exit] {
+    animation: none !important;
+    transition-duration: .01ms !important;
   }
 }

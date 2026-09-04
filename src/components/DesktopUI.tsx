@@ -100,7 +100,11 @@ import {
   setLegalConsultationCaseId,
 } from '@/lib/legalCaseStore';
 import { PresenceIndicator } from './biometrics/PresenceIndicator';
-import { systemService } from '@/services/systemService';
+import {
+  systemService,
+  type WallpaperPresentation,
+  type WallpaperWorkspace,
+} from '@/services/systemService';
 import { usePlatform } from '@/hooks/usePlatform';
 import { apiFetch } from '@/services/apiClient';
 import {
@@ -151,7 +155,6 @@ const RETURN_IDLE_SECONDS = 30;
 // the origin explicit so closing an overlay returns to the surface the user
 // came from instead of silently falling back to the personal desktop.
 type SurfaceReturnTarget = 'home' | 'command-center';
-
 const AgentChatPage = lazy(() => import('./AgentChatPage').then(m => ({ default: m.AgentChatPage })));
 const AutonomousFeed = lazy(() => import('./AutonomousFeed').then(m => ({ default: m.AutonomousFeed })));
 const AvatarStudio = lazy(() => import('./AvatarStudio').then(m => ({ default: m.AvatarStudio })));
@@ -1699,30 +1702,41 @@ export function DesktopUI({
   const [volume, setVolume] = useState(60);
   const [time, setTime] = useState(new Date());
   const [isWallpaperMode, setIsWallpaperMode] = useState(false);
+  const [wallpaperPresentation, setWallpaperPresentation] = useState<WallpaperPresentation>('workbench');
+  const [wallpaperWorkspace, setWallpaperWorkspace] = useState<WallpaperWorkspace>('personal');
   const [isDesktopWidgetMode, setIsDesktopWidgetMode] = useState(false);
   const [isCompactWindowMode, setIsCompactWindowMode] = useState(false);
   const [externalCapabilities, setExternalCapabilities] = useState<ExternalCapabilityProjection[]>([]);
   const externalCapabilityLaunchesRef = useRef(new Set<string>());
   const externalCapabilityExecutionRequestsRef = useRef(new Map<string, ExternalCapabilityExecutionCorrelation>());
   const isWallpaperModeRef = useRef(false);
+  const wallpaperPresentationRef = useRef<WallpaperPresentation>('workbench');
+  const wallpaperWorkspaceRef = useRef<WallpaperWorkspace>('personal');
+  const wallpaperNativeTransitionDepthRef = useRef(0);
   const closeToBackgroundSyncRef = useRef(false);
 
-  // Command Center and Wallpaper are both deliberate focus surfaces. Either
-  // one is enough to keep Lumi above other apps; normal stacking returns only
-  // after both have closed. Widget mode keeps its existing topmost contract.
+  // Command Center remains a deliberate focus surface. Only the controlled
+  // desktop overlay stays above other apps; the interactive workbench behaves
+  // like a normal full-screen workspace and must not trap the user on top.
   useEffect(() => {
-    const shouldStayOnTop = chatOpen || isWallpaperMode || isDesktopWidgetMode;
+    const shouldStayOnTop = (!isWallpaperMode && chatOpen)
+      || (isWallpaperMode && wallpaperPresentation === 'desktop-control')
+      || isDesktopWidgetMode;
     void systemService.setAlwaysOnTop(shouldStayOnTop).catch(error => {
       console.error('Failed to synchronize Lumi window level:', error);
     });
-  }, [chatOpen, isDesktopWidgetMode, isWallpaperMode]);
+  }, [chatOpen, isDesktopWidgetMode, isWallpaperMode, wallpaperPresentation]);
 
   useEffect(() => () => {
     void systemService.setAlwaysOnTop(false).catch(() => {});
   }, []);
   const desktopWidgetFallbackRef = useRef<DesktopWidgetFallbackState | null>(null);
   const wallpaperAutomationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const wallpaperWasEnabledBeforeAutomationRef = useRef(false);
+  const wallpaperBeforeAutomationRef = useRef<{
+    enabled: boolean;
+    presentation: WallpaperPresentation;
+    workspace: WallpaperWorkspace;
+  } | null>(null);
   const viewport = useViewportSize();
   const [wallpaperWorkPromptVisible, setWallpaperWorkPromptVisible] = useState(false);
   const [wallpaper, setWallpaper] = useState<string>(() => localStorage.getItem('lumi_wallpaper_type') || 'celestial');
@@ -1785,16 +1799,48 @@ export function DesktopUI({
     }
   }, [canUseExternalCapabilities, lang, refreshExternalCapabilities]);
 
+  const inferWallpaperWorkspace = useCallback((): WallpaperWorkspace => {
+    if (activeTab === 'org') return 'organization';
+    if (
+      chatOpen
+      || knowledgeOpen
+      || memoryLabOpen
+      || sanctuaryOpen
+      || activeTab === 'chat'
+      || activeTab === 'command-center'
+    ) return 'command-center';
+    return 'personal';
+  }, [activeTab, chatOpen, knowledgeOpen, memoryLabOpen, sanctuaryOpen]);
+  const isWallpaperDesktopControl = isWallpaperMode && wallpaperPresentation === 'desktop-control';
+  const isWallpaperWorkbench = isWallpaperMode && wallpaperPresentation === 'workbench';
+
   useEffect(() => {
     isWallpaperModeRef.current = isWallpaperMode;
     if (isWallpaperMode) setWallpaperWorkPromptVisible(false);
   }, [isWallpaperMode]);
 
-  const syncWallpaperModeView = useCallback((enabled: boolean) => {
+  const syncWallpaperModeView = useCallback((
+    enabled: boolean,
+    presentation: WallpaperPresentation = wallpaperPresentationRef.current,
+    workspace: WallpaperWorkspace = wallpaperWorkspaceRef.current,
+  ) => {
     isWallpaperModeRef.current = enabled;
+    wallpaperPresentationRef.current = presentation;
+    wallpaperWorkspaceRef.current = workspace;
     setIsWallpaperMode(enabled);
-    systemService.syncWallpaperDocumentMode(enabled);
+    setWallpaperPresentation(presentation);
+    setWallpaperWorkspace(workspace);
+    systemService.syncWallpaperDocumentMode(enabled, presentation, workspace);
+    window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
   }, []);
+
+  useEffect(() => {
+    if (!isWallpaperWorkbench) return;
+    const currentWorkspace = inferWallpaperWorkspace();
+    if (currentWorkspace !== wallpaperWorkspaceRef.current) {
+      syncWallpaperModeView(true, 'workbench', currentWorkspace);
+    }
+  }, [inferWallpaperWorkspace, isWallpaperWorkbench, syncWallpaperModeView]);
 
   useEffect(() => {
     if (chatOpen) setWallpaperWorkPromptVisible(false);
@@ -3206,39 +3252,115 @@ export function DesktopUI({
     systemService.getBrightness().then(b => setBrightness(b));
   }, []);
 
-  const applyWallpaperMode = useCallback((enabled: boolean, options: { silent?: boolean; timeoutMs?: number } = {}) => {
+  const applyWallpaperMode = useCallback(async (
+    enabled: boolean,
+    options: {
+      silent?: boolean;
+      timeoutMs?: number;
+      presentation?: WallpaperPresentation;
+      workspace?: WallpaperWorkspace;
+    } = {},
+  ) => {
     if (wallpaperAutomationTimerRef.current) {
       clearTimeout(wallpaperAutomationTimerRef.current);
       wallpaperAutomationTimerRef.current = null;
     }
 
-    const previous = isWallpaperModeRef.current;
-    syncWallpaperModeView(enabled);
-    void systemService.setWallpaperMode(enabled).then(actual => {
-      syncWallpaperModeView(actual);
-    }).catch(error => {
-      syncWallpaperModeView(previous);
+    const requestedPresentation = options.presentation
+      || (enabled ? 'workbench' : wallpaperPresentationRef.current);
+    const requestedWorkspace = options.workspace
+      || (enabled && requestedPresentation === 'workbench'
+        ? inferWallpaperWorkspace()
+        : wallpaperWorkspaceRef.current);
+    const previous = {
+      enabled: isWallpaperModeRef.current,
+      presentation: wallpaperPresentationRef.current,
+      workspace: wallpaperWorkspaceRef.current,
+    };
+    syncWallpaperModeView(enabled, requestedPresentation, requestedWorkspace);
+    let resolvedState = {
+      enabled,
+      presentation: requestedPresentation,
+      workspace: requestedWorkspace,
+    };
+
+    try {
+      wallpaperNativeTransitionDepthRef.current += 1;
+      const actual = await systemService.setWallpaperMode(
+        enabled,
+        requestedPresentation,
+        requestedWorkspace,
+      );
+      resolvedState = actual;
+      syncWallpaperModeView(actual.enabled, actual.presentation, actual.workspace);
+      await systemService.setAlwaysOnTop(
+        actual.enabled
+          ? actual.presentation === 'desktop-control'
+          : chatOpen || isDesktopWidgetMode,
+      );
+    } catch (error) {
+      syncWallpaperModeView(previous.enabled, previous.presentation, previous.workspace);
+      await systemService.setAlwaysOnTop(
+        previous.enabled
+          ? previous.presentation === 'desktop-control'
+          : chatOpen || isDesktopWidgetMode,
+      ).catch(() => {});
       console.error('Wallpaper mode transition failed:', error);
       toast.error('Wallpaper mode could not be changed');
-    });
+      throw error;
+    } finally {
+      wallpaperNativeTransitionDepthRef.current = Math.max(
+        0,
+        wallpaperNativeTransitionDepthRef.current - 1,
+      );
+    }
 
-    if (enabled && options.timeoutMs) {
+    if (enabled && requestedPresentation === 'desktop-control' && options.timeoutMs) {
       wallpaperAutomationTimerRef.current = setTimeout(() => {
-        if (!wallpaperWasEnabledBeforeAutomationRef.current) {
-          syncWallpaperModeView(false);
-          void systemService.setWallpaperMode(false).then(actual => {
-            syncWallpaperModeView(actual);
-          }).catch(error => {
-            console.error('Wallpaper mode restore failed:', error);
-          });
-        }
-        wallpaperWasEnabledBeforeAutomationRef.current = false;
+        const restore = wallpaperBeforeAutomationRef.current || {
+          enabled: false,
+          presentation: 'workbench' as WallpaperPresentation,
+          workspace: wallpaperWorkspaceRef.current,
+        };
         wallpaperAutomationTimerRef.current = null;
-        addNotification({
-          type: 'system',
-          title: 'Lumi',
-          message: t.wallpaperAutoRestored || 'Wallpaper mode restored after desktop control timeout',
-        });
+        wallpaperNativeTransitionDepthRef.current += 1;
+        void systemService.setWallpaperMode(restore.enabled, restore.presentation, restore.workspace)
+          .then(actual => {
+            wallpaperBeforeAutomationRef.current = null;
+            syncWallpaperModeView(actual.enabled, actual.presentation, actual.workspace);
+            void systemService.setAlwaysOnTop(
+              actual.enabled
+                ? actual.presentation === 'desktop-control'
+                : chatOpen || isDesktopWidgetMode,
+            ).catch(() => {});
+            addNotification({
+              type: 'system',
+              title: 'Lumi',
+              message: t.wallpaperAutoRestored || 'Wallpaper mode restored after desktop control timeout',
+            });
+          })
+          .catch(async error => {
+            console.error('Wallpaper mode restore failed:', error);
+            try {
+              const safeState = await systemService.setWallpaperMode(false, 'workbench', restore.workspace);
+              wallpaperBeforeAutomationRef.current = null;
+              syncWallpaperModeView(safeState.enabled, safeState.presentation, safeState.workspace);
+              await systemService.setAlwaysOnTop(chatOpen || isDesktopWidgetMode).catch(() => {});
+            } catch (safeExitError) {
+              console.error('Wallpaper mode safe exit failed:', safeExitError);
+              addNotification({
+                type: 'warning',
+                title: 'Lumi',
+                message: 'Desktop-control wallpaper could not be restored automatically.',
+              });
+            }
+          })
+          .finally(() => {
+            wallpaperNativeTransitionDepthRef.current = Math.max(
+              0,
+              wallpaperNativeTransitionDepthRef.current - 1,
+            );
+          });
       }, Math.max(15_000, options.timeoutMs));
     }
 
@@ -3247,15 +3369,16 @@ export function DesktopUI({
         icon: enabled ? <Sparkles className="text-celestial-saturn" /> : <Box className="text-white/40" />
       });
     }
-  }, [t, addNotification, syncWallpaperModeView]);
+    return resolvedState;
+  }, [t, addNotification, chatOpen, inferWallpaperWorkspace, isDesktopWidgetMode, syncWallpaperModeView]);
 
   useEffect(() => {
     let disposed = false;
     let unlisten: undefined | (() => void);
 
     void systemService.getWallpaperMode()
-      .then(enabled => {
-        if (!disposed) syncWallpaperModeView(enabled);
+      .then(state => {
+        if (!disposed) syncWallpaperModeView(state.enabled, state.presentation, state.workspace);
       })
       .catch(error => console.error('Failed to read wallpaper mode:', error));
 
@@ -3264,8 +3387,26 @@ export function DesktopUI({
     );
     if (hasTauriRuntime) {
       void import('@tauri-apps/api/event')
-        .then(({ listen }) => listen<{ enabled?: boolean }>('lumi:wallpaper-mode-changed', event => {
-          if (!disposed) syncWallpaperModeView(Boolean(event.payload?.enabled));
+        .then(({ listen }) => listen<{
+          enabled?: boolean;
+          presentation?: WallpaperPresentation;
+          workspace?: WallpaperWorkspace;
+        }>('lumi:wallpaper-mode-changed', event => {
+          if (!disposed) {
+            const enabled = Boolean(event.payload?.enabled);
+            if (!enabled && wallpaperNativeTransitionDepthRef.current === 0) {
+              if (wallpaperAutomationTimerRef.current) {
+                clearTimeout(wallpaperAutomationTimerRef.current);
+                wallpaperAutomationTimerRef.current = null;
+              }
+              wallpaperBeforeAutomationRef.current = null;
+            }
+            syncWallpaperModeView(
+              enabled,
+              event.payload?.presentation || wallpaperPresentationRef.current,
+              event.payload?.workspace || wallpaperWorkspaceRef.current,
+            );
+          }
         }))
         .then(stop => {
           if (disposed) stop();
@@ -3280,8 +3421,23 @@ export function DesktopUI({
     };
   }, [syncWallpaperModeView]);
 
+  useEffect(() => () => {
+    if (!isWallpaperModeRef.current || wallpaperPresentationRef.current !== 'desktop-control') return;
+    const restore = wallpaperBeforeAutomationRef.current || {
+      enabled: false,
+      presentation: 'workbench' as WallpaperPresentation,
+      workspace: wallpaperWorkspaceRef.current,
+    };
+    wallpaperBeforeAutomationRef.current = null;
+    void systemService.setWallpaperMode(
+      restore.enabled,
+      restore.presentation,
+      restore.workspace,
+    ).catch(error => console.error('Failed to safely exit desktop-control wallpaper:', error));
+  }, []);
+
   const toggleWallpaperMode = useCallback(() => {
-    applyWallpaperMode(!isWallpaperMode);
+    void applyWallpaperMode(!isWallpaperMode, { presentation: 'workbench' });
   }, [applyWallpaperMode, isWallpaperMode]);
 
   const dismissWallpaperWorkPrompt = useCallback(() => {
@@ -3290,29 +3446,55 @@ export function DesktopUI({
 
   const enterWallpaperFromWorkPrompt = useCallback(() => {
     dismissWallpaperWorkPrompt();
-    applyWallpaperMode(true);
+    void applyWallpaperMode(true, { presentation: 'workbench' });
   }, [applyWallpaperMode, dismissWallpaperWorkPrompt]);
 
   useEffect(() => {
     const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{ enabled?: boolean; timeoutMs?: number }>).detail || {};
-      const enabled = Boolean(detail.enabled);
-      if (enabled) {
-        wallpaperWasEnabledBeforeAutomationRef.current = isWallpaperModeRef.current;
-      } else if (wallpaperWasEnabledBeforeAutomationRef.current) {
-        if (wallpaperAutomationTimerRef.current) {
-          clearTimeout(wallpaperAutomationTimerRef.current);
-          wallpaperAutomationTimerRef.current = null;
-        }
-        wallpaperWasEnabledBeforeAutomationRef.current = false;
-        return;
-      }
+      const detail = (event as CustomEvent<{
+        enabled?: boolean;
+        timeoutMs?: number;
+        respond?: (result: any) => void;
+        reject?: (message: string) => void;
+      }>).detail || {};
+      void (async () => {
+        const enabled = Boolean(detail.enabled);
+        const capturedRestore = enabled && !wallpaperBeforeAutomationRef.current;
+        try {
+          if (capturedRestore) {
+            wallpaperBeforeAutomationRef.current = {
+              enabled: isWallpaperModeRef.current,
+              presentation: wallpaperPresentationRef.current,
+              workspace: wallpaperWorkspaceRef.current,
+            };
+          } else if (!enabled && wallpaperBeforeAutomationRef.current) {
+            const restore = wallpaperBeforeAutomationRef.current;
+            if (wallpaperAutomationTimerRef.current) {
+              clearTimeout(wallpaperAutomationTimerRef.current);
+              wallpaperAutomationTimerRef.current = null;
+            }
+            const restored = await applyWallpaperMode(restore.enabled, {
+              silent: true,
+              presentation: restore.presentation,
+              workspace: restore.workspace,
+            });
+            wallpaperBeforeAutomationRef.current = null;
+            detail.respond?.(restored);
+            return;
+          }
 
-      applyWallpaperMode(enabled, {
-        silent: true,
-        timeoutMs: enabled ? detail.timeoutMs : undefined,
-      });
-      if (!enabled) wallpaperWasEnabledBeforeAutomationRef.current = false;
+          const result = await applyWallpaperMode(enabled, {
+            silent: true,
+            presentation: 'desktop-control',
+            timeoutMs: enabled ? detail.timeoutMs : undefined,
+          });
+          if (!enabled) wallpaperBeforeAutomationRef.current = null;
+          detail.respond?.(result);
+        } catch (error: any) {
+          if (capturedRestore) wallpaperBeforeAutomationRef.current = null;
+          detail.reject?.(error?.message || String(error));
+        }
+      })();
     };
     window.addEventListener('lumi:set-wallpaper-mode', handler);
     return () => {
@@ -3847,7 +4029,7 @@ export function DesktopUI({
         }
         setIsSearchOpen(false);
         setIsControlCenterOpen(false);
-        if (isWallpaperMode) toggleWallpaperMode();
+        if (isWallpaperWorkbench) toggleWallpaperMode();
         return;
       }
       if (e.key === ' ' && !e.repeat) {
@@ -3880,7 +4062,7 @@ export function DesktopUI({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [chatOpen, closeKnowledgeBase, closeMemoryAvatar, endCall, getVoiceScopeOptions, interrupt, isControlCenterOpen, isSearchOpen, isWallpaperMode, knowledgeOpen, memoryLabOpen, openCommandCenter, sanctuaryOpen, selectedVoiceId, startCall, startStandardVoiceCall, toggleWallpaperMode]);
+  }, [chatOpen, closeKnowledgeBase, closeMemoryAvatar, endCall, getVoiceScopeOptions, interrupt, isControlCenterOpen, isSearchOpen, isWallpaperWorkbench, knowledgeOpen, memoryLabOpen, openCommandCenter, sanctuaryOpen, selectedVoiceId, startCall, startStandardVoiceCall, toggleWallpaperMode]);
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
@@ -4132,8 +4314,12 @@ export function DesktopUI({
         }
       }
       // Native and fallback widget exit both restore ordinary window flags.
-      // Re-apply Lumi's independent Command Center / Wallpaper contract.
-      await systemService.setAlwaysOnTop(chatOpen || isWallpaperModeRef.current).catch(() => {});
+      // Re-apply Command Center / controlled desktop overlay stacking. The
+      // user-facing workbench intentionally keeps ordinary window stacking.
+      await systemService.setAlwaysOnTop(
+        (!isWallpaperModeRef.current && chatOpen)
+          || (isWallpaperModeRef.current && wallpaperPresentationRef.current === 'desktop-control'),
+      ).catch(() => {});
     }
     if (nextSurface) {
       window.setTimeout(() => toggleWindow(nextSurface), 120);
@@ -4510,8 +4696,14 @@ export function DesktopUI({
         if (action === 'set_wallpaper_mode') {
           const enabled = Boolean(detail.enabled);
           if (enabled && !confirmed) throw new Error('set_wallpaper_mode requires explicit user confirmation');
-          applyWallpaperMode(enabled);
-          respond({ ok: true, action, enabled });
+          const state = await applyWallpaperMode(enabled, { presentation: 'workbench' });
+          respond({
+            ok: true,
+            action,
+            enabled: state.enabled,
+            presentation: state.presentation,
+            workspace: state.workspace,
+          });
           return;
         }
         const registeredSurface = getPersonalClientSurfaceByAction(action);
@@ -4609,6 +4801,7 @@ export function DesktopUI({
     setViewMode,
     switchDomain,
     workDomain,
+    wallpaperWorkspace,
   ]);
 
   useEffect(() => {
@@ -4682,6 +4875,8 @@ export function DesktopUI({
           runtimeLogOpen: openWindows.includes('kernel'),
           meetingOpen: meetingNotesOpen,
           wallpaperMode: isWallpaperMode,
+          wallpaperPresentation: isWallpaperMode ? wallpaperPresentation : undefined,
+          wallpaperWorkspace: isWallpaperMode ? wallpaperWorkspace : undefined,
           widgetMode: isDesktopWidgetMode,
           nexusOpen: viewMode === 'world',
           openSurfaceIds,
@@ -4743,6 +4938,8 @@ export function DesktopUI({
     isNotificationPanelOpen,
     isSearchOpen,
     isWallpaperMode,
+    wallpaperPresentation,
+    wallpaperWorkspace,
     knowledgeOpen,
     memoryLabOpen,
     mcpActivities.length,
@@ -4910,9 +5107,11 @@ export function DesktopUI({
       data-view-mode={viewMode}
       data-ui-density={desktopChrome.density}
       data-compact-layout={isCompactDesktopLayout ? 'true' : 'false'}
+      data-wallpaper-presentation={isWallpaperMode ? wallpaperPresentation : undefined}
+      data-wallpaper-workspace={isWallpaperMode ? wallpaperWorkspace : undefined}
       onContextMenu={handleShellContextMenu}
       className={`fixed inset-0 overflow-hidden cursor-default select-none transition-all duration-1000 ${resolvedAppearanceMode === 'light' ? 'lumi-light-shell' : 'lumi-dark-shell'} ${
-      isWallpaperMode ? 'bg-transparent pointer-events-none' :
+      isWallpaperMode ? `bg-transparent ${isWallpaperDesktopControl ? 'pointer-events-none' : ''}` :
       resolvedAppearanceMode === 'light' ? 'bg-[#e9efe6]' :
       theme === 'celestial' ? 'bg-[#010103]' :
       theme === 'nebula' ? 'bg-[#050010]' :
@@ -4929,8 +5128,22 @@ export function DesktopUI({
       }}
     >
       <input ref={wallpaperInputRef} type="file" accept="image/*" onChange={handleWallpaperUpload} className="hidden" />
+      {isWallpaperWorkbench && (
+        <motion.button
+          data-wallpaper-exit
+          type="button"
+          initial={{ opacity: 0, scale: 0.86 }}
+          animate={{ opacity: 1, scale: 1 }}
+          onClick={() => { void applyWallpaperMode(false, { presentation: 'workbench' }); }}
+          className="fixed right-4 top-4 z-[220] flex h-9 w-9 items-center justify-center rounded-full border border-cyan-300/20 bg-black/25 text-white/55 shadow-lg backdrop-blur-xl transition-colors hover:border-cyan-200/45 hover:bg-black/40 hover:text-white"
+          title={uiMessage('desktop-ui.exit-wallpaper-mode.9b9dd6514d', (lang === 'zh') ? 'zh' : 'en')}
+          aria-label={uiMessage('desktop-ui.exit-wallpaper-mode.9b9dd6514d', (lang === 'zh') ? 'zh' : 'en')}
+        >
+          <X size={15} />
+        </motion.button>
+      )}
       <ControlCenter
-        isOpen={isControlCenterOpen}
+        isOpen={isControlCenterOpen && !isWallpaperMode}
         onClose={() => setIsControlCenterOpen(false)}
         t={t}
         brightness={brightness}
@@ -5296,7 +5509,7 @@ export function DesktopUI({
 
         {/* Global Search */}
         <AnimatePresence>
-          {isSearchOpen && (
+          {isSearchOpen && !isWallpaperMode && (
             <Spotlight 
               isOpen={isSearchOpen} 
               onClose={() => setIsSearchOpen(false)} 
@@ -5386,6 +5599,7 @@ export function DesktopUI({
 
       {/* Main OS Content Layer (Personal Desktop Surface) */}
       <motion.div
+        data-wallpaper-source-surface="personal"
         style={{
           scale: personalScale,
           opacity: personalOpacity,
@@ -5394,7 +5608,7 @@ export function DesktopUI({
       >
         <div className="relative w-full h-full pointer-events-auto">
           {/* Central Interactive Entity */}
-          <div className="lumi-core-stage absolute inset-0 flex items-center justify-center z-[15] pointer-events-none">
+          <div data-wallpaper-tool="personal-core" className="lumi-core-stage absolute inset-0 flex items-center justify-center z-[15] pointer-events-none">
         <motion.div 
           initial={{ scale: 0.8, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
@@ -5967,7 +6181,7 @@ export function DesktopUI({
           </motion.div>
         )}
       </AnimatePresence>
-      <div className="absolute inset-0 z-[20] pointer-events-none">
+      <div className={`absolute inset-0 z-[20] pointer-events-none transition-opacity duration-500 ${isWallpaperMode ? 'opacity-0' : 'opacity-100'}`}>
         <SensorPrimer
           isOpen={!sensorPrimerSeen}
           onContinue={finishSensorPrimer}
@@ -6259,11 +6473,13 @@ export function DesktopUI({
       <AnimatePresence>
         {activeTab === 'org' && (
           <motion.div
+            data-wallpaper-source-surface="organization"
+            data-wallpaper-tool="organization-portal"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.3 }}
-            className="lumi-below-topbar fixed inset-x-0 bottom-0 z-[90] bg-celestial-deep overflow-auto"
+            className="lumi-organization-fullscreen-surface lumi-below-topbar fixed inset-x-0 bottom-0 z-[90] bg-celestial-deep overflow-auto"
           >
             <Suspense fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
               <OrgPortal

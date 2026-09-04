@@ -272,7 +272,7 @@ export function CommandCenterPanel({
     <section
       data-command-center-background={backgroundOnly ? 'true' : undefined}
       aria-hidden={backgroundOnly || undefined}
-      className={`flex h-full min-h-0 flex-col overflow-hidden ${backgroundOnly ? 'pointer-events-none bg-transparent' : 'bg-[#02040b]'}`}
+      className={`lumi-command-center-panel flex h-full min-h-0 flex-col overflow-hidden ${backgroundOnly ? 'pointer-events-none bg-transparent' : 'bg-[#02040b]'}`}
     >
       {!backgroundOnly && <header className="flex h-14 shrink-0 items-center justify-between border-b border-white/[0.07] bg-black/20 px-3.5">
         <div className="flex min-w-0 items-center gap-3">

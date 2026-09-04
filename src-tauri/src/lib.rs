@@ -47,20 +47,51 @@ struct BackendProcesses {
     node_config: Option<SpawnConfig>,
 }
 
-/// Track whether wallpaper (click-through) mode is active and where to restore
-/// the main window afterward.
-#[derive(Default)]
+/// Track whether a wallpaper presentation is active and where to restore the
+/// main window afterward.
+#[derive(Default, Clone)]
 struct WallpaperState {
     enabled: bool,
+    presentation: WallpaperPresentation,
+    workspace: WallpaperWorkspace,
     previous_size: Option<tauri::PhysicalSize<u32>>,
     previous_position: Option<tauri::PhysicalPosition<i32>>,
     was_fullscreen: bool,
     was_maximized: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WallpaperPresentation {
+    Workbench,
+    DesktopControl,
+}
+
+impl Default for WallpaperPresentation {
+    fn default() -> Self {
+        Self::Workbench
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WallpaperWorkspace {
+    Personal,
+    CommandCenter,
+    Organization,
+}
+
+impl Default for WallpaperWorkspace {
+    fn default() -> Self {
+        Self::Personal
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WallpaperMode {
     pub enabled: bool,
+    pub presentation: WallpaperPresentation,
+    pub workspace: WallpaperWorkspace,
 }
 
 #[derive(Default)]
@@ -3165,10 +3196,12 @@ fn pick_directory(_window: tauri::WebviewWindow) -> Result<Option<String>, Strin
 #[tauri::command]
 fn set_wallpaper_mode(
     enabled: bool,
+    presentation: Option<WallpaperPresentation>,
+    workspace: Option<WallpaperWorkspace>,
     state: tauri::State<'_, Mutex<WallpaperState>>,
     window: tauri::WebviewWindow,
 ) -> Result<WallpaperMode, String> {
-    let mode = apply_wallpaper_mode(enabled, state.inner(), &window)?;
+    let mode = apply_wallpaper_mode(enabled, presentation, workspace, state.inner(), &window)?;
     let _ = window.emit("lumi:wallpaper-mode-changed", mode.clone());
     Ok(mode)
 }
@@ -3177,17 +3210,24 @@ fn set_wallpaper_mode(
 fn get_wallpaper_mode(
     state: tauri::State<'_, Mutex<WallpaperState>>,
 ) -> Result<WallpaperMode, String> {
-    let enabled = state.lock().map_err(|e| e.to_string())?.enabled;
-    Ok(WallpaperMode { enabled })
+    let wallpaper = state.lock().map_err(|e| e.to_string())?;
+    Ok(WallpaperMode {
+        enabled: wallpaper.enabled,
+        presentation: wallpaper.presentation,
+        workspace: wallpaper.workspace,
+    })
 }
 
 fn apply_wallpaper_mode(
     enabled: bool,
+    requested_presentation: Option<WallpaperPresentation>,
+    requested_workspace: Option<WallpaperWorkspace>,
     state: &Mutex<WallpaperState>,
     window: &tauri::WebviewWindow,
 ) -> Result<WallpaperMode, String> {
-    let restore = {
+    let (restore, presentation, workspace, previous_state) = {
         let mut wallpaper = state.lock().map_err(|e| e.to_string())?;
+        let previous_state = wallpaper.clone();
         if enabled {
             if !wallpaper.enabled {
                 wallpaper.previous_size = window.outer_size().ok();
@@ -3195,100 +3235,143 @@ fn apply_wallpaper_mode(
                 wallpaper.was_fullscreen = window.is_fullscreen().unwrap_or(false);
                 wallpaper.was_maximized = window.is_maximized().unwrap_or(false);
             }
+            let presentation = requested_presentation.unwrap_or_default();
+            let workspace = requested_workspace.unwrap_or(wallpaper.workspace);
             wallpaper.enabled = true;
-            None
+            wallpaper.presentation = presentation;
+            wallpaper.workspace = workspace;
+            (None, presentation, workspace, previous_state)
         } else {
             wallpaper.enabled = false;
-            Some((
-                wallpaper.previous_size.take(),
-                wallpaper.previous_position.take(),
-                wallpaper.was_fullscreen,
-                wallpaper.was_maximized,
-            ))
+            let presentation = wallpaper.presentation;
+            let workspace = requested_workspace.unwrap_or(wallpaper.workspace);
+            wallpaper.workspace = workspace;
+            (
+                Some((
+                    wallpaper.previous_size.take(),
+                    wallpaper.previous_position.take(),
+                    wallpaper.was_fullscreen,
+                    wallpaper.was_maximized,
+                )),
+                presentation,
+                workspace,
+                previous_state,
+            )
         }
     };
 
-    if enabled {
-        let _ = window.show();
-        let _ = window.set_fullscreen(false);
-        let _ = window.unmaximize();
-        let _ = window.set_resizable(true);
-        let _ = window.set_decorations(false);
-        let _ = window.set_shadow(false);
-        // Keep the macOS Dock icon available as a guaranteed escape hatch. A
-        // click-through NSWindow cannot receive its own on-screen exit click.
-        #[cfg(target_os = "macos")]
-        let _ = window.set_skip_taskbar(false);
-        #[cfg(not(target_os = "macos"))]
-        let _ = window.set_skip_taskbar(true);
+    let transition_result = (|| -> Result<(), String> {
+        if enabled {
+            window
+                .show()
+                .map_err(|e| format!("show wallpaper window: {e}"))?;
+            // Always clear click-through before changing presentations so moving
+            // from desktop control to the workbench cannot leave a dead window.
+            window
+                .set_ignore_cursor_events(false)
+                .map_err(|e| format!("restore wallpaper pointer input: {e}"))?;
+            let _ = window.set_fullscreen(false);
+            let _ = window.unmaximize();
+            let _ = window.set_resizable(true);
+            let _ = window.set_decorations(false);
+            let _ = window.set_shadow(false);
 
-        let maybe_monitor = window
-            .current_monitor()
-            .ok()
-            .flatten()
-            .or_else(|| window.primary_monitor().ok().flatten());
-        if let Some(monitor) = maybe_monitor {
-            let pos = monitor.position();
-            let size = monitor.size();
-            let _ = window.set_position(tauri::PhysicalPosition::new(pos.x, pos.y));
-            let _ = window.set_size(tauri::PhysicalSize::new(size.width, size.height));
+            match presentation {
+                WallpaperPresentation::Workbench => {
+                    // The supercomputer workbench is a real interactive full-screen
+                    // application surface, not a click-through desktop overlay.
+                    let _ = window.set_skip_taskbar(false);
+                    window
+                        .set_always_on_top(false)
+                        .map_err(|e| format!("release workbench always-on-top: {e}"))?;
+                    window
+                        .set_fullscreen(true)
+                        .map_err(|e| format!("enter wallpaper workbench fullscreen: {e}"))?;
+                }
+                WallpaperPresentation::DesktopControl => {
+                    // Preserve the legacy transparent, always-on-top, click-through
+                    // surface used while Lumi controls other desktop applications.
+                    #[cfg(target_os = "macos")]
+                    let _ = window.set_skip_taskbar(false);
+                    #[cfg(not(target_os = "macos"))]
+                    let _ = window.set_skip_taskbar(true);
+
+                    let maybe_monitor = window
+                        .current_monitor()
+                        .ok()
+                        .flatten()
+                        .or_else(|| window.primary_monitor().ok().flatten());
+                    if let Some(monitor) = maybe_monitor {
+                        let pos = monitor.position();
+                        let size = monitor.size();
+                        let _ = window.set_position(tauri::PhysicalPosition::new(pos.x, pos.y));
+                        let _ = window.set_size(tauri::PhysicalSize::new(size.width, size.height));
+                    } else {
+                        let _ = window.maximize();
+                    }
+
+                    window
+                        .set_always_on_top(true)
+                        .map_err(|e| format!("raise desktop-control wallpaper: {e}"))?;
+                    window
+                        .set_ignore_cursor_events(true)
+                        .map_err(|e| format!("enable desktop-control click-through: {e}"))?;
+                }
+            }
         } else {
-            let _ = window.maximize();
-        }
+            window
+                .set_ignore_cursor_events(false)
+                .map_err(|e| format!("disable wallpaper click-through: {e}"))?;
+            window
+                .set_always_on_top(false)
+                .map_err(|e| format!("release wallpaper always-on-top: {e}"))?;
+            let _ = window.set_skip_taskbar(false);
+            let _ = window.set_resizable(true);
+            let _ = window.set_min_size(Some(tauri::LogicalSize::new(
+                DEFAULT_MAIN_MIN_WIDTH as f64,
+                DEFAULT_MAIN_MIN_HEIGHT as f64,
+            )));
 
-        match window.set_always_on_top(true) {
-            Ok(_) => println!("[LumiCore] set_always_on_top(true) succeeded"),
-            Err(e) => eprintln!("[LumiCore] set_always_on_top(true) FAILED: {}", e),
-        }
-        match window.set_ignore_cursor_events(true) {
-            Ok(_) => println!("[LumiCore] set_ignore_cursor_events(true) succeeded"),
-            Err(e) => eprintln!("[LumiCore] set_ignore_cursor_events(true) FAILED: {}", e),
-        }
-    } else {
-        match window.set_ignore_cursor_events(false) {
-            Ok(_) => println!("[LumiCore] set_ignore_cursor_events(false) succeeded"),
-            Err(e) => eprintln!("[LumiCore] set_ignore_cursor_events(false) FAILED: {}", e),
-        }
-        match window.set_always_on_top(false) {
-            Ok(_) => println!("[LumiCore] set_always_on_top(false) succeeded"),
-            Err(e) => eprintln!("[LumiCore] set_always_on_top(false) FAILED: {}", e),
-        }
-        let _ = window.set_skip_taskbar(false);
-        let _ = window.set_resizable(true);
-        let _ = window.set_min_size(Some(tauri::LogicalSize::new(
-            DEFAULT_MAIN_MIN_WIDTH as f64,
-            DEFAULT_MAIN_MIN_HEIGHT as f64,
-        )));
-
-        if let Some((previous_size, previous_position, was_fullscreen, was_maximized)) = restore {
-            if was_fullscreen {
-                let _ = window.set_fullscreen(true);
-            } else {
-                let _ = window.set_fullscreen(false);
-                if let Some(size) = previous_size {
-                    let _ = window.set_size(size);
-                }
-                if let Some(position) = previous_position {
-                    let _ = window.set_position(position);
+            if let Some((previous_size, previous_position, was_fullscreen, was_maximized)) = restore
+            {
+                if was_fullscreen {
+                    let _ = window.set_fullscreen(true);
                 } else {
-                    let _ = window.center();
-                }
-                if was_maximized {
-                    let _ = window.maximize();
+                    let _ = window.set_fullscreen(false);
+                    if let Some(size) = previous_size {
+                        let _ = window.set_size(size);
+                    }
+                    if let Some(position) = previous_position {
+                        let _ = window.set_position(position);
+                    } else {
+                        let _ = window.center();
+                    }
+                    if was_maximized {
+                        let _ = window.maximize();
+                    }
                 }
             }
         }
+        Ok(())
+    })();
+
+    if let Err(error) = transition_result {
+        if let Ok(mut wallpaper) = state.lock() {
+            *wallpaper = previous_state;
+        }
+        return Err(error);
     }
 
     println!(
-        "[LumiCore] Wallpaper mode: {}",
-        if enabled {
-            "ON (click-through fullscreen)"
-        } else {
-            "OFF"
-        }
+        "[LumiCore] Wallpaper mode: {} ({:?})",
+        if enabled { "ON" } else { "OFF" },
+        presentation,
     );
-    Ok(WallpaperMode { enabled })
+    Ok(WallpaperMode {
+        enabled,
+        presentation,
+        workspace,
+    })
 }
 
 const DESKTOP_WIDGET_WIDTH: u32 = 240;
@@ -4073,12 +4156,11 @@ fn show_main_window_impl(app: &tauri::AppHandle, source: &str) -> WindowActivati
         .map_err(|error| format!("read wallpaper state: {error}"));
     let restore_result = match wallpaper_enabled {
         Ok(true) => {
-            let result = apply_wallpaper_mode(false, wallpaper_state.inner(), &window);
+            let result = apply_wallpaper_mode(false, None, None, wallpaper_state.inner(), &window);
             if result.is_ok() {
-                let _ = window.emit(
-                    "lumi:wallpaper-mode-changed",
-                    WallpaperMode { enabled: false },
-                );
+                if let Ok(mode) = &result {
+                    let _ = window.emit("lumi:wallpaper-mode-changed", mode.clone());
+                }
             }
             result.map(|_| ())
         }
