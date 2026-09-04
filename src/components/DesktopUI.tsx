@@ -5326,6 +5326,8 @@ export function DesktopUI({
         <div
           data-tauri-drag-region
           data-theme-scope={viewMode === 'world' ? 'dark' : undefined}
+          inert={isWallpaperMode ? true : undefined}
+          aria-hidden={isWallpaperMode ? true : undefined}
           onPointerDown={(event) => void handleTopbarPointerDown(event)}
           className={`lumi-shell-topbar absolute top-0 inset-x-0 h-10 glass-dark border-b border-white/5 flex items-center px-6 pointer-events-auto backdrop-blur-md transition-all duration-1000 ${isWallpaperMode ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
         >
@@ -5600,6 +5602,8 @@ export function DesktopUI({
       {/* Main OS Content Layer (Personal Desktop Surface) */}
       <motion.div
         data-wallpaper-source-surface="personal"
+        inert={isWallpaperMode && (isWallpaperDesktopControl || wallpaperWorkspace !== 'personal') ? true : undefined}
+        aria-hidden={isWallpaperMode && (isWallpaperDesktopControl || wallpaperWorkspace !== 'personal') ? true : undefined}
         style={{
           scale: personalScale,
           opacity: personalOpacity,
@@ -5796,7 +5800,11 @@ export function DesktopUI({
       </div>
 
       {/* Desktop Grid & Widgets */}
-      <div className={`lumi-desktop-grid relative z-10 w-full h-full overflow-y-auto custom-scrollbar px-3 pb-24 pt-14 transition-all duration-1000 sm:px-6 sm:pt-16 md:p-12 md:pt-20 lg:p-16 ${isWallpaperMode ? 'opacity-0 blur-sm pointer-events-none' : 'opacity-100'}`}>
+      <div
+        inert={isWallpaperMode ? true : undefined}
+        aria-hidden={isWallpaperMode ? true : undefined}
+        className={`lumi-desktop-grid relative z-10 w-full h-full overflow-y-auto custom-scrollbar px-3 pb-24 pt-14 transition-all duration-1000 sm:px-6 sm:pt-16 md:p-12 md:pt-20 lg:p-16 ${isWallpaperMode ? 'opacity-0 blur-sm pointer-events-none' : 'opacity-100'}`}
+      >
         <div className="lumi-desktop-grid-layout flex flex-col xl:flex-row justify-between items-start gap-6 xl:gap-12">
             <div className="lumi-desktop-icon-canvas relative flex-1 w-full" style={{ margin: 0, padding: 0, minHeight: desktopIconAreaHeight }}>
               {desktopIcons.map((def, i) => {
@@ -6479,7 +6487,7 @@ export function DesktopUI({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.3 }}
-            className="lumi-organization-fullscreen-surface lumi-below-topbar fixed inset-x-0 bottom-0 z-[90] bg-celestial-deep overflow-auto"
+            className={`lumi-organization-fullscreen-surface lumi-below-topbar fixed inset-x-0 bottom-0 z-[90] bg-celestial-deep overflow-auto ${isWallpaperWorkbench ? 'lumi-organization-wallpaper' : ''}`}
           >
             <Suspense fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
               <OrgPortal

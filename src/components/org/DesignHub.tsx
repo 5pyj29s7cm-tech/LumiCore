@@ -173,25 +173,27 @@ export function DesignHub({ workspace = 'spatial' }: { workspace?: DesignWorkspa
     : uiMessage('design-hub.a-focused-workspace-for-brand.945622f065');
 
   return (
-    <div className="flex h-full min-h-0">
-      <aside className="flex w-64 shrink-0 flex-col border-r border-white/[0.08] bg-black/20">
-        <div className="border-b border-white/[0.08] p-4">
+    <div data-organization-wallpaper-module="design" className="lumi-org-module-shell lumi-design-hub flex h-full min-h-0">
+      <aside data-wallpaper-tool="organization-module-tools" className="lumi-org-module-tools lumi-design-sidebar flex w-64 shrink-0 flex-col border-r border-white/[0.08] bg-black/20">
+        <div className="lumi-org-module-tool-header border-b border-white/[0.08] p-4">
           <h3 className="flex items-center gap-2 text-sm font-black uppercase tracking-[0.12em] text-white/85">
             <span className={`flex h-8 w-8 items-center justify-center rounded-xl border ${workspace === 'spatial' ? 'border-cyan-300/15 bg-cyan-400/10 text-cyan-200' : 'border-pink-300/15 bg-pink-400/10 text-pink-200'}`}>
               {workspace === 'spatial' ? <Building2 size={16} /> : <Palette size={16} />}
             </span>
-            <span className="min-w-0 truncate">{workspaceTitle}</span>
+            <span className="lumi-org-module-tool-copy min-w-0 truncate">{workspaceTitle}</span>
           </h3>
-          <p className="mt-2 text-xs leading-relaxed text-white/40">
+          <p className="lumi-org-module-tool-copy mt-2 text-xs leading-relaxed text-white/40">
             {workspaceDescription}
           </p>
         </div>
-        <nav className="custom-scrollbar flex-1 space-y-1 overflow-y-auto p-2">
+        <nav className="lumi-org-module-tool-nav custom-scrollbar flex-1 space-y-1 overflow-y-auto p-2">
           {navItems.map(item => (
             <button
               key={item.id}
               onClick={() => setView(item.id)}
-              className={`flex w-full items-start gap-2 rounded-xl border px-3 py-2.5 text-left transition-colors ${
+              title={item.label}
+              aria-label={item.label}
+              className={`lumi-org-module-tool-button flex w-full items-start gap-2 rounded-xl border px-3 py-2.5 text-left transition-colors ${
                 view === item.id
                   ? workspace === 'spatial'
                     ? 'border-cyan-400/20 bg-cyan-500/10 text-cyan-100'
@@ -199,8 +201,8 @@ export function DesignHub({ workspace = 'spatial' }: { workspace?: DesignWorkspa
                   : 'border-transparent text-white/50 hover:border-white/[0.08] hover:bg-white/[0.05] hover:text-white/80'
               }`}
             >
-              <span className="mt-0.5 shrink-0">{item.icon}</span>
-              <span className="min-w-0">
+              <span className="lumi-org-module-tool-icon mt-0.5 shrink-0">{item.icon}</span>
+              <span className="lumi-org-module-tool-copy min-w-0">
                 <span className="block truncate text-sm font-bold">{item.label}</span>
                 <span className="mt-0.5 line-clamp-2 block text-[12px] leading-relaxed text-white/35">{item.desc}</span>
               </span>
@@ -208,7 +210,7 @@ export function DesignHub({ workspace = 'spatial' }: { workspace?: DesignWorkspa
           ))}
         </nav>
       </aside>
-      <main className="custom-scrollbar min-w-0 flex-1 overflow-y-auto bg-black/10">
+      <main data-wallpaper-tool="organization-module-workspace" className="lumi-org-module-workspace lumi-design-workspace custom-scrollbar min-w-0 flex-1 overflow-y-auto bg-black/10">
         <DesignToolView config={tools[view]} workspace={workspace} />
       </main>
     </div>
@@ -263,7 +265,7 @@ ${input}`);
   };
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-5 p-6">
+    <div className="lumi-design-tool mx-auto flex max-w-5xl flex-col gap-5 p-6">
       <section className="border-b border-white/[0.08] pb-5">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
@@ -334,7 +336,7 @@ ${input}`);
       </section>
 
       {result && (
-        <section className="lumi-panel custom-scrollbar max-h-[560px] overflow-y-auto p-5 text-sm leading-relaxed whitespace-pre-wrap text-white/80">
+        <section className="lumi-design-result lumi-panel custom-scrollbar max-h-[560px] overflow-y-auto p-5 text-sm leading-relaxed whitespace-pre-wrap text-white/80">
           {result}
         </section>
       )}

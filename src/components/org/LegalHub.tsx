@@ -662,91 +662,97 @@ export function LegalHub() {
 
   return (
     <>
-      <div className="flex h-full">
-      <div className="flex w-56 shrink-0 flex-col border-r border-white/[0.08] bg-black/20">
-        <div className="border-b border-white/[0.08] p-4">
+      <div data-organization-wallpaper-module="legal" className="lumi-org-module-shell lumi-legal-workbench flex h-full">
+      <div data-wallpaper-tool="organization-module-tools" className="lumi-org-module-tools lumi-legal-navigation flex w-56 shrink-0 flex-col border-r border-white/[0.08] bg-black/20">
+        <div className="lumi-org-module-tool-header border-b border-white/[0.08] p-4">
           <h3 className="flex items-center gap-2 text-sm font-black uppercase tracking-[0.12em] text-white/85">
             <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-amber-300/15 bg-amber-400/10 text-amber-300">
               <Scale size={16} />
             </span>
-            <span className="min-w-0 truncate">{t.legalHub || uiMessage('legal-hub.law-firm.a283f14451')}</span>
+            <span className="lumi-org-module-tool-copy min-w-0 truncate">{t.legalHub || uiMessage('legal-hub.law-firm.a283f14451')}</span>
           </h3>
           {activeCase && (
-            <p className="mt-2 line-clamp-2 text-xs text-white/45">
+            <p className="lumi-org-module-tool-copy mt-2 line-clamp-2 text-xs text-white/45">
               {activeCase.title || activeCase.party || activeCase.caseNumber || uiMessage('legal-hub.untitled-case.796e2578d9')}
             </p>
           )}
         </div>
-        <nav className="custom-scrollbar flex-1 space-y-1 overflow-y-auto p-2">
+        <nav className="lumi-org-module-tool-nav custom-scrollbar flex-1 space-y-1 overflow-y-auto p-2">
           {workflowNavItems.map((item, index) => (
             <button
               key={item.id}
               onClick={() => setView(item.id)}
-              className={`flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-sm transition-colors ${
+              title={item.label}
+              aria-label={item.label}
+              className={`lumi-org-module-tool-button lumi-legal-workflow-tool flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-sm transition-colors ${
                 view === item.id
                   ? 'border-amber-400/20 bg-amber-500/10 text-amber-200'
                   : 'border-transparent text-white/50 hover:border-white/[0.08] hover:bg-white/[0.05] hover:text-white/80'
               }`}
             >
-              <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border text-[10px] font-bold ${
+              <span className={`lumi-legal-step-index flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border text-[10px] font-bold ${
                 view === item.id
                   ? 'border-amber-300/25 bg-amber-400/15 text-amber-100'
                   : 'border-white/10 bg-white/[0.035] text-white/35'
               }`}>
                 {index + 1}
               </span>
-              <span className="shrink-0">{item.icon}</span>
-              <span className="min-w-0 truncate">{item.label}</span>
+              <span className="lumi-org-module-tool-icon shrink-0">{item.icon}</span>
+              <span className="lumi-org-module-tool-copy min-w-0 truncate">{item.label}</span>
             </button>
           ))}
           {specialToolNavItems.length > 0 && (
             <>
-              <div className="my-2 border-t border-white/[0.08]" />
-              <div className="px-3 pb-1 pt-1 text-[10px] font-black uppercase tracking-[0.14em] text-white/28">
+              <div className="lumi-org-module-tool-copy my-2 border-t border-white/[0.08]" />
+              <div className="lumi-org-module-tool-copy px-3 pb-1 pt-1 text-[10px] font-black uppercase tracking-[0.14em] text-white/28">
                 {uiMessage('legal-hub.special-tools.77554fcb98')}
               </div>
               {specialToolNavItems.map(item => (
                 <button
                   key={item.id}
                   onClick={() => setView(item.id)}
-                  className={`flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-sm transition-colors ${
+                  title={item.label}
+                  aria-label={item.label}
+                  className={`lumi-org-module-tool-button flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-sm transition-colors ${
                     view === item.id
                       ? 'border-violet-400/20 bg-violet-500/10 text-violet-200'
                       : 'border-transparent text-white/45 hover:border-white/[0.08] hover:bg-white/[0.05] hover:text-white/80'
                   }`}
                 >
-                  <span className="shrink-0">{item.icon}</span>
-                  <span className="min-w-0 truncate">{item.label}</span>
+                  <span className="lumi-org-module-tool-icon shrink-0">{item.icon}</span>
+                  <span className="lumi-org-module-tool-copy min-w-0 truncate">{item.label}</span>
                 </button>
               ))}
             </>
           )}
           {utilityNavItems.length > 0 && (
             <>
-              <div className="my-2 border-t border-white/[0.08]" />
-              <div className="px-3 pb-1 pt-1 text-[10px] font-black uppercase tracking-[0.14em] text-white/28">
+              <div className="lumi-org-module-tool-copy my-2 border-t border-white/[0.08]" />
+              <div className="lumi-org-module-tool-copy px-3 pb-1 pt-1 text-[10px] font-black uppercase tracking-[0.14em] text-white/28">
                 {uiMessage('legal-hub.settings.57cc04dce6')}
               </div>
               {utilityNavItems.map(item => (
                 <button
                   key={item.id}
                   onClick={() => setView(item.id)}
-                  className={`flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-sm transition-colors ${
+                  title={item.label}
+                  aria-label={item.label}
+                  className={`lumi-org-module-tool-button flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-sm transition-colors ${
                     view === item.id
                       ? 'border-cyan-400/20 bg-cyan-500/10 text-cyan-200'
                       : 'border-transparent text-white/45 hover:border-white/[0.08] hover:bg-white/[0.05] hover:text-white/80'
                   }`}
                 >
-                  <span className="shrink-0">{item.icon}</span>
-                  <span className="min-w-0 truncate">{item.label}</span>
+                  <span className="lumi-org-module-tool-icon shrink-0">{item.icon}</span>
+                  <span className="lumi-org-module-tool-copy min-w-0 truncate">{item.label}</span>
                 </button>
               ))}
             </>
           )}
         </nav>
       </div>
-      <div className="flex min-w-0 flex-1 flex-col bg-black/10">
-        <div className="border-b border-white/[0.08] bg-black/25 px-5 py-3">
+      <div data-wallpaper-tool="organization-module-workspace" className="lumi-org-module-workspace lumi-legal-workspace flex min-w-0 flex-1 flex-col bg-black/10">
+        <div data-wallpaper-tool="organization-module-context" className="lumi-legal-context border-b border-white/[0.08] bg-black/25 px-5 py-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.14em] text-amber-200/70">
@@ -789,7 +795,7 @@ export function LegalHub() {
             )}
           </div>
         </div>
-        <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
+        <div className="lumi-org-module-scroll lumi-legal-content custom-scrollbar min-h-0 flex-1 overflow-y-auto">
           {renderView()}
         </div>
       </div>
@@ -860,7 +866,7 @@ function LegalCaseCreateDialog({
   ];
 
   return (
-    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+    <div data-wallpaper-modal="legal-case-create" className="lumi-legal-modal fixed inset-0 z-[300] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
       <button type="button" className="absolute inset-0" onClick={onClose} aria-label={uiMessage('legal-hub.close-new-case.cc85fb0c91')} />
       <form
         role="dialog"
@@ -946,7 +952,7 @@ function LegalCaseDeleteDialog({
   ui: (zh: string, en: string) => string;
 }) {
   return (
-    <div className="fixed inset-0 z-[310] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+    <div data-wallpaper-modal="legal-case-delete" className="lumi-legal-modal fixed inset-0 z-[310] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
       <button type="button" className="absolute inset-0" onClick={onClose} aria-label={uiMessage('legal-hub.close-delete-confirmation.ccd3d3d67d')} />
       <div role="dialog" aria-modal="true" aria-labelledby="legal-delete-case-title" className="relative z-10 w-full max-w-md rounded-lg border border-rose-400/18 bg-[#11151b] p-5 shadow-2xl">
         <div className="flex items-start gap-3">

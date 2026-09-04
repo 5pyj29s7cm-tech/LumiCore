@@ -47,6 +47,36 @@ describe('Wallpaper surface projection', () => {
     expect(styles).toContain('html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="command-center"] .lumi-chat-root.lumi-work-surface');
   });
 
+  it('turns the existing organization chrome into compact edge tools without collapsing gateway forms', () => {
+    const desktop = source('src/components/DesktopUI.tsx');
+    const portal = source('src/components/OrgPortal.tsx');
+    const organization = source('src/components/org/OrgHub.tsx');
+    const design = source('src/components/org/DesignHub.tsx');
+    const legal = source('src/components/org/LegalHub.tsx');
+    const styles = source('src/index.css');
+
+    expect(portal).toContain('data-organization-wallpaper-gateway');
+    expect(portal).toContain('lumi-org-gateway');
+    expect(organization).toContain('lumi-org-nav-copy');
+    expect(organization).toContain('lumi-org-content-scroll');
+    expect(styles).toContain('width: 3.75rem !important');
+    expect(styles).toContain('[data-wallpaper-tool="organization-navigation"]:is(:hover, :focus-within)');
+    expect(styles).not.toContain('.lumi-organization-fullscreen-surface:has([data-organization-wallpaper-surface])');
+    expect(styles).toContain('[data-organization-wallpaper-gateway].lumi-work-surface');
+    expect(styles).toContain('backdrop-filter: none !important');
+    expect(styles).toContain('--lumi-work-panel-soft: rgba(248, 252, 249, .62)');
+    expect(styles).toContain('.lumi-org-gateway {\n  height: 100%;\n  min-height: 0;\n  overflow: auto;');
+    expect(design).toContain('data-organization-wallpaper-module="design"');
+    expect(design).toContain('lumi-org-module-tool-copy');
+    expect(legal).toContain('data-organization-wallpaper-module="legal"');
+    expect(legal).toContain('lumi-org-module-tool-copy');
+    expect(styles).toContain('.lumi-org-module-tools:is(:hover, :focus-within)');
+    expect(styles).toContain('padding-inline-start: 4.15rem');
+    expect(desktop).toContain("isWallpaperWorkbench ? 'lumi-organization-wallpaper' : ''");
+    expect(desktop).toContain('inert={isWallpaperMode ? true : undefined}');
+    expect(desktop).toContain("inert={isWallpaperMode && (isWallpaperDesktopControl || wallpaperWorkspace !== 'personal') ? true : undefined}");
+  });
+
   it('keeps the user presentation interactive and reserves click-through for desktop control', () => {
     const desktop = source('src/components/DesktopUI.tsx');
     const service = source('src/services/systemService.ts');

@@ -182,14 +182,14 @@ export function OrgHub() {
             <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-blue-300/15 bg-blue-400/10 text-blue-200">
               <Building2 size={16} />
             </span>
-            <span className="hidden min-w-0 truncate sm:block">{t.orgWorkSpace}</span>
+            <span className="lumi-org-nav-copy hidden min-w-0 truncate sm:block">{t.orgWorkSpace}</span>
           </h3>
           {orgConnection?.orgName && (
-            <p className="hidden truncate text-xs text-white/55 sm:block">{orgConnection.orgName}</p>
+            <p className="lumi-org-nav-copy lumi-org-nav-name hidden truncate text-xs text-white/55 sm:block">{orgConnection.orgName}</p>
           )}
           {/* Role badge */}
           <span title={roleInfo.label} className={`mx-auto flex w-fit items-center gap-1 rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-[0.12em] sm:mx-0 sm:py-0.5 ${roleInfo.color}`}>
-            {roleInfo.icon} <span className="hidden sm:inline">{roleInfo.label}</span>
+            {roleInfo.icon} <span className="lumi-org-nav-copy hidden sm:inline">{roleInfo.label}</span>
           </span>
           <button
             onClick={handleDomainToggle}
@@ -203,7 +203,7 @@ export function OrgHub() {
             }`}
           >
             {switchBusy ? <Loader2 size={12} className="animate-spin" /> : workDomain === 'work' ? <Briefcase size={12} /> : <User size={12} />}
-            <span className="hidden sm:inline">{switchBusy ? (t.switching || uiMessage('org-hub.switching.c197a0b742')) : displayedDomain}</span>
+            <span className="lumi-org-nav-copy hidden sm:inline">{switchBusy ? (t.switching || uiMessage('org-hub.switching.c197a0b742')) : displayedDomain}</span>
           </button>
         </div>
 
@@ -221,7 +221,7 @@ export function OrgHub() {
               }`}
             >
               <span className="shrink-0">{item.icon}</span>
-              <span className="hidden min-w-0 truncate sm:block">{item.label}</span>
+              <span className="lumi-org-nav-copy hidden min-w-0 truncate sm:block">{item.label}</span>
             </button>
           ))}
           {moduleNavItems.length > 0 && (
@@ -238,11 +238,11 @@ export function OrgHub() {
                 }`}
               >
                 <Layers size={16} className="shrink-0" />
-                <span className="hidden min-w-0 flex-1 truncate text-left sm:block">{uiMessage('org-hub.organization-modules.75dd9b5603')}</span>
-                <span className="hidden sm:block">{orgModulesOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
+                <span className="lumi-org-nav-copy hidden min-w-0 flex-1 truncate text-left sm:block">{uiMessage('org-hub.organization-modules.75dd9b5603')}</span>
+                <span className="lumi-org-nav-copy lumi-org-nav-disclosure hidden sm:block">{orgModulesOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
               </button>
               {orgModulesOpen && (
-                <div className="mt-1 space-y-1 sm:pl-3">
+                <div className="lumi-org-module-items mt-1 space-y-1 sm:pl-3">
                   {moduleNavItems.map(item => (
                     <button
                       key={item.id}
@@ -256,7 +256,7 @@ export function OrgHub() {
                       }`}
                     >
                       <span className="shrink-0">{item.icon}</span>
-                      <span className="hidden min-w-0 truncate sm:block">{item.label}</span>
+                      <span className="lumi-org-nav-copy hidden min-w-0 truncate sm:block">{item.label}</span>
                     </button>
                   ))}
                 </div>
@@ -275,7 +275,7 @@ export function OrgHub() {
             className="flex w-full items-center justify-center gap-2 rounded-xl border border-transparent px-2 py-2 text-sm text-white/40 transition-colors hover:border-white/[0.08] hover:bg-white/[0.05] hover:text-white/70 sm:justify-start sm:px-3"
           >
             <ArrowLeft size={16} />
-            <span className="hidden min-w-0 truncate sm:block">{t.orgExitWorkSpace}</span>
+            <span className="lumi-org-nav-copy hidden min-w-0 truncate sm:block">{t.orgExitWorkSpace}</span>
           </button>
         </nav>
       </div>
@@ -296,7 +296,7 @@ export function OrgHub() {
             {roleInfo.icon}<span className="hidden sm:inline">{roleInfo.label}</span>
           </span>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">
+        <div className="lumi-org-content-scroll min-h-0 flex-1 overflow-y-auto custom-scrollbar">
           <Suspense fallback={<OrgViewFallback />}>
             {renderView()}
           </Suspense>

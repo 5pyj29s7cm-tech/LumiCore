@@ -3140,6 +3140,8 @@ html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view] .lumi-com
 }
 
 [data-wallpaper-presentation="workbench"] [data-wallpaper-exit] {
+  top: max(1rem, env(safe-area-inset-top));
+  right: max(1rem, env(safe-area-inset-right));
   pointer-events: auto;
   animation: lumi-wallpaper-tool-arrive .42s cubic-bezier(.2, .8, .2, 1) both;
 }
@@ -3210,81 +3212,327 @@ html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper
   background: rgba(248, 252, 249, .68);
 }
 
-/* Organization uses its existing role navigation and current workspace as the
- * wallpaper tools. Nothing new is introduced; the same authorized controls
- * become translucent modules and move outward to expose the desktop. */
+/* Organization reuses the existing role-filtered navigation, context and
+ * workspace. Wallpaper turns those exact elements into small desktop tools;
+ * it never wraps the organization in another two-column glass application. */
 [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-source-surface="personal"] {
   opacity: 0;
   pointer-events: none;
 }
 
-[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-organization-fullscreen-surface {
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-organization-fullscreen-surface,
+[data-wallpaper-presentation="workbench"] .lumi-organization-fullscreen-surface.lumi-organization-wallpaper {
   top: 0 !important;
-  padding: clamp(.75rem, 1.8vw, 1.5rem);
+  padding: clamp(.55rem, 1vw, 1rem);
+  overflow: hidden;
   background: transparent !important;
-  overflow: auto;
   scrollbar-width: none;
 }
 
-[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-organization-fullscreen-surface::-webkit-scrollbar {
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-organization-fullscreen-surface::-webkit-scrollbar,
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-sidebar nav::-webkit-scrollbar,
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-content-scroll::-webkit-scrollbar,
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-gateway::-webkit-scrollbar {
   display: none;
 }
 
-[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-organization-wallpaper-surface].lumi-work-surface {
-  gap: clamp(.75rem, 1.4vw, 1.5rem);
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-organization-wallpaper-surface].lumi-work-surface,
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-organization-wallpaper-gateway].lumi-work-surface {
+  position: relative;
+  min-height: 100%;
+  overflow: visible;
+  border: 0 !important;
+  border-radius: 0 !important;
   background: transparent !important;
+  box-shadow: none !important;
+  filter: none !important;
+  backdrop-filter: none !important;
 }
 
-html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-organization-wallpaper-surface].lumi-work-surface {
+html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-organization-wallpaper-surface].lumi-work-surface,
+html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-organization-wallpaper-gateway].lumi-work-surface {
+  --lumi-work-panel: rgba(250, 253, 250, .72);
+  --lumi-work-panel-soft: rgba(248, 252, 249, .62);
+  --lumi-work-border: rgba(32, 56, 43, .13);
   background: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
 }
 
+/* The existing organization sidebar becomes a compact icon tool cluster. It
+ * reveals its existing labels on hover/focus, so mouse, keyboard and touch
+ * users keep the full navigation without a permanent 240px slab. */
 [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-navigation"] {
-  height: 100%;
-  border: 1px solid rgba(96, 165, 250, .18);
-  border-radius: 1.5rem;
-  background: rgba(3, 11, 22, .42) !important;
-  box-shadow: 0 24px 70px rgba(0, 0, 0, .18);
-  backdrop-filter: blur(22px) saturate(118%);
-  animation: lumi-wallpaper-tool-spread-left .62s cubic-bezier(.2, .8, .2, 1) both;
+  position: absolute;
+  top: 50%;
+  inset-inline-start: clamp(.35rem, .9vw, .8rem);
+  z-index: 45;
+  width: 3.75rem !important;
+  height: auto !important;
+  max-height: calc(100% - 1.5rem);
+  overflow: hidden;
+  transform: translateY(-50%);
+  border: 1px solid rgba(103, 232, 249, .16);
+  border-radius: 1.15rem;
+  background: linear-gradient(155deg, rgba(4, 18, 31, .30), rgba(3, 10, 20, .20)) !important;
+  box-shadow: 0 18px 52px rgba(0, 0, 0, .15), inset 0 1px rgba(255, 255, 255, .035);
+  backdrop-filter: blur(12px) saturate(112%);
+  transition: width .32s cubic-bezier(.2, .8, .2, 1), background-color .25s ease, border-color .25s ease, box-shadow .25s ease;
+  animation: lumi-org-wallpaper-nav-arrive .52s cubic-bezier(.2, .8, .2, 1) both;
 }
 
-[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-workspace"] {
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-navigation"]:is(:hover, :focus-within) {
+  width: clamp(12.5rem, 18vw, 15rem) !important;
+  border-color: rgba(103, 232, 249, .28);
+  background: linear-gradient(155deg, rgba(4, 18, 31, .48), rgba(3, 10, 20, .34)) !important;
+  box-shadow: 0 22px 62px rgba(0, 0, 0, .22), inset 0 1px rgba(255, 255, 255, .05);
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-sidebar > div:first-child {
+  padding: .65rem;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-sidebar :is(h3, button) {
+  justify-content: center;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-sidebar:is(:hover, :focus-within) :is(h3, button) {
+  justify-content: flex-start;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-nav-copy {
+  display: block !important;
+  width: auto;
+  max-width: 0;
+  max-height: 0;
+  margin: 0;
   overflow: hidden;
+  opacity: 0;
+  white-space: nowrap;
+  transform: translateX(-.35rem);
+  transition: max-width .28s ease, max-height .28s ease, opacity .18s ease, transform .28s ease;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-sidebar:is(:hover, :focus-within) .lumi-org-nav-copy {
+  max-width: 11.5rem;
+  max-height: 2.5rem;
+  opacity: 1;
+  transform: translateX(0);
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-nav-name {
+  padding-inline: .25rem;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-module-items {
+  padding-inline-start: 0;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-sidebar nav,
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-content-scroll,
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-gateway {
+  scrollbar-width: none;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-sidebar nav {
+  min-height: 0;
+}
+
+/* The workspace remains the real current organization module. Only its
+ * content cards float; the former full-height right-hand glass plate is gone. */
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-workspace"] {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  min-width: 0;
+  overflow: visible;
+  padding: 4.5rem 1rem 1rem 4.8rem;
   border: 0;
   border-radius: 0;
   background: transparent !important;
   box-shadow: none;
   backdrop-filter: none;
-  animation: lumi-wallpaper-tool-spread-right .62s cubic-bezier(.2, .8, .2, 1) both;
 }
 
 [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-context"] {
-  align-self: stretch;
-  margin: 0 0 .75rem;
-  border: 1px solid rgba(96, 165, 250, .14);
+  position: absolute;
+  top: max(.7rem, env(safe-area-inset-top));
+  right: calc(3.8rem + env(safe-area-inset-right));
+  left: auto;
+  z-index: 46;
+  width: max-content;
+  max-width: calc(100% - 9rem);
+  min-height: 3.15rem;
+  padding: .55rem .75rem;
+  border: 1px solid rgba(103, 232, 249, .14);
   border-radius: 1rem;
-  background: rgba(2, 9, 18, .44) !important;
+  background: linear-gradient(145deg, rgba(4, 18, 31, .32), rgba(3, 10, 20, .22)) !important;
+  box-shadow: 0 16px 44px rgba(0, 0, 0, .14);
+  backdrop-filter: blur(12px) saturate(112%);
+  animation: lumi-org-wallpaper-context-arrive .52s cubic-bezier(.2, .8, .2, 1) both;
 }
 
-[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-workspace"] .glass,
-[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-workspace"] .glass-dark,
-[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-workspace"] .lumi-panel,
-[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-workspace"] .lumi-surface,
-[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-portal"] .glass,
-[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-portal"] .glass-dark,
-[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-portal"] .lumi-panel,
-[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-portal"] .lumi-surface {
-  background: rgba(3, 11, 22, .54) !important;
-  border-color: rgba(96, 165, 250, .14) !important;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, .12) !important;
-  backdrop-filter: blur(18px) saturate(114%);
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-content-scroll {
+  position: relative;
+  height: 100%;
+  overflow: auto;
+  border-radius: 1.25rem;
+  background: radial-gradient(ellipse at 50% 28%, rgba(2, 12, 22, .16), transparent 72%);
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-content-scroll section,
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-content-scroll button[class*="bg-white"] {
+  box-shadow: 0 14px 42px rgba(0, 0, 0, .09);
+  backdrop-filter: blur(11px) saturate(108%);
+}
+
+/* Design and legal keep their real module navigation. In Wallpaper those
+ * existing controls become a narrow secondary tool rail and expand over the
+ * canvas on demand instead of permanently consuming another column. */
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-module-shell {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  background: transparent !important;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-module-tools {
+  position: absolute;
+  top: 50%;
+  inset-inline-start: .45rem;
+  z-index: 42;
+  width: 3.5rem !important;
+  height: auto !important;
+  max-height: calc(100% - 1rem);
+  overflow: hidden;
+  transform: translateY(-50%);
+  border: 1px solid rgba(125, 211, 252, .14) !important;
+  border-radius: 1rem;
+  background: linear-gradient(155deg, rgba(4, 18, 31, .38), rgba(3, 10, 20, .28)) !important;
+  box-shadow: 0 16px 46px rgba(0, 0, 0, .14);
+  backdrop-filter: blur(12px) saturate(110%);
+  transition: width .32s cubic-bezier(.2, .8, .2, 1), border-color .22s ease, background-color .22s ease, box-shadow .22s ease;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-module-tools:is(:hover, :focus-within) {
+  width: clamp(12rem, 19vw, 14rem) !important;
+  border-color: rgba(125, 211, 252, .26) !important;
+  background: linear-gradient(155deg, rgba(4, 18, 31, .58), rgba(3, 10, 20, .44)) !important;
+  box-shadow: 0 20px 58px rgba(0, 0, 0, .22);
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-module-tool-header {
+  flex: 0 0 auto;
+  padding: .55rem;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-module-tool-header h3,
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-module-tool-button {
+  justify-content: center;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-module-tools:is(:hover, :focus-within) :is(.lumi-org-module-tool-header h3, .lumi-org-module-tool-button) {
+  justify-content: flex-start;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-module-tool-nav {
+  min-height: 0;
+  scrollbar-width: none;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-module-tool-copy {
+  display: block !important;
+  width: auto;
+  max-width: 0;
+  max-height: 0;
+  margin: 0;
+  overflow: hidden;
+  opacity: 0;
+  white-space: nowrap;
+  transform: translateX(-.3rem);
+  transition: max-width .28s ease, max-height .28s ease, opacity .18s ease, transform .28s ease;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-module-tools:is(:hover, :focus-within) .lumi-org-module-tool-copy {
+  max-width: 11rem;
+  max-height: 3.5rem;
+  opacity: 1;
+  transform: translateX(0);
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-design-sidebar .lumi-org-module-tool-icon {
+  margin-top: 0;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-legal-navigation:not(:hover):not(:focus-within) .lumi-legal-workflow-tool .lumi-org-module-tool-icon {
+  display: none;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-module-workspace {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  padding-inline-start: 4.15rem;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-legal-context {
+  margin: .45rem .45rem 0;
+  border: 1px solid rgba(251, 191, 36, .12) !important;
+  border-radius: 1rem;
+  background: rgba(7, 12, 20, .38) !important;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, .10);
+  backdrop-filter: blur(11px) saturate(108%);
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-legal-modal {
+  background: rgba(2, 6, 12, .78) !important;
+  backdrop-filter: blur(12px) saturate(82%);
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-design-tool {
+  padding: clamp(.8rem, 2vw, 1.5rem);
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] :is(
+  [data-organization-wallpaper-surface],
+  [data-organization-wallpaper-gateway]
+) :is(.custom-scrollbar, [class*="overflow-y-auto"], [class*="overflow-auto"]) {
+  scrollbar-width: none;
+  overscroll-behavior: contain;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] :is(
+  [data-organization-wallpaper-surface],
+  [data-organization-wallpaper-gateway]
+) :is(.custom-scrollbar, [class*="overflow-y-auto"], [class*="overflow-auto"])::-webkit-scrollbar {
+  display: none;
+}
+
+/* Login/join/create remain ordinary, fully usable forms. They share the
+ * transparent canvas and scrolling, but never inherit the collapsible rail. */
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-gateway {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding: clamp(.75rem, 3vw, 2rem) !important;
+  background: radial-gradient(circle at 50% 38%, rgba(6, 24, 41, .22), transparent 62%) !important;
+}
+
+[data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-gateway [class*="bg-white"] {
+  backdrop-filter: blur(12px) saturate(108%);
 }
 
 html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-navigation"] {
-  border-color: rgba(30, 64, 175, .14);
-  background: rgba(248, 251, 249, .58) !important;
-  box-shadow: 0 24px 70px rgba(39, 67, 56, .12);
+  border-color: rgba(15, 118, 110, .15);
+  background: linear-gradient(155deg, rgba(250, 253, 250, .42), rgba(238, 247, 242, .30)) !important;
+  box-shadow: 0 18px 52px rgba(39, 67, 56, .10), inset 0 1px rgba(255, 255, 255, .52);
+}
+
+html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-navigation"]:is(:hover, :focus-within) {
+  border-color: rgba(15, 118, 110, .24);
+  background: linear-gradient(155deg, rgba(252, 254, 252, .62), rgba(239, 248, 243, .48)) !important;
 }
 
 html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-workspace"] {
@@ -3293,20 +3541,82 @@ html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper
 }
 
 html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-context"] {
-  background: rgba(248, 251, 249, .62) !important;
+  border-color: rgba(15, 118, 110, .13);
+  background: linear-gradient(145deg, rgba(250, 253, 250, .48), rgba(238, 247, 242, .34)) !important;
+  box-shadow: 0 16px 44px rgba(39, 67, 56, .09);
 }
 
-html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-workspace"] .glass,
-html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-workspace"] .glass-dark,
-html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-workspace"] .lumi-panel,
-html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-workspace"] .lumi-surface,
-html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-portal"] .glass,
-html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-portal"] .glass-dark,
-html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-portal"] .lumi-panel,
-html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-portal"] .lumi-surface {
-  background: rgba(248, 251, 249, .74) !important;
-  border-color: rgba(30, 64, 175, .12) !important;
-  box-shadow: 0 16px 48px rgba(39, 67, 56, .09) !important;
+html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-content-scroll {
+  background: radial-gradient(ellipse at 50% 28%, rgba(244, 250, 246, .22), transparent 72%);
+}
+
+html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-gateway {
+  background: radial-gradient(circle at 50% 38%, rgba(243, 250, 246, .28), transparent 62%) !important;
+}
+
+html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-module-tools {
+  border-color: rgba(15, 118, 110, .14) !important;
+  background: linear-gradient(155deg, rgba(250, 253, 250, .50), rgba(238, 247, 242, .38)) !important;
+  box-shadow: 0 16px 46px rgba(39, 67, 56, .09);
+}
+
+html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-module-tools:is(:hover, :focus-within) {
+  border-color: rgba(15, 118, 110, .24) !important;
+  background: linear-gradient(155deg, rgba(252, 254, 252, .72), rgba(239, 248, 243, .58)) !important;
+}
+
+html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-legal-context {
+  border-color: rgba(161, 98, 7, .12) !important;
+  background: rgba(250, 253, 250, .56) !important;
+  box-shadow: 0 12px 36px rgba(39, 67, 56, .08);
+}
+
+@keyframes lumi-org-wallpaper-nav-arrive {
+  from { opacity: 0; transform: translate(-1rem, -50%) scale(.94); }
+}
+
+@keyframes lumi-org-wallpaper-context-arrive {
+  from { opacity: 0; transform: translateX(1rem) scale(.96); }
+}
+
+@media (max-width: 720px) {
+  [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-navigation"] {
+    inset-inline-start: .25rem;
+    width: 3.4rem !important;
+    max-height: calc(100% - 1rem);
+  }
+
+  [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-navigation"]:is(:hover, :focus-within) {
+    width: min(13rem, calc(100vw - 1rem)) !important;
+  }
+
+  [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-workspace"] {
+    padding: 4.25rem .25rem .5rem 3.8rem;
+  }
+
+  [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] [data-wallpaper-tool="organization-context"] {
+    top: max(.35rem, env(safe-area-inset-top));
+    right: calc(3.25rem + env(safe-area-inset-right));
+    max-width: calc(100% - 7.7rem);
+  }
+
+  [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-module-tools {
+    inset-inline-start: .25rem;
+    width: 3.15rem !important;
+  }
+
+  [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-module-tools:is(:hover, :focus-within) {
+    width: min(12.5rem, calc(100% - .5rem)) !important;
+  }
+
+  [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-org-module-workspace {
+    padding-inline-start: 3.55rem;
+  }
+
+  [data-wallpaper-presentation="workbench"][data-wallpaper-workspace="organization"] .lumi-design-result {
+    max-height: none;
+    overflow: visible;
+  }
 }
 
 /* Controlled desktop operation preserves the original click-through view and
