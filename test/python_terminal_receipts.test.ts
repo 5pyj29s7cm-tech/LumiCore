@@ -5,6 +5,7 @@ import path from 'path';
 import { registerPythonTools } from '../server/tools/definitions/python_tools';
 import { executeToolCall } from '../server/tools/execution_engine';
 import { ToolRegistry } from '../server/tools/registry';
+import { getGeneratedOutputDir } from '../server/config/data_path';
 
 describe('Python terminal receipts', () => {
   it('keeps concurrent Python output receipts bound to their own job', async () => {
@@ -20,8 +21,40 @@ describe('Python terminal receipts', () => {
     try {
       expect(results.map(result => result.artifacts.map((artifact: any) => path.basename(artifact.path))))
         .toEqual([[firstName], [secondName]]);
+      expect(results[0].outputDirectory).not.toBe(results[1].outputDirectory);
     } finally {
-      for (const result of results) for (const artifact of result.artifacts) fs.rmSync(artifact.path, { force: true });
+      for (const result of results) {
+        for (const artifact of result.artifacts) fs.rmSync(artifact.path, { force: true });
+        fs.rmdirSync(result.outputDirectory);
+      }
+    }
+  });
+
+  it('excludes an image produced by another tool while Python is running and preserves follow-up access', async () => {
+    const registry = new ToolRegistry();
+    registerPythonTools(registry);
+    const externalImage = path.join(getGeneratedOutputDir(), `other-tool-${Date.now()}.png`);
+    const execution = registry.execute('python_exec', {
+      code: `import os, time\nwhile not os.path.exists(${JSON.stringify(externalImage)}):\n    time.sleep(0.01)\nwith open('chart.png', 'wb') as image:\n    image.write(b'python-chart')\nprint('own-image-ready')`,
+    }, { requestConfirmation: async () => true });
+    let result: any;
+    try {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      fs.writeFileSync(externalImage, 'another tool image');
+      result = JSON.parse(await execution);
+      expect(result.artifacts).toEqual([{ type: 'image', path: path.join(result.outputDirectory, 'chart.png') }]);
+      expect(fs.readFileSync(result.artifacts[0].path, 'utf8')).toBe('python-chart');
+      const followup = JSON.parse(await registry.execute('python_exec', {
+        code: `with open(${JSON.stringify(result.artifacts[0].path)}, 'rb') as previous:\n    print(previous.read().decode())`,
+      }, { requestConfirmation: async () => true }));
+      expect(followup.stdout).toBe('python-chart');
+      expect(followup.artifacts).toEqual([]);
+    } finally {
+      fs.rmSync(externalImage, { force: true });
+      if (result) {
+        for (const artifact of result.artifacts) fs.rmSync(artifact.path, { force: true });
+        fs.rmdirSync(result.outputDirectory);
+      }
     }
   });
 

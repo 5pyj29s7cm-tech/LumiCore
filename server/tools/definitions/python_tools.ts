@@ -9,8 +9,7 @@ import type { ToolContext } from '../types';
 const OUTPUT_DIR = getGeneratedOutputDir();
 const IMAGE_EXTS = /\.(png|jpg|jpeg|svg|gif|webp)$/i;
 
-// These tools share one interpreter environment and image output directory.
-// Preserve their execution order without blocking the server's event loop.
+// Preserve interpreter/package mutation order without blocking the event loop.
 const pythonJobs: Array<() => void> = [];
 let pythonJobRunning = false;
 
@@ -61,29 +60,14 @@ function ensureOutputDir() {
   if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 }
 
-function snapshotImages(): Set<string> {
-  return new Set(fs.readdirSync(OUTPUT_DIR).filter(f => IMAGE_EXTS.test(f)));
+function snapshotImages(directory: string): Set<string> {
+  return new Set(fs.readdirSync(directory).filter(f => IMAGE_EXTS.test(f)));
 }
 
-function detectNewImages(before: Set<string>): string[] {
-  const after = fs.readdirSync(OUTPUT_DIR).filter(f => IMAGE_EXTS.test(f));
+function detectNewImages(directory: string, before: Set<string>): string[] {
+  const after = fs.readdirSync(directory).filter(f => IMAGE_EXTS.test(f));
   return after.filter(f => !before.has(f));
 }
-
-function formatImages(images: string[]): string {
-  return images.map(img => {
-    const stat = fs.statSync(path.join(OUTPUT_DIR, img));
-    const sizeKB = (stat.size / 1024).toFixed(1);
-    return `![${img}](/lumi_output/${img})\n*${img} · ${sizeKB} KB*`;
-  }).join('\n\n');
-}
-
-const WRAP_HEADER = `import os
-os.environ['MPLBACKEND'] = 'Agg'
-_output_dir = r"${OUTPUT_DIR.replace(/\\/g, '\\\\')}"
-os.chdir(_output_dir)
-
-`;
 
 /** Await process settlement so cancellation never deletes a still-running script. */
 function runPythonProcess(args: string[], timeoutMs: number, maxBytes: number, signal?: AbortSignal): Promise<string> {
@@ -152,32 +136,38 @@ async function pythonExec(args: Record<string, any>, context?: ToolContext): Pro
   if (!code.trim()) throw new Error('Code is required.');
 
   ensureOutputDir();
-  const before = snapshotImages();
-
-  const scriptId = `py_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-  const scriptPath = path.join(OUTPUT_DIR, `${scriptId}.py`);
-  fs.writeFileSync(scriptPath, WRAP_HEADER + code, 'utf-8');
+  // Image tools may finish while Python is awaiting its process. A private
+  // directory prevents their files (or another job's same filename) becoming
+  // this job's artifacts. Receipts retain the complete generated file paths.
+  const jobDir = fs.mkdtempSync(path.join(OUTPUT_DIR, 'python-'));
+  const before = snapshotImages(jobDir);
+  const scriptPath = path.join(jobDir, 'script.py');
+  const header = `import os\nos.environ['MPLBACKEND'] = 'Agg'\n_output_dir = ${JSON.stringify(jobDir)}\nos.chdir(_output_dir)\n\n`;
+  fs.writeFileSync(scriptPath, header + code, 'utf-8');
 
   try {
     const stdout = await runPythonProcess([scriptPath], timeout, 10 * 1024 * 1024, context?.executionSignal);
 
-    const newImages = detectNewImages(before);
-    const artifacts = newImages.map(image => ({ type: 'image', path: path.join(OUTPUT_DIR, image) }));
+    const newImages = detectNewImages(jobDir, before);
+    const artifacts = newImages.map(image => ({ type: 'image', path: path.join(jobDir, image) }));
     return JSON.stringify({
       ok: true,
       status: 'completed',
       exitCode: 0,
       stdout: stdout.trim(),
+      outputDirectory: jobDir,
       artifacts,
     });
   } catch (err: any) {
-    const newImages = detectNewImages(before);
+    const newImages = detectNewImages(jobDir, before);
     const errorMsg = err.stderr || err.message || String(err);
-    const partialArtifacts = newImages.map(image => path.join(OUTPUT_DIR, image));
+    const partialArtifacts = newImages.map(image => path.join(jobDir, image));
     const partial = partialArtifacts.length > 0 ? ` Partial artifacts: ${partialArtifacts.join(', ')}.` : '';
     throw new Error(`Python execution failed: ${String(errorMsg).slice(0, 2000)}.${partial}`);
   } finally {
     try { fs.unlinkSync(scriptPath); } catch {}
+    // Keep generated files for subsequent tools; remove only an empty job dir.
+    try { fs.rmdirSync(jobDir); } catch {}
   }
 }
 
@@ -207,7 +197,7 @@ export function registerPythonTools(registry: ToolRegistry): void {
   registry.register({
     name: 'python_exec',
     description:
-      'Execute Python 3.10 code in the active Python environment. Common libraries such as matplotlib, seaborn, plotly, pandas, and Pillow can be used when installed. Use this to generate charts, plots, data visualizations, statistical graphics, and image processing. To display a chart in chat, save it with `plt.savefig(\'filename.png\')` — saved images are automatically captured and shown. The matplotlib backend is configured as Agg (no GUI needed) without importing matplotlib for non-plotting tasks. Working directory is lumi_output/. Use `plt.savefig(\'chart.png\', dpi=100, bbox_inches=\'tight\')` for best results. For plotly, use `fig.write_image(\'chart.png\')` or `fig.write_html(\'chart.html\')`.',
+      'Execute Python 3.10 code in the active Python environment. Common libraries such as matplotlib, seaborn, plotly, pandas, and Pillow can be used when installed. Use this to generate charts, plots, data visualizations, statistical graphics, and image processing. To display a chart in chat, save it with `plt.savefig(\'filename.png\')` — saved images are automatically captured and shown. The matplotlib backend is configured as Agg (no GUI needed) without importing matplotlib for non-plotting tasks. Each execution uses a new subdirectory under lumi_output/. Read earlier outputs using their full receipt paths; outputDirectory identifies this job\'s folder. Use `plt.savefig(\'chart.png\', dpi=100, bbox_inches=\'tight\')` for best results. For plotly, use `fig.write_image(\'chart.png\')` or `fig.write_html(\'chart.html\')`.',
     parameters: {
       type: 'object',
       properties: {
