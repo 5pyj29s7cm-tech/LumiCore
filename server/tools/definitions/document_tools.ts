@@ -13,7 +13,7 @@ import { extractPptxText } from '../../knowledge/pptx';
 import { extractRtfText } from '../../knowledge/rtf';
 import { AUDIO_FILE_EXTS, isAudioTranscriptionUnavailable, transcribeAudioFile } from '../../stt/file_transcription';
 import type { STTProvider } from '../../stt/types';
-import { applySpreadsheetOperations, createXlsxWorkbook, getWorksheetNames, getWorksheetOrThrow, loadXlsxWorkbook, workbookToText, worksheetToCsv, writeXlsxWorkbook } from '../../utils/spreadsheet';
+import { applySpreadsheetOperations, createXlsxWorkbook, getWorksheetNames, getWorksheetOrThrow, loadXlsxWorkbook, prepareSpreadsheetRows, workbookToText, worksheetToCsv, worksheetToCsvPage, writeXlsxWorkbook } from '../../utils/spreadsheet';
 import { extractPdfText } from '../../utils/pdf_text';
 import { getGeneratedOutputDir } from '../../config/data_path';
 
@@ -89,10 +89,11 @@ function uniqueOutputPath(baseName: string, extension: '.txt' | '.md'): string {
   return candidate;
 }
 
-function getAudioToolPreferredProvider(value: unknown): STTProvider | 'auto' {
-  const provider = String(value || 'auto').trim().toLowerCase();
-  const allowed = new Set(['auto', 'whisper', 'qwen', 'ark', 'local-whisper']);
-  if (!allowed.has(provider)) return 'auto';
+function getAudioToolPreferredProvider(value: unknown): STTProvider | 'auto' | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const provider = String(value).trim().toLowerCase();
+  const allowed = new Set(['auto', 'whisper', 'qwen', 'ark', 'local-whisper', 'relay']);
+  if (!allowed.has(provider)) throw new Error(`Unsupported audio transcription provider: ${provider}`);
   return provider as STTProvider | 'auto';
 }
 
@@ -177,7 +178,7 @@ async function transcribeAudioToTextFile(args: Record<string, any>, context?: To
     }, null, 2);
   } catch (err: any) {
     if (isAudioTranscriptionUnavailable(err)) {
-      throw new Error('No audio transcription provider is configured. Configure DashScope Fun-ASR, local Whisper, OpenAI Whisper, or Doubao Speech, then retry.');
+      throw new Error('No usable audio transcription provider is configured. Select a configured speech recognition provider in Settings (Official API, DashScope Fun-ASR, local Whisper, OpenAI Whisper, or Doubao Speech), then retry.');
     }
     if (err?.code === 'AUDIO_TRANSCRIPTION_FAILED') {
       const failures = Array.isArray(err.failures) ? err.failures.join('; ') : (err?.message || String(err));
@@ -218,8 +219,14 @@ async function readXlsx(args: Record<string, any>): Promise<string> {
 
   if (sheetName) {
     const sheet = getWorksheetOrThrow(workbook, sheetName);
-    const csv = worksheetToCsv(sheet);
-    return `Sheet: ${sheetName}\n\n${csv.slice(0, 10000)}`;
+    const requestedStart = Number(args.startRow);
+    const requestedRows = Number(args.maxRows);
+    const startRow = Number.isFinite(requestedStart) ? Math.min(Number.MAX_SAFE_INTEGER, Math.max(1, Math.floor(requestedStart))) : 1;
+    const maxRows = Number.isFinite(requestedRows) ? Math.min(1000, Math.max(1, Math.floor(requestedRows))) : 200;
+    const { csv, endRow, totalRows, hasMore } = worksheetToCsvPage(sheet, startRow, maxRows);
+    const range = startRow > totalRows ? 'No rows in this range' : `Rows ${startRow}-${endRow} of ${totalRows}`;
+    const continuation = hasMore ? `\n[Truncated: more rows remain. Continue with startRow=${endRow + 1}, maxRows=${maxRows}.]` : '';
+    return `Sheet: ${sheetName}\n${range}\n\n${csv}${continuation}`;
   }
 
   // Return summary of all sheets
@@ -311,8 +318,7 @@ async function createXlsx(args: Record<string, any>): Promise<string> {
       const name = (sheetDef.name || `Sheet${wb.worksheets.length + 1}`).slice(0, 31);
       const ws = wb.addWorksheet(name);
 
-      const headers: string[] = sheetDef.headers || [];
-      const data = sheetDef.data || [];
+      const { headers, rows: data } = prepareSpreadsheetRows(sheetDef.headers || [], sheetDef.data || []);
 
       // Write header row
       if (headers.length > 0) {
@@ -333,8 +339,7 @@ async function createXlsx(args: Record<string, any>): Promise<string> {
 
       // Write data rows
       for (let i = 0; i < data.length; i++) {
-        const rowData = Array.isArray(data[i]) ? data[i] : Object.values(data[i]);
-        const row = ws.addRow(rowData);
+        const row = ws.addRow(data[i]);
         if (i % 2 === 1) {
           row.eachCell((cell: any) => {
             cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } };
@@ -343,11 +348,11 @@ async function createXlsx(args: Record<string, any>): Promise<string> {
       }
 
       // Auto-fit column widths
-      const colCount = headers.length || (data.length > 0 ? (Array.isArray(data[0]) ? data[0].length : Object.keys(data[0]).length) : 0);
+      const colCount = data.reduce((count, row) => Math.max(count, row.length), headers.length);
       for (let c = 0; c < colCount; c++) {
         let maxLen = headers[c] ? String(headers[c]).length : 0;
         for (const row of data) {
-          const val = Array.isArray(row) ? String(row[c] ?? '') : String(Object.values(row)[c] ?? '');
+          const val = String(row[c] ?? '');
           maxLen = Math.max(maxLen, val.length);
         }
         const col = ws.getColumn(c + 1);
@@ -673,12 +678,14 @@ export function registerDocumentTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'read_xlsx',
-    description: 'Read and extract data from an Excel .xlsx spreadsheet. Specify sheetName or get a summary of all sheets.',
+    description: 'Read an Excel .xlsx spreadsheet. Specify sheetName for complete-row pages with explicit truncation and continuation, or omit it for a summary of all sheets.',
     parameters: {
       type: 'object',
       properties: {
         filePath: { type: 'string', description: 'Absolute path to the .xlsx file' },
         sheetName: { type: 'string', description: 'Optional: specific sheet name to read' },
+        startRow: { type: 'number', description: 'One-based worksheet row to start at when sheetName is supplied. Defaults to 1.' },
+        maxRows: { type: 'number', description: 'Maximum rows in a named-sheet page (default 200, max 1000). Large pages are shortened at row boundaries; follow the returned startRow to continue.' },
       },
       required: ['filePath'],
     },
@@ -756,7 +763,7 @@ export function registerDocumentTools(registry: ToolRegistry): void {
         filename: { type: 'string', description: 'Optional output filename base without extension' },
         outputFormat: { type: 'string', description: 'txt or md. Defaults to txt.' },
         language: { type: 'string', description: 'Speech language code. Defaults to zh.' },
-        preferredProvider: { type: 'string', description: 'Optional STT provider: auto, qwen, whisper, ark, local-whisper' },
+        preferredProvider: { type: 'string', description: 'Optional STT override: auto, relay, qwen, whisper, ark, local-whisper. Omit to use the speech recognition provider selected in Settings.' },
         allowLocal: { type: 'boolean', description: 'Allow local Whisper fallback. Defaults to true.' },
         excerptLimit: { type: 'number', description: 'Maximum transcript excerpt characters returned in chat. Defaults to 1200.' },
       },
@@ -777,7 +784,7 @@ export function registerDocumentTools(registry: ToolRegistry): void {
       properties: {
         sheets: {
           type: 'array',
-          description: 'Array of sheet definitions: [{ name?: string, headers?: string[], data: any[][] | object[] }]',
+          description: 'Array of sheet definitions: [{ name?: string, headers?: string[], data: any[][] | object[] }]. For object rows, headers must be field keys (missing values become blank); omit headers to infer all keys in stable order.',
           items: { type: 'object' },
         },
         filename: { type: 'string', description: 'Output filename (without extension)' },

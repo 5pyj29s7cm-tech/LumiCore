@@ -80,6 +80,33 @@ function currentWpsSource(overrides: Partial<DurableTaskCapsuleSource> = {}): Du
 }
 
 describe('real file/desktop target anchoring', () => {
+  it.each([
+    ['D:\\audit-temp', 'report.txt', ''],
+    ['D:\\中文 资料\\项目 A', '季度 报告.xlsx', '"'],
+    ['D:\\中文目录', '分析结果.pdf', '“'],
+  ])('separates the search directory from Chinese instruction text: %s', (directory, filename, quote) => {
+    const closeQuote = quote === '“' ? '”' : quote;
+    const taskText = `请在目录 ${quote}${directory}${closeQuote} 中查找并读取文件 ${quote}${filename}${closeQuote}，如果找不到请告诉我。`;
+    const projection = buildTaskTargetAnchorProjection({ taskText });
+    expect(projection.target.object).toBe(filename);
+    expect(projection.target.path).toBe('');
+    expect(projection.allowedSearchRoots).toContain(directory);
+    expect(guardTaskTargetToolCall({ taskText, toolName: 'search_files', arguments: { directory, pattern: filename } })).toMatchObject({ allowed: true });
+    const foundPath = path.win32.join(directory, filename);
+    const found = record({
+      name: 'search_files', arguments: { directory, pattern: filename },
+      result: JSON.stringify([{ name: filename, path: foundPath }]),
+      terminalVerification: { status: 'verified', strategy: 'terminal_receipt', reason: 'synthetic bounded discovery' },
+    });
+    expect(guardTaskTargetToolCall({ taskText, toolName: 'read_xlsx', arguments: { filePath: foundPath }, toolRecords: [found] })).toMatchObject({ allowed: true });
+    expect(guardTaskTargetToolCall({ taskText, toolName: 'read_xlsx', arguments: { filePath: path.win32.join(directory, 'other.xlsx') }, toolRecords: [found] })).toMatchObject({ allowed: false, code: 'target_mismatch' });
+  });
+
+  it('preserves a quoted full Windows filename containing spaces and Chinese characters', () => {
+    const fullPath = 'D:\\中文 资料\\季度 报告.xlsx';
+    expect(buildTaskTargetAnchorProjection({ taskText: `请读取 "${fullPath}"。` }).target.path).toBe(fullPath);
+  });
+
   it('anchors the current WPS object from trusted foreground evidence and drops runtime artifacts', () => {
     const source = currentWpsSource({
       receipts: [{

@@ -1,12 +1,61 @@
-import { execSync } from 'child_process';
+import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { ToolRegistry } from '../registry';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 import { getGeneratedOutputDir } from '../../config/data_path';
+import type { ToolContext } from '../types';
 
 const OUTPUT_DIR = getGeneratedOutputDir();
 const IMAGE_EXTS = /\.(png|jpg|jpeg|svg|gif|webp)$/i;
+
+// These tools share one interpreter environment and image output directory.
+// Preserve their execution order without blocking the server's event loop.
+const pythonJobs: Array<() => void> = [];
+let pythonJobRunning = false;
+
+function startNextPythonJob(): void {
+  if (pythonJobRunning) return;
+  const next = pythonJobs.shift();
+  if (!next) return;
+  pythonJobRunning = true;
+  next();
+}
+
+function withPythonTurn<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (signal?.aborted) return Promise.reject(new Error('Python process cancelled before starting.'));
+  return new Promise<T>((resolve, reject) => {
+    const cancelQueued = () => {
+      const index = pythonJobs.indexOf(start);
+      if (index < 0) return;
+      pythonJobs.splice(index, 1);
+      signal?.removeEventListener('abort', cancelQueued);
+      reject(new Error('Python process cancelled before starting.'));
+    };
+    const release = () => {
+      pythonJobRunning = false;
+      startNextPythonJob();
+    };
+    const start = () => {
+      signal?.removeEventListener('abort', cancelQueued);
+      if (signal?.aborted) {
+        reject(new Error('Python process cancelled before starting.'));
+        release();
+        return;
+      }
+      let pending: Promise<T>;
+      try { pending = operation(); }
+      catch (error) { reject(error); release(); return; }
+      pending.then(
+        value => { resolve(value); release(); },
+        error => { reject(error); release(); },
+      );
+    };
+    pythonJobs.push(start);
+    signal?.addEventListener('abort', cancelQueued, { once: true });
+    startNextPythonJob();
+  });
+}
 
 function ensureOutputDir() {
   if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -36,7 +85,68 @@ os.chdir(_output_dir)
 
 `;
 
-async function pythonExec(args: Record<string, any>): Promise<string> {
+/** Await process settlement so cancellation never deletes a still-running script. */
+function runPythonProcess(args: string[], timeoutMs: number, maxBytes: number, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) return Promise.reject(new Error('Python process cancelled before starting.'));
+  return new Promise((resolve, reject) => {
+    const child = spawn('python', args, {
+      shell: false,
+      windowsHide: true,
+      detached: process.platform !== 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, MPLBACKEND: 'Agg', PYTHONIOENCODING: 'utf-8' },
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let bytes = 0;
+    let failure: Error | undefined;
+    let cleanup: Promise<void> | undefined;
+    const stop = (error: Error) => {
+      if (failure) return;
+      failure = error;
+      if (!child.pid) return;
+      if (process.platform === 'win32') {
+        cleanup = new Promise<void>(done => {
+          const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, shell: false, stdio: 'ignore' });
+          const fallback = () => { try { child.kill('SIGKILL'); } catch {} };
+          const deadline = setTimeout(() => { killer.kill(); fallback(); }, 5000);
+          killer.once('error', () => { clearTimeout(deadline); fallback(); done(); });
+          killer.once('close', code => { clearTimeout(deadline); if (code !== 0) fallback(); done(); });
+        });
+      } else {
+        try { process.kill(-child.pid, 'SIGKILL'); }
+        catch { try { child.kill('SIGKILL'); } catch {} }
+      }
+    };
+    const onAbort = () => stop(new Error('Python process cancelled.'));
+    const timer = setTimeout(() => stop(new Error(`Python process timed out after ${timeoutMs}ms.`)), timeoutMs);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+    const collect = (chunks: Buffer[]) => (chunk: Buffer) => {
+      if (failure) return;
+      bytes += chunk.length;
+      if (bytes > maxBytes) { stop(new Error(`Python process output exceeded ${maxBytes} bytes.`)); return; }
+      chunks.push(Buffer.from(chunk));
+    };
+    child.stdout!.on('data', collect(stdout));
+    child.stderr!.on('data', collect(stderr));
+    child.once('error', error => { failure ||= error; });
+    child.once('close', async (code, terminationSignal) => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      await cleanup;
+      if (failure) { reject(failure); return; }
+      if (code !== 0) {
+        reject(new Error(Buffer.concat(stderr).toString('utf8').slice(0, 2000)
+          || `Python process exited with ${terminationSignal || code}.`));
+        return;
+      }
+      resolve(Buffer.concat(stdout).toString('utf8'));
+    });
+  });
+}
+
+async function pythonExec(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const code = String(args.code || '');
   const timeout = Math.min(Math.max(Number(args.timeout) || 30000, 5000), 120000);
   if (!code.trim()) throw new Error('Code is required.');
@@ -49,13 +159,7 @@ async function pythonExec(args: Record<string, any>): Promise<string> {
   fs.writeFileSync(scriptPath, WRAP_HEADER + code, 'utf-8');
 
   try {
-    const stdout = execSync(`python "${scriptPath}"`, {
-      timeout,
-      encoding: 'utf-8',
-      maxBuffer: 10 * 1024 * 1024,
-      env: { ...process.env, MPLBACKEND: 'Agg', PYTHONIOENCODING: 'utf-8' },
-      windowsHide: true,
-    });
+    const stdout = await runPythonProcess([scriptPath], timeout, 10 * 1024 * 1024, context?.executionSignal);
 
     const newImages = detectNewImages(before);
     const artifacts = newImages.map(image => ({ type: 'image', path: path.join(OUTPUT_DIR, image) }));
@@ -77,7 +181,7 @@ async function pythonExec(args: Record<string, any>): Promise<string> {
   }
 }
 
-async function pythonPackageInstall(args: Record<string, any>): Promise<string> {
+async function pythonPackageInstall(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const pkg = String(args.package || '').trim();
   if (!pkg) throw new Error('Package name is required.');
 
@@ -85,12 +189,7 @@ async function pythonPackageInstall(args: Record<string, any>): Promise<string> 
   if (!safePkg) throw new Error(`Invalid package name: ${pkg}`);
 
   try {
-    const stdout = execSync(`pip install "${safePkg}"`, {
-      timeout: 60000,
-      encoding: 'utf-8',
-      maxBuffer: 1024 * 1024,
-      windowsHide: true,
-    });
+    const stdout = await runPythonProcess(['-m', 'pip', 'install', safePkg], 60000, 1024 * 1024, context?.executionSignal);
     const alreadyInstalled = stdout.includes('already satisfied');
     return JSON.stringify({
       ok: true,
@@ -100,7 +199,7 @@ async function pythonPackageInstall(args: Record<string, any>): Promise<string> 
     });
   } catch (err: any) {
     const msg = err.stderr || err.message || String(err);
-    throw new Error(`Failed to install ${safePkg}: ${msg}`);
+    throw new Error(`Failed to install ${safePkg}: ${String(msg).slice(0, 2000)}`);
   }
 }
 
@@ -117,7 +216,7 @@ export function registerPythonTools(registry: ToolRegistry): void {
       },
       required: ['code'],
     },
-    handler: pythonExec,
+    handler: (args, context) => withPythonTurn(() => pythonExec(args, context), context?.executionSignal),
     permission: 'user',
     securityLevel: 'confirm',
     capability: capabilityContract({
@@ -160,7 +259,7 @@ export function registerPythonTools(registry: ToolRegistry): void {
       },
       required: ['package'],
     },
-    handler: pythonPackageInstall,
+    handler: (args, context) => withPythonTurn(() => pythonPackageInstall(args, context), context?.executionSignal),
     permission: 'user',
     securityLevel: 'confirm',
     capability: capabilityContract({

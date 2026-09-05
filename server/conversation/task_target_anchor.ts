@@ -283,11 +283,26 @@ function concreteTargetPath(value: unknown): boolean {
   return /^(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|\/[A-Za-z0-9_.-])/u.test(clean);
 }
 
+/** Keep a named search directory separate from the file to discover inside it. */
+function directorySearchReference(text: string): { directory: string; filename: string } | null {
+  const match = text.match(new RegExp(
+    `((?:[A-Za-z]:[\\\\/]|\\\\\\\\)[^\\r\\n，,；;。！？!?"'“”‘’]{1,420}?)` +
+    // i18n-allow: Chinese directory-plus-file instruction parsing; not user-visible copy.
+    `["'”’]?\\s*(?:中|里|内|下)\\s*(?:查找|搜索|寻找|检索)(?:并(?:读取|阅读|查看|打开))?\\s*(?:文件|文档)?\\s*["'“‘]?` +
+    `([^\\\\/\\r\\n，,；;。！？!?"'“”‘’]{1,180}\\.${FILE_EXTENSIONS})`,
+    'iu',
+  ));
+  if (!match) return null;
+  return { directory: match[1].trim(), filename: match[2].trim() };
+}
+
 function explicitFile(text: string): string {
   const clean = primaryTaskText(text);
   // i18n-allow: multilingual user target-correction recognition; not user-visible copy.
   const replacement = clean.match(/(?:而是|应该是|改成|换成|(?<!不)要用|请用|instead(?:\s+use)?|replace(?:\s+it)?\s+with)\s*([^\r\n]{1,240})/iu)?.[1];
   const targetClause = compact(replacement || clean, 500);
+  const directorySearch = directorySearchReference(targetClause);
+  if (directorySearch) return directorySearch.filename;
   // i18n-allow: multilingual explicit filename recognition; not user-visible copy.
   const named = targetClause.match(new RegExp(
     `(?:\u51c6\u786e\u6587\u4ef6\u540d\u662f|\u6587\u4ef6\u540d(?:\u79f0)?\u662f|\u53eb|\u540d\u4e3a|\u540d\u79f0\u662f|(?:exact\\s+)?file\\s*name\\s+is|named|called)\\s*["'“”‘’]?([^"'“”‘’\\r\\n，,；;。！？!?]{1,200}\\.${FILE_EXTENSIONS})`,
@@ -304,7 +319,10 @@ function explicitFile(text: string): string {
 
 function explicitAbsolutePaths(text: string): string[] {
   const clean = primaryTaskText(text);
-  const windowsMatches = clean.match(/(?:[A-Za-z]:[\\/]|~[\\/]|\\\\)[^\r\n，,；;。！？!?"'“”‘’]{1,420}/gu) || [];
+  const directorySearch = directorySearchReference(clean);
+  const windowsMatches = (clean.match(/(?:[A-Za-z]:[\\/]|~[\\/]|\\\\)[^\r\n，,；;。！？!?"'“”‘’]{1,420}/gu) || [])
+    .map(value => directorySearch && value.startsWith(directorySearch.directory) && value.includes(directorySearch.filename)
+      ? directorySearch.directory : value);
   const quotedPosixMatches = [...clean.matchAll(POSIX_QUOTED_PATH_RE)]
     .map(match => match.slice(1).find(Boolean) || '')
     // compact() deliberately collapses whitespace, so reject quoted paths
