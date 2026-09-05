@@ -42,6 +42,8 @@ import {
   sanitizeMcpLogValue,
 } from './public_security';
 import { CN_MCP_MESSAGES } from '../regions/packs/cn/mcp_messages';
+import { attachMcpCallLifecycle, type McpCallLifecycle } from './lifecycle';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
 // Track active transports per session
 const transports: Map<string, { transport: SSEServerTransport; scope: McpCallerScope }> = new Map();
@@ -121,7 +123,7 @@ export function createLumiMcpServer(llmGetters?: {
   getKimi?: () => any;
   getGlm?: () => any;
   getRelay?: () => any;
-}, toolReg?: ToolRegistry, broadcast?: (event: string, data: any) => void, callerScope?: McpCallerScope): McpServer {
+}, toolReg?: ToolRegistry, broadcast?: (event: string, data: any) => void, callerScope?: McpCallerScope, lifecycle?: McpCallLifecycle): McpServer {
   const g = llmGetters || {};
   const tr = toolReg || toolRegistry;
   const bc = broadcast || (() => {});
@@ -191,6 +193,7 @@ export function createLumiMcpServer(llmGetters?: {
   }, {
     capabilities: { tools: {} },
   });
+  if (lifecycle) attachMcpCallLifecycle(mcp, lifecycle);
 
   // Tool: send a chat message to Lumi
   mcp.registerTool(
@@ -308,7 +311,7 @@ export function createLumiMcpServer(llmGetters?: {
           const gOAI = g.getOpenAI || (() => null);
           const gAnt = g.getAnthropic || (() => null);
           const gQw = g.getQwen || (() => null);
-          void (async () => {
+          const extraction = (async () => {
             try {
               const { extractMemories } = await import('../memory/extractor');
               const result = await extractMemories(
@@ -323,6 +326,7 @@ export function createLumiMcpServer(llmGetters?: {
               }
             } catch { /* best-effort */ }
           })();
+          lifecycle?.track(extraction);
         };
 
         const deliverFinalizedChatResponse = async (
@@ -449,7 +453,7 @@ export function createLumiMcpServer(llmGetters?: {
             console.log('[MCP lumi_chat] Timeout — continuing in background');
             bc('mcp:activity', { device: 'xiaozhi', action: 'chat', status: 'timeout' });
             bc('agent:status', { status: 'idle', agentName: 'Lumi' });
-            void responsePromise
+            const background = responsePromise
               .then(backgroundResponse => deliverFinalizedChatResponse(backgroundResponse, true))
               .catch((backgroundErr: any) => {
                 logger.error(`[MCP Tool] background chat failed: ${sanitizeMcpLogValue(backgroundErr?.message || backgroundErr)}`);
@@ -464,6 +468,7 @@ export function createLumiMcpServer(llmGetters?: {
                 });
                 bc('agent:status', { status: 'error', agentName: 'Lumi' });
               });
+            lifecycle?.track(background);
             return {
               content: [{ type: 'text' as const, text: '正在处理中，稍等片刻...' }],
               finalized: false,
@@ -877,6 +882,7 @@ export async function handleMcpSSE(
   req: Request,
   res: Response,
   callerScope?: McpCallerScope,
+  onTransport?: (transport: Transport) => void,
 ) {
   try {
     const scope = callerScope || mcpScopeFromAuthUser(req.user);
@@ -885,6 +891,7 @@ export async function handleMcpSSE(
       return;
     }
     const transport = new SSEServerTransport('/mcp/message', res);
+    onTransport?.(transport);
     transports.set(transport.sessionId, { transport, scope });
 
     res.on('close', () => {

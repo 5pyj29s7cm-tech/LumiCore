@@ -11,6 +11,9 @@ import { deviceRegistry } from "../devices";
 import { mcpManager } from "../mcp/client";
 import { requireAuth } from "../middleware/auth";
 import { mcpScopeFromAuthUser } from "../mcp/auth";
+import { McpCallLifecycle } from '../mcp/lifecycle';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { setImmediate as nextEventLoopTurn } from 'node:timers/promises';
 
 export function setupMcpServer(
   app: express.Express,
@@ -22,7 +25,14 @@ export function setupMcpServer(
     getKimi?: any; getGlm?: any; getRelay?: any;
   },
   __dirname: string,
-) {
+): () => Promise<void> {
+  const lifecycle = new McpCallLifecycle();
+  const transports = new Set<Transport>();
+  const rememberTransport = (transport: Transport) => {
+    transports.add(transport);
+    const previousClose = transport.onclose;
+    transport.onclose = () => { transports.delete(transport); previousClose?.(); };
+  };
   const scopedBroadcast = (scope: NonNullable<ReturnType<typeof mcpScopeFromAuthUser>>) => {
     const room = scope.domain === 'work'
       ? `user:${scope.userId}:org:${scope.orgId}`
@@ -31,27 +41,32 @@ export function setupMcpServer(
   };
 
   app.get('/mcp/sse', requireAuth, (req, res) => {
+    if (!lifecycle.accepting) return res.status(503).json({ error: 'MCP is shutting down' });
     const scope = mcpScopeFromAuthUser(req.user);
     if (!scope) return res.status(401).json({ error: 'Authentication required' });
-    const scopedMcp = createLumiMcpServer(llm, toolRegistry, scopedBroadcast(scope), scope);
-    return handleMcpSSE(scopedMcp, req, res, scope);
+    const scopedMcp = createLumiMcpServer(llm, toolRegistry, scopedBroadcast(scope), scope, lifecycle);
+    return handleMcpSSE(scopedMcp, req, res, scope, rememberTransport);
   });
-  app.post('/mcp/message', requireAuth, (req, res) => handleMcpMessage(req, res));
+  app.post('/mcp/message', requireAuth, (req, res) => {
+    if (!lifecycle.accepting) return res.status(503).json({ error: 'MCP is shutting down' });
+    return handleMcpMessage(req, res);
+  });
 
-  attachMcpWebSocket(server, async (transport, _request, user) => {
+  const inboundSockets = attachMcpWebSocket(server, async (transport, _request, user) => {
+    rememberTransport(transport);
     try {
       const scope = mcpScopeFromAuthUser(user);
       if (!scope) {
         await transport.close();
         return;
       }
-      const scopedMcp = createLumiMcpServer(llm, toolRegistry, scopedBroadcast(scope), scope);
+      const scopedMcp = createLumiMcpServer(llm, toolRegistry, scopedBroadcast(scope), scope, lifecycle);
       await scopedMcp.connect(transport);
       console.log(`[MCP Server] WebSocket client connected: ${transport.sessionId}`);
     } catch (err: any) {
       console.error(`[MCP Server] WebSocket connection error:`, err.message);
     }
-  });
+  }, () => lifecycle.accepting);
 
   console.log('[MCP Server] Lumi MCP server ready at /mcp/sse + /mcp/ws');
 
@@ -70,20 +85,51 @@ export function setupMcpServer(
     domain: 'personal' as const,
     orgId: '',
   };
-  const remoteMcp = createLumiMcpServer(
+  const createRemoteMcp = () => createLumiMcpServer(
     llm,
     toolRegistry,
     scopedBroadcast(remoteScope),
     remoteScope,
+    lifecycle,
   );
   const remoteDevices = mcpManager.getRemoteDevices();
+  const remoteConnections: Array<ReturnType<typeof connectMcpServerToRemote>> = [];
   for (const [name, url] of Object.entries(remoteDevices)) {
     if (!url) continue;
     console.log(`[MCP Server] Connecting to remote device: ${name}`);
-    connectMcpServerToRemote(
-      url as string, remoteMcp, name as string,
+    remoteConnections.push(connectMcpServerToRemote(
+      url as string, createRemoteMcp, name as string,
       () => { deviceRegistry.registerMcpDevice(name as string, 'mcp_remote', { audio: true, video: false, spatial: false, haptic: false, holographic: false }); },
       () => { deviceRegistry.unregisterMcpDevice(name as string); },
-    );
+    ));
   }
+  let shutdownPromise: Promise<void> | undefined;
+  let inboundClosed = false;
+  const shutdownMcp = (): Promise<void> => {
+    lifecycle.stopAdmission();
+    for (const connection of remoteConnections) connection.stop();
+    if (shutdownPromise) return shutdownPromise;
+    const pending = (async () => {
+      await lifecycle.drain();
+      // The SDK queues the JSON-RPC reply after its tool callback settles.
+      // Let those continuations send before beginning the close handshake.
+      await nextEventLoopTurn();
+      await Promise.all([...transports].map(transport => transport.close()));
+      await Promise.all(remoteConnections.map(connection => connection.close()));
+      if (!inboundClosed) {
+        for (const socket of inboundSockets.clients) socket.terminate();
+        await new Promise<void>((resolve, reject) => inboundSockets.close(error => {
+          if (error) reject(error);
+          else { inboundClosed = true; resolve(); }
+        }));
+      }
+    })();
+    shutdownPromise = pending;
+    void pending.catch(() => { shutdownPromise = undefined; });
+    return pending;
+  };
+  server.once('close', () => {
+    void shutdownMcp().catch(() => console.error('[MCP Server] Shutdown did not finish; runtime cleanup remains pending.'));
+  });
+  return shutdownMcp;
 }

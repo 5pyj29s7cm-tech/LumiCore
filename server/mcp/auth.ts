@@ -96,6 +96,7 @@ export function mcpScopeFromAuthUser(user?: AuthUser): McpCallerScope | null {
 
 export function sameMcpScope(left: McpCallerScope, right: McpCallerScope): boolean {
   return left.userId === right.userId
+    && left.role === right.role
     && left.domain === right.domain
     && left.orgId === right.orgId
     && String(left.orgRole || '') === String(right.orgRole || '');

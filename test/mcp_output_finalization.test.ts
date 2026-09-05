@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   runWithTools: vi.fn(),
   synthesizeSpeech: vi.fn(),
+  extractMemories: vi.fn(),
+  autoExtract: false,
 }));
 
 vi.mock('../server/llm/adapter', () => ({
@@ -16,6 +18,8 @@ vi.mock('../server/memory', () => ({
   buildNarrativeChain: vi.fn(() => ''),
 }));
 
+vi.mock('../server/memory/extractor', () => ({ extractMemories: mocks.extractMemories }));
+
 vi.mock('../server/personality', () => {
   const personality = {
     id: 'lumi',
@@ -23,7 +27,7 @@ vi.mock('../server/personality', () => {
     memoryPolicy: {
       retrieveLimit: 5,
       minConfidence: 0,
-      autoExtract: false,
+      get autoExtract() { return mocks.autoExtract; },
     },
     toolPolicy: {
       maxIterations: 5,
@@ -91,6 +95,7 @@ vi.mock('../logger', () => ({
 }));
 
 import { createLumiMcpServer } from '../server/mcp/lumi_server';
+import { McpCallLifecycle } from '../server/mcp/lifecycle';
 import {
   addMemory,
   getDueReminders,
@@ -126,6 +131,8 @@ function falseSuccessRecord() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.autoExtract = false;
+  mocks.extractMemories.mockResolvedValue({ memories: [], reminders: [] });
   mocks.synthesizeSpeech.mockResolvedValue({
     audioBuffer: Buffer.from('safe-audio'),
     format: 'wav',
@@ -133,6 +140,77 @@ beforeEach(() => {
 });
 
 describe('MCP finalized output delivery', () => {
+  it('drains an admitted chat and rejects every registered tool after shutdown admission closes', async () => {
+    let finish!: (value: any) => void;
+    mocks.runWithTools.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const lifecycle = new McpCallLifecycle();
+    const server = createLumiMcpServer(undefined, {} as any, vi.fn(), undefined, lifecycle);
+    const response = getHandler(server, 'lumi_chat')({ message: 'hello' });
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    lifecycle.stopAdmission();
+    let drained = false;
+    const pendingDrain = lifecycle.drain().then(() => { drained = true; });
+    for (const name of Object.keys((server as any)._registeredTools)) {
+      await expect(getHandler(server, name)({})).rejects.toThrow('shutting down');
+    }
+    expect(drained).toBe(false);
+    expect(mocks.runWithTools).toHaveBeenCalledTimes(1);
+    finish({ text: 'Hello.', toolCalls: [], usageRecords: [] });
+    expect(await response).toMatchObject({ finalized: true });
+    await pendingDrain;
+    expect(drained).toBe(true);
+  });
+
+  it('waits for timed-out chat finalization and its later memory write before declaring shutdown drained', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.autoExtract = true;
+      let finishResponse!: (value: any) => void;
+      let finishExtraction!: (value: any) => void;
+      mocks.runWithTools.mockImplementationOnce(() => new Promise(resolve => { finishResponse = resolve; }));
+      mocks.extractMemories.mockImplementationOnce(() => new Promise(resolve => { finishExtraction = resolve; }));
+      const lifecycle = new McpCallLifecycle();
+      const broadcast = vi.fn();
+      const server = createLumiMcpServer(undefined, {} as any, broadcast, undefined, lifecycle);
+      const pending = getHandler(server, 'lumi_chat')({ message: 'Remember synthetic blue.' });
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(await pending).toMatchObject({ finalized: false, reason: 'background_processing' });
+      lifecycle.stopAdmission();
+      let drained = false;
+      const pendingDrain = lifecycle.drain().then(() => { drained = true; });
+      await Promise.resolve();
+      expect(drained).toBe(false);
+      finishResponse({ text: 'I will remember blue.', toolCalls: [], usageRecords: [] });
+      await vi.waitFor(() => expect(finishExtraction).toBeTypeOf('function'));
+      await vi.waitFor(() => expect(broadcast.mock.calls.some(([event]) => event === 'mcp:proactive')).toBe(true));
+      expect(drained).toBe(false);
+      expect(addMemory).not.toHaveBeenCalled();
+      finishExtraction({ memories: [{ type: 'fact', content: 'Synthetic blue', keywords: ['blue'], confidence: 1 }], reminders: [] });
+      await pendingDrain;
+      expect(addMemory).toHaveBeenCalledWith(expect.objectContaining({ content: 'Synthetic blue' }), expect.any(Object));
+      expect(drained).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('finishes draining a failed background chat without retaining a phantom active call', async () => {
+    vi.useFakeTimers();
+    try {
+      let fail!: (reason: Error) => void;
+      mocks.runWithTools.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+      const lifecycle = new McpCallLifecycle();
+      const broadcast = vi.fn();
+      const server = createLumiMcpServer(undefined, {} as any, broadcast, undefined, lifecycle);
+      const pending = getHandler(server, 'lumi_chat')({ message: 'hello' });
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(await pending).toMatchObject({ finalized: false });
+      lifecycle.stopAdmission();
+      const pendingDrain = lifecycle.drain();
+      fail(new Error('synthetic adapter failure'));
+      await pendingDrain;
+      expect(broadcast).toHaveBeenCalledWith('agent:response', expect.objectContaining({ reason: 'mcp_operation_failed' }));
+    } finally { vi.useRealTimers(); }
+  });
+
   it('passes a deny-by-default remote boundary into lumi_chat tool execution', async () => {
     mocks.runWithTools.mockResolvedValue({
       text: 'safe remote answer',
