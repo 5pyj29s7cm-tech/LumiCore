@@ -76,7 +76,7 @@ export function createWeChatRoutes(
         // Persist the login credentials
         updateMessagingConfig({ wechat: conf });
         Object.assign(config, conf);
-        adapter.stopPolling();
+        await adapter.stopPolling();
         adapter.reload(config);
         // Start polling in background
         startWeChatPolling(adapter, config, options);
@@ -179,12 +179,12 @@ export function createWeChatRoutes(
       const { botToken, botId } = req.body;
       const updated = updateMessagingConfig({ wechat: { botToken, botId, baseUrl: 'https://ilinkai.weixin.qq.com' } });
       Object.assign(config, updated.wechat);
-      adapter.stopPolling();
+      await adapter.stopPolling();
       adapter.reload(config);
       if (updated.wechat.enabled) {
         startWeChatPolling(adapter, config, options);
       } else {
-        adapter.stopPolling();
+        await adapter.stopPolling();
       }
       res.json({ success: true, configured: updated.wechat.enabled });
     } catch (err: any) {

@@ -11,6 +11,7 @@ import { messagingConnectionManager } from "../messaging/connections";
 import type { MessagingRouteOptions } from "../messaging/routes";
 import { createDesktopRelay } from "../socket/desktop_relay";
 import { desktopWechatWatchService } from "../messaging/desktop_wechat_watch";
+import { getActiveWeChatAdapter } from '../messaging/wechat_runtime';
 
 export function setupMessaging(
   apiRouter: Router,
@@ -107,7 +108,10 @@ export function startMessagingConnections(): Promise<void> {
   return messagingConnectionManager.start();
 }
 
-export function stopMessagingConnections(): Promise<void> {
-  desktopWechatWatchService.stop();
-  return messagingConnectionManager.stop();
+export async function stopMessagingConnections(): Promise<void> {
+  await Promise.all([
+    desktopWechatWatchService.stop(),
+    getActiveWeChatAdapter()?.shutdown(),
+    messagingConnectionManager.stop(),
+  ]);
 }

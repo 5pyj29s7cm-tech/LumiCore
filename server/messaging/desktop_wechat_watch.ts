@@ -331,6 +331,8 @@ export class DesktopWechatWatchService {
   private dependencies: DesktopWechatWatchDependencies | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private activeUsers = new Set<string>();
+  private activeScans = new Set<Promise<void>>();
+  private stopped = false;
   private runtime = new Map<string, DesktopWechatWatchRuntimeStatus>();
 
   configure(dependencies: DesktopWechatWatchDependencies): void {
@@ -338,16 +340,18 @@ export class DesktopWechatWatchService {
   }
 
   start(): void {
+    this.stopped = false;
     if (this.timer) return;
     this.timer = setInterval(() => { void this.runLoop(); }, LOOP_INTERVAL_MS);
     if (typeof (this.timer as any).unref === 'function') (this.timer as any).unref();
     void this.runLoop();
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
-    this.activeUsers.clear();
+    while (this.activeScans.size) await Promise.all([...this.activeScans]);
   }
 
   getConfig(userId: string): DesktopWechatWatchConfig {
@@ -392,6 +396,7 @@ export class DesktopWechatWatchService {
   }
 
   async scanNow(userId: string): Promise<ReturnType<DesktopWechatWatchService['status']>> {
+    if (this.stopped) throw new Error('Desktop WeChat watch is stopping.');
     const store = readStore();
     const retry = store.events
       .filter(event => event.userId === userId && event.status === 'attention_required' && !event.draft)
@@ -474,6 +479,7 @@ export class DesktopWechatWatchService {
   }
 
   private async runLoop(): Promise<void> {
+    if (this.stopped) return;
     const store = readStore();
     const enabledUsers = Object.entries(store.configs)
       .filter(([, config]) => normalizeDesktopWechatWatchConfig(config).enabled)
@@ -487,7 +493,15 @@ export class DesktopWechatWatchService {
     }
   }
 
-  private async scanUser(userId: string, manual: boolean): Promise<void> {
+  private scanUser(userId: string, manual: boolean): Promise<void> {
+    if (this.stopped) return Promise.resolve();
+    const task = this.performScanUser(userId, manual);
+    this.activeScans.add(task);
+    void task.then(() => this.activeScans.delete(task), () => this.activeScans.delete(task));
+    return task;
+  }
+
+  private async performScanUser(userId: string, manual: boolean): Promise<void> {
     if (this.activeUsers.has(userId)) return;
     const dependencies = this.requireDependencies();
     const config = this.getConfig(userId);

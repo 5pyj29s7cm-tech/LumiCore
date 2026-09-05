@@ -102,6 +102,8 @@ export class WeChatClawBotAdapter implements MessageAdapter {
   private processedMessageIds = new Set<string>();
   private pollingRun: { value: boolean } | null = null;
   private pollingAbort: AbortController | null = null;
+  private pollingTasks = new Set<Promise<void>>();
+  private shuttingDown = false;
   private onMessage: ((msg: IncomingMessage) => Promise<OutgoingMessage | null>) | null = null;
   private contextTokens = new Map<string, string>();
   private suggestedLongPollMs = 35_000;
@@ -249,6 +251,7 @@ export class WeChatClawBotAdapter implements MessageAdapter {
 
   /** Start long-polling loop. Calls onMessage callback for each incoming message. */
   async startPolling(onMessage: (msg: IncomingMessage) => Promise<OutgoingMessage | null>): Promise<void> {
+    if (this.shuttingDown) return;
     this.onMessage = onMessage;
     if (this.pollingRun?.value) return;
 
@@ -258,7 +261,7 @@ export class WeChatClawBotAdapter implements MessageAdapter {
     this.health.lastError = null;
 
     // Session announcement is best-effort and must not delay the first receive poll.
-    void this.activate();
+    this.trackPollingTask(this.activate());
 
     const poll = async () => {
       while (running.value) {
@@ -281,6 +284,7 @@ export class WeChatClawBotAdapter implements MessageAdapter {
 
           if (!res.ok) throw new Error(`getUpdates HTTP ${res.status}`);
           const data: GetUpdatesResponse = await res.json();
+          if (!running.value) break;
           this.health.lastPollAt = new Date().toISOString();
           if (Number.isFinite(data.longpolling_timeout_ms) && Number(data.longpolling_timeout_ms) > 0) {
             this.suggestedLongPollMs = Number(data.longpolling_timeout_ms);
@@ -302,6 +306,7 @@ export class WeChatClawBotAdapter implements MessageAdapter {
           console.log('[WeChat] Poll response — ret:', ret, 'messages:', messages.length);
           if (messages.length > 0) {
             for (const msg of messages) {
+              if (!running.value) break;
               const parsed = this.parseEvent(msg);
               if (parsed) console.log('[WeChat] Received message', parsed.messageId, 'type:', msg.message_type);
               if (parsed && this.onMessage) {
@@ -311,6 +316,7 @@ export class WeChatClawBotAdapter implements MessageAdapter {
                 }
                 this.health.lastMessageAt = new Date().toISOString();
                 const reply = await this.onMessage(parsed);
+                if (!running.value) break;
                 if (reply) {
                   // Must carry the context_token from the inbound message to the outbound reply
                   (reply as any).context_token = (parsed.raw as any)?.context_token || msg.context_token || '';
@@ -322,6 +328,7 @@ export class WeChatClawBotAdapter implements MessageAdapter {
               }
             }
           }
+          if (!running.value) break;
           if (typeof data.get_updates_buf === 'string') {
             this.cursor = data.get_updates_buf;
             this.processedMessageIds.clear();
@@ -345,17 +352,29 @@ export class WeChatClawBotAdapter implements MessageAdapter {
       if (this.pollingRun === running) this.pollingRun = null;
     };
 
-    void poll();
+    this.trackPollingTask(poll());
   }
 
-  /** Stop long-polling loop */
-  stopPolling(): void {
+  private trackPollingTask(task: Promise<void>): void {
+    this.pollingTasks.add(task);
+    void task.then(() => this.pollingTasks.delete(task), () => this.pollingTasks.delete(task));
+  }
+
+  /** Stop receiving, then wait for accepted callbacks and cursor writes. */
+  async stopPolling(): Promise<void> {
     if (this.pollingRun) {
       this.pollingRun.value = false;
       this.pollingRun = null;
     }
     this.pollingAbort?.abort();
     this.pollingAbort = null;
+    while (this.pollingTasks.size) await Promise.all([...this.pollingTasks]);
+  }
+
+  /** Runtime shutdown cannot be undone by a late configuration response. */
+  shutdown(): Promise<void> {
+    this.shuttingDown = true;
+    return this.stopPolling();
   }
 
   // ── Event Parsing ──
