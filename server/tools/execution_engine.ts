@@ -571,10 +571,18 @@ export async function executeToolCall(
     ? { allowed: false, arguments: serverPreflight.arguments, reason: desktopAuthorization.reason }
     : serverPreflight;
   const executionArguments = preflight.arguments || callerArguments;
+  // Allocate a durable action identity only after all argument binding. The
+  // task-level key is not a tool-call key: distinct steps may use one tool.
+  const resolvedIdempotencyKey = preflight.allowed && input.context?.resolveToolIdempotencyKey
+    ? input.context.resolveToolIdempotencyKey({ id: input.id, name: input.name, arguments: executionArguments })
+    : input.context?.idempotencyKey;
+  if (preflight.allowed && input.context?.resolveToolIdempotencyKey && !resolvedIdempotencyKey?.trim()) {
+    throw new Error('The server did not allocate a tool action identity.');
+  }
   const receiptArguments = sanitizeReceiptValue(executionArguments) as Record<string, any>;
   const evidenceBuilder = (input.registry as any)?.buildEvidenceRecord;
   const record: ToolExecutionRecord = {
-    id: input.id,
+    id: input.context?.resolveToolIdempotencyKey ? resolvedIdempotencyKey : input.id,
     taskId: input.context?.taskId,
     turnId: input.context?.turnId,
     requestId: input.context?.requestId,
@@ -597,7 +605,7 @@ export async function executeToolCall(
         }
       : undefined,
   };
-  record.idempotencyKey = input.context?.idempotencyKey || toolRecordIdempotencyKey(record);
+  record.idempotencyKey = resolvedIdempotencyKey || toolRecordIdempotencyKey(record);
   const finalizeRecord = (): ToolExecutionRecord => {
     record.envelope = buildToolExecutionEnvelope(record, {
       taskId: input.context?.taskId,
@@ -630,7 +638,7 @@ export async function executeToolCall(
 
   try {
     input.context?.onToolStart?.({
-      id: input.id,
+      id: record.id,
       name: input.name,
       arguments: receiptArguments,
     });
@@ -645,8 +653,9 @@ export async function executeToolCall(
       executionArguments,
       {
         ...(input.context || {}),
+        ...(resolvedIdempotencyKey ? { idempotencyKey: resolvedIdempotencyKey } : {}),
         onAdapterStart: async call => {
-          await input.context?.onAdapterStart?.(call);
+          await input.context?.onAdapterStart?.({ ...call, idempotencyKey: call.idempotencyKey || record.idempotencyKey });
           adapterStarted = true;
           record.adapterStarted = true;
         },

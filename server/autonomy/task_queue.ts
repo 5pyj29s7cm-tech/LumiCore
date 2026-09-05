@@ -1,6 +1,8 @@
 /** Durable autonomous task queue for Lumi's unattended background work. */
 import { randomUUID } from 'crypto';
-import { readDB, writeDB } from '../../db_layer';
+import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
+import type { ToolExecutionRecord } from '../tools/types';
+import { sanitizeDiagnosticValue } from '../client/diagnostic_sanitizer';
 import type { PersistedCapabilityExecutionPlan } from '../conversation/action_ledger';
 import {
   diagnoseDurableTaskFailure,
@@ -28,6 +30,18 @@ export interface AutonomousTaskCheckpoint {
   receipts?: DurableTaskReceiptSnapshot[];
   detail?: string;
   updatedAt: string;
+}
+
+export interface AutonomousTaskAction {
+  id: string;
+  attempt: number;
+  callId?: string;
+  name: string;
+  argumentsDigest: string;
+  mayHaveSideEffects: boolean;
+  state: 'prepared' | 'started' | 'settled';
+  /** Bounded, credential-redacted receipt; raw inputs are never stored here. */
+  record?: ToolExecutionRecord;
 }
 
 export interface AutonomousTask {
@@ -70,6 +84,7 @@ export interface AutonomousTask {
   nextAttemptAt?: string;
   recovery?: DurableTaskRecoveryState;
   checkpoint?: AutonomousTaskCheckpoint;
+  actions?: AutonomousTaskAction[];
   executionPlan?: PersistedCapabilityExecutionPlan;
   /** Unified terminal acceptance receipt. Completed tasks require a verified receipt. */
   terminalReceipt?: TaskTerminalReceipt;
@@ -91,6 +106,14 @@ let queue: AutonomousTask[] = [];
 let history: AutonomousTask[] = [];
 let hydrated = false;
 const cancellationRequests = new Set<string>();
+// Expiry requests cooperative shutdown; it never proves a local executor has
+// released its handler. This process fence outlives the wall-clock lease.
+const activeExecutors = new Map<string, string>();
+const executorStops = new Map<string, (reason: string) => void>();
+
+function notifyExecutorStop(id: string, reason: string): void {
+  try { executorStops.get(id)?.(reason); } catch { /* Stopping observers cannot undo a durable request. */ }
+}
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -111,9 +134,43 @@ function hasLiveLease(task: AutonomousTask, leaseId?: string): boolean {
     && new Date(task.leaseExpiresAt!).getTime() > Date.now();
 }
 
+function ownsSettlement(task: AutonomousTask, leaseId?: string): boolean {
+  if (!leaseId) return true;
+  return (task.status === 'running' || task.status === 'pausing')
+    && task.leaseId === leaseId
+    && (activeExecutors.get(task.id) === leaseId
+      || Boolean(task.leaseExpiresAt && Date.parse(task.leaseExpiresAt) > Date.now()));
+}
+
+function recoveryReceipts(task: AutonomousTask): DurableTaskReceiptSnapshot[] {
+  const receipts = new Map((task.checkpoint?.receipts || []).map(receipt => [receipt.id, receipt]));
+  for (const action of task.actions || []) {
+    if (action.state === 'settled' && action.record) {
+      for (const receipt of snapshotDurableToolRecords([action.record])) receipts.set(receipt.id, receipt);
+    } else if (action.state === 'started' && action.mayHaveSideEffects) {
+      receipts.set(action.id, {
+        id: action.id, name: action.name, idempotencyKey: action.id,
+        status: 'unknown_outcome', verificationStatus: 'unverified', operation: 'unknown',
+        sideEffects: [{ type: 'local_write', reversible: false }], resultDigest: '',
+        error: 'The adapter started without a durable terminal receipt.', recordedAt: task.updatedAt || task.createdAt,
+      });
+    }
+  }
+  return [...receipts.values()];
+}
+
+function resumeSafety(task: AutonomousTask) {
+  const receipts = recoveryReceipts(task);
+  const records = new Set((task.actions || [])
+    .filter(action => action.state === 'settled' && action.record)
+    .map(action => action.record!.id));
+  return evaluateDurableResumeSafety(receipts, receipts.every(receipt => records.has(receipt.id)));
+}
+
 function cloneTask(task: AutonomousTask): AutonomousTask {
   return {
     ...task,
+    actions: task.actions ? structuredClone(task.actions) : undefined,
     checkpoint: task.checkpoint ? {
       ...task.checkpoint,
       receiptIds: [...(task.checkpoint.receiptIds || [])],
@@ -156,7 +213,7 @@ function normalizeStoredTask(value: unknown): AutonomousTask | null {
 
 export function recoverPersistedTask(task: AutonomousTask, recoveredAt = nowIso()): AutonomousTask {
   const recovered = cloneTask(task);
-  if (recovered.status === 'running') {
+  if (recovered.status === 'running' || recovered.status === 'pausing' || recovered.status === 'paused') {
     if (recovered.cancelRequestedAt) {
       recovered.status = 'cancelled';
       recovered.completedAt = recoveredAt;
@@ -174,7 +231,8 @@ export function recoverPersistedTask(task: AutonomousTask, recoveredAt = nowIso(
       clearLease(recovered);
       return recovered;
     }
-    if (recovered.pauseRequestedAt) {
+    if ((recovered.pauseRequestedAt || recovered.status === 'pausing' || recovered.status === 'paused')
+      && resumeSafety(recovered).allowed) {
       recovered.status = 'paused';
       recovered.pausedAt = recoveredAt;
       recovered.pauseRequestedAt = undefined;
@@ -183,14 +241,14 @@ export function recoverPersistedTask(task: AutonomousTask, recoveredAt = nowIso(
       return recovered;
     }
     const nextRecoveryCount = (recovered.recoveryCount || 0) + 1;
-    const resumeSafety = evaluateDurableResumeSafety(recovered.checkpoint?.receipts, false);
-    if (!resumeSafety.allowed || nextRecoveryCount > 2) {
-      const reason = !resumeSafety.allowed
-        ? resumeSafety.reason
+    const safety = resumeSafety(recovered);
+    if (!safety.allowed || nextRecoveryCount > 2) {
+      const reason = !safety.allowed
+        ? safety.reason
         : 'Autonomous task exceeded its restart recovery budget.';
       const diagnosis = diagnoseDurableTaskFailure({
         error: reason,
-        receiptSnapshots: recovered.checkpoint?.receipts,
+        receiptSnapshots: recoveryReceipts(recovered),
         sideEffectClass: recovered.executionPlan?.risk.sideEffectClass,
         attempt: recovered.attempt || 0,
         recoveryCount: nextRecoveryCount,
@@ -207,7 +265,7 @@ export function recoverPersistedTask(task: AutonomousTask, recoveredAt = nowIso(
       recovered.updatedAt = recoveredAt;
       recovered.recoveryCount = nextRecoveryCount;
       recovered.lastRecoveredAt = recoveredAt;
-      recovered.recovery = updateDurableTaskRecovery(recovered.recovery, diagnosis, recovered.checkpoint?.receipts);
+      recovered.recovery = updateDurableTaskRecovery(recovered.recovery, diagnosis, recoveryReceipts(recovered));
       recovered.terminalReceipt = buildTaskTerminalReceipt({
         taskId: recovered.id,
         runtime: 'autonomous',
@@ -228,13 +286,6 @@ export function recoverPersistedTask(task: AutonomousTask, recoveredAt = nowIso(
     clearLease(recovered);
     return recovered;
   }
-  if (recovered.status === 'pausing') {
-    recovered.status = 'paused';
-    recovered.pausedAt = recoveredAt;
-    recovered.pauseRequestedAt = undefined;
-    recovered.updatedAt = recoveredAt;
-    clearLease(recovered);
-  }
   return recovered;
 }
 
@@ -248,8 +299,119 @@ function persist(): void {
   }
 }
 
+/** Admission/terminal lifecycle barriers may never use best-effort persistence. */
+export async function persistAutonomousTaskQueue(): Promise<void> {
+  const db = readDB();
+  db.autonomousTasks = [...queue, ...history.slice(-MAX_HISTORY)].map(cloneTask);
+  writeDB(db);
+  await flushDBOrThrow();
+}
+
+export function registerAutonomousTaskExecutor(id: string, leaseId: string, onStop?: (reason: string) => void): boolean {
+  const task = findTask(id);
+  if (!task || !hasLiveLease(task, leaseId) || activeExecutors.has(id)) return false;
+  activeExecutors.set(id, leaseId);
+  if (onStop) executorStops.set(id, onStop);
+  return true;
+}
+
+export function reconcileExpiredAutonomousTasks(at = Date.now()): number {
+  ensureHydrated();
+  let changed = 0;
+  for (const task of [...queue]) {
+    if (!['running', 'pausing'].includes(task.status) || activeExecutors.has(task.id)) continue;
+    if (task.leaseExpiresAt && Date.parse(task.leaseExpiresAt) > at) continue;
+    const recovered = recoverPersistedTask(task, new Date(at).toISOString());
+    Object.assign(task, recovered);
+    if (isTerminal(task.status)) moveToHistory(task);
+    changed += 1;
+  }
+  if (changed) persist();
+  return changed;
+}
+
+export function releaseAutonomousTaskExecutor(id: string, leaseId: string): void {
+  if (activeExecutors.get(id) !== leaseId) return;
+  activeExecutors.delete(id);
+  executorStops.delete(id);
+  reconcileExpiredAutonomousTasks();
+}
+
+export function prepareAutonomousTaskAction(
+  id: string, leaseId: string,
+  call: Pick<AutonomousTaskAction, 'callId' | 'name' | 'argumentsDigest' | 'mayHaveSideEffects'>,
+): string {
+  const task = findTask(id);
+  if (!task || !hasLiveLease(task, leaseId) || task.cancelRequestedAt || task.pauseRequestedAt) {
+    throw new Error('Autonomous action admission no longer owns a live task lease.');
+  }
+  task.actions ||= [];
+  if (task.actions.some(action => action.attempt !== task.attempt && action.mayHaveSideEffects
+    && action.argumentsDigest === call.argumentsDigest && action.name === call.name && action.state !== 'prepared')) {
+    throw new Error('A prior autonomous side effect already owns this exact input; reuse its receipt or reconcile its result.');
+  }
+  const existing = call.callId && task.actions.find(action => (
+    action.attempt === task.attempt && action.callId === call.callId
+  ));
+  if (existing) {
+    if (existing.name !== call.name || existing.argumentsDigest !== call.argumentsDigest) {
+      throw new Error('An autonomous action identity was reused for different input.');
+    }
+    return existing.id;
+  }
+  if (task.actions.length >= 40) throw new Error('Autonomous task reached its durable action limit.');
+  const actionId = `${task.idempotencyKey || task.id}:action:${task.actions.length + 1}`;
+  task.actions.push({ ...call, id: actionId, attempt: task.attempt || 0, state: 'prepared' });
+  task.updatedAt = nowIso();
+  return actionId;
+}
+
+export async function startAutonomousTaskAction(id: string, leaseId: string, actionId: string): Promise<void> {
+  const task = findTask(id);
+  const action = task?.actions?.find(item => item.id === actionId);
+  if (!task || !action || !hasLiveLease(task, leaseId) || task.cancelRequestedAt || task.pauseRequestedAt) {
+    throw new Error('Autonomous adapter admission no longer owns its live action.');
+  }
+  action.state = 'started';
+  task.updatedAt = nowIso();
+  await persistAutonomousTaskQueue();
+  // A cancellation or expiry may arrive while SQLite is acknowledging entry.
+  // Keep its conservative started fence but never dispatch the handler then.
+  const current = findTask(id);
+  if (!current || !hasLiveLease(current, leaseId) || current.cancelRequestedAt || current.pauseRequestedAt
+    || !current.actions?.some(item => item.id === actionId && item.state === 'started')) {
+    throw new Error('Autonomous adapter admission was revoked while persisting its start.');
+  }
+}
+
+export async function settleAutonomousTaskAction(id: string, leaseId: string, record: ToolExecutionRecord): Promise<void> {
+  const task = findTask(id);
+  if (!task || !ownsSettlement(task, leaseId)) throw new Error('Autonomous terminal receipt lost its execution owner.');
+  const action = task.actions?.find(item => item.id === record.idempotencyKey);
+  if (!action) return; // A preflight denial did not reserve an adapter action.
+  if (action.name !== record.name) throw new Error('Autonomous terminal receipt action mismatch.');
+  // Keep the bounded canonical receipt already redacted by the tool engine.
+  // Oversized receipts remain unknown rather than silently losing replay data.
+  const stored = sanitizeDiagnosticValue(structuredClone(record));
+  if (JSON.stringify(stored).length > 64_000) throw new Error('Autonomous terminal receipt exceeds its durable limit.');
+  action.record = stored;
+  action.state = 'settled';
+  task.updatedAt = nowIso();
+  task.checkpoint = {
+    phase: 'tool_execution', updatedAt: task.updatedAt,
+    receiptIds: [...new Set([...(task.checkpoint?.receiptIds || []), ...(record.id ? [record.id] : [])])],
+    receipts: recoveryReceipts(task),
+  };
+  await persistAutonomousTaskQueue();
+}
+
+export function getAutonomousTaskPriorRecords(task: AutonomousTask): ToolExecutionRecord[] {
+  return (task.actions || []).flatMap(action => action.state === 'settled' && action.record ? [structuredClone(action.record)] : []);
+}
+
 export function hydrateAutonomousTasksFromDb(force = false): number {
   if (hydrated && !force) return 0;
+  if (activeExecutors.size > 0) return 0;
   let db: any;
   try {
     db = readDB();
@@ -331,7 +493,14 @@ export function claimAutonomousTask(id: string, input: AutonomousTaskLeaseInput 
   const task = findTask(id);
   if (!task || task.status === 'paused' || task.status === 'pausing' || isTerminal(task.status)) return null;
   if (!isDurableTaskReady(task.nextAttemptAt)) return null;
+  if (activeExecutors.has(id)) return null;
   if (task.cancelRequestedAt) return markCancelled(id);
+  if (task.status === 'pending' && !resumeSafety(task).allowed) {
+    Object.assign(task, recoverPersistedTask({ ...task, status: 'running' }));
+    if (isTerminal(task.status)) moveToHistory(task);
+    persist();
+    return null;
+  }
   const now = Date.now();
   const leaseExpired = !task.leaseExpiresAt || new Date(task.leaseExpiresAt).getTime() <= now;
   if (task.status === 'running' && !leaseExpired) return null;
@@ -357,7 +526,7 @@ export function markRunning(id: string): AutonomousTask | null {
 export function heartbeatAutonomousTask(id: string, leaseId: string, durationMs = DEFAULT_LEASE_MS): AutonomousTask | null {
   ensureHydrated();
   const task = findTask(id);
-  if (!task || task.status !== 'running' || task.leaseId !== leaseId) return null;
+  if (!task || !['running', 'pausing'].includes(task.status) || task.leaseId !== leaseId) return null;
   const now = Date.now();
   if (task.leaseExpiresAt && new Date(task.leaseExpiresAt).getTime() <= now) return null;
   task.heartbeatAt = new Date(now).toISOString();
@@ -374,7 +543,7 @@ export function checkpointAutonomousTask(
 ): AutonomousTask | null {
   ensureHydrated();
   const task = findTask(id);
-  if (!task || !hasLiveLease(task, leaseId)) return null;
+  if (!task || !ownsSettlement(task, leaseId)) return null;
   const timestamp = nowIso();
   task.checkpoint = {
     ...checkpoint,
@@ -486,7 +655,12 @@ export function recordAutonomousTaskFailure(
   if (!hasLiveLease(task, leaseId)) return null;
   if (isTaskCancellationRequested(id)) return markCancelled(id, compactFailure(input.error));
   if (task.pauseRequestedAt) return markPaused(id);
-  const receipts = input.receiptSnapshots || snapshotDurableToolRecords(input.toolRecords || []);
+  // The execution ledger is authoritative even if the callback failed before
+  // the caller could append its record to the turn-local tool list.
+  const receiptsById = new Map((input.receiptSnapshots || snapshotDurableToolRecords(input.toolRecords || []))
+    .map(receipt => [receipt.id, receipt]));
+  for (const receipt of recoveryReceipts(task)) receiptsById.set(receipt.id, receipt);
+  const receipts = [...receiptsById.values()];
   const diagnosis = diagnoseDurableTaskFailure({
     ...input,
     receiptSnapshots: receipts,
@@ -547,6 +721,7 @@ export function requestPauseAutonomousTask(id: string, userId?: string): Autonom
     task.status = 'pausing';
   }
   persist();
+  notifyExecutorStop(id, 'Autonomous task paused by user');
   return cloneTask(task);
 }
 
@@ -554,6 +729,7 @@ export function markPaused(id: string): AutonomousTask | null {
   ensureHydrated();
   const task = findTask(id);
   if (!task || isTerminal(task.status)) return task ? cloneTask(task) : null;
+  if (task.cancelRequestedAt || cancellationRequests.has(id)) return markCancelled(id);
   const timestamp = nowIso();
   task.status = 'paused';
   task.pausedAt = timestamp;
@@ -568,6 +744,13 @@ export function resumeAutonomousTask(id: string, userId?: string): AutonomousTas
   ensureHydrated();
   const task = findTask(id, userId);
   if (!task || task.status !== 'paused') return null;
+  if (task.cancelRequestedAt || cancellationRequests.has(id)) return markCancelled(id);
+  if (!resumeSafety(task).allowed) {
+    Object.assign(task, recoverPersistedTask(task));
+    if (isTerminal(task.status)) moveToHistory(task);
+    persist();
+    return cloneTask(task);
+  }
   task.status = 'pending';
   task.terminalReceipt = undefined;
   task.pausedAt = undefined;
@@ -592,6 +775,7 @@ export function cancelTask(id: string, userId?: string): boolean {
     task.updatedAt = task.cancelRequestedAt;
     cancellationRequests.add(id);
     persist();
+    notifyExecutorStop(id, 'Autonomous task cancelled by user');
     return true;
   }
   markCancelled(id);
@@ -665,6 +849,8 @@ export function resetAutonomousTaskQueueForTest(options: { clearPersisted?: bool
   queue = [];
   history = [];
   cancellationRequests.clear();
+  activeExecutors.clear();
+  executorStops.clear();
   hydrated = options.markHydrated === true;
   if (options.clearPersisted) persist();
 }

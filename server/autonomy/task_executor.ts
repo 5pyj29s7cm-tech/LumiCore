@@ -16,7 +16,16 @@ import {
   markPaused,
   requestPauseAutonomousTask,
   recordAutonomousTaskFailure,
+  getAutonomousTaskPriorRecords,
+  persistAutonomousTaskQueue,
+  prepareAutonomousTaskAction,
+  reconcileExpiredAutonomousTasks,
+  registerAutonomousTaskExecutor,
+  releaseAutonomousTaskExecutor,
+  settleAutonomousTaskAction,
+  startAutonomousTaskAction,
 } from './task_queue';
+import { toolExecutionInputDigests } from '../tools/execution_engine';
 import { getGateConfig, isAutonomousWorkAllowed, recordAutonomousTokens } from './safety_gate';
 import { runWithTools } from '../llm/adapter';
 import { toolRegistry, type ToolRegistry } from '../tools/registry';
@@ -30,7 +39,7 @@ import { formatLumiConstitutionForPrompt } from '../personality/constitution';
 import { getPlan, updatePlan, updatePlanStep } from './planner';
 import { createDesktopRelay } from '../socket/desktop_relay';
 import type { PlanScope } from './planner';
-import { isRealtimeUserActive } from './foreground_activity';
+import { createRealtimeVoicePrioritySignal, isRealtimeUserActive } from './foreground_activity';
 import { finalizeLumiResponse } from '../cognition/result_finalizer';
 import { finalizeExecutionForOutboundDelivery } from '../cognition/execution_guard_recovery';
 import {
@@ -578,6 +587,8 @@ export async function executeNextAutonomousTask(
   if (userId && isRealtimeUserActive(userId)) {
     return { executed: false, result: 'Live user voice session has priority' };
   }
+  // Expiry is reclaimable only after the prior local executor has settled.
+  if (reconcileExpiredAutonomousTasks()) await persistAutonomousTaskQueue();
   // Don't start a new task if one is already running
   if (getRunningTask(userId)) {
     return { executed: false, result: 'Task already running' };
@@ -595,18 +606,28 @@ export async function executeNextAutonomousTask(
   const running = markRunning(task.id);
   if (!running) return { executed: false };
   if (!running.leaseId) return { executed: false, taskId: task.id, result: 'Task lease was not created' };
+  const executionAbort = new AbortController();
+  const abortExecution = (reason: string) => {
+    if (!executionAbort.signal.aborted) executionAbort.abort(new Error(reason));
+  };
+  if (!registerAutonomousTaskExecutor(task.id, running.leaseId, abortExecution)) return { executed: false };
+  const voicePriority = createRealtimeVoicePrioritySignal(task.userId);
+  const onVoicePriority = () => abortExecution('Live user voice session has priority');
+  voicePriority.signal.addEventListener('abort', onVoicePriority, { once: true });
+  if (voicePriority.signal.aborted) onVoicePriority();
   let leaseLost = false;
   const leaseHeartbeat = setInterval(() => {
     const renewed = heartbeatAutonomousTask(task.id, running.leaseId!);
     if (!renewed) {
       leaseLost = true;
+      abortExecution('Autonomous task lease expired');
       clearInterval(leaseHeartbeat);
     }
   }, 20_000);
   if (typeof (leaseHeartbeat as any).unref === 'function') (leaseHeartbeat as any).unref();
   markLinkedPlanRunning(running);
   let releaseDesktopControlLease = () => undefined;
-  const toolLedger: ToolExecutionRecord[] = [];
+  const toolLedger: ToolExecutionRecord[] = getAutonomousTaskPriorRecords(running);
   let sideEffectClass = running.executionPlan?.risk.sideEffectClass;
 
   const taskScope = planScopeForTask(running);
@@ -680,6 +701,7 @@ export async function executeNextAutonomousTask(
         || isTaskPauseRequested(task.id, task.userId)
         || isRealtimeUserActive(task.userId)
         || leaseLost,
+      executionSignal: executionAbort.signal,
       autonomous: true,
       localExecution: isLocalAdminAuthorizedSelfImprovementTask(
         taskScope,
@@ -688,6 +710,21 @@ export async function executeNextAutonomousTask(
       ),
       source: 'autonomous',
       idempotencyKey: running.idempotencyKey,
+      priorToolRecords: getAutonomousTaskPriorRecords(running),
+      resolveToolIdempotencyKey: call => {
+        const capability = toolRegistry.getCapabilityManifestEntry(call.name, toolPolicy);
+        const mayHaveSideEffects = !capability || !['observe', 'test'].includes(capability.operation)
+          || capability.sideEffects.some(effect => !['none', 'local_read', 'network_read'].includes(effect.type));
+        return prepareAutonomousTaskAction(running.id, running.leaseId!, {
+          callId: call.id, name: call.name,
+          argumentsDigest: toolExecutionInputDigests(call.arguments).argumentsDigest,
+          mayHaveSideEffects,
+        });
+      },
+      onAdapterStart: async call => {
+        if (!call.idempotencyKey) throw new Error('Autonomous adapter is missing its action identity.');
+        await startAutonomousTaskAction(running.id, running.leaseId!, call.idempotencyKey);
+      },
     }, { ownerUserId: task.userId, taskId: running.id });
 
     const messages = [
@@ -695,6 +732,7 @@ export async function executeNextAutonomousTask(
         `You are Lumi executing an autonomous background task. You work independently without user interaction. Be efficient and direct. Current task mode: ${task.mode}.`,
         formatLumiConstitutionForPrompt(),
         executionPipeline.capabilityPlan.promptOverlay,
+        ...(toolLedger.length ? [`Previously completed action receipts are preserved below. Continue only missing work; do not repeat those actions.\n${JSON.stringify(toolLedger.map(record => ({ id: record.id, name: record.name, result: record.result?.slice(0, 500), error: record.error })))}`] : []),
         ...(running.recovery?.planRevisions?.length
           ? [`This is durable recovery attempt ${running.attempt}. Follow the latest persisted recovery revision: ${running.recovery.planRevisions.at(-1)?.strategy}. Do not repeat any side effect from a prior receipt. If exact prior state cannot be reconciled, stop and report the blocker.`]
           : []),
@@ -709,8 +747,9 @@ export async function executeNextAutonomousTask(
     const result = await runWithTools(
       messages,
       toolRegistry,
-      getUserPreferredLLMConfig(task.userId, { maxTokens: 2000 }),
-      (record) => {
+      { ...getUserPreferredLLMConfig(task.userId, { maxTokens: 2000 }), signal: executionAbort.signal },
+      async (record) => {
+        await settleAutonomousTaskAction(running.id, running.leaseId!, record);
         upsertToolLedger(toolLedger, record);
         if (record.result !== undefined || record.error !== undefined) {
           checkpointAutonomousTask(running.id, {
@@ -746,7 +785,7 @@ export async function executeNextAutonomousTask(
     const tokensUsed = result.usageRecords.reduce((sum, r) => sum + r.totalTokens, 0);
     recordAutonomousTokens(task.userId, tokensUsed);
 
-    if (isTaskPauseRequested(task.id, task.userId)) {
+    if (isTaskPauseRequested(task.id, task.userId) && !isTaskCancellationRequested(task.id, task.userId)) {
       markPaused(task.id);
       io.to(taskRoom).emit('autonomous:task_paused', {
         taskId: task.id,
@@ -904,7 +943,7 @@ export async function executeNextAutonomousTask(
     return { executed: true, taskId: task.id, result: summary };
   } catch (err: any) {
     const errorMsg = err.message || 'Unknown error';
-    if (isTaskPauseRequested(task.id, task.userId)) {
+    if (isTaskPauseRequested(task.id, task.userId) && !isTaskCancellationRequested(task.id, task.userId)) {
       markPaused(task.id);
       io.to(taskRoom).emit('autonomous:task_paused', {
         taskId: task.id,
@@ -985,6 +1024,10 @@ export async function executeNextAutonomousTask(
     };
   } finally {
     clearInterval(leaseHeartbeat);
+    voicePriority.signal.removeEventListener('abort', onVoicePriority);
+    voicePriority.dispose();
     releaseDesktopControlLease();
+    releaseAutonomousTaskExecutor(task.id, running.leaseId);
+    await persistAutonomousTaskQueue();
   }
 }

@@ -266,6 +266,8 @@ export interface ToolContext {
     allowCloudFallback?: boolean;
   };
   idempotencyKey?: string;
+  /** Server-owned per-action identity. Failure must prevent adapter admission. */
+  resolveToolIdempotencyKey?: (call: { id?: string; name: string; arguments: Record<string, any> }) => string;
   /**
    * Canonical calls that already executed before this model/tool-loop segment,
    * such as the exact receipt produced after consuming a one-time user
@@ -367,7 +369,7 @@ export interface ToolContext {
   /** Lifecycle callback fired immediately before an LLM-selected tool begins. */
   onToolStart?: (call: { id?: string; name: string; arguments: Record<string, any> }) => void;
   /** Fired only after policy/confirmation checks, immediately before an adapter handler starts. */
-  onAdapterStart?: (call: { name: string; attempt: number }) => void | Promise<void>;
+  onAdapterStart?: (call: { name: string; attempt: number; idempotencyKey?: string }) => void | Promise<void>;
   /**
    * Fired only after the exact adapter handler promise has genuinely settled.
    * A timeout requests cooperative cancellation but does not synthesize this
