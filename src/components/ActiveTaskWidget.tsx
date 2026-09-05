@@ -1,10 +1,15 @@
 import { AnimatePresence, motion } from 'motion/react';
 import { CheckCircle2, CircleAlert, Loader2, ShieldAlert } from 'lucide-react';
-import type { WorkflowTask } from './workflowTypes';
+import {
+  customerVisibleTaskBlocker,
+  customerVisibleTaskDetail,
+  type WorkflowTask,
+} from './workflowTypes';
 import type { ConversationFocusThread } from '@/hooks/useFocusThreads';
 import type { RuntimeTaskProjection, StructuredRuntimeStatus } from '@/hooks/useRuntimeStatus';
 import { uiMessage } from '@/i18n/uiMessages';
 import type { Locale } from '@/i18n/runtime';
+import { taskCompletionFeedbackCopy } from '@/i18n/locales/taskCompletionFeedback';
 
 const ACTIVE_TASK_STATUSES = new Set(['created', 'planning', 'executing', 'verifying', 'waiting_confirmation']);
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'pausing', 'cancelling']);
@@ -40,7 +45,9 @@ export function selectActiveTaskWidgetState(input: {
   workflowStatus: string;
   progressText: string;
   fallbackTitle: string;
+  locale?: Locale;
 }): ActiveTaskWidgetState {
+  const locale = input.locale || 'en';
   const runtimeTasks = activeRuntimeTasks(input.status);
   const threads = activeFocusThreads(input.focusThreads);
   const tasks = activeWorkflowTasks(input.tasks);
@@ -52,11 +59,11 @@ export function selectActiveTaskWidgetState(input: {
     || primaryThread?.status
     || primaryWorkflowTask?.status
     || input.workflowStatus;
-  const title = primaryRuntimeTask?.goal
+  const rawTitle = primaryRuntimeTask?.goal
     || primaryThread?.goal
     || primaryWorkflowTask?.title
     || input.fallbackTitle;
-  const detail = primaryRuntimeTask?.blocker
+  const rawDetail = primaryRuntimeTask?.blocker
     || primaryThread?.waitingFor
     || primaryThread?.nextAction
     || primaryWorkflowTask?.error
@@ -64,6 +71,8 @@ export function selectActiveTaskWidgetState(input: {
     || primaryWorkflowTask?.completionFeedback?.incomplete[0]
     || primaryWorkflowTask?.completionFeedback?.nextSteps[0]
     || input.progressText;
+  const title = customerVisibleTaskDetail(rawTitle, locale, input.fallbackTitle);
+  const detail = customerVisibleTaskBlocker(rawDetail, locale);
   const activeTaskIds = new Set([
     ...runtimeTasks.map(task => task.taskId),
     ...threads.map(thread => thread.taskId),
@@ -109,6 +118,7 @@ export function ActiveTaskWidget({
   isZh: boolean;
 }) {
   const locale: Locale = isZh ? 'zh' : 'en';
+  const feedbackCopy = taskCompletionFeedbackCopy(locale);
   const view = selectActiveTaskWidgetState({
     status,
     focusThreads,
@@ -117,6 +127,7 @@ export function ActiveTaskWidget({
     workflowStatus,
     progressText,
     fallbackTitle: uiMessage('agent-chat-page.lumi-is-working.98a841ddde', locale),
+    locale,
   });
   const waitingConfirmation = view.status === 'waiting_confirmation';
   const hasEvidenceProblem = view.failedReceipts > 0;
@@ -181,11 +192,12 @@ export function ActiveTaskWidget({
           </div>
           {view.receiptTotal > 0 && (
             <div className="mt-2.5 flex items-center gap-3 border-t border-white/[0.07] pt-2 text-[9px] text-white/32">
-              <span>{uiMessage('command-center.receipts.291d3480e2', locale)} {view.receiptTotal}</span>
-              <span className="inline-flex items-center gap-1 text-emerald-100/60">
-                <CheckCircle2 size={10} />
-                {uiMessage('command-center.verified-receipts.02cc95eeba', locale)} {view.verifiedReceipts}
-              </span>
+              {view.verifiedReceipts > 0 && (
+                <span className="inline-flex items-center gap-1 text-emerald-100/60">
+                  <CheckCircle2 size={10} />
+                  {feedbackCopy.receipts} {view.verifiedReceipts}
+                </span>
+              )}
               {view.failedReceipts > 0 && (
                 <span className="text-red-100/65">
                   {uiMessage('command-center.attention.c47451e86a', locale)} {view.failedReceipts}

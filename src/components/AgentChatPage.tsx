@@ -55,8 +55,11 @@ import {
 } from '@/lib/chatAttachmentReferences';
 import {
   describeAgentResponseDelivery,
+  hasInternalAgentExecutionDetail,
   isFinalizedSuccessfulResponse,
   isTerminalAgentStatus,
+  sanitizeAgentStreamingTextForDisplay,
+  sanitizeAgentResponseTextForDisplay,
   shouldDisplayAgentResponse,
 } from '@/lib/agentResponseDelivery';
 import { buildChatConversationScopeKey } from '@/lib/chatConversationScope';
@@ -211,6 +214,13 @@ function getDisplayText(message: any): string {
   return String(message.text);
 }
 
+function getCustomerDisplayText(message: any, isZh: boolean): string {
+  const text = getDisplayText(message);
+  return message?.type === 'agent'
+    ? sanitizeAgentResponseTextForDisplay(text, isZh ? 'zh' : 'en')
+    : text;
+}
+
 const ASSISTANT_HISTORY_NOISE_RE =
   /我还没有真正开始读取或审查|我还不能说这件事已经完成|没有记录到成功的工具执行|真正读取时|Completion claim|Maximum tool call iterations|Action Constitution|local_write action requires confirmation|已经落到(?:桌面|电脑|文件)|结果包已经|交付包已经|真实接管|WPS\s*表格|剪映已打开|微信已打开|文件生成也卡在权限确认|工具调用一直在跑/i;
 
@@ -218,7 +228,11 @@ function shouldOmitAssistantHistoryMessage(message: any, text: string): boolean 
   const role = String(message?.role || '').toLowerCase();
   const type = String(message?.type || '').toLowerCase();
   const isAssistantLike = role === 'assistant' || type === 'agent';
-  return isAssistantLike && ASSISTANT_HISTORY_NOISE_RE.test(text);
+  return isAssistantLike && (
+    message?.legacyExecutionReport === true
+    || hasInternalAgentExecutionDetail(text)
+    || ASSISTANT_HISTORY_NOISE_RE.test(text)
+  );
 }
 
 function stripStoredAttachmentSummary(value: string): string {
@@ -227,7 +241,7 @@ function stripStoredAttachmentSummary(value: string): string {
     .trim();
 }
 
-function buildChatHistoryPayload(messages: any[]) {
+export function buildChatHistoryPayload(messages: any[]) {
   return messages.flatMap((m) => {
     const text = getDisplayText(m).trim();
     if (!text) return [];
@@ -1513,9 +1527,16 @@ export function AgentChatPage({
       const timestamp = m.timestamp || m.createdAt || new Date().toISOString();
       const role = m.role || '';
       const userText = role === 'assistant' ? '' : stripStoredAttachmentSummary(m.content || m.message || '');
-      const assistantText = role === 'assistant'
+      const storedAssistantText = role === 'assistant'
         ? (m.content || m.message || m.response || '')
         : (m.response || '');
+      const legacyExecutionReport = Boolean(
+        storedAssistantText && hasInternalAgentExecutionDetail(storedAssistantText),
+      );
+      const assistantText = sanitizeAgentResponseTextForDisplay(
+        storedAssistantText,
+        isZh ? 'zh' : 'en',
+      );
 
       if (role !== 'tool' && userText) {
         pushMessage({
@@ -1538,6 +1559,7 @@ export function AgentChatPage({
           timestamp,
           type: 'agent',
           mode: m.mode,
+          ...(legacyExecutionReport ? { legacyExecutionReport: true } : {}),
           ...(completionFeedback ? { completionFeedback } : {}),
           ...(mediaArtifacts.length ? { mediaArtifacts } : {}),
         });
@@ -1550,7 +1572,7 @@ export function AgentChatPage({
       seen.add(m.id);
       return true;
     });
-  }, [user?.displayName, user?.username, t.chatUserFallback]);
+  }, [isZh, user?.displayName, user?.username, t.chatUserFallback]);
 
   useEffect(() => {
     if (!agentId || isFounder) return;
@@ -1565,6 +1587,7 @@ export function AgentChatPage({
       chatRequestLedgerRef.current.clear();
       chatTurnUiMetaRef.current.clear();
       streamingMsgIdsRef.current.clear();
+      streamingRawTextRef.current.clear();
       for (const detach of activeChatViewDetachersRef.current) detach();
       activeChatViewDetachersRef.current.clear();
       activeChatRequestIdRef.current = null;
@@ -1672,6 +1695,7 @@ export function AgentChatPage({
   }, [agentId, isFounder, normalizePersistedMessages, scopedConversationUrl, searchQuery]);
 
   const streamingMsgIdsRef = useRef(new Map<string, string>());
+  const streamingRawTextRef = useRef(new Map<string, string>());
   const textChatActiveRef = useRef(false);
   const activeChatRequestIdRef = useRef<string | null>(null);
   const lastResumedRequestIdsRef = useRef(new Set<string>());
@@ -1773,11 +1797,13 @@ export function AgentChatPage({
       if (proactiveType === 'greeting' && localStorage.getItem('lumi_allow_proactive_voice') !== 'true') return;
       if ((data.requestId || data.source) && !isCurrentChatEvent(data)) return;
       if (!shouldDisplayAgentResponse({ ...data, text: data.message })) return;
+      const publicMessage = sanitizeAgentResponseTextForDisplay(data.message, isZh ? 'zh' : 'en');
+      if (!publicMessage) return;
       setMessages(prev => {
-        if (prev.some(m => m.text === data.message && m.type === 'agent')) return prev;
+        if (prev.some(m => m.text === publicMessage && m.type === 'agent')) return prev;
         return [...prev, {
           id: `proactive-${Date.now()}`,
-          text: data.message,
+          text: publicMessage,
           userName: agentName,
           timestamp: data.timestamp || new Date().toISOString(),
           type: 'agent',
@@ -1789,18 +1815,22 @@ export function AgentChatPage({
     const onChunk = (data: { text: string; agentName: string; requestId?: string; source?: string; conversationId?: string }) => {
       if (!isCurrentChatEvent(data)) return;
       const streamKey = String(data.requestId || '__legacy__');
+      const rawText = `${streamingRawTextRef.current.get(streamKey) || ''}${data.text}`;
+      streamingRawTextRef.current.set(streamKey, rawText);
+      const publicText = sanitizeAgentStreamingTextForDisplay(rawText, isZh ? 'zh' : 'en');
+      if (!publicText) return;
       const currentStreamId = streamingMsgIdsRef.current.get(streamKey);
       if (currentStreamId) {
         const sid = currentStreamId;
         setMessages(prev => prev.map(m =>
-          m.id === sid ? { ...m, text: m.text + data.text } : m
+          m.id === sid ? { ...m, text: publicText } : m
         ));
       } else {
         const id = makeChatMessageId('stream');
         streamingMsgIdsRef.current.set(streamKey, id);
         setMessages(prev => [...prev, {
           id,
-          text: data.text,
+          text: publicText,
           userName: data.agentName,
           timestamp: new Date().toISOString(),
           type: 'agent'
@@ -1808,7 +1838,7 @@ export function AgentChatPage({
       }
     };
 
-    const onTool = (data: { correlationId?: string; name: string; args?: any; arguments?: any; result?: string; artifactReceipt?: unknown; error?: string; requestId?: string; source?: string; conversationId?: string; taskRelation?: unknown }) => {
+    const onTool = (data: { correlationId?: string; name: string; args?: any; arguments?: any; result?: string; artifactReceipt?: unknown; error?: string; publicText?: string; requestId?: string; source?: string; conversationId?: string; taskRelation?: unknown }) => {
       if (!isCurrentChatEvent(data)) return;
       recordTaskRelation(data);
       const requestId = String(data.requestId || '').trim();
@@ -1845,7 +1875,7 @@ export function AgentChatPage({
         if (data.error !== undefined) {
           mediaGenerationArtifactValidationRef.current = null;
           setMediaGenerationStatus('error');
-          setMediaGenerationDetail(String(data.error || mediaGenerationText.toolFailed));
+          setMediaGenerationDetail(mediaGenerationText.toolFailed);
         } else if (data.artifactReceipt !== undefined || data.result !== undefined) {
           if (!mediaGenerationArgumentsMatch(activeMediaGeneration.request, args)) {
             mediaGenerationArtifactValidationRef.current = null;
@@ -1916,40 +1946,41 @@ export function AgentChatPage({
           setWorkflowSteps(prev => [...prev, step]);
         }
       };
-      pushChatProgress(describeToolProgress(data.name, phase, isZh), phase === 'error' ? 'error' : 'tool');
+      const customerToolText = sanitizeAgentResponseTextForDisplay(
+        data.publicText || describeToolProgress(data.name, phase, isZh),
+        isZh ? 'zh' : 'en',
+      );
+      pushChatProgress(customerToolText, phase === 'error' ? 'error' : 'tool');
       if (data.result !== undefined) {
         appendTurnStep({
           id: `chat-tool-ok-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
           type: 'tool_result',
-          text: `${data.name}: ${uiMessage('chat-progress.tool-returned-result-awaiting-task-verification.4f8d02cb71', (isZh) ? 'zh' : 'en')}`,
-          detail: data.result?.slice(0, 100),
+          text: customerToolText,
           time: Date.now(),
         });
       } else if (data.error !== undefined) {
         appendTurnStep({
           id: `chat-tool-err-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
           type: 'error',
-          text: `${data.name} ${t.workflowToolFailed || 'failed'}`,
-          detail: data.error?.slice(0, 100),
+          text: customerToolText,
           time: Date.now(),
         });
       } else {
-        const argsSummary = args
-          ? Object.entries(args).map(([k, v]) => `${k}=${typeof v === 'string' ? v.slice(0, 30) : String(v).slice(0, 30)}`).join(', ')
-          : '';
         appendTurnStep({
           id: `chat-tool-start-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
           type: 'tool_start',
-          text: `${t.workflowCalling || 'Calling'} ${data.name}`,
-          detail: argsSummary || undefined,
+          text: customerToolText,
           time: Date.now(),
         });
       }
     };
 
-    const onProgress = (data: { text?: string; tone?: ChatProgressTone; requestId?: string; source?: string; conversationId?: string }) => {
+    const onProgress = (data: { text?: string; publicText?: string; tone?: ChatProgressTone; requestId?: string; source?: string; conversationId?: string }) => {
       if (!isCurrentChatEvent(data)) return;
-      pushChatProgress(data.text || '', data.tone || 'tool');
+      pushChatProgress(
+        sanitizeAgentResponseTextForDisplay(data.publicText || data.text || '', isZh ? 'zh' : 'en'),
+        data.tone || 'tool',
+      );
       const requestId = String(data.requestId || '').trim();
       if (activeMediaGenerationRef.current?.requestId === requestId && data.text?.trim()) {
         setMediaGenerationStatus('generating');
@@ -2002,9 +2033,10 @@ export function AgentChatPage({
 
       const mediaReceiptDisplayable = responseMediaArtifacts.length > 0 && isFinalizedSuccessfulResponse(data);
       const displayable = shouldDisplayAgentResponse(data) || mediaReceiptDisplayable;
-      const deliveredText = data.text?.trim() || (mediaReceiptDisplayable
-        ? mediaGenerationText.mediaCompleted
-        : '');
+      const deliveredText = sanitizeAgentResponseTextForDisplay(
+        data.text?.trim() || (mediaReceiptDisplayable ? mediaGenerationText.mediaCompleted : ''),
+        isZh ? 'zh' : 'en',
+      );
       if (streamId) {
         if (displayable && deliveredText) {
           // Capture the id before deleting its request bucket. React may run
@@ -2033,6 +2065,7 @@ export function AgentChatPage({
           ...(responseMediaArtifacts.length ? { mediaArtifacts: responseMediaArtifacts } : {}),
         }]);
       }
+      streamingRawTextRef.current.delete(streamKey);
 
       const activeMediaGeneration = activeMediaGenerationRef.current;
       if (activeMediaGeneration?.requestId === requestId) {
@@ -2092,7 +2125,10 @@ export function AgentChatPage({
           setMediaGenerationStatus(responseWasCancelled ? 'cancelled' : 'error');
           setMediaGenerationDetail(responseWasCancelled
             ? mediaGenerationText.statusCancelled
-            : String(data.reason || data.text || mediaGenerationText.taskBlocked));
+            : describeAgentResponseDelivery({
+                ...data,
+                text: data.text || mediaGenerationText.taskBlocked,
+              }, isZh));
         } else if (replayReceiptRejected) {
           // Preserve the exact settings mismatch reported above.
         } else if (!hasArtifact || !validation?.contractValid) {
@@ -2255,15 +2291,20 @@ export function AgentChatPage({
           setMessages(prev => prev.filter(m => m.id !== sid));
           streamingMsgIdsRef.current.delete(streamKey);
         }
+        streamingRawTextRef.current.delete(streamKey);
       }
     };
 
     const onError = (data: { message: string; code?: string; requestId?: string; source?: string; conversationId?: string; sidecar?: boolean }) => {
       if (!isCurrentChatEvent(data)) return;
       if (!terminalReceiptsRef.current.claim(data)) return;
+      const message = sanitizeAgentResponseTextForDisplay(
+        data.message || (t.failedToRouteNeuralMesh || 'Failed to route through Neural Mesh.'),
+        isZh ? 'zh' : 'en',
+      );
       if (activeMediaGenerationRef.current?.requestId === String(data.requestId || '').trim()) {
         setMediaGenerationStatus('error');
-        setMediaGenerationDetail(data.message || mediaGenerationText.taskFailed);
+        setMediaGenerationDetail(message || mediaGenerationText.taskFailed);
         activeMediaGenerationRef.current = null;
       }
       const tracked = settleTrackedChatRequest(data.requestId);
@@ -2288,7 +2329,7 @@ export function AgentChatPage({
           id: `chat-err-${Date.now()}`,
           type: 'error',
           text: t.workflowError || 'Processing failed',
-          detail: data.message,
+          detail: message,
           time: Date.now(),
         }]);
         scheduleWorkflowReset(data.requestId);
@@ -2299,7 +2340,7 @@ export function AgentChatPage({
         setMessages(prev => prev.filter(m => m.id !== sid));
         streamingMsgIdsRef.current.delete(streamKey);
       }
-      const message = data.message || (t.failedToRouteNeuralMesh || 'Failed to route through Neural Mesh.');
+      streamingRawTextRef.current.delete(streamKey);
       setMessages(prev => {
         const text = `${t.requestFailed || 'Request failed'}\n\n${message}`;
         if (prev.some(m => m.type === 'agent' && m.text === text)) return prev;
@@ -2356,6 +2397,7 @@ export function AgentChatPage({
         activeRequestId: activeChatRequestIdRef.current,
       })) return;
       streamingMsgIdsRef.current.clear();
+      streamingRawTextRef.current.clear();
       fetch(scopedConversationUrl(`/api/conversations/${data.conversationId}/messages?limit=${CHAT_HISTORY_LIMIT}`))
         .then(r => r.json())
         .then(result => {
@@ -2572,6 +2614,7 @@ export function AgentChatPage({
       textChatActiveRef.current = false;
       lastResumedRequestIdsRef.current.clear();
       streamingMsgIdsRef.current.clear();
+      streamingRawTextRef.current.clear();
       chatTurnTimerGuardRef.current.invalidate();
       currentResponseFinalizationRef.current = null;
       resetMediaGenerationSurface();
@@ -2761,6 +2804,7 @@ export function AgentChatPage({
       textChatActiveRef.current = false;
       lastResumedRequestIdsRef.current.clear();
       streamingMsgIdsRef.current.clear();
+      streamingRawTextRef.current.clear();
       chatTurnTimerGuardRef.current.invalidate();
       currentResponseFinalizationRef.current = null;
       resetMediaGenerationSurface();
@@ -3048,6 +3092,7 @@ export function AgentChatPage({
         if (resolved) return;
         if (!socketAcknowledged) {
           streamingMsgIdsRef.current.delete(requestId);
+          streamingRawTextRef.current.delete(requestId);
           if (activeMediaGenerationRef.current?.requestId === requestId) {
             setMediaGenerationStatus('error');
             setMediaGenerationDetail(mediaGenerationText.backendNoAck);
@@ -3090,6 +3135,7 @@ export function AgentChatPage({
               'error',
             );
             streamingMsgIdsRef.current.delete(requestId);
+            streamingRawTextRef.current.delete(requestId);
             if (activeMediaGenerationRef.current?.requestId === requestId) {
               setMediaGenerationStatus('error');
               setMediaGenerationDetail(result?.error || mediaGenerationText.backendLostTask);
@@ -4559,7 +4605,7 @@ export function AgentChatPage({
                 >
                   {/* Image / file previews */}
                   {(() => {
-                    const messageText = getDisplayText(msg);
+                    const messageText = getCustomerDisplayText(msg, isZh);
                     const receiptMedia = Array.isArray(msg.mediaArtifacts)
                       ? msg.mediaArtifacts.filter((artifact: any) => artifact?.url && (artifact.kind === 'image' || artifact.kind === 'video'))
                       : [];
@@ -4644,7 +4690,7 @@ export function AgentChatPage({
                   >
                     <div className={`markdown-body chat-message-markdown select-text ${msg.type === 'agent' ? 'chat-message-markdown-agent' : 'chat-message-markdown-user'}`}>
                       <Markdown components={safeMarkdownComponents} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                        {getDisplayText(msg)}
+                        {getCustomerDisplayText(msg, isZh)}
                       </Markdown>
                     </div>
                     {msg.type === 'agent' && msg.completionFeedback && (
@@ -4655,11 +4701,11 @@ export function AgentChatPage({
                         className={isOfficeCommandCenter ? 'lumi-command-center-task-feedback mt-3' : 'mt-3'}
                       />
                     )}
-                    {getDisplayText(msg) && (
+                    {getCustomerDisplayText(msg, isZh) && (
                       <button
                         onMouseDown={(event) => event.preventDefault()}
                         onClick={(event) => handleCopyMessage(
-                          getDisplayText(msg),
+                          getCustomerDisplayText(msg, isZh),
                           msg.id,
                           event.currentTarget.closest('[data-chat-message-bubble]') as HTMLElement | null,
                         )}

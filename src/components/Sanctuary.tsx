@@ -9,6 +9,8 @@ import { memoryAvatarCopy } from '../i18n/locales/memoryAvatar';
 import { CN_DEPENDENCY_SIGNALS } from '../i18n/regions/cn/recognition';
 import {
   isTerminalAgentStatus,
+  sanitizeAgentResponseTextForDisplay,
+  sanitizeAgentStreamingTextForDisplay,
   shouldDisplayAgentResponse,
   type AgentResponseDelivery,
 } from '@/lib/agentResponseDelivery';
@@ -84,7 +86,10 @@ export function Sanctuary({ agent, lang, isOpen, onClose, avatars = [], onSelect
   // Bind lazy-loaded sanctuary labels to the shell locale.  The old calls
   // relied on uiMessage's global default, which can still be English during
   // the render immediately after switching the desktop language.
-  const message = (key: Parameters<typeof uiMessage>[0]) => uiMessage(key, locale);
+  const message = useCallback(
+    (key: Parameters<typeof uiMessage>[0]) => uiMessage(key, locale),
+    [locale],
+  );
   const memoryCopy = memoryAvatarCopy(isZh ? 'zh' : 'en');
 
   const relationshipType = agent?.relationshipType || '';
@@ -104,6 +109,7 @@ export function Sanctuary({ agent, lang, isOpen, onClose, avatars = [], onSelect
     }
     activeRequestIdRef.current = null;
     streamingMsgId.current = null;
+    streamingRawText.current = '';
   }, []);
 
   const eventBelongsToAvatar = useCallback((data?: {
@@ -139,7 +145,9 @@ export function Sanctuary({ agent, lang, isOpen, onClose, avatars = [], onSelect
         if (!cancelled && Array.isArray(data)) {
           const history = data.map((m: any, idx: number) => ({
             id: `hist-${idx}`,
-            text: m.content || m.message || '',
+            text: m.role === 'assistant'
+              ? sanitizeAgentResponseTextForDisplay(m.content || m.message || '', locale)
+              : (m.content || m.message || ''),
             userName: m.role === 'assistant' ? agentName : (user.displayName || user.username || memoryCopy.youLabel),
             timestamp: m.timestamp || new Date().toISOString(),
             type: m.role === 'assistant' ? 'agent' : 'user',
@@ -149,24 +157,28 @@ export function Sanctuary({ agent, lang, isOpen, onClose, avatars = [], onSelect
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [agentId, user, agentName, memoryCopy.youLabel, clearActiveRequest]);
+  }, [agentId, user, agentName, memoryCopy.youLabel, clearActiveRequest, locale]);
 
   // Socket listeners
   const streamingMsgId = useRef<string | null>(null);
+  const streamingRawText = useRef('');
 
   useEffect(() => {
     if (!socket) return;
 
     const onChunk = (data: { text: string; agentName: string; agentId?: string; requestId?: string }) => {
       if (!eventBelongsToAvatar(data)) return;
+      streamingRawText.current += data.text;
+      const publicText = sanitizeAgentStreamingTextForDisplay(streamingRawText.current, locale);
+      if (!publicText) return;
       if (streamingMsgId.current) {
         setMessages(prev => prev.map(m =>
-          m.id === streamingMsgId.current ? { ...m, text: m.text + data.text } : m
+          m.id === streamingMsgId.current ? { ...m, text: publicText } : m
         ));
       } else {
         const id = Date.now().toString();
         streamingMsgId.current = id;
-        setMessages(prev => [...prev, { id, text: data.text, userName: data.agentName, timestamp: new Date().toISOString(), type: 'agent' }]);
+        setMessages(prev => [...prev, { id, text: publicText, userName: data.agentName, timestamp: new Date().toISOString(), type: 'agent' }]);
       }
     };
 
@@ -184,16 +196,23 @@ export function Sanctuary({ agent, lang, isOpen, onClose, avatars = [], onSelect
           setMessages(prev => prev.filter(m => m.id !== streamingId));
           streamingMsgId.current = null;
         }
+        streamingRawText.current = '';
+        return;
+      }
+      const publicText = sanitizeAgentResponseTextForDisplay(data.text, locale);
+      if (!publicText) {
+        streamingRawText.current = '';
         return;
       }
       if (streamingMsgId.current) {
         setMessages(prev => prev.map(m =>
-          m.id === streamingMsgId.current ? { ...m, text: data.text! } : m
+          m.id === streamingMsgId.current ? { ...m, text: publicText } : m
         ));
         streamingMsgId.current = null;
       } else {
-        setMessages(prev => [...prev, { id: Date.now().toString(), text: data.text!, userName: data.agentName || agentName, timestamp: new Date().toISOString(), type: 'agent' }]);
+        setMessages(prev => [...prev, { id: Date.now().toString(), text: publicText, userName: data.agentName || agentName, timestamp: new Date().toISOString(), type: 'agent' }]);
       }
+      streamingRawText.current = '';
     };
 
     const onStatus = (data: { status: string; agentId?: string; requestId?: string }) => {
@@ -211,6 +230,7 @@ export function Sanctuary({ agent, lang, isOpen, onClose, avatars = [], onSelect
           setMessages(prev => prev.filter(m => m.id !== streamingId));
         }
         streamingMsgId.current = null;
+        streamingRawText.current = '';
         activeRequestIdRef.current = null;
       }
     };
@@ -223,9 +243,10 @@ export function Sanctuary({ agent, lang, isOpen, onClose, avatars = [], onSelect
       }
       setIsTyping(false);
       streamingMsgId.current = null;
+      streamingRawText.current = '';
       setMessages(prev => [...prev, {
         id: `error-${Date.now()}`,
-        text: data.message,
+        text: sanitizeAgentResponseTextForDisplay(data.message, locale),
         userName: agentName,
         timestamp: new Date().toISOString(),
         type: 'error',
@@ -244,7 +265,7 @@ export function Sanctuary({ agent, lang, isOpen, onClose, avatars = [], onSelect
       socket.off('agent:status', onStatus);
       socket.off('agent:error', onError);
     };
-  }, [socket, agentName, eventBelongsToAvatar]);
+  }, [socket, agentName, eventBelongsToAvatar, locale]);
 
   useEffect(() => () => clearActiveRequest(), [clearActiveRequest]);
 
@@ -292,13 +313,19 @@ export function Sanctuary({ agent, lang, isOpen, onClose, avatars = [], onSelect
       if (activeRequestIdRef.current !== requestId) return;
       setIsTyping(false);
       streamingMsgId.current = null;
+      streamingRawText.current = '';
       activeRequestIdRef.current = null;
       safetyTimerRef.current = null;
     }, 45000);
 
     socket.emit('agent:chat', {
       text,
-      history: messages.map(m => ({ role: m.type === 'agent' ? 'assistant' : 'user', content: m.text })),
+      history: messages.map(m => ({
+        role: m.type === 'agent' ? 'assistant' : 'user',
+        content: m.type === 'agent'
+          ? sanitizeAgentResponseTextForDisplay(m.text, locale)
+          : m.text,
+      })),
       personalityId: 'lumi',
       agentId,
       requestId,
@@ -317,7 +344,7 @@ export function Sanctuary({ agent, lang, isOpen, onClose, avatars = [], onSelect
         type: 'error',
       }]);
     });
-  }, [newMessage, socket, messages, user, agentId, agentName, memoryCopy.youLabel, clearActiveRequest]);
+  }, [newMessage, socket, messages, user, agentId, agentName, memoryCopy.youLabel, clearActiveRequest, locale, message]);
 
   if (!agent) return null;
 
@@ -508,7 +535,11 @@ export function Sanctuary({ agent, lang, isOpen, onClose, avatars = [], onSelect
                         ? `${meta.color.replace('text-', 'bg-')}/10 ${meta.color.replace('text-', 'text-')}/80 border ${meta.border} rounded-tl-sm`
                         : 'bg-white/5 text-white/70 border border-white/10 rounded-tr-sm'
                     }`}>
-                      <span className="whitespace-pre-wrap">{msg.text}</span>
+                      <span className="whitespace-pre-wrap">
+                        {msg.type === 'agent' || msg.type === 'error'
+                          ? sanitizeAgentResponseTextForDisplay(msg.text, locale)
+                          : msg.text}
+                      </span>
                     </div>
                     <span className="text-xs uppercase tracking-wider opacity-20 mt-1.5 px-2 font-mono">
                       {msg.userName} · {new Date(msg.timestamp).toLocaleTimeString(isZh ? 'zh-CN' : undefined, { hour: '2-digit', minute: '2-digit' })}

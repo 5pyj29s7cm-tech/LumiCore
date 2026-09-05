@@ -28,6 +28,8 @@ type PendingDesktopRelay = {
   resolve: (output: string) => void;
   reject: (err: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
+  deliveryTimeout?: ReturnType<typeof setTimeout>;
+  executionDispatched?: boolean;
   onDisconnect?: () => void;
   onAbort?: () => void;
   signal?: AbortSignal;
@@ -53,6 +55,7 @@ export type DesktopRelayOptions = {
   emitToolLifecycle?: DesktopRelayLifecycle;
   formatResultForLifecycle?: (output: string) => string;
   timeoutMs?: number;
+  deliveryAckTimeoutMs?: number;
   cancelOnRequestSocketDisconnect?: boolean;
   signal?: AbortSignal;
   taskId?: string;
@@ -209,9 +212,11 @@ export function handleDesktopRelayResult(correlationId: string, data: DesktopRel
   const pending = pendingDesktopRelays.get(correlationId);
   if (!pending) return false;
   if (!senderSocketId || !pending.targetSocketId || senderSocketId !== pending.targetSocketId) return false;
+  if (pending.executionDispatched !== true) return false;
 
   pendingDesktopRelays.delete(correlationId);
   clearTimeout(pending.timeout);
+  if (pending.deliveryTimeout) clearTimeout(pending.deliveryTimeout);
   if (pending.requestSocket && pending.onDisconnect) {
     pending.requestSocket.off('disconnect', pending.onDisconnect);
   }
@@ -400,6 +405,7 @@ export function createDesktopRelay(options: DesktopRelayOptions): DesktopRelay {
         if (pending) {
           pendingDesktopRelays.delete(cid);
           clearTimeout(pending.timeout);
+          if (pending.deliveryTimeout) clearTimeout(pending.deliveryTimeout);
           if (pending.requestSocket && pending.onDisconnect) {
             pending.requestSocket.off('disconnect', pending.onDisconnect);
           }
@@ -461,7 +467,49 @@ export function createDesktopRelay(options: DesktopRelayOptions): DesktopRelay {
         const pending = pendingDesktopRelays.get(cid);
         if (!pending) return false;
         pending.targetSocketId = socketId;
-        targetSocket.emit('tool:desktop_exec', payload);
+        // Socket connectivity and device registration do not prove that the
+        // WebView still owns a live relay consumer after HMR or auth rebinding.
+        // This is deliberately a two-phase delivery: the client first accepts
+        // an offer without touching the desktop. Only a timely acknowledgement
+        // causes the server to dispatch the executable event. A late callback
+        // therefore cannot run a side effect after this request has failed.
+        const deliveryAckMs = Math.min(
+          timeoutMs,
+          Math.max(10, options.deliveryAckTimeoutMs ?? 2_000),
+        );
+        pending.deliveryTimeout = setTimeout(() => {
+          finishWithError(`Desktop client did not accept "${toolName}" for execution`);
+        }, deliveryAckMs);
+        targetSocket.emit('tool:desktop_offer', payload, (acknowledgement?: {
+          accepted?: boolean;
+          correlationId?: string;
+        }) => {
+          const current = pendingDesktopRelays.get(cid);
+          if (!current || current.targetSocketId !== socketId) return;
+          if (
+            acknowledgement?.accepted !== true
+            || String(acknowledgement.correlationId || '') !== cid
+          ) {
+            finishWithError(`Desktop client declined "${toolName}" for execution`);
+            return;
+          }
+          if (current.executionDispatched) return;
+          if (current.deliveryTimeout) {
+            clearTimeout(current.deliveryTimeout);
+            current.deliveryTimeout = undefined;
+          }
+          const liveTargetSocket = options.io.sockets.sockets.get(socketId);
+          if (
+            liveTargetSocket !== targetSocket
+            || !liveTargetSocket?.connected
+            || liveTargetSocket.data?.trustedLocalExecution !== true
+          ) {
+            finishWithError(`Desktop client disconnected before "${toolName}" could start`);
+            return;
+          }
+          current.executionDispatched = true;
+          liveTargetSocket.emit('tool:desktop_exec', payload);
+        });
         return true;
       };
 

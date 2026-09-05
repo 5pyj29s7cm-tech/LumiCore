@@ -1,9 +1,12 @@
 import './helpers';
+import fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   evaluateAutonomousTaskOutcome,
   finalizeAutonomousTaskOutcomeForDelivery,
   isSuccessfulAutonomousToolRecord,
+  projectAutonomousCompletionFeedback,
+  projectAutonomousCustomerMessage,
 } from '../server/autonomy/task_executor';
 import { isVerifiedAutonomousHistoryItem } from '../server/socket/ambient';
 import { finalizeScheduledDelivery } from '../server/scheduler';
@@ -11,6 +14,7 @@ import {
   classifyToolNotification,
 } from '../src/components/ProactiveNotifications';
 import {
+  autonomousTaskCustomerSummary,
   isVerifiedAutonomousCompletionPayload,
   normalizeAutonomousHistoryTask,
 } from '../src/components/AutonomousFeed';
@@ -43,7 +47,74 @@ describe('remaining output bypass closure', () => {
     expect(JSON.stringify(delivery)).not.toMatch(
       /No successful current-turn tool execution|Missing verified in-app UI mutation evidence/u,
     );
-    expect(delivery.text).toContain('Status: blocked');
+    expect(delivery.text).toBe(
+      'That step did not finish because no result confirmed the operation. The target can be checked again and work can continue from here.',
+    );
+    expect(delivery.text).not.toMatch(/Status:|Evidence:|receipt|target_mismatch/iu);
+  });
+
+  it('separates autonomous machine diagnostics from public socket copy', () => {
+    const targetFailure = projectAutonomousCustomerMessage(
+      'Desktop execution ended as target_mismatch. receipt=receipt_private_1 desktop_open failed.',
+      { language: 'zh', state: 'failed' },
+    );
+    expect(targetFailure).toContain('窗口');
+    expect(targetFailure).not.toMatch(/target_mismatch|receipt|desktop_open/iu);
+
+    const rawException = projectAutonomousCustomerMessage(
+      'Error: ECONNREFUSED 127.0.0.1 requestId=req_private_1',
+      { language: 'zh', state: 'failed' },
+    );
+    expect(rawException).toBe('这项自主任务暂时没有完成。你可以稍后让我重试。');
+    expect(rawException).not.toMatch(/ECONNREFUSED|requestId|127\.0\.0\.1/u);
+
+    expect(projectAutonomousCustomerMessage('已整理今天的公开资料摘要。', {
+      language: 'zh',
+      state: 'completed',
+      preserveCleanText: true,
+    })).toBe('已整理今天的公开资料摘要。');
+
+    expect(projectAutonomousCompletionFeedback({
+      status: 'failed',
+      completed: [],
+      evidence: ['Verified tool receipt: desktop_open'],
+      incomplete: ['Task is not verified complete.'],
+      blockers: ['target_mismatch requestId=req_private_1'],
+      nextSteps: ['Inspect the receipt ledger.'],
+    })).toEqual({
+      status: 'failed',
+      completed: [],
+      evidence: [],
+      incomplete: [],
+      blockers: [],
+      nextSteps: [],
+    });
+  });
+
+  it('renders one natural autonomous summary while retaining raw state fields', () => {
+    const rawTask = {
+      status: 'failed' as const,
+      error: 'Error: target_mismatch after desktop_open; receipt=receipt_private_1',
+      result: 'desktop_open failed',
+    };
+    expect(rawTask.error).toContain('receipt_private_1');
+
+    const summary = autonomousTaskCustomerSummary(rawTask, 'zh');
+    expect(summary).toContain('窗口');
+    expect(summary).not.toMatch(/Error:|target_mismatch|desktop_open|receipt/iu);
+
+    const source = fs.readFileSync(
+      new URL('../src/components/AutonomousFeed.tsx', import.meta.url),
+      'utf8',
+    );
+    expect(source).not.toContain('{task.error}');
+    expect(source).not.toContain('task.result.slice');
+    expect(source).not.toContain('{task.toolCallsCount} tools');
+    expect(source).not.toContain('{task.tokensUsed} tokens');
+    expect(source).not.toContain('Priority: {task.priority}');
+    expect(source).not.toContain('Status: {task.status}');
+    expect(source).toContain('autonomousTaskCustomerSummary(task, locale)');
+    expect(source).toContain('variant="chat"');
   });
 
   it('requires successful structured tool receipts and an actually completed response', () => {

@@ -28,6 +28,8 @@ import {
   recordPendingConfirmation,
 } from '../server/tools/pending_confirmation';
 
+const CUSTOMER_INTERNAL_EXECUTION_COPY = /(?:^|\n)\s*(?:\u72b6\u6001|\u8bc1\u636e|\u5177\u4f53\u963b\u585e|\u6267\u884c\u56de\u9988)\s*[:\uff1a]|\u56de\u6267|target_mismatch|terminalVerification|\b(?:taskId|requestId|desktop_open|client_action|desktop_execution_plan_receipt|verified|blocked|failed)\b|No successful current-turn tool execution/iu;
+
 const TOOL_POLICY = {
   allowedTools: ['desktop_open'],
   requireConfirmation: [],
@@ -705,9 +707,10 @@ describe('manager conversation action-turn integration', () => {
       taskId: waiting.taskId,
     });
     const reply = formatConversationActionTaskStatus(state);
-    expect(reply).toContain('没有执行旧操作');
-    expect(reply).toContain('重新生成并展示');
-    expect(reply).toContain('审阅新提议后再确认');
+    expect(reply).toMatch(/没有(?:重新|再次)?执行旧操作|旧操作.*没有执行/u);
+    expect(reply).toMatch(/重新(?:生成|展示)/u);
+    expect(reply).toMatch(/(?:审阅|查看).*(?:再确认|重新确认)/u);
+    expect(reply).not.toMatch(CUSTOMER_INTERNAL_EXECUTION_COPY);
   });
 
   it('preserves a hydrated exact confirmation across restart recovery', () => {

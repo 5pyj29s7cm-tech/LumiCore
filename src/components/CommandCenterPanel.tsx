@@ -25,7 +25,14 @@ import { LumiScenePanel } from './LumiScenePanel';
 import { RuntimeEvidencePanel } from './RuntimeEvidencePanel';
 import { LumiCoreSphere, type LumiCoreOrbitTask, type LumiCoreTaskState } from './LumiCoreSphere';
 import { TaskCompletionFeedbackDetails } from './TaskCompletionFeedbackDetails';
-import { normalizeTaskCompletionFeedback, type TaskCompletionFeedback } from './workflowTypes';
+import {
+  customerVisibleTaskBlocker,
+  customerVisibleTaskDetail,
+  customerVisibleTaskNextAction,
+  customerVisibleTaskStatus,
+  normalizeTaskCompletionFeedback,
+  type TaskCompletionFeedback,
+} from './workflowTypes';
 import type { CommandCenterView } from './commandCenterTypes';
 
 export type CommandCenterTask = {
@@ -64,7 +71,7 @@ function numeric(value: unknown): number {
   return Number.isFinite(number) ? Math.max(0, number) : 0;
 }
 
-export function normalizeCommandCenterTask(value: unknown): CommandCenterTask | null {
+export function normalizeCommandCenterTask(value: unknown, locale?: 'zh' | 'en'): CommandCenterTask | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const task = value as Record<string, any>;
   const id = String(task.id || task.taskId || '').trim();
@@ -99,17 +106,25 @@ export function normalizeCommandCenterTask(value: unknown): CommandCenterTask | 
   return {
     id,
     kind: task.kind === 'takeover' ? 'takeover' : 'autonomy',
-    title: String(task.title || id),
+    title: locale
+      ? customerVisibleTaskDetail(task.title, locale, '')
+      : String(task.title || '').trim(),
     status,
     phase,
     updatedAt: typeof task.updatedAt === 'string' ? task.updatedAt : undefined,
-    blocker: typeof task.blocker === 'string' ? task.blocker : undefined,
-    nextAction: typeof task.nextAction === 'string' ? task.nextAction : undefined,
+    blocker: typeof task.blocker === 'string'
+      ? locale ? customerVisibleTaskBlocker(task.blocker, locale) : task.blocker
+      : undefined,
+    nextAction: typeof task.nextAction === 'string'
+      ? locale ? customerVisibleTaskNextAction(task.nextAction, locale) : task.nextAction
+      : undefined,
     cancellationRequested: task.cancellationRequested === true || task.cancelRequested === true,
     pauseRequested: task.pauseRequested === true,
     controls,
     progress,
     evidence,
+    // Keep the evidence rows until the details renderer summarizes them. A
+    // second projection would count the summary itself as a single result.
     completionFeedback: normalizeTaskCompletionFeedback(task.completionFeedback),
   };
 }
@@ -205,11 +220,13 @@ export function CommandCenterPanel({
         const payload = await response.json();
         if (!isCurrentScopeRequest(request, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
         const items = Array.isArray(payload?.items) ? payload.items : [];
-        setTasks(items.map(normalizeCommandCenterTask).filter((task): task is CommandCenterTask => Boolean(task)));
+        setTasks(items
+          .map(item => normalizeCommandCenterTask(item, isZh ? 'zh' : 'en'))
+          .filter((task): task is CommandCenterTask => Boolean(task)));
         setTaskError(payload?.degraded ? copy.degradedTaskState : '');
       } catch (error: any) {
         if (isCurrentScopeRequest(request, activeScopeKeyRef.current, scopeGenerationRef.current)) {
-          setTaskError(error?.message || String(error));
+          setTaskError(copy.degradedTaskState);
         }
       } finally {
         if (isCurrentScopeRequest(request, activeScopeKeyRef.current, scopeGenerationRef.current)) setLoading(false);
@@ -218,7 +235,7 @@ export function CommandCenterPanel({
     })();
     refreshInFlightRef.current = promise;
     return promise;
-  }, [copy.degradedTaskState, scopeKey]);
+  }, [copy.degradedTaskState, isZh, scopeKey]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -256,11 +273,11 @@ export function CommandCenterPanel({
       await refresh();
       await refreshRuntime();
     } catch (error: any) {
-      setTaskError(error?.message || String(error));
+      setTaskError(copy.degradedTaskState);
     } finally {
       setControlInFlightIds(previous => previous.filter(id => id !== task.id));
     }
-  }, [controlInFlightIds, refresh, refreshRuntime]);
+  }, [controlInFlightIds, copy.degradedTaskState, refresh, refreshRuntime]);
 
   const orbitTasks = useMemo(() => buildLumiCoreOrbitTasks(tasks), [tasks]);
   const activeTasks = useMemo(() => tasks.filter(commandCenterTaskIsActive), [tasks]);
@@ -336,23 +353,24 @@ export function CommandCenterPanel({
                 <div className="rounded-xl border border-dashed border-white/[0.07] px-3 py-5 text-center text-[10px] text-white/28">{copy.noTasks}</div>
               ) : (
                 <div className="space-y-1.5">
-                  {recentTasks.map(task => {
+                  {recentTasks.map((task, taskIndex) => {
                     const expanded = expandedTaskId === task.id;
                     const inFlight = controlInFlightIds.includes(task.id);
+                    const taskPanelId = `command-center-task-${taskIndex}`;
                     return (
                       <article key={task.id} data-task-cancel-requested={task.cancellationRequested ? 'true' : undefined} className="overflow-hidden rounded-xl border border-white/[0.065] bg-black/15">
-                        <button type="button" aria-expanded={expanded} aria-controls={`command-center-task-${task.id}`} onClick={() => setExpandedTaskId(expanded ? null : task.id)} className="flex w-full items-center gap-2 px-3 py-2.5 text-left hover:bg-white/[0.035]">
+                        <button type="button" aria-expanded={expanded} aria-controls={taskPanelId} onClick={() => setExpandedTaskId(expanded ? null : task.id)} className="flex w-full items-center gap-2 px-3 py-2.5 text-left hover:bg-white/[0.035]">
                           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${commandCenterTaskIsActive(task) ? 'animate-pulse bg-cyan-300' : task.phase === 'completed' ? 'bg-emerald-300' : task.phase === 'failed' || task.phase === 'blocked' ? 'bg-rose-300' : 'bg-white/25'}`} />
-                          <span className="min-w-0 flex-1 truncate text-[10px] font-bold text-white/68">{task.title}</span><span className="shrink-0 text-[8px] font-black uppercase text-white/32">{task.phase}</span><ChevronDown size={12} className={`shrink-0 text-white/28 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+                          <span className="min-w-0 flex-1 truncate text-[10px] font-bold text-white/68">{task.title || copy.tasks}</span><span className="shrink-0 text-[8px] font-black uppercase text-white/32">{customerVisibleTaskStatus(task.phase || task.status, isZh ? 'zh' : 'en')}</span><ChevronDown size={12} className={`shrink-0 text-white/28 transition-transform ${expanded ? 'rotate-180' : ''}`} />
                         </button>
                         {expanded && (
-                          <div id={`command-center-task-${task.id}`} className="space-y-2 border-t border-white/[0.06] p-2.5">
+                          <div id={taskPanelId} className="space-y-2 border-t border-white/[0.06] p-2.5">
                             <div className="grid grid-cols-2 gap-2 text-[9px] text-white/38">
-                              <div className="rounded-lg border border-white/[0.055] bg-black/15 px-2.5 py-2"><span className="block text-[8px] font-black uppercase text-white/24">{copy.phase}</span><span className="mt-1 block text-white/55">{task.phase}{task.progress?.checkpoint ? ` · ${task.progress.checkpoint}` : ''}</span></div>
-                              <div className="rounded-lg border border-white/[0.055] bg-black/15 px-2.5 py-2"><span className="block text-[8px] font-black uppercase text-white/24">{copy.progress}</span><span className="mt-1 block text-white/55">{task.progress?.completedUnits || 0}/{task.progress?.totalUnits || 0} · {copy.receipts} {task.progress?.receiptCount || 0}</span></div>
+                              <div className="rounded-lg border border-white/[0.055] bg-black/15 px-2.5 py-2"><span className="block text-[8px] font-black uppercase text-white/24">{copy.phase}</span><span className="mt-1 block text-white/55">{customerVisibleTaskStatus(task.phase || task.status, isZh ? 'zh' : 'en')}</span></div>
+                              <div className="rounded-lg border border-white/[0.055] bg-black/15 px-2.5 py-2"><span className="block text-[8px] font-black uppercase text-white/24">{copy.progress}</span><span className="mt-1 block text-white/55">{task.progress?.completedUnits || 0}/{task.progress?.totalUnits || 0} · {copy.verification} {task.progress?.receiptCount || 0}</span></div>
                             </div>
-                            {task.evidence && <div className="rounded-lg border border-cyan-300/10 bg-cyan-300/[0.025] px-2.5 py-2 text-[9px] leading-4 text-white/42"><span className="font-black text-cyan-100/55">{copy.verification}: </span>{task.evidence.verification} · {copy.receipts} {task.evidence.evidenceCount}</div>}
-                            {task.blocker && <div className="rounded-lg border border-rose-300/10 bg-rose-300/[0.035] px-2.5 py-2 text-[10px] leading-4 text-rose-100/65"><span className="font-black">{copy.blocker}: </span>{task.blocker}</div>}
+                            {task.evidence && <div className="rounded-lg border border-cyan-300/10 bg-cyan-300/[0.025] px-2.5 py-2 text-[9px] leading-4 text-white/42"><span className="font-black text-cyan-100/55">{copy.verification}: </span>{customerVisibleTaskStatus(task.evidence.verification, isZh ? 'zh' : 'en')} · {task.evidence.evidenceCount}</div>}
+                            {task.blocker && !task.completionFeedback && <div className="rounded-lg border border-rose-300/10 bg-rose-300/[0.035] px-2.5 py-2 text-[10px] leading-4 text-rose-100/65"><span className="font-black">{copy.blocker}: </span>{task.blocker}</div>}
                             {task.nextAction && <div className="rounded-lg border border-amber-300/10 bg-amber-300/[0.025] px-2.5 py-2 text-[10px] leading-4 text-white/52"><span className="font-black text-amber-100/55">{copy.next}: </span>{task.nextAction}</div>}
                             <TaskCompletionFeedbackDetails feedback={task.completionFeedback} locale={isZh ? 'zh' : 'en'} compact />
                             {task.controls && (task.controls.canPause || task.controls.canResume || task.controls.canCancel) && (

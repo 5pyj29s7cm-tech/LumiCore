@@ -1,5 +1,6 @@
 import type { ToolExecutionRecord } from '../tools/types';
 import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../regions/packs/cn/execution_evidence_messages';
+import { formatCnToolFailureDetail } from '../regions/packs/cn/voice_fast_path_messages';
 import {
   sanitizeUserFacingNotification,
   sanitizeUserFacingExecutionOutput,
@@ -11,6 +12,7 @@ import {
   normalizeActionIntent,
 } from './normalized_action_intent';
 import { formatUserVisibleReplyForReadability } from './reply_style';
+import { containsInternalExecutionLanguage } from '../../shared/public_execution_language';
 
 export type ExecutionGuardIntent = 'conversation' | 'status_query' | 'action_execution';
 
@@ -114,12 +116,20 @@ const STRUCTURED_SECRET_DETAIL = /("(?:password|passphrase|secret|token|api.?key
 const BEARER_SECRET = /\bBearer\s+\S+/gi;
 // i18n-allow -- Chinese internal execution-guard recognition; not user-visible copy.
 const INTERNAL_GUARD_DETAIL = /No successful (?:current-turn )?tool execution|without a current-turn tool receipt|No tool execution started|execution-status claim|Missing (?:verified in-app UI mutation|in-app UI mutation|core|verified|current-turn|in-app|desktop|client|content-read|action) evidence|tool-call protocol leaked|internal tool request|fictional tool-mode|fictional user-switchable tool availability|claimed tool execution without matching tool records|Internal execution recovery|我还不能说正在执行|这一轮没有记录到成功的真实工具执行|这一轮没有成功执行任何工具|我需要先真正调用对应工具|再按当前轮回执汇报进度/iu;
+// Old builds rendered the verifier's internal report as assistant prose. Keep
+// recognizing that shape at the final boundary so replayed history or a model
+// imitation cannot put protocol vocabulary back into customer chat.
+const INTERNAL_EXECUTION_REPORT = /(?:(?:^|\n)\s*(?:状态\s*[:：]\s*(?:受阻|失败|已完成)|Status\s*:\s*(?:blocked|failed|completed))[\s\S]{0,800}(?:^|\n)\s*(?:证据|Evidence)\s*[:：])|(?:^|\n)\s*(?:具体阻塞|执行回馈)\s*[:：]?|(?:^|\n)\s*(?:Concrete blocker|Execution feedback)\s*:|(?:原目标|已有进度|已执行步骤).{0,80}(?:回执|目标状态)/imu; // i18n-allow: reviewed legacy execution-report recognition; not user-visible copy.
 const PUBLIC_RECOVERY_FAILURE_REASON = 'execution_recovery_incomplete';
 const MAX_RECEIPTS_IN_RECOVERY_PROMPT = 40;
 const PUBLIC_REASON_CODE = /^[a-z][a-z0-9_]{0,79}$/;
 // i18n-allow -- deterministic intent recognition; not user-visible copy.
 const DIRECT_STATUS_QUERY = /(?:完成了吗|成功了吗|是否成功|弄好了吗|做好了吗|执行到哪|怎么回事|怎么样了|还在(?:执行|处理|运行)吗)|\b(?:done yet|finished yet|what (?:is the task status|happened)|still (?:running|working)|did (?:it|that|you).{0,20}(?:work|finish|complete|open|send|save))\b/iu;
-const STATUS_SUBJECT_ANCHOR = /(?:当前|这次|本次|这轮|刚才|刚刚|之前|上次|那个|任务|操作|执行|处理|工作|回执)|\b(?:current|this|that|previous|last|earlier|task|operation|execution|run|receipt)\b/iu;
+// This phrase is a reaction unless the current turn carries task receipts.
+// Durable continuation resolves it against an actual unfinished task before
+// execution recovery sees it; the guard must not invent a new status task.
+const BARE_AMBIGUOUS_REACTION = /^(?:(?:你|lumi)[，,\s]*)?(?:怎么回事|什么情况|搞什么|什么鬼|干嘛呢|怎么了)[啊呀吧嘛呢，,。！？?!\s]*$/iu; // i18n-allow: reviewed conversational-reaction recognition; not user-visible copy.
+const STATUS_SUBJECT_ANCHOR = /(?:当前|这次|本次|这轮|刚才|刚刚|之前|上次|那个|任务|操作|执行|处理|工作|回执)|\b(?:current|this|that|previous|last|earlier|task|operation|execution|run|receipt)\b/iu; // i18n-allow: reviewed status-query recognition; not user-visible copy.
 const STATUS_ASPECT = /(?:状态|进度|结果|证据|回执|完成|成功|失败|受阻)|\b(?:status|progress|result|evidence|receipt|completed?|finished?|succeeded?|failed?|blocked)\b/iu; // i18n-allow: reviewed execution-status input recognition.
 const CONCEPTUAL_STATUS_DISCUSSION = /(?:什么是|什么意思|概念|定义|标准|原则|应该|应当|如何|怎么判断|依据什么|怎样才算|请只解释|仅解释|不要执行|不执行任何操作)|\b(?:what (?:is|does)|meaning|concept|definition|criteria|standard|principle|should|how (?:to|should)|explain only|do not (?:execute|run|perform))\b/iu; // i18n-allow: reviewed conceptual-question input recognition.
 const UNVERIFIED_TERMINAL_ACTION_ANSWER = /(?:我|文件|消息|任务|操作|提醒|应用|网页)?[^。！？!?\n]{0,12}(?:已|已经|成功)[^。！？!?\n]{0,12}(?:保存|写入|发送|提交|发布|创建|打开|启动|执行|完成)|(?:保存|写入|发送|提交|发布|创建|打开|启动|执行|完成)成功(?:了)?[。！？!?\s]*$|\b(?:I\s+(?:have\s+)?|the\s+(?:file|message|task)\s+(?:has\s+)?)?(?:saved|sent|submitted|published|created|opened|launched|executed|completed)\s+(?:it|successfully)?[.!?\s]*$/iu; // i18n-allow: reviewed unverified terminal-action claim recognition.
@@ -153,7 +163,7 @@ function redactReceiptDetail(value: unknown, maxLength = 180): string {
     .replace(BEARER_SECRET, 'Bearer [redacted]')
     .replace(/\s+/g, ' ')
     .trim();
-  if (!redacted || INTERNAL_GUARD_DETAIL.test(redacted)) return '';
+  if (!redacted || INTERNAL_GUARD_DETAIL.test(redacted) || INTERNAL_EXECUTION_REPORT.test(redacted)) return '';
   return redacted.slice(0, maxLength);
 }
 
@@ -240,6 +250,7 @@ export function classifyExecutionGuardIntent(
   ) return 'action_execution';
   if (hasMixedStatusExecutionIntent(clean)) return 'action_execution';
   if (CONCEPTUAL_STATUS_DISCUSSION.test(clean) && !DIRECT_STATUS_QUERY.test(clean)) return 'conversation';
+  if (BARE_AMBIGUOUS_REACTION.test(clean) && records.length === 0) return 'conversation';
   if (isExecutionStatusQuery(clean)) return 'status_query';
   if (CONVERSATION_ONLY.test(clean)) return 'conversation';
   const contract = buildActionContract(clean);
@@ -341,28 +352,20 @@ function latestReceiptOutcome(records: ToolExecutionRecord[]): 'completed' | 'bl
   return latest ? receiptOutcome(latest) : 'blocked';
 }
 
-function receiptEvidenceLines(records: ToolExecutionRecord[], chinese: boolean): string[] {
-  const retained = records.slice(-3);
-  if (retained.length === 0) {
-    return [chinese
-      ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryEvidenceUnavailable
-      : 'No independently verifiable execution result is available yet'];
-  }
-  return retained.map(record => {
-    const outcome = receiptOutcome(record);
-    const label = chinese
-      ? outcome === 'completed'
-        ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryEvidenceVerified
-        : outcome === 'failed'
-          ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryEvidenceFailed
-          : CN_EXECUTION_EVIDENCE_MESSAGES.recoveryEvidenceUnverified
-      : outcome === 'completed' ? 'verified' : outcome === 'failed' ? 'failed' : 'not verified';
-    const detail = redactReceiptDetail(
-      record.error || record.terminalVerification?.reason,
-      120,
-    );
-    return `${friendlyReceiptAction(record, chinese)} (${label}${detail ? `: ${detail}` : ''})`;
-  });
+function hasVerifiedProgress(records: ToolExecutionRecord[]): boolean {
+  return records.some(record => receiptOutcome(record) === 'completed');
+}
+
+function trimSentence(value: string): string {
+  return String(value || '').trim().replace(/[。.!?；;]+$/u, '');
+}
+
+function naturalChineseFailureSentence(value: string): string {
+  const detail = trimSentence(value);
+  const match = detail.match(/^(桌面操作|浏览器操作|客户端操作|文件操作|语音操作|消息发送|当前操作)：(.+)$/u); // i18n-allow: reviewed regional label parsing; not user-visible copy.
+  if (!match) return CN_EXECUTION_EVIDENCE_MESSAGES.recoveryFailureSentence(detail);
+  const [, action, reason] = match;
+  return CN_EXECUTION_EVIDENCE_MESSAGES.recoveryActionFailureSentence(action, reason);
 }
 
 export function formatExecutionStatusFeedback(
@@ -375,32 +378,35 @@ export function formatExecutionStatusFeedback(
   const outcome = options.forceBlocked && observedOutcome === 'completed'
     ? 'blocked'
     : observedOutcome;
-  const evidence = receiptEvidenceLines(records, chinese).join(chinese ? '\uff1b' : '; ');
   if (chinese) {
-    const status = outcome === 'completed'
-      ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryStatusCompleted
-      : outcome === 'failed'
-        ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryStatusFailed
-        : CN_EXECUTION_EVIDENCE_MESSAGES.recoveryStatusBlocked;
-    const next = outcome === 'completed'
-      ? ''
-      : outcome === 'failed'
-        ? `\n${CN_EXECUTION_EVIDENCE_MESSAGES.recoveryNextFailed}`
-        : `\n${CN_EXECUTION_EVIDENCE_MESSAGES.recoveryNextBlocked}`;
-    return `${CN_EXECUTION_EVIDENCE_MESSAGES.recoveryStatus(status)}\n${CN_EXECUTION_EVIDENCE_MESSAGES.recoveryEvidence(evidence)}${next}`;
+    if (outcome === 'completed') {
+      return CN_EXECUTION_EVIDENCE_MESSAGES.recoveryStepCompleted;
+    }
+    if (outcome === 'failed') {
+      const failure = naturalChineseFailureSentence(safeFailureDetail(records, true));
+      return CN_EXECUTION_EVIDENCE_MESSAGES.recoveryStepFailed(failure, hasVerifiedProgress(records));
+    }
+    return records.length > 0
+      ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryStepUnconfirmed(hasVerifiedProgress(records))
+      : CN_EXECUTION_EVIDENCE_MESSAGES.recoveryNoResult;
   }
-  const status = outcome === 'completed' ? 'completed' : outcome;
-  const next = outcome === 'completed'
-    ? ''
-    : outcome === 'failed'
-      ? '\nNext: keep the existing receipts, fix the concrete failure, and then resume.'
-      : '\nNext: keep the existing progress, verify the target state, and then continue.';
-  return `Status: ${status}.\nEvidence: ${evidence}.${next}`;
+  if (outcome === 'completed') {
+    return 'That step is complete, and I have a result that confirms it.';
+  }
+  if (outcome === 'failed') {
+    const blocker = trimSentence(safeFailureDetail(records, false));
+    return `Not yet. That step did not finish${blocker ? `: ${blocker}` : ''}. The existing progress is intact, so it can be retried from here.`;
+  }
+  return records.length > 0
+    ? 'Not yet. The available result does not confirm that step as complete. The existing progress is intact and can continue from here.'
+    : 'Not yet. I did not get a result that confirms the operation. The target can be checked again before continuing.';
 }
 
 export function formatConversationGuardClarification(task: string): string {
   return /[\u3400-\u9fff]/.test(task)
-    ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryConversationClarification
+    ? BARE_AMBIGUOUS_REACTION.test(String(task || '').trim())
+      ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryBareReaction
+      : CN_EXECUTION_EVIDENCE_MESSAGES.recoveryConversationClarification
     : 'I need to confirm your intent: is this ordinary conversation, or do you want an action performed on a specific target? If it is an action, tell me the target and desired change.';
 }
 
@@ -449,7 +455,11 @@ function safeFailureDetail(records: ToolExecutionRecord[], chinese: boolean): st
     }
     return detail;
   })();
-  return chinese ? `${action}：${mappedDetail}` : `${action}: ${mappedDetail}`;
+  if (chinese) return `${action}：${formatCnToolFailureDetail(mappedDetail)}`;
+  const safeEnglishDetail = /(?:\b(?:target_mismatch|taskId|requestId|receipt|terminalVerification)\b|\{[\s\S]*\}|[_-](?:receipt|task|request))/iu.test(mappedDetail)
+    ? 'the operation could not confirm the requested result'
+    : mappedDetail;
+  return `${action}: ${safeEnglishDetail}`;
 }
 
 function containsInternalGuardDetail(value: unknown): boolean {
@@ -459,7 +469,9 @@ function containsInternalGuardDetail(value: unknown): boolean {
     : (() => {
         try { return JSON.stringify(value); } catch { return String(value); }
       })();
-  return INTERNAL_GUARD_DETAIL.test(serialized);
+  return containsInternalExecutionLanguage(serialized)
+    || INTERNAL_GUARD_DETAIL.test(serialized)
+    || INTERNAL_EXECUTION_REPORT.test(serialized);
 }
 
 function publicBlockedReason(decision: ExecutionGuardRecoveryDecision): string {
@@ -514,7 +526,7 @@ export function sanitizeExecutionResponseForDelivery<
         blocked,
       );
   const fallbackText = textLeaks
-    ? intent === 'conversation'
+      ? intent === 'conversation'
       ? formatConversationGuardClarification(task)
       : intent === 'status_query'
         ? formatExecutionStatusFeedback(task, options.toolRecords || [])
@@ -567,8 +579,17 @@ function sanitizeLeakingFinalization<
   const leakingReason = containsInternalGuardDetail(finalization.reason);
   const leakingNotification = containsInternalGuardDetail(finalization.notification);
   const intent = decision.intent || classifyExecutionGuardIntent(task, records);
-  const replaceWithIntentFeedback = forceFailureText || leakingText || leakingReason;
-  const informationalGuard = replaceWithIntentFeedback && intent !== 'action_execution';
+  const currentText = String(finalization.text || '').trim();
+  // A failed recovery pass does not make an already-safe finalizer message
+  // invalid. Preserve useful explanations such as “bring the document to the
+  // foreground” instead of overwriting them with one generic verifier report.
+  // We still replace empty text, protocol leakage, or an unverified success
+  // claim so the user never receives a false completion statement.
+  const replaceWithIntentFeedback = leakingText
+    || !currentText
+    || (forceFailureText && UNVERIFIED_TERMINAL_ACTION_ANSWER.test(currentText));
+  const informationalGuard = (forceFailureText || leakingText || leakingReason)
+    && intent !== 'action_execution';
   const publicReason = publicDeliveryReason(
     leakingReason || forceFailureText
       ? publicBlockedReason(decision)
@@ -607,29 +628,18 @@ export function formatExecutionRecoveryFailure(
 ): string {
   const chinese = /[\u3400-\u9fff]/.test(task);
   const blocker = safeFailureDetail(records, chinese);
-  const failed = latestReceiptOutcome(records) === 'failed';
   if (chinese) {
-    return [
-      CN_EXECUTION_EVIDENCE_MESSAGES.recoveryStatus(
-        failed
-          ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryStatusFailed
-          : CN_EXECUTION_EVIDENCE_MESSAGES.recoveryStatusBlocked,
-      ),
-      CN_EXECUTION_EVIDENCE_MESSAGES.recoveryNotCompleted,
-      CN_EXECUTION_EVIDENCE_MESSAGES.recoveryEvidence(
-        receiptEvidenceLines(records, true).join('; '),
-      ),
-      CN_EXECUTION_EVIDENCE_MESSAGES.recoveryBlocker(blocker),
-      CN_EXECUTION_EVIDENCE_MESSAGES.recoveryRetained,
-    ].join('\n');
+    return records.length > 0
+      ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryRetry(
+          naturalChineseFailureSentence(blocker),
+          hasVerifiedProgress(records),
+        )
+      : CN_EXECUTION_EVIDENCE_MESSAGES.recoveryNoResultRetry;
   }
-  return [
-    `Status: ${failed ? 'failed' : 'blocked'}.`,
-    'This task has not completed successfully.',
-    `Evidence: ${receiptEvidenceLines(records, false).join('; ')}.`,
-    `Concrete blocker: ${blocker}.`,
-    'I retained the original goal, executed steps, and receipts. I will not report this as complete or ask you to manage the internal workflow; execution can resume from this state when the blocker clears.',
-  ].join('\n');
+  const cause = trimSentence(blocker);
+  return records.length > 0
+    ? `That step did not finish${cause ? `: ${cause}` : ''}. The existing progress is intact, so it can be retried from here without repeating completed actions.`
+    : 'That step did not finish because no result confirmed the operation. The target can be checked again and work can continue from here.';
 }
 
 function mergeRecoveryToolRecords(
@@ -638,8 +648,23 @@ function mergeRecoveryToolRecords(
 ): ToolExecutionRecord[] {
   const merged = [...priorRecords];
   for (const record of recoveryRecords) {
+    const duplicateIndex = record.id
+      ? merged.findIndex(item => item.id === record.id)
+      : -1;
+    // A desktop-plan record is a turn-local aggregate snapshot. Recovery can
+    // add observations or actions to the same tracker, so the newer snapshot
+    // must replace the stale pre-recovery one before the task is finalized.
+    // Ordinary tool receipts remain immutable and are still only appended.
+    if (
+      duplicateIndex >= 0
+      && record.name === 'desktop_execution_plan_receipt'
+      && merged[duplicateIndex]?.name === record.name
+    ) {
+      merged[duplicateIndex] = record;
+      continue;
+    }
     const duplicate = record.id
-      ? merged.some(item => item.id === record.id)
+      ? duplicateIndex >= 0
       : merged.some(item => (
           item.name === record.name
           && item.result === record.result

@@ -16,6 +16,7 @@ import {
   revokePendingConfirmationChannelDurably,
 } from "../tools/pending_confirmation";
 import { ensurePendingConfirmationPersistenceInitialized } from "../tools/pending_confirmation_repository";
+import { sanitizePublicExecutionText } from '../../shared/public_execution_language';
 
 type ConversationScope = { domain: 'personal' | 'work'; orgId: string };
 
@@ -33,6 +34,32 @@ function getConversationScope(req: any): ConversationScope {
 function conversationMatchesScope(conv: any, scope: ConversationScope): boolean {
   if (scope.domain === 'work') return !!scope.orgId && conv.orgId === scope.orgId;
   return !conv.orgId || conv.orgId === '';
+}
+
+function customerAssistantText(value: unknown): string {
+  const text = String(value || '').trim();
+  return sanitizePublicExecutionText(
+    text,
+    /[\u3400-\u9fff]/u.test(text) ? 'zh' : 'en',
+  );
+}
+
+export function projectConversationMessageForCustomer(message: any): any {
+  const role = String(message?.role || '').toLowerCase();
+  if (role === 'assistant' || role === 'agent') {
+    return {
+      ...message,
+      ...(message.message !== undefined ? { message: customerAssistantText(message.message) } : {}),
+      ...(message.content !== undefined ? { content: customerAssistantText(message.content) } : {}),
+      ...(message.response !== undefined ? { response: customerAssistantText(message.response) } : {}),
+    };
+  }
+  // Older combined rows store the assistant answer in `response` beside the
+  // user message. Project that half without altering the user's own words.
+  if (message?.response !== undefined) {
+    return { ...message, response: customerAssistantText(message.response) };
+  }
+  return message;
 }
 
 export function mountConversationRoutes(router: Router, _jwtSecret: string) {
@@ -58,11 +85,12 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
         const lastVisible = [...recent].reverse().find(message => (
           String(message.role === 'assistant' ? message.message : (message.response || message.message) || '').trim()
         ));
-        const preview = String(
+        const rawPreview = String(
           lastVisible
             ? (lastVisible.role === 'assistant' ? lastVisible.message : (lastVisible.response || lastVisible.message))
             : conversation.summary || ''
-        ).replace(/\s+/g, ' ').trim().slice(0, 120);
+        );
+        const preview = customerAssistantText(rawPreview).replace(/\s+/g, ' ').trim().slice(0, 120);
         const displayTitle = String(conversation.title || lastUser?.message || preview || '').replace(/\s+/g, ' ').trim().slice(0, 48);
         return { ...conversation, displayTitle, preview };
       });
@@ -119,11 +147,12 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
       })
       .map((item: any) => {
         const role = item.role === 'assistant' ? 'assistant' : 'user';
-        const text = String(
+        const rawText = String(
           item.message ||
           (item.response && item.role === 'assistant' ? item.response : '') ||
           (!item.response ? item.content || '' : '')
         ).trim();
+        const text = role === 'assistant' ? customerAssistantText(rawText) : rawText;
         return {
           id: item.id,
           userId: item.userId,
@@ -152,7 +181,7 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
     const scope = getConversationScope(req);
     if (!conversationMatchesScope(conv, scope)) return res.status(403).json({ error: "Unauthorized" });
     const limit = parseInt(req.query.limit as string) || 50;
-    const messages = getMessages(req.params.id, limit);
+    const messages = getMessages(req.params.id, limit).map(projectConversationMessageForCustomer);
     res.json({ messages });
   });
 

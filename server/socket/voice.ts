@@ -3,6 +3,7 @@
  * v2.1 — Multi-turn tool iteration, hands/mouth separation, input queue
  */
 import { Server, Socket } from "socket.io";
+import { projectCustomerVisibleExecutionEvent } from './public_agent_event_projection';
 import fs from "fs";
 import path from "path";
 import { randomUUID } from "node:crypto";
@@ -1838,13 +1839,16 @@ async function processVoiceInput(
     event: string,
     payload: Record<string, any> = {},
   ): Record<string, any> => {
-    const publicPayload: Record<string, any> = event === 'agent:response'
+    const sanitizedPayload: Record<string, any> = event === 'agent:response'
       ? sanitizeExecutionResponseForDelivery(payload, { task: actionIntentText })
       : event === 'agent:notification'
         ? sanitizeExecutionNotificationForDelivery(payload, { task: actionIntentText })
       : event === 'agent:error'
         ? sanitizeVoiceAgentErrorPayload()
         : payload;
+    const publicPayload = projectCustomerVisibleExecutionEvent(event, sanitizedPayload, {
+      taskText: actionIntentText,
+    });
     return {
       ...publicPayload,
       source: publicPayload.source || 'voice',
@@ -4750,12 +4754,14 @@ async function processVoiceInput(
           taskId: actionTaskExecution.state?.taskId,
           requestId,
         });
-    const desktopPauseBlocksCurrentTask = () => {
+    const desktopPauseBlocksCurrentTask = (
+      records = taskAwareRecords(toolResults),
+    ) => {
       return shouldBlockForDesktopControlPause({
         pauseReason: desktopRelay.getControlPauseReason(),
         waitingForConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
         taskText: actionIntentText,
-        toolRecords: taskAwareRecords(toolResults),
+        toolRecords: records,
       });
     };
     if (desktopPauseBlocksCurrentTask()) {
@@ -4775,7 +4781,9 @@ async function processVoiceInput(
       pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
       requiresFreshConfirmation: correctionRequiresFreshConfirmation,
       aborted: !isCurrentTurn() || desktopPauseBlocksCurrentTask(),
-      isAborted: () => !isCurrentTurn() || desktopPauseBlocksCurrentTask(),
+      // Losing the current voice turn is cancellation. A desktop pause is a
+      // resumable customer-visible state and must not become AbortError.
+      isAborted: () => !isCurrentTurn(),
       isPendingConfirmation: () => Boolean(pendingConfirmationCreatedThisTurn),
       toolRecords: toolResults,
       attempt: async ({ instruction, priorToolRecords, recordTool }) => {
@@ -4857,23 +4865,34 @@ async function processVoiceInput(
           toolRecords: withDesktopExecutionReceipt(recovery.toolCalls, desktopExecutionTracker),
         };
       },
-      finalize: (candidateText, records) => pendingConfirmationCreatedThisTurn
-        ? {
-            text: CN_TASK_EXECUTION_MESSAGES.waitingConfirmation(
-              actionTaskExecution.state?.goal || actionIntentText,
-            ),
-            blocked: false,
-            reason: 'waiting_confirmation',
-          }
-        : finalizeLumiResponse({
-            taskText: actionIntentText,
-            responseText: candidateText,
-            toolRecords: taskAwareRecords(records),
-            source: 'voice_guard_recovery',
-            flow: turnFlow,
-            taskId: actionTaskExecution.state?.taskId,
-            requestId,
-          }),
+      finalize: (candidateText, records) => {
+        const recoveredRecords = taskAwareRecords(records);
+        const candidate = pendingConfirmationCreatedThisTurn
+          ? {
+              text: CN_TASK_EXECUTION_MESSAGES.waitingConfirmation(
+                actionTaskExecution.state?.goal || actionIntentText,
+              ),
+              blocked: false,
+              reason: 'waiting_confirmation',
+            }
+          : finalizeLumiResponse({
+              taskText: actionIntentText,
+              responseText: candidateText,
+              toolRecords: recoveredRecords,
+              source: 'voice_guard_recovery',
+              flow: turnFlow,
+              taskId: actionTaskExecution.state?.taskId,
+              requestId,
+            });
+        if (!desktopPauseBlocksCurrentTask(recoveredRecords)) return candidate;
+        const pausePresentation = desktopPausePresentation();
+        return {
+          ...candidate,
+          text: pausePresentation.text,
+          blocked: true,
+          reason: pausePresentation.reason,
+        };
+      },
     });
     if (!isCurrentTurn()) return;
     finalResponse = guardRecovery.finalization;

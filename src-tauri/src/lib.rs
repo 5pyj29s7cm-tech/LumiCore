@@ -60,31 +60,21 @@ struct WallpaperState {
     was_maximized: bool,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum WallpaperPresentation {
+    #[default]
     Workbench,
     DesktopControl,
 }
 
-impl Default for WallpaperPresentation {
-    fn default() -> Self {
-        Self::Workbench
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum WallpaperWorkspace {
+    #[default]
     Personal,
     CommandCenter,
     Organization,
-}
-
-impl Default for WallpaperWorkspace {
-    fn default() -> Self {
-        Self::Personal
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

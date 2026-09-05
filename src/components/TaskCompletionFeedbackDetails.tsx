@@ -9,6 +9,7 @@ import type { Locale } from '@/i18n/runtime';
 import { taskCompletionFeedbackCopy } from '@/i18n/locales/taskCompletionFeedback';
 import {
   normalizeTaskCompletionFeedback,
+  projectTaskCompletionFeedbackForCustomer,
   type TaskCompletionFeedback,
 } from './workflowTypes';
 
@@ -110,15 +111,18 @@ export function TaskCompletionFeedbackDetails({
   variant?: 'default' | 'chat';
   className?: string;
 }) {
-  const normalized = normalizeTaskCompletionFeedback(feedback);
-  if (!normalized) return null;
+  const normalizedInput = normalizeTaskCompletionFeedback(feedback);
+  if (!normalizedInput) return null;
   if (variant === 'chat') {
     // A normal completed/cancelled task should read like an ordinary assistant
-    // reply. Keep the full audit evidence in the task center and reserve an
-    // inline disclosure for states that actually need the user's attention.
-    if (normalized.status === 'completed' || normalized.status === 'cancelled') return null;
-    return <ChatTaskCompletionFeedback feedback={normalized} locale={locale} className={className} />;
+    // reply. Failed/blocked details are already present in the assistant's
+    // natural-language reply, so reserve the inline disclosure for live work
+    // or a confirmation that actually needs the user's attention.
+    if (normalizedInput.status !== 'working' && !feedbackNeedsConfirmation(normalizedInput)) return null;
+    return <ChatTaskCompletionFeedback feedback={normalizedInput} locale={locale} className={className} />;
   }
+  const normalized = projectTaskCompletionFeedbackForCustomer(normalizedInput, locale);
+  if (!normalized) return null;
   const copy = taskCompletionFeedbackCopy(locale);
   const sections: Array<{ key: FeedbackSectionKey; items: string[] }> = [
     { key: 'completed', items: normalized.completed },

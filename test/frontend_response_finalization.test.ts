@@ -6,6 +6,8 @@ import {
   isActionSuccessClaim,
   isFinalizedSuccessfulResponse,
   isTerminalAgentStatus,
+  hasInternalAgentExecutionDetail,
+  sanitizeAgentResponseTextForDisplay,
   shouldDisplayAgentResponse,
   shouldSpeakAgentResponse,
 } from '../src/lib/agentResponseDelivery';
@@ -37,7 +39,7 @@ describe('frontend agent response finalization gate', () => {
     expect(shouldDisplayAgentResponse(verified)).toBe(true);
     expect(shouldSpeakAgentResponse(verified)).toBe(true);
     expect(shouldDisplayAgentResponse(blocked)).toBe(true);
-    expect(shouldSpeakAgentResponse(blocked)).toBe(false);
+    expect(shouldSpeakAgentResponse(blocked)).toBe(true);
     expect(isFinalizedSuccessfulResponse(verified)).toBe(true);
     expect(isFinalizedSuccessfulResponse(blocked)).toBe(false);
   });
@@ -52,6 +54,11 @@ describe('frontend agent response finalization gate', () => {
     expect(isActionSuccessClaim(partialFailure.text)).toBe(true);
     expect(shouldDisplayAgentResponse(partialFailure)).toBe(true);
     expect(shouldSpeakAgentResponse(partialFailure)).toBe(false);
+    expect(shouldSpeakAgentResponse({
+      text: '文件已经写入，但读取确认没有完成。',
+      finalized: true,
+      blocked: true,
+    })).toBe(true);
   });
 
   it('keeps confirmation boundaries visible even when transport finalization is absent', () => {
@@ -68,7 +75,7 @@ describe('frontend agent response finalization gate', () => {
       finalized: true,
       blocked: true,
       reason: 'execution_recovery_incomplete',
-    }, true)).toContain('\u5df2\u4fdd\u7559');
+    }, true)).toBe('刚才没有完成，我没有拿到能确认结果的反馈。你可以直接让我重试。');
     expect(describeAgentResponseDelivery({
       text: '\u9700\u8981\u786e\u8ba4\u540e\u624d\u80fd\u7ee7\u7eed\u3002',
       reason: 'waiting_confirmation',
@@ -77,15 +84,58 @@ describe('frontend agent response finalization gate', () => {
       text: 'blocked',
       reason: 'execution_capability_unavailable',
     }, false)).toContain('Settings');
+    expect(describeAgentResponseDelivery({
+      text: [
+        'Status: blocked.',
+        'Evidence: client operation (not verified).',
+        'Concrete blocker: target_mismatch.',
+        'The receipts were retained.',
+      ].join('\n'),
+      finalized: true,
+      blocked: true,
+      reason: 'execution_recovery_incomplete',
+    }, false)).toBe('This did not finish because the active window or target changed. Select the intended target, then try again.');
+    expect(describeAgentResponseDelivery({
+      text: 'desktop operation failed: target_mismatch',
+      finalized: true,
+      blocked: true,
+      reason: 'target_mismatch',
+    }, true)).toBe('这次还没完成，因为当前窗口或目标已经变化。请重新选中目标后重试。');
   });
 
-  it('uses retained-state language instead of exposing the missing-tool guard in progress', () => {
+  it('projects legacy execution reports into short customer language', () => {
+    const emptyEvidenceReport = [
+      '状态：受阻。',
+      '证据：暂时没有可核验的执行结果。',
+      '下一步：保留已有进度，先核验目标状态再继续。',
+    ].join('\n');
+    const targetMismatchReport = [
+      '状态：失败。',
+      '这项任务还没有执行成功。',
+      '证据：文件操作 (失败: Desktop target application has not matched a fresh observation.); 桌面操作 (失败: Desktop execution ended as target_mismatch.)。',
+      '具体阻塞：桌面操作：后续窗口核验没有确认当前前台状态。',
+    ].join('\n');
+
+    expect(hasInternalAgentExecutionDetail(emptyEvidenceReport)).toBe(true);
+    expect(sanitizeAgentResponseTextForDisplay(emptyEvidenceReport, 'zh')).toBe(
+      '刚才没有完成，我没有拿到能确认结果的反馈。你可以直接让我重试。',
+    );
+    expect(sanitizeAgentResponseTextForDisplay(targetMismatchReport, 'zh')).toBe(
+      '刚才没有完成，因为操作后的窗口和目标不一致。请把目标窗口保持在前台，再让我重试。',
+    );
+    expect(sanitizeAgentResponseTextForDisplay('这是正常的 **Markdown** 回复。', 'zh')).toBe(
+      '这是正常的 **Markdown** 回复。',
+    );
+  });
+
+  it('uses natural failure language instead of exposing the missing-tool guard in progress', () => {
     const blocked = describeTurnCompletionProgress(true, false, true, {
       finalized: true,
       blocked: true,
       reason: 'execution_recovery_incomplete',
     });
-    expect(blocked.text).toContain('\u4e0a\u4e0b\u6587');
+    expect(blocked.text).toContain('这次还没有完成');
+    expect(blocked.text).not.toMatch(/上下文|回执/u);
     expect(blocked.text).not.toContain('\u672a\u68c0\u6d4b\u5230\u5b9e\u9645\u5de5\u5177\u6267\u884c');
   });
 
@@ -99,6 +149,11 @@ describe('frontend agent response finalization gate', () => {
     })).toBe(true);
     expect(shouldSpeakAgentResponse({
       text: '\u8fd9\u6b21\u6ca1\u6709\u5b8c\u6210\u3002',
+      finalized: true,
+      blocked: true,
+    })).toBe(true);
+    expect(shouldSpeakAgentResponse({
+      text: 'Status: blocked. Evidence: terminal receipt missing.',
       finalized: true,
       blocked: true,
     })).toBe(false);
@@ -145,6 +200,21 @@ describe('frontend dynamic output path audit', () => {
     expect(source).toContain('shouldDisplayAgentResponse');
     expect(source).toContain('shouldSpeakAgentResponse');
     expect(source).toContain('if (!shouldDisplayAgentResponse(delivery)) return');
+  });
+
+  it('never feeds a raw backend reason into the media workbench error detail', () => {
+    const source = read('src/components/AgentChatPage.tsx');
+    expect(source).not.toContain('String(data.reason || data.text || mediaGenerationText.taskBlocked)');
+    expect(source).toContain('describeAgentResponseDelivery({');
+  });
+
+  it('renders public tool progress instead of raw tool names, arguments, results, or errors', () => {
+    const source = read('src/components/AgentChatPage.tsx');
+    expect(source).toContain('data.publicText || describeToolProgress');
+    expect(source).toContain('data.publicText || data.text ||');
+    expect(source).not.toContain('detail: data.result?.slice');
+    expect(source).not.toContain('detail: data.error?.slice');
+    expect(source).not.toContain("Object.entries(args).map(([k, v]) =>");
   });
 
   it('does not keep a browser system-voice fallback in chat surfaces', () => {

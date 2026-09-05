@@ -6,6 +6,7 @@ import {
   classifyExecutionGuardIntent,
   decideExecutionGuardRecovery,
   formatExecutionRecoveryFailure,
+  formatExecutionStatusFeedback,
   recoverBlockedExecutionOnce,
   sanitizeExecutionResponseForDelivery,
   summarizePriorToolReceipts,
@@ -18,6 +19,7 @@ import {
   formatPendingConfirmationRequest,
   recordPendingConfirmation,
 } from '../server/tools/pending_confirmation';
+import { formatDesktopControlPausePresentation } from '../server/regions/packs/cn/desktop_control_messages';
 
 function record(patch: Partial<ToolExecutionRecord> = {}): ToolExecutionRecord {
   return {
@@ -26,6 +28,12 @@ function record(patch: Partial<ToolExecutionRecord> = {}): ToolExecutionRecord {
     result: '',
     ...patch,
   };
+}
+
+const INTERNAL_CUSTOMER_REPORT = /(?:状态|证据)\s*[:：]|具体阻塞|回执|target_mismatch|Internal execution recovery/iu;
+
+function expectNaturalCustomerReply(text: string): void {
+  expect(text).not.toMatch(INTERNAL_CUSTOMER_REPORT);
 }
 
 describe('execution guard recovery', () => {
@@ -133,12 +141,62 @@ describe('execution guard recovery', () => {
       name: 'client_action',
       error: 'authorization=Bearer-secret-token connection refused',
     })]);
-    expect(text).toContain('这项任务还没有执行成功');
+    expect(text).toContain('没有完成');
     expect(text).toContain('客户端操作');
     expect(text).not.toContain('client_action');
     expect(text).not.toContain('No successful current-turn tool execution');
     expect(text).not.toContain('我需要先真正调用');
     expect(text).not.toContain('Bearer-secret-token');
+    expectNaturalCustomerReply(text);
+  });
+
+  it('keeps Chinese failure and status replies customer-readable across internal failure shapes', () => {
+    const failedDesktop = record({
+      name: 'desktop_execution_plan_receipt',
+      error: 'Desktop execution ended as target_mismatch.',
+      terminalVerification: {
+        status: 'failed',
+        strategy: 'terminal_receipt',
+        reason: 'Desktop plan receipt is target_mismatch.',
+      },
+    });
+    const replies = [
+      formatExecutionRecoveryFailure('打开当前文档', [failedDesktop]),
+      formatExecutionRecoveryFailure('打开当前文档', []),
+      formatExecutionStatusFeedback('刚才任务的进度怎么样了？', [failedDesktop]),
+      sanitizeExecutionResponseForDelivery({
+        text: [
+          '状态：失败。',
+          '证据：桌面操作失败。',
+          '具体阻塞：Desktop execution ended as target_mismatch.',
+          '我已保留原目标、已执行步骤和回执。',
+        ].join('\n'),
+        finalized: true,
+        blocked: true,
+        reason: 'Missing verified action evidence.',
+      }, {
+        task: '刚才任务的进度怎么样了？',
+        toolRecords: [failedDesktop],
+      }).text,
+    ];
+
+    for (const reply of replies) {
+      expect(reply).toBeTruthy();
+      expectNaturalCustomerReply(String(reply));
+    }
+    expect(replies[0]).toContain('窗口和你要操作的目标不一致');
+    expect(replies[2]).toContain('还没有');
+  });
+
+  it('does not invent retained progress when there are no execution records', () => {
+    const failure = formatExecutionRecoveryFailure('打开当前文档', []);
+    const status = formatExecutionStatusFeedback('刚才任务的进度怎么样了？', []);
+
+    for (const reply of [failure, status]) {
+      expect(reply).toContain('没有拿到可以确认的操作结果');
+      expect(reply).not.toMatch(/已有进度|保留已有进度|已执行步骤/u);
+      expectNaturalCustomerReply(reply);
+    }
   });
 
   it('runs one internal attempt with immutable prior receipts and merges only new evidence', async () => {
@@ -181,6 +239,72 @@ describe('execution guard recovery', () => {
       responseText: '修复完成。',
     });
     expect(recovered.toolRecords.map(item => item.id)).toEqual(['prior-1', 'new-1']);
+  });
+
+  it('replaces a stale desktop aggregate with the recovered snapshot sharing its id', async () => {
+    const aggregateId = 'desktop-plan-plan-recovery';
+    const stale = record({
+      id: aggregateId,
+      name: 'desktop_execution_plan_receipt',
+      result: JSON.stringify({ completionVerified: false, finalState: 'target_mismatch' }),
+      error: 'Desktop execution ended as target_mismatch.',
+      terminalVerification: {
+        status: 'failed',
+        strategy: 'terminal_receipt',
+        reason: 'Desktop plan receipt is target_mismatch.',
+      },
+    });
+    const verified = record({
+      id: aggregateId,
+      name: 'desktop_execution_plan_receipt',
+      result: JSON.stringify({ completionVerified: true, finalState: 'completed' }),
+      error: undefined,
+      terminalVerification: {
+        status: 'verified',
+        strategy: 'terminal_receipt',
+        reason: 'Desktop plan and fresh post-action observation verified.',
+      },
+    });
+
+    const recovered = await recoverBlockedExecutionOnce<ExecutionGuardRecoveryFinalization>({
+      task: '打开当前文档',
+      responseText: '当前窗口还没有核验。',
+      finalization: {
+        text: '当前窗口还没有核验。',
+        blocked: true,
+        reason: 'Missing action evidence.',
+      },
+      allowToolUse: true,
+      toolRecords: [stale],
+      attempt: async ({ recordTool }) => {
+        recordTool(verified);
+        return { text: '当前文档已经打开。', toolRecords: [verified] };
+      },
+      finalize: (text, records) => {
+        const aggregate = records.find(item => item.id === aggregateId);
+        const complete = aggregate?.terminalVerification?.status === 'verified'
+          && !aggregate.error;
+        return {
+          text,
+          blocked: !complete,
+          reason: complete ? undefined : 'Missing action evidence.',
+        };
+      },
+    });
+
+    expect(recovered).toMatchObject({
+      attempted: true,
+      recoveryFailed: false,
+      responseText: '当前文档已经打开。',
+      finalization: { blocked: false },
+    });
+    expect(recovered.toolRecords).toHaveLength(1);
+    expect(recovered.toolRecords[0]).toMatchObject({
+      id: aggregateId,
+      error: undefined,
+      terminalVerification: { status: 'verified' },
+    });
+    expect(recovered.toolRecords[0].result).toContain('"completionVerified":true');
   });
 
   it('never attempts recovery across confirmation, cancellation, or uncertain external commits', async () => {
@@ -251,8 +375,8 @@ describe('execution guard recovery', () => {
       reason: 'execution_capability_unavailable',
       notification: undefined,
     });
-    expect(recovered.finalization.text).toContain('状态：受阻');
-    expect(recovered.finalization.text).toContain('证据：');
+    expect(recovered.finalization.text).toBe('当前无法继续执行。');
+    expectNaturalCustomerReply(recovered.finalization.text);
     expect(JSON.stringify(recovered.finalization)).not.toContain('No successful current-turn');
   });
 
@@ -335,7 +459,9 @@ describe('execution guard recovery', () => {
 
     expect(delivery.blocked).toBe(true);
     expect(delivery.reason).toBe('execution_recovery_incomplete');
-    expect(delivery.text).toContain('还没有执行成功');
+    expect(delivery.text).toContain('没有完成');
+    expect(delivery.text).not.toContain('已有进度');
+    expectNaturalCustomerReply(delivery.text);
     expect(JSON.stringify(delivery)).not.toMatch(/No successful current-turn|我还不能说正在执行|真实工具执行|先真正调用对应工具/iu);
   });
 
@@ -737,7 +863,7 @@ describe('execution guard recovery', () => {
 
     expect(attempts).toBe(1);
     expect(recovered.recoveryFailed).toBe(true);
-    expect(recovered.responseText).toContain('这项任务还没有执行成功');
+    expect(recovered.responseText).toContain('没有完成');
     expect(recovered.responseText).toContain('客户端操作');
     expect(recovered.responseText).not.toContain('client_action');
     expect(recovered.responseText).not.toContain('Internal execution recovery');
@@ -745,6 +871,46 @@ describe('execution guard recovery', () => {
     expect(recovered.finalization.reason).toBe('execution_recovery_incomplete');
     expect(recovered.finalization.notification).toBeUndefined();
     expect(JSON.stringify(recovered.finalization)).not.toContain('No successful current-turn');
+    expectNaturalCustomerReply(recovered.responseText);
+  });
+
+  it('preserves a safe natural finalizer blocker when the single recovery still fails', async () => {
+    const naturalBlocker = '还没完成。请先把目标文档切到前台，我就能从这里重试。';
+    const recovered = await recoverBlockedExecutionOnce<ExecutionGuardRecoveryFinalization>({
+      task: '修改当前文档标题',
+      responseText: '我会修改当前文档标题。',
+      finalization: {
+        text: '这一轮没有记录到成功的真实工具执行。',
+        blocked: true,
+        reason: 'No successful current-turn tool execution was recorded.',
+      },
+      allowToolUse: true,
+      toolRecords: [],
+      attempt: async () => ({
+        text: naturalBlocker,
+        toolRecords: [record({
+          name: 'desktop_open',
+          error: 'Desktop target application has not matched a fresh observation.',
+        })],
+      }),
+      finalize: (text) => ({
+        text,
+        blocked: true,
+        reason: 'Missing verified action evidence.',
+      }),
+    });
+
+    expect(recovered).toMatchObject({
+      attempted: true,
+      recoveryFailed: true,
+      responseText: naturalBlocker,
+      finalization: {
+        text: naturalBlocker,
+        blocked: true,
+        reason: 'execution_recovery_incomplete',
+      },
+    });
+    expectNaturalCustomerReply(recovered.responseText);
   });
 
   it('retains terminal receipts when the recovery provider fails after a tool call', async () => {
@@ -777,7 +943,7 @@ describe('execution guard recovery', () => {
     expect(recovered.toolRecords.map(item => item.id)).toEqual([
       'terminal-before-provider-failure',
     ]);
-    expect(recovered.responseText).toContain('client operation');
+    expect(recovered.responseText).toBe('No execution started.');
     expect(recovered.responseText).not.toContain('client_action');
     expect(recovered.responseText).not.toContain('provider disconnected');
     expect(recovered.finalization).toMatchObject({
@@ -871,8 +1037,56 @@ describe('execution guard recovery', () => {
     expect(recovered.finalization.reason).toBe('execution_recovery_incomplete');
   });
 
-  it('propagates cancellation instead of turning it into a recovery blocker', async () => {
-    let aborted = false;
+  it('keeps a desktop-control pause raised during recovery as a natural resumable blocker', async () => {
+    const task = '继续处理当前文档';
+    const pause = formatDesktopControlPausePresentation(task);
+    let desktopPaused = false;
+    const recovered = await recoverBlockedExecutionOnce<ExecutionGuardRecoveryFinalization>({
+      task,
+      responseText: '正在继续处理。',
+      finalization: {
+        text: 'No execution started.',
+        blocked: true,
+        reason: 'No tool execution started.',
+      },
+      allowToolUse: true,
+      toolRecords: [],
+      // Physical input pauses desktop authority, but it does not revoke the
+      // accepted Chat/Task/Voice request itself.
+      isAborted: () => false,
+      attempt: async ({ recordTool }) => {
+        desktopPaused = true;
+        const pausedRecord = record({
+          id: 'desktop-paused-during-recovery',
+          name: 'desktop_open',
+          error: 'Desktop control is paused: desktop_control_paused_for_user_activity',
+          terminalVerification: {
+            status: 'failed',
+            strategy: 'state_diff',
+            reason: 'Desktop control is paused: desktop_control_paused_for_user_activity',
+          },
+        });
+        recordTool(pausedRecord);
+        return { text: pause.text, toolRecords: [pausedRecord] };
+      },
+      finalize: text => desktopPaused
+        ? { text: pause.text, blocked: true, reason: pause.reason }
+        : { text, blocked: true, reason: 'missing_evidence' },
+    });
+
+    expect(recovered).toMatchObject({
+      attempted: true,
+      recoveryFailed: true,
+      finalization: { blocked: true },
+    });
+    expect(recovered.responseText).toMatch(/暂停.*桌面|桌面.*(?:暂停|暂时停下)/u);
+    expect(recovered.responseText).toMatch(/继续|重试/u);
+    expect(recovered.responseText).not.toMatch(/AbortError|用户取消|任务已停止|desktop_control_paused_for_user_activity/iu);
+    expectNaturalCustomerReply(recovered.responseText);
+  });
+
+  it('propagates a real request-lease abort instead of turning it into a recovery blocker', async () => {
+    const lease = new AbortController();
     await expect(recoverBlockedExecutionOnce<ExecutionGuardRecoveryFinalization>({
       task: 'repair the client',
       responseText: 'Working on it.',
@@ -883,9 +1097,9 @@ describe('execution guard recovery', () => {
       },
       allowToolUse: true,
       toolRecords: [],
-      isAborted: () => aborted,
+      isAborted: () => lease.signal.aborted,
       attempt: async () => {
-        aborted = true;
+        lease.abort(new DOMException('request lease revoked', 'AbortError'));
         return { text: 'late response', toolRecords: [] };
       },
       finalize: text => ({ text, blocked: true }),
@@ -919,6 +1133,32 @@ describe('execution guard recovery', () => {
     for (const source of [chatSource, taskSource, voiceSource]) {
       expect(source).toMatch(/correctionRequiresFreshConfirmation\s+&& !pendingConfirmationMatchesExactProposal\(/);
       expect(source).toContain("throw new Error('Corrected action confirmation was not bound to the current task request')");
+    }
+  });
+
+  it('keeps desktop pause and request cancellation separate in chat, task and voice recovery wiring', () => {
+    const root = process.cwd();
+    const cases = [{
+      source: readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8'),
+      cancellationCheck: 'isAborted: () => abortController.signal.aborted',
+    }, {
+      source: readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8'),
+      cancellationCheck: 'isAborted: () => taskLease.signal.aborted',
+    }, {
+      source: readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8'),
+      cancellationCheck: 'isAborted: () => !isCurrentTurn()',
+    }];
+
+    for (const { source, cancellationCheck } of cases) {
+      const recoveryStart = source.indexOf('const guardRecovery = await recoverBlockedExecutionOnce({');
+      expect(recoveryStart).toBeGreaterThanOrEqual(0);
+      const recoveryBlock = source.slice(recoveryStart, recoveryStart + 13_000);
+      expect(recoveryBlock).toContain(cancellationCheck);
+      expect(recoveryBlock).not.toMatch(/isAborted:\s*\(\)\s*=>[^\n]*desktopPauseBlocksCurrentTask/u);
+      expect(recoveryBlock).toContain('if (!desktopPauseBlocksCurrentTask(recoveredRecords)) return candidate;');
+      expect(recoveryBlock).toContain('text: pausePresentation.text');
+      expect(recoveryBlock).toContain('blocked: true');
+      expect(recoveryBlock).toContain('reason: pausePresentation.reason');
     }
   });
 });

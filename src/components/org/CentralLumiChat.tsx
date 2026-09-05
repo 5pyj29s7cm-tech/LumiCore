@@ -12,6 +12,8 @@ import { useT } from '../../lib/useT';
 import { formatUiMessage, uiMessage } from '../../i18n/uiMessages';
 import {
   isTerminalAgentStatus,
+  sanitizeAgentResponseTextForDisplay,
+  sanitizeAgentStreamingTextForDisplay,
   shouldDisplayAgentResponse,
   type AgentResponseDelivery,
 } from '../../lib/agentResponseDelivery';
@@ -88,13 +90,16 @@ function serializeChatAttachment(item: ChatAttachment): ChatAttachment {
   };
 }
 
-function normalizeHistoryMessage(item: any): Message | null {
+function normalizeHistoryMessage(item: any, language: 'zh' | 'en'): Message | null {
   if (item?.role === 'tool') return null;
   const role = item?.role === 'assistant' ? 'assistant' : item?.role === 'user' ? 'user' : null;
   if (!role) return null;
-  const content = String(item.message || item.response || item.content || '')
+  const rawContent = String(item.message || item.response || item.content || '')
     .replace(/\n{0,2}\[Attachments\][\s\S]*$/i, '')
     .trim();
+  const content = role === 'assistant'
+    ? sanitizeAgentResponseTextForDisplay(rawContent, language)
+    : rawContent;
   if (!content) return null;
   return {
     id: item.id || makeMessageId('org-history'),
@@ -110,6 +115,7 @@ export function CentralLumiChat() {
   const socket = useSocket();
   const { orgConnection, user } = useApp();
   const isZh = t.langCode !== 'en';
+  const locale = isZh ? 'zh' : 'en';
   const greeting = useCallback((): Message => ({
     id: 'org-lumi-greeting',
     role: 'assistant',
@@ -134,6 +140,7 @@ export function CentralLumiChat() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activeRequestIdRef = useRef<string | null>(null);
   const streamingMessageIdRef = useRef<string | null>(null);
+  const streamingRawTextRef = useRef('');
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nativeDropHandledAtRef = useRef(0);
   const attachmentContextStoragePrefix = `lumi_org_chat_attachment_context:${user?.uid || user?.username || 'anonymous'}:${orgConnection?.orgId || 'unbound'}`;
@@ -206,6 +213,7 @@ export function CentralLumiChat() {
     }
     activeRequestIdRef.current = null;
     streamingMessageIdRef.current = null;
+    streamingRawTextRef.current = '';
     setLoading(false);
     setRequestNotice('');
   }, []);
@@ -478,7 +486,7 @@ export function CentralLumiChat() {
         const messagesData = await messagesRes.json().catch(() => ({}));
         if (!messagesRes.ok) return;
         const history = Array.isArray(messagesData.messages)
-          ? messagesData.messages.map(normalizeHistoryMessage).filter(Boolean) as Message[]
+          ? messagesData.messages.map((item: any) => normalizeHistoryMessage(item, locale)).filter(Boolean) as Message[]
           : [];
         if (!cancelled) setMessages(history.length > 0 ? history : [greeting()]);
       } catch {
@@ -487,7 +495,7 @@ export function CentralLumiChat() {
     };
     loadConversation();
     return () => { cancelled = true; };
-  }, [bindAttachmentContextToConversation, greeting, orgConnection?.orgId, user?.uid, user?.username]);
+  }, [bindAttachmentContextToConversation, greeting, locale, orgConnection?.orgId, user?.uid, user?.username]);
 
   useEffect(() => {
     if (!socket) return;
@@ -500,12 +508,15 @@ export function CentralLumiChat() {
       if (!isCurrent(data) || !data.text) return;
       setLoading(false);
       setRequestNotice('');
+      streamingRawTextRef.current += data.text;
+      const publicText = sanitizeAgentStreamingTextForDisplay(streamingRawTextRef.current, locale);
+      if (!publicText) return;
       setMessages(prev => {
         const streamingId = streamingMessageIdRef.current;
         if (streamingId) {
           return prev.map(message => (
             message.id === streamingId
-              ? { ...message, content: message.content + data.text }
+              ? { ...message, content: publicText }
               : message
           ));
         }
@@ -514,7 +525,7 @@ export function CentralLumiChat() {
         return [...prev, {
           id: nextId,
           role: 'assistant',
-          content: data.text || '',
+          content: publicText,
           timestamp: Date.now(),
           source: 'socket',
         }];
@@ -524,7 +535,7 @@ export function CentralLumiChat() {
     const onResponse = (data: AgentResponseDelivery & { requestId?: string }) => {
       if (!isCurrent(data)) return;
       setRequestNotice('');
-      const finalText = (data.text || '').trim();
+      const finalText = sanitizeAgentResponseTextForDisplay(data.text, locale);
       if (!shouldDisplayAgentResponse(data)) {
         const streamingId = streamingMessageIdRef.current;
         if (streamingId) {
@@ -575,7 +586,10 @@ export function CentralLumiChat() {
       setMessages(prev => [...prev, {
         id: makeMessageId('org-error'),
         role: 'assistant',
-        content: data.message || uiMessage('central-lumi-chat.lumi-can-t-answer-in.4cc9225c23'),
+        content: sanitizeAgentResponseTextForDisplay(
+          data.message || uiMessage('central-lumi-chat.lumi-can-t-answer-in.4cc9225c23'),
+          locale,
+        ),
         timestamp: Date.now(),
         source: 'error',
       }]);
@@ -605,13 +619,16 @@ export function CentralLumiChat() {
         });
       }
       streamingMessageIdRef.current = null;
+      streamingRawTextRef.current = '';
       fetch(`/api/conversations/${data.conversationId}/messages?domain=work&limit=80`, {
         credentials: 'include',
       })
         .then(response => response.json().then(body => ({ ok: response.ok, body })))
         .then(({ ok, body }) => {
           if (!ok || !Array.isArray(body.messages)) return;
-          const history = body.messages.map(normalizeHistoryMessage).filter(Boolean) as Message[];
+          const history = body.messages
+            .map((item: any) => normalizeHistoryMessage(item, locale))
+            .filter(Boolean) as Message[];
           setMessages(history.length > 0 ? history : [greeting()]);
         })
         .catch(() => {});
@@ -631,7 +648,7 @@ export function CentralLumiChat() {
       socket.off('chat:conversation_updated', onConversationUpdated);
       clearActiveRequest();
     };
-  }, [bindAttachmentContextToConversation, clearActiveRequest, greeting, socket]);
+  }, [bindAttachmentContextToConversation, clearActiveRequest, greeting, locale, socket]);
 
   const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -685,7 +702,12 @@ export function CentralLumiChat() {
     const requestId = `org_chat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const history = messages
       .filter(message => message.source !== 'error' && message.source !== 'system')
-      .map(message => ({ role: message.role, content: message.content }));
+      .map(message => ({
+        role: message.role,
+        content: message.role === 'assistant'
+          ? sanitizeAgentResponseTextForDisplay(message.content, locale)
+          : message.content,
+      }));
     const outgoingText = text || 'Please review these attachments.';
     const userMsg: Message = {
       id: makeMessageId('org-user'),
@@ -698,6 +720,7 @@ export function CentralLumiChat() {
 
     activeRequestIdRef.current = requestId;
     streamingMessageIdRef.current = null;
+    streamingRawTextRef.current = '';
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => {
       if (activeRequestIdRef.current !== requestId) return;
@@ -833,7 +856,9 @@ export function CentralLumiChat() {
               )}
               <div className={`markdown-body chat-message-markdown select-text ${msg.role === 'assistant' ? 'chat-message-markdown-agent text-[15px]' : 'chat-message-markdown-user text-sm'}`}>
                 <Markdown components={safeMarkdownComponents} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                  {msg.content}
+                  {msg.role === 'assistant'
+                    ? sanitizeAgentResponseTextForDisplay(msg.content, locale)
+                    : msg.content}
                 </Markdown>
               </div>
               <span className="text-xs text-white/45 mt-2 block">

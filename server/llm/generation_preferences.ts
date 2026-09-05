@@ -1,4 +1,5 @@
 import { readDB, writeDB } from '../../db_layer';
+import { LUMI_OFFICIAL_DEFAULT_MODELS } from '../../shared/model_provider_capabilities';
 
 export type ImageGenerationProvider = 'auto' | 'openai' | 'qwen' | 'siliconflow' | 'relay';
 export type ImageEditProvider = 'relay';
@@ -22,11 +23,11 @@ export const DEFAULT_IMAGE_GENERATION_MODELS: Record<Exclude<ImageGenerationProv
   openai: 'gpt-image-1',
   qwen: 'wan2.2-t2i-plus',
   siliconflow: 'Kwai-Kolors/Kolors',
-  relay: 'huawei_maas/qwen-image',
+  relay: LUMI_OFFICIAL_DEFAULT_MODELS.image_generation,
 };
 
 export const DEFAULT_IMAGE_EDIT_MODELS: Record<ImageEditProvider, string> = {
-  relay: 'huawei_maas/qwen-image-edit-2509',
+  relay: LUMI_OFFICIAL_DEFAULT_MODELS.image_edit,
 };
 
 export const DEFAULT_VIDEO_GENERATION_MODELS: Record<VideoGenerationProvider, string> = {
@@ -34,7 +35,7 @@ export const DEFAULT_VIDEO_GENERATION_MODELS: Record<VideoGenerationProvider, st
   minimax: 'MiniMax-Hailuo-2.3',
   siliconflow: 'Wan-AI/Wan2.2-T2V-A14B',
   openai: 'sora-2',
-  relay: 'huawei_maas/Wan2.2-T2V-A14B',
+  relay: LUMI_OFFICIAL_DEFAULT_MODELS.video_generation,
 };
 
 export const DEFAULT_IMAGE_TO_VIDEO_MODELS: Record<ImageToVideoProvider, string> = {
@@ -45,7 +46,7 @@ export const DEFAULT_IMAGE_TO_VIDEO_MODELS: Record<ImageToVideoProvider, string>
   minimax: DEFAULT_VIDEO_GENERATION_MODELS.minimax,
   siliconflow: 'Wan-AI/Wan2.2-I2V-A14B',
   openai: DEFAULT_VIDEO_GENERATION_MODELS.openai,
-  relay: 'huawei_maas/Wan2.2-I2V-A14B',
+  relay: LUMI_OFFICIAL_DEFAULT_MODELS.image_to_video,
 };
 
 const IMAGE_PROVIDERS = new Set<ImageGenerationProvider>(['auto', 'openai', 'qwen', 'siliconflow', 'relay']);

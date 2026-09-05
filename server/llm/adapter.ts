@@ -2690,9 +2690,21 @@ function recordWorkflowIfToolsUsed(
   config: Pick<LLMConfig, 'userId' | 'domain' | 'orgId'>,
 ): void {
   if (executionLog.length === 0) return;
-  const rawContent = [...messages].reverse().find(m => m.role === 'user')?.content || '';
+  const rawContent = [...messages].reverse().find(message => {
+    if (message.role !== 'user') return false;
+    const content = typeof message.content === 'string'
+      ? message.content
+      : Array.isArray(message.content)
+        ? message.content.filter(part => part.type === 'text').map(part => (part as any).text).join(' ')
+        : '';
+    // The bounded recovery prompt is a server instruction carried in a user
+    // slot for provider compatibility. It is never the user's workflow and
+    // must not be learned, displayed, or used as future intent context.
+    return !/^\s*Internal execution recovery\./i.test(content);
+  })?.content || '';
   const userMsg = typeof rawContent === 'string' ? rawContent : Array.isArray(rawContent) ? rawContent.filter(c => c.type === 'text').map(c => (c as any).text).join(' ') : '';
   const safeMsg = userMsg || '';
+  if (!safeMsg.trim()) return;
   recordWorkflow({
     userId: config.userId || 'anonymous',
     domain: config.domain === 'work' ? 'work' : 'personal',

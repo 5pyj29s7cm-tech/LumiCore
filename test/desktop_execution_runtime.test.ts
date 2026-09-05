@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { buildDesktopExecutionPlan } from '../server/desktop/execution_plan';
-import { DesktopExecutionTracker } from '../server/desktop/execution_runtime';
+import {
+  DesktopExecutionTracker,
+  withDesktopExecutionReceipt,
+} from '../server/desktop/execution_runtime';
 import type { ToolExecutionRecord } from '../server/tools/types';
 
 function verifiedRecord(name: string, result: string): ToolExecutionRecord {
@@ -115,6 +118,54 @@ describe('desktop execution runtime', () => {
       applicationMatched: true,
       finalState: 'verified_success',
       completionVerified: true,
+    });
+  });
+
+  it('replaces an earlier aggregate plan receipt with the latest tracker snapshot', () => {
+    const plan = buildDesktopExecutionPlan({
+      text: 'open WPS',
+      lane: 'desktop_control',
+      taskId: 'wps-recovered-plan',
+    });
+    const blockedTracker = new DesktopExecutionTracker(plan);
+    blockedTracker.record(verifiedRecord('desktop_active_window', JSON.stringify({
+      title: 'New tab - Google Chrome', process_name: 'chrome.exe', pid: 11,
+    })));
+    const blockedRecords = withDesktopExecutionReceipt([], blockedTracker);
+
+    expect(blockedRecords).toHaveLength(1);
+    expect(blockedRecords[0]).toMatchObject({
+      id: `desktop-plan-${plan.planId}`,
+      name: 'desktop_execution_plan_receipt',
+      terminalVerification: { status: 'failed' },
+    });
+
+    const recoveredTracker = new DesktopExecutionTracker(plan);
+    recoveredTracker.record(verifiedRecord('desktop_active_window', JSON.stringify({
+      title: 'LumiCore', process_name: 'lumi-core.exe', pid: 10,
+    })));
+    recoveredTracker.record(verifiedRecord('desktop_open', JSON.stringify({
+      ok: true,
+      status: 'verified',
+      target: 'WPS',
+      targetMatched: true,
+      actualTarget: { title: 'WPS Writer', processName: 'wps.exe' },
+    })));
+    recoveredTracker.record(verifiedRecord('desktop_active_window', JSON.stringify({
+      title: 'Document1 - WPS Writer', process_name: 'wps.exe', pid: 20,
+    })));
+
+    const recoveredRecords = withDesktopExecutionReceipt(blockedRecords, recoveredTracker);
+    expect(recoveredRecords).toHaveLength(1);
+    expect(recoveredRecords[0]).toMatchObject({
+      id: blockedRecords[0].id,
+      name: 'desktop_execution_plan_receipt',
+      terminalVerification: { status: 'verified' },
+    });
+    expect(recoveredRecords[0].error).toBeUndefined();
+    expect(JSON.parse(recoveredRecords[0].result || '{}')).toMatchObject({
+      completionVerified: true,
+      finalState: 'verified_success',
     });
   });
 

@@ -48,6 +48,19 @@ describe('conversation guard history isolation', () => {
     await initDatabase();
   });
 
+  it('recognizes legacy verifier reports and standalone desktop relay codes', () => {
+    expect(isGuardGeneratedAssistantText([
+      '状态：受阻。',
+      '证据：暂时没有可核验的执行结果。',
+      '下一步：保留已有进度，先核验目标状态再继续。',
+    ].join('\n'))).toBe(true);
+    expect(isGuardGeneratedAssistantText([
+      '状态：失败。',
+      '具体阻塞：Desktop execution ended as target_mismatch.',
+    ].join('\n'))).toBe(true);
+    expect(isGuardGeneratedAssistantText('desktop_active_window returned target_mismatch')).toBe(true);
+  });
+
   it('keeps guard output visible in storage but out of model prompt history', () => {
     const userId = `guard-history-${Date.now()}-${Math.random()}`;
     const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');

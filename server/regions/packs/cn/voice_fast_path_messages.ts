@@ -27,10 +27,22 @@ export function formatCnToolFailureDetail(error: string): string {
   if (/previous runtime ended|pending confirmation expired/i.test(raw)) {
     return '上一次客户端运行结束时任务尚未收尾，已停在最后一个可验证步骤，可以从这里继续。';
   }
+  if (/target[_ ]?mismatch|fingerprint changed|window\/display fingerprint|target application has not matched a fresh observation/i.test(raw)) {
+    return '操作后看到的窗口与目标不一致。为避免继续操作错窗口，这一步已经停下。';
+  }
+  if (/global desktop lease|desktop.*(?:busy|occupied)/i.test(raw)) {
+    return '桌面控制正被另一项操作占用，这一步没有继续。';
+  }
+  if (/paused_for_user_activity|desktop control is paused/i.test(raw)) {
+    return '检测到你正在操作电脑，自动控制已经暂时停下。';
+  }
+  if (/provider unavailable|service unavailable|connection refused/i.test(raw)) {
+    return '这一步需要的服务暂时不可用。';
+  }
   if (isInternalExecutionDetail(raw)) {
     return '这一步没有拿到可执行的入口或可验证的结果，已停止，没有冒充完成。';
   }
-  if (/forbidden|not in allowedTools/i.test(raw)) return '当前任务路由没有授权所需的执行工具。';
+  if (/forbidden|not in allowedTools|not (?:declared|allowed)|allowlist/i.test(raw)) return '当前任务没有取得所需的操作能力。';
   if (/requested WeChat conversation was not verified|conversation-selection/i.test(raw)) {
     return '联系人搜索后没有确认进入目标聊天窗口；为避免误发，已在粘贴和回车前停止。';
   }
@@ -172,6 +184,19 @@ export const CN_TASK_EXECUTION_MESSAGES = {
   resumableNotRunning: (goal: string, receiptCount: number) => `“${goal}”的任务上下文仍然保留${receiptCount ? `，已有${receiptCount}个可验证步骤` : ''}，但当前没有正在运行的执行请求。`,
   activeWithoutReceipt: '当前任务仍在执行，暂时还没有终态回执。',
   cancelled: '已停止当前任务，未完成的步骤不会继续执行。',
+  statusCancelled: (goal: string) => `“${goal || '刚才的任务'}”已经停止，未完成的步骤不会继续。`,
+  statusFreshConfirmation: (goal: string) => `“${goal}”上次的确认已经失效，我没有执行旧操作。需要重新生成并展示这一步；请审阅新提议后再确认。`,
+  statusWaitingConfirmation: (goal: string) => `“${goal}”正在等你确认。确认后会接着完成剩余步骤。`,
+  statusFailed: (goal: string, detail: string, completedSteps: number) => (
+    `“${goal}”还没完成：${detail}。${completedSteps ? '已经完成的部分不会重做，' : ''}你说“继续”就会从这里重试。`
+  ),
+  statusCompleted: (goal: string) => `“${goal}”已完成。`,
+  statusActive: (goal: string, completedSteps: number) => (
+    `“${goal}”正在处理${completedSteps ? `，已经完成 ${completedSteps} 个步骤` : ''}。有结果后我会直接告诉你。`
+  ),
+  statusResumable: (goal: string, completedSteps: number) => (
+    `“${goal}”还没完成，目前也没有在后台运行。${completedSteps ? '已经完成的部分不会重做，' : ''}你说“继续”就能从这里接上。`
+  ),
   terminalCannotCancel: (goal: string, status: string) => status === 'completed'
     ? `“${goal || '刚才的任务'}”已经完成，取消不会撤销已经发生并记录的结果；我没有再次执行任何操作。`
     : `“${goal || '刚才的任务'}”已经处于${status === 'cancelled' ? '已取消' : '终态'}，没有可继续停止的步骤；我没有再次执行任何操作。`,
@@ -229,9 +254,16 @@ export const CN_RESULT_GROUNDING_MESSAGES = {
   actionNotStarted: '这轮没有任何工具执行回执；刚才只说了方案，实际还没开始。不能把计划当成执行结果。',
   executionEndedWithoutCompletion: '这一轮操作已经结束，但还没有证据证明目标完成；不会继续显示“正在执行”。',
   desktopSoftwareShortcutCount: (count: number) => `桌面上有 ${count} 个软件快捷方式。`,
-  desktopSnapshotIntro: '本轮桌面状态读取已完成，结果来自当前桌面客户端的本次采样。',
-  processSnapshot: (count: number, names: string[]) => `运行快照：已读取 ${count} 条活跃进程记录${names.length ? `，前几项为 ${names.join('、')}` : ''}。`,
-  processSnapshotCaveat: '这是一次瞬时采样；仅凭这次结果，不能判定内存泄漏、程序卡死或长期稳定性。',
+  desktopSnapshotIntro: '桌面信息已经更新。',
+  desktopUnknownWindow: '未知窗口',
+  desktopActiveWindowReadOnly: (title: string, processName: string) => (
+    `当前前台窗口是「${title}」${processName ? `（${processName}）` : ''}；我只查看了窗口信息，没有进行其他操作。`
+  ),
+  desktopPartialRead: '我只读取到了部分桌面信息。',
+  desktopUnavailableReadCount: (count: number) => `有 ${count} 项信息暂时没能读取。`,
+  desktopReadOnly: '我只读取了信息，没有点击、输入、切换窗口、打开应用或修改内容。',
+  processSnapshot: (count: number, names: string[]) => `当前读取到 ${count} 个运行中的进程${names.length ? `，其中包括 ${names.join('、')}` : ''}。`,
+  processSnapshotCaveat: '这只是当前状态，不能单独用来判断内存泄漏、程序卡死或长期稳定性。',
   wpsExactTextWritten: (documentName: string, requestedText: string) => `已在可见 WPS 文档“${documentName}”中精确写入：${requestedText}`,
   wpsBlankDocumentCreated: (documentName: string) => `已在 WPS 中新建可见空白文档“${documentName}”。`,
   wpsWindow: (windowTitle: string) => `窗口：${windowTitle}`,

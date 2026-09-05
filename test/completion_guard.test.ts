@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { guardCompletionClaims } from '../server/work_product/completion_guard';
 
-function expectStructuredGuardMarkdown(text: string): void {
-  const lines = text.split('\n');
+const INTERNAL_GUARD_LEAK_RE = /(?:\u72b6\u6001|\u8bc1\u636e)\s*[:\uff1a]|\u5177\u4f53\u963b\u585e|\u56de\u6267(?!\u884c)|target_mismatch|undefined|(?:^|\n)\s*[-*]\s+|No successful|current-turn|tool execution|execution-status claim/imu;
 
-  expect(lines.length).toBeGreaterThanOrEqual(4);
-  expect(lines[0].trim()).not.toBe('');
-  expect(lines[1]).toBe('');
-  expect(lines.slice(2).every(line => line.startsWith('- '))).toBe(true);
-  expect(text).not.toContain('\n\n\n');
+function expectCustomerReadableGuard(text: string): void {
+  const normalized = text.trim();
+  const sentences = normalized
+    .split(/(?<=[\u3002\uff01\uff1f.!?])\s*/u)
+    .filter(Boolean);
+
+  expect(normalized).not.toBe('');
+  expect(sentences.length).toBeGreaterThanOrEqual(1);
+  expect(sentences.length).toBeLessThanOrEqual(2);
+  expect(normalized).not.toMatch(INTERNAL_GUARD_LEAK_RE);
 }
 
 describe('completion guard desktop action handling', () => {
@@ -117,29 +121,30 @@ describe('completion guard reply formatting', () => {
       name: 'execution-status guard',
       task: 'open WeChat from the desktop shortcut',
       response: "I'm executing this now.",
-      expectedSummary: 'That action has not started successfully.',
+      expected: /not started|could not start/i,
     },
     {
       name: 'action-promise guard',
       task: 'review the attached document',
       response: 'I will review the document now.',
-      expectedSummary: 'I have not started the requested action yet.',
+      expected: /could not start|not started/i,
     },
     {
       name: 'completion-evidence guard',
       task: 'open WeChat from the desktop shortcut',
       response: 'Opened WeChat.',
-      expectedSummary: 'The desktop action does not yet have a verified completion result.',
+      expected: /desktop action is not complete/i,
     },
-  ])('formats the $name as a Markdown paragraph followed by bullets', ({ task, response, expectedSummary }) => {
+  ])('formats the $name as a concise customer-readable explanation', ({ task, response, expected }) => {
     const result = guardCompletionClaims({ task, response, toolCalls: [] });
 
     expect(result.blocked).toBe(true);
-    expect(result.text.startsWith(`${expectedSummary}\n\n- `)).toBe(true);
-    expectStructuredGuardMarkdown(result.text);
+    expect(result.text).toMatch(expected);
+    expect(result.text).toMatch(/retry|retried|continue|checked again/i);
+    expectCustomerReadableGuard(result.text);
   });
 
-  it('uses the same Markdown structure for a Chinese guarded reply', () => {
+  it('uses the same concise natural style for a Chinese guarded reply', () => {
     const result = guardCompletionClaims({
       task: '\u6253\u5f00\u684c\u9762\u4e0a\u7684\u5fae\u4fe1',
       response: '\u5df2\u7ecf\u6253\u5f00\u5fae\u4fe1\u3002',
@@ -147,8 +152,9 @@ describe('completion guard reply formatting', () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result.text).toContain('\u8fd9\u9879\u684c\u9762\u64cd\u4f5c\u8fd8\u4e0d\u80fd\u786e\u8ba4\u5b8c\u6210\u3002');
-    expectStructuredGuardMarkdown(result.text);
+    expect(result.text).toContain('\u684c\u9762\u64cd\u4f5c\u8fd8\u6ca1\u5b8c\u6210');
+    expect(result.text).toContain('\u91cd\u8bd5');
+    expectCustomerReadableGuard(result.text);
   });
 
   it.each([
@@ -164,7 +170,9 @@ describe('completion guard reply formatting', () => {
     expect(result.blocked).toBe(true);
     expect(result.text).not.toContain('client_get_state');
     expect(result.text).not.toContain('client_action');
-    expectStructuredGuardMarkdown(result.text);
+    expect(result.text).toContain('\u5ba2\u6237\u7aef\u64cd\u4f5c');
+    expect(result.text).toContain('\u91cd\u8bd5');
+    expectCustomerReadableGuard(result.text);
   });
 });
 
@@ -279,7 +287,9 @@ describe('completion guard generic execution claims', () => {
 
     expect(result.blocked).toBe(true);
     expect(result.reason).toContain('\u8fd9\u4e00\u8f6e\u6ca1\u6709\u6210\u529f\u6267\u884c\u4efb\u4f55\u5de5\u5177');
-    expect(result.text).toContain('\u8fd8\u4e0d\u80fd\u8bf4\u8fd9\u4ef6\u4e8b\u5df2\u7ecf\u5b8c\u6210');
+    expect(result.text).toContain('\u8fd9\u9879\u64cd\u4f5c\u8fd8\u6ca1\u5b8c\u6210');
+    expect(result.text).toContain('\u91cd\u8bd5');
+    expectCustomerReadableGuard(result.text);
   });
 
   it.each([
@@ -296,8 +306,8 @@ describe('completion guard generic execution claims', () => {
 
     expect(result.blocked).toBe(true);
     expect(result.reason).toContain('current-turn tool execution');
-    expect(result.text).toContain('\u64cd\u4f5c\u8fd8\u6ca1\u6709\u6210\u529f\u542f\u52a8');
-    expect(result.text).not.toMatch(/No successful|current-turn|tool execution|execution-status claim|\u6267\u884c\u5668|\u5de5\u5177\u94fe/iu);
+    expect(result.text).toContain('\u64cd\u4f5c\u8fd8\u6ca1\u6709\u5f00\u59cb');
+    expectCustomerReadableGuard(result.text);
   });
 
   it('allows a write-completion claim only with current-turn producer evidence', () => {
@@ -342,7 +352,9 @@ describe('completion guard generic execution claims', () => {
 
     expect(result.blocked).toBe(true);
     expect(result.reason).toContain('current-turn tool execution');
-    expect(result.text).toContain('AutoCAD launch failed');
+    expect(result.text).toMatch(/\u6ca1\u6709\u5f00\u59cb|\u6ca1\u80fd\u5b8c\u6210/u);
+    expect(result.text).not.toContain('AutoCAD launch failed');
+    expectCustomerReadableGuard(result.text);
   });
 
   it('does not accept an inspection-only receipt as file creation evidence', () => {
@@ -500,12 +512,12 @@ describe('completion guard generic execution claims', () => {
 
     expect(result.blocked).toBe(true);
     expect(result.reason).toContain('\u6210\u529f\u6267\u884c\u4e86\u67e5\u8be2\u6216\u68c0\u67e5\u5de5\u5177');
-    expect(result.text).toContain('\u5df2\u7ecf\u53d6\u5f97\u90e8\u5206\u6709\u6548\u56de\u6267');
+    expect(result.text).toContain('\u5df2\u7ecf\u5b8c\u6210\u7684\u90e8\u5206\u4f1a\u4fdd\u7559');
     expect(result.text).not.toContain('client_get_state');
-    expect(result.text).toContain('\u8fd8\u7f3a\u5c11\u80fd\u8bc1\u660e\u6700\u7ec8\u7ed3\u679c\u7684\u8bc1\u636e');
+    expect(result.text).toContain('\u8fd9\u9879\u64cd\u4f5c\u8fd8\u6ca1\u5b8c\u6210');
     expect(result.text).not.toContain('\u8fd9\u4e00\u8f6e\u6ca1\u6709\u6210\u529f\u6267\u884c\u4efb\u4f55\u5de5\u5177');
     expect(result.text).not.toContain('\u6ca1\u6709\u8bb0\u5f55\u5230\u6210\u529f\u7684\u5de5\u5177\u6267\u884c');
-    expect(result.text).not.toContain('undefined');
+    expectCustomerReadableGuard(result.text);
   });
 
   it.each([
@@ -524,9 +536,10 @@ describe('completion guard generic execution claims', () => {
 
     expect(result.blocked).toBe(true);
     expect(result.reason).toContain('\u6210\u529f\u6267\u884c\u4e86\u67e5\u8be2\u6216\u68c0\u67e5\u5de5\u5177');
-    expect(result.text).toContain('Some verified progress exists');
+    expect(result.text).toContain('Completed work is preserved');
+    expect(result.text).toContain('not complete');
     expect(result.text).not.toContain('client_get_state');
-    expect(result.text).not.toContain('client_get_state: undefined');
+    expectCustomerReadableGuard(result.text);
   });
 
   it.each([
@@ -548,7 +561,7 @@ describe('completion guard generic execution claims', () => {
     expect(result.blocked).toBe(true);
     expect(result.text).toContain(expectedDetail);
     expect(result.text).not.toContain('desktop_active_window');
-    expect(result.text).not.toContain('undefined');
+    expectCustomerReadableGuard(result.text);
   });
 
   it('does not mistake ordinary explanations or third-party facts for Lumi execution', () => {
@@ -594,12 +607,12 @@ describe('completion guard generic execution claims', () => {
     {
       task: '启动桌面上的微信程序。',
       response: '已经完成。',
-      expected: '桌面操作还不能确认完成',
+      expected: '桌面操作还没完成',
     },
     {
       task: 'launch WeChat from the desktop',
       response: 'Completed successfully.',
-      expected: 'desktop action does not yet have a verified completion result',
+      expected: 'desktop action is not complete',
     },
   ])('keeps real unsupported completion claims blocked without exposing guard internals', ({ task, response, expected }) => {
     const result = guardCompletionClaims({ task, response, toolCalls: [] });
@@ -607,7 +620,7 @@ describe('completion guard generic execution claims', () => {
     expect(result.blocked).toBe(true);
     expect(result.reason).toBeTruthy();
     expect(result.text.toLowerCase()).toContain(expected.toLowerCase());
-    expect(result.text).not.toMatch(/No successful|current-turn|tool execution|execution-status claim|执行器|工具链|这一轮没有.*工具/iu);
+    expectCustomerReadableGuard(result.text);
   });
 
   it.each([
@@ -768,7 +781,8 @@ describe('completion guard current-app UI evidence', () => {
 
     expect(result.blocked).toBe(true);
     expect(result.reason).toBe('Missing verified in-app UI mutation evidence.');
-    expect(result.text).toContain('\u8fd8\u4e0d\u80fd\u786e\u8ba4\u5b8c\u6210');
+    expect(result.text).toContain('\u684c\u9762\u64cd\u4f5c\u8fd8\u6ca1\u5b8c\u6210');
+    expectCustomerReadableGuard(result.text);
   });
 
   it('allows a create-and-type claim after matching UI actuation and post-action OCR', () => {

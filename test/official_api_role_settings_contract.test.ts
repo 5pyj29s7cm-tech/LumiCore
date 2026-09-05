@@ -59,12 +59,12 @@ describe('Lumi official API role settings contract', () => {
     expect(manifest.LUMI_OFFICIAL_DOCS_URL).toBe('https://zhuan.huaczy.com/console/help');
     expect(manifest.LUMI_OFFICIAL_RECHARGE_URL).toBe('https://zhuan.huaczy.com/console/recharge');
     expect(manifest.LUMI_OFFICIAL_DEFAULT_MODELS.reasoning).toBe('aliyun/qwen-plus');
-    expect(manifest.LUMI_OFFICIAL_DEFAULT_MODELS.vision).toBe('huawei_maas/qwen2.5-vl-72b');
+    expect(manifest.LUMI_OFFICIAL_DEFAULT_MODELS.vision).toBe('aliyun/qwen2.5-vl-72b');
     expect(manifest.LUMI_OFFICIAL_DEFAULT_MODELS.world).toBe('aliyun/qwen3-vl-flash');
-    expect(manifest.LUMI_OFFICIAL_DEFAULT_MODELS.video_generation).toBe('huawei_maas/Wan2.2-T2V-A14B');
-    expect(LUMI_OFFICIAL_DEFAULT_MODELS.image_generation).toBe('huawei_maas/qwen-image');
-    expect(LUMI_OFFICIAL_DEFAULT_MODELS.image_edit).toBe('huawei_maas/qwen-image-edit-2509');
-    expect(LUMI_OFFICIAL_DEFAULT_MODELS.image_to_video).toBe('huawei_maas/Wan2.2-I2V-A14B');
+    expect(manifest.LUMI_OFFICIAL_DEFAULT_MODELS.video_generation).toBe('aliyun/Wan2.2-T2V-A14B');
+    expect(LUMI_OFFICIAL_DEFAULT_MODELS.image_generation).toBe('aliyun/qwen-image');
+    expect(LUMI_OFFICIAL_DEFAULT_MODELS.image_edit).toBe('aliyun/qwen-image-edit-2509');
+    expect(LUMI_OFFICIAL_DEFAULT_MODELS.image_to_video).toBe('aliyun/Wan2.2-I2V-A14B');
     expect(LUMI_OFFICIAL_DEFAULT_MODELS.speech_recognition).toBe('aliyun/qwen-audio-3.0-asr-flash-streaming');
     expect(LUMI_OFFICIAL_DEFAULT_MODELS.speech_synthesis).toBe('aliyun/cosyvoice-v3-flash');
   });

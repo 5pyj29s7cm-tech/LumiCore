@@ -1205,51 +1205,28 @@ export function formatConversationActionTaskStatus(
     ? CN_TASK_EXECUTION_MESSAGES.goalWithCurrentStep(rootGoal, latestInstruction)
     : rootGoal;
   const successes = (state.receipts || []).filter(receipt => receipt.outcome === 'success').length;
-  let activity = '';
-  const feedback = CN_TASK_EXECUTION_MESSAGES.feedback;
-  let blocker: string = feedback.noBlocker;
-  let userAction: string = feedback.noUserAction;
-  let nextStep: string = feedback.continueAndVerify;
   if (state.status === 'cancelled') {
-    activity = CN_TASK_EXECUTION_MESSAGES.cancelled;
-    blocker = feedback.cancelledBlocker;
-    nextStep = feedback.restartAfterCancel;
-  } else if (conversationActionRequiresFreshConfirmationReview(state)) {
-    activity = CN_TASK_EXECUTION_MESSAGES.reconfirmationRequired(goal);
-    blocker = feedback.exactConfirmationUnavailable;
-    userAction = feedback.reviewFreshConfirmation;
-    nextStep = feedback.regenerateConfirmation;
-  } else if (state.status === 'failed') {
-    activity = CN_TASK_EXECUTION_MESSAGES.blocked(
-      goal,
-      formatCnToolFailureDetail(state.latestBlocker || 'The task ended without a verified result.'),
-    );
-    blocker = formatCnToolFailureDetail(
+    return CN_TASK_EXECUTION_MESSAGES.statusCancelled(goal);
+  }
+  if (conversationActionRequiresFreshConfirmationReview(state)) {
+    return CN_TASK_EXECUTION_MESSAGES.statusFreshConfirmation(goal);
+  }
+  if (state.status === 'waiting_confirmation') {
+    return CN_TASK_EXECUTION_MESSAGES.statusWaitingConfirmation(goal);
+  }
+  if (state.status === 'failed' || state.latestBlocker) {
+    const detail = formatCnToolFailureDetail(
       state.latestBlocker || 'The task ended without a verified result.',
-    );
-    userAction = feedback.requestRetryOrCorrection;
-    nextStep = feedback.replanFailedStep;
-  } else if (state.status === 'completed' || !state.unfinished) {
+    ).replace(/[。；;]+$/u, '');
+    return CN_TASK_EXECUTION_MESSAGES.statusFailed(goal, detail, successes);
+  }
+  if (state.status === 'completed' || !state.unfinished) {
     if (state.completionSource === 'user_observation') {
-      activity = CN_TASK_EXECUTION_MESSAGES.completedFromUserObservation(goal);
-    } else {
-      activity = CN_TASK_EXECUTION_MESSAGES.completed(goal, successes);
+      return CN_TASK_EXECUTION_MESSAGES.completedFromUserObservation(goal);
     }
-    blocker = feedback.terminalSettled;
-    nextStep = feedback.waitForInstruction;
-  } else if (state.status === 'waiting_confirmation') {
-    activity = CN_TASK_EXECUTION_MESSAGES.waitingConfirmation(goal);
-    blocker = feedback.waitingAtConfirmation;
-    userAction = feedback.reviewCurrentConfirmation;
-    nextStep = feedback.resumeExactAction;
-  } else if (state.latestBlocker) {
-    const detail = state.latestBlocker.replace(/^[A-Za-z0-9_.:-]+:\s*/, '');
-    const publicBlocker = formatCnToolFailureDetail(detail);
-    activity = CN_TASK_EXECUTION_MESSAGES.blocked(goal, publicBlocker);
-    blocker = publicBlocker;
-    userAction = feedback.requestRetryOrCorrection;
-    nextStep = feedback.resumeBlockedStep;
-  } else if (
+    return CN_TASK_EXECUTION_MESSAGES.statusCompleted(goal);
+  }
+  if (
     options.executionActive === true
     || (
       options.executionActive === undefined
@@ -1257,22 +1234,9 @@ export function formatConversationActionTaskStatus(
       && ['planning', 'executing', 'verifying'].includes(state.status || '')
     )
   ) {
-    activity = CN_TASK_EXECUTION_MESSAGES.executing(goal, successes);
-  } else {
-    activity = CN_TASK_EXECUTION_MESSAGES.resumableNotRunning(goal, successes);
-    blocker = feedback.noBlocker;
-    userAction = feedback.requestRetryOrCorrection;
-    nextStep = feedback.resumeStoredTask;
+    return CN_TASK_EXECUTION_MESSAGES.statusActive(goal, successes);
   }
-
-  return feedback.format({
-    activity,
-    target: goal,
-    completedSteps: successes,
-    blocker,
-    userAction,
-    nextStep,
-  });
+  return CN_TASK_EXECUTION_MESSAGES.statusResumable(goal, successes);
 }
 
 /**

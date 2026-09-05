@@ -234,13 +234,13 @@ function persistResolvedPrefs(userId: string, prefs: UserLLMPrefs, updatedAt?: s
   writeDB(db);
 }
 
-export function getUserPreferredLLM(userId: string): UserLLMPrefs {
+export function getUserPreferredLLM(userId: string, options: { persistMigration?: boolean } = {}): UserLLMPrefs {
   const uid = userId || 'anonymous';
   const raw = parsePrefsRow(`llm_prefs_${uid}`);
   const resolved = resolvePrefs(raw, uid);
   // Legacy aliases are migrated exactly once. New schema writes preserve the
   // user's literal model id, including ids that happen to match old aliases.
-  if (raw && (Number(raw.schemaVersion || 0) < 2 || resolved.legacyMigration?.entries.some(entry => entry.provider === 'relay'))) {
+  if (options.persistMigration !== false && raw && (Number(raw.schemaVersion || 0) < 2 || resolved.legacyMigration?.entries.some(entry => entry.provider === 'relay'))) {
     persistResolvedPrefs(uid, resolved, raw.updatedAt);
   }
   return resolved;

@@ -443,6 +443,12 @@ export function withDesktopExecutionReceipt(
   tracker: DesktopExecutionTracker | undefined,
 ): ToolExecutionRecord[] {
   const receipt = tracker?.toToolExecutionRecord();
-  if (!receipt || records.some(record => record.id === receipt.id)) return records;
+  if (!receipt) return records;
+  const existingIndex = records.findIndex(record => record.id === receipt.id);
+  if (existingIndex >= 0) {
+    const updated = [...records];
+    updated[existingIndex] = receipt;
+    return updated;
+  }
   return [...records, receipt];
 }

@@ -1,7 +1,7 @@
 import { ToolRegistry } from '../registry';
 import type { ToolContext } from '../types';
 import { analyzeScreen } from '../../llm/adapter';
-import { getUserPreferredVision, type VisionProvider } from '../../llm/vision_preferences';
+import { DEFAULT_VISION_MODELS, getUserPreferredVision, type VisionProvider } from '../../llm/vision_preferences';
 import { readDB, writeDB } from '../../../db_layer';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
@@ -646,7 +646,7 @@ function fallbackVisionModel(provider: VisionProvider): string {
     case 'ark': return 'doubao-1-5-vision-pro-32k';
     case 'ollama': return 'qwen2.5vl:7b';
     case 'lmstudio': return 'local-vision-model';
-    case 'relay': return 'huawei_maas/qwen2.5-vl-72b';
+    case 'relay': return DEFAULT_VISION_MODELS.relay;
     case 'openai': return 'gpt-4o';
     case 'gemini':
     default:

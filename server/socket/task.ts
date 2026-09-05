@@ -2,6 +2,7 @@
  * agent:task socket handler — multi-turn tool-augmented AI pipeline
  */
 import { Server, Socket } from "socket.io";
+import { projectCustomerVisibleExecutionEvent } from './public_agent_event_projection';
 import { flushDBOrThrow, readDB, writeDB } from "../../db_layer";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { NormalizedMessage } from "../llm/providers";
@@ -285,13 +286,16 @@ export function registerTaskHandler(
       event: string,
       payload: Record<string, any> = {},
     ): Record<string, any> => {
-      const publicPayload: Record<string, any> = event === 'agent:response'
+      const sanitizedPayload: Record<string, any> = event === 'agent:response'
         ? sanitizeExecutionResponseForDelivery(payload, { task: data.text })
         : event === 'agent:notification'
           ? sanitizeExecutionNotificationForDelivery(payload, { task: data.text })
         : event === 'agent:error'
           ? sanitizeChatAgentErrorPayload(payload)
           : payload;
+      const publicPayload = projectCustomerVisibleExecutionEvent(event, sanitizedPayload, {
+        taskText: data.text,
+      });
       return { ...publicPayload, source: publicPayload.source || 'task', requestId };
     };
     const publishRecordedAgent = (event: string, normalizedPayload: Record<string, any>) => {
@@ -1894,12 +1898,14 @@ export function registerTaskHandler(
             taskId: actionTaskExecution.state?.taskId,
             requestId,
           });
-      const desktopPauseBlocksCurrentTask = () => {
+      const desktopPauseBlocksCurrentTask = (
+        records = taskAwareRecords(finalTaskToolRecords),
+      ) => {
         return shouldBlockForDesktopControlPause({
           pauseReason: desktopRelay.getControlPauseReason(),
           waitingForConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
           taskText: routedTaskText,
-          toolRecords: taskAwareRecords(finalTaskToolRecords),
+          toolRecords: records,
         });
       };
       if (desktopPauseBlocksCurrentTask()) {
@@ -1919,7 +1925,9 @@ export function registerTaskHandler(
         pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
         requiresFreshConfirmation: correctionRequiresFreshConfirmation,
         aborted: taskLease.signal.aborted || desktopPauseBlocksCurrentTask(),
-        isAborted: () => taskLease.signal.aborted || desktopPauseBlocksCurrentTask(),
+        // Desktop control may be paused by physical user input without the
+        // task itself being cancelled. Keep those state transitions separate.
+        isAborted: () => taskLease.signal.aborted,
         isPendingConfirmation: () => Boolean(pendingConfirmationCreatedThisTurn),
         toolRecords: finalTaskToolRecords,
         attempt: async ({ instruction, priorToolRecords, recordTool }) => {
@@ -2002,21 +2010,32 @@ export function registerTaskHandler(
             toolRecords: attachDesktopReceipt(recovery.toolCalls),
           };
         },
-        finalize: (candidateText, records) => pendingConfirmationCreatedThisTurn
-          ? {
-              text: formatPendingConfirmationPrompt(pendingConfirmationCreatedThisTurn),
-              blocked: false,
-              reason: 'waiting_confirmation',
-            }
-          : finalizeLumiResponse({
-              taskText: data.text,
-              responseText: candidateText,
-              toolRecords: taskAwareRecords(records),
-              source: 'task_guard_recovery',
-              flow: turnFlow,
-              taskId: actionTaskExecution.state?.taskId,
-              requestId,
-            }),
+        finalize: (candidateText, records) => {
+          const recoveredRecords = taskAwareRecords(records);
+          const candidate = pendingConfirmationCreatedThisTurn
+            ? {
+                text: formatPendingConfirmationPrompt(pendingConfirmationCreatedThisTurn),
+                blocked: false,
+                reason: 'waiting_confirmation',
+              }
+            : finalizeLumiResponse({
+                taskText: data.text,
+                responseText: candidateText,
+                toolRecords: recoveredRecords,
+                source: 'task_guard_recovery',
+                flow: turnFlow,
+                taskId: actionTaskExecution.state?.taskId,
+                requestId,
+              });
+          if (!desktopPauseBlocksCurrentTask(recoveredRecords)) return candidate;
+          const pausePresentation = formatDesktopControlPausePresentation(routedTaskText);
+          return {
+            ...candidate,
+            text: pausePresentation.text,
+            blocked: true,
+            reason: pausePresentation.reason,
+          };
+        },
       });
       finalTaskResponse = guardRecovery.finalization;
       finalTaskToolRecords = attachDesktopReceipt(guardRecovery.toolRecords);

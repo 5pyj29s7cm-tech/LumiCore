@@ -16,6 +16,8 @@ import {
 } from '@/lib/chatProgress';
 import {
   isTerminalAgentStatus,
+  sanitizeAgentStreamingTextForDisplay,
+  sanitizeAgentResponseTextForDisplay,
   shouldDisplayAgentResponse,
 } from '@/lib/agentResponseDelivery';
 import { uiMessage } from '../i18n/uiMessages';
@@ -72,6 +74,7 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
   const [installedSkillNames, setInstalledSkillNames] = useState<string[]>([]);
   const [streamingText, setStreamingText] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const streamingPublicText = sanitizeAgentStreamingTextForDisplay(streamingText, isZh ? 'zh' : 'en');
   const [chatProgressLines, setChatProgressLines] = useState<ChatProgressLine[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -194,7 +197,14 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
     const onMessages = (data: { conversationId: string; messages: ChatMessage[] }) => {
       // Use ref to avoid stale closure on activeConvId
       if (data.conversationId === activeConvIdRef.current) {
-        setMessages(data.messages || []);
+        setMessages((data.messages || []).map(message => (
+          message.type === 'lumi' && message.content
+            ? {
+                ...message,
+                content: sanitizeAgentResponseTextForDisplay(message.content, isZh ? 'zh' : 'en'),
+              }
+            : message
+        )));
       }
     };
 
@@ -206,7 +216,7 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
       socket.off('chat:conversations', onConversations);
       socket.off('chat:messages', onMessages);
     };
-  }, [socket]);
+  }, [isZh, socket]);
 
   // Refresh conversation list
   const refreshConversations = useCallback(() => {
@@ -255,6 +265,8 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
         finishChatProgress(rejected.text, rejected.tone);
         return;
       }
+      const publicText = sanitizeAgentResponseTextForDisplay(data.text, isZh ? 'zh' : 'en');
+      if (!publicText) return;
       const completion = describeTurnCompletionProgress(
         isZh,
         currentRequestHadToolRef.current,
@@ -265,7 +277,7 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
       setMessages(prev => [...prev, {
         id: crypto.randomUUID().slice(0, 9),
         type: 'lumi',
-        content: data.text,
+        content: publicText,
         timestamp: new Date().toISOString(),
       }]);
       refreshConversations();
@@ -279,7 +291,10 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
 
     const onProgress = (data: { text?: string; tone?: ChatProgressTone; requestId?: string; source?: string }) => {
       if (!isCurrentTaskEvent(data)) return;
-      pushChatProgress(data.text || '', data.tone || 'tool');
+      pushChatProgress(
+        sanitizeAgentResponseTextForDisplay(data.text || '', isZh ? 'zh' : 'en'),
+        data.tone || 'tool',
+      );
     };
 
     const onStatus = (data: { status: string; requestId?: string; source?: string; executionAccepted?: boolean }) => {
@@ -318,7 +333,10 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
         uiMessage('chat-panel.something-went-wrong-i-am.01c198a67b', (isZh) ? 'zh' : 'en'),
         'error'
       );
-      const message = data.message || (t?.requestFailed || 'Request failed');
+      const message = sanitizeAgentResponseTextForDisplay(
+        data.message || (t?.requestFailed || 'Request failed'),
+        isZh ? 'zh' : 'en',
+      );
       setMessages(prev => [...prev, {
         id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         type: 'lumi',
@@ -724,7 +742,7 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
             ))}
 
             {/* Streaming indicator — live text as it arrives */}
-            {isStreaming && streamingText && (
+            {isStreaming && streamingPublicText && (
               <motion.div
                 initial={{ opacity: 0, y: 4 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -733,7 +751,7 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
                 <div className="max-w-[85%] bg-white/5 border border-celestial-glow/20 rounded-lg px-3 py-1.5">
                   <div className="markdown-body text-white/80 text-sm leading-relaxed">
                     <Markdown components={safeMarkdownComponents} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                      {streamingText}
+                      {streamingPublicText}
                     </Markdown>
                   </div>
                   <span className="inline-block w-1.5 h-3 bg-celestial-glow/60 animate-pulse ml-0.5 align-middle" />

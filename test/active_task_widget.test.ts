@@ -70,4 +70,12 @@ describe('active task widget', () => {
     });
     expect(view.activeCount).toBe(1);
   });
+
+  it('does not expose runtime codes or receipt details in the foreground widget', () => {
+    const runtimeTask = task('executing');
+    runtimeTask.blocker = 'desktop_open failed: target_mismatch receipt=receipt-private';
+    const view = select({ status: { tasks: [runtimeTask] }, locale: 'zh' });
+    expect(view.detail).toContain('窗口');
+    expect(view.detail).not.toMatch(/desktop_open|target_mismatch|receipt/iu);
+  });
 });

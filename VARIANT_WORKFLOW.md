@@ -11,7 +11,7 @@ schema v2 明确区分三类分支：
 - `delivery.remoteBranch`：子程序仓库接收正式交付的远端分支。
 - `delivery.defaultBranch`：用户打开仓库时看到的默认分支，通常是 `main`。
 
-管理器扫描所有 Git worktree，再读取其中的 `.lumi/variant.json` 发现子程序；不再用 `variant/<id>` 的命名猜测子程序身份。旧 schema v1 会被只读兼容，并在下一次成功同步时升级为 v2。
+管理器扫描所有 Git worktree，再读取其中的 `.lumi/variant.json` 发现子程序；不再用 `variant/<id>` 的命名猜测子程序身份。如果审查用的 detached worktree 保留了同一子程序元数据，管理器优先使用元数据指定交付分支上的唯一正式 worktree；单独的 detached 子程序仍会列出以诊断分支状态，身份冲突或多个交付候选仍会阻断。旧 schema v1 会被只读兼容，并在下一次成功同步时升级为 v2。
 
 ## 创建子程序
 

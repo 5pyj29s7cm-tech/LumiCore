@@ -10,6 +10,8 @@ import { getUserPreferredGenerationModels } from '../server/llm/generation_prefe
 import { getVoicePreference, setVoicePreference } from '../server/config/voice_preference';
 import { LUMI_OFFICIAL_SUPPORTED_ROLES, LUMI_OFFICIAL_UNSUPPORTED_ROLES } from '../shared/model_provider_capabilities';
 import { mountSystemRoutes } from '../server/routes/system_routes';
+import { updateLumiModelConfiguration } from '../server/llm/model_configuration';
+import { readDB, writeDB } from '../db_layer';
 
 describe('Lumi official API one-click adaptation', () => {
   const requestTimeoutMs = 15_000;
@@ -21,14 +23,14 @@ describe('Lumi official API one-click adaptation', () => {
   let initialVoicePreference: ReturnType<typeof getVoicePreference>;
   const completeCatalogModels = [
     { id: 'aliyun/qwen-plus', capability: 'chat' },
-    { id: 'huawei_maas/qwen2.5-vl-72b', capability: 'multimodal_chat' },
+    { id: 'aliyun/qwen2.5-vl-72b', capability: 'multimodal_chat' },
     { id: 'aliyun/qwen3-vl-flash', capability: 'multimodal_chat' },
-    { id: 'huawei_maas/qwen-image', capability: 'image_generation' },
-    { id: 'huawei_maas/qwen-image-edit-2509', capability: 'image_edit' },
-    { id: 'huawei_maas/Wan2.2-T2V-A14B', capability: 'video_generation' },
-    { id: 'huawei_maas/Wan2.2-I2V-A14B', capability: 'video_generation' },
-    { id: 'huawei_maas/bge-m3', capability: 'embedding' },
-    { id: 'huawei_maas/bge-reranker-v2-m3', capability: 'rerank' },
+    { id: 'aliyun/qwen-image', capability: 'image_generation' },
+    { id: 'aliyun/qwen-image-edit-2509', capability: 'image_edit' },
+    { id: 'aliyun/Wan2.2-T2V-A14B', capability: 'video_generation' },
+    { id: 'aliyun/Wan2.2-I2V-A14B', capability: 'video_generation' },
+    { id: 'aliyun/bge-m3', capability: 'embedding' },
+    { id: 'aliyun/bge-reranker-v2-m3', capability: 'rerank' },
     { id: 'aliyun/qwen-audio-3.0-asr-flash-streaming', capability: 'speech_recognition' },
     { id: 'aliyun/cosyvoice-v3-flash', capability: 'speech_synthesis' },
   ];
@@ -103,21 +105,21 @@ describe('Lumi official API one-click adaptation', () => {
     expect(body.applied).toHaveLength(11);
     expect(body.applied.map((item: any) => item.model)).toEqual([
       'aliyun/qwen-plus',
-      'huawei_maas/qwen2.5-vl-72b',
+      'aliyun/qwen2.5-vl-72b',
       'aliyun/qwen3-vl-flash',
-      'huawei_maas/qwen-image',
-      'huawei_maas/qwen-image-edit-2509',
-      'huawei_maas/Wan2.2-T2V-A14B',
-      'huawei_maas/Wan2.2-I2V-A14B',
-      'huawei_maas/bge-m3',
-      'huawei_maas/bge-reranker-v2-m3',
+      'aliyun/qwen-image',
+      'aliyun/qwen-image-edit-2509',
+      'aliyun/Wan2.2-T2V-A14B',
+      'aliyun/Wan2.2-I2V-A14B',
+      'aliyun/bge-m3',
+      'aliyun/bge-reranker-v2-m3',
       'aliyun/qwen-audio-3.0-asr-flash-streaming',
       'aliyun/cosyvoice-v3-flash',
     ]);
     expect(getUserPreferredGenerationModels(userId)).toMatchObject({
-      imageEdit: { provider: 'relay', model: 'huawei_maas/qwen-image-edit-2509' },
-      video: { provider: 'relay', model: 'huawei_maas/Wan2.2-T2V-A14B' },
-      imageToVideo: { provider: 'relay', model: 'huawei_maas/Wan2.2-I2V-A14B' },
+      imageEdit: { provider: 'relay', model: 'aliyun/qwen-image-edit-2509' },
+      video: { provider: 'relay', model: 'aliyun/Wan2.2-T2V-A14B' },
+      imageToVideo: { provider: 'relay', model: 'aliyun/Wan2.2-I2V-A14B' },
     });
     expect(body.roles.vision.selectionReason).toBe('recommended_default');
     expect(body.roles.world.selectionReason).toBe('recommended_default');
@@ -182,5 +184,137 @@ describe('Lumi official API one-click adaptation', () => {
       signal: AbortSignal.timeout(requestTimeoutMs),
     });
     expect(rejected.status).toBe(400);
+  });
+
+  it('migrates retired namespaces through the catalog and persists the same world model family', async () => {
+    const migrationUserId = `${userId}-namespace-migration`;
+    const migrationToken = jwt.sign({ uid: migrationUserId, username: 'migration-test', role: 'admin' }, JWT_SECRET);
+    updateLumiModelConfiguration(migrationUserId, {
+      role: 'world', provider: 'relay', model: 'huawei_maas/qwen2.5-vl-72b',
+    });
+    updateLumiModelConfiguration(migrationUserId, {
+      role: 'embedding', provider: 'relay', model: 'huawei_maas/bge-m3',
+    });
+    const response = await fetch(`${url}/api/preferences/official/apply`, {
+      method: 'POST', headers: { Authorization: `Bearer ${migrationToken}` },
+      signal: AbortSignal.timeout(requestTimeoutMs),
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.roles.world).toMatchObject({
+      model: 'aliyun/qwen2.5-vl-72b', selectionReason: 'catalog_namespace_migration',
+    });
+    expect(body.roles.embedding).toMatchObject({
+      model: 'aliyun/bge-m3', selectionReason: 'catalog_namespace_migration',
+    });
+    expect(getUserWorldModelPrefs(migrationUserId).model).toBe('aliyun/qwen2.5-vl-72b');
+    expect(getUserRetrievalModelPreferences(migrationUserId).embedding.model).toBe('aliyun/bge-m3');
+  });
+
+  it('writes no roles when a saved custom model would need a family change', async () => {
+    const customUserId = `${userId}-custom`;
+    const customToken = jwt.sign({ uid: customUserId, username: 'custom-test', role: 'admin' }, JWT_SECRET);
+    updateLumiModelConfiguration(customUserId, {
+      role: 'world', provider: 'relay', model: 'custom/private-world-model',
+    });
+    const before = getUserPreferredLLM(customUserId);
+    const response = await fetch(`${url}/api/preferences/official/apply`, {
+      method: 'POST', headers: { Authorization: `Bearer ${customToken}` },
+      signal: AbortSignal.timeout(requestTimeoutMs),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      code: 'OFFICIAL_API_MODEL_SELECTION_UNAVAILABLE',
+      error: expect.stringContaining('Explicitly choose a replacement model'),
+    });
+    expect(getUserPreferredLLM(customUserId)).toEqual(before);
+    expect(getUserWorldModelPrefs(customUserId).model).toBe('custom/private-world-model');
+  });
+
+  it('still adapts non-official provider choices to the official defaults', async () => {
+    const externalUserId = `${userId}-external-providers`;
+    const externalToken = jwt.sign({ uid: externalUserId, username: 'external-test', role: 'admin' }, JWT_SECRET);
+    updateLumiModelConfiguration(externalUserId, { role: 'reasoning', provider: 'qwen', model: 'qwen-private-chat' });
+    updateLumiModelConfiguration(externalUserId, { role: 'vision', provider: 'qwen', model: 'qwen-private-vision' });
+    updateLumiModelConfiguration(externalUserId, { role: 'world', provider: 'qwen', model: 'qwen-private-world' });
+    updateLumiModelConfiguration(externalUserId, { role: 'image_generation', provider: 'qwen', model: 'qwen-private-image' });
+    updateLumiModelConfiguration(externalUserId, { role: 'embedding', provider: 'qwen', model: 'qwen-private-embedding' });
+    const response = await fetch(`${url}/api/preferences/official/apply`, {
+      method: 'POST', headers: { Authorization: `Bearer ${externalToken}` },
+      signal: AbortSignal.timeout(requestTimeoutMs),
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.applied).toHaveLength(11);
+    expect(body.roles.reasoning.model).toBe('aliyun/qwen-plus');
+    expect(body.roles.vision.model).toBe('aliyun/qwen2.5-vl-72b');
+    expect(body.roles.world.model).toBe('aliyun/qwen3-vl-flash');
+    expect(body.roles.image_generation.model).toBe('aliyun/qwen-image');
+    expect(body.roles.embedding.model).toBe('aliyun/bge-m3');
+  });
+
+  it('does not replace an explicitly saved recommended model when it leaves the catalog', async () => {
+    const pinnedDefaultUserId = `${userId}-explicit-default`;
+    const pinnedDefaultToken = jwt.sign({ uid: pinnedDefaultUserId, username: 'explicit-default-test', role: 'admin' }, JWT_SECRET);
+    updateLumiModelConfiguration(pinnedDefaultUserId, { role: 'world', provider: 'relay', model: 'aliyun/qwen3-vl-flash' });
+    const before = getUserPreferredLLM(pinnedDefaultUserId);
+    activeCatalogModels = completeCatalogModels.filter(model => model.id !== 'aliyun/qwen3-vl-flash');
+    try {
+      const response = await fetch(`${url}/api/preferences/official/apply`, {
+        method: 'POST', headers: { Authorization: `Bearer ${pinnedDefaultToken}` },
+        signal: AbortSignal.timeout(requestTimeoutMs),
+      });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ code: 'OFFICIAL_API_MODEL_SELECTION_UNAVAILABLE' });
+      expect(getUserPreferredLLM(pinnedDefaultUserId)).toEqual(before);
+      expect(getUserWorldModelPrefs(pinnedDefaultUserId).model).toBe('aliyun/qwen3-vl-flash');
+    } finally {
+      activeCatalogModels = completeCatalogModels;
+    }
+  });
+
+  it('preserves the selected official world model over a legacy deployment model', async () => {
+    const selectedUserId = `${userId}-deployment-conflict`;
+    const selectedToken = jwt.sign({ uid: selectedUserId, username: 'deployment-test', role: 'admin' }, JWT_SECRET);
+    updateLumiModelConfiguration(selectedUserId, { role: 'world', provider: 'relay', model: 'custom/live-world' });
+    const previous = process.env.RELAY_WORLD_MODEL;
+    process.env.RELAY_WORLD_MODEL = 'huawei_maas/qwen2.5-vl-72b';
+    activeCatalogModels = [...completeCatalogModels, { id: 'custom/live-world', capability: 'multimodal_chat' }];
+    try {
+      const response = await fetch(`${url}/api/preferences/official/apply`, {
+        method: 'POST', headers: { Authorization: `Bearer ${selectedToken}` },
+        signal: AbortSignal.timeout(requestTimeoutMs),
+      });
+      expect(response.status).toBe(200);
+      expect((await response.json()).roles.world).toMatchObject({
+        model: 'custom/live-world', selectionReason: 'preserved_live_selection',
+      });
+      expect(getUserWorldModelPrefs(selectedUserId).model).toBe('custom/live-world');
+    } finally {
+      if (previous === undefined) delete process.env.RELAY_WORLD_MODEL;
+      else process.env.RELAY_WORLD_MODEL = previous;
+      activeCatalogModels = completeCatalogModels;
+    }
+  });
+
+  it('does not persist a legacy reasoning read migration when later preflight fails', async () => {
+    const legacyUserId = `${userId}-legacy-preflight`;
+    const legacyToken = jwt.sign({ uid: legacyUserId, username: 'legacy-test', role: 'admin' }, JWT_SECRET);
+    const key = `llm_prefs_${legacyUserId}`;
+    const original = JSON.stringify({ provider: 'relay', models: { relay: 'gpt-4o' } });
+    const db = readDB();
+    db.settings.push({ key, value: original });
+    writeDB(db);
+    activeCatalogModels = completeCatalogModels.filter(model => model.capability !== 'image_edit');
+    try {
+      const response = await fetch(`${url}/api/preferences/official/apply`, {
+        method: 'POST', headers: { Authorization: `Bearer ${legacyToken}` },
+        signal: AbortSignal.timeout(requestTimeoutMs),
+      });
+      expect(response.status).toBe(409);
+      expect(readDB().settings.find(setting => setting.key === key)?.value).toBe(original);
+    } finally {
+      activeCatalogModels = completeCatalogModels;
+    }
   });
 });

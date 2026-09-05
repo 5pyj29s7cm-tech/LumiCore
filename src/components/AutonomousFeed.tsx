@@ -13,6 +13,9 @@ import {
   type TaskCompletionFeedback,
 } from './workflowTypes';
 import { isCurrentScopeRequest, type ScopeRequestToken } from './scopeRequestGuard';
+import { sanitizeAgentResponseTextForDisplay } from '@/lib/agentResponseDelivery';
+import { autonomousTaskCopy } from '@/i18n/locales/autonomousTask';
+import { CN_AUTONOMOUS_CUSTOMER_COPY_RE } from '@/i18n/regions/cn/recognition';
 
 interface AutoTask {
   id: string;
@@ -50,6 +53,51 @@ interface AutonomousCompletionPayload {
   verified?: boolean;
   reason?: string;
   completionFeedback?: TaskCompletionFeedback;
+}
+
+// i18n-allow -- recognition only; these implementation details must never be
+// rendered on the autonomous customer surface.
+const AUTONOMOUS_UI_MACHINE_DETAIL_RE = /(?:\b(?:receipt|terminalVerification|verificationStatus|requestId|taskId|idempotencyKey|target_mismatch|execution_recovery_incomplete)\b|\b(?:desktop|web|url|write|read|extract|work_product|adapter_registry|self_improvement|client|system)_[a-z0-9_]+\b|\b(?:ECONN[A-Z]+|ENOENT|EACCES)\b|(?:Error|Exception):|(?:[A-Za-z]:\\|\/(?:Users|home|var|tmp)\/))/iu;
+
+function autonomousUiFallback(
+  status: AutoTask['status'],
+  locale: 'zh' | 'en',
+): string {
+  const copy = autonomousTaskCopy(locale);
+  if (locale === 'zh') {
+    if (status === 'completed') return copy.completed;
+    if (status === 'cancelled') return copy.cancelled;
+    if (status === 'pending' || status === 'running' || status === 'pausing' || status === 'paused' || status === 'cancelling') return '';
+    return copy.failed;
+  }
+  if (status === 'completed') return copy.completed;
+  if (status === 'cancelled') return copy.cancelled;
+  if (status === 'pending' || status === 'running' || status === 'pausing' || status === 'paused' || status === 'cancelling') return '';
+  return copy.failed;
+}
+
+export function autonomousTaskCustomerSummary(
+  task: Pick<AutoTask, 'status' | 'result' | 'error'>,
+  locale: 'zh' | 'en',
+): string {
+  if (task.status === 'cancelled') return autonomousUiFallback(task.status, locale);
+  const raw = String(
+    task.status === 'completed'
+      ? task.result || ''
+      : task.error || task.result || '',
+  ).trim();
+  const projected = sanitizeAgentResponseTextForDisplay(raw, locale);
+  const isCanonicalFailureCopy = CN_AUTONOMOUS_CUSTOMER_COPY_RE.test(projected)
+    || /^(?:This autonomous task|That (?:step )?did not finish|Not yet|This step|Desktop control|I (?:could not|paused))/iu.test(projected);
+  if (
+    projected
+    && !AUTONOMOUS_UI_MACHINE_DETAIL_RE.test(projected)
+    && !/Autonomous task (?:is blocked|failed).*local runtime logs/iu.test(projected)
+    && (task.status === 'completed' || projected !== raw || isCanonicalFailureCopy)
+  ) {
+    return projected;
+  }
+  return autonomousUiFallback(task.status, locale);
 }
 
 export function isVerifiedAutonomousCompletionPayload(data: AutonomousCompletionPayload): boolean {
@@ -213,7 +261,7 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
       addNotification({
         type: 'warning',
         title: uiMessage('autonomous-feed.failed.948e2ae057'),
-        message: `${data.title}: ${data.error}`,
+        message: `${data.title}: ${autonomousTaskCustomerSummary(failedTask, locale)}`,
       });
     };
 
@@ -256,7 +304,7 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
       addNotification({
         type: 'success',
         title: uiMessage('autonomous-feed.done.9ffd599475'),
-        message: `${data.title}: ${data.result}`,
+        message: `${data.title}: ${autonomousTaskCustomerSummary(newHistoryItem, locale)}`,
       });
     };
 
@@ -307,7 +355,7 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
       socket.off('autonomous:task_failed', onFailed);
       socket.off('autonomous:task_cancelled', onCancelled);
     };
-  }, [socket, addNotification, isWork, scopeKey]);
+  }, [socket, addNotification, isWork, locale, scopeKey]);
 
   const cancelTask = async (task: AutoTask) => {
     const requestToken = { scopeKey, generation: scopeGenerationRef.current };
@@ -470,65 +518,66 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
                   {uiMessage('autonomous-feed.no-autonomous-learning-tasks-yet.41b8e1c56b')}
                 </div>
               ) : (
-                allItems.map(task => (
-                  <motion.div
-                    key={task.id}
-                    initial={{ opacity: 0, y: -8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="cursor-pointer rounded-2xl border border-white/[0.06] bg-white/[0.025] p-3 transition-colors hover:border-white/[0.1] hover:bg-white/[0.05]"
-                    onClick={() => setExpandedTask(expandedTask === task.id ? null : task.id)}
-                  >
-                    <div className="flex items-center gap-2">
-                      {statusIcon(task.status)}
-                      {modeIcon(task.mode)}
-                      <span className="text-sm font-bold text-white/60 truncate flex-1">{task.title}</span>
-                      {task.toolCallsCount != null && (
-                        <span className="text-xs text-white/30 font-mono">{task.toolCallsCount} tools</span>
-                      )}
-                      {(task.status === 'pending' || task.status === 'running') && !task.cancelRequested && (
-                        <button
-                          onClick={(event) => { event.stopPropagation(); void cancelTask(task); }}
-                          disabled={cancellingIds.includes(task.id)}
-                          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-red-400/15 bg-red-500/10 text-red-200/55 hover:bg-red-500/18 hover:text-red-100 disabled:opacity-30"
-                          title={uiMessage('autonomous-feed.cancel-task.ea0c83beba')}
-                        >
-                          <X size={12} />
-                        </button>
-                      )}
-                    </div>
+                allItems.map(task => {
+                  const customerSummary = autonomousTaskCustomerSummary(task, locale);
+                  return (
+                    <motion.div
+                      key={task.id}
+                      initial={{ opacity: 0, y: -8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="cursor-pointer rounded-2xl border border-white/[0.06] bg-white/[0.025] p-3 transition-colors hover:border-white/[0.1] hover:bg-white/[0.05]"
+                      onClick={() => setExpandedTask(expandedTask === task.id ? null : task.id)}
+                    >
+                      <div className="flex items-center gap-2">
+                        {statusIcon(task.status)}
+                        {modeIcon(task.mode)}
+                        <span className="text-sm font-bold text-white/60 truncate flex-1">{task.title}</span>
+                        {(task.status === 'pending' || task.status === 'running') && !task.cancelRequested && (
+                          <button
+                            onClick={(event) => { event.stopPropagation(); void cancelTask(task); }}
+                            disabled={cancellingIds.includes(task.id)}
+                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-red-400/15 bg-red-500/10 text-red-200/55 hover:bg-red-500/18 hover:text-red-100 disabled:opacity-30"
+                            title={uiMessage('autonomous-feed.cancel-task.ea0c83beba')}
+                          >
+                            <X size={12} />
+                          </button>
+                        )}
+                      </div>
 
-                    {expandedTask === task.id && (
-                      <motion.div
-                        initial={{ height: 0 }}
-                        animate={{ height: 'auto' }}
-                        className="mt-2 space-y-1 border-t border-white/[0.08] pt-2 text-xs text-white/50"
-                      >
-                        {task.result && (
-                          <p className="text-white/60 leading-relaxed">{task.result.slice(0, 300)}</p>
-                        )}
-                        {task.error && <p className="text-red-400/70">{task.error}</p>}
-                        {task.cancelRequested && task.status !== 'cancelled' && (
-                          <p data-autonomous-cancel-requested className="text-amber-200/65">
-                            {uiMessage('agent-chat-page.cancelling-task.18c33c6327', locale)}
-                          </p>
-                        )}
-                        <TaskCompletionFeedbackDetails
-                          feedback={task.completionFeedback}
-                          locale={locale}
-                          compact
-                        />
-                        <div className="flex gap-4 text-white/30">
-                          {task.tokensUsed != null && <span>{task.tokensUsed} tokens</span>}
-                          <span>Priority: {task.priority}</span>
-                          <span>Status: {task.status}</span>
-                          {task.completedAt && (
-                            <span>{new Date(task.completedAt).toLocaleTimeString()}</span>
+                      {expandedTask === task.id && (
+                        <motion.div
+                          initial={{ height: 0 }}
+                          animate={{ height: 'auto' }}
+                          className="mt-2 space-y-1 border-t border-white/[0.08] pt-2 text-xs text-white/50"
+                        >
+                          {customerSummary && (
+                            <p className={task.status === 'failed' || task.status === 'blocked'
+                              ? 'text-red-300/75 leading-relaxed'
+                              : 'text-white/60 leading-relaxed'}>
+                              {customerSummary.slice(0, 300)}
+                            </p>
                           )}
-                        </div>
-                      </motion.div>
-                    )}
-                  </motion.div>
-                ))
+                          {task.cancelRequested && task.status !== 'cancelled' && (
+                            <p data-autonomous-cancel-requested className="text-amber-200/65">
+                              {uiMessage('agent-chat-page.cancelling-task.18c33c6327', locale)}
+                            </p>
+                          )}
+                          <TaskCompletionFeedbackDetails
+                            feedback={task.completionFeedback}
+                            locale={locale}
+                            compact
+                            variant="chat"
+                          />
+                          {task.completedAt && (
+                            <div className="text-white/30">
+                              {new Date(task.completedAt).toLocaleTimeString()}
+                            </div>
+                          )}
+                        </motion.div>
+                      )}
+                    </motion.div>
+                  );
+                })
               )}
             </AnimatePresence>
           </div>

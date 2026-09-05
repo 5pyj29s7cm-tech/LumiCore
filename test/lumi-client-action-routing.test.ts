@@ -6,6 +6,19 @@ import {
 } from '../server/cognition/tool_intent';
 import { guardCompletionClaims } from '../server/work_product/completion_guard';
 
+const INTERNAL_GUARD_LEAK_RE = /(?:\u72b6\u6001|\u8bc1\u636e)\s*[:\uff1a]|\u5177\u4f53\u963b\u585e|\u56de\u6267(?!\u884c)|target_mismatch|undefined/iu;
+
+function expectCustomerReadableGuard(text: string): void {
+  const sentences = text.trim()
+    .split(/(?<=[\u3002\uff01\uff1f.!?])\s*/u)
+    .filter(Boolean);
+
+  expect(sentences.length).toBeGreaterThanOrEqual(1);
+  expect(sentences.length).toBeLessThanOrEqual(2);
+  expect(text).not.toMatch(INTERNAL_GUARD_LEAK_RE);
+  expect(text).not.toMatch(/(?:^|\n)\s*[-*]\s+/mu);
+}
+
 describe('Lumi client action routing', () => {
   it('routes client-native surface commands to client action tools', () => {
     expect(hasClientActionOnlyIntent('你能打开中枢世界吗')).toBe(true);
@@ -77,10 +90,12 @@ describe('Lumi client action routing', () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result.text).toContain('我还没有真正操作客户端');
-    expect(result.text).toContain('\u7ee7\u7eed\u5b8c\u6210\u5bf9\u5e94\u7684\u5ba2\u6237\u7aef\u64cd\u4f5c');
+    expect(result.text).toContain('\u5ba2\u6237\u7aef\u64cd\u4f5c');
+    expect(result.text).toContain('\u91cd\u8bd5');
     expect(result.text).not.toContain('client_get_state');
     expect(result.text).not.toContain('client_action');
+    expect(result.text).not.toMatch(/\u5df2\u7ecf\u6253\u5f00|\u64cd\u4f5c\u5df2\u5b8c\u6210/u);
+    expectCustomerReadableGuard(result.text);
   });
 
   it('allows client completion claims when client_action produced evidence', () => {

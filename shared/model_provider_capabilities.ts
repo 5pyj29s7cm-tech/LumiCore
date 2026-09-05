@@ -38,14 +38,14 @@ export type LumiModelRoleId = typeof LUMI_MODEL_ROLE_IDS[number];
 /** Safe model-id defaults used when a user has not chosen a role-specific id. */
 export const LUMI_OFFICIAL_DEFAULT_MODELS: Readonly<Record<LumiModelRoleId, string>> = {
   reasoning: 'aliyun/qwen-plus',
-  vision: 'huawei_maas/qwen2.5-vl-72b',
+  vision: 'aliyun/qwen2.5-vl-72b',
   world: 'aliyun/qwen3-vl-flash',
-  image_generation: 'huawei_maas/qwen-image',
-  image_edit: 'huawei_maas/qwen-image-edit-2509',
-  video_generation: 'huawei_maas/Wan2.2-T2V-A14B',
-  image_to_video: 'huawei_maas/Wan2.2-I2V-A14B',
-  embedding: 'huawei_maas/bge-m3',
-  rerank: 'huawei_maas/bge-reranker-v2-m3',
+  image_generation: 'aliyun/qwen-image',
+  image_edit: 'aliyun/qwen-image-edit-2509',
+  video_generation: 'aliyun/Wan2.2-T2V-A14B',
+  image_to_video: 'aliyun/Wan2.2-I2V-A14B',
+  embedding: 'aliyun/bge-m3',
+  rerank: 'aliyun/bge-reranker-v2-m3',
   speech_recognition: 'aliyun/qwen-audio-3.0-asr-flash-streaming',
   speech_synthesis: 'aliyun/cosyvoice-v3-flash',
 };

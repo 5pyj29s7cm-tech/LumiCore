@@ -13,10 +13,24 @@ export const CN_EXECUTION_EVIDENCE_MESSAGES = {
   verifiedDocumentReadWithoutAnalysis: '文件内容已经成功读取，但分析结论还没有生成；当前只能确认读取完成，不能把整项分析标记为完成。',
   mismatchedDocumentReadTarget: '本轮读取回执对应的不是你指定的文件，因此不能据此完成这次分析。',
   recoveryExecutorDidNotStart: '\u6267\u884c\u5668\u4ecd\u672a\u9009\u62e9\u6216\u542f\u52a8\u53ef\u5b8c\u6210\u8be5\u4efb\u52a1\u7684\u5de5\u5177',
-  recoveryNotCompleted: '\u8fd9\u9879\u4efb\u52a1\u8fd8\u6ca1\u6709\u6267\u884c\u6210\u529f\u3002',
-  recoveryBlocker: (detail: string) => `\u5177\u4f53\u963b\u585e\uff1a${detail}\u3002`,
-  recoveryRetained: '\u6211\u5df2\u4fdd\u7559\u539f\u76ee\u6807\u3001\u5df2\u6267\u884c\u6b65\u9aa4\u548c\u56de\u6267\uff1b\u4e0d\u4f1a\u628a\u8fd9\u6b21\u5931\u8d25\u8bf4\u6210\u5b8c\u6210\uff0c\u4e5f\u4e0d\u4f1a\u8981\u6c42\u4f60\u5904\u7406\u5185\u90e8\u6d41\u7a0b\u3002\u540e\u7eed\u6761\u4ef6\u6062\u590d\u540e\u53ef\u4ece\u5f53\u524d\u72b6\u6001\u7ee7\u7eed\u3002',
-  recoveryNoVerifiableResult: '暂时没有拿到可确认的执行结果',
+  recoveryNoVerifiableResult: '这一步没有返回明确结果',
+  recoveryStepCompleted: '刚才这一步已经完成，我拿到了可以确认的结果。',
+  recoveryStepFailed: (failure: string, hasProgress: boolean) => (
+    `还没有。${failure}。${hasProgress ? '已经完成的部分不会重做，' : ''}可以从这里重试。`
+  ),
+  recoveryStepUnconfirmed: (hasProgress: boolean) => (
+    `还没有。现有结果还不能确认这一步已经完成；${hasProgress ? '已经完成的部分不会重做，' : ''}可以从这里继续。`
+  ),
+  recoveryNoResult: '还没有。这次没有拿到可以确认的操作结果；可以先重新确认目标，再继续处理。',
+  recoveryBareReaction: '抱歉，刚才没有接好你的话。你直接告诉我哪里不对，我从当前对话接着处理。',
+  recoveryFailureSentence: (detail: string) => detail ? `刚才这一步没有完成：${detail}` : '刚才这一步没有完成',
+  recoveryActionFailureSentence: (action: string, reason: string) => action === '当前操作'
+    ? `刚才这一步没有完成：${reason}`
+    : `刚才的${action}没有完成：${reason}`,
+  recoveryRetry: (failure: string, hasProgress: boolean) => (
+    `${failure}。${hasProgress ? '已经完成的部分不会重做，' : ''}可以从这里重试。`
+  ),
+  recoveryNoResultRetry: '刚才这一步没有完成：这次没有拿到可以确认的操作结果。重新确认目标后，可以从这里继续。',
   recoveryActionDesktop: '桌面操作',
   recoveryActionBrowser: '浏览器操作',
   recoveryActionClient: '客户端操作',
@@ -24,22 +38,11 @@ export const CN_EXECUTION_EVIDENCE_MESSAGES = {
   recoveryActionVoice: '语音操作',
   recoveryActionCurrent: '当前操作',
   recoveryActionMessage: '消息发送',
-  recoveryEvidenceUnavailable: '暂时没有可核验的执行结果',
-  recoveryEvidenceVerified: '已验证',
-  recoveryEvidenceFailed: '失败',
-  recoveryEvidenceUnverified: '未验证',
-  recoveryStatus: (status: string) => `状态：${status}。`,
-  recoveryStatusCompleted: '已完成',
-  recoveryStatusFailed: '失败',
-  recoveryStatusBlocked: '受阻',
-  recoveryEvidence: (evidence: string) => `证据：${evidence}。`,
-  recoveryNextFailed: '下一步：保留已有回执，修复具体失败后再续执行。',
-  recoveryNextBlocked: '下一步：保留已有进度，先核验目标状态再继续。',
   recoveryConversationClarification: '我需要确认你的意图：这是普通对话，还是希望我对某个具体目标执行操作？如果要执行，请告诉我目标和希望发生的动作。',
   recoveryDesktopBusy: '桌面控制正被另一项操作占用',
   recoveryDesktopPaused: '检测到你正在操作桌面，自动控制已暂时停下',
-  recoveryForegroundUnverified: '后续窗口核验没有确认当前前台状态',
-  recoveryCapabilityMissing: '当前任务没有获得所需能力',
+  recoveryForegroundUnverified: '操作后看到的窗口和你要操作的目标不一致',
+  recoveryCapabilityMissing: '这一步没有取得所需的操作能力',
   recoveryServiceUnavailable: '相关服务暂时不可用',
   currentAuthoringNeedsExactFile: (target: string) => (
     `\u6211\u770b\u5230\u524d\u53f0\u662f\u300c${target}\u300d\uff0c\u4f46\u8def\u5f84\u4ecd\u672a\u77e5\uff0c\u6211\u5c1a\u672a\u8bfb\u53d6\u8be5\u6587\u4ef6\u3002\u8bf7\u5148\u4fdd\u5b58\u6587\u6863\uff0c\u6216\u76f4\u63a5\u628a\u6587\u4ef6\u53d1\u7ed9\u6211\uff0c\u6211\u5c31\u80fd\u7ee7\u7eed\u5206\u6790\u3002`

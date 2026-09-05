@@ -9,7 +9,8 @@ import {
   hasCurrentAppUiMutationEvidence,
   requiresCurrentAppUiMutation,
 } from '../cognition/action_contract';
-import { formatCnToolFailureDetail, isInternalExecutionDetail } from '../regions/packs/cn/voice_fast_path_messages';
+import { formatCnToolFailureDetail } from '../regions/packs/cn/voice_fast_path_messages';
+import { CN_COMPLETION_GUARD_MESSAGES } from '../regions/packs/cn/completion_guard_messages';
 import { normalizeActionIntent } from '../cognition/normalized_action_intent';
 
 export interface CompletionGuardResult {
@@ -17,27 +18,6 @@ export interface CompletionGuardResult {
   blocked: boolean;
   reason?: string;
   reasonCode?: 'successful_irrelevant_evidence';
-}
-
-/**
- * Keep guarded completion replies readable in clients that render Markdown.
- * The first item is the outcome; the remaining items are concise supporting
- * details or next steps. A blank line before the list is required Markdown.
- */
-function formatGuardedMarkdown(
-  parts: readonly (string | false | null | undefined)[],
-): string {
-  const content = parts
-    .filter((part): part is string => typeof part === 'string' && part.trim().length > 0)
-    .map(part => part.trim());
-
-  if (content.length <= 1) return content[0] || '';
-
-  return [
-    content[0],
-    '',
-    ...content.slice(1).map(part => `- ${part}`),
-  ].join('\n');
 }
 
 function buildActionPromiseGuardedResponse(
@@ -55,62 +35,30 @@ function buildActionPromiseGuardedResponse(
 
   if (!isZh) {
     if (clientSurfaceTask) {
-      return formatGuardedMarkdown([
-        'I have not operated the Lumi client yet.',
-        lastFailure ? `Latest issue: ${lastFailure}.` : 'No client change has been verified yet.',
-        'I will keep the request intact and continue with the matching client action; I will ask only if permission or missing input is required.',
-      ]);
+      return `I could not complete that client action${lastFailure ? `: ${lastFailure}` : ''}. The request is still available to retry from this step.`;
     }
     if (desktopActionTask) {
-      return formatGuardedMarkdown([
-        'I have not verified the desktop action yet.',
-        lastFailure ? `Latest issue: ${lastFailure}.` : 'The requested window or process state has not been confirmed yet.',
-        'I will keep locating, opening, or checking the target and report once its actual state is confirmed.',
-      ]);
+      return `I could not complete that desktop action${lastFailure ? `: ${lastFailure}` : ''}. The target can be checked again before retrying.`;
     }
     if (confirmationBlocked) {
-      return formatGuardedMarkdown([
-        'I started the request, but it is waiting for confirmation.',
-        lastFailure ? `Latest issue: ${lastFailure}.` : '',
-        'Confirm the requested local action in the client, or explicitly ask me to retry with approval.',
-      ]);
+      return `This action is waiting for your confirmation${lastFailure ? `: ${lastFailure}` : ''}. Confirm it in the client to continue.`;
     }
-    return formatGuardedMarkdown([
-      'I have not started the requested action yet.',
-      lastFailure ? `Latest issue: ${lastFailure}.` : 'I do not yet have a result from the requested content or location.',
-      'I will keep the request intact and continue once the required content or location is available.',
-    ]);
+    return `I could not start that action${lastFailure ? `: ${lastFailure}` : ''}. The request is still available to retry from this step.`;
   }
 
   if (clientSurfaceTask) {
-    return formatGuardedMarkdown([
-      '\u6211\u8fd8\u6ca1\u6709\u771f\u6b63\u64cd\u4f5c\u5ba2\u6237\u7aef\u3002', // i18n-allow: reviewed Chinese completion-guard response.
-      lastFailure ? `\u6700\u8fd1\u9047\u5230\u7684\u95ee\u9898\uff1a${lastFailure}\u3002` : '\u5ba2\u6237\u7aef\u754c\u9762\u8fd8\u6ca1\u6709\u53d1\u751f\u53ef\u786e\u8ba4\u7684\u53d8\u5316\u3002', // i18n-allow: reviewed Chinese completion-guard response.
-      '\u6211\u4f1a\u4fdd\u7559\u4f60\u7684\u8981\u6c42\uff0c\u5e76\u7ee7\u7eed\u5b8c\u6210\u5bf9\u5e94\u7684\u5ba2\u6237\u7aef\u64cd\u4f5c\uff1b\u53ea\u6709\u786e\u5b9e\u9700\u8981\u6743\u9650\u6216\u8865\u5145\u4fe1\u606f\u65f6\u624d\u4f1a\u8bf7\u4f60\u5904\u7406\u3002', // i18n-allow: reviewed Chinese completion-guard response.
-    ]);
+    return CN_COMPLETION_GUARD_MESSAGES.promiseClient(lastFailure);
   }
 
   if (desktopActionTask) {
-    return formatGuardedMarkdown([
-      '\u6211\u8fd8\u6ca1\u6709\u62ff\u5230\u53ef\u786e\u8ba4\u7684\u684c\u9762\u52a8\u4f5c\u7ed3\u679c\u3002', // i18n-allow: reviewed Chinese completion-guard response.
-      lastFailure ? `\u6700\u8fd1\u9047\u5230\u7684\u95ee\u9898\uff1a${lastFailure}\u3002` : '\u76ee\u6807\u7a97\u53e3\u6216\u8fdb\u7a0b\u72b6\u6001\u8fd8\u6ca1\u6709\u5f97\u5230\u786e\u8ba4\u3002', // i18n-allow: reviewed Chinese completion-guard response.
-      '\u6211\u4f1a\u7ee7\u7eed\u5b9a\u4f4d\u3001\u6253\u5f00\u6216\u68c0\u67e5\u76ee\u6807\uff0c\u786e\u8ba4\u771f\u5b9e\u72b6\u6001\u540e\u518d\u6c47\u62a5\u3002', // i18n-allow: reviewed Chinese completion-guard response.
-    ]);
+    return CN_COMPLETION_GUARD_MESSAGES.promiseDesktop(lastFailure);
   }
 
   if (confirmationBlocked) {
-    return formatGuardedMarkdown([
-      '我已经开始处理了，但卡在一个需要确认的本地动作上。',
-      lastFailure ? `最近的阻塞点：${lastFailure}。` : '',
-      '下一步需要在客户端确认这一步，或者你明确授权后让我重试；我不能把这一步说成已经完成。',
-    ]);
+    return CN_COMPLETION_GUARD_MESSAGES.confirmation(lastFailure);
   }
 
-  return formatGuardedMarkdown([
-    '\u6211\u8fd8\u6ca1\u6709\u771f\u6b63\u5f00\u59cb\u8bfb\u53d6\u6216\u5ba1\u67e5\u3002', // i18n-allow: reviewed Chinese completion-guard response.
-    lastFailure ? `\u6700\u8fd1\u9047\u5230\u7684\u95ee\u9898\uff1a${lastFailure}\u3002` : '\u76ee\u524d\u8fd8\u6ca1\u6709\u5b9e\u9645\u8bfb\u5230\u6587\u4ef6\u5185\u5bb9\u3002', // i18n-allow: reviewed Chinese completion-guard response.
-    '\u6211\u4f1a\u4fdd\u7559\u4f60\u7684\u8981\u6c42\uff1b\u62ff\u5230\u53ef\u8bfb\u53d6\u7684\u6587\u4ef6\u6216\u4f4d\u7f6e\u540e\u7ee7\u7eed\u5904\u7406\u3002', // i18n-allow: reviewed Chinese completion-guard response.
-  ]);
+  return CN_COMPLETION_GUARD_MESSAGES.promiseGeneric(lastFailure);
 }
 
 interface CompletionGuardInput {
@@ -444,7 +392,7 @@ function toolFailureDetail(call: ToolExecutionRecord): string {
 function summarizeFailedToolCalls(failed: ToolExecutionRecord[], chinese = false): string {
   const summaries = failed.slice(-2).map(call => {
     const detail = toolFailureDetail(call);
-    const safeDetail = chinese && detail && isInternalExecutionDetail(detail)
+    const safeDetail = chinese && detail
       ? formatCnToolFailureDetail(detail)
       : detail;
     return safeDetail || (chinese
@@ -499,17 +447,9 @@ function buildExecutionStatusGuardedResponse(
   const isZh = /[\u3400-\u9fff]/.test(task);
   const lastFailure = summarizeFailedToolCalls(failed, isZh);
   if (!isZh) {
-    return formatGuardedMarkdown([
-      'That action has not started successfully.',
-      lastFailure ? `Latest issue: ${lastFailure}.` : 'I do not yet have a result showing that it started.',
-      'I will keep the request intact and continue; if permission or missing input is required, I will ask for it directly.',
-    ]);
+    return `That action has not started${lastFailure ? `: ${lastFailure}` : ''}. It can be retried from here.`;
   }
-  return formatGuardedMarkdown([
-    '\u8fd9\u9879\u64cd\u4f5c\u8fd8\u6ca1\u6709\u6210\u529f\u542f\u52a8\u3002', // i18n-allow: reviewed Chinese execution-guard response.
-    lastFailure ? `\u6700\u8fd1\u9047\u5230\u7684\u95ee\u9898\uff1a${lastFailure}\u3002` : '\u6211\u8fd8\u6ca1\u6709\u62ff\u5230\u80fd\u8bf4\u660e\u64cd\u4f5c\u5df2\u5f00\u59cb\u7684\u7ed3\u679c\u3002', // i18n-allow: reviewed Chinese execution-guard response.
-    '\u6211\u4f1a\u4fdd\u7559\u4f60\u7684\u8981\u6c42\u5e76\u7ee7\u7eed\u5904\u7406\uff1b\u5982\u679c\u786e\u5b9e\u9700\u8981\u6743\u9650\u6216\u8865\u5145\u4fe1\u606f\uff0c\u6211\u4f1a\u76f4\u63a5\u8bf4\u660e\u3002', // i18n-allow: reviewed Chinese execution-guard response.
-  ]);
+  return CN_COMPLETION_GUARD_MESSAGES.statusNotStarted(lastFailure);
 }
 
 export function needsCompletionEvidence(task: string): boolean {
@@ -710,69 +650,29 @@ function buildGuardedResponse(
   );
 
   if (isZh && desktopActionTask && !clientSurfaceTask) {
-    return formatGuardedMarkdown([
-      '\u8fd9\u9879\u684c\u9762\u64cd\u4f5c\u8fd8\u4e0d\u80fd\u786e\u8ba4\u5b8c\u6210\u3002', // i18n-allow: reviewed Chinese completion-guard response.
-      hasVerifiedProgress ? '\u5df2\u7ecf\u53d6\u5f97\u90e8\u5206\u6709\u6548\u56de\u6267\uff0c\u4f46\u8fd8\u7f3a\u5c11\u76ee\u6807\u7a97\u53e3\u6216\u8fdb\u7a0b\u7684\u6700\u7ec8\u72b6\u6001\u3002' : '\u76ee\u6807\u7a97\u53e3\u6216\u8fdb\u7a0b\u7684\u6700\u7ec8\u72b6\u6001\u8fd8\u6ca1\u6709\u5f97\u5230\u786e\u8ba4\u3002', // i18n-allow: reviewed Chinese evidence-accuracy response.
-      lastFailure ? `\u6700\u8fd1\u7684\u963b\u585e\u70b9\uff1a${lastFailure}\u3002` : '',
-      '\u6211\u4f1a\u7ee7\u7eed\u5b9a\u4f4d\u3001\u6253\u5f00\u6216\u805a\u7126\u76ee\u6807\uff0c\u786e\u8ba4\u771f\u5b9e\u7a97\u53e3\u6216\u8fdb\u7a0b\u540e\u518d\u6c47\u62a5\u3002',
-    ]);
+    return CN_COMPLETION_GUARD_MESSAGES.blockedDesktop(lastFailure, hasVerifiedProgress);
   }
 
   if (!isZh) {
     if (clientSurfaceTask) {
-      return formatGuardedMarkdown([
-        'The Lumi client action does not yet have a verified completion result.',
-        hasVerifiedProgress ? 'Some verified progress exists, but the requested client state has not been confirmed yet.' : 'The requested client state has not been confirmed yet.',
-        lastFailure ? `Latest blocker: ${lastFailure}.` : '',
-        'I will continue with the requested client action and report once its actual state is confirmed.',
-      ]);
+      return `That client action is not complete${lastFailure ? `: ${lastFailure}` : ''}. ${hasVerifiedProgress ? 'Completed work is preserved, and the request ' : 'The request '}can be retried from this step.`;
     }
     if (desktopActionTask) {
-      return formatGuardedMarkdown([
-        'The desktop action does not yet have a verified completion result.',
-        hasVerifiedProgress ? 'Some verified progress exists, but the requested window or process state has not been confirmed yet.' : 'The requested window or process state has not been confirmed yet.',
-        lastFailure ? `Latest blocker: ${lastFailure}.` : '',
-        'I will keep locating, opening, or focusing the target and report once the real window or process is confirmed.',
-      ]);
+      return `That desktop action is not complete${lastFailure ? `: ${lastFailure}` : ''}. ${hasVerifiedProgress ? 'Completed work is preserved; ' : ''}the target can be checked again before retrying.`;
     }
     if (confirmationBlocked) {
-      return formatGuardedMarkdown([
-        'I started the request, but it is waiting for confirmation and is not complete yet.',
-        hasVerifiedProgress ? 'The steps before confirmation have verified receipts.' : '',
-        lastFailure ? `Latest blocker: ${lastFailure}.` : '',
-        'Confirm the action in the client, or explicitly ask me to retry with approval.',
-      ]);
+      return `This action still needs your confirmation${lastFailure ? `: ${lastFailure}` : ''}. Confirm it in the client to continue.`;
     }
-    return formatGuardedMarkdown([
-      'I cannot honestly mark this complete yet.',
-      hasVerifiedProgress ? 'Some verified progress exists, but the requested final result has not been confirmed yet.' : 'The requested result has not been confirmed yet.',
-      lastFailure ? `Latest blocker: ${lastFailure}.` : '',
-      'I will continue the requested work and report once the result itself is confirmed.',
-    ]);
+    return `That action is not complete${lastFailure ? `: ${lastFailure}` : ''}. ${hasVerifiedProgress ? 'Completed work is preserved, and it ' : 'It '}can be retried from this step.`;
   }
 
   if (clientSurfaceTask) {
-    return formatGuardedMarkdown([
-      '\u5ba2\u6237\u7aef\u52a8\u4f5c\u8fd8\u6ca1\u6709\u5f97\u5230\u53ef\u786e\u8ba4\u7684\u5b8c\u6210\u7ed3\u679c\u3002', // i18n-allow: reviewed Chinese completion-guard response.
-      hasVerifiedProgress ? '\u5df2\u7ecf\u53d6\u5f97\u90e8\u5206\u6709\u6548\u56de\u6267\uff0c\u4f46\u8fd8\u7f3a\u5c11\u5ba2\u6237\u7aef\u5b9e\u9645\u754c\u9762\u72b6\u6001\u3002' : '\u8bf7\u6c42\u7684\u5ba2\u6237\u7aef\u72b6\u6001\u8fd8\u6ca1\u6709\u5f97\u5230\u786e\u8ba4\u3002', // i18n-allow: reviewed Chinese evidence-accuracy response.
-      lastFailure ? `最近的阻塞点：${lastFailure}。` : '',
-      '\u6211\u4f1a\u7ee7\u7eed\u5b8c\u6210\u5bf9\u5e94\u7684\u5ba2\u6237\u7aef\u64cd\u4f5c\uff0c\u786e\u8ba4\u5b9e\u9645\u754c\u9762\u72b6\u6001\u540e\u518d\u6c47\u62a5\u3002',
-    ]);
+    return CN_COMPLETION_GUARD_MESSAGES.blockedClient(lastFailure, hasVerifiedProgress);
   }
 
   if (confirmationBlocked) {
-    return formatGuardedMarkdown([
-      '\u6211\u5df2\u7ecf\u5f00\u59cb\u5904\u7406\uff0c\u4f46\u8fd9\u4e00\u6b65\u4ecd\u5728\u7b49\u5f85\u786e\u8ba4\uff0c\u8fd8\u4e0d\u80fd\u8bf4\u5b8c\u6210\u3002', // i18n-allow: reviewed Chinese completion-guard response.
-      hasVerifiedProgress ? '确认前的步骤已经有有效回执。' : '',
-      lastFailure ? `最近的阻塞点：${lastFailure}。` : '',
-      '\u8bf7\u5728\u5ba2\u6237\u7aef\u786e\u8ba4\u8fd9\u4e2a\u52a8\u4f5c\uff0c\u6216\u660e\u786e\u6388\u6743\u6211\u91cd\u8bd5\u3002', // i18n-allow: reviewed Chinese completion-guard response.
-    ]);
+    return CN_COMPLETION_GUARD_MESSAGES.confirmation(lastFailure);
   }
 
-  return formatGuardedMarkdown([
-    '\u6211\u8fd8\u4e0d\u80fd\u8bf4\u8fd9\u4ef6\u4e8b\u5df2\u7ecf\u5b8c\u6210\u3002', // i18n-allow: reviewed Chinese completion-guard response.
-    hasVerifiedProgress ? '\u5df2\u7ecf\u53d6\u5f97\u90e8\u5206\u6709\u6548\u56de\u6267\uff0c\u4f46\u8fd8\u7f3a\u5c11\u80fd\u8bc1\u660e\u6700\u7ec8\u7ed3\u679c\u7684\u8bc1\u636e\u3002' : '\u8bf7\u6c42\u7684\u5b9e\u9645\u7ed3\u679c\u8fd8\u6ca1\u6709\u5f97\u5230\u786e\u8ba4\u3002', // i18n-allow: reviewed Chinese evidence-accuracy response.
-    lastFailure ? `最近的阻塞点：${lastFailure}。` : '',
-    '\u6211\u4f1a\u7ee7\u7eed\u5b8c\u6210\u8fd9\u9879\u5de5\u4f5c\uff0c\u5e76\u5728\u5b9e\u9645\u7ed3\u679c\u786e\u8ba4\u540e\u518d\u6c47\u62a5\u3002',
-  ]);
+  return CN_COMPLETION_GUARD_MESSAGES.blockedGeneric(lastFailure, hasVerifiedProgress);
 }

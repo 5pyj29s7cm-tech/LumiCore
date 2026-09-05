@@ -1,6 +1,10 @@
 import path from 'node:path';
 import type { ToolExecutionRecord } from '../tools/types';
 import { CN_USER_OUTPUT_PROTECTION_MESSAGES } from '../regions/packs/cn/user_output_protection_messages';
+import {
+  containsInternalExecutionLanguage,
+  sanitizePublicExecutionText,
+} from '../../shared/public_execution_language';
 
 export interface UserFacingOutputProtectionOptions {
   task?: string;
@@ -108,7 +112,8 @@ function hasHighStructuredDensity(value: string): boolean {
 export function containsUnsafeToolPayload(value: unknown): boolean {
   const raw = stringify(value);
   if (!raw) return false;
-  return DATA_URL_RE.test(raw)
+  return containsInternalExecutionLanguage(raw)
+    || DATA_URL_RE.test(raw)
     || IMAGE_BASE64_FIELD_RE.test(raw)
     || LARGE_BASE64_RE.test(raw)
     || INTERNAL_RECEIPT_RE.test(raw)
@@ -624,6 +629,9 @@ export function sanitizeUserFacingExecutionOutput(
   ).trim();
   if (trustedConfirmationRequestText && raw === trustedConfirmationRequestText) {
     return redacted;
+  }
+  if (containsInternalExecutionLanguage(redacted)) {
+    return sanitizePublicExecutionText(redacted, isChinese(redacted) ? 'zh' : 'en');
   }
   const oversizedToolOutput = raw.length > 8_000 && (options.toolRecords || []).length > 0;
   const oversizedUnscopedOutput = raw.length > 50_000;

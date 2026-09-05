@@ -14,6 +14,12 @@ import type { ConversationActionContinuationState } from '../server/cognition/ac
 import { ToolRegistry } from '../server/tools/registry';
 import { formatCnToolFailureDetail } from '../server/regions/packs/cn/voice_fast_path_messages';
 
+const CUSTOMER_INTERNAL_EXECUTION_COPY = /(?:^|\n)\s*(?:\u72b6\u6001|\u8bc1\u636e|\u5177\u4f53\u963b\u585e|\u6267\u884c\u56de\u9988)\s*[:\uff1a]|\u56de\u6267|target_mismatch|terminalVerification|\b(?:taskId|requestId|desktop_open|client_action|desktop_execution_plan_receipt|verified|blocked|failed)\b|No successful current-turn tool execution/iu;
+
+function expectNaturalCustomerStatus(value: string): void {
+  expect(value).not.toMatch(CUSTOMER_INTERNAL_EXECUTION_COPY);
+}
+
 function actionState(overrides: Partial<ConversationActionContinuationState>): ConversationActionContinuationState {
   return {
     version: 2,
@@ -58,8 +64,9 @@ describe('Lumi field-call stability replay', () => {
       userId: conversation.userId,
       query: '现在进度怎么样',
     });
-    expect(unowned).toContain('当前没有正在运行的执行请求');
-    expect(unowned).not.toContain('还在执行链上');
+    expect(unowned).toMatch(/没有在后台运行|没有.*正在运行/u);
+    expect(unowned).not.toMatch(/正在(?:处理|执行)|还在执行/u);
+    expectNaturalCustomerStatus(unowned);
 
     db.conversationActionTurns.push({
       conversationId: conversation.id,
@@ -73,7 +80,9 @@ describe('Lumi field-call stability replay', () => {
       userId: conversation.userId,
       query: '现在进度怎么样',
     });
-    expect(owned).toContain('还在执行链上');
+    expect(owned).toMatch(/正在(?:处理|执行)|还在执行/u);
+    expect(owned).not.toContain('没有在后台运行');
+    expectNaturalCustomerStatus(owned);
   });
 
   it('reports desktop relay timeouts as actionable Chinese instead of an opaque failure', () => {
@@ -224,6 +233,7 @@ describe('Lumi field-call stability replay', () => {
     });
     expect(status).toContain('视觉核验服务拒绝了请求');
     expect(status).toContain('账号状态、余额和访问权限');
+    expectNaturalCustomerStatus(status);
   });
 
   it('includes the verified output path when a completed artifact status query asks for it', () => {
@@ -256,8 +266,9 @@ describe('Lumi field-call stability replay', () => {
       userId: conversation.userId,
       query: '任务完成了吗？告诉我产物路径。',
     });
-    expect(status).toContain('已完成');
+    expect(status).toMatch(/(?:已|已经)完成/u);
     expect(status).toContain(`产物路径：${outputPath}`);
+    expectNaturalCustomerStatus(status);
   });
 
   it('finds a completed named artifact through persistent receipts and reports the post-write readback', () => {

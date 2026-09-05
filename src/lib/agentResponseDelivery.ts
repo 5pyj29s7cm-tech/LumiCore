@@ -1,4 +1,9 @@
 import { executionFeedbackCopy } from '../i18n/locales/executionFeedback';
+import {
+  containsInternalExecutionLanguage,
+  sanitizePublicExecutionText,
+  type PublicExecutionLanguage,
+} from '../../shared/public_execution_language';
 
 export type AgentResponseDelivery = {
   text?: string;
@@ -10,8 +15,6 @@ export type AgentResponseDelivery = {
 
 const FAILURE_STATUS_RE = /^(?:blocked|cancelled|canceled|error|failed|timeout|timed_out)$/i;
 const WAITING_STATUS_RE = /^(?:waiting_confirmation|waiting_for_confirmation)$/i;
-const INTERNAL_EXECUTION_DETAIL_RE = /No successful (?:current-turn )?tool execution|without a current-turn tool receipt|No tool execution started|execution-status claim|Missing (?:core|verified|current-turn|in-app|desktop|client|content-read|action) evidence|tool-call protocol leaked|internal tool request|fictional tool-mode|claimed tool execution without matching tool records|Internal execution recovery/i;
-
 const CHINESE_ACTION_SUCCESS_RE = new RegExp(
   [
     '(?:\\u5df2|\\u5df2\\u7ecf|\\u6210\\u529f|\\u73b0\\u5728\\u5df2)(?:\\u6253\\u5f00|\\u542f\\u52a8|\\u65b0\\u5efa|\\u521b\\u5efa|\\u5199\\u5165|\\u5199\\u597d|\\u4fdd\\u5b58|\\u53d1\\u9001|\\u53d1\\u51fa|\\u751f\\u6210|\\u5bfc\\u51fa|\\u4e0a\\u4f20|\\u4e0b\\u8f7d|\\u5b89\\u88c5|\\u5173\\u95ed|\\u5220\\u9664|\\u4fee\\u6539|\\u7ed8\\u5236|\\u6267\\u884c|\\u5b8c\\u6210|\\u63d0\\u53d6)',
@@ -64,8 +67,49 @@ export function shouldDisplayAgentResponse(data: AgentResponseDelivery): boolean
 }
 
 export function shouldSpeakAgentResponse(data: AgentResponseDelivery): boolean {
-  if (!shouldDisplayAgentResponse(data) || isAgentResponseBlocked(data)) return false;
+  if (!shouldDisplayAgentResponse(data)) return false;
+  if (isAgentResponseBlocked(data)) {
+    const text = String(data.text || '').trim();
+    return data.finalized === true
+      && Boolean(text)
+      && !containsInternalExecutionLanguage(text);
+  }
   return !isActionSuccessClaim(String(data.text || '')) || data.finalized === true;
+}
+
+/**
+ * The backend normally sends customer-ready prose. This final client boundary
+ * also protects restored legacy conversations and late events from an older
+ * backend process, without truncating or rewriting ordinary Markdown replies.
+ */
+export function sanitizeAgentResponseTextForDisplay(
+  value: unknown,
+  language?: PublicExecutionLanguage,
+): string {
+  return sanitizePublicExecutionText(value, language);
+}
+
+/**
+ * Buffers the very beginning of a streamed reply until there is enough text
+ * to distinguish normal prose from a leaked execution report. The terminal
+ * response still replaces this preview, so short conversational replies are
+ * not lost; they simply appear when finalized instead of flashing an unsafe
+ * partial heading such as `Status:` or `状态：`.
+ */
+export function sanitizeAgentStreamingTextForDisplay(
+  value: unknown,
+  language?: PublicExecutionLanguage,
+): string {
+  const text = String(value || '');
+  if (!text) return '';
+  if (containsInternalExecutionLanguage(text)) {
+    return sanitizePublicExecutionText(text, language);
+  }
+  return Array.from(text).length < 24 ? '' : text;
+}
+
+export function hasInternalAgentExecutionDetail(value: unknown): boolean {
+  return containsInternalExecutionLanguage(value);
 }
 
 export function isFinalizedSuccessfulResponse(data: AgentResponseDelivery): boolean {
@@ -98,7 +142,11 @@ export function describeAgentResponseDelivery(
   if (reason === 'execution_capability_unavailable') {
     return copy.capabilityUnavailable;
   }
+  if (reason === 'target_mismatch' || /\btarget_mismatch\b/i.test(String(data.text || ''))) {
+    return copy.targetChanged;
+  }
   const text = String(data.text || '').replace(/\s+/g, ' ').trim();
-  if (text && !INTERNAL_EXECUTION_DETAIL_RE.test(text)) return text.slice(0, 160);
+  if (text && !containsInternalExecutionLanguage(text)) return text.slice(0, 160);
+  if (text) return sanitizePublicExecutionText(text, isZh ? 'zh' : 'en').slice(0, 160);
   return copy.retainedBlocker;
 }

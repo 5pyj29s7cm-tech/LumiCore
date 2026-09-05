@@ -70,6 +70,19 @@ describe('audio transcription tool intent', () => {
     }
   });
 
+  it('keeps a bare reaction in conversation instead of starting diagnostics or tools', () => {
+    const text = '\u4f60\u600e\u4e48\u56de\u4e8b\u554a';
+    expect(isUserCorrectionOrExplanationQuestion(text)).toBe(true);
+    expect(isInformationOnlyQuestion(text)).toBe(true);
+    expect(isDiagnosticOrRepairRequest(text)).toBe(false);
+    expect(shouldAllowToolUseForTurn(text, 'chat', 'assistant')).toBe(false);
+
+    const trace = traceToolIntentDecision(text, 'chat', 'assistant');
+    expect(trace.allowToolUse).toBe(false);
+    expect(trace.signals.diagnosticOrRepair).toBe(false);
+    expect(trace.blockedBy).toContain('information-only-question');
+  });
+
   it('still enables diagnostics for a concrete client failure', () => {
     const text = '为什么客户端打不开了？';
     expect(isUserCorrectionOrExplanationQuestion(text)).toBe(false);

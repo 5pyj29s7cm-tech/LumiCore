@@ -1,4 +1,5 @@
 import { readDB, writeDB } from '../../db_layer';
+import { LUMI_OFFICIAL_DEFAULT_MODELS } from '../../shared/model_provider_capabilities';
 
 export interface EmbeddingModelSelection {
   provider: string;
@@ -42,11 +43,11 @@ export const DEFAULT_EMBEDDING_MODELS: Record<string, string> = {
   siliconflow: 'Qwen/Qwen3-Embedding-8B',
   ollama: 'nomic-embed-text',
   lmstudio: 'text-embedding-nomic-embed-text-v1.5',
-  relay: 'huawei_maas/bge-m3',
+  relay: LUMI_OFFICIAL_DEFAULT_MODELS.embedding,
 };
 export const DEFAULT_RERANK_MODELS: Record<string, string> = {
   siliconflow: 'Qwen/Qwen3-Reranker-8B',
-  relay: 'huawei_maas/bge-reranker-v2-m3',
+  relay: LUMI_OFFICIAL_DEFAULT_MODELS.rerank,
 };
 
 export function isEmbeddingProvider(value: unknown): value is string {

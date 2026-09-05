@@ -373,6 +373,20 @@ export function formatDesktopObservationResult(
     ? (wantsDesktopAi ? apps.filter(isDesktopAiApp) : apps)
     : [];
 
+  const activeWindowOnly = coverage.complete
+    && !hasMutation
+    && coverage.plannedToolNames.length === 1
+    && coverage.plannedToolNames[0] === 'desktop_active_window'
+    && active
+    && typeof active === 'object';
+  if (activeWindowOnly) {
+    const title = String(active.title || '').trim() || (zh ? CN_RESULT_GROUNDING_MESSAGES.desktopUnknownWindow : 'an unknown window');
+    const processName = String(active.process_name || active.processName || '').trim();
+    return zh
+      ? CN_RESULT_GROUNDING_MESSAGES.desktopActiveWindowReadOnly(title, processName)
+      : `The active window is “${title}”${processName ? ` (${processName})` : ''}; I only read its window information and made no changes.`;
+  }
+
   const hasStructuredObservation = Boolean(
     active
     || Boolean(processList)
@@ -385,8 +399,8 @@ export function formatDesktopObservationResult(
 
   if (!zh) {
     const lines = [coverage.complete
-      ? 'The desktop-state check completed with fresh evidence from the connected desktop client.'
-      : 'The desktop-state check returned partial fresh evidence from the connected desktop client.'];
+      ? 'The requested desktop information is up to date.'
+      : 'I could read only part of the requested desktop information.'];
     if (active && typeof active === 'object') {
       const processLabel = active.process_name ? ` (${active.process_name}${active.pid ? `, PID ${active.pid}` : ''})` : '';
       const sizeLabel = Number(active.width) > 0 && Number(active.height) > 0 ? `, ${active.width}x${active.height}` : '';
@@ -418,16 +432,17 @@ export function formatDesktopObservationResult(
     }
     if (idle && Number.isFinite(Number(idle.idle_seconds))) lines.push(`Desktop idle time: about ${Math.round(Number(idle.idle_seconds))} seconds.`);
     if (system && typeof system === 'object') lines.push('System information was refreshed successfully.');
-    if (failures.length) lines.push(`Unavailable checks: ${failures.map(record => `${record.name}: ${record.error}`).join('; ')}.`);
-    if (coverage.missingToolNames.length) lines.push(`Incomplete checks: ${coverage.missingToolNames.join(', ')} (no usable current-turn receipt).`);
-    if (!hasMutation) lines.push('No click, typing, window switch, app launch, or content modification tool ran in this turn.');
+    if (failures.length || coverage.missingToolNames.length) {
+      lines.push(`${Math.max(failures.length, coverage.missingToolNames.length)} requested check(s) did not return a usable result.`);
+    }
+    if (!hasMutation) lines.push('I only read information; I did not click, type, switch windows, open apps, or modify content.');
     return lines.join('\n');
   }
 
   // i18n-allow: reviewed Chinese partial desktop observation result.
   const lines: string[] = [coverage.complete
     ? CN_RESULT_GROUNDING_MESSAGES.desktopSnapshotIntro
-    : '\u684c\u9762\u72b6\u6001\u68c0\u67e5\u53ea\u62ff\u5230\u4e86\u90e8\u5206\u672c\u8f6e\u65b0\u9c9c\u56de\u6267\u3002']; // i18n-allow: reviewed Chinese partial desktop observation result.
+    : CN_RESULT_GROUNDING_MESSAGES.desktopPartialRead];
   if (active && typeof active === 'object') {
     const processLabel = active.process_name ? `\uff08${active.process_name}${active.pid ? `\uff0cPID ${active.pid}` : ''}\uff09` : '';
     const sizeLabel = Number(active.width) > 0 && Number(active.height) > 0 ? `\uff0c\u7a97\u53e3 ${active.width}x${active.height}` : '';
@@ -460,10 +475,10 @@ export function formatDesktopObservationResult(
   }
   if (idle && Number.isFinite(Number(idle.idle_seconds))) lines.push(`\u684c\u9762\u7a7a\u95f2\u65f6\u95f4\uff1a\u7ea6 ${Math.round(Number(idle.idle_seconds))} \u79d2\u3002`);
   if (system && typeof system === 'object') lines.push('\u7cfb\u7edf\u4fe1\u606f\u5df2\u5b8c\u6210\u5237\u65b0\u3002');
-  if (failures.length) lines.push(`\u672a\u5b8c\u6210\u7684\u8bfb\u53d6\uff1a${failures.map(record => `${record.name}: ${record.error}`).join('\uff1b')}\u3002`);
-  // i18n-allow: reviewed Chinese incomplete desktop observation detail.
-  if (coverage.missingToolNames.length) lines.push(`\u672a\u5b8c\u6210\u7684\u8bfb\u53d6\uff1a${coverage.missingToolNames.join('\u3001')}\uff08\u672c\u8f6e\u6ca1\u6709\u53ef\u7528\u56de\u6267\uff09\u3002`);
-  if (!hasMutation) lines.push('\u672c\u8f6e\u6ca1\u6709\u6267\u884c\u70b9\u51fb\u3001\u8f93\u5165\u3001\u5207\u6362\u7a97\u53e3\u3001\u6253\u5f00\u5e94\u7528\u6216\u4fee\u6539\u5185\u5bb9\u3002');
+  if (failures.length || coverage.missingToolNames.length) {
+    lines.push(CN_RESULT_GROUNDING_MESSAGES.desktopUnavailableReadCount(Math.max(failures.length, coverage.missingToolNames.length)));
+  }
+  if (!hasMutation) lines.push(CN_RESULT_GROUNDING_MESSAGES.desktopReadOnly);
   return lines.join('\n');
 }
 

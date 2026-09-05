@@ -34,7 +34,7 @@ describe('task completion feedback normalization', () => {
 });
 
 describe('task completion feedback details', () => {
-  it('renders completed items, machine evidence, incomplete items, blockers, and next steps', () => {
+  it('renders customer-readable progress without machine receipt details', () => {
     const markup = renderToStaticMarkup(
       <TaskCompletionFeedbackDetails
         locale="en"
@@ -53,11 +53,12 @@ describe('task completion feedback details', () => {
       expect(markup).toContain(`data-task-feedback-section="${section}"`);
     }
     expect(markup).toContain('Completed items');
-    expect(markup).toContain('Machine evidence');
-    expect(markup).toContain('Incomplete items');
-    expect(markup).toContain('Blockers');
+    expect(markup).toContain('Confirmed results');
+    expect(markup).toContain('Still to do');
+    expect(markup).toContain('Needs attention');
     expect(markup).toContain('Next steps');
-    expect(markup).toContain('Verified tool receipt: write_file');
+    expect(markup).toContain('1 result confirmed');
+    expect(markup).not.toMatch(/Machine evidence|Verified tool receipt|write_file/iu);
   });
 
   it('states missing evidence explicitly instead of implying verification', () => {
@@ -67,8 +68,8 @@ describe('task completion feedback details', () => {
         feedback={{ status: 'working', completed: [], evidence: [], incomplete: [], blockers: [], nextSteps: [] }}
       />,
     );
-    expect(markup).toContain('暂无机器证据。');
-    expect(markup).toContain('执行中');
+    expect(markup).toContain('暂无可确认结果。');
+    expect(markup).toContain('处理中');
   });
 
   it('keeps successful task evidence out of the conversational surface', () => {
@@ -134,7 +135,7 @@ describe('task completion feedback details', () => {
     expect(markup).not.toContain('<details');
   });
 
-  it('keeps failed and confirmation-blocked chat outcomes visible in the compact summary', () => {
+  it('shows only confirmation-blocked chat outcomes and leaves ordinary failures to the reply', () => {
     const waitingMarkup = renderToStaticMarkup(
       <TaskCompletionFeedbackDetails
         locale="zh"
@@ -167,9 +168,7 @@ describe('task completion feedback details', () => {
     expect(waitingMarkup).toContain('等待确认');
     expect(waitingMarkup).toContain('需要你确认后才能继续');
     expect(waitingMarkup).not.toContain('tool:publish');
-    expect(failedMarkup).toContain('Failed');
-    expect(failedMarkup).toContain('data-task-feedback-attention');
-    expect(failedMarkup).toContain('The task needs attention');
+    expect(failedMarkup).toBe('');
     expect(failedMarkup).not.toContain('The target application did not respond');
     expect(failedMarkup).not.toContain('<details');
   });
@@ -188,7 +187,7 @@ describe('task feedback frontend wiring', () => {
     expect(panel).toContain('data-command-center-tasks');
     expect(panel).toContain('<TaskCompletionFeedbackDetails feedback={task.completionFeedback}');
     expect(planner).toContain('data-command-center-task-details');
-    expect(planner).toContain('completionFeedback: normalizeTaskCompletionFeedback(task.completionFeedback)');
+    expect(planner).toContain('normalizeTaskCompletionFeedback(task.completionFeedback)');
     expect(chat).toContain('normalizeTaskCompletionFeedback(data.completionFeedback)');
     expect(chat).toContain('variant="chat"');
     expect(desktop).toContain('normalizeTaskCompletionFeedback(raw?.completionFeedback || data?.completionFeedback)');

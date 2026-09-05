@@ -1050,7 +1050,8 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
       const message = sanitizedProviderError(err);
       const notConfigured = /not configured|RELAY_API_KEY|RELAY_BASE_URL/i.test(message);
       const catalogIncomplete = /catalog has no compatible model|empty model catalog/i.test(message);
-      return res.status(notConfigured ? 400 : catalogIncomplete ? 409 : 500).json({
+      const selectionUnavailable = /selected model is unavailable/i.test(message);
+      return res.status(notConfigured ? 400 : catalogIncomplete || selectionUnavailable ? 409 : 500).json({
         ok: false,
         provider: 'relay',
         configured: isLumiOfficialApiConfigured(uid),
@@ -1058,7 +1059,9 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
           ? { code: 'OFFICIAL_API_NOT_CONFIGURED' }
           : catalogIncomplete
             ? { code: 'OFFICIAL_API_CATALOG_INCOMPLETE' }
-            : {}),
+            : selectionUnavailable
+              ? { code: 'OFFICIAL_API_MODEL_SELECTION_UNAVAILABLE' }
+              : {}),
         applied: [],
         skipped: [],
         failed: [],

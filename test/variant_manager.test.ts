@@ -40,7 +40,88 @@ function parseLastJson(output: string) {
   return JSON.parse(start >= 0 ? output.slice(start + 1) : output);
 }
 
+function withDiscoveryFixture(run: (fixture: { mainRepository: string; childWorktree: string; temporaryRoot: string }) => void) {
+  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi-variant-discovery-'));
+  const mainRepository = path.join(temporaryRoot, 'core');
+  const childWorktree = path.join(temporaryRoot, 'z-delivery');
+  try {
+    fs.mkdirSync(mainRepository);
+    git(mainRepository, 'init', '-b', 'main');
+    git(mainRepository, 'config', 'user.name', 'Lumi Variant Test');
+    git(mainRepository, 'config', 'user.email', 'variant-test@localhost');
+    fs.writeFileSync(path.join(mainRepository, 'core.txt'), 'baseline\n');
+    git(mainRepository, 'add', '.');
+    git(mainRepository, 'commit', '-m', 'initial core');
+    const baseline = git(mainRepository, 'rev-parse', 'HEAD');
+    git(mainRepository, 'worktree', 'add', '-b', 'feature/real-delivery', childWorktree);
+    fs.mkdirSync(path.join(childWorktree, '.lumi'));
+    writeJson(path.join(childWorktree, '.lumi', 'variant.json'), buildVariantMetadata({
+      id: 'test-client',
+      displayName: 'Lumi Test Client',
+      productLine: 'test-client',
+      upstreamRepository: 'https://github.com/lumi/core.git',
+      baselineCommit: baseline,
+      repository: 'https://github.com/lumi/test-client.git',
+      localBranch: 'feature/real-delivery',
+    }));
+    git(childWorktree, 'add', '.lumi/variant.json');
+    git(childWorktree, 'commit', '-m', 'variant identity');
+    run({ mainRepository, childWorktree, temporaryRoot });
+  } finally {
+    const resolved = path.resolve(temporaryRoot);
+    if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !path.basename(resolved).startsWith('lumi-variant-discovery-')) {
+      throw new Error('Unexpected discovery fixture path');
+    }
+    fs.rmSync(resolved, { recursive: true, force: true });
+  }
+}
+
 describe('Lumi variant release train', () => {
+  it('uses the declared delivery worktree when a detached review snapshot sorts first', () => {
+    withDiscoveryFixture(({ mainRepository, childWorktree, temporaryRoot }) => {
+      const snapshot = path.join(temporaryRoot, 'a-review');
+      git(mainRepository, 'worktree', 'add', '--detach', snapshot, 'feature/real-delivery');
+      const before = git(snapshot, 'rev-parse', 'HEAD');
+      expect(discoverVariants(mainRepository)).toMatchObject([{ worktree: path.resolve(git(childWorktree, 'rev-parse', '--show-toplevel')), currentBranch: 'feature/real-delivery' }]);
+      expect(git(snapshot, 'rev-parse', 'HEAD')).toBe(before);
+      expect(git(snapshot, 'status', '--porcelain')).toBe('');
+    });
+  });
+
+  it('keeps a lone detached variant discoverable for branch diagnostics', () => {
+    withDiscoveryFixture(({ mainRepository, childWorktree }) => {
+      git(childWorktree, 'switch', '--detach');
+      expect(discoverVariants(mainRepository)).toMatchObject([{ worktree: path.resolve(git(childWorktree, 'rev-parse', '--show-toplevel')), currentBranch: '' }]);
+    });
+  });
+
+  it('rejects duplicate attached variant worktrees', () => {
+    withDiscoveryFixture(({ mainRepository, temporaryRoot }) => {
+      git(mainRepository, 'worktree', 'add', '-b', 'review/other', path.join(temporaryRoot, 'a-review'), 'feature/real-delivery');
+      expect(() => discoverVariants(mainRepository)).toThrow(/Duplicate variant ID/);
+    });
+  });
+
+  it('rejects ambiguous detached variants when there is no delivery worktree', () => {
+    withDiscoveryFixture(({ mainRepository, childWorktree, temporaryRoot }) => {
+      git(mainRepository, 'worktree', 'add', '--detach', path.join(temporaryRoot, 'a-review'), 'feature/real-delivery');
+      git(childWorktree, 'switch', '--detach');
+      expect(() => discoverVariants(mainRepository)).toThrow(/Duplicate variant ID/);
+    });
+  });
+
+  it('does not hide a detached variant with a conflicting repository identity', () => {
+    withDiscoveryFixture(({ mainRepository, temporaryRoot }) => {
+      const snapshot = path.join(temporaryRoot, 'a-review');
+      git(mainRepository, 'worktree', 'add', '--detach', snapshot, 'feature/real-delivery');
+      const metadataPath = path.join(snapshot, '.lumi', 'variant.json');
+      const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+      metadata.repository = 'https://github.com/lumi/other-client.git';
+      writeJson(metadataPath, metadata);
+      expect(() => discoverVariants(mainRepository)).toThrow(/Duplicate variant ID/);
+    });
+  });
+
   it('normalizes safe variant identifiers and rejects reserved identifiers', () => {
     expect(normalizeVariantId(' Lumi_Legal-Client ')).toBe('legal-client');
     expect(() => normalizeVariantId('main')).toThrow(/reserved/i);

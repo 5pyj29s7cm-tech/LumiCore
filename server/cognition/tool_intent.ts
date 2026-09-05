@@ -332,6 +332,12 @@ export function isUserCorrectionOrExplanationQuestion(text: string): boolean {
   if (/(?:微信|企业微信|wechat|weixin).{0,40}(?:问一下|问问|询问|发给|发送).{0,40}(?:在干嘛|在做什么|忙什么|做什么)/iu.test(normalized)) return false;
 
   return [
+    // A bare reaction such as “你怎么回事” does not name a system, app, or
+    // operation to diagnose. If an unfinished task exists, the continuation
+    // layer can bind it to that task; without that binding it must stay normal
+    // conversation instead of creating a new self-repair job.
+    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    /^(?:(?:你|lumi)[，,\s]*)?(?:怎么回事|什么情况|搞什么|什么鬼|干嘛呢|怎么了)[啊呀吧嘛呢，,。！？?!\s]*$/iu,
     // A complaint about Lumi not answering is a conversational repair turn,
     // not a request to diagnose the client/runtime. Keep it scoped to replies
     // directed back to the user so real app/task failures can still self-repair.

@@ -1,4 +1,5 @@
 import { readDB, writeDB } from '../../db_layer';
+import { LUMI_OFFICIAL_DEFAULT_MODELS } from '../../shared/model_provider_capabilities';
 
 export type VisionProvider = 'openai' | 'gemini' | 'ark' | 'qwen' | 'ollama' | 'lmstudio' | 'relay';
 
@@ -15,7 +16,7 @@ export const DEFAULT_VISION_MODELS: Record<VisionProvider, string> = {
   qwen: 'qwen-vl-max',
   ollama: 'qwen2.5vl:7b',
   lmstudio: 'local-vision-model',
-  relay: 'huawei_maas/qwen2.5-vl-72b',
+  relay: LUMI_OFFICIAL_DEFAULT_MODELS.vision,
 };
 
 const VALID_VISION_PROVIDERS = new Set<VisionProvider>(['openai', 'gemini', 'ark', 'qwen', 'ollama', 'lmstudio', 'relay']);

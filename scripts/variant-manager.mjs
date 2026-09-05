@@ -317,24 +317,42 @@ export function discoverVariants(coreRootInput) {
   const coreRoot = path.resolve(coreRootInput);
   const worktrees = parseWorktrees(git(coreRoot, ['worktree', 'list', '--porcelain']).stdout);
   const discovered = [];
-  const seenIds = new Map();
+  const candidatesById = new Map();
   for (const item of worktrees) {
     if (samePath(item.worktree, coreRoot)) continue;
     const metadataPath = path.join(item.worktree, '.lumi', 'variant.json');
     if (!fs.existsSync(metadataPath)) continue;
     const details = readMetadata(item.worktree, item.branch);
-    const previous = seenIds.get(details.metadata.variantId);
-    if (previous) {
-      throw new Error(`Duplicate variant ID ${details.metadata.variantId} in ${previous} and ${item.worktree}.`);
-    }
-    seenIds.set(details.metadata.variantId, item.worktree);
-    discovered.push({
+    const candidates = candidatesById.get(details.metadata.variantId) || [];
+    candidates.push({
       id: details.metadata.variantId,
       worktree: item.worktree,
       workspace: path.join(path.dirname(item.worktree), `${path.basename(item.worktree)}.code-workspace`),
       currentBranch: item.branch,
       ...details,
     });
+    candidatesById.set(details.metadata.variantId, candidates);
+  }
+  for (const [id, candidates] of candidatesById) {
+    if (candidates.length === 1) {
+      discovered.push(candidates[0]);
+      continue;
+    }
+    // A detached review snapshot may carry the same metadata as its delivery
+    // worktree. Keep the explicit delivery branch authoritative, while leaving
+    // lone detached variants visible so status can report their branch blocker.
+    const delivery = candidates.filter(candidate => candidate.currentBranch === candidate.metadata.delivery.localBranch);
+    const canonical = delivery.length === 1 ? delivery[0] : null;
+    const onlyReviewSnapshots = canonical && candidates.every(candidate => candidate === canonical || (
+      !candidate.currentBranch
+      && candidate.metadata.repository === canonical.metadata.repository
+      && candidate.metadata.upstream.repository === canonical.metadata.upstream.repository
+      && candidate.metadata.delivery.localBranch === canonical.metadata.delivery.localBranch
+    ));
+    if (!onlyReviewSnapshots) {
+      throw new Error(`Duplicate variant ID ${id} in ${candidates.map(candidate => candidate.worktree).join(' and ')}.`);
+    }
+    discovered.push(canonical);
   }
   return discovered.sort((first, second) => first.id.localeCompare(second.id));
 }

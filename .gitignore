@@ -9,6 +9,7 @@ logs/
 .codex-run/
 .lumi-runtime/
 .playwright-mcp/
+.tmp/
 __pycache__/
 .DS_Store
 *.log

@@ -28,6 +28,7 @@
         "alwaysOnBottom": false,
         "skipTaskbar": false,
         "shadow": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding",
         "visible": false
       }
     ],

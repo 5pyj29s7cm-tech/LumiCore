@@ -15,6 +15,23 @@ const verifiedTerminalReceipt = {
 };
 
 describe('desktop observation routing', () => {
+  it('does not claim no changes after a desktop action followed by an active-window read', () => {
+    const text = formatDesktopObservationResult([{
+      name: 'desktop_open',
+      arguments: { target: 'notepad.exe' },
+      result: 'Opened notepad.exe',
+      ...verifiedTerminalReceipt,
+    }, {
+      name: 'desktop_active_window',
+      arguments: {},
+      result: JSON.stringify({ title: 'Untitled - Notepad', process_name: 'notepad.exe' }),
+      ...verifiedTerminalReceipt,
+    }], 'Read the current active window.');
+
+    expect(text).toContain('Untitled - Notepad');
+    expect(text).not.toMatch(/only read|made no changes|did not click/iu);
+  });
+
   it('turns an explicit local-computer audit into a bounded three-probe plan', () => {
     expect(buildDesktopObservationPlan(
       '不止这些吧，你不是会对我的电脑做一次盘查吗',
@@ -293,10 +310,10 @@ describe('desktop observation routing', () => {
     }];
 
     const text = formatDesktopObservationResult(records, taskText);
-    expect(text).toContain('partial fresh evidence');
+    expect(text).toContain('only part of the requested desktop information');
     expect(text).toContain('Active window: LumiCore Settings');
-    expect(text).toContain('desktop_list_files');
-    expect(text).not.toContain('check completed');
+    expect(text).toContain('requested check(s) did not return a usable result');
+    expect(text).not.toContain('desktop_list_files');
 
     const finalized = finalizeLumiResponse({
       taskText,
@@ -308,7 +325,7 @@ describe('desktop observation routing', () => {
     expect(finalized.reason).toContain('Missing desktop evidence for the requested live observation');
     expect(finalized.reason).toContain('desktop_list_files');
     expect(finalized.text).toContain('Active window: LumiCore Settings');
-    expect(finalized.text).toContain('partial fresh evidence');
+    expect(finalized.text).toContain('only part of the requested desktop information');
   });
 
   it.each(['unverified', 'failed'] as const)(
@@ -354,7 +371,19 @@ describe('desktop observation routing', () => {
     }];
 
     const text = formatDesktopObservationResult(records, 'Show the current active window.');
-    expect(text).toContain('Active window: LumiCore');
+    expect(text).toContain('active window is “LumiCore”');
+  });
+
+  it('answers a single active-window request in one natural sentence without PID or relay language', () => {
+    const text = formatDesktopObservationResult([{
+      name: 'desktop_active_window',
+      arguments: {},
+      result: '{"title":"LumiCore","process_name":"lumi-core.exe","pid":7788,"width":1920,"height":1080}',
+      ...verifiedTerminalReceipt,
+    }], '请读取当前前台窗口的名称，只观察，不要操作任何内容。');
+
+    expect(text).toBe('当前前台窗口是「LumiCore」（lumi-core.exe）；我只查看了窗口信息，没有进行其他操作。');
+    expect(text).not.toMatch(/PID|回执|采样|desktop_/iu);
   });
 
   it('does not treat compatibility-inferred success as fresh desktop evidence', () => {
@@ -384,10 +413,10 @@ describe('desktop observation routing', () => {
       ...verifiedTerminalReceipt,
     }], '做个桌面程序检查');
 
-    expect(text).toContain('运行快照');
+    expect(text).toContain('当前读取到');
     expect(text).toContain('msedgewebview2.exe');
-    expect(text).toContain('瞬时采样');
-    expect(text).toContain('不能判定内存泄漏');
+    expect(text).toContain('当前状态');
+    expect(text).toContain('不能单独用来判断内存泄漏');
     expect(text).not.toContain('一切正常');
     expect(text).not.toContain('没卡死');
   });
@@ -465,9 +494,9 @@ describe('desktop observation routing', () => {
 
     expect(text).toContain('\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\uff1aLumiCore');
     expect(text).toContain('lumi-core.exe');
-    expect(text).toContain('\u5df2\u8bfb\u53d6 2 \u6761\u6d3b\u8dc3\u8fdb\u7a0b\u8bb0\u5f55');
+    expect(text).toContain('\u5f53\u524d\u8bfb\u53d6\u5230 2 \u4e2a\u8fd0\u884c\u4e2d\u7684\u8fdb\u7a0b');
     expect(text).toContain('\u7ea6 160 \u79d2');
-    expect(text).toContain('\u6ca1\u6709\u6267\u884c\u70b9\u51fb');
+    expect(text).toContain('\u6ca1\u6709\u70b9\u51fb');
 
     const finalized = finalizeLumiResponse({
       taskText,

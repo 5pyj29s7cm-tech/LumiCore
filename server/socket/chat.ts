@@ -8,6 +8,7 @@ import { NormalizedMessage, makeLLMCall, makeLLMCallStreaming, StreamCallback } 
 import { resolveModelRequestInputBudget } from "../llm/request_context_budget";
 import { LLMUsage, ToolExecutionRecord, type ToolContext } from "../tools/types";
 import { buildMediaArtifactReceipt, type MediaArtifactReceipt } from './media_artifact_receipt';
+import { projectCustomerVisibleExecutionEvent } from './public_agent_event_projection';
 import {
   normalizeStructuredMediaRequest,
   structuredMediaRoutingEnvelope,
@@ -960,7 +961,7 @@ export function registerChatHandler(
       payload: Record<string, any> = {},
       outputProtection: { trustedConfirmationRequestText?: string } = {},
     ): Record<string, any> => {
-      const publicPayload: Record<string, any> = event === 'agent:response'
+      const sanitizedPayload: Record<string, any> = event === 'agent:response'
         ? sanitizeExecutionResponseForDelivery(payload, {
             task: visibleUserText,
             ...outputProtection,
@@ -970,6 +971,9 @@ export function registerChatHandler(
         : event === 'agent:error'
           ? sanitizeChatAgentErrorPayload(payload)
           : payload;
+      const publicPayload = projectCustomerVisibleExecutionEvent(event, sanitizedPayload, {
+        taskText: visibleUserText,
+      });
       const completionFeedback = normalizeCompletionFeedbackForPersistence(publicPayload.completionFeedback);
       const boundedPublicPayload = { ...publicPayload };
       delete boundedPublicPayload.completionFeedback;
@@ -4362,12 +4366,14 @@ export function registerChatHandler(
             taskId: durableTaskId,
             requestId,
           });
-      const desktopPauseBlocksCurrentTask = () => {
+      const desktopPauseBlocksCurrentTask = (
+        records = taskAwareRecords(allToolRecords),
+      ) => {
         return shouldBlockForDesktopControlPause({
           pauseReason: desktopRelay.getControlPauseReason(),
           waitingForConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
           taskText: executionTaskText,
-          toolRecords: taskAwareRecords(allToolRecords),
+          toolRecords: records,
         });
       };
       if (desktopPauseBlocksCurrentTask()) {
@@ -4387,7 +4393,10 @@ export function registerChatHandler(
         pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
         requiresFreshConfirmation: correctionRequiresFreshConfirmation,
         aborted: abortController.signal.aborted || desktopPauseBlocksCurrentTask(),
-        isAborted: () => abortController.signal.aborted || desktopPauseBlocksCurrentTask(),
+        // A physical-input pause revokes further desktop authority, but it is
+        // not a user cancellation.  Treating the pause as AbortError made the
+        // outer chat catch publish the misleading "task stopped" terminal.
+        isAborted: () => abortController.signal.aborted,
         isPendingConfirmation: () => Boolean(pendingConfirmationCreatedThisTurn),
         toolRecords: taskAwareRecords(allToolRecords),
         attempt: async ({ instruction, priorToolRecords, recordTool }) => {
@@ -4495,22 +4504,33 @@ export function registerChatHandler(
             ),
           };
         },
-        finalize: (candidateText, records) => pendingConfirmationCreatedThisTurn
-          ? {
-              text: formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn),
-              blocked: false,
-              reason: 'waiting_confirmation',
-              notification: undefined,
-            }
-          : finalizeLumiResponse({
-              taskText: executionTaskText,
-              responseText: candidateText,
-              toolRecords: withDesktopExecutionReceipt(records, desktopExecutionTracker),
-              source: 'chat_guard_recovery',
-              flow: turnFlow,
-              taskId: durableTaskId,
-              requestId,
-            }),
+        finalize: (candidateText, records) => {
+          const recoveredRecords = withDesktopExecutionReceipt(records, desktopExecutionTracker);
+          const candidate = pendingConfirmationCreatedThisTurn
+            ? {
+                text: formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn),
+                blocked: false,
+                reason: 'waiting_confirmation',
+                notification: undefined,
+              }
+            : finalizeLumiResponse({
+                taskText: executionTaskText,
+                responseText: candidateText,
+                toolRecords: recoveredRecords,
+                source: 'chat_guard_recovery',
+                flow: turnFlow,
+                taskId: durableTaskId,
+                requestId,
+              });
+          if (!desktopPauseBlocksCurrentTask(recoveredRecords)) return candidate;
+          const pausePresentation = formatDesktopControlPausePresentation(executionTaskText);
+          return {
+            ...candidate,
+            text: pausePresentation.text,
+            blocked: true,
+            reason: pausePresentation.reason,
+          };
+        },
       });
       for (const record of guardRecovery.toolRecords) {
         const isPriorTaskReceipt = priorTaskRecords.some(item => (

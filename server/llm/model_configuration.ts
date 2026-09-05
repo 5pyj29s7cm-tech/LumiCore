@@ -1,4 +1,4 @@
-import { flushDBOrThrow } from '../../db_layer';
+import { flushDBOrThrow, readDB } from '../../db_layer';
 import { loadKeys } from '../config/keys';
 import {
   getRegisteredProviderDefaultModel,
@@ -166,8 +166,8 @@ function roleSelection(provider: string, model: string, userId: string, extra: R
   };
 }
 
-function allRoleConfigurations(userId: string): Record<LumiModelRole, Record<string, unknown>> {
-  const reasoning = getUserPreferredLLM(userId);
+function allRoleConfigurations(userId: string, options: { persistMigration?: boolean } = {}): Record<LumiModelRole, Record<string, unknown>> {
+  const reasoning = getUserPreferredLLM(userId, options);
   const vision = getUserPreferredVision(userId);
   const world = getUserWorldModelPrefs(userId);
   const resolvedWorld = getUserPreferredWorldModel(userId);
@@ -272,7 +272,7 @@ export interface OfficialModelConfigurationRoleReceipt {
   model: string;
   status: 'applied' | 'skipped';
   reason?: 'adapter_not_available' | 'official_api_not_configured';
-  selectionReason?: 'recommended_default' | 'preserved_live_selection' | 'catalog_fallback';
+  selectionReason?: 'recommended_default' | 'preserved_live_selection' | 'catalog_namespace_migration' | 'catalog_fallback';
 }
 
 export interface OfficialModelConfigurationApplyResult {
@@ -287,7 +287,7 @@ export interface OfficialModelConfigurationApplyResult {
   configuration: ReturnType<typeof getLumiModelConfiguration>;
 }
 
-function officialModelForRole(userId: string, role: LumiModelRole): string {
+function officialModelForRole(userId: string, role: LumiModelRole, hasUserSelection = false): string {
   const envName: Record<LumiModelRole, string> = {
     reasoning: 'RELAY_REASONING_MODEL',
     vision: 'RELAY_VISION_MODEL',
@@ -317,11 +317,11 @@ function officialModelForRole(userId: string, role: LumiModelRole): string {
     }
   }
   const configured = cleanModel(process.env[envName[role]]);
-  if (configured) return officialConfiguredModel(configured, role, LUMI_OFFICIAL_DEFAULT_MODELS[role]);
+  if (configured && !hasUserSelection) return officialConfiguredModel(configured, role, LUMI_OFFICIAL_DEFAULT_MODELS[role]);
 
   switch (role) {
     case 'reasoning': {
-      const preference = getUserPreferredLLM(userId);
+      const preference = getUserPreferredLLM(userId, { persistMigration: false });
       return officialConfiguredModel(
         preference.provider === LUMI_OFFICIAL_PROVIDER_ID
           ? (preference.model || preference.models[LUMI_OFFICIAL_PROVIDER_ID])
@@ -451,33 +451,90 @@ function restoreModelConfigurationSnapshot(
   } catch {}
 }
 
-function selectOfficialRoleModel(
+// Only these model families changed namespace in the September 2026 official
+// catalog. A custom id is never rewritten, and a still-live legacy id wins.
+// Keep the world alias on the user's existing vision family instead of
+// replacing it with the lower-latency default during namespace migration.
+const OFFICIAL_CATALOG_NAMESPACE_ALIASES: Partial<Record<LumiModelRole, Readonly<Record<string, string>>>> = {
+  vision: { 'huawei_maas/qwen2.5-vl-72b': 'aliyun/qwen2.5-vl-72b' },
+  world: { 'huawei_maas/qwen2.5-vl-72b': 'aliyun/qwen2.5-vl-72b' },
+  image_generation: { 'huawei_maas/qwen-image': 'aliyun/qwen-image' },
+  image_edit: { 'huawei_maas/qwen-image-edit-2509': 'aliyun/qwen-image-edit-2509' },
+  video_generation: { 'huawei_maas/Wan2.2-T2V-A14B': 'aliyun/Wan2.2-T2V-A14B' },
+  image_to_video: { 'huawei_maas/Wan2.2-I2V-A14B': 'aliyun/Wan2.2-I2V-A14B' },
+  embedding: { 'huawei_maas/bge-m3': 'aliyun/bge-m3' },
+  rerank: { 'huawei_maas/bge-reranker-v2-m3': 'aliyun/bge-reranker-v2-m3' },
+};
+
+export function selectOfficialRoleModel(
   role: LumiModelRole,
   availableModels: string[],
   configuredModel: string,
+  options: { explicitSelection?: boolean } = {},
 ): { model: string; selectionReason: NonNullable<OfficialModelConfigurationRoleReceipt['selectionReason']> } | null {
   const recommended = LUMI_OFFICIAL_DEFAULT_MODELS[role];
-  // These lanes have deliberately different model families or latency goals;
-  // one-click adaptation must establish the recommended split even when an
-  // older build persisted a still-live but semantically wrong selection.
-  const recommendedFirst = role === 'vision'
-    || role === 'world'
-    || role === 'image_edit'
-    || role === 'video_generation'
-    || role === 'image_to_video';
-  const ordered = recommendedFirst
-    ? [recommended, configuredModel]
-    : [configuredModel, recommended];
-  for (const candidate of ordered) {
-    if (!candidate || !availableModels.includes(candidate)) continue;
+  if (configuredModel && availableModels.includes(configuredModel)) {
     return {
-      model: candidate,
-      selectionReason: candidate === recommended ? 'recommended_default' : 'preserved_live_selection',
+      model: configuredModel,
+      selectionReason: configuredModel === recommended ? 'recommended_default' : 'preserved_live_selection',
     };
+  }
+  const namespaceAlias = OFFICIAL_CATALOG_NAMESPACE_ALIASES[role]?.[configuredModel];
+  if (namespaceAlias && availableModels.includes(namespaceAlias)) {
+    return { model: namespaceAlias, selectionReason: 'catalog_namespace_migration' };
+  }
+  // An unknown/custom choice or a missing alias needs explicit replacement;
+  // catalog refresh must not silently select a different model family.
+  if (configuredModel && (configuredModel !== recommended || options.explicitSelection !== false)) return null;
+  if (availableModels.includes(recommended)) {
+    return { model: recommended, selectionReason: 'recommended_default' };
   }
   return availableModels[0]
     ? { model: availableModels[0], selectionReason: 'catalog_fallback' }
     : null;
+}
+
+function explicitlySelectedOfficialRoles(userId: string, includeEnvironment = true): Set<LumiModelRole> {
+  const settings = readDB().settings || [];
+  const readPreference = (key: string): any => {
+    try { return JSON.parse(settings.find(setting => setting.key === key)?.value || 'null'); }
+    catch { return null; }
+  };
+  const generation = readPreference(`generation_prefs_${userId}`);
+  const retrievalValue = readPreference(`retrieval_model_prefs_${userId}`)
+    || readPreference(`model_role_prefs_${userId}`);
+  const retrieval = retrievalValue?.retrieval || retrievalValue;
+  const selections: Partial<Record<LumiModelRole, any>> = {
+    reasoning: readPreference(`llm_prefs_${userId}`),
+    vision: readPreference(`vision_prefs_${userId}`),
+    world: readPreference(`world_prefs_${userId}`),
+    image_generation: generation?.image, image_edit: generation?.imageEdit,
+    video_generation: generation?.video, image_to_video: generation?.imageToVideo,
+    embedding: retrieval?.embedding || retrieval, rerank: retrieval?.rerank,
+  };
+  const nonemptyString = (value: unknown) => typeof value === 'string' && value.trim().length > 0;
+  const roles = new Set<LumiModelRole>();
+  for (const [role, preference] of Object.entries(selections)) {
+    if (preference?.provider === 'relay'
+      && (nonemptyString(preference?.models?.relay) || nonemptyString(preference?.model))) {
+      roles.add(role as LumiModelRole);
+    }
+  }
+  const voice = readPreference('voice_preference');
+  if (voice?.stt === 'relay' && nonemptyString(voice.sttModel)) roles.add('speech_recognition');
+  if (voice?.tts === 'relay' && nonemptyString(voice.ttsModel)) roles.add('speech_synthesis');
+  if (!includeEnvironment) return roles;
+  const environmentRoles: Partial<Record<LumiModelRole, string>> = {
+    reasoning: 'RELAY_REASONING_MODEL', vision: 'RELAY_VISION_MODEL', world: 'RELAY_WORLD_MODEL',
+    image_generation: 'RELAY_IMAGE_MODEL', image_edit: 'RELAY_IMAGE_EDIT_MODEL',
+    video_generation: 'RELAY_VIDEO_MODEL', image_to_video: 'RELAY_IMAGE_TO_VIDEO_MODEL',
+    embedding: 'RELAY_EMBEDDING_MODEL', rerank: 'RELAY_RERANK_MODEL',
+    speech_recognition: 'RELAY_STT_MODEL', speech_synthesis: 'RELAY_TTS_MODEL',
+  };
+  for (const [role, name] of Object.entries(environmentRoles)) {
+    if (nonemptyString(process.env[name])) roles.add(role as LumiModelRole);
+  }
+  return roles;
 }
 
 /**
@@ -505,9 +562,11 @@ export async function applyLumiOfficialModelConfiguration(
     throw new Error('Lumi Official API returned an empty model catalog. No role configuration was changed.');
   }
 
-  const current = allRoleConfigurations(uid);
+  const current = allRoleConfigurations(uid, { persistMigration: false });
+  const userSelectedRoles = explicitlySelectedOfficialRoles(uid, false);
+  const explicitRoles = explicitlySelectedOfficialRoles(uid);
   const snapshot = {
-    reasoning: getUserPreferredLLM(uid),
+    reasoning: getUserPreferredLLM(uid, { persistMigration: false }),
     vision: getUserPreferredVision(uid),
     world: getUserWorldModelPrefs(uid),
     generation: getUserPreferredGenerationModels(uid),
@@ -529,8 +588,13 @@ export async function applyLumiOfficialModelConfiguration(
       : role === 'video_generation'
         ? roleModels.filter(modelId => !/(?:^|[\/_-])i2v(?:[\/_-]|$)|image[-_]?to[-_]?video/i.test(modelId))
         : roleModels;
-    const selection = selectOfficialRoleModel(role, availableModels, officialModelForRole(uid, role));
+    const selection = selectOfficialRoleModel(role, availableModels, officialModelForRole(uid, role, userSelectedRoles.has(role)), {
+      explicitSelection: explicitRoles.has(role),
+    });
     if (!selection) {
+      if (availableModels.length > 0) {
+        throw new Error(`Lumi Official API selected model is unavailable for ${role}. Explicitly choose a replacement model; no role configuration was changed.`);
+      }
       throw new Error(`Lumi Official API catalog has no compatible model for ${role}. No role configuration was changed.`);
     }
     planned.set(role, selection);

@@ -98,6 +98,23 @@ describe('conversation session routes', () => {
     expect(activateResponse.status).toBe(401);
   });
 
+  it('projects legacy verifier prose before conversation history reaches a customer', async () => {
+    const { projectConversationMessageForCustomer } = await import('../server/routes/conversations');
+    const projected = projectConversationMessageForCustomer({
+      role: 'assistant',
+      message: [
+        '状态：失败。',
+        '证据：Desktop target application has not matched a fresh observation.',
+        '具体阻塞：Desktop execution ended as target_mismatch.',
+      ].join('\n'),
+    });
+
+    expect(projected.message).toBe(
+      '刚才没有完成，因为操作后的窗口和目标不一致。请把目标窗口保持在前台，再让我重试。',
+    );
+    expect(projected.message).not.toMatch(/状态|证据|target_mismatch|desktop_/iu);
+  });
+
   it('creates and deletes an explicitly-bound isolated conversation without moving the personal active pointer', async () => {
     const beforeResponse = await fetch(`${url}/api/conversations/active?domain=personal&agentId=lumi`, {
       headers: headers(),

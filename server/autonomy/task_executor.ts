@@ -46,8 +46,15 @@ import { snapshotDurableToolRecords } from '../cognition/durable_task_recovery';
 import {
   buildTaskCompletionFeedback,
   buildTaskTerminalReceipt,
+  type TaskCompletionFeedback,
   validateCompletionTerminalReceipt,
 } from '../cognition/acceptance_evidence';
+import {
+  containsInternalExecutionLanguage,
+  sanitizePublicExecutionText,
+  type PublicExecutionLanguage,
+} from '../../shared/public_execution_language';
+import { CN_AUTONOMOUS_CUSTOMER_MESSAGES } from '../regions/packs/cn/autonomous_customer_messages';
 import {
   canUseQueuedSelfImprovementStageAuthorization,
   isLocalAdminAuthorizedSelfImprovementTask,
@@ -177,6 +184,70 @@ export function buildAutonomousCapabilityPipeline(
 
 function clipPlanResult(value: string, max = 1800): string {
   return value.length > max ? `${value.slice(0, max)}...` : value;
+}
+
+// A task record keeps the original exception, recovery diagnosis, receipts,
+// and tool ledger for durable recovery. Socket clients receive only this
+// compact projection; none of those machine fields belongs in customer copy.
+// i18n-allow -- recognition only; mapped to the localized copy below.
+const AUTONOMOUS_MACHINE_DETAIL_RE = /(?:\b(?:receipt|terminalVerification|verificationStatus|requestId|taskId|idempotencyKey|target_mismatch|execution_recovery_incomplete)\b|\b(?:desktop|web|url|write|read|extract|work_product|adapter_registry|self_improvement|client|system)_[a-z0-9_]+\b|No successful (?:current-turn )?tool execution|Missing (?:core|verified|current-turn|desktop|client|action) evidence)/iu;
+
+function inferAutonomousPublicLanguage(value: unknown): PublicExecutionLanguage {
+  return /[\u3400-\u9fff]/u.test(String(value || '')) ? 'zh' : 'en';
+}
+
+function autonomousFallbackText(
+  language: PublicExecutionLanguage,
+  state: 'completed' | 'failed' | 'retrying' | 'cancelled',
+): string {
+  if (language === 'zh') {
+    if (state === 'completed') return CN_AUTONOMOUS_CUSTOMER_MESSAGES.completed;
+    if (state === 'retrying') return CN_AUTONOMOUS_CUSTOMER_MESSAGES.retrying;
+    if (state === 'cancelled') return CN_AUTONOMOUS_CUSTOMER_MESSAGES.cancelled;
+    return CN_AUTONOMOUS_CUSTOMER_MESSAGES.failed;
+  }
+  if (state === 'completed') return 'This autonomous task is complete.';
+  if (state === 'retrying') return 'This autonomous task has not finished yet. I kept its progress and will try again later.';
+  if (state === 'cancelled') return 'This autonomous task was stopped.';
+  return 'This autonomous task did not finish. You can ask me to retry later.';
+}
+
+export function projectAutonomousCustomerMessage(
+  value: unknown,
+  options: {
+    language?: PublicExecutionLanguage;
+    state: 'completed' | 'failed' | 'retrying' | 'cancelled';
+    preserveCleanText?: boolean;
+  },
+): string {
+  const raw = String(value || '').trim();
+  const language = options.language || inferAutonomousPublicLanguage(raw);
+  const projected = sanitizePublicExecutionText(raw, language);
+  const wasInternal = containsInternalExecutionLanguage(raw);
+  if (
+    projected
+    && !AUTONOMOUS_MACHINE_DETAIL_RE.test(projected)
+    && (wasInternal || options.preserveCleanText === true)
+  ) {
+    return projected;
+  }
+  return autonomousFallbackText(language, options.state);
+}
+
+export function projectAutonomousCompletionFeedback(
+  feedback: TaskCompletionFeedback,
+): TaskCompletionFeedback {
+  // The detailed receipt-backed feedback remains on the durable task. The
+  // public event needs only its semantic status; result/error already carries
+  // the single customer-facing sentence.
+  return {
+    status: feedback.status,
+    completed: [],
+    evidence: [],
+    incomplete: [],
+    blockers: [],
+    nextSteps: [],
+  };
 }
 
 const INCOMPLETE_AUTONOMOUS_TOOL_STATUSES = new Set([
@@ -514,6 +585,7 @@ export async function executeNextAutonomousTask(
 
   const task = dequeue(userId);
   if (!task) return { executed: false };
+  const publicLanguage = inferAutonomousPublicLanguage(`${task.title}\n${task.description}`);
 
   const gate = isAutonomousWorkAllowed(task.userId);
   if (!gate.allowed) {
@@ -689,13 +761,14 @@ export async function executeNextAutonomousTask(
         : 'Cancelled by user';
       const cancelled = markCancelled(task.id, reason);
       markLinkedPlanCancelled(task);
+      const machineFeedback = buildTaskCompletionFeedback(cancelled?.terminalReceipt, task.title, {
+        status: cancelled?.status || 'cancelled',
+        reason,
+      });
       io.to(taskRoom).emit('autonomous:task_cancelled', {
         taskId: task.id,
         title: task.title,
-        completionFeedback: buildTaskCompletionFeedback(cancelled?.terminalReceipt, task.title, {
-          status: cancelled?.status || 'cancelled',
-          reason,
-        }),
+        completionFeedback: projectAutonomousCompletionFeedback(machineFeedback),
         timestamp: new Date().toISOString(),
       });
       return { executed: true, taskId: task.id, result: 'Cancelled by user' };
@@ -750,28 +823,29 @@ export async function executeNextAutonomousTask(
       }
       const willRetry = settled.status === 'pending';
       if (!willRetry) markLinkedPlanFailed(task, failureReason);
+      const publicFailureText = projectAutonomousCustomerMessage(publicOutcome.text, {
+        language: publicLanguage,
+        state: willRetry ? 'retrying' : 'failed',
+        preserveCleanText: true,
+      });
+      const machineFeedback = buildTaskCompletionFeedback(
+        settled.terminalReceipt,
+        task.title,
+        { status: settled.status, reason: failureReason },
+      );
       io.to(taskRoom).emit(willRetry ? 'autonomous:task_retry_scheduled' : 'autonomous:task_failed', {
         taskId: task.id,
         title: task.title,
-        error: publicOutcome.text,
-        result: publicOutcome.text,
+        error: publicFailureText,
+        result: publicFailureText,
         toolCallsCount: toolCallCount,
         tokensUsed,
         finalized: !willRetry,
         blocked: !willRetry,
         verified: false,
-        reason: publicOutcome.reason,
         status: settled.status,
         nextAttemptAt: settled.nextAttemptAt,
-        diagnosis: settled.recovery?.diagnoses.at(-1),
-        completionFeedback: {
-          ...buildTaskCompletionFeedback(
-            settled.terminalReceipt,
-            task.title,
-            { status: settled.status, reason: publicOutcome.text },
-          ),
-          blockers: publicOutcome.blocked ? [publicOutcome.text] : [],
-        },
+        completionFeedback: projectAutonomousCompletionFeedback(machineFeedback),
         timestamp: new Date().toISOString(),
       });
       console.warn(
@@ -786,6 +860,11 @@ export async function executeNextAutonomousTask(
     }
 
     const summary = publicOutcome.text;
+    const publicSummary = projectAutonomousCustomerMessage(summary, {
+      language: publicLanguage,
+      state: 'completed',
+      preserveCleanText: true,
+    });
     checkpointAutonomousTask(task.id, {
       phase: 'verified',
       receiptIds: toolLedger.map(item => item.id).filter((id): id is string => Boolean(id)),
@@ -807,18 +886,17 @@ export async function executeNextAutonomousTask(
     io.to(taskRoom).emit('autonomous:task_completed', {
       taskId: task.id,
       title: task.title,
-      result: summary,
+      result: publicSummary,
       toolCallsCount: toolCallCount,
       tokensUsed,
       finalized: true,
       blocked: false,
       verified: true,
-      reason: publicOutcome.reason,
-      terminalReceipt: completed.terminalReceipt,
-      completionFeedback: buildTaskCompletionFeedback(completed.terminalReceipt, task.title, {
-        status: completed.status,
-        accepted: true,
-      }),
+      completionFeedback: projectAutonomousCompletionFeedback(buildTaskCompletionFeedback(
+        completed.terminalReceipt,
+        task.title,
+        { status: completed.status, accepted: true },
+      )),
       timestamp: new Date().toISOString(),
     });
 
@@ -841,13 +919,14 @@ export async function executeNextAutonomousTask(
         : errorMsg;
       const cancelled = markCancelled(task.id, reason);
       markLinkedPlanCancelled(task);
+      const machineFeedback = buildTaskCompletionFeedback(cancelled?.terminalReceipt, task.title, {
+        status: cancelled?.status || 'cancelled',
+        reason,
+      });
       io.to(taskRoom).emit('autonomous:task_cancelled', {
         taskId: task.id,
         title: task.title,
-        completionFeedback: buildTaskCompletionFeedback(cancelled?.terminalReceipt, task.title, {
-          status: cancelled?.status || 'cancelled',
-          reason,
-        }),
+        completionFeedback: projectAutonomousCompletionFeedback(machineFeedback),
         timestamp: new Date().toISOString(),
       });
       return { executed: true, taskId: task.id, result: 'Cancelled by user' };
@@ -878,18 +957,23 @@ export async function executeNextAutonomousTask(
     }
     const willRetry = settled.status === 'pending';
     if (!willRetry) markLinkedPlanFailed(task, errorMsg);
+    const publicFailureText = projectAutonomousCustomerMessage(errorMsg, {
+      language: publicLanguage,
+      state: willRetry ? 'retrying' : 'failed',
+    });
+    const machineFeedback = buildTaskCompletionFeedback(settled.terminalReceipt, task.title, {
+      status: settled.status,
+      reason: errorMsg,
+    });
 
     io.to(taskRoom).emit(willRetry ? 'autonomous:task_retry_scheduled' : 'autonomous:task_failed', {
       taskId: task.id,
       title: task.title,
-      error: errorMsg,
+      error: publicFailureText,
+      result: publicFailureText,
       status: settled.status,
       nextAttemptAt: settled.nextAttemptAt,
-      diagnosis: settled.recovery?.diagnoses.at(-1),
-      completionFeedback: buildTaskCompletionFeedback(settled.terminalReceipt, task.title, {
-        status: settled.status,
-        reason: errorMsg,
-      }),
+      completionFeedback: projectAutonomousCompletionFeedback(machineFeedback),
       timestamp: new Date().toISOString(),
     });
 

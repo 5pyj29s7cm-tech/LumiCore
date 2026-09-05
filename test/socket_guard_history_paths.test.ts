@@ -1,6 +1,9 @@
 import './helpers';
 import { describe, expect, it } from 'vitest';
-import { buildClientSurfaceContinuationBridge } from '../server/socket/chat';
+import {
+  buildClientSurfaceContinuationBridge,
+  normalizeChatHistoryRecord,
+} from '../server/socket/chat';
 import { normalizeVoiceHistoryRecord } from '../server/socket/voice';
 
 describe('socket guard-history delivery paths', () => {
@@ -39,6 +42,31 @@ describe('socket guard-history delivery paths', () => {
       role: 'assistant',
       message: '我还没有真正操作客户端，这一轮没有记录到成功的工具执行。',
     })).toEqual([]);
+  });
+
+  it('quarantines legacy status/evidence reports in chat and voice history', () => {
+    const reports = [
+      [
+        '状态：受阻。',
+        '证据：暂时没有可核验的执行结果。',
+        '下一步：保留已有进度，先核验目标状态再继续。',
+      ].join('\n'),
+      [
+        '状态：失败。',
+        '证据：文件操作 (失败: Desktop target application has not matched a fresh observation.)。',
+        '具体阻塞：Desktop execution ended as target_mismatch.',
+      ].join('\n'),
+    ];
+
+    for (const report of reports) {
+      expect(normalizeChatHistoryRecord({ role: 'assistant', message: report }, { serverOwned: true })).toEqual([]);
+      expect(normalizeVoiceHistoryRecord({ role: 'assistant', message: report })).toEqual([]);
+      expect(normalizeVoiceHistoryRecord({
+        role: 'user',
+        message: '继续刚才的任务',
+        response: report,
+      })).toEqual([{ role: 'user', content: '继续刚才的任务' }]);
+    }
   });
 
   it('keeps the user side of a legacy combined row but does not reconstruct its guard response', () => {

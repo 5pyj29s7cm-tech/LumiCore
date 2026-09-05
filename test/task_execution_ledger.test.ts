@@ -15,6 +15,12 @@ import {
   toolRecordSucceeded,
 } from '../server/cognition/task_execution_ledger';
 
+const CUSTOMER_INTERNAL_EXECUTION_COPY = /(?:\u6b63\u5728\u505a\u4ec0\u4e48|\u5f53\u524d\u76ee\u6807|\u5df2\u5b8c\u6210\u4ec0\u4e48|\u5361\u5728\u54ea\u91cc|\u662f\u5426\u9700\u8981\u4f60\u64cd\u4f5c|\u4e0b\u4e00\u6b65|\u72b6\u6001|\u8bc1\u636e|\u5177\u4f53\u963b\u585e|\u6267\u884c\u56de\u9988)\s*[:\uff1a]|\u56de\u6267|target_mismatch|terminalVerification|\b(?:taskId|requestId|desktop_open|client_action|desktop_execution_plan_receipt|verified|blocked|failed)\b|No successful current-turn tool execution/iu;
+
+function expectNaturalCustomerStatus(value: string): void {
+  expect(value).not.toMatch(CUSTOMER_INTERNAL_EXECUTION_COPY);
+}
+
 describe('durable conversation task execution ledger', () => {
   it('does not promote uncertain or target-mismatched actuation into success', () => {
     expect(toolRecordSucceeded({
@@ -273,13 +279,18 @@ describe('durable conversation task execution ledger', () => {
     expect(merged.maxIterations).toBe(10);
   });
 
-  it('keeps a zero-tool promise visibly unfinished and reports only terminal receipt facts', () => {
+  it('describes work as active only while the task has a request owner', () => {
     const started = prepareConversationActionTaskState(null, {
       userText: '把桌面的方案打开并在 WPS 里修改',
       requestId: 'request-1',
       toolPolicy: { allowedTools: ['desktop_open'], requireConfirmation: [], forbiddenTools: [], maxIterations: 5 },
     });
-    expect(formatConversationActionTaskStatus(started.state)).toContain('还在执行链上');
+    expect(started.state?.activeRequestId).toBe('request-1');
+    const activeReply = formatConversationActionTaskStatus(started.state);
+    expect(activeReply).toContain('把桌面的方案打开并在 WPS 里修改');
+    expect(activeReply).toMatch(/正在(?:处理|执行)/u);
+    expect(activeReply).not.toContain('没有在后台运行');
+    expectNaturalCustomerStatus(activeReply);
 
     const blocked = buildConversationActionContinuationState({
       previous: started.state,
@@ -289,7 +300,10 @@ describe('durable conversation task execution ledger', () => {
     });
     expect(blocked?.status).toBe('blocked');
     expect(blocked?.latestBlocker).toContain('application not found');
-    expect(formatConversationActionTaskStatus(blocked)).toContain('还没完成');
+    const blockedReply = formatConversationActionTaskStatus(blocked);
+    expect(blockedReply).toContain('还没完成');
+    expect(blockedReply).toMatch(/继续|重试/u);
+    expectNaturalCustomerStatus(blockedReply);
     expect(recordsToTaskReceipts([])).toEqual([]);
   });
 
@@ -307,11 +321,13 @@ describe('durable conversation task execution ledger', () => {
     };
 
     const reply = formatConversationActionTaskStatus(detached);
-    expect(reply).toContain('当前没有正在运行的执行请求');
-    expect(reply).not.toContain('还在执行链上');
+    expect(reply).toMatch(/没有在后台运行|没有.*正在运行/u);
+    expect(reply).not.toMatch(/正在(?:处理|执行)|还在执行/u);
+    expect(reply).toMatch(/继续|接上/u);
+    expectNaturalCustomerStatus(reply);
   });
 
-  it('reports the six user-facing task facts without leaking an internal guard', () => {
+  it('summarizes a blocked task naturally without leaking verifier protocol', () => {
     const started = prepareConversationActionTaskState(null, {
       userText: '打开桌面上的季度报告并核对内容',
       requestId: 'feedback-request',
@@ -324,16 +340,11 @@ describe('durable conversation task execution ledger', () => {
       unfinished: true,
     });
 
-    for (const label of [
-      '正在做什么：',
-      '当前目标：',
-      '已完成什么：',
-      '卡在哪里：',
-      '是否需要你操作：',
-      '下一步：',
-    ]) expect(reply).toContain(label);
-    expect(reply).not.toContain('No successful current-turn tool execution');
+    expect(reply).toContain('打开桌面上的季度报告并核对内容');
+    expect(reply).toContain('还没完成');
     expect(reply).toContain('没有拿到可执行的入口或可验证的结果');
+    expect(reply).toMatch(/继续|重试/u);
+    expectNaturalCustomerStatus(reply);
   });
 
   it('keeps a terse confirmation attached to the original multi-step goal', () => {

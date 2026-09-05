@@ -495,11 +495,9 @@ describe('Lumi result finalizer', () => {
 
     expect(result.blocked).toBe(true);
     expect(result.reason).toContain('\u6210\u529f\u6267\u884c\u4e86\u67e5\u8be2\u6216\u68c0\u67e5\u5de5\u5177');
-    expect(result.text).toContain('\u5df2\u7ecf\u53d6\u5f97\u90e8\u5206\u6709\u6548\u56de\u6267');
+    expect(result.text).toBe('\u8fd9\u9879\u64cd\u4f5c\u8fd8\u6ca1\u5b8c\u6210\u3002\u5df2\u7ecf\u5b8c\u6210\u7684\u90e8\u5206\u4f1a\u4fdd\u7559\uff0c\u53ef\u4ee5\u4ece\u8fd9\u91cc\u91cd\u8bd5\u3002');
     expect(result.text).not.toContain('client_get_state');
-    expect(result.text).toContain('\u8fd8\u7f3a\u5c11\u80fd\u8bc1\u660e\u6700\u7ec8\u7ed3\u679c\u7684\u8bc1\u636e');
-    expect(result.text).not.toContain('\u8fd9\u4e00\u8f6e\u6ca1\u6709\u6210\u529f\u6267\u884c\u4efb\u4f55\u5de5\u5177');
-    expect(result.text).not.toContain('client_get_state: undefined');
+    expect(result.text).not.toMatch(/\u72b6\u6001\s*[:\uff1a]|\u8bc1\u636e\s*[:\uff1a]|\u56de\u6267|target_mismatch|undefined/iu);
   });
 
   it('does not invent a WeChat desktop limitation from a work-scope routing miss', async () => {
@@ -693,7 +691,7 @@ describe('Lumi result finalizer', () => {
 
     expect(result.blocked).toBe(true);
     expect(result.reason).toContain('current-turn tool execution');
-    expect(result.text).toContain('\u64cd\u4f5c\u8fd8\u6ca1\u6709\u6210\u529f\u542f\u52a8');
+    expect(result.text).toBe('\u8fd9\u9879\u64cd\u4f5c\u8fd8\u6ca1\u6709\u5f00\u59cb\u3002\u53ef\u4ee5\u4ece\u8fd9\u91cc\u91cd\u8bd5\u3002');
     expect(result.text).not.toContain('No successful current-turn tool execution');
   });
 
@@ -1534,8 +1532,8 @@ describe('Lumi result finalizer', () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result.text).toContain('\u6ca1\u6709\u771f\u6b63\u5f00\u59cb\u8bfb\u53d6');
-    expect(result.text).toContain('\u6ca1\u6709\u5b9e\u9645\u8bfb\u5230\u6587\u4ef6\u5185\u5bb9');
+    expect(result.text).toBe('\u521a\u624d\u6ca1\u80fd\u5f00\u59cb\u8fd9\u9879\u64cd\u4f5c\u3002\u8fd9\u9879\u8981\u6c42\u4ecd\u7136\u4fdd\u7559\uff0c\u53ef\u4ee5\u4ece\u8fd9\u91cc\u91cd\u8bd5\u3002');
+    expect(result.text).not.toMatch(/\u72b6\u6001\s*[:\uff1a]|\u8bc1\u636e\s*[:\uff1a]|\u56de\u6267|target_mismatch|undefined/iu);
   });
 
   it('does not treat a directory listing as read/review evidence', async () => {
@@ -1672,7 +1670,7 @@ describe('Lumi result finalizer', () => {
     expect(result.reason).toContain('action-contract drift');
     expect(result.text).toContain('\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\uff1aLumiCore');
     expect(result.text).toContain('lumi-core.exe');
-    expect(result.text).toContain('\u672c\u8f6e\u6ca1\u6709\u6267\u884c\u70b9\u51fb');
+    expect(result.text).toContain('\u6211\u53ea\u8bfb\u53d6\u4e86\u4fe1\u606f\uff0c\u6ca1\u6709\u70b9\u51fb');
     expect(result.text).not.toContain('\u5fae\u4fe1');
     expect(result.text).not.toContain('wechat_read_recent_chat');
   });
@@ -1697,7 +1695,7 @@ describe('Lumi result finalizer', () => {
     });
 
     expect(result.blocked).toBe(false);
-    expect(result.text).toContain('运行快照');
+    expect(result.text).toContain('当前读取到');
     expect(result.text).toContain('lumi-core.exe');
     expect(result.text).not.toContain('write_file');
   });

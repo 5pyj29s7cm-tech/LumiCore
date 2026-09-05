@@ -18,6 +18,8 @@ import { commandCenterPlannerCopy } from '@/i18n/locales/commandCenterPlanner';
 import { taskCompletionFeedbackCopy } from '@/i18n/locales/taskCompletionFeedback';
 import { TaskCompletionFeedbackDetails } from './TaskCompletionFeedbackDetails';
 import {
+  customerVisibleTaskBlocker,
+  customerVisibleTaskStatus,
   normalizeTaskCompletionFeedback,
   type TaskCompletionFeedback,
 } from './workflowTypes';
@@ -113,6 +115,9 @@ export function CommandCenterPlanner({
       setRuntimeTasks(Array.isArray(taskResult.value?.items)
         ? taskResult.value.items.map((task: RuntimeTask) => ({
             ...task,
+            blocker: task.blocker
+              ? customerVisibleTaskBlocker(task.blocker, isZh ? 'zh' : 'en')
+              : undefined,
             completionFeedback: normalizeTaskCompletionFeedback(task.completionFeedback),
           }))
         : []);
@@ -120,9 +125,9 @@ export function CommandCenterPlanner({
     const failures = [planResult, taskResult]
       .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
       .map(result => result.reason instanceof Error ? result.reason.message : String(result.reason));
-    setError(failures.join(' · '));
+    setError(failures.length > 0 ? feedbackCopy.controlError : '');
     setLoading(false);
-  }, [scopeKey]);
+  }, [feedbackCopy.controlError, isZh, scopeKey]);
 
   useEffect(() => {
     activeScopeKeyRef.current = scopeKey;
@@ -189,7 +194,7 @@ export function CommandCenterPlanner({
       await refresh(true);
     } catch (cause) {
       if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(feedbackCopy.controlError);
     } finally {
       if (isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) setSaving(false);
     }
@@ -231,6 +236,9 @@ export function CommandCenterPlanner({
         setRuntimeTasks(previous => [
           {
             ...payload.task,
+            blocker: payload.task.blocker
+              ? customerVisibleTaskBlocker(payload.task.blocker, isZh ? 'zh' : 'en')
+              : undefined,
             completionFeedback: normalizeTaskCompletionFeedback(payload.task.completionFeedback),
           },
           ...previous.filter(task => task.id !== payload.task.id),
@@ -239,7 +247,7 @@ export function CommandCenterPlanner({
       await refresh(true);
     } catch (cause) {
       if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(feedbackCopy.controlError);
     } finally {
       runningPlanIdsRef.current.delete(plan.id);
       if (isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) {
@@ -256,13 +264,13 @@ export function CommandCenterPlanner({
       if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        setError(payload.error || `HTTP ${response.status}`);
+        setError(feedbackCopy.controlError);
         return;
       }
       await refresh(true);
     } catch (cause) {
       if (isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) {
-        setError(cause instanceof Error ? cause.message : String(cause));
+        setError(feedbackCopy.controlError);
       }
     }
   };
@@ -341,7 +349,10 @@ export function CommandCenterPlanner({
       {plans.map(plan => {
         const Icon = KIND_ICONS[plan.kind];
         const task = plan.lastRuntimeTaskId ? taskById.get(plan.lastRuntimeTaskId) : undefined;
-        const lastRunStatus = task?.status || (plan.lastRuntimeTaskId ? 'unknown' : copy.neverRun);
+        const lastRunStatus = task?.status || (plan.lastRuntimeTaskId ? 'unknown' : '');
+        const lastRunLabel = task || plan.lastRuntimeTaskId
+          ? customerVisibleTaskStatus(lastRunStatus || 'unknown', isZh ? 'zh' : 'en')
+          : copy.neverRun;
         const runInFlight = runningPlanIds.includes(plan.id);
         const activeRun = Boolean(task && ['queued', 'running', 'pausing', 'paused', 'cancelling'].includes(task.status));
         const runDisabled = runInFlight || activeRun || plan.status === 'completed';
@@ -354,7 +365,7 @@ export function CommandCenterPlanner({
                   <div className="truncate text-xs font-bold text-white/82">{plan.title}</div>
                   <div className="mt-1 line-clamp-2 text-[10px] leading-4 text-white/36">{plan.instruction}</div>
                 </div>
-                <span className={`shrink-0 rounded-full px-2 py-1 text-[8px] font-black uppercase ${plan.status === 'active' ? 'bg-cyan-300/[0.11] text-cyan-100/80' : plan.status === 'completed' ? 'bg-emerald-300/[0.10] text-emerald-100/75' : 'bg-white/[0.05] text-white/35'}`}>{copy.planStatus}: {plan.status}</span>
+                <span className={`shrink-0 rounded-full px-2 py-1 text-[8px] font-black uppercase ${plan.status === 'active' ? 'bg-cyan-300/[0.11] text-cyan-100/80' : plan.status === 'completed' ? 'bg-emerald-300/[0.10] text-emerald-100/75' : 'bg-white/[0.05] text-white/35'}`}>{copy.planStatus}: {customerVisibleTaskStatus(plan.status, isZh ? 'zh' : 'en')}</span>
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-2 text-[9px] text-white/28">
                 <span>{kindLabel(plan.kind)}</span><span>·</span><span>{planScheduleLabel(plan)}</span>
@@ -362,7 +373,7 @@ export function CommandCenterPlanner({
               </div>
               <div data-command-center-plan-run-status className="mt-1.5 text-[9px] text-white/35">
                 <span className="font-black text-white/28">{copy.lastRun}: </span>
-                <span className={lastRunStatus === 'failed' || lastRunStatus === 'blocked' ? 'text-rose-100/65' : ['queued', 'running', 'pausing', 'cancelling'].includes(lastRunStatus) ? 'text-cyan-100/65' : 'text-white/42'}>{lastRunStatus}</span>
+                <span className={lastRunStatus === 'failed' || lastRunStatus === 'blocked' ? 'text-rose-100/65' : ['queued', 'running', 'pausing', 'cancelling'].includes(lastRunStatus) ? 'text-cyan-100/65' : 'text-white/42'}>{lastRunLabel}</span>
               </div>
             </div>
           </div>
@@ -372,7 +383,7 @@ export function CommandCenterPlanner({
                 {feedbackCopy.details}
               </summary>
               <div className="space-y-2 border-t border-white/[0.06] p-2.5">
-                {task.blocker && (
+                {task.blocker && !task.completionFeedback && (
                   <div className="rounded-lg border border-rose-300/10 bg-rose-300/[0.035] px-2.5 py-2 text-[10px] leading-4 text-rose-100/65">
                     <span className="font-black">{feedbackCopy.blocker}: </span>{task.blocker}
                   </div>
@@ -388,8 +399,8 @@ export function CommandCenterPlanner({
           <div className="mt-3 flex items-center justify-end gap-1.5 border-t border-white/[0.05] pt-2.5">
             <button type="button" onClick={() => onDiscuss(copy.discussPrompt(plan.title, plan.instruction))} className="flex h-7 items-center gap-1 rounded-lg px-2 text-[9px] text-white/38 hover:bg-white/[0.05] hover:text-white/65"><MessageSquareText size={11} />{copy.discuss}</button>
             <button type="button" disabled={runDisabled} aria-busy={runInFlight} onClick={() => void runPlan(plan)} className="flex h-7 items-center gap-1 rounded-lg px-2 text-[9px] text-cyan-100/55 hover:bg-cyan-300/[0.08] hover:text-cyan-50 disabled:cursor-not-allowed disabled:opacity-35">{runInFlight ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}{runInFlight ? copy.running : copy.run}</button>
-            <button type="button" onClick={() => void updatePlan(plan, { status: plan.status === 'paused' ? 'active' : 'paused' }).catch(cause => setError(String(cause)))} className="flex h-7 w-7 items-center justify-center rounded-lg text-white/30 hover:bg-white/[0.05] hover:text-white/60" title={plan.status === 'paused' ? copy.resume : copy.pause}>{plan.status === 'paused' ? <Play size={11} /> : <Pause size={11} />}</button>
-            <button type="button" onClick={() => void updatePlan(plan, { status: 'completed' }).catch(cause => setError(String(cause)))} className="flex h-7 w-7 items-center justify-center rounded-lg text-emerald-100/35 hover:bg-emerald-300/[0.08] hover:text-emerald-100" title={copy.complete}><Check size={11} /></button>
+            <button type="button" onClick={() => void updatePlan(plan, { status: plan.status === 'paused' ? 'active' : 'paused' }).catch(() => setError(feedbackCopy.controlError))} className="flex h-7 w-7 items-center justify-center rounded-lg text-white/30 hover:bg-white/[0.05] hover:text-white/60" title={plan.status === 'paused' ? copy.resume : copy.pause}>{plan.status === 'paused' ? <Play size={11} /> : <Pause size={11} />}</button>
+            <button type="button" onClick={() => void updatePlan(plan, { status: 'completed' }).catch(() => setError(feedbackCopy.controlError))} className="flex h-7 w-7 items-center justify-center rounded-lg text-emerald-100/35 hover:bg-emerald-300/[0.08] hover:text-emerald-100" title={copy.complete}><Check size={11} /></button>
             <button type="button" onClick={() => void removePlan(plan)} className="flex h-7 w-7 items-center justify-center rounded-lg text-white/24 hover:bg-rose-300/[0.08] hover:text-rose-100/70" title={copy.remove}><Trash2 size={11} /></button>
           </div>
         </article>;

@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import {
+  sanitizeAgentResponseTextForDisplay,
   shouldDisplayAgentResponse,
   type AgentResponseDelivery,
 } from '@/lib/agentResponseDelivery';
@@ -876,9 +877,11 @@ export function useVoiceCall({
       if (data.channel !== 'voice') return;
       if (!activeVoiceRequestIdRef.current || data.requestId !== activeVoiceRequestIdRef.current) return;
       if (!shouldDisplayAgentResponse(data)) return;
+      const publicText = sanitizeAgentResponseTextForDisplay(data.text);
+      if (!publicText) return;
       setTranscript(''); // Clear user transcript when AI starts responding
-      setResponseText(data.text!);
-      onResponse?.(data.text!);
+      setResponseText(publicText);
+      onResponse?.(publicText);
     };
 
     const onAudioError = (data: { message: string }) => {
@@ -966,9 +969,11 @@ export function useVoiceCall({
       if (!isCallActive.current || !data.text?.trim()) return;
       const workRequestId = data.workRequestId || data.requestId;
       if (!workRequestId || workRequestId !== activeVoiceRequestIdRef.current) return;
+      const publicText = sanitizeAgentResponseTextForDisplay(data.text);
+      if (!publicText) return;
       setTranscript('');
-      setResponseText(data.text.trim());
-      onResponse?.(data.text.trim());
+      setResponseText(publicText);
+      onResponse?.(publicText);
     };
 
     const onAudioWorkProgress = (data: { text?: string; requestId?: string; active?: boolean }) => {
@@ -983,7 +988,7 @@ export function useVoiceCall({
       }
       // This is a live task indicator, not an assistant chat turn. Keep it in
       // the call surface without feeding it back into conversation history.
-      setResponseText(data.text.trim());
+      setResponseText(sanitizeAgentResponseTextForDisplay(data.text));
     };
 
     const onAudioProactiveSpeak = (data: { audioBuffer: ArrayBuffer; text: string; timestamp: string }) => {

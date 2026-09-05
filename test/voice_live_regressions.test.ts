@@ -303,11 +303,8 @@ describe('live voice regression cases', () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result.text).toContain('\u5df2\u7ecf\u53d6\u5f97\u90e8\u5206\u6709\u6548\u56de\u6267');
-    expect(result.text).toContain('\u8fd8\u7f3a\u5c11\u80fd\u8bc1\u660e\u6700\u7ec8\u7ed3\u679c\u7684\u8bc1\u636e');
+    expect(result.text).toBe('\u8fd9\u9879\u64cd\u4f5c\u8fd8\u6ca1\u5b8c\u6210\u3002\u5df2\u7ecf\u5b8c\u6210\u7684\u90e8\u5206\u4f1a\u4fdd\u7559\uff0c\u53ef\u4ee5\u4ece\u8fd9\u91cc\u91cd\u8bd5\u3002');
     expect(result.text).not.toContain('client_get_state');
-    expect(result.text).not.toContain('这一轮没有成功执行任何工具');
-    expect(result.text).not.toContain('没有记录到成功的工具执行');
-    expect(result.text).not.toContain('undefined');
+    expect(result.text).not.toMatch(/\u72b6\u6001\s*[:\uff1a]|\u8bc1\u636e\s*[:\uff1a]|\u56de\u6267|target_mismatch|undefined/iu);
   });
 });

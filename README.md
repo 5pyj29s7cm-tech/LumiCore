@@ -94,7 +94,9 @@ LumiCore 支持以下模型来源，具体可用模型由用户账号、服务�
 
 ### Lumi 官方 API（ModelDepot）
 
-如果使用 Lumi 官方服务，设置页中的 Base URL 应填写 `https://zhuan.huaczy.com/v1`，API Key 只保存在后端。模型名使用 `供应商/模型名` 格式，例如 `aliyun/qwen-plus` 或 `huawei_maas/bge-m3`。官方目录会在设置页实时同步，并按推理、视觉、世界操作、图像生成、AI 图像编辑、文生视频、图生视频、嵌入、重排、语音识别和语音合成十一类角色筛选。
+如果使用 Lumi 官方服务，设置页中的 Base URL 应填写 `https://zhuan.huaczy.com/v1`，API Key 只保存在后端。模型名使用 `供应商/模型名` 格式，例如 `aliyun/qwen-plus` 或 `aliyun/bge-m3`。官方目录会在设置页实时同步，并按推理、视觉、世界操作、图像生成、AI 图像编辑、文生视频、图生视频、嵌入、重排、语音识别和语音合成十一类角色筛选。
+
+官方目录更新供应商命名空间后，可使用设置页的“一键适配”迁移已知旧模型名：只有旧 ID 已下架、同一角色的同族新 ID 存在时才迁移，并保留仍可用的选择。自定义模型不可用时会要求显式选择替代模型；刷新目录不会修改偏好。完整实时音频对话模型的 `audio_realtime` 协议暂未接入这十一类角色，不能直接用作独立的语音识别或合成模型。
 
 - API 调用说明：<https://zhuan.huaczy.com/console/help>
 - 官方充值入口：<https://zhuan.huaczy.com/console/recharge>
