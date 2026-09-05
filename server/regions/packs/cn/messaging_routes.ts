@@ -30,6 +30,13 @@ import {
   type MessagingPlatformId,
 } from '../../../messaging/bindings';
 import { evaluateMessagingIngress } from '../../../messaging/ingress_policy';
+import {
+  assertMessagingAuthorization as assertAcceptedMessagingAuthorization,
+  captureMessagingBinding,
+  captureMessagingOrganization,
+  isMessagingAuthorizationCurrent as isAcceptedMessagingAuthorizationCurrent,
+  MessagingAuthorizationRevokedError,
+} from '../../../messaging/turn_authorization';
 import { flushDBOrThrow, readDB } from '../../../../db_layer';
 import { requireAuth } from '../../../middleware/auth';
 import { getDataPath } from '../../../config/data_path';
@@ -115,6 +122,7 @@ import { coalesceToolExecutionRecords, taskReceiptsToRecords } from '../../../co
 import {
   persistExplicitRemoteRelationshipMemories,
   persistRemotePostTurnLearning,
+  drainRemotePostTurnLearning,
 } from './remote_memory';
 import {
   buildTransportNeutralConfirmationScope,
@@ -135,6 +143,29 @@ import {
 } from '../../../cognition/pending_assistant_offer';
 
 const messageRouteQueues = new Map<string, Promise<void>>();
+const acceptedMessageSettlements = new Set<Promise<void>>();
+let acceptingMessagingIngress = true;
+
+function isMessagingAuthorizationCurrent(message: IncomingMessage): boolean {
+  return acceptingMessagingIngress && isAcceptedMessagingAuthorizationCurrent(message);
+}
+
+function assertMessagingAuthorization(message: IncomingMessage): void {
+  if (!acceptingMessagingIngress) throw new MessagingAuthorizationRevokedError();
+  assertAcceptedMessagingAuthorization(message);
+}
+
+/** Close admission synchronously, then settle every already accepted route.
+ * The shutdown coordinator owns the deadline; timing out must not kill writers.
+ */
+export async function stopMessagingIngressAndDrain(): Promise<void> {
+  acceptingMessagingIngress = false;
+  for (const entry of activeMessageRouteControllers.values()) {
+    entry.controller.abort(new Error('Messaging is shutting down.'));
+  }
+  await Promise.all([...acceptedMessageSettlements]);
+  await drainRemotePostTurnLearning();
+}
 const bindingCodeQueues = new Map<string, Promise<unknown>>();
 const messageRouteActivity = new Map<string, {
   latestSequence: number;
@@ -369,7 +400,16 @@ function registerActiveMessageRouteController(
   if (newerMessageSupersedesThisTurn(message) && !controller.signal.aborted) {
     controller.abort(new Error('A newer remote message superseded this turn.'));
   }
+  const checkAuthorization = () => {
+    if (!isMessagingAuthorizationCurrent(message) && !controller.signal.aborted) {
+      controller.abort(new MessagingAuthorizationRevokedError());
+    }
+  };
+  checkAuthorization();
+  const authorizationTimer = setInterval(checkAuthorization, 100);
+  authorizationTimer.unref?.();
   return () => {
+    clearInterval(authorizationTimer);
     if (activeMessageRouteControllers.get(key) === entry) activeMessageRouteControllers.delete(key);
   };
 }
@@ -378,6 +418,7 @@ export function correlateMessagingReply(
   message: IncomingMessage,
   reply: string,
 ): { text: string; superseded: boolean; delayed: boolean } {
+  if (!isMessagingAuthorizationCurrent(message)) return { text: '', superseded: true, delayed: false };
   const readableReply = formatRemoteReplyForReadability(reply);
   const activity = newerMessageActivity(message);
   if (!activity) return { text: readableReply, superseded: false, delayed: false };
@@ -1145,29 +1186,32 @@ function planMessagingBindingCommand(msg: IncomingMessage): PlannedMessagingBind
 }
 
 function applyMessagingBinding(msg: IncomingMessage): IncomingMessage {
+  if (msg.bindingAuthorization !== undefined) return msg;
   if (!isBindingPlatform(msg.platform)) return msg;
   const binding = getBinding(msg.platform, msg.userId, msg.chatId, msg.chatType);
-  if (!binding) return msg;
+  if (!binding) return msg.boundUserId ? msg : { ...msg, bindingAuthorization: null };
   if (binding.domain === 'work') {
     const membership = getMember(binding.orgId, binding.lumiUserId);
     if (!membership || membership.status !== 'active') return msg;
   }
-  return {
+  return captureMessagingOrganization({
     ...msg,
     boundUserId: binding.lumiUserId,
     boundOrgId: binding.domain === 'work' ? binding.orgId : undefined,
-  };
+    bindingAuthorization: captureMessagingBinding(binding),
+  });
 }
 
 function applyPlannedMessagingBinding(
   msg: IncomingMessage,
   plan: BindingCodeConsumptionPlan,
 ): IncomingMessage {
-  return {
+  return captureMessagingOrganization({
     ...msg,
     boundUserId: plan.code.lumiUserId,
     boundOrgId: plan.code.domain === 'work' ? plan.code.orgId : undefined,
-  };
+    bindingAuthorization: undefined,
+  });
 }
 
 export function dispatchIncomingMessage(
@@ -1175,6 +1219,7 @@ export function dispatchIncomingMessage(
   transport: IncomingMessageTransport,
   options?: MessagingRouteOptions,
 ): boolean {
+  if (!acceptingMessagingIngress) return false;
   const ingressDecision = evaluateMessagingIngress(message);
   if (!ingressDecision.allowed) {
     recordMessagingIngress(message);
@@ -1199,15 +1244,21 @@ export function dispatchIncomingMessage(
     return false;
   }
 
-  const trackedMessage = registerMessageRouteActivity(message);
+  const trackedMessage = registerMessageRouteActivity(captureMessagingOrganization(applyMessagingBinding(message)));
   recordMessagingIngress(trackedMessage);
   let finalJournalStatus: 'completed' | 'superseded' = 'completed';
   let terminalReplyDurable = false;
   let retryableBindingTurn = false;
   let retryableReplyDelivery = false;
+  let settleAcceptedMessage!: () => void;
+  let failAcceptedMessage!: (error: unknown) => void;
+  const settlement = new Promise<void>((resolve, reject) => { settleAcceptedMessage = resolve; failAcceptedMessage = reject; });
+  void settlement.catch(() => undefined);
+  acceptedMessageSettlements.add(settlement);
 
   setImmediate(() => {
     void (async () => {
+      assertMessagingAuthorization(trackedMessage);
       const interruptedDelivery = getMessagingJournalEntry(trackedMessage);
       if (
         interruptedDelivery?.status === 'delivery_unknown'
@@ -1217,7 +1268,20 @@ export function dispatchIncomingMessage(
         retryableBindingTurn = true;
         retryableReplyDelivery = true;
         updateMessagingJournal(trackedMessage, { status: 'processing' });
-        const interruptedCorrelation = correlateMessagingReply(trackedMessage, interruptedDelivery.replyText);
+        const retryTarget: IncomingMessage = {
+          ...trackedMessage,
+          boundUserId: interruptedDelivery.boundUserId || undefined,
+          boundOrgId: interruptedDelivery.orgId || undefined,
+          bindingAuthorization: interruptedDelivery.bindingAuthorization,
+          organizationAuthorization: interruptedDelivery.organizationAuthorization,
+        };
+        // Historical binding receipts without an identity version cannot safely
+        // be replayed through a possibly replaced platform binding.
+        if (retryTarget.boundUserId && retryTarget.bindingAuthorization === undefined) {
+          throw new MessagingAuthorizationRevokedError();
+        }
+        assertMessagingAuthorization(retryTarget);
+        const interruptedCorrelation = correlateMessagingReply(retryTarget, interruptedDelivery.replyText);
         if (interruptedCorrelation.superseded) {
           retryableReplyDelivery = false;
           finalJournalStatus = 'superseded';
@@ -1251,6 +1315,7 @@ export function dispatchIncomingMessage(
               options?.onConversationUpdated,
             );
             if (accepted.message.boundUserId) {
+              assertMessagingAuthorization(accepted.message);
               persistBoundMessagingExchange(
                 accepted.message,
                 correlated.text,
@@ -1302,6 +1367,8 @@ export function dispatchIncomingMessage(
               plannedTarget,
               options?.onConversationUpdated,
             );
+            assertMessagingAuthorization(trackedMessage);
+            assertMessagingAuthorization(accepted.message);
             const committed = commitBindingCodeConsumption(refreshedPlan);
             if (!committed) {
               throw new Error('The binding code was already consumed by another durable request');
@@ -1310,6 +1377,7 @@ export function dispatchIncomingMessage(
               ...accepted.message,
               boundUserId: committed.binding.lumiUserId,
               boundOrgId: committed.binding.domain === 'work' ? committed.binding.orgId : undefined,
+              bindingAuthorization: captureMessagingBinding(committed.binding),
             };
             try {
               persistBoundMessagingExchange(
@@ -1325,13 +1393,15 @@ export function dispatchIncomingMessage(
             }
             updateMessagingJournal(trackedMessage, {
               boundUserId: committedTarget.boundUserId || '',
+              bindingAuthorization: committedTarget.bindingAuthorization,
+              organizationAuthorization: committedTarget.organizationAuthorization,
               domain: committedTarget.boundOrgId ? 'work' : 'personal',
               orgId: committedTarget.boundOrgId || '',
               replyText: correlated.text,
               replyRetryable: true,
             });
             retryableReplyDelivery = true;
-            const deliveryCorrelation = correlateMessagingReply(trackedMessage, correlated.text);
+            const deliveryCorrelation = correlateMessagingReply(committedTarget, correlated.text);
             if (deliveryCorrelation.superseded) {
               retryableReplyDelivery = false;
               updateMessagingJournal(trackedMessage, { replyRetryable: false });
@@ -1359,14 +1429,19 @@ export function dispatchIncomingMessage(
       // Accepted transcripts are persisted immediately, even when execution is
       // queued behind an older long-running turn. Side effects remain fenced.
       const accepted = await admitBoundMessagingTurnDurably(
-        scopePlan.resolution.message,
+        captureMessagingOrganization(scopePlan.resolution.message),
         options?.onConversationUpdated,
       );
       const routeBaseMessage = accepted.message;
+      assertMessagingAuthorization(routeBaseMessage);
       const enrichment = scopePlan.resolution.kind === 'reply'
         ? Promise.resolve(routeBaseMessage)
         : transport.enrich(routeBaseMessage);
       await enqueueMessageRoute(trackedMessage, async () => {
+        if (!isMessagingAuthorizationCurrent(routeBaseMessage)) {
+          void enrichment.catch(() => undefined);
+          throw new MessagingAuthorizationRevokedError();
+        }
         if (newerMessageSupersedesThisTurn(trackedMessage)) {
           void enrichment.catch(() => undefined);
           finalJournalStatus = 'superseded';
@@ -1375,6 +1450,7 @@ export function dispatchIncomingMessage(
         commitPersonalOrganizationScopePlan(scopePlan);
         updateMessagingJournal(trackedMessage, {
           boundUserId: routeBaseMessage.boundUserId || '',
+          organizationAuthorization: routeBaseMessage.organizationAuthorization,
           domain: routeBaseMessage.boundOrgId ? 'work' : 'personal',
           orgId: routeBaseMessage.boundOrgId || '',
         });
@@ -1382,8 +1458,13 @@ export function dispatchIncomingMessage(
         // only after a bound user's accepted transcript is durably flushed,
         // but before a long-running predecessor can let signed URLs expire.
         const enriched = await enrichment;
+        assertMessagingAuthorization(routeBaseMessage);
         const enrichedMessage: IncomingMessage = applyRemoteAttachmentContext({
           ...enriched,
+          boundUserId: routeBaseMessage.boundUserId,
+          boundOrgId: routeBaseMessage.boundOrgId,
+          bindingAuthorization: routeBaseMessage.bindingAuthorization,
+          organizationAuthorization: routeBaseMessage.organizationAuthorization,
           receivedAt: routeBaseMessage.receivedAt,
           routeSequence: routeBaseMessage.routeSequence,
           userMessagePersisted: routeBaseMessage.userMessagePersisted,
@@ -1444,6 +1525,11 @@ export function dispatchIncomingMessage(
       completeMessageDelivery(trackedMessage.platform, trackedMessage.messageId);
       updateMessagingJournal(trackedMessage, { status: finalJournalStatus });
     }).catch(async (err: any) => {
+      if (err instanceof MessagingAuthorizationRevokedError) {
+        completeMessageDelivery(trackedMessage.platform, trackedMessage.messageId);
+        updateMessagingJournal(trackedMessage, { status: 'ignored', replyRetryable: false, error: err.message });
+        return;
+      }
       if (retryableBindingTurn) {
         releaseMessageDelivery(trackedMessage.platform, trackedMessage.messageId);
         updateMessagingJournal(trackedMessage, {
@@ -1468,6 +1554,12 @@ export function dispatchIncomingMessage(
       releaseMessageDelivery(trackedMessage.platform, trackedMessage.messageId);
       updateMessagingJournal(trackedMessage, { status: 'failed', error: err?.message || String(err) });
       console.error(`[Messaging] ${trackedMessage.platform} route failed:`, err?.message || err);
+    }).then(() => {
+      acceptedMessageSettlements.delete(settlement);
+      settleAcceptedMessage();
+    }, error => {
+      acceptedMessageSettlements.delete(settlement);
+      failAcceptedMessage(error);
     });
   });
   return true;
@@ -1794,6 +1886,7 @@ function updateCaseHintsFromText(orgId: string, userId: string, caseFile: LegalC
 }
 
 export async function handleRemoteOrgCommand(msg: IncomingMessage): Promise<string | null> {
+  assertMessagingAuthorization(msg);
   const requestText = getRequestText(msg);
   const platformLabel = remotePlatformLabel(msg.platform);
   const materialSource = remoteMaterialSource(msg.platform);
@@ -1818,6 +1911,7 @@ export async function handleRemoteOrgCommand(msg: IncomingMessage): Promise<stri
 
   const textAttachments = (msg.attachments || []).filter(item => item.extractedText?.trim());
   const extractionReply = await handleRemoteExtractionCommand(msg, textAttachments);
+  assertMessagingAuthorization(msg);
   if (extractionReply) return extractionReply;
 
   if (/知识库|制度|资料|文档库/.test(requestText) && /(查|搜|找|检索|搜索)/.test(requestText)) {
@@ -2246,6 +2340,8 @@ export async function processWithPersonality(
   options?: MessagingRouteOptions,
   preacceptedAdmission?: AcceptedUserTurnAdmission<string> | null,
 ): Promise<string> {
+  msg = captureMessagingOrganization(msg);
+  assertMessagingAuthorization(msg);
   const llm = options?.llmGetters;
   const requestText = getRequestText(msg);
   const registry = options?.personalityRegistry;
@@ -2305,6 +2401,7 @@ export async function processWithPersonality(
       throw new MessagingReplyDurabilityError('accepted_turn', error);
     }
   }
+  assertMessagingAuthorization(msg);
   const precedingTranscript = conversation
     ? getMessagesThroughExternalMessage(conversation.id, msg.messageId, 8).filter(item => !(
         item.role === 'user'
@@ -2382,6 +2479,7 @@ export async function processWithPersonality(
   const pendingConfirmationPrompt = confirmationResolution?.prompt || '';
   const correctionRequiresFreshConfirmation =
     confirmationResolution?.correctionRequiresFreshConfirmation === true;
+  assertMessagingAuthorization(msg);
   const organizationMembership = isOrganizationBound ? getMember(orgId, effectiveUserId) : null;
   const canWriteOrganization = organizationMembership?.status === 'active' && organizationMembership.role !== 'viewer';
   // Capability selection is authorized by this user turn, not by words inside
@@ -2556,9 +2654,10 @@ export async function processWithPersonality(
     : null;
   const actionLeaseWasLost = () => Boolean(actionLeaseHeartbeat?.isLeaseLost());
   const actionWasCancelled = () => (
-    actionAbortController.signal.aborted || newerMessageSupersedesThisTurn(msg)
+    actionAbortController.signal.aborted || newerMessageSupersedesThisTurn(msg) || !isMessagingAuthorizationCurrent(msg)
   );
   const throwIfActionLeaseWasLost = () => {
+    assertMessagingAuthorization(msg);
     if (!actionLeaseWasLost()) return;
     const error = new Error('Remote conversation action execution lease was lost');
     error.name = 'AbortError';
@@ -2847,6 +2946,7 @@ export async function processWithPersonality(
     // envelope. Never let it execute an external commit; those actions must go
     // through the receipt-producing tool route and its exact confirmation gate.
     if (options?.onMessage && !callbackBlockedForExternalCommit) {
+      assertMessagingAuthorization(msg);
       callbackReply = await options.onMessage(msg);
       throwIfActionLeaseWasLost();
     }
@@ -2888,6 +2988,7 @@ export async function processWithPersonality(
           personalDesktopRelay,
           desktopExecutionTracker,
           isCancelled: actionWasCancelled,
+          executionSignal: actionAbortController.signal,
           requestConfirmation: requestToolConfirmation,
         },
       });
@@ -2944,8 +3045,13 @@ export async function processWithPersonality(
     }
 
     if (!deterministicEntryReply && isOrganizationBound) {
-      deterministicEntryReply = await handleRemoteLegalNoticeIntake(msg)
-        || await handleRemoteOrgCommand(msg);
+      assertMessagingAuthorization(msg);
+      deterministicEntryReply = await handleRemoteLegalNoticeIntake(msg, {
+        isCancelled: actionWasCancelled,
+        executionSignal: actionAbortController.signal,
+      });
+      assertMessagingAuthorization(msg);
+      if (!deterministicEntryReply) deterministicEntryReply = await handleRemoteOrgCommand(msg);
       if (deterministicEntryReply) {
         responseText = deterministicEntryReply;
         toolRecords.push({
@@ -3032,6 +3138,7 @@ export async function processWithPersonality(
         personalDesktopRelay,
         desktopExecutionTracker,
         isCancelled: actionWasCancelled,
+        executionSignal: actionAbortController.signal,
         requestConfirmation: requestToolConfirmation,
       },
       llm?.getOllama,
@@ -3044,6 +3151,7 @@ export async function processWithPersonality(
     );
 
     if (!entryHandled && !toolSessionActive) {
+      assertMessagingAuthorization(msg);
       const response = await makeLLMCall(
         messages,
         [],
@@ -3253,7 +3361,7 @@ export async function processWithPersonality(
     }
     settleRemoteTask();
     await flushTerminalReply();
-    if (newerMessageSupersedesThisTurn(msg)) {
+    if (actionWasCancelled()) {
       removeSupersededAssistantMessage(persistedTerminalReply);
       await flushTerminalReply();
       return '';
@@ -3267,9 +3375,10 @@ export async function processWithPersonality(
     // commands comes from the authoritative organization transaction instead.
     if (!entryHandled) {
       try {
-        persistRemotePostTurnLearning({
+        void persistRemotePostTurnLearning({
           message: msg,
           responseText: correlated.text,
+          isCancelled: actionWasCancelled,
           llmGetters: llm,
           modelConfig: {
             provider: userLLMPrefs.provider,
@@ -3282,6 +3391,11 @@ export async function processWithPersonality(
     }
     return correlated.text;
   } catch (err: any) {
+    if (!isMessagingAuthorizationCurrent(msg)) {
+      settleRemoteTask('The remote message authorization was revoked or replaced.');
+      await flushTerminalReply();
+      throw new MessagingAuthorizationRevokedError();
+    }
     if (actionLeaseWasLost()) {
       await actionLeaseHeartbeat!.leaseLoss;
       return CN_TASK_EXECUTION_MESSAGES.persistenceUnknown;

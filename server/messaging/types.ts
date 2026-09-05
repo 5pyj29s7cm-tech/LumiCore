@@ -20,6 +20,15 @@ export interface IncomingMessage {
   attachments?: IncomingAttachment[];
   boundUserId?: string;
   boundOrgId?: string;
+  /** Server-captured binding identity. Null means unbound when the message arrived. */
+  bindingAuthorization?: {
+    id: string;
+    revision: string;
+    userId: string;
+    orgId: string;
+    domain: 'personal' | 'work';
+  } | null;
+  organizationAuthorization?: { orgId: string; userId: string; membershipId: string };
   raw: Record<string, any>; // raw platform payload
   timestamp: string;
   /** Local receipt time, independent from the platform timestamp. */

@@ -19,6 +19,8 @@ export interface MessagingJournalEntry {
   messageId: string;
   platformUserId: string;
   boundUserId?: string;
+  bindingAuthorization?: IncomingMessage['bindingAuthorization'];
+  organizationAuthorization?: IncomingMessage['organizationAuthorization'];
   chatId: string;
   chatType: IncomingMessage['chatType'];
   threadId: string;
@@ -77,6 +79,8 @@ export function recordMessagingIngress(message: IncomingMessage): void {
     messageId: String(message.messageId || ''),
     platformUserId: String(message.userId || ''),
     boundUserId: String(message.boundUserId || ''),
+    bindingAuthorization: message.bindingAuthorization,
+    organizationAuthorization: message.organizationAuthorization,
     chatId: String(message.chatId || ''),
     chatType: message.chatType,
     threadId: String(message.threadId || ''),
@@ -94,7 +98,7 @@ export function recordMessagingIngress(message: IncomingMessage): void {
 
 export function updateMessagingJournal(
   message: Pick<IncomingMessage, 'platform' | 'messageId'>,
-  update: Partial<Pick<MessagingJournalEntry, 'status' | 'replyText' | 'replyMessageId' | 'replyRetryable' | 'error' | 'routeSequence' | 'boundUserId' | 'domain' | 'orgId'>>,
+  update: Partial<Pick<MessagingJournalEntry, 'status' | 'replyText' | 'replyMessageId' | 'replyRetryable' | 'error' | 'routeSequence' | 'boundUserId' | 'bindingAuthorization' | 'organizationAuthorization' | 'domain' | 'orgId'>>,
 ): void {
   const current = readEntries();
   const entry = current.find(item => item.key === journalKey(message));

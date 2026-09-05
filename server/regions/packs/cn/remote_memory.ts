@@ -1,6 +1,13 @@
 import { addMemory, addReminder, extractMemories, queryMemories } from '../../../memory';
 import type { IncomingMessage } from '../../../messaging/types';
 import type { UserLLMProvider } from '../../../llm/user_preferences';
+import { captureMessagingOrganization, isMessagingAuthorizationCurrent } from '../../../messaging/turn_authorization';
+
+const pendingLearning = new Set<Promise<void>>();
+
+export async function drainRemotePostTurnLearning(): Promise<void> {
+  while (pendingLearning.size) await Promise.all([...pendingLearning]);
+}
 
 type RemoteLlmGetters = Record<string, (() => any) | undefined>;
 
@@ -37,6 +44,7 @@ function personalRelationshipAnchors(text: string): Array<{
   return anchors;
 }
 export function persistExplicitRemoteRelationshipMemories(message: IncomingMessage): string[] {
+  if (!isMessagingAuthorizationCurrent(message)) return [];
   if (!message.boundUserId || message.boundOrgId) return [];
   const sourceInteractionId = `remote_${message.platform}_${message.messageId}`;
   return personalRelationshipAnchors(message.text).map(anchor => addMemory({
@@ -67,9 +75,12 @@ export function persistRemotePostTurnLearning(input: {
   responseText: string;
   llmGetters?: RemoteLlmGetters;
   modelConfig: RemoteModelConfig;
-}): void {
-  const { message, responseText, llmGetters, modelConfig } = input;
-  if (!message.boundUserId || !responseText.trim() || message.text.trim().length < 8) return;
+  isCancelled?: () => boolean;
+}): Promise<void> {
+  const { responseText, llmGetters, modelConfig } = input;
+  const message = captureMessagingOrganization(input.message);
+  const stillAuthorized = () => !input.isCancelled?.() && isMessagingAuthorizationCurrent(message);
+  if (!stillAuthorized() || !message.boundUserId || !responseText.trim() || message.text.trim().length < 8) return Promise.resolve();
   const domain = message.boundOrgId ? 'work' : 'personal';
   const orgId = message.boundOrgId || '';
   const existingMemories = queryMemories({
@@ -82,7 +93,7 @@ export function persistRemotePostTurnLearning(input: {
   }).map(memory => memory.content);
   const get = (name: string) => llmGetters?.[name] || (() => null);
 
-  void extractMemories(
+  const learning = extractMemories(
     {
       userMessage: message.text,
       assistantResponse: responseText,
@@ -108,6 +119,7 @@ export function persistRemotePostTurnLearning(input: {
     get('getGlm'),
     get('getRelay'),
   ).then(extracted => {
+    if (!stillAuthorized()) return;
     for (const memory of extracted.memories) {
       addMemory({
         userId: message.boundUserId!,
@@ -138,5 +150,9 @@ export function persistRemotePostTurnLearning(input: {
     }
   }).catch(error => {
     console.warn('[Messaging] Remote post-turn memory extraction failed:', error?.message || error);
+  }).finally(() => {
+    pendingLearning.delete(learning);
   });
+  pendingLearning.add(learning);
+  return learning;
 }

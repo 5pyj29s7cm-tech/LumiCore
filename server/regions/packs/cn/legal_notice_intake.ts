@@ -5,6 +5,7 @@ import { getMember, listUserOrgs } from '../../../org/db';
 import { upsertPendingReminder } from '../../../memory';
 import { pushNotification } from '../../../routes/notifications';
 import type { IncomingMessage } from '../../../messaging/types';
+import { assertMessagingAuthorization, captureMessagingOrganization, isMessagingAuthorizationCurrent, MessagingAuthorizationRevokedError } from '../../../messaging/turn_authorization';
 import {
   consumePendingLegalNotice,
   getPendingLegalNotice,
@@ -13,17 +14,36 @@ import {
   type PendingLegalNoticeCandidate,
 } from '../../../messaging/legal_notice_pending';
 
-function executeRegisteredTool(
+interface LegalNoticeExecutionControl {
+  isCancelled?: () => boolean;
+  executionSignal?: AbortSignal;
+}
+
+function assertNoticeAuthorized(msg: IncomingMessage, control: LegalNoticeExecutionControl): void {
+  assertMessagingAuthorization(msg);
+  if (control.isCancelled?.() || control.executionSignal?.aborted) throw new MessagingAuthorizationRevokedError();
+}
+
+async function executeRegisteredTool(
+  msg: IncomingMessage,
+  control: LegalNoticeExecutionControl,
   name: string,
   args: Record<string, any>,
   context: Record<string, any>,
 ): Promise<string> {
-  return executeToolCallOrThrow({
+  assertNoticeAuthorized(msg, control);
+  const result = await executeToolCallOrThrow({
     registry: toolRegistry,
     name,
     arguments: args,
-    context,
+    context: {
+      ...context,
+      executionSignal: control.executionSignal,
+      isCancelled: () => Boolean(control.isCancelled?.() || control.executionSignal?.aborted || !isMessagingAuthorizationCurrent(msg)),
+    },
   });
+  assertNoticeAuthorized(msg, control);
+  return result;
 }
 
 function text(value: unknown): string {
@@ -380,11 +400,11 @@ function createCaseAlerts(params: {
   return reminders;
 }
 
-async function inspectPersonalNotice(msg: IncomingMessage, messageText: string): Promise<string> {
+async function inspectPersonalNotice(msg: IncomingMessage, messageText: string, control: LegalNoticeExecutionControl): Promise<string> {
   const url = extractFirstUrl(messageText);
   if (!url || !msg.boundUserId || !toolRegistry.get('legal_process_notice_link')) return '';
   try {
-    return await executeRegisteredTool('legal_process_notice_link', {
+    return await executeRegisteredTool(msg, control, 'legal_process_notice_link', {
       userId: msg.boundUserId,
       url,
       message: messageText,
@@ -401,6 +421,7 @@ async function inspectPersonalNotice(msg: IncomingMessage, messageText: string):
       source: `${msg.platform}-personal-legal-notice-inspection`,
     });
   } catch (err: any) {
+    assertNoticeAuthorized(msg, control);
     return `链接检查未完成：${err?.message || String(err)}`;
   }
 }
@@ -409,13 +430,16 @@ async function runOrganizationLegalIntake(
   msg: IncomingMessage,
   target: PendingLegalNoticeCandidate,
   messageText: string,
+  control: LegalNoticeExecutionControl,
 ): Promise<string> {
+  assertNoticeAuthorized(msg, control);
   const userId = msg.boundUserId!;
   const member = getMember(target.orgId, userId);
   if (!member || member.status !== 'active' || member.role === 'viewer') {
     return '当前 Lumi 身份没有向该组织案件写入材料的权限。';
   }
   msg.boundOrgId = target.orgId;
+  msg.organizationAuthorization = captureMessagingOrganization(msg).organizationAuthorization;
 
   let resolvedTarget = target;
   const intakeIntent = classifyRemoteLegalNoticeIntakeIntent(messageText);
@@ -435,7 +459,7 @@ async function runOrganizationLegalIntake(
   }
 
   if (toolRegistry.get('legal_message_intake_to_case')) {
-    const report = await executeRegisteredTool('legal_message_intake_to_case', {
+    const report = await executeRegisteredTool(msg, control, 'legal_message_intake_to_case', {
       orgId: resolvedTarget.orgId,
       userId,
       platform: msg.platform,
@@ -468,7 +492,7 @@ async function runOrganizationLegalIntake(
     userId,
     message: messageText,
   });
-  const report = await executeRegisteredTool('legal_process_notice_link', {
+  const report = await executeRegisteredTool(msg, control, 'legal_process_notice_link', {
     orgId: resolvedTarget.orgId,
     userId,
     caseId: caseFile.id,
@@ -504,17 +528,19 @@ async function handlePersonalLegalNotice(
   msg: IncomingMessage,
   messageText: string,
   matchText: string,
+  control: LegalNoticeExecutionControl,
 ): Promise<string> {
   const userId = msg.boundUserId!;
   let candidates = caseCandidates(userId, matchText);
   let inspected = '';
   if (candidates.length !== 1) {
-    inspected = await inspectPersonalNotice(msg, matchText);
+    inspected = await inspectPersonalNotice(msg, matchText, control);
+    assertNoticeAuthorized(msg, control);
     candidates = caseCandidates(userId, `${matchText}\n${inspected}`);
   }
 
   if (candidates.length === 1) {
-    return runOrganizationLegalIntake(msg, candidates[0], messageText);
+    return runOrganizationLegalIntake(msg, candidates[0], messageText, control);
   }
 
   if (candidates.length === 0) {
@@ -526,7 +552,7 @@ async function handlePersonalLegalNotice(
         ...organizations[0],
         caseTitle: explicitTarget || hints.caseNumber,
         caseNumber: hints.caseNumber,
-      }, messageText);
+      }, messageText, control);
     }
     candidates = organizations;
   }
@@ -555,7 +581,9 @@ async function handlePersonalLegalNotice(
   return pendingPrompt(candidates, inspected);
 }
 
-export async function handleRemoteLegalNoticeIntake(msg: IncomingMessage): Promise<string | null> {
+export async function handleRemoteLegalNoticeIntake(msg: IncomingMessage, control: LegalNoticeExecutionControl = {}): Promise<string | null> {
+  msg.organizationAuthorization = captureMessagingOrganization(msg).organizationAuthorization;
+  assertNoticeAuthorized(msg, control);
   const messageText = currentUserRequestText(msg);
   const signalText = legalSignalText(msg);
   const hasCourtNoticeAttachment = Boolean(msg.attachments?.length)
@@ -579,7 +607,7 @@ export async function handleRemoteLegalNoticeIntake(msg: IncomingMessage): Promi
       consumePendingLegalNotice(pending.id);
       msg.text = pending.messageText;
       msg.attachments = pending.attachments;
-      return runOrganizationLegalIntake(msg, selected, pending.messageText);
+      return runOrganizationLegalIntake(msg, selected, pending.messageText, control);
     }
   }
 
@@ -588,10 +616,10 @@ export async function handleRemoteLegalNoticeIntake(msg: IncomingMessage): Promi
   if (!msg.boundUserId) {
     return bindingPrompt(msg.platform);
   }
-  if (!msg.boundOrgId) return handlePersonalLegalNotice(msg, messageText, signalText);
+  if (!msg.boundOrgId) return handlePersonalLegalNotice(msg, messageText, signalText, control);
 
   return runOrganizationLegalIntake(msg, {
     orgId: msg.boundOrgId,
     orgName: writableOrganizations(msg.boundUserId).find(org => org.id === msg.boundOrgId)?.name || msg.boundOrgId,
-  }, messageText);
+  }, messageText, control);
 }

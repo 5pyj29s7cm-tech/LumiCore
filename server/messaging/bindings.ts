@@ -10,6 +10,8 @@ export type MessagingBindingDomain = 'personal' | 'work';
 
 export interface MessagingBinding {
   id: string;
+  /** Changes on every replacement, even when two bindings share a timestamp. */
+  revision?: string;
   platform: MessagingPlatformId;
   platformUserId: string;
   chatId?: string;
@@ -260,6 +262,7 @@ export function commitBindingCodeConsumption(
   const previousBinding = existingIdx >= 0 ? { ...store.bindings[existingIdx] } : null;
   const binding: MessagingBinding = {
     id: existingIdx >= 0 ? store.bindings[existingIdx].id : randomUUID(),
+    revision: randomUUID(),
     platform: plan.platform,
     platformUserId: plan.platformUserId,
     chatId: plan.chatId || undefined,
