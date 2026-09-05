@@ -11,6 +11,7 @@ import { createHash, randomUUID } from 'crypto';
 import { promises as dns } from 'node:dns';
 import { isIP } from 'node:net';
 import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
+import { runtimeBackgroundWork } from '../runtime/shutdown_work';
 
 const BRANCH_STATE_SETTING = 'org.branch.client.state.v2';
 const OFFLINE_QUEUE_SETTING = 'org.branch.client.offline_queue.v2';
@@ -18,6 +19,8 @@ const SYNC_INDEX_SETTING = 'org.branch.client.sync_index.v2';
 const KB_CACHE_SETTING = 'org.branch.client.kb_cache.v1';
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_OFFLINE_ACTIONS = 1_000;
+// Protocol limit enforced by the company branch ingest API.
+const MAX_SYNC_BATCH_ITEMS = 1_000;
 
 export type BranchStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'error';
 
@@ -94,7 +97,11 @@ interface CachedArticle {
 }
 
 let branchState: BranchState | null = null;
-let syncInFlight: Promise<{ synced: number; errors: string[] }> | null = null;
+interface SyncDrainResult { synced: number; flushed: number; errors: string[] }
+let syncInFlight: Promise<SyncDrainResult> | null = null;
+let syncIncludesUnsynced = false;
+let connectionGeneration = 0;
+let pendingConnection: AbortController | null = null;
 
 function isObject(value: unknown): value is Record<string, any> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -201,12 +208,13 @@ function getOfflineQueue(): OfflineAction[] {
     lastError: String(item.lastError || ''),
     queuedAt: String(item.queuedAt || new Date().toISOString()),
     updatedAt: String(item.updatedAt || item.queuedAt || new Date().toISOString()),
-  })).slice(-MAX_OFFLINE_ACTIONS) as OfflineAction[];
+  })) as OfflineAction[];
 }
 
 function saveOfflineQueue(queue: OfflineAction[]): void {
+  if (queue.length > MAX_OFFLINE_ACTIONS) throw new Error('Organization offline queue capacity exceeded; existing batches were retained');
   const db = readDB();
-  writeSetting(db, OFFLINE_QUEUE_SETTING, queue.slice(-MAX_OFFLINE_ACTIONS));
+  writeSetting(db, OFFLINE_QUEUE_SETTING, queue);
   writeDB(db);
 }
 
@@ -298,8 +306,12 @@ export async function validateCompanyEndpoint(value: string): Promise<string> {
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
+  init.signal?.throwIfAborted();
   const safeUrl = await validateCompanyEndpoint(url);
+  init.signal?.throwIfAborted();
   const controller = new AbortController();
+  const abort = () => controller.abort(init.signal?.reason);
+  init.signal?.addEventListener('abort', abort, { once: true });
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(safeUrl, { ...init, redirect: 'manual', signal: controller.signal });
@@ -309,6 +321,7 @@ async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs =
     return response;
   } finally {
     clearTimeout(timeout);
+    init.signal?.removeEventListener('abort', abort);
   }
 }
 
@@ -469,6 +482,41 @@ function createSyncAction(orgId: string, branchId: string, payload: SyncPayload)
   };
 }
 
+function createSyncActions(orgId: string, branchId: string, payload: SyncPayload): OfflineAction[] {
+  const actions: OfflineAction[] = [];
+  let memoryOffset = 0;
+  let interactionOffset = 0;
+  while (memoryOffset < payload.memories.length || interactionOffset < payload.interactions.length) {
+    const memories = payload.memories.slice(memoryOffset, memoryOffset + MAX_SYNC_BATCH_ITEMS);
+    const interactions = payload.interactions.slice(interactionOffset, interactionOffset + MAX_SYNC_BATCH_ITEMS - memories.length);
+    memoryOffset += memories.length;
+    interactionOffset += interactions.length;
+    actions.push(createSyncAction(orgId, branchId, { memories, interactions }));
+  }
+  return actions;
+}
+
+async function splitUnacceptedOversizedActions(): Promise<void> {
+  const queue = getOfflineQueue();
+  let changed = false;
+  const migrated = queue.flatMap(action => {
+    const payload = action.payload as BranchSyncRequest;
+    if (action.type !== 'sync' || payload?.orgId !== bs().orgId || payload?.branchId !== bs().branchId) return [action];
+    const memories = Array.isArray(payload.memories) ? payload.memories : [];
+    const interactions = Array.isArray(payload.interactions) ? payload.interactions : [];
+    // Only a never-sent batch or an explicit protocol rejection proves that
+    // replacing its identity is safe. An unknown outcome must be reconciled.
+    const definitelyUnaccepted = (action.state === 'pending' && action.attempts === 0)
+      || (action.state === 'blocked' && /^Branch sync batch exceeds 1000 items$/.test(action.lastError));
+    if (!definitelyUnaccepted || memories.length + interactions.length <= MAX_SYNC_BATCH_ITEMS) return [action];
+    changed = true;
+    return createSyncActions(payload.orgId, payload.branchId, { memories, interactions });
+  });
+  if (!changed) return;
+  saveOfflineQueue(migrated);
+  await flushDBOrThrow();
+}
+
 export function getBranchState(): Readonly<BranchState> {
   return bs();
 }
@@ -478,24 +526,37 @@ export async function connectToOrg(
   companyUrl: string,
   token: string,
 ): Promise<{ success: boolean; error?: string }> {
+  const generation = ++connectionGeneration;
+  pendingConnection?.abort(new Error('Organization connection was superseded'));
+  const controller = new AbortController();
+  pendingConnection = controller;
+  const assertCurrent = () => {
+    if (generation !== connectionGeneration || controller.signal.aborted) throw new Error('Organization connection was superseded or disconnected');
+  };
   const state = bs();
   state.status = 'connecting';
   saveBranchState();
   try {
     // The immutable branch ID must reach disk before it is registered remotely.
     await flushDBOrThrow();
+    assertCurrent();
     const normalizedUrl = normalizeCompanyUrl(companyUrl);
     const response = await fetchWithTimeout(`${normalizedUrl}/api/branch/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ orgId, branchId: state.branchId }),
+      signal: controller.signal,
     });
+    assertCurrent();
     if (!response.ok) {
+      const error = await responseError(response, 'Registration failed');
+      assertCurrent();
       state.status = 'error';
       saveBranchState();
-      return { success: false, error: await responseError(response, 'Registration failed') };
+      return { success: false, error };
     }
     const body: any = await response.json();
+    assertCurrent();
     if (
       !body?.branchToken
       || body.branchId !== state.branchId
@@ -512,17 +573,25 @@ export async function connectToOrg(
     state.lastHeartbeatAt = new Date().toISOString();
     saveBranchState();
     await flushDBOrThrow();
-    void pullKbCache();
-    void flushOfflineQueue();
+    assertCurrent();
+    void runtimeBackgroundWork.track(pullKbCache());
+    void runtimeBackgroundWork.track(flushOfflineQueue()).catch(error => console.warn('[Org] Pending sync remains queued:', error?.message || error));
     return { success: true };
   } catch (error: any) {
-    state.status = 'error';
-    saveBranchState();
+    if (generation === connectionGeneration) {
+      state.status = 'error';
+      saveBranchState();
+    }
     return { success: false, error: String(error?.message || error) };
+  } finally {
+    if (pendingConnection === controller) pendingConnection = null;
   }
 }
 
 export function disconnectFromOrg(): void {
+  connectionGeneration++;
+  pendingConnection?.abort(new Error('Organization connection was disconnected'));
+  pendingConnection = null;
   const state = bs();
   state.orgId = null;
   state.companyUrl = null;
@@ -545,27 +614,51 @@ export function isWorkDomain(): boolean {
   return bs().currentDomain === 'work' && bs().status === 'connected';
 }
 
-async function runSyncWorkData(): Promise<{ synced: number; errors: string[] }> {
+async function runSyncWorkData(includeUnsynced: boolean): Promise<SyncDrainResult> {
+  const generation = connectionGeneration;
   const state = bs();
   if (!state.companyUrl || !state.connectionToken || !state.orgId) {
-    return { synced: 0, errors: ['Not connected to organization'] };
+    return { synced: 0, flushed: 0, errors: ['Not connected to organization'] };
   }
-  const queued = getOfflineQueue().find(action => action.type === 'sync');
-  if (queued) return executeSyncAction(queued);
-
-  const payload = unsyncedPayload(state.orgId);
-  const total = payload.memories.length + payload.interactions.length;
-  if (total === 0) return { synced: 0, errors: [] };
-  const action = createSyncAction(state.orgId, state.branchId, payload);
-  saveOfflineQueue([...getOfflineQueue(), action]);
+  if (includeUnsynced && !getOfflineQueue().some(action => action.type === 'sync')) {
+    const actions = createSyncActions(state.orgId, state.branchId, unsyncedPayload(state.orgId));
+    if (actions.length) saveOfflineQueue([...getOfflineQueue(), ...actions]);
+  }
+  await splitUnacceptedOversizedActions();
+  // Includes already queued batches: an earlier persistence failure must never
+  // let a subsequent call send a newly generated identity before it is durable.
   await flushDBOrThrow();
-  return executeSyncAction(action);
+  let synced = 0;
+  let flushed = 0;
+  for (const action of getOfflineQueue()) {
+    if (generation !== connectionGeneration) return { synced, flushed, errors: ['Organization connection changed during sync'] };
+    if (action.type === 'sync') {
+      const result = await executeSyncAction(action);
+      synced += result.synced;
+      if (result.errors.length) return { synced, flushed, errors: result.errors };
+    } else {
+      saveOfflineQueue(getOfflineQueue().filter(candidate => candidate.id !== action.id));
+    }
+    flushed++;
+  }
+  return { synced, flushed, errors: [] };
 }
 
-export function syncWorkData(): Promise<{ synced: number; errors: string[] }> {
-  if (syncInFlight) return syncInFlight;
-  syncInFlight = runSyncWorkData().finally(() => { syncInFlight = null; });
+function drainSyncQueue(includeUnsynced: boolean): Promise<SyncDrainResult> {
+  if (syncInFlight) {
+    if (includeUnsynced && !syncIncludesUnsynced) {
+      return syncInFlight.then(result => result.errors.length ? result : drainSyncQueue(true));
+    }
+    return syncInFlight;
+  }
+  syncIncludesUnsynced = includeUnsynced;
+  syncInFlight = runSyncWorkData(includeUnsynced).finally(() => { syncInFlight = null; });
   return syncInFlight;
+}
+
+export async function syncWorkData(): Promise<{ synced: number; errors: string[] }> {
+  const { synced, errors } = await drainSyncQueue(true);
+  return { synced, errors };
 }
 
 let kbCache: CachedArticle[] | null = null;
@@ -640,22 +733,7 @@ export function queueOfflineAction(type: OfflineAction['type'], payload: any): v
 }
 
 export async function flushOfflineQueue(): Promise<{ flushed: number; errors: string[] }> {
-  if (!bs().companyUrl || !bs().connectionToken) return { flushed: 0, errors: ['Not connected'] };
-  let flushed = 0;
-  const errors: string[] = [];
-  for (const action of getOfflineQueue()) {
-    if (action.type === 'sync') {
-      const result = await executeSyncAction(action);
-      if (result.errors.length === 0) flushed += 1;
-      else errors.push(...result.errors.map(error => `[sync] ${error}`));
-      continue;
-    }
-    if (action.type === 'kb_query') {
-      saveOfflineQueue(getOfflineQueue().filter(candidate => candidate.id !== action.id));
-      flushed += 1;
-      continue;
-    }
-  }
+  const { flushed, errors } = await drainSyncQueue(false);
   return { flushed, errors };
 }
 
