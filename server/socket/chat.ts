@@ -146,6 +146,7 @@ import { resolveExactConversationCorrection } from "../conversation/exact_correc
 import { findLatestRepeatableAssistantReply } from '../conversation/assistant_restatement';
 import { ensureBranch } from "../memory/tree";
 import { retrieveChunks } from "../agents/rag";
+import { runRetrievalRequest } from "../llm/retrieval_request";
 import { getSensory } from "./shared";
 import { processInput, handleLLMFailure, extractSentiment, CognitiveContext } from "../cognition";
 import {
@@ -2426,7 +2427,7 @@ export function registerChatHandler(
         : { typeWeights: {}, perspectiveWeights: {} };
 
       // Vector semantic search with keyword fallback
-      const relevantMemories = await queryMemoriesVector({
+      const relevantMemories = await runRetrievalRequest(signal => queryMemoriesVector({
         userId: uid,
         query: text,
         limit: isMemoryAvatar ? Math.min(20, Number(memoryAvatar?.personalityConfig?.memoryPolicy?.retrieveLimit) || 10) : 5,
@@ -2438,7 +2439,8 @@ export function registerChatHandler(
         orgId: resolvedOrgId,
         useVector: true,
         evidenceClasses: CONVERSATIONAL_MEMORY_EVIDENCE,
-      });
+        signal,
+      }), abortController.signal);
       console.log('[ChatHandler] relevantMemories (vector):', relevantMemories.length);
 
       // RAG: retrieve relevant knowledge chunks from agent-scoped and Lumi knowledge.
@@ -2447,10 +2449,11 @@ export function registerChatHandler(
         ? [conversationAgentId]
         : Array.from(new Set([conversationAgentId, 'lumi'].filter(Boolean)));
       for (const ragAgentId of ragAgentIds) {
-        const chunks = await retrieveChunks(uid, ragAgentId, text, 3, {
+        const chunks = await runRetrievalRequest(signal => retrieveChunks(uid, ragAgentId, text, 3, {
           domain: resolvedDomain,
           orgId: resolvedDomain === 'work' ? resolvedOrgId : '',
-        });
+          signal,
+        }), abortController.signal);
         for (const chunk of chunks) {
           const content = (chunk as any).content;
           if (content && !ragChunks.includes(content)) ragChunks.push(content);
@@ -2463,7 +2466,7 @@ export function registerChatHandler(
       let kbContext: string | undefined;
       if (resolvedDomain === 'work' && resolvedOrgId) {
         try {
-          const kbResults = await searchKnowledgeBase(resolvedOrgId, text, { limit: 3, userId: uid });
+          const kbResults = await runRetrievalRequest(signal => searchKnowledgeBase(resolvedOrgId, text, { limit: 3, userId: uid, signal }), abortController.signal);
           if (kbResults.length > 0) {
             kbContext = kbResults
               .map(r => `[${r.title}] ${r.chunk}`)
@@ -2471,6 +2474,7 @@ export function registerChatHandler(
             console.log('[ChatHandler] KB search results:', kbResults.length, 'articles found');
           }
         } catch (err: any) {
+          abortController.signal.throwIfAborted();
           console.warn('[ChatHandler] KB search failed:', err.message);
         }
       }

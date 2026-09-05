@@ -667,6 +667,35 @@ function extractUsage(rawResponse: any) {
   };
 }
 
+export class ModelToolArgumentsError extends Error {
+  readonly code = 'MODEL_TOOL_ARGUMENTS_INVALID';
+
+  constructor(reason: string) {
+    // Do not include model-supplied arguments: they may contain private data.
+    super(`Model returned invalid tool-call arguments: ${reason}`);
+    this.name = 'ModelToolArgumentsError';
+  }
+}
+
+function parseToolArguments(value: unknown): Record<string, any> {
+  let parsed: unknown;
+  try {
+    parsed = typeof value === 'string' ? JSON.parse(value || '{}') : (value ?? {});
+  } catch {
+    throw new ModelToolArgumentsError('incomplete or malformed JSON');
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new ModelToolArgumentsError('expected an object');
+  }
+  return parsed as Record<string, any>;
+}
+
+function assertToolResponseComplete(reason: unknown): void {
+  if (reason === 'length' || reason === 'max_tokens' || reason === 'content_filter') {
+    throw new ModelToolArgumentsError('response ended before the tool turn completed');
+  }
+}
+
 export function parseDeepSeekResponse(rawResponse: any): NormalizedLLMResponse {
   const message = rawResponse.choices?.[0]?.message;
   if (!message) return { text: null, toolCalls: null };
@@ -678,13 +707,12 @@ export function parseDeepSeekResponse(rawResponse: any): NormalizedLLMResponse {
   const usage = extractUsage(rawResponse);
 
   if (message.tool_calls && message.tool_calls.length > 0) {
-    const toolCalls: ParsedToolCall[] = message.tool_calls.map((tc: any) => {
-      let args: Record<string, any> = {};
-      try {
-        args = JSON.parse(tc.function?.arguments || '{}');
-      } catch { /* ignore parse errors */ }
-      return { id: tc.id, name: tc.function?.name || '', arguments: args };
-    });
+    assertToolResponseComplete(rawResponse.choices?.[0]?.finish_reason);
+    const toolCalls: ParsedToolCall[] = message.tool_calls.map((tc: any) => ({
+      id: tc.id,
+      name: tc.function?.name || '',
+      arguments: parseToolArguments(tc.function?.arguments),
+    }));
     return { text, toolCalls, reasoningContent, usage };
   }
 
@@ -990,10 +1018,11 @@ export function parseAnthropicResponse(rawResponse: any): NormalizedLLMResponse 
       textParts.push(block.text);
     }
     if (block.type === 'tool_use') {
+      assertToolResponseComplete(rawResponse.stop_reason);
       toolCalls.push({
         id: block.id,
         name: block.name,
-        arguments: block.input || {},
+        arguments: parseToolArguments(block.input),
       });
     }
   }
@@ -1384,7 +1413,7 @@ export async function makeLLMCallDirect(
       let response: any;
       try {
         response = supervisedLocal
-          ? await runLocalModelInference(config.provider as LocalModelProvider, execute, { signal: config.signal })
+          ? await runLocalModelInference(config.provider as LocalModelProvider, execute, { signal: config.signal, model: config.model })
           : await execute();
       } catch (error) {
         if (extensionProvider) throw extensionProviderFailure(config.provider, error);
@@ -1963,6 +1992,7 @@ export async function makeLLMCallStreamingDirect(
       const toolCallAccumulators: Map<number, { id: string; name: string; args: string }> = new Map();
       const legacyProtocolFilter = createLegacyProtocolChunkFilter(onChunk);
       let streamUsage: any = undefined;
+      let finishReason: unknown;
       let iterator: AsyncIterator<any> | undefined;
 
       try {
@@ -1986,6 +2016,9 @@ export async function makeLLMCallStreamingDirect(
               (error as any).code = relayError.code;
             }
             throw error;
+          }
+          if (chunk.choices?.[0]?.finish_reason != null) {
+            finishReason = chunk.choices[0].finish_reason;
           }
           const delta = chunk.choices?.[0]?.delta;
           if (delta) {
@@ -2028,11 +2061,12 @@ export async function makeLLMCallStreamingDirect(
         const text = accumulatedText.length > 0 ? accumulatedText.join('') : null;
         const reasoningContent = accumulatedReasoning.length > 0 ? accumulatedReasoning.join('') : null;
         if (toolCallAccumulators.size > 0) {
-          const toolCalls: ParsedToolCall[] = [...toolCallAccumulators.values()].map(acc => {
-            let args: Record<string, any> = {};
-            try { args = JSON.parse(acc.args || '{}'); } catch { /* ignore parse errors */ }
-            return { id: acc.id, name: acc.name, arguments: args };
-          });
+          assertToolResponseComplete(finishReason);
+          const toolCalls: ParsedToolCall[] = [...toolCallAccumulators.values()].map(acc => ({
+            id: acc.id,
+            name: acc.name,
+            arguments: parseToolArguments(acc.args),
+          }));
           return { text, toolCalls, reasoningContent, usage };
         }
         const legacyToolCalls = parseLegacyXmlToolCalls(text, toolDeclarations);
@@ -2120,7 +2154,7 @@ export async function makeLLMCallStreamingDirect(
     return executeWithProviderOutboundEvidence(outboundEvidence, async () => {
       try {
         return supervisedLocal
-          ? await runLocalModelInference(config.provider as LocalModelProvider, executeStream, { signal: config.signal })
+          ? await runLocalModelInference(config.provider as LocalModelProvider, executeStream, { signal: config.signal, model: config.model })
           : await executeStream();
       } catch (error) {
         if (extensionProvider) throw extensionProviderFailure(config.provider, error);
@@ -2238,7 +2272,6 @@ export async function makeLLMCallStreamingDirect(
         const supervisor = new ModelAttemptSupervisor(operationSignal, config.attemptTimeouts);
         const textParts: string[] = [];
         const toolCalls: ParsedToolCall[] = [];
-        const toolUseAccumulators: Map<string, { id: string; name: string; args: Record<string, any> }> = new Map();
         let iterator: AsyncIterator<any> | undefined;
         try {
           const stream: any = await supervisor.request(() => client.messages.stream(
@@ -2250,43 +2283,45 @@ export async function makeLLMCallStreamingDirect(
             const next = await supervisor.next(iterator);
             if (next.done) break;
             const event = next.value;
-            if (event.type === 'text' && event.text) {
-              textParts.push(event.text);
-              if (String(event.text).trim()) supervisor.markSemanticContent();
-              onChunk(event.text);
+            // The SDK iterator yields raw stream events; `text` is a separate
+            // EventEmitter convenience callback, not an iterator event.
+            if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+              const text = String(event.delta.text || '');
+              textParts.push(text);
+              if (text.trim()) supervisor.markSemanticContent();
+              if (text) onChunk(text);
             }
             if (event.type === 'content_block_start' && (event as any).content_block?.type === 'tool_use') {
-              const block = (event as any).content_block;
-              toolUseAccumulators.set(block.id, { id: block.id, name: block.name, args: {} });
               supervisor.markSemanticContent();
             }
             if (event.type === 'content_block_delta' && (event as any).delta?.type === 'input_json_delta') {
-              const delta = (event as any).delta;
-              const acc = [...toolUseAccumulators.values()].find(a => !a.name || Object.keys(a.args).length === 0);
-              if (acc) {
-                try { acc.args = { ...acc.args, ...JSON.parse(delta.partial_json || '{}') }; } catch {}
-              }
-              if (delta.partial_json) supervisor.markSemanticContent();
+              if (event.delta.partial_json) supervisor.markSemanticContent();
             }
           }
 
           const finalMessage: any = await supervisor.completion<any>(stream.finalMessage());
-          if (toolUseAccumulators.size > 0) {
-            for (const acc of toolUseAccumulators.values()) {
-              toolCalls.push({ id: acc.id, name: acc.name, arguments: acc.args });
-            }
-          } else {
-            for (const block of finalMessage.content) {
-              if (block.type === 'tool_use') {
-                toolCalls.push({
-                  id: block.id,
-                  name: block.name,
-                  arguments: block.input || {},
-                });
-                supervisor.markSemanticContent();
-              }
+          // The SDK assembles JSON fragments by content-block index. Use its
+          // completed inputs so one tool can never consume another's fragment.
+          for (const block of finalMessage.content || []) {
+            if (block.type === 'tool_use') {
+              assertToolResponseComplete(finalMessage.stop_reason);
+              toolCalls.push({ id: block.id, name: block.name, arguments: parseToolArguments(block.input) });
+              supervisor.markSemanticContent();
             }
           }
+          const finalText = (finalMessage.content || [])
+            .filter((block: any) => block.type === 'text')
+            .map((block: any) => String(block.text || '')).join('');
+          const streamedText = textParts.join('');
+          if (finalText && finalText !== streamedText) {
+            if (!finalText.startsWith(streamedText)) {
+              throw new Error('Model final text does not match its streamed text');
+            }
+            const remainder = finalText.slice(streamedText.length);
+            textParts.push(remainder);
+            if (remainder) onChunk(remainder);
+          }
+          if (finalText.trim()) supervisor.markSemanticContent();
           supervisor.assertSemanticContent();
           return {
             text: textParts.length > 0 ? textParts.join('') : null,

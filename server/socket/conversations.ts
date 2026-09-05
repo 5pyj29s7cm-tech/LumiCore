@@ -100,15 +100,17 @@ export function registerConversationHandlers(socket: Socket, getUserId: (s: Sock
 
       const messages: any[] = [];
       for (const i of interactions) {
-        if (i.content || i.message) {
+        const body = i.content || i.message;
+        if (body && (!i.role || i.role === 'user')) {
           messages.push({ id: i.id + '_u', type: 'user-text', content: i.content || i.message, timestamp: i.timestamp });
         }
         const tcs = Array.isArray(i.toolCalls) ? i.toolCalls : [];
         for (const tc of tcs) {
           messages.push({ id: i.id + '_t_' + tc.name, type: 'tool', name: tc.name, args: tc.args || tc.arguments || {}, status: 'done', timestamp: i.timestamp });
         }
-        if (i.response) {
-          messages.push({ id: i.id + '_r', type: 'lumi', content: i.response, timestamp: i.timestamp });
+        const response = i.role === 'assistant' ? (body || i.response) : i.response;
+        if (response && (!i.role || i.role === 'user' || i.role === 'assistant')) {
+          messages.push({ id: i.id + '_r', type: 'lumi', content: response, timestamp: i.timestamp });
         }
       }
       socket.emit("chat:messages", { conversationId: data.conversationId, messages });

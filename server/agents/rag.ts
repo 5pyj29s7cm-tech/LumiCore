@@ -152,6 +152,7 @@ export async function ingestDocument(
         confidence: 0.7,
         sourceInteractionId: sourceFile,
         embedding: embedding?.vector,
+        embeddingNamespace: embedding ? { provider: embedding.provider, model: embedding.model, dimensions: embedding.vector.length } : undefined,
         knowledgeProvenance: {
           sourceId: sourceFile,
           sourceLabel,
@@ -224,7 +225,7 @@ export async function verifyIngestedDocument(
   agentId: string,
   manifest: KnowledgeIngestionManifest,
   cases: KnowledgeGoldenCaseDefinition[],
-  scope: { domain?: string; orgId?: string } = {},
+  scope: { domain?: string; orgId?: string; signal?: AbortSignal } = {},
 ): Promise<KnowledgeIngestionManifest> {
   const retrieval = await runKnowledgeGoldenEvaluation({
     cases,
@@ -272,7 +273,7 @@ export async function retrieveChunks(
   agentId: string,
   query: string,
   limit = 5,
-  scope: { domain?: string; orgId?: string } = {},
+  scope: { domain?: string; orgId?: string; signal?: AbortSignal } = {},
 ): Promise<Array<Memory & { citation: string }>> {
   const requestedLimit = Math.max(1, Math.min(50, Number(limit) || 5));
   const memories = await queryMemoriesVector({
@@ -287,6 +288,7 @@ export async function retrieveChunks(
     domain: scope.domain,
     orgId: scope.orgId,
     useVector: true,
+    signal: scope.signal,
   });
 
   return memories

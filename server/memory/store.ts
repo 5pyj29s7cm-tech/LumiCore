@@ -10,8 +10,9 @@ import {
 } from './types';
 export { CONVERSATIONAL_MEMORY_EVIDENCE } from './types';
 import { applyMemoryFirewallMetadata, evaluateMemoryFirewall } from './firewall';
-import { generateConfiguredEmbedding, getEmbeddingRoute } from '../llm/embedding_provider';
+import { generateConfiguredEmbedding, getEmbeddingRoute, type EmbeddingResult } from '../llm/embedding_provider';
 import { getRerankSelection, rerankConfiguredDocuments } from '../llm/rerank_provider';
+import { isProviderLocalOnly, isStrictPrivacy } from '../config/privacy';
 
 function getMemoryStore(): Memory[] {
   const db = readDB();
@@ -72,19 +73,19 @@ function dedupeMemoriesInRankOrder(memories: Memory[]): Memory[] {
 
 // ── Embedding / Vector Search ──
 
-/** LRU cache for embeddings: text → vector. Avoids re-embedding the same content. */
-const embeddingCache = new Map<string, number[]>();
+/** Bounded cache keyed by user, actual vector space and input text. */
+const embeddingCache = new Map<string, EmbeddingResult>();
 const EMBEDDING_CACHE_MAX = 500;
 
-function cacheEmbedding(key: string, vec: number[]) {
+function cacheEmbedding(key: string, result: EmbeddingResult) {
   if (embeddingCache.size >= EMBEDDING_CACHE_MAX) {
     const first = embeddingCache.keys().next().value;
     if (first) embeddingCache.delete(first);
   }
-  embeddingCache.set(key, vec);
+  embeddingCache.set(key, result);
 }
 
-function getCachedEmbedding(key: string): number[] | undefined {
+function getCachedEmbedding(key: string): EmbeddingResult | undefined {
   return embeddingCache.get(key);
 }
 
@@ -140,24 +141,35 @@ function markMemoriesRetrieved(memories: Memory[]): void {
 }
 
 /** Generate an embedding through the configured retrieval role. */
-export async function generateEmbedding(text: string, userId = 'anonymous'): Promise<number[] | null> {
+export async function generateEmbedding(text: string, userId = 'anonymous', options: { signal?: AbortSignal } = {}): Promise<number[] | null> {
+  return (await generateEmbeddingWithIdentity(text, userId, options))?.vector || null;
+}
+
+function embeddingCacheKey(userId: string, provider: string, model: string, text: string): string {
+  return JSON.stringify([userId, provider, model, text]);
+}
+
+function embeddingNamespace(result: EmbeddingResult): NonNullable<Memory['embeddingNamespace']> {
+  return { provider: result.provider, model: result.model, dimensions: result.vector.length };
+}
+
+export async function generateEmbeddingWithIdentity(text: string, userId = 'anonymous', options: { signal?: AbortSignal } = {}): Promise<EmbeddingResult | null> {
+  options.signal?.throwIfAborted();
   const route = getEmbeddingRoute(userId);
-  const routeKey = [
-    userId,
-    route.primary.provider,
-    route.primary.model,
-    route.fallback?.provider || '',
-    route.fallback?.model || '',
-    text,
-  ].join('\u0000');
-  const cached = getCachedEmbedding(routeKey);
+  // Only the currently selected primary identity can satisfy a cache read.
+  // A fallback vector is retained under its actual identity, never the primary route.
+  const routeKey = embeddingCacheKey(userId, route.primary.provider, route.primary.model, text);
+  const cached = !isStrictPrivacy() || isProviderLocalOnly(route.primary.provider)
+    ? getCachedEmbedding(routeKey) : undefined;
   if (cached) return cached;
 
   try {
-    const result = await generateConfiguredEmbedding(text, userId);
-    cacheEmbedding(routeKey, result.vector);
-    return result.vector;
+    const result = await generateConfiguredEmbedding(text, userId, options);
+    options.signal?.throwIfAborted();
+    cacheEmbedding(embeddingCacheKey(userId, result.provider, result.model, text), result);
+    return result;
   } catch {
+    options.signal?.throwIfAborted();
     return null;
   }
 }
@@ -166,14 +178,16 @@ export async function generateEmbedding(text: string, userId = 'anonymous'): Pro
 async function attachEmbedding(memory: Memory): Promise<void> {
   if (memory.embedding && memory.embedding.length > 0) return;
   const text = `${memory.type}: ${memory.content} ${memory.keywords.join(' ')}`;
-  const vec = await generateEmbedding(text, memory.userId);
-  if (vec) {
-    memory.embedding = vec;
+  const result = await generateEmbeddingWithIdentity(text, memory.userId);
+  if (result) {
+    memory.embedding = result.vector;
+    memory.embeddingNamespace = embeddingNamespace(result);
     try {
       const all = getMemoryStore();
       const existing = all.find(m => m.id === memory.id);
       if (existing) {
-        existing.embedding = vec;
+        existing.embedding = result.vector;
+        existing.embeddingNamespace = embeddingNamespace(result);
         saveMemoryStore(all);
       }
     } catch {}
@@ -536,13 +550,15 @@ export function queryMemories(q: MemoryQuery): Memory[] {
 
 /** Async vector-based semantic search. Falls back to keyword search if embeddings unavailable. */
 export async function queryMemoriesVector(q: MemoryQuery): Promise<Memory[]> {
+  q.signal?.throwIfAborted();
   if (!q.query || !q.useVector) {
     return queryMemories(q);
   }
 
   // Generate query embedding
-  const queryVec = await generateEmbedding(q.query, q.userId);
-  if (!queryVec) {
+  const queryEmbedding = await generateEmbeddingWithIdentity(q.query, q.userId, { signal: q.signal });
+  q.signal?.throwIfAborted();
+  if (!queryEmbedding) {
     // Embeddings unavailable — fall back to keyword search
     return queryMemories({ ...q, useVector: false });
   }
@@ -557,10 +573,14 @@ export async function queryMemoriesVector(q: MemoryQuery): Promise<Memory[]> {
   const ranked = scopedMemories
     .map(m => {
       let score = 0;
-      if (!m.embedding || m.embedding.length === 0 || m.embedding.length !== queryVec.length) {
+      if (!m.embedding || m.embedding.length === 0
+        || m.embedding.length !== queryEmbedding.vector.length
+        || m.embeddingNamespace?.provider !== queryEmbedding.provider
+        || m.embeddingNamespace?.model !== queryEmbedding.model
+        || m.embeddingNamespace?.dimensions !== queryEmbedding.vector.length) {
         score = relevanceScore(q.query!, m);
       } else {
-        const cos = cosineSimilarity(queryVec, m.embedding);
+        const cos = cosineSimilarity(queryEmbedding.vector, m.embedding);
         score = +(cos * m.confidence).toFixed(4);
       }
       if (score > 0) {
@@ -581,7 +601,7 @@ export async function queryMemoriesVector(q: MemoryQuery): Promise<Memory[]> {
 
   const retrievalUserId = q.userId || 'anonymous';
   const rerank = getRerankSelection(retrievalUserId);
-  if (rerank.enabled && scored.length > 1) {
+  if (rerank.enabled && scored.length > 1 && (!isStrictPrivacy() || isProviderLocalOnly(rerank.provider))) {
     try {
       const candidates = scored.slice(0, candidateLimit);
       const ranked = await rerankConfiguredDocuments(
@@ -589,7 +609,9 @@ export async function queryMemoriesVector(q: MemoryQuery): Promise<Memory[]> {
         candidates.map(({ m }) => `${m.type}: ${m.content}\nKeywords: ${m.keywords.join(', ')}`),
         retrievalUserId,
         Math.max(limit, rerank.topN),
+        { signal: q.signal },
       );
+      q.signal?.throwIfAborted();
       const seen = new Set<number>();
       const reordered = ranked.items
         .map(item => {
@@ -602,24 +624,34 @@ export async function queryMemoriesVector(q: MemoryQuery): Promise<Memory[]> {
       markMemoriesRetrieved(result);
       return result;
     } catch (error: any) {
+      q.signal?.throwIfAborted();
       console.warn(`[Memory] Rerank unavailable; preserving vector order: ${error?.message || String(error)}`);
     }
   }
 
+  q.signal?.throwIfAborted();
   const result = scored.slice(0, limit).map(({ m }) => m);
   markMemoriesRetrieved(result);
   return result;
 }
 
-/** Pre-generate embeddings for all existing memories that lack them. One-time migration. */
+/** Explicitly migrate missing, legacy or differently configured vector spaces. */
 export async function backfillEmbeddings(userId?: string): Promise<number> {
   const all = getMemoryStore();
-  const targets = all.filter(m => !m.embedding && (!userId || m.userId === userId));
+  const targets = all.filter(m => {
+    if (userId && m.userId !== userId) return false;
+    const primary = getEmbeddingRoute(m.userId).primary;
+    return !m.embedding || !m.embeddingNamespace
+      || m.embeddingNamespace.provider !== primary.provider
+      || m.embeddingNamespace.model !== primary.model
+      || m.embeddingNamespace.dimensions !== m.embedding.length;
+  });
   let count = 0;
   for (const m of targets) {
-    const vec = await generateEmbedding(`${m.type}: ${m.content} ${m.keywords.join(' ')}`, m.userId);
-    if (vec) {
-      m.embedding = vec;
+    const result = await generateEmbeddingWithIdentity(`${m.type}: ${m.content} ${m.keywords.join(' ')}`, m.userId);
+    if (result) {
+      m.embedding = result.vector;
+      m.embeddingNamespace = embeddingNamespace(result);
       count++;
     }
     // Small delay to avoid rate limits

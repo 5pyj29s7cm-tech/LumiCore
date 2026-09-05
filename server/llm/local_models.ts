@@ -16,6 +16,8 @@ export interface LocalModelConfig {
   nextRetryAt?: string;
   updatedAt?: string;
   lastError?: string;
+  /** Inference health/backoff applies to this model, not every catalog entry. */
+  probedModel?: string;
 }
 
 export interface LocalModelProbeResult extends LocalModelConfig {
@@ -49,7 +51,7 @@ const SETTING_KEYS: Record<LocalModelProvider, string> = {
   lmstudio: 'lmstudio_config',
 };
 const LOCAL_PROBE_TTL_MS = Math.max(2_000, Number(process.env.LUMI_LOCAL_MODEL_PROBE_TTL_MS) || 15_000);
-const probeInFlight = new Map<LocalModelProvider, Promise<LocalModelProbeResult>>();
+const probeInFlight = new Map<string, Promise<LocalModelProbeResult>>();
 const LOCAL_MODEL_MAX_QUEUE = Math.max(1, Math.min(256, Number(process.env.LUMI_LOCAL_MODEL_MAX_QUEUE) || 32));
 const LOCAL_MODEL_QUEUE_TIMEOUT_MS = Math.max(1_000, Math.min(300_000, Number(process.env.LUMI_LOCAL_MODEL_QUEUE_TIMEOUT_MS) || 45_000));
 
@@ -177,19 +179,23 @@ async function acquireQueueSlot(
 export async function runLocalModelInference<T>(
   provider: LocalModelProvider,
   operation: () => Promise<T>,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; model?: string } = {},
 ): Promise<T> {
+  // Capture identity before queueing: another model may update provider health
+  // while this operation is waiting or running.
+  const startingConfig = getLocalModelConfig(provider);
+  const model = options.model || startingConfig.probedModel;
   const release = await acquireQueueSlot(provider, options.signal);
   const state = queueState(provider);
   const startedAt = Date.now();
   try {
     const result = await operation();
     state.completed += 1;
-    markLocalModelHealthy(provider, Date.now() - startedAt);
+    markLocalModelHealthy(provider, Date.now() - startedAt, model, startingConfig.baseUrl);
     return result;
   } catch (error) {
     state.failed += 1;
-    markLocalModelUnhealthy(provider, error);
+    markLocalModelUnhealthy(provider, error, model, startingConfig.baseUrl);
     throw error;
   } finally {
     release();
@@ -292,6 +298,7 @@ export function getLocalModelConfig(provider: LocalModelProvider): LocalModelCon
       nextRetryAt: typeof stored.nextRetryAt === 'string' ? stored.nextRetryAt : undefined,
       updatedAt: typeof stored.updatedAt === 'string' ? stored.updatedAt : undefined,
       lastError: typeof stored.lastError === 'string' ? stored.lastError : undefined,
+      probedModel: typeof stored.probedModel === 'string' ? stored.probedModel : undefined,
     };
   } catch {
     return fallback;
@@ -312,6 +319,7 @@ export function saveLocalModelConfig(provider: LocalModelProvider, config: Local
     ...(config.nextRetryAt ? { nextRetryAt: config.nextRetryAt } : {}),
     updatedAt: config.updatedAt || new Date().toISOString(),
     ...(config.lastError ? { lastError: config.lastError.slice(0, 300) } : {}),
+    ...(config.probedModel ? { probedModel: config.probedModel } : {}),
   };
   let db: any;
   try {
@@ -363,8 +371,8 @@ export async function probeLocalModel(
         .filter((model: unknown): model is string => typeof model === 'string' && model.trim().length > 0);
       const detected = models.some(isTextGenerationModel);
       const requestedProbeModel = String(options.requestedModel || '').trim();
-      const probeModel = requestedProbeModel && models.includes(requestedProbeModel) && isTextGenerationModel(requestedProbeModel)
-        ? requestedProbeModel
+      const probeModel = requestedProbeModel
+        ? (models.includes(requestedProbeModel) && isTextGenerationModel(requestedProbeModel) ? requestedProbeModel : undefined)
         : models.find(isTextGenerationModel);
       if (!detected || !probeModel) {
         return {
@@ -376,7 +384,8 @@ export async function probeLocalModel(
           models,
           updatedAt: new Date().toISOString(),
           latencyMs: Date.now() - startedAt,
-          lastError: 'The service is reachable but no text-generation model is loaded',
+          lastError: requestedProbeModel ? `Requested model "${requestedProbeModel}" is not loaded` : 'The service is reachable but no text-generation model is loaded',
+          probedModel: requestedProbeModel || undefined,
         };
       }
       try {
@@ -391,6 +400,7 @@ export async function probeLocalModel(
           updatedAt: new Date().toISOString(),
           lastInferenceAt: new Date().toISOString(),
           lastInferenceLatencyMs: inferenceLatencyMs,
+          probedModel: probeModel,
           consecutiveFailures: 0,
           latencyMs: Date.now() - startedAt,
         };
@@ -409,6 +419,7 @@ export async function probeLocalModel(
           consecutiveFailures: 1,
           latencyMs: Date.now() - startedAt,
           lastError: message.slice(0, 300),
+          probedModel: probeModel,
         };
       }
     } catch (error: any) {
@@ -440,7 +451,8 @@ export async function refreshLocalModelConfig(
     ? { ...result, models: current.models }
     : result;
   if (!durableResult.detected) {
-    const failureCount = Math.max(1, Number(current.consecutiveFailures || 0) + 1);
+    const sameFailureScope = !durableResult.serviceReachable || durableResult.probedModel === current.probedModel;
+    const failureCount = sameFailureScope ? Math.max(1, Number(current.consecutiveFailures || 0) + 1) : 1;
     const delayMs = Math.min(30_000, 1_000 * (2 ** Math.min(failureCount - 1, 5)));
     durableResult = {
       ...durableResult,
@@ -469,12 +481,14 @@ export async function ensureLocalModelReady(
   let config = getLocalModelConfig(provider);
   const requested = String(requestedModel || '').trim();
   const retryAt = Date.parse(config.nextRetryAt || '');
-  if (!options.force && !config.detected && Number.isFinite(retryAt) && retryAt > Date.now()) {
+  const backoffApplies = !config.serviceReachable || !requested || config.probedModel === requested;
+  if (!options.force && !config.detected && backoffApplies && Number.isFinite(retryAt) && retryAt > Date.now()) {
     throw new Error(`${provider} reconnect is backing off until ${config.nextRetryAt}: ${config.lastError || 'local model unavailable'}`);
   }
   let probed = false;
   const probe = async (): Promise<LocalModelProbeResult> => {
-    let pending = probeInFlight.get(provider);
+    const probeKey = JSON.stringify([provider, config.baseUrl, requested]);
+    let pending = probeInFlight.get(probeKey);
     if (!pending) {
       pending = refreshLocalModelConfig(provider, config.baseUrl, {
         timeoutMs: options.timeoutMs || 5_000,
@@ -482,14 +496,16 @@ export async function ensureLocalModelReady(
         requestedModel: requested,
         fetchImpl: options.fetchImpl,
       }).finally(() => {
-        probeInFlight.delete(provider);
+        probeInFlight.delete(probeKey);
       });
-      probeInFlight.set(provider, pending);
+      probeInFlight.set(probeKey, pending);
     }
     probed = true;
     return pending;
   };
-  if (options.force || !configIsFresh(config)) {
+  const healthApplies = !requested || config.probedModel === requested
+    || (!config.probedModel && config.models.filter(isTextGenerationModel).length === 1 && config.models.includes(requested));
+  if (options.force || !configIsFresh(config) || !healthApplies) {
     config = await probe();
   }
   if (!config.detected) {
@@ -508,20 +524,22 @@ export async function ensureLocalModelReady(
   if (requested && !textModels.includes(requested)) {
     throw new Error(`${provider} model "${requested}" is not loaded. Available text models: ${textModels.join(', ') || 'none'}`);
   }
-  const model = requested || textModels[0];
+  const model = requested || config.probedModel || textModels[0];
   if (!model) throw new Error(`${provider} is reachable but no text-generation model is loaded`);
   return { provider, model, baseUrl: config.baseUrl };
 }
 
-export function markLocalModelUnhealthy(provider: LocalModelProvider, error: unknown): void {
+export function markLocalModelUnhealthy(provider: LocalModelProvider, error: unknown, model?: string, baseUrl?: string): void {
   const message = String((error as any)?.message || error || 'Local model call failed');
   if ((error as any)?.name === 'AbortError' || /abort|cancelled by user/i.test(message)) return;
   const current = getLocalModelConfig(provider);
-  const consecutiveFailures = Math.max(1, Number(current.consecutiveFailures || 0) + 1);
+  if (baseUrl && current.baseUrl !== baseUrl) return;
+  const consecutiveFailures = model === current.probedModel ? Math.max(1, Number(current.consecutiveFailures || 0) + 1) : 1;
   const baseDelayMs = Math.min(30_000, 1_000 * (2 ** Math.min(consecutiveFailures - 1, 5)));
   const jitterMs = Math.floor(Math.random() * Math.min(500, baseDelayMs * 0.2));
   saveLocalModelConfig(provider, {
     ...current,
+    probedModel: model,
     detected: false,
     inferenceHealthy: false,
     healthStatus: 'backoff',
@@ -532,10 +550,12 @@ export function markLocalModelUnhealthy(provider: LocalModelProvider, error: unk
   });
 }
 
-export function markLocalModelHealthy(provider: LocalModelProvider, latencyMs?: number): void {
+export function markLocalModelHealthy(provider: LocalModelProvider, latencyMs?: number, model?: string, baseUrl?: string): void {
   const current = getLocalModelConfig(provider);
+  if (baseUrl && current.baseUrl !== baseUrl) return;
   saveLocalModelConfig(provider, {
     ...current,
+    probedModel: model,
     detected: true,
     serviceReachable: true,
     inferenceHealthy: true,

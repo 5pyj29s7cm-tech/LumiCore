@@ -111,6 +111,7 @@ describe('knowledge retrieval model routing', () => {
       confidence: 0.9,
       sourceInteractionId: 'contract-guide.md',
       embedding: [1, 0],
+      embeddingNamespace: { provider: 'siliconflow', model: 'Qwen/Qwen3-Embedding-0.6B', dimensions: 2 },
     }, { agentId: 'lumi', tier: 'internalized', source: 'import' });
     addMemory({
       userId: 'semantic-memory-user',
@@ -120,6 +121,7 @@ describe('knowledge retrieval model routing', () => {
       confidence: 0.9,
       sourceInteractionId: 'studio-guide.md',
       embedding: [0, 1],
+      embeddingNamespace: { provider: 'siliconflow', model: 'Qwen/Qwen3-Embedding-0.6B', dimensions: 2 },
     }, { agentId: 'lumi', tier: 'internalized', source: 'import' });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,

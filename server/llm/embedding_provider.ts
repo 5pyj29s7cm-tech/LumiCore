@@ -6,6 +6,8 @@ import {
 } from './retrieval_model_preferences';
 import { relayApiKey } from '../relay/config';
 import { officialApiModel, officialApiPath, officialApiRequest } from './official_api';
+import { requireLocalProvider } from '../config/privacy';
+import { runRetrievalRequest } from './retrieval_request';
 
 type EmbeddingSelection = Pick<EmbeddingModelSelection, 'provider' | 'model'>;
 
@@ -35,23 +37,21 @@ function usableVector(value: unknown): number[] | null {
   return vector.every(Number.isFinite) ? vector : null;
 }
 
-async function fetchJson(url: string, init: RequestInit, timeoutMs = 10_000): Promise<any> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, { ...init, signal: controller.signal });
+async function fetchJson(url: string, init: RequestInit, callerSignal?: AbortSignal): Promise<any> {
+  return runRetrievalRequest(async signal => {
+    const response = await fetch(url, { ...init, signal });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
       throw new Error(String(body?.error?.message || body?.message || `Embedding request failed (${response.status})`).slice(0, 300));
     }
     return body;
-  } finally {
-    clearTimeout(timeout);
-  }
+  }, callerSignal, 10_000);
 }
 
-async function runEmbedding(selection: EmbeddingSelection, text: string): Promise<EmbeddingResult> {
+async function runEmbedding(selection: EmbeddingSelection, text: string, signal?: AbortSignal): Promise<EmbeddingResult> {
+  signal?.throwIfAborted();
   const provider = selection.provider;
+  requireLocalProvider(provider);
   const model = provider === 'relay'
     ? officialApiModel('RELAY_EMBEDDING_MODEL', selection.model.trim())
     : selection.model.trim();
@@ -68,10 +68,10 @@ async function runEmbedding(selection: EmbeddingSelection, text: string): Promis
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, input }),
-    });
+    }, signal);
     const vector = usableVector(body?.embeddings?.[0] || body?.embedding);
     if (!vector) throw new Error('Ollama returned no embedding vector');
-    return { provider, model, vector };
+    return { provider, model: typeof body.model === 'string' && body.model.trim() ? body.model.trim() : model, vector };
   }
 
   const providerConfig: Record<string, { key: string; baseUrl: string }> = {
@@ -109,7 +109,7 @@ async function runEmbedding(selection: EmbeddingSelection, text: string): Promis
   // Keep the official lane on the shared transport so timeout, URL-origin,
   // bearer-header and redacted-error rules are identical across roles.
   const body = provider === 'relay'
-    ? (await officialApiRequest<any>(officialApiPath(
+    ? (await runRetrievalRequest(requestSignal => officialApiRequest<any>(officialApiPath(
       ['RELAY_EMBEDDINGS_PATH', 'RELAY_EMBEDDING_PATH'],
       '/embeddings',
     ), {
@@ -118,15 +118,16 @@ async function runEmbedding(selection: EmbeddingSelection, text: string): Promis
       // ModelDepot documents embedding input as an array. Do not collapse it
       // to a scalar just because other compatibility providers accept one.
       body: JSON.stringify({ model, input: [input] }),
-    })).body
+      signal: requestSignal,
+    }), signal, 60_000)).body
     : await fetchJson(compatibleEmbeddingEndpoint(config.baseUrl), {
       method: 'POST',
       headers,
       body: JSON.stringify({ model, input }),
-    });
+    }, signal);
   const vector = usableVector(body?.data?.[0]?.embedding || body?.embedding);
   if (!vector) throw new Error(`${provider} returned no embedding vector`);
-  return { provider, model, vector };
+  return { provider, model: typeof body.model === 'string' && body.model.trim() ? body.model.trim() : model, vector };
 }
 
 export function getEmbeddingRoute(userId = 'anonymous'): EmbeddingRoute {
@@ -138,17 +139,19 @@ export function getEmbeddingRoute(userId = 'anonymous'): EmbeddingRoute {
       }
     : undefined;
   return {
-    primary: { provider: preferences.provider, model: preferences.model },
+    primary: { provider: preferences.provider, model: preferences.provider === 'relay'
+      ? officialApiModel('RELAY_EMBEDDING_MODEL', preferences.model) : preferences.model },
     fallback,
   };
 }
 
-export async function generateConfiguredEmbedding(text: string, userId = 'anonymous'): Promise<EmbeddingResult> {
+export async function generateConfiguredEmbedding(text: string, userId = 'anonymous', options: { signal?: AbortSignal } = {}): Promise<EmbeddingResult> {
   const route = getEmbeddingRoute(userId);
   try {
-    return await runEmbedding(route.primary, text);
+    return await runEmbedding(route.primary, text, options.signal);
   } catch (primaryError) {
+    options.signal?.throwIfAborted();
     if (!route.fallback) throw primaryError;
-    return runEmbedding(route.fallback, text);
+    return runEmbedding(route.fallback, text, options.signal);
   }
 }

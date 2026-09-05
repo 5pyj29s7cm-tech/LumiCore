@@ -505,6 +505,7 @@ describe('reasoning model switching stability', () => {
     await local.refreshLocalModelConfig('ollama', 'http://127.0.0.1:9', { timeoutMs: 500 });
     const runtime = createLLMRuntime();
 
+    const firstRequestIndex = requestedModels.length;
     prefs.upsertUserPreferredLLM('switch-user', { provider: 'lmstudio', model: 'lm-alpha' });
     const first = prefs.getUserPreferredLLMConfig('switch-user');
     const firstResult = await providers.makeLLMCall(
@@ -513,6 +514,7 @@ describe('reasoning model switching stability', () => {
       runtime.getOllama, runtime.getLmStudio, runtime.getArk, runtime.getXiaomi, runtime.getKimi, runtime.getGlm, runtime.getRelay,
     );
 
+    const secondRequestIndex = requestedModels.length;
     prefs.upsertUserPreferredLLM('switch-user', { provider: 'lmstudio', model: 'lm-beta' });
     const second = prefs.getUserPreferredLLMConfig('switch-user');
     const secondResult = await providers.makeLLMCall(
@@ -523,7 +525,10 @@ describe('reasoning model switching stability', () => {
 
     expect(firstResult.text).toBe('local:lm-alpha');
     expect(secondResult.text).toBe('local:lm-beta');
-    expect(requestedModels.slice(-2)).toEqual(['lm-alpha', 'lm-beta']);
+    // Readiness probes use the same endpoint as chat. Each selection may send
+    // both, and every request in its window must use the selected model.
+    expect([...new Set(requestedModels.slice(firstRequestIndex, secondRequestIndex))]).toEqual(['lm-alpha']);
+    expect([...new Set(requestedModels.slice(secondRequestIndex))]).toEqual(['lm-beta']);
   });
 
   it('re-probes a healthy local runtime when the newly selected model is absent from the fresh cache', async () => {
