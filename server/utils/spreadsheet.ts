@@ -146,7 +146,7 @@ export function prepareSpreadsheetRows(headers: string[] = [], data: any[] = [])
     rows: data.map(row => {
       if (Array.isArray(row)) return row;
       if (!row || typeof row !== 'object') throw new Error('Spreadsheet data rows must be arrays or objects.');
-      return keys.map(key => row[key] ?? null);
+      return keys.map(key => Object.prototype.hasOwnProperty.call(row, key) ? row[key] ?? null : null);
     }),
   };
 }

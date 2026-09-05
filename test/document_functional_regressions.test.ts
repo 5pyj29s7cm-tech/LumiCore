@@ -6,6 +6,8 @@ import { initDatabase } from '../db_layer';
 import { getGeneratedOutputDir } from '../server/config/data_path';
 import { ToolRegistry } from '../server/tools/registry';
 import { registerDocumentTools } from '../server/tools/definitions/document_tools';
+import { executeToolCall } from '../server/tools/execution_engine';
+import { formatToolRecordForModel } from '../server/llm/adapter';
 import { loadXlsxWorkbook, worksheetToCsvPage } from '../server/utils/spreadsheet';
 import { transcribeAudioFile } from '../server/stt/file_transcription';
 
@@ -58,13 +60,30 @@ describe('document functionality regressions', () => {
     expect(sheet.getRow(3).values.slice(1)).toEqual(['B', 5]);
   });
 
-  it('pages a named sheet without silently dropping or cutting records', async () => {
+  it('treats missing prototype-named fields as blank while retaining own JSON fields', async () => {
+    const data = JSON.parse('[{"sku":"A"},{"sku":"B","__proto__":"own prototype field","constructor":"own constructor field"}]');
+    const created = await run('create_xlsx', { sheets: [{ name: 'OwnFields', headers: ['sku', '__proto__', 'constructor'], data }] });
+    const modified = await run('modify_xlsx', { filePath: created.path, operations: [{ addSheet: true, sheet: 'InferredFields', data }] });
+    const workbook = await loadXlsxWorkbook(modified.path);
+    for (const name of ['OwnFields', 'InferredFields']) {
+      const sheet = workbook.getWorksheet(name);
+      expect(sheet.getCell('B2').value).toBeNull();
+      expect(sheet.getCell('C2').value).toBeNull();
+      expect(sheet.getRow(3).values.slice(1)).toEqual(['B', 'own prototype field', 'own constructor field']);
+    }
+  });
+
+  it('keeps every named-sheet record visible through model formatting and continuation', async () => {
     const data = Array.from({ length: 421 }, (_, i) => [`record-${i}`, 'complete field '.repeat(5)]);
     const created = await run('create_xlsx', { sheets: [{ name: 'Long', headers: ['id', 'description'], data }] });
     let startRow = 1;
     const pages: string[] = [];
     for (let page = 0; page < 10; page++) {
-      const text = await registry.execute('read_xlsx', { filePath: created.path, sheetName: 'Long', startRow, maxRows: 200 }, context);
+      const record = await executeToolCall({ registry, name: 'read_xlsx', arguments: { filePath: created.path, sheetName: 'Long', startRow, maxRows: 200 }, context });
+      expect(record.error).toBeUndefined();
+      const text = formatToolRecordForModel(record);
+      expect(text).toContain(record.result);
+      expect(text).not.toContain('compacted for model context');
       pages.push(text);
       const next = text.match(/Continue with startRow=(\d+)/);
       if (!next) break;
@@ -80,6 +99,26 @@ describe('document functionality regressions', () => {
     expect(pages.at(-1)).not.toContain('[Truncated:');
     expect(await registry.execute('read_xlsx', { filePath: created.path, sheetName: 'Long', startRow: 1000 }, context)).toContain('No rows in this range');
     expect(await registry.execute('read_xlsx', { filePath: created.path, sheetName: 'Long', startRow: Infinity, maxRows: NaN }, context)).toContain('Rows 1-');
+  });
+
+  it('warns when one oversized row cannot fit model context and offers a complete CSV export', async () => {
+    const largeValue = `row-start-${'x'.repeat(20000)}-row-end`;
+    const created = await run('create_xlsx', { sheets: [{ name: 'Oversized', data: [[largeValue], ['later-record']] }] });
+    const record = await executeToolCall({ registry, name: 'read_xlsx', arguments: { filePath: created.path, sheetName: 'Oversized' }, context });
+    expect(record.error).toBeUndefined();
+    expect(record.result).toContain(largeValue);
+    const text = formatToolRecordForModel(record);
+    expect(text).toContain('[Incomplete spreadsheet content:');
+    expect(text).toContain('not fully included in model context');
+    expect(text).toContain('xlsx_to_csv');
+    expect(text).toContain('Continue with startRow=2');
+    expect(text).toContain('row-start-');
+    expect(text).toContain('-row-end');
+    expect(text).not.toContain(largeValue);
+    const exported = await run('xlsx_to_csv', { filePath: created.path, sheetName: 'Oversized' });
+    const csv = fs.readFileSync(exported.path, 'utf8');
+    expect(csv).toContain(largeValue);
+    expect(csv).toContain('later-record');
   });
 
   it('visits only the requested rows and keeps an oversized first row intact', () => {

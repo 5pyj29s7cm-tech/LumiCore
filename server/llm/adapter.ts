@@ -159,6 +159,9 @@ const TOOL_RESULT_LIMITS: Record<string, number> = {
   read_files_batch: 7_000,
   extract_document_text: 8_000,
   read_docx: 6_000,
+  // Named worksheet pages contain at most 10,000 CSV characters, except for
+  // an oversized single row. Keep normal pages and their continuation intact.
+  read_xlsx: 12_000,
   read_pdf: 6_000,
   ocr_image_file: 6_000,
   floorplan_extract_geometry: 8_000,
@@ -668,6 +671,12 @@ function compactStringForModel(value: string, limit: number, label: string): str
 
 export function compactToolResultForModel(toolName: string, value: string): string {
   const limit = TOOL_RESULT_LIMITS[toolName] || DEFAULT_TOOL_RESULT_MODEL_LIMIT;
+  if (toolName === 'read_xlsx' && value.length > limit) {
+    return [
+      '[Incomplete spreadsheet content: an oversized row or page was not fully included in model context. Do not treat it as completely read. The continuation advances to later rows; it does not recover the omitted content. Use xlsx_to_csv with the same filePath and sheetName to export the complete worksheet to a CSV file, then inspect or process that file.]',
+      compactStringForModel(value, limit, 'Spreadsheet content'),
+    ].join('\n');
+  }
   return compactStringForModel(value, limit, 'Tool result');
 }
 
