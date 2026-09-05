@@ -10,6 +10,7 @@ import { getVoicePreference } from '../config/voice_preference';
 import { recordLatency } from '../monitor/latency_store';
 import { isCircuitClosed, isCircuitHealthy, recordFailure, recordSuccess } from '../cloud/circuit_breaker';
 import { relayConfigured } from '../relay/config';
+import { isStrictPrivacy, requireNotStrict } from '../config/privacy';
 
 type StreamingSTTProvider = 'qwen' | 'ark' | 'relay';
 
@@ -42,6 +43,7 @@ export async function transcribe(audioBuffer: Buffer, config: STTConfig): Promis
   if (!effectiveProvider) {
     throw new Error('No STT provider configured. Configure local Whisper, DashScope, OpenAI Whisper, or Doubao Speech.');
   }
+  if (effectiveProvider !== 'local-whisper') requireNotStrict('Cloud speech recognition');
 
   let result: STTResult;
   switch (effectiveProvider) {
@@ -89,6 +91,7 @@ export async function transcribe(audioBuffer: Buffer, config: STTConfig): Promis
 export function createStreamingSession(
   config: STTConfig,
 ): StreamingSTTSession {
+  requireNotStrict('Cloud streaming speech recognition');
   const sessionConfig = resolveSessionConfig(config);
   const provider = sessionConfig.provider;
   if (provider === 'qwen') {
@@ -111,7 +114,7 @@ export interface ResilientStreamingSessionOptions {
   onRecovered?: (details: { attempt: number }) => void;
 }
 
-const NON_RECOVERABLE_STT_ERROR = /(?:api.?key|access.?token|not configured|auth|unauthori[sz]ed|forbidden|quota|circuit open|not supported)/i;
+const NON_RECOVERABLE_STT_ERROR = /(?:api.?key|access.?token|not configured|auth|unauthori[sz]ed|forbidden|quota|circuit open|not supported|\[Privacy\])/i;
 
 export function isRecoverableStreamingSTTError(error: Error): boolean {
   return !NON_RECOVERABLE_STT_ERROR.test(error.message || '');
@@ -126,6 +129,7 @@ export function createResilientStreamingSession(
   config: STTConfig,
   options: ResilientStreamingSessionOptions = {},
 ): StreamingSTTSession {
+  requireNotStrict('Cloud streaming speech recognition');
   const reconnectDelaysMs = options.reconnectDelaysMs ?? [250, 750, 2_000];
   const maxPendingChunks = Math.max(1, options.maxPendingChunks ?? 32);
   const factory = options.createSession ?? createStreamingSession;
@@ -246,6 +250,7 @@ export function createResilientStreamingSession(
 }
 
 export function getActiveSTTProvider(options: { requireHealthy?: boolean } = {}): STTProvider | null {
+  if (isStrictPrivacy()) return localWhisper.isLocalWhisperAvailable() ? 'local-whisper' : null;
   const pref = getVoicePreference();
   const available = options.requireHealthy ? isCircuitHealthy : isCircuitClosed;
   const hasDoubao = arkStream.hasDoubaoSpeech();
@@ -271,6 +276,9 @@ export function getActiveSTTProvider(options: { requireHealthy?: boolean } = {})
 }
 
 export function getActiveStreamingSTTProvider(options: { requireHealthy?: boolean } = {}): StreamingSTTProvider | null {
+  // All current streaming providers use a cloud service. Batch local Whisper
+  // remains available without opening or reconnecting a microphone upload.
+  if (isStrictPrivacy()) return null;
   const pref = getVoicePreference();
   const available = options.requireHealthy ? isCircuitHealthy : isCircuitClosed;
   const qwenKey = hasQwenKey();

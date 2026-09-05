@@ -4995,7 +4995,9 @@ export function registerChatHandler(
       const publicError = sanitizeChatAgentErrorPayload({
         code: chatPublicErrorCodeForException(error),
       });
-      const failureText = publicError.code === 'CHAT_MODEL_ROUTES_UNAVAILABLE'
+      const failureText = publicError.code === 'CHAT_PRIVACY_RESTRICTED'
+        ? CN_VOICE_WORK_MESSAGES.privacyRestricted
+        : publicError.code === 'CHAT_MODEL_ROUTES_UNAVAILABLE'
         ? CN_VOICE_WORK_MESSAGES.modelRoutesUnavailable
         : CN_VOICE_WORK_MESSAGES.processingFailed;
       await commitDeterministicTerminal({

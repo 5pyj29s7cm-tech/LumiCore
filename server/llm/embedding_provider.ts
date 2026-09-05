@@ -6,7 +6,7 @@ import {
 } from './retrieval_model_preferences';
 import { relayApiKey } from '../relay/config';
 import { officialApiModel, officialApiPath, officialApiRequest } from './official_api';
-import { requireLocalProvider } from '../config/privacy';
+import { requireLocalProvider, isStrictPrivacy, requireLocalEndpoint } from '../config/privacy';
 import { runRetrievalRequest } from './retrieval_request';
 
 type EmbeddingSelection = Pick<EmbeddingModelSelection, 'provider' | 'model'>;
@@ -38,8 +38,9 @@ function usableVector(value: unknown): number[] | null {
 }
 
 async function fetchJson(url: string, init: RequestInit, callerSignal?: AbortSignal): Promise<any> {
+  requireLocalEndpoint(url, 'Embedding model');
   return runRetrievalRequest(async signal => {
-    const response = await fetch(url, { ...init, signal });
+    const response = await fetch(url, { ...init, signal, ...(isStrictPrivacy() ? { redirect: 'error' as const } : {}) });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
       throw new Error(String(body?.error?.message || body?.message || `Embedding request failed (${response.status})`).slice(0, 300));

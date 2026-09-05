@@ -8,6 +8,7 @@
  * Endpoint paths are overridable for a deployment whose gateway exposes a
  * namespaced route, while the defaults follow the OpenAI-compatible contract.
  */
+import { requireNotStrict } from '../config/privacy';
 import {
   relayApiKey,
   relayBaseUrl,
@@ -173,6 +174,7 @@ export async function officialApiRequest<T = any>(
   path: string,
   options: OfficialApiRequestOptions = {},
 ): Promise<OfficialApiResponse<T>> {
+  requireNotStrict('Official API');
   const fetchImpl = options.fetchImpl || fetch;
   const timeoutMs = Number.isFinite(Number(options.timeoutMs)) && Number(options.timeoutMs) > 0
     ? Math.max(1_000, Math.trunc(Number(options.timeoutMs)))
@@ -278,6 +280,7 @@ export async function officialApiBinary(
   pathOrUrl: string,
   options: OfficialApiRequestOptions = {},
 ): Promise<Response> {
+  requireNotStrict('Official API media');
   const fetchImpl = options.fetchImpl || fetch;
   const absolute = /^https?:\/\//i.test(pathOrUrl);
   const url = absolute ? pathOrUrl : officialApiUrl(pathOrUrl);

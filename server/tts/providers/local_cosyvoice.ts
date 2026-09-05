@@ -1,4 +1,5 @@
 import { TTSResult, VoiceListItem } from '../types';
+import { isStrictPrivacy, requireLocalEndpoint } from '../../config/privacy';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:50000';
 const DEFAULT_SFT_PATH = '/inference_sft';
@@ -26,6 +27,7 @@ function getDefaultSpeaker(): string {
 }
 
 export function isConfigured(): boolean {
+  try { requireLocalEndpoint(endpointUrl(), 'Local CosyVoice'); } catch { return false; }
   return Boolean(
     process.env.LOCAL_COSYVOICE_ENABLED === 'true'
     || process.env.LOCAL_COSYVOICE_API_URL
@@ -164,7 +166,8 @@ async function resolveJsonAudio(json: any, signal?: AbortSignal): Promise<TTSRes
   }
 
   if (/^https?:\/\//i.test(audio)) {
-    const audioRes = await fetch(audio, { signal });
+    requireLocalEndpoint(audio, 'Local CosyVoice audio download');
+    const audioRes = await fetch(audio, { signal, ...(isStrictPrivacy() ? { redirect: 'error' as const } : {}) });
     if (!audioRes.ok) {
       throw new Error(`Local CosyVoice audio download failed (${audioRes.status})`);
     }
@@ -194,6 +197,8 @@ export async function synthesizeSpeech(
   volume?: number,
   model?: string,
 ): Promise<TTSResult> {
+  const endpoint = endpointUrl();
+  requireLocalEndpoint(endpoint, 'Local CosyVoice speech synthesis');
   if (!isConfigured()) {
     throw new Error(
       'Local CosyVoice is not configured. Set LOCAL_COSYVOICE_ENABLED=true and run a local CosyVoice server, or set LOCAL_COSYVOICE_API_URL.',
@@ -201,17 +206,19 @@ export async function synthesizeSpeech(
   }
 
   const officialFastApi = getTtsPath().includes('inference_');
-  const res = await fetch(endpointUrl(), officialFastApi
+  const res = await fetch(endpoint, officialFastApi
     ? {
       method: 'POST',
       body: buildOfficialFormBody(text, voiceId, speechRate, pitch, volume, model),
       signal,
+      ...(isStrictPrivacy() ? { redirect: 'error' as const } : {}),
     }
     : {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(buildRequestBody(text, voiceId, speechRate, pitch, volume, model)),
       signal,
+      ...(isStrictPrivacy() ? { redirect: 'error' as const } : {}),
     });
 
   if (!res.ok) {

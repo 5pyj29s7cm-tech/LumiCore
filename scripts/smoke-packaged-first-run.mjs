@@ -239,6 +239,28 @@ async function main() {
       [DESKTOP_SESSION_HEADER]: bootstrap.desktopSessionProof,
     };
 
+    const privacy = await fetchJson(`${baseUrl}/privacy`, { headers: authHeaders, timeoutMs: 8000 });
+    const expectedPrivacy = env.LUMI_PRIVACY === 'strict' ? 'strict' : 'standard';
+    if (privacy.mode !== expectedPrivacy || privacy.configuredMode !== expectedPrivacy
+      || privacy.restartRequired || privacy.locked !== (expectedPrivacy === 'strict') || !privacy.canManage) {
+      throw new Error('Packaged privacy settings did not match the isolated startup policy.');
+    }
+    if (!privacy.locked) {
+      const saveMode = mode => fetchJson(`${baseUrl}/privacy`, {
+        method: 'PUT', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }), timeoutMs: 8000,
+      });
+      const pending = await saveMode('strict');
+      if (pending.mode !== 'standard' || pending.configuredMode !== 'strict' || !pending.restartRequired) {
+        throw new Error('Saving privacy mode did not retain the active policy until restart.');
+      }
+      const restored = await saveMode('standard');
+      if (restored.mode !== 'standard' || restored.configuredMode !== 'standard' || restored.restartRequired) {
+        throw new Error('Privacy smoke could not restore its isolated default preference.');
+      }
+    }
+    console.log(`[packaged-smoke] Privacy: ${privacy.mode}; locked=${privacy.locked}; persistence checked=${!privacy.locked}`);
+
     const marketplace = await fetchJson(`${baseUrl}/marketplace/skills?lang=zh`, { timeoutMs: 8000 });
     const bundledSkillCount = (await fs.readdir(bundledSkillsDir, { withFileTypes: true }))
       .filter(entry => entry.isDirectory() && existsSync(path.join(bundledSkillsDir, entry.name, 'package.json')))

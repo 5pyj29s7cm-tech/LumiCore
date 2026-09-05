@@ -1,4 +1,5 @@
 import { readDB, writeDB } from '../../db_layer';
+import { isStrictPrivacy, requireLocalEndpoint } from '../config/privacy';
 import { resetCircuit } from '../cloud/circuit_breaker';
 
 export type LocalModelProvider = 'ollama' | 'lmstudio';
@@ -251,7 +252,9 @@ async function probeLocalInference(
         max_tokens: 2,
         temperature: 0,
       };
+  requireLocalEndpoint(baseUrl, 'Local language model probe');
   const response = await fetchImpl(`${baseUrl}${endpoint}`, {
+    ...(isStrictPrivacy() ? { redirect: 'error' as const } : {}),
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -359,7 +362,8 @@ export async function probeLocalModel(
 
   for (const baseUrl of candidates) {
     try {
-      const response = await fetchImpl(`${baseUrl}${path}`, { signal: AbortSignal.timeout(timeoutMs) });
+      requireLocalEndpoint(baseUrl, 'Local language model catalog');
+      const response = await fetchImpl(`${baseUrl}${path}`, { signal: AbortSignal.timeout(timeoutMs), ...(isStrictPrivacy() ? { redirect: 'error' as const } : {}) });
       if (!response.ok) {
         lastError = `HTTP ${response.status}`;
         continue;

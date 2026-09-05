@@ -1,4 +1,5 @@
 import type { TTSResult, VoiceListItem } from '../types';
+import { requireNotStrict } from '../../config/privacy';
 import {
   officialApiBinary,
   officialApiModel,
@@ -72,6 +73,7 @@ export async function synthesizeSpeech(
   _volume?: number,
   model?: string,
 ): Promise<TTSResult> {
+  requireNotStrict('Official API speech synthesis');
   // An explicit role selection is snapshotted by the adapter; env config is
   // only the fallback for legacy installs without a persisted model choice.
   const resolvedModel = normalizeLumiOfficialModel(

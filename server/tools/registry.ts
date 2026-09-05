@@ -1,3 +1,4 @@
+import { isStrictPrivacy, requireNotStrict } from '../config/privacy';
 import {
   CapabilityAdapterContract,
   CapabilityLane,
@@ -908,6 +909,7 @@ export class ToolRegistry {
     type: 'function';
     function: { name: string; description: string; parameters: Record<string, any> };
   }> {
+    if (isStrictPrivacy()) return [];
     return this.list().filter(tool => isToolVisibleToModelContext(tool, options?.context)).map(t => ({
       type: 'function' as const,
       function: {
@@ -972,6 +974,7 @@ export class ToolRegistry {
 
   /** Resolve effective security level for a tool given a personality's policy */
   resolveSecurity(toolName: string, policy?: ToolPolicy): EffectiveSecurity {
+    if (isStrictPrivacy()) return { level: 'forbidden', reason: 'Strict privacy pauses automatic tool execution' };
     const tool = this.get(toolName);
     const builtIn: SecurityLevel = tool?.securityLevel || 'confirm';
     const semanticToolName = String(tool?.semanticToolName || toolName);
@@ -1018,6 +1021,9 @@ export class ToolRegistry {
   }
 
   async execute(name: string, args: Record<string, any>, context?: ToolContext): Promise<string> {
+    // Tools can invoke browsers, MCP servers and child processes. Side-effect
+    // labels alone cannot prove that their execution stays on this computer.
+    requireNotStrict('Automatic tool execution');
     const finishMetric = beginToolMetric(name);
     const tool = this.get(name);
     if (!tool) {

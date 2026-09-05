@@ -5,7 +5,13 @@
 # First run auto-installs faster-whisper if not present.
 # Model (~500MB) caches to $WHISPER_MODEL_DIR or ../data/whisper_models/
 
-import os, sys, subprocess, json, site, inspect
+import os, sys, subprocess, json, site, inspect, importlib.util
+
+STRICT_PRIVACY = os.environ.get("LUMI_PRIVACY") == "strict"
+if STRICT_PRIVACY:
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 
 MODEL_PLAN = [item.strip() for item in os.environ.get("LUMI_WHISPER_MODEL", "large-v3,medium,small").split(",") if item.strip()]
 DEVICE = os.environ.get("LUMI_WHISPER_DEVICE", "cpu").lower()
@@ -27,6 +33,8 @@ def ensure_deps():
         from faster_whisper import WhisperModel
         return WhisperModel
     except ImportError:
+        if STRICT_PRIVACY:
+            raise RuntimeError("[Privacy] Install faster-whisper before using strict mode; automatic installation is disabled.")
         print("[local_whisper] Installing faster-whisper (one-time)...", file=sys.stderr)
         subprocess.check_call([sys.executable, "-m", "pip", "install", "faster-whisper", "-q"])
         print("[local_whisper] Done.", file=sys.stderr)
@@ -67,6 +75,8 @@ def model_cached(model_dir, model_name):
     return total >= model_cache_min_bytes(model_name)
 
 def should_skip_uncached_model(model_dir, model_name):
+    if STRICT_PRIVACY:
+        return not local_model_ready(model_dir, model_name)
     name = model_name.lower()
     if model_cached(model_dir, model_name):
         return False
@@ -74,7 +84,22 @@ def should_skip_uncached_model(model_dir, model_name):
         return False
     return not ALLOW_HIGH_ACCURACY_DOWNLOAD
 
+def local_model_ready(model_dir, model_name):
+    def complete(directory):
+        return all(os.path.isfile(os.path.join(directory, filename)) for filename in ("model.bin", "config.json"))
+    if os.path.isdir(model_name):
+        return complete(model_name)
+    repository = model_name if "/" in model_name else f"Systran/faster-whisper-{model_name}"
+    snapshots = os.path.join(model_dir, "models--" + repository.replace("/", "--"), "snapshots")
+    if not os.path.isdir(snapshots):
+        return False
+    return any(complete(os.path.join(snapshots, revision)) for revision in os.listdir(snapshots))
+
 def main():
+    if len(sys.argv) == 2 and sys.argv[1] == "--check-available":
+        model_dir = os.environ.get("WHISPER_MODEL_DIR", "")
+        ready = importlib.util.find_spec("faster_whisper") is not None and any(local_model_ready(model_dir, name) for name in MODEL_PLAN)
+        sys.exit(0 if ready else 1)
     if len(sys.argv) < 2:
         print("Usage: python local_whisper.py <wav_file>", file=sys.stderr)
         sys.exit(1)
@@ -113,12 +138,12 @@ def main():
         print(f"[local_whisper] Loading model '{model_name}' ({requested_device}/{requested_compute}) from {model_dir}...", file=sys.stderr)
         try:
             try:
-                model = WhisperModel(model_name, device=requested_device, compute_type=requested_compute, download_root=model_dir)
+                model = WhisperModel(model_name, device=requested_device, compute_type=requested_compute, download_root=model_dir, local_files_only=STRICT_PRIVACY)
             except Exception as exc:
                 if requested_device != "cuda":
                     raise
                 print(f"[local_whisper] CUDA unavailable or incompatible ({exc}); falling back to CPU/int8.", file=sys.stderr)
-                model = WhisperModel(model_name, device="cpu", compute_type="int8", download_root=model_dir)
+                model = WhisperModel(model_name, device="cpu", compute_type="int8", download_root=model_dir, local_files_only=STRICT_PRIVACY)
             transcribe_kwargs = {
                 "language": language,
                 "beam_size": BEAM_SIZE,

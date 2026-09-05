@@ -35,6 +35,7 @@ import { toast } from 'sonner';
 
 import { usePlatform } from '@/hooks/usePlatform';
 import { BiometricsEnrollPanel } from './biometrics/BiometricsEnrollPanel';
+import { PrivacyModeSettings } from './PrivacyModeSettings';
 import { useApp, type AppearanceMode, type OperationMode } from '@/contexts/AppContext';
 import { VoiceProviderSwitch } from './VoiceProviderSwitch';
 import { VoiceDeviceSelector } from './VoiceDeviceSelector';
@@ -265,7 +266,7 @@ export function Settings({
   onSectionChange?: (section: string) => void;
 }) {
   const { platform, isElectron } = usePlatform();
-  const { operationMode, appearanceMode, resolvedAppearanceMode, setAppearanceMode, workDomain, switchDomain } = useApp();
+  const { user, operationMode, appearanceMode, resolvedAppearanceMode, setAppearanceMode, workDomain, switchDomain } = useApp();
   const [providerStatus, setProviderStatus] = useState<Record<string, ProviderRuntimeStatus>>({});
   const [modelConfigurationRevision, setModelConfigurationRevision] = useState(0);
   const visibleSection = activeSection === 'computer' || activeSection === 'messaging'
@@ -422,6 +423,7 @@ export function Settings({
         return (
           <div className="space-y-8">
             <SettingsSection title={t.privacySecurity || uiMessage('settings.privacy-security.901389923c')} icon={<Shield size={18} className="text-celestial-mars" />}>
+              <PrivacyModeSettings locale={lang} workspace={workDomain} sessionId={user?.uid || 'signed-out'} />
               <SettingsItem label={t.localEncryption || uiMessage('settings.local-encryption.48aca1952b')} desc={t.localEncryptionDesc || uiMessage('settings.encrypt-all-agent-data-stored.d88a575c31')} storageKey="lumi_sec_local_encryption" t={t} />
               <SettingsItem label={t.anonymousMode || uiMessage('settings.anonymous-mode.2caa1cc9a5')} desc={t.anonymousModeDesc || uiMessage('settings.hide-your-node-id-from.1679578b38')} storageKey="lumi_sec_anonymous_mode" t={t} />
               <SettingsItem label={t.biometricLock || uiMessage('settings.biometric-lock.6e177df8a6')} desc={t.biometricLockDesc || uiMessage('settings.require-fingerprint-or-face-id.a9f1459524')} storageKey="lumi_sec_biometric_lock" t={t} />

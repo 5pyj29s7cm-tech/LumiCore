@@ -167,6 +167,7 @@ export const CN_VOICE_WORK_MESSAGES = {
   coordinatingTask: (task: string) => `还在继续，正在并行处理${task || '这个任务'}。`,
   continuingTask: (task: string) => `还在继续处理${task || '这个任务'}，没有停。`,
   modelRoutesUnavailable: '当前配置的模型暂时都不可用，这次处理没有完成。检查模型服务或余额后，可以直接重试。',
+  privacyRestricted: '严格模式已停用云端 AI 和自动工具。请选用已就绪的本地模型；如果要恢复官网 API，请到“设置 → 隐私与安全”关闭严格模式，并完全退出后重新启动主程序。',
   processingFailed: '这次没有完成处理，已经停止，你可以直接继续说。',
   processingTimedOut: '这次处理超时，已经停止，不会在后台继续。',
 } as const;

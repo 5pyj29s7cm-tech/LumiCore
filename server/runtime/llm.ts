@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { localPrivacyFetch } from '../config/privacy';
 import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { getKey } from "../config/keys";
@@ -152,6 +153,7 @@ function getOllama() {
   if (!ollama || ollamaSignature !== signature) {
     ollama = new OpenAI({
       apiKey: 'ollama',
+      fetch: localPrivacyFetch,
       baseURL: `${config.baseUrl}/v1`,
     });
     ollamaSignature = signature;
@@ -172,6 +174,7 @@ function getLmStudio() {
   if (!lmstudio || lmstudioSignature !== signature) {
     lmstudio = new OpenAI({
       apiKey: 'lm-studio',
+      fetch: localPrivacyFetch,
       baseURL: `${config.baseUrl}/v1`,
     });
     lmstudioSignature = signature;

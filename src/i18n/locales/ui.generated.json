@@ -6592,8 +6592,8 @@
     "zh": "兼容 OpenAI 的 API 中转服务。请输入代理/中转服务的 Base URL 和 API Key。"
   },
   "settings.our-protocol-strictly-enforces-local.872b7c5677": {
-    "en": "Our protocol strictly enforces local-only processing. Your visual and auditory data streams are never transmitted outside your sovereign mesh node without direct user-signed override.",
-    "zh": "协议默认强制本地处理。没有你的明确确认，视觉和听觉数据流不会离开你的本地主权节点。"
+    "en": "Standard mode may send inputs to configured cloud AI services, including voice and visual processing. Strict mode can be configured under Privacy & Security and takes effect after fully quitting and restarting the application. It restricts cloud AI and automatic tool execution, including local file operations. It does not control other applications' network access.",
+    "zh": "标准模式可能将输入发送给已配置的云端 AI 服务，包括语音与视觉处理。严格模式可在“隐私与安全”中设置，完全退出并重新启动后生效。它限制云端 AI 和自动工具执行，包括本地文件操作，不控制其他程序的网络访问。"
   },
   "settings.permissions-follow-the-three-desktop.5c6e6a2ca1": {
     "en": "Permissions follow the three desktop modes: Chat, Assistant, and Autonomy. Meeting is a separate capture mode and does not create another autonomy level.",

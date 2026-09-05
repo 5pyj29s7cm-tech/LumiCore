@@ -3,6 +3,7 @@
  * Auto-selects: Ark > Qwen. Both streaming; falls back to Qwen if no Ark key.
  */
 import { logger } from '../../logger';
+import { requireNotStrict } from '../config/privacy';
 import { getKey } from '../config/keys';
 import { getVoicePreference } from '../config/voice_preference';
 import { classifyCloudError } from '../cloud/core';
@@ -570,6 +571,9 @@ export function createWakeDetector(
   accessKey?: string,
   echoFilter?: (text: string) => boolean,
 ): WakeDetectorSession {
+  // The socket wake:start handler catches this and emits wake:error. Do not
+  // create an idle cloud stream, retry timer, or buffered audio in strict mode.
+  requireNotStrict('Cloud wake-word detection');
   // Read user STT preference — if explicitly set, honor it
   let userPref: string = 'auto';
   try {

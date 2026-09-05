@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { requireNotStrict } from '../../config/privacy';
 import path from 'path';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'module';
@@ -307,6 +308,7 @@ async function generateImageOpenAI(
 }
 
 async function generateImageDalle(args: Record<string, any>, context?: ToolContext): Promise<string> {
+  requireNotStrict('Cloud image generation');
   return generateImageOpenAI(args, String(args.model || 'dall-e-3'), context?.executionSignal, context?.onProgress);
 }
 
@@ -589,6 +591,7 @@ async function generateImageOfficial(
 }
 
 async function generateImage(args: Record<string, any>, context?: ToolContext): Promise<string> {
+  requireNotStrict('Cloud image generation');
   const signal = context?.executionSignal;
   const onProgress = context?.onProgress;
   const prefs = getUserPreferredGenerationModels(context?.userId || 'anonymous').image;
@@ -692,6 +695,7 @@ function imageInputReceiptValue(value: string): string {
 }
 
 async function aiEditImageOfficial(args: Record<string, any>, context?: ToolContext): Promise<string> {
+  requireNotStrict('Cloud image editing');
   const signal = context?.executionSignal;
   const prompt = String(args.prompt || '').trim();
   if (!prompt) throw new Error('prompt is required');

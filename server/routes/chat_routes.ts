@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { requireNotStrict } from '../config/privacy';
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenerativeAI } from "@google/generative-ai";
@@ -398,6 +399,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       let responseText = '';
 
       if (isBYOK) {
+        requireNotStrict('Chat with a supplied cloud API key');
         const llmStart = Date.now();
         if (provider === "gemini") {
           const client = new GoogleGenerativeAI(userKey);
@@ -605,7 +607,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       const publicError = sanitizeChatAgentErrorPayload({
         code: chatPublicErrorCodeForException(error),
       });
-      res.status(publicError.code === 'CHAT_MODEL_ROUTES_UNAVAILABLE' ? 503 : 500).json({
+      res.status(publicError.code === 'CHAT_PRIVACY_RESTRICTED' ? 403 : publicError.code === 'CHAT_MODEL_ROUTES_UNAVAILABLE' ? 503 : 500).json({
         error: publicError.message,
         code: publicError.code,
       });

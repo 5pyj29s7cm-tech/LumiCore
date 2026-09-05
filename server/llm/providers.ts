@@ -1,6 +1,6 @@
 import { ParsedToolCall, NormalizedLLMResponse } from '../tools/types';
 import { withCloudResilience } from '../cloud/resilience';
-import { isProviderLocalOnly, isStrictPrivacy, requireLocalProvider } from '../config/privacy';
+import { isProviderLocalOnly, isStrictPrivacy, requireLocalProvider, requireLocalEndpoint } from '../config/privacy';
 import {
   getScopedPreferredLLM,
   type UserLLMFallbackCandidate,
@@ -9,7 +9,7 @@ import {
 import { compileReasoningFailoverCandidates } from './failover_policy';
 import { getUserPreferredVision } from './vision_preferences';
 import { getUserPreferredWorldModel } from './world_preferences';
-import { ensureLocalModelReady, runLocalModelInference, type LocalModelProvider } from './local_models';
+import { ensureLocalModelReady, getLocalModelConfig, runLocalModelInference, type LocalModelProvider } from './local_models';
 import { prepareLocalModelRequest } from './local_context_budget';
 import {
   modelRoutingErrorDigest,
@@ -377,6 +377,9 @@ function assertProviderAllowedByPrivacy(config: LLMCallConfig): void {
     throw new Error(`[Privacy] Local-only routing active. Cloud provider "${config.provider}" is blocked. Use ollama or lmstudio.`);
   }
   requireLocalProvider(config.provider);
+  if (isProviderLocalOnly(config.provider)) {
+    requireLocalEndpoint(getLocalModelConfig(config.provider as LocalModelProvider).baseUrl, 'Local language model');
+  }
 }
 
 function assertQwenAllowedByUserPrefs(config: { provider: string; model: string; userId?: string; domain?: string; orgId?: string; role?: 'reasoning' | 'vision' | 'world'; authorizedRoutingCandidate?: boolean }): void {

@@ -39,6 +39,25 @@ const nativeClientIdentity = {
 };
 
 describe('REST chat remote execution boundary', () => {
+  it('blocks a supplied cloud API key in strict mode before constructing a provider client', async () => {
+    vi.stubEnv('LUMI_PRIVACY', 'strict');
+    const realFetch = globalThis.fetch;
+    const transport = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const target = input instanceof Request ? input.url : String(input);
+      if (!target.startsWith(baseUrl)) throw new Error('Unexpected external transport');
+      return realFetch(input, init);
+    });
+    try {
+      const response = await fetch(`${baseUrl}/api/chat`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': 'synthetic-client-key' },
+        body: JSON.stringify({ provider: 'openai', message: 'synthetic private message' }),
+      });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ code: 'CHAT_PRIVACY_RESTRICTED' });
+      expect(transport).toHaveBeenCalledOnce();
+      expect(mocks.runWithTools).not.toHaveBeenCalled();
+    } finally { transport.mockRestore(); vi.unstubAllEnvs(); }
+  });
   beforeAll(async () => {
     const app = await makeApp();
     baseUrl = app.url;

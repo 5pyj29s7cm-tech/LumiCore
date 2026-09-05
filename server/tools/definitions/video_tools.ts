@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { requireNotStrict } from '../../config/privacy';
 import path from 'path';
 import crypto from 'crypto';
 import { createRequire } from 'module';
@@ -698,6 +699,7 @@ async function generateOfficialVideo(
 }
 
 async function generateVideo(args: Record<string, any>, context?: ToolContext): Promise<string> {
+  requireNotStrict('Cloud video generation');
   const signal = context?.executionSignal;
   throwIfAborted(signal);
   const prompt = String(args.prompt || '').trim();

@@ -1,4 +1,5 @@
 import { TTSResult, VoiceListItem } from '../types';
+import { isStrictPrivacy, requireLocalEndpoint } from '../../config/privacy';
 import fs from 'fs';
 import path from 'path';
 import { getDataPath } from '../../config/data_path';
@@ -40,6 +41,7 @@ function getBaseUrl(): string {
 }
 
 export function isConfigured(): boolean {
+  try { requireLocalEndpoint(`${getBaseUrl()}/tts`, 'GPT-SoVITS'); } catch { return false; }
   if (process.env.GPTSOVITS_API_URL || process.env.GPTSOVITS_ENABLED === 'true') return true;
 
   return isGptSovitsRuntimeInstalled();
@@ -106,7 +108,10 @@ async function synthesizeSpeechInternal(
   voiceId?: string,
   signal?: AbortSignal,
 ): Promise<TTSResult> {
-  await ensureGptSovitsRuntime(signal);
+  // Strict mode only contacts an existing local service. A direct provider
+  // call must not start a cold model after automatic selection refused it.
+  requireLocalEndpoint(`${getBaseUrl()}/tts`, 'GPT-SoVITS speech synthesis');
+  if (!isStrictPrivacy()) await ensureGptSovitsRuntime(signal);
   markGptSovitsActivity();
   // Resolve reference audio based on voiceId
   let refAudioPath: string;
@@ -146,11 +151,14 @@ async function synthesizeSpeechInternal(
 
   const audioBuffer = await withCloudResilience(
     async () => {
-      const res = await fetch(`${getBaseUrl()}/tts`, {
+      const endpoint = `${getBaseUrl()}/tts`;
+      requireLocalEndpoint(endpoint, 'GPT-SoVITS speech synthesis');
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
         signal,
+        ...(isStrictPrivacy() ? { redirect: 'error' as const } : {}),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ message: res.statusText }));

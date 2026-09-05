@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { requireNotStrict } from '../../config/privacy';
 import fs from 'fs';
 import path from 'path';
 import { TTSResult, VoiceCloneRequest, VoiceCloneResult, VoiceCloneStatus, VoiceListItem } from '../types';
@@ -174,6 +175,7 @@ export async function getVoiceCloneStatus(
   billingMode: 'prepaid' | 'postpaid' = /^S_/i.test(voiceId) ? 'prepaid' : 'postpaid',
   fetchImpl: typeof fetch = fetch,
 ): Promise<VoiceCloneResult> {
+  requireNotStrict('Doubao voice clone status');
   const credentials = requireDoubaoSpeechCredentials();
   const { payload } = await postCloneApi(
     process.env.DOUBAO_VOICE_CLONE_STATUS_URL || VOICE_CLONE_STATUS_URL,
@@ -189,6 +191,7 @@ export async function cloneVoice(
   fetchImpl: typeof fetch = fetch,
   polling: { intervalMs?: number; timeoutMs?: number } = {},
 ): Promise<VoiceCloneResult> {
+  requireNotStrict('Doubao voice cloning');
   const credentials = requireDoubaoSpeechCredentials();
   const samplePath = String(request.sampleUrls?.[0] || '').trim();
   if (!samplePath || !fs.existsSync(samplePath)) {
@@ -327,6 +330,7 @@ export async function synthesizeSpeech(
   volume?: number,
   fetchImpl: typeof fetch = fetch,
 ): Promise<TTSResult> {
+  requireNotStrict('Doubao speech synthesis');
   const credentials = requireDoubaoSpeechCredentials();
   return withCloudResilience(
     () => synthesizeWithApiKey(text, credentials, voiceId, signal, speechRate, pitch, volume, fetchImpl),

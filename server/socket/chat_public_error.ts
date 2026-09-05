@@ -1,4 +1,7 @@
+import { isStrictPrivacy } from '../config/privacy';
+
 export const CHAT_PUBLIC_ERROR_MESSAGES = {
+  CHAT_PRIVACY_RESTRICTED: 'Strict mode blocks cloud AI and automatic tools. Select an available local model, or turn off strict mode in Privacy & Security and restart Lumi.',
   CHAT_CONTROL_RECEIPT_WRITE_FAILED: 'Lumi could not durably reserve this control request. Refresh the task state before retrying.',
   CHAT_CONTROL_CANCEL_FAILED: 'Lumi could not confirm that cancellation settled. Refresh the task state before retrying.',
   CHAT_CONVERSATION_REFRESH_FAILED: 'This conversation is unavailable for the current user or workspace.',
@@ -13,10 +16,12 @@ const CHAT_PUBLIC_ERROR_CODES = new Set<string>(Object.keys(CHAT_PUBLIC_ERROR_ME
 
 export function chatPublicErrorCodeForException(error: unknown): ChatPublicErrorCode {
   const candidate = error as any;
+  if (String(candidate?.message || '').startsWith('[Privacy]')) return 'CHAT_PRIVACY_RESTRICTED';
   if (
     candidate?.name === 'ModelRoutingDispatchError'
     || Array.isArray(candidate?.routing?.attempts)
   ) {
+    if (isStrictPrivacy()) return 'CHAT_PRIVACY_RESTRICTED';
     return 'CHAT_MODEL_ROUTES_UNAVAILABLE';
   }
   return 'CHAT_EXECUTION_FAILED';

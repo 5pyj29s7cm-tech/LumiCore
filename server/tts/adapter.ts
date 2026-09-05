@@ -9,6 +9,7 @@ import { hasDoubaoSpeech } from './providers/ark';
 import { getVoicePreference } from '../config/voice_preference';
 import { isCircuitClosed, isCircuitHealthy, recordFailure, recordSuccess } from '../cloud/circuit_breaker';
 import { relayConfigured } from '../relay/config';
+import { isStrictPrivacy, requireNotStrict } from '../config/privacy';
 
 /**
  * A user barge-in, call stop, or request supersession is transport control,
@@ -34,6 +35,9 @@ function circuitProvider(provider: TTSProvider): string {
 }
 
 export async function synthesizeSpeech(text: string, config: TTSConfig): Promise<TTSResult> {
+  if (config.provider !== 'local-cosyvoice' && config.provider !== 'gptsovits') {
+    requireNotStrict('Cloud speech synthesis');
+  }
   const circuit = circuitProvider(config.provider);
   try {
     if (!isCircuitClosed(circuit)) {
@@ -123,7 +127,8 @@ export function getFallbackProvider(
 ): TTSProvider | null {
   if (excluded !== 'local-cosyvoice' && localCosyvoice.isConfigured() && isCircuitClosed('local-cosyvoice')) return 'local-cosyvoice';
   if (excluded !== 'gptsovits' && gptsovits.isConfigured() && isCircuitClosed('gptsovits')
-    && (!options.requireWarmLocal || gptsovits.isReadyForAutomaticFallback())) return 'gptsovits';
+    && (!(options.requireWarmLocal || isStrictPrivacy()) || gptsovits.isReadyForAutomaticFallback())) return 'gptsovits';
+  if (isStrictPrivacy()) return null;
   if (excluded !== 'ark' && hasDoubaoSpeech() && isCircuitClosed('doubao-tts')) return 'ark';
   if (excluded !== 'cosyvoice' && hasDashScopeKey() && isCircuitClosed('cosyvoice')) return 'cosyvoice';
   // Keep the official gateway out of implicit fallback. Selecting relay as
@@ -132,6 +137,7 @@ export function getFallbackProvider(
 }
 
 export async function cloneVoice(request: VoiceCloneRequest, provider: TTSProvider): Promise<VoiceCloneResult> {
+  requireNotStrict('Cloud voice cloning');
   switch (provider) {
     case 'cosyvoice':
       return {
@@ -150,6 +156,7 @@ export async function getVoiceCloneStatus(
   provider: TTSProvider,
   billingMode?: 'prepaid' | 'postpaid',
 ): Promise<VoiceCloneResult> {
+  requireNotStrict('Cloud voice clone status');
   switch (provider) {
     case 'ark':
       return ark.getVoiceCloneStatus(voiceId, billingMode);
@@ -159,6 +166,7 @@ export async function getVoiceCloneStatus(
 }
 
 export async function designVoice(prompt: string, name: string, provider: TTSProvider = 'cosyvoice'): Promise<string> {
+  requireNotStrict('Cloud voice design');
   switch (provider) {
     case 'cosyvoice':
       return cosyvoice.designVoice(prompt, name);
@@ -208,6 +216,14 @@ export function isTTSProviderConfigured(provider: TTSProvider): boolean {
 export function getActiveProvider(options: { requireHealthy?: boolean; requireWarmLocal?: boolean } = {}): TTSProvider | null {
   const pref = getVoicePreference();
   const available = options.requireHealthy ? isCircuitHealthy : isCircuitClosed;
+  if (isStrictPrivacy()) {
+    if (pref.tts === 'gptsovits' && gptsovits.isConfigured() && available('gptsovits')
+      && (!options.requireWarmLocal || gptsovits.isReadyForAutomaticFallback())) return 'gptsovits';
+    if (localCosyvoice.isConfigured() && available('local-cosyvoice')) return 'local-cosyvoice';
+    // Automatic selection must not boot a cold model behind the user's back.
+    if (gptsovits.isConfigured() && available('gptsovits') && gptsovits.isReadyForAutomaticFallback()) return 'gptsovits';
+    return null;
+  }
   if (pref.tts === 'local-cosyvoice' && localCosyvoice.isConfigured() && available('local-cosyvoice')) return 'local-cosyvoice';
   if (pref.tts === 'gptsovits' && gptsovits.isConfigured() && available('gptsovits')
     && (!options.requireWarmLocal || gptsovits.isReadyForAutomaticFallback())) return 'gptsovits';

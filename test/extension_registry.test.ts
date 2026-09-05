@@ -733,12 +733,14 @@ describe('signed extension and Provider registry', () => {
     }
   });
 
-  it('allows only a signed loopback Provider in strict privacy mode', async () => {
+  it('allows an installed signed loopback Provider but blocks installation tools in strict privacy mode', async () => {
     const priorPrivacy = process.env.LUMI_PRIVACY;
-    process.env.LUMI_PRIVACY = 'strict';
     try {
+      process.env.LUMI_PRIVACY = 'standard';
       const remote = signedManifest();
       await install(remote);
+      process.env.LUMI_PRIVACY = 'strict';
+      await expect(install(remote)).rejects.toThrow(/Automatic tool execution/);
       await expect(makeLLMCall(
         [{ role: 'user', content: 'strict remote' }], [],
         { provider: remote.id, model: 'signed-model', userId: USER_ID, selectionMode: 'pinned' },
@@ -755,7 +757,9 @@ describe('signed extension and Provider registry', () => {
         origin: 'http://127.0.0.1:19090',
         localNetwork: true,
       });
+      process.env.LUMI_PRIVACY = 'standard';
       await install(local);
+      process.env.LUMI_PRIVACY = 'strict';
       const result = await makeLLMCall(
         [{ role: 'user', content: 'strict local' }], [],
         { provider: local.id, model: 'signed-model', userId: USER_ID, selectionMode: 'pinned' },

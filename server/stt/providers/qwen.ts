@@ -1,4 +1,5 @@
 import { STTResult, StreamingSTTSession } from '../types';
+import { requireNotStrict } from '../../config/privacy';
 import { logger } from '../../../logger';
 import { getKey } from '../../config/keys';
 import { isCircuitClosed, recordSuccess, recordFailure } from '../../cloud/circuit_breaker';
@@ -22,6 +23,7 @@ export function createStream(
   language: string = 'zh',
   interimResults: boolean = true,
 ): QwenStreamSession {
+  requireNotStrict('Qwen streaming speech recognition');
   if (!isCircuitClosed(PROVIDER)) {
     throw new Error('[CircuitBreaker] Qwen STT is temporarily unavailable (circuit open). The circuit will probe automatically after cooldown.');
   }

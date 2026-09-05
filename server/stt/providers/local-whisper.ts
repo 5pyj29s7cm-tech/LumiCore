@@ -4,6 +4,7 @@
 
 import { execFileSync, spawn } from 'child_process';
 import { STTResult } from '../types';
+import { isStrictPrivacy } from '../../config/privacy';
 import { getSttArtifactRoot, getWhisperModelDir } from '../artifact_paths';
 import fs from 'fs';
 import path from 'path';
@@ -19,6 +20,7 @@ const MANAGED_PYTHON = path.join(MANAGED_VENV_DIR, 'Scripts', 'python.exe');
 const LEGACY_MANAGED_PYTHON = path.join(os.homedir(), 'LumiOS', 'data', 'stt', 'faster-whisper-venv', 'Scripts', 'python.exe');
 
 let pythonCandidates: string[] | null = null;
+let offlineAvailability: { checkedAt: number; available: boolean } | null = null;
 
 function splitConfiguredPython(value?: string): string[] {
   return String(value || '')
@@ -59,6 +61,12 @@ function getPythonEnv(): NodeJS.ProcessEnv {
     PYTHONUNBUFFERED: '1',
     LUMI_STT_DATA_DIR: STT_ARTIFACT_ROOT,
     WHISPER_MODEL_DIR: getWhisperModelDir(),
+    ...(isStrictPrivacy() ? {
+      LUMI_PRIVACY: 'strict',
+      HF_HUB_OFFLINE: '1',
+      TRANSFORMERS_OFFLINE: '1',
+      HF_HUB_DISABLE_TELEMETRY: '1',
+    } : {}),
   };
 }
 
@@ -133,6 +141,19 @@ function ensureManagedPython(): string | null {
 
 export function isLocalWhisperAvailable(): boolean {
   if (!fs.existsSync(SCRIPT_PATH)) return false;
+  if (isStrictPrivacy()) {
+    if (offlineAvailability && Date.now() - offlineAvailability.checkedAt < 10_000) return offlineAvailability.available;
+    const available = findPythonCandidates().some(python => {
+      try {
+        execFileSync(python, [SCRIPT_PATH, '--check-available'], {
+          stdio: 'pipe', timeout: 5_000, windowsHide: true, env: getPythonEnv(),
+        });
+        return true;
+      } catch { return false; }
+    });
+    offlineAvailability = { checkedAt: Date.now(), available };
+    return available;
+  }
   if (findPythonCandidates().length > 0) return true;
   return Boolean(findBootstrapPython());
 }
@@ -292,8 +313,11 @@ function runPythonTranscriber(
 
 export async function transcribe(audioBuffer: Buffer, language: string = 'zh', options: LocalWhisperOptions = {}): Promise<STTResult> {
   options.signal?.throwIfAborted();
+  if (isStrictPrivacy() && !isLocalWhisperAvailable()) {
+    throw new Error('[Privacy] Strict mode requires an installed local Whisper runtime and cached model.');
+  }
   options.onProgress?.('准备本地 Whisper 转写环境');
-  ensureManagedPython();
+  if (!isStrictPrivacy()) ensureManagedPython();
   const pythons = findPythonCandidates();
   if (pythons.length === 0) throw new Error('Python not found. Local STT requires Python 3.10+.');
 

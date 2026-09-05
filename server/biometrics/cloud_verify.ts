@@ -11,7 +11,7 @@
 
 import { getKey } from '../config/keys';
 import { withCloudResilience } from '../cloud/resilience';
-import { requireNotStrict } from '../config/privacy';
+import { isStrictPrivacy, requireNotStrict } from '../config/privacy';
 
 // ── Face: Aliyun CompareFace ──
 
@@ -141,6 +141,9 @@ export async function escalateIfUncertain(
   }
 
   // Grey zone (0.40–highThreshold) → escalate
+  if (isStrictPrivacy()) {
+    return { matched: localConfidence >= 0.55, confidence: localConfidence, source: 'local' };
+  }
   try {
     const result = await verifyFn();
     return { ...result, source: 'cloud' };

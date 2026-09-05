@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { requireNotStrict } from '../../config/privacy';
 import { TTSResult, VoiceListItem } from '../types';
 import { getKey } from '../../config/keys';
 import { withCloudResilience } from '../../cloud/resilience';
@@ -74,6 +75,7 @@ export async function synthesizeSpeech(
   volume?: number,
   model?: string,
 ): Promise<TTSResult> {
+  requireNotStrict('CosyVoice speech synthesis');
   const apiKey = getApiKey();
   const resolvedModel = model || resolveVoiceModel(voiceId) || getCosyVoiceModel();
 
@@ -188,6 +190,7 @@ async function postVoiceEnrollment(model: string, input: Record<string, any>, op
 
 /** Clone a voice from a prepared public audio URL, or local WAV in data-url mode. */
 export async function cloneVoice(sampleUrls: string[], name: string): Promise<string> {
+  requireNotStrict('CosyVoice voice cloning');
   const firstSource = sampleUrls[0];
   if (!firstSource) throw new Error('At least one prepared audio sample is required');
   const audioData = resolveCloneAudioUrl(firstSource);
@@ -211,6 +214,7 @@ export async function cloneVoice(sampleUrls: string[], name: string): Promise<st
 
 /** Design a new voice from a text description using CosyVoice voice enrollment. */
 export async function designVoice(voicePrompt: string, name: string): Promise<string> {
+  requireNotStrict('Qwen voice design');
   return postVoiceEnrollment('qwen-voice-design', {
     action: 'create_voice',
     target_model: getQwenDesignTargetModel(),

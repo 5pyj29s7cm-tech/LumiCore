@@ -41,7 +41,7 @@ describe('audio transcription privacy and cancellation', () => {
     vi.stubEnv('LUMI_PRIVACY', 'strict');
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ text: 'synthetic transcript' }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
-    await expect(registry.execute('transcribe_audio_to_text_file', { filePath, preferredProvider: 'whisper', allowLocal: false }, { userId: 'round3-audio', requestConfirmation: async () => true })).rejects.toThrow('Strict privacy');
+    await expect(registry.execute('transcribe_audio_to_text_file', { filePath, preferredProvider: 'whisper', allowLocal: false }, { userId: 'round3-audio', requestConfirmation: async () => true })).rejects.toThrow('Automatic tool execution');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
