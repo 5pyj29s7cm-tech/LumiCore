@@ -93,6 +93,21 @@ describe('Lumi official streaming STT protocol', () => {
     expect(JSON.stringify([run, buildOfficialSttFinishTask('task-id')])).not.toContain('input-finished');
   });
 
+  it('closes the owned socket and discards queued audio when cancelled before handshake', async () => {
+    const controller = new AbortController();
+    const pending = transcribe(Buffer.from('synthetic PCM'), 'zh', {
+      rawPcm: true, sampleRate: 16_000, signal: controller.signal, WebSocketImpl: FakeWebSocket as any,
+    });
+    const socket = FakeWebSocket.latest!;
+    const stopped = expect(pending).rejects.toThrow('cancel official audio');
+    controller.abort(new Error('cancel official audio'));
+    await stopped;
+    expect(socket.readyState).toBe(3);
+    socket.open();
+    socket.message({ header: { event: 'task-started' }, payload: {} });
+    expect(socket.sent).toEqual([]);
+  });
+
   it('detects encoded source rates instead of assuming every file is 16 kHz', () => {
     const wav = Buffer.alloc(44);
     wav.write('RIFF', 0, 'ascii');

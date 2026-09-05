@@ -1,6 +1,8 @@
 import { STTResult } from '../types';
 import { getKey } from '../../config/keys';
 import path from 'path';
+import { requireNotStrict } from '../../config/privacy';
+import { createTranscriptionControl, transcriptionFetch } from '../transcription_control';
 
 function getApiKey(): string {
   return process.env.OPENAI_API_KEY || getKey('OPENAI_API_KEY') || '';
@@ -9,6 +11,8 @@ function getApiKey(): string {
 interface AudioFileOptions {
   fileName?: string;
   mimeType?: string;
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
 }
 
 function safeFileName(fileName?: string): string {
@@ -21,6 +25,17 @@ export async function transcribe(
   language: string = 'zh',
   options: AudioFileOptions = {},
 ): Promise<STTResult> {
+  requireNotStrict('OpenAI audio transcription');
+  const control = createTranscriptionControl(options.signal, 10 * 60_000);
+  try {
+    return await transcribeRequest(audioBuffer, language, { ...options, signal: control.signal });
+  } finally {
+    control.dispose();
+  }
+}
+
+async function transcribeRequest(audioBuffer: Buffer, language: string, options: AudioFileOptions): Promise<STTResult> {
+  options.signal?.throwIfAborted();
   const apiKey = getApiKey();
   if (!apiKey) throw new Error('OPENAI_API_KEY is not configured');
 
@@ -31,7 +46,7 @@ export async function transcribe(
   form.append('model', 'whisper-1');
   form.append('language', language);
 
-  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+  const res = await transcriptionFetch(options.fetchImpl || fetch, options.signal)('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${apiKey}` },
     body: form,
@@ -43,5 +58,6 @@ export async function transcribe(
   }
 
   const data = await res.json() as any;
+  options.signal?.throwIfAborted();
   return { text: data.text || '', isFinal: true };
 }

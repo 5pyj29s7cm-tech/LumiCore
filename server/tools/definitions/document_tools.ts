@@ -136,6 +136,11 @@ function formatAudioTranscriptFile(args: Record<string, any>, result: Awaited<Re
 }
 
 async function transcribeAudioToTextFile(args: Record<string, any>, context?: ToolContext): Promise<string> {
+  const checkCancelled = () => {
+    context?.executionSignal?.throwIfAborted();
+    if (context?.isCancelled?.()) throw new DOMException('Audio transcription cancelled.', 'AbortError');
+  };
+  checkCancelled();
   const filePath = String(args.filePath || args.audioPath || '').trim().replace(/^["']|["']$/g, '');
   if (!filePath) throw new Error('filePath is required. Attach an audio file or provide the local audio path.');
   const resolvedPath = path.resolve(filePath);
@@ -153,14 +158,17 @@ async function transcribeAudioToTextFile(args: Record<string, any>, context?: To
       language: String(args.language || 'zh'),
       preferredProvider: getAudioToolPreferredProvider(args.preferredProvider),
       allowLocal: args.allowLocal !== false,
+      signal: context?.executionSignal,
       onProgress: (message) => context?.onProgress?.(message),
     });
+    checkCancelled();
     context?.onProgress?.('正在写入转写文本文件');
     const format = /^(md|markdown)$/i.test(String(args.outputFormat || '')) ? 'md' : 'txt';
     const extension = format === 'md' ? '.md' : '.txt';
     const baseName = safeOutputBaseName(String(args.filename || args.title || args.caseName || path.basename(resolvedPath)), 'audio_transcript');
     const outputPath = uniqueOutputPath(baseName, extension);
     const content = formatAudioTranscriptFile(args, result, resolvedPath, format);
+    checkCancelled();
     fs.writeFileSync(outputPath, content, 'utf-8');
 
     const excerptLimit = Math.max(300, Math.min(Number(args.excerptLimit) || 1200, 5000));
@@ -772,7 +780,14 @@ export function registerDocumentTools(registry: ToolRegistry): void {
     handler: transcribeAudioToTextFile,
     permission: 'user',
     securityLevel: 'safe',
-    capability: documentArtifactCapability('office.audio.transcript.create', 'transcription', 'saved audio transcript text file'),
+    capability: {
+      ...documentArtifactCapability('office.audio.transcript.create', 'transcription', 'saved audio transcript text file'),
+      sideEffects: [
+        { type: 'local_read', scope: 'source audio file', reversible: true },
+        { type: 'network_read', scope: 'audio sent for inference when a cloud transcription engine is selected; blocked in strict privacy mode', reversible: false },
+        { type: 'local_write', scope: 'saved audio transcript text file', reversible: true },
+      ],
+    },
     evidence: documentArtifactEvidence('office.audio.transcript.create', 'filePath'),
   });
 

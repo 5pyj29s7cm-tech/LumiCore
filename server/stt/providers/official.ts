@@ -14,6 +14,8 @@ import { logger } from '../../../logger';
 import { shouldEmitStreamingPartial } from '../partial_transcript';
 import { clampEndpointSilenceMs } from '../adaptive_endpointing';
 import { normalizeLumiOfficialModel } from '../../../shared/model_provider_capabilities';
+import { requireNotStrict } from '../../config/privacy';
+import { createTranscriptionControl } from '../transcription_control';
 
 export interface OfficialAudioFileOptions {
   fileName?: string;
@@ -30,6 +32,7 @@ export interface OfficialAudioFileOptions {
 }
 
 export interface OfficialStreamingOptions {
+  signal?: AbortSignal;
   model?: string;
   format?: OfficialAudioFormat;
   sampleRate?: number;
@@ -287,6 +290,8 @@ export function createStream(
   interimResults = true,
   options: OfficialStreamingOptions = {},
 ): StreamingSTTSession {
+  options.signal?.throwIfAborted();
+  requireNotStrict('Official API audio transcription');
   // A role-specific model selected in Settings is an explicit snapshot for
   // this session. Deployment-level env configuration remains the fallback for
   // older databases that have no persisted selection.
@@ -313,6 +318,17 @@ export function createStream(
   let lastPartial = '';
   let finalEmitted = false;
   let endpointSilenceMs = clampEndpointSilenceMs(Number(process.env.RELAY_STT_SILENCE_MS || 850));
+  const abort = () => {
+    if (closed) return;
+    closed = true;
+    pendingAudio.length = 0;
+    pendingBytes = 0;
+    const error = asError(options.signal?.reason || new DOMException('STT aborted', 'AbortError'));
+    // User cancellation is not evidence that the cloud provider is unhealthy.
+    errorCallbacks.forEach(callback => callback(error));
+    try { ws.terminate(); } catch { try { ws.close(); } catch {} }
+  };
+  options.signal?.addEventListener('abort', abort, { once: true });
 
   const notifyError = (input: unknown) => {
     if (errorNotified || closed) return;
@@ -337,6 +353,7 @@ export function createStream(
   };
 
   ws.on('open', () => {
+    if (closed) return;
     ws.send(JSON.stringify(buildOfficialSttRunTask(
       taskId,
       model,
@@ -402,6 +419,7 @@ export function createStream(
   });
 
   ws.on('close', (code: number, reason: Buffer) => {
+    options.signal?.removeEventListener('abort', abort);
     const expected = closed || (finishSent && code === 1000);
     pendingAudio.length = 0;
     pendingBytes = 0;
@@ -469,6 +487,8 @@ export async function transcribe(
   language = 'zh',
   options: OfficialAudioFileOptions = {},
 ): Promise<STTResult> {
+  options.signal?.throwIfAborted();
+  requireNotStrict('Official API audio transcription');
   if (!Buffer.isBuffer(audioBuffer) || audioBuffer.length === 0) {
     throw new Error('Lumi Official API STT received no audio data.');
   }
@@ -485,35 +505,37 @@ export async function transcribe(
       + 'Provide sampleRate or use a self-describing WAV/MP3/Opus/AAC file.',
     );
   }
-  const session = createStream(language, false, {
-    model: options.model,
-    format,
-    sampleRate,
-    WebSocketImpl: options.WebSocketImpl,
-  });
-  return new Promise<STTResult>((resolve, reject) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      try { session.end(); } catch {}
-      reject(new Error('Lumi Official API STT timed out after 90 seconds.'));
-    }, 90_000);
-    const finish = (result?: STTResult, error?: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (error) reject(error);
-      else resolve({ ...result!, isFinal: true });
-    };
-    session.onResult(result => {
-      if (result.isFinal) finish(result);
+  const control = createTranscriptionControl(options.signal, 90_000);
+  let abort: (() => void) | undefined;
+  try {
+    const session = createStream(language, false, {
+      model: options.model,
+      format,
+      sampleRate,
+      WebSocketImpl: options.WebSocketImpl,
+      signal: control.signal,
     });
-    session.onError(error => finish(undefined, error));
-    options.signal?.addEventListener('abort', () => finish(undefined, asError(options.signal?.reason || 'STT aborted')), { once: true });
-    session.sendAudio(audioBuffer);
-    session.end();
-  }).finally(() => {
+    return await new Promise<STTResult>((resolve, reject) => {
+      let settled = false;
+      const finish = (result?: STTResult, error?: Error) => {
+        if (settled) return;
+        settled = true;
+        if (error) reject(error);
+        else resolve({ ...result!, isFinal: true });
+      };
+      session.onResult(result => {
+        if (result.isFinal) finish(result);
+      });
+      session.onError(error => finish(undefined, error));
+      abort = () => finish(undefined, asError(control.signal.reason));
+      control.signal.addEventListener('abort', abort, { once: true });
+      control.signal.throwIfAborted();
+      session.sendAudio(audioBuffer);
+      session.end();
+    });
+  } finally {
+    if (abort) control.signal.removeEventListener('abort', abort);
+    control.dispose();
     logger.debug('[Official-STT] one-utterance transcription finished');
-  });
+  }
 }

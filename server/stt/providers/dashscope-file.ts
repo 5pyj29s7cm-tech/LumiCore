@@ -1,6 +1,9 @@
 import path from 'path';
 import { getKey } from '../../config/keys';
 import type { STTResult, STTSegment } from '../types';
+import { setTimeout as delay } from 'node:timers/promises';
+import { requireNotStrict } from '../../config/privacy';
+import { createTranscriptionControl, transcriptionFetch } from '../transcription_control';
 
 type FetchLike = typeof fetch;
 
@@ -13,6 +16,7 @@ interface DashScopeFileOptions {
   speakerCount?: number;
   pollIntervalMs?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 interface UploadPolicyData {
@@ -244,6 +248,7 @@ async function pollTask(
   onProgress?: (message: string) => void,
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  signal?: AbortSignal,
 ): Promise<string> {
   const startedAt = Date.now();
   const interval = Math.max(1000, pollIntervalMs);
@@ -273,7 +278,7 @@ async function pollTask(
       throw new Error(`DashScope ASR task ${status}: ${reason}`);
     }
 
-    await new Promise(resolve => setTimeout(resolve, Math.min(interval + attempts * 250, 15000)));
+    await delay(Math.min(interval + attempts * 250, 15000), undefined, { signal });
   }
   throw new Error('DashScope ASR task timed out.');
 }
@@ -363,8 +368,20 @@ export async function transcribe(
   language: string = 'zh',
   options: DashScopeFileOptions = {},
 ): Promise<STTResult> {
+  requireNotStrict('DashScope audio transcription');
+  const timeoutMs = options.timeoutMs || parsePositiveInt(process.env.DASHSCOPE_ASR_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
+  const control = createTranscriptionControl(options.signal, timeoutMs);
+  try {
+    return await transcribeRequest(audioBuffer, language, { ...options, signal: control.signal });
+  } finally {
+    control.dispose();
+  }
+}
+
+async function transcribeRequest(audioBuffer: Buffer, language: string, options: DashScopeFileOptions): Promise<STTResult> {
+  options.signal?.throwIfAborted();
   const apiKey = getApiKey();
-  const fetchImpl = options.fetchImpl || fetch;
+  const fetchImpl = transcriptionFetch(options.fetchImpl || fetch, options.signal);
   const model = getModel();
   const fileName = path.basename(String(options.fileName || 'audio.wav')) || 'audio.wav';
   const mimeType = options.mimeType || 'audio/wav';
@@ -380,11 +397,13 @@ export async function transcribe(
     options.onProgress,
     options.pollIntervalMs || parsePositiveInt(process.env.DASHSCOPE_ASR_POLL_INTERVAL_MS) || DEFAULT_POLL_INTERVAL_MS,
     options.timeoutMs || parsePositiveInt(process.env.DASHSCOPE_ASR_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS,
+    options.signal,
   );
 
   options.onProgress?.('DashScope 转写完成，正在下载识别结果');
   const resultRes = await fetchImpl(transcriptionUrl, { method: 'GET' });
   const resultJson = await readJsonResponse(resultRes, 'DashScope ASR result download');
+  options.signal?.throwIfAborted();
   const formatted = formatDashScopeTranscript(resultJson);
   return {
     text: formatted.text,

@@ -1,6 +1,8 @@
 import { randomUUID } from 'crypto';
 import path from 'path';
 import { STTResult } from '../types';
+import { requireNotStrict } from '../../config/privacy';
+import { createTranscriptionControl, transcriptionFetch } from '../transcription_control';
 import {
   buildDoubaoApiHeaders,
   getDoubaoFileAsrResourceId,
@@ -50,8 +52,19 @@ export async function transcribe(
   language: string = 'zh',
   options: AudioFileOptions = {},
 ): Promise<STTResult> {
+  requireNotStrict('Doubao audio transcription');
+  const control = createTranscriptionControl(options.signal, 10 * 60_000);
+  try {
+    return await transcribeRequest(audioBuffer, language, { ...options, signal: control.signal });
+  } finally {
+    control.dispose();
+  }
+}
+
+async function transcribeRequest(audioBuffer: Buffer, language: string, options: AudioFileOptions): Promise<STTResult> {
+  options.signal?.throwIfAborted();
   const credentials = requireDoubaoSpeechCredentials();
-  const fetchImpl = options.fetchImpl || fetch;
+  const fetchImpl = transcriptionFetch(options.fetchImpl || fetch, options.signal);
   const requestId = randomUUID();
   const format = audioFormat(options);
   const audio: Record<string, unknown> = { data: audioBuffer.toString('base64') };
@@ -81,6 +94,7 @@ export async function transcribe(
   });
 
   const payload = await response.json().catch(() => ({})) as any;
+  options.signal?.throwIfAborted();
   const statusCode = response.headers.get('X-Api-Status-Code');
   if (!response.ok || (statusCode && statusCode !== '20000000')) {
     throw responseError(response, payload);

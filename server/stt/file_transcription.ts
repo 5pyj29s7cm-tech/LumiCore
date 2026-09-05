@@ -12,6 +12,8 @@ import { hasDoubaoSpeechCredentials } from '../config/doubao_speech';
 import * as relay from './providers/official';
 import { relayConfigured } from '../relay/config';
 import { getVoicePreference } from '../config/voice_preference';
+import { isStrictPrivacy, requireNotStrict } from '../config/privacy';
+import { createTranscriptionControl } from './transcription_control';
 
 export type AudioFileProvider = STTProvider;
 
@@ -24,6 +26,7 @@ export interface AudioFileTranscriptionOptions {
   fetchImpl?: typeof fetch;
   providerAvailability?: Partial<Record<AudioFileProvider, boolean>>;
   onProgress?: (message: string) => void;
+  signal?: AbortSignal;
 }
 
 export interface AudioFileTranscriptionResult {
@@ -147,6 +150,7 @@ export function getAudioFileProviderPlan(options: AudioFileTranscriptionOptions 
 
   const providers: AudioFileProvider[] = [];
   for (const provider of baseOrder) {
+    if (isStrictPrivacy() && provider !== 'local-whisper') continue;
     if (providers.includes(provider)) continue;
     if (provider === 'qwen' && !isQwenFileSttAllowed(options)) continue;
     if (provider === 'local-whisper' && !allowLocal) continue;
@@ -175,8 +179,11 @@ async function transcribeWithProvider(
     fileName: string;
     mimeType: string;
     onProgress?: (message: string) => void;
+    signal?: AbortSignal;
   },
 ): Promise<ProviderTranscript> {
+  options.signal?.throwIfAborted();
+  if (provider !== 'local-whisper') requireNotStrict('Cloud audio transcription');
   switch (provider) {
     case 'qwen': {
       const result = await dashscopeFile.transcribe(audioBuffer, options.language, {
@@ -184,6 +191,7 @@ async function transcribeWithProvider(
         mimeType: options.mimeType,
         fetchImpl: options.fetchImpl,
         onProgress: options.onProgress,
+        signal: options.signal,
       });
       return {
         text: result.text,
@@ -197,6 +205,8 @@ async function transcribeWithProvider(
       const result = await whisper.transcribe(audioBuffer, options.language, {
         fileName: options.fileName,
         mimeType: options.mimeType,
+        fetchImpl: options.fetchImpl,
+        signal: options.signal,
       });
       return { text: result.text, model: result.model };
     }
@@ -205,6 +215,7 @@ async function transcribeWithProvider(
         fileName: options.fileName,
         mimeType: options.mimeType,
         fetchImpl: options.fetchImpl,
+        signal: options.signal,
       });
       return { text: result.text, model: result.model };
     }
@@ -212,6 +223,7 @@ async function transcribeWithProvider(
       const result = await localWhisper.transcribe(audioBuffer, options.language, {
         fileName: options.fileName,
         onProgress: options.onProgress,
+        signal: options.signal,
       });
       return { text: result.text, model: result.model };
     }
@@ -221,6 +233,7 @@ async function transcribeWithProvider(
         mimeType: options.mimeType,
         fetchImpl: options.fetchImpl,
         model: getProviderModelLabel('relay'),
+        signal: options.signal,
       });
       return { text: result.text, model: result.model, segments: result.segments };
     }
@@ -237,17 +250,34 @@ export async function transcribeAudioFile(
   audioBuffer: Buffer,
   options: AudioFileTranscriptionOptions = {},
 ): Promise<AudioFileTranscriptionResult> {
+  const control = createTranscriptionControl(options.signal);
+  try {
+    return await transcribeAudioFileWithSignal(audioBuffer, { ...options, signal: control.signal });
+  } finally {
+    control.dispose();
+  }
+}
+
+async function transcribeAudioFileWithSignal(
+  audioBuffer: Buffer,
+  options: AudioFileTranscriptionOptions,
+): Promise<AudioFileTranscriptionResult> {
+  options.signal?.throwIfAborted();
   const start = Date.now();
   const fileName = sanitizeUploadName(options.fileName);
   const language = options.language || 'zh';
   const mimeType = getAudioMimeType(fileName);
   const fetchImpl = options.fetchImpl || fetch;
   const preferredProvider = await getPreferredAudioFileProvider(options);
+  options.signal?.throwIfAborted();
   const plan = getAudioFileProviderPlan({ ...options, preferredProvider });
   options.onProgress?.(`准备转写音频：${fileName}`);
   options.onProgress?.(`转写引擎顺序：${plan.join(' -> ') || 'none'}`);
 
   if (plan.length === 0) {
+    if (isStrictPrivacy()) {
+      throw errorCode('AUDIO_PRIVACY_LOCAL_UNAVAILABLE', 'Strict privacy mode requires an available local Whisper engine. Cloud audio transcription is blocked.');
+    }
     const qwenConfigured = !!getConfiguredKey('qwen', options.providerAvailability);
     const qwenDisabled = qwenConfigured && !isQwenFileSttAllowed(options);
     throw errorCode(
@@ -260,6 +290,7 @@ export async function transcribeAudioFile(
 
   const failures: string[] = [];
   for (const provider of plan) {
+    options.signal?.throwIfAborted();
     const plannedModel = getProviderModelLabel(provider);
     const providerStart = Date.now();
     try {
@@ -270,7 +301,9 @@ export async function transcribeAudioFile(
         mimeType,
         fetchImpl,
         onProgress: options.onProgress,
+        signal: options.signal,
       });
+      options.signal?.throwIfAborted();
       const text = transcript.text.trim();
       const actualModel = transcript.model || plannedModel;
       if (!text) {
@@ -294,6 +327,8 @@ export async function transcribeAudioFile(
         taskId: transcript.taskId,
       };
     } catch (err: any) {
+      options.signal?.throwIfAborted();
+      if (err?.name === 'AbortError') throw err;
       const failure = err instanceof Error ? err : new Error(String(err));
       const classified = classifyCloudError(failure, provider);
       const accountUnavailable = classified.category === 'auth' || classified.category === 'quota';
