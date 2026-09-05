@@ -1,4 +1,4 @@
-﻿import fs from 'fs';
+import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { execSync } from 'child_process';
@@ -4157,7 +4157,7 @@ ${skippedLines}
       tags: ['legal:folder-argument', `caseName:${caseName}`, `caseType:${caseType}`],
       metadata: { articleType: 'pleading' },
     });
-    const indexed = await indexLegalArticle(orgId, article.id);
+    const indexed = await indexLegalArticle(orgId, article.id, context?.userId || userId);
     kbLine = `\n- 知识库：已导入 articleId=${article.id}，索引块数=${indexed}`;
   }
 
@@ -4230,7 +4230,7 @@ async function importMaterialsToKbHandler(args: Record<string, any>, context?: a
         jurisdiction: metadata.court,
       } : { articleType },
     });
-    const chunks = await indexLegalArticle(orgId, article.id);
+    const chunks = await indexLegalArticle(orgId, article.id, context?.userId || userId);
     imported.push({ title, articleId: article.id, chunks, category: article.category });
   };
 
@@ -4486,7 +4486,7 @@ ${browserSteps}
           court: hints.court,
         },
       });
-      const indexed = await indexLegalArticle(orgId, article.id);
+      const indexed = await indexLegalArticle(orgId, article.id, context?.userId || userId);
       kbLine = `- 知识库：已导入 articleId=${article.id}，索引块数=${indexed}`;
     }
 
@@ -4578,7 +4578,7 @@ ${kbLine}
         court: hints.court,
       },
     });
-    const indexed = await indexLegalArticle(orgId, article.id);
+    const indexed = await indexLegalArticle(orgId, article.id, context?.userId || userId);
     kbLine = `- 知识库：已导入 articleId=${article.id}，索引块数=${indexed}`;
   }
 
@@ -4712,7 +4712,7 @@ ${statusRows}
         articleType: 'research_note',
       },
     });
-    const chunks = await indexLegalArticle(orgId, article.id);
+    const chunks = await indexLegalArticle(orgId, article.id, context?.userId || userId);
     kbLine = `- 知识库：已导入（articleId=${article.id}，索引块=${chunks}）。`;
   }
 
@@ -4803,7 +4803,7 @@ ${statusRows}
         articleType: 'company_report',
       },
     });
-    const chunks = await indexLegalArticle(orgId, article.id);
+    const chunks = await indexLegalArticle(orgId, article.id, context?.userId || userId);
     kbLine = `- 知识库：已导入（articleId=${article.id}，索引块=${chunks}）。`;
   }
 
@@ -4966,7 +4966,7 @@ async function generateCitationVerificationReportHandler(args: Record<string, an
       category: 'legal_research_note',
       tags: ['legal:citation-verification', `caseName:${caseName}`],
     });
-    const indexed = await indexLegalArticle(orgId, article.id);
+    const indexed = await indexLegalArticle(orgId, article.id, context?.userId || userId);
     kbLine = `- 知识库：已导入 articleId=${article.id}，索引块数=${indexed}`;
   }
 
@@ -5541,7 +5541,7 @@ async function importJudgmentHandler(args: Record<string, any>, context?: any): 
     },
   });
 
-  const indexed = await indexLegalArticle(orgId, article.id);
+  const indexed = await indexLegalArticle(orgId, article.id, context?.userId || userId);
 
   return `裁判文书导入成功。
 
