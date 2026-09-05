@@ -31,6 +31,9 @@ export function addScopedVoiceProfile(scope: VoiceProfileScope, profile: Record<
   if (!db.voiceProfiles[key]) db.voiceProfiles[key] = [];
   const stored = {
     ...profile,
+    // The store owns this required persistence field, including direct callers
+    // that do not come through the voice clone/design HTTP routes.
+    createdAt: profile.createdAt ?? new Date().toISOString(),
     domain: scope.domain,
     orgId: scope.orgId,
     createdBy: scope.userId,
