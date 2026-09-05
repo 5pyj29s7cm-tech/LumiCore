@@ -186,7 +186,7 @@ describe('RAG markdown source metadata', () => {
   it('connects and syncs an Obsidian vault into Lumi knowledge', async () => {
     const { readDB } = await import('../db_layer');
     const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_obsidian_vault_'));
-    const cookie = `token=${jwt.sign({ uid: 'obsidian-user', username: 'obsidian-user' }, JWT_SECRET)}`;
+    const cookie = `token=${jwt.sign({ uid: 'obsidian-user', username: 'obsidian-user', role: 'admin' }, JWT_SECRET)}`;
 
     try {
       fs.mkdirSync(path.join(vaultDir, '.obsidian'), { recursive: true });

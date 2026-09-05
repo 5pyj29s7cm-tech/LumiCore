@@ -16,6 +16,7 @@ import {
   issueDesktopSessionProof,
 } from "../config/desktop_bootstrap";
 import { normalizeNativeClientIdentity } from '../devices/native_identity';
+import { decodeUserSessionToken, requireAuth, requireUserSession } from '../middleware/auth';
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -105,7 +106,7 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
     }
   });
 
-  router.get("/auth/me", (req, res) => {
+  router.get("/auth/me", requireAuth, (req, res) => {
     let token = req.cookies.token;
     // Fallback: WebView2 may not send httpOnly cookies, check Authorization header
     if (!token) {
@@ -158,8 +159,8 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
       : '';
     if (bearer) {
       try {
-        const decoded = jwt.verify(bearer, jwtSecret) as any;
-        admin = db.users.find((user: any) => user.uid === decoded.uid) || null;
+        const decoded = decodeUserSessionToken(bearer, jwtSecret);
+        admin = decoded ? db.users.find((user: any) => user.uid === decoded.uid) || null : null;
       } catch {}
     }
     if (!admin) {
@@ -215,7 +216,7 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
     }
   });
 
-  router.post("/auth/change-password", async (req, res) => {
+  router.post("/auth/change-password", requireAuth, async (req, res) => {
     try {
     const token = req.cookies.token;
     if (!token) return res.status(401).json({ error: "Unauthorized" });
@@ -252,15 +253,11 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
   });
 
   // Switch into organization context — returns a new JWT with orgId + orgRole
-  router.post("/auth/switch-org", (req, res) => {
-    let token = req.cookies.token;
-    if (!token && req.headers.authorization?.startsWith('Bearer ')) {
-      token = req.headers.authorization.slice(7);
-    }
-    if (!token) return res.status(401).json({ error: "Not authenticated" });
-
+  // Validate membership in the target org below, so a former member can still
+  // leave the old org context and return to their personal workspace.
+  router.post("/auth/switch-org", requireUserSession, (req, res) => {
     try {
-      const decoded: any = jwt.verify(token, jwtSecret);
+      const decoded = req.user!;
       const { orgId } = req.body;
 
       // Allow clearing org context (return to personal mode)
@@ -306,7 +303,7 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
   // ── Biometric enrollment ──
 
   // Enroll a voiceprint: receives MFCC features extracted in-browser
-  router.put("/auth/biometric/voiceprint/enroll", async (req, res) => {
+  router.put("/auth/biometric/voiceprint/enroll", requireAuth, async (req, res) => {
     let token = req.cookies.token;
     if (!token && req.headers.authorization?.startsWith('Bearer ')) token = req.headers.authorization.slice(7);
     if (!token) return res.status(401).json({ error: "Not authenticated" });
@@ -375,7 +372,7 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
   });
 
   // Verify a recent speech window against enrolled voiceprints.
-  router.post("/auth/biometric/voiceprint/verify", async (req, res) => {
+  router.post("/auth/biometric/voiceprint/verify", requireAuth, async (req, res) => {
     let token = req.cookies.token;
     if (!token && req.headers.authorization?.startsWith('Bearer ')) token = req.headers.authorization.slice(7);
     if (!token) return res.status(401).json({ error: "Not authenticated" });
@@ -412,7 +409,7 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
   });
 
   // Enroll a face: receives embedding extracted in-browser via MediaPipe
-  router.put("/auth/biometric/face/enroll", (req, res) => {
+  router.put("/auth/biometric/face/enroll", requireAuth, (req, res) => {
     let token = req.cookies.token;
     if (!token && req.headers.authorization?.startsWith('Bearer ')) token = req.headers.authorization.slice(7);
     if (!token) return res.status(401).json({ error: "Not authenticated" });
@@ -440,7 +437,7 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
   });
 
   // List enrolled biometrics for current user
-  router.get("/auth/biometric/list", (req, res) => {
+  router.get("/auth/biometric/list", requireAuth, (req, res) => {
     let token = req.cookies.token;
     if (!token && req.headers.authorization?.startsWith('Bearer ')) token = req.headers.authorization.slice(7);
     if (!token) return res.status(401).json({ error: "Not authenticated" });
@@ -473,7 +470,7 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
   });
 
   // Delete a biometric item
-  router.delete("/auth/biometric/:type/:id", (req, res) => {
+  router.delete("/auth/biometric/:type/:id", requireAuth, (req, res) => {
     let token = req.cookies.token;
     if (!token && req.headers.authorization?.startsWith('Bearer ')) token = req.headers.authorization.slice(7);
     if (!token) return res.status(401).json({ error: "Not authenticated" });
@@ -503,7 +500,7 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
   // Face/voice signals currently support presence and command gating, not
   // cryptographic authentication. Keep old clients from silently impersonating
   // another local user until an explicit biometric challenge is implemented.
-  router.post("/auth/switch-user", (req, res) => {
+  router.post("/auth/switch-user", requireAuth, (req, res) => {
     let token = req.cookies.token;
     if (!token && req.headers.authorization?.startsWith('Bearer ')) token = req.headers.authorization.slice(7);
     if (!token) return res.status(401).json({ error: "Not authenticated" });
@@ -520,7 +517,7 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
   });
 
   // List user's organization memberships (for org switcher UI)
-  router.get("/auth/orgs", (req, res) => {
+  router.get("/auth/orgs", requireAuth, (req, res) => {
     let token = req.cookies.token;
     if (!token && req.headers.authorization?.startsWith('Bearer ')) {
       token = req.headers.authorization.slice(7);

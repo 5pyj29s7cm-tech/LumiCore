@@ -8,7 +8,6 @@
  */
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
-import jwt from 'jsonwebtoken';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -20,7 +19,6 @@ import { chunkText, ingestDocument, verifyIngestedDocument } from '../server/age
 import type { KnowledgeIngestionManifest } from '../server/knowledge/ingestion_manifest';
 import { buildKnowledgeIngestionManifest, evaluateKnowledgeManifest, hashKnowledgeContent } from '../server/knowledge/ingestion_manifest';
 import { getDataPath, getGeneratedOutputDir } from '../server/config/data_path';
-import { getJwtSecret } from '../server/config/local_identity';
 import {
   requireAdmin as requireUnifiedAdmin,
   requireAuth as requireUnifiedAuth,
@@ -45,36 +43,14 @@ fs.mkdirSync(PERSONAL_KNOWLEDGE_DIR, { recursive: true });
 
 const router = Router();
 
-const JWT_SECRET = getJwtSecret();
-
-function requireAuth(req: Request, res: Response, next: () => void): void {
-  let token = req.cookies.token;
-  if (!token && req.headers.authorization?.startsWith('Bearer ')) {
-    token = req.headers.authorization.slice(7);
-  }
-  if (!token) { res.status(401).json({ error: 'Login required' }); return; }
-  try { jwt.verify(token, JWT_SECRET); next(); }
-  catch { res.status(401).json({ error: 'Invalid token' }); }
-}
+const requireAuth = requireUnifiedAuth;
 
 function getUserId(req: Request): string {
-  try {
-    let token = req.cookies.token;
-    if (!token && req.headers.authorization?.startsWith('Bearer ')) token = req.headers.authorization.slice(7);
-    if (token) return (jwt.verify(token, JWT_SECRET) as any).uid;
-  } catch {}
-  return 'anonymous';
+  return req.user?.uid || 'anonymous';
 }
 
 function getAuthPayload(req: Request): any | null {
-  try {
-    let token = req.cookies?.token;
-    if (!token && req.headers.authorization?.startsWith('Bearer ')) token = req.headers.authorization.slice(7);
-    if (!token) return null;
-    return jwt.verify(token, JWT_SECRET) as any;
-  } catch {
-    return null;
-  }
+  return req.user || null;
 }
 
 // ── Multer: files staged in OS temp, then moved to knowledge dir ──
@@ -334,6 +310,13 @@ const DOWNLOAD_MIME_TYPES: Record<string, string> = {
   '.dxf': 'application/dxf',
   '.dwg': 'application/octet-stream',
 };
+
+// Only passive formats are rendered under the application's origin.
+const SAFE_INLINE_EXTENSIONS = new Set([
+  '.txt', '.log', '.md', '.json', '.csv',
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.pdf',
+  '.mp3', '.mpeg', '.wav', '.m4a', '.ogg', '.oga', '.flac', '.aac', '.wma', '.webm', '.mp4', '.mov',
+]);
 
 function getDownloadMime(filePath: string): string | undefined {
   const ext = path.extname(filePath).toLowerCase() || (filePath.startsWith('.') ? filePath.toLowerCase() : '');
@@ -1809,7 +1792,7 @@ function getSourceBacklinks(db: any, scope: FileScope, filename: string): string
   return buildSourceBacklinkMap(scopedMeta, names).get(filename) || [];
 }
 
-router.get('/files/list', (req: Request, res: Response) => {
+router.get('/files/list', requireAuth, (req: Request, res: Response) => {
   try {
     const scope = getFileScope(req);
     const db = readDB();
@@ -1884,7 +1867,7 @@ router.get('/files/obsidian/status', requireAuth, (req: Request, res: Response) 
   }
 });
 
-router.post('/files/obsidian/connect', requireAuth, (req: Request, res: Response) => {
+router.post('/files/obsidian/connect', requireAuth, requireUnifiedAdmin, requireUnifiedLocalRequest, (req: Request, res: Response) => {
   try {
     assertLocalHostRequest(req);
     const userId = getUserId(req);
@@ -1912,7 +1895,7 @@ router.post('/files/obsidian/connect', requireAuth, (req: Request, res: Response
   }
 });
 
-router.post('/files/obsidian/sync', requireAuth, async (req: Request, res: Response) => {
+router.post('/files/obsidian/sync', requireAuth, requireUnifiedAdmin, requireUnifiedLocalRequest, async (req: Request, res: Response) => {
   try {
     assertLocalHostRequest(req);
     const userId = getUserId(req);
@@ -2218,9 +2201,12 @@ router.get('/files/download/:id', requireAuth, (req: Request, res: Response) => 
 
     const ext = path.extname(safeName).toLowerCase();
     const mime = getDownloadMime(ext);
-    if (mime) res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Type', mime || 'application/octet-stream');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    // Applies even to downloaded active documents if a browser renders them.
+    res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'");
 
-    const inline = req.query.inline === '1';
+    const inline = req.query.inline === '1' && SAFE_INLINE_EXTENSIONS.has(ext);
     if (inline) {
       res.setHeader('Content-Disposition', 'inline');
     } else {
@@ -2334,7 +2320,7 @@ router.post('/files/rename', requireAuth, (req: Request, res: Response) => {
 });
 
 // ── GET /files/info/:id ──
-router.get('/files/info/:id', (req: Request, res: Response) => {
+router.get('/files/info/:id', requireAuth, (req: Request, res: Response) => {
   try {
     const scope = getFileScope(req);
     const safeName = path.basename(req.params.id);

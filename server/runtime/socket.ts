@@ -1,6 +1,6 @@
 // Socket aggregator — mounts all Socket.IO handlers
 import { Server } from "socket.io";
-import jwt from "jsonwebtoken";
+import { decodeUserSessionToken } from '../middleware/auth';
 import { registerChatHandler } from "../socket/chat";
 import { registerTaskHandler } from "../socket/task";
 import { registerVoiceHandlers } from "../socket/voice";
@@ -34,7 +34,7 @@ interface SocketContext {
   };
 }
 
-function getSocketAuth(socket: any, jwtSecret: string): {
+export function getSocketAuth(socket: any, jwtSecret: string): {
   uid: string;
   username: string;
   role: string;
@@ -53,8 +53,8 @@ function getSocketAuth(socket: any, jwtSecret: string): {
   try {
     const authToken = socket.handshake?.auth?.token;
     if (authToken) {
-      const decoded: any = jwt.verify(authToken, jwtSecret);
-      return decoded.uid ? {
+      const decoded = decodeUserSessionToken(authToken, jwtSecret);
+      return decoded ? {
         uid: decoded.uid,
         username: decoded.username || '',
         role: decoded.role || 'user',
@@ -62,12 +62,12 @@ function getSocketAuth(socket: any, jwtSecret: string): {
         orgRole: decoded.orgRole || '',
       } : null;
     }
-    const cookies = socket.handshake.headers.cookie;
+    const cookies = socket.handshake?.headers?.cookie;
     if (cookies) {
       const token = cookies.split(';').find((c: string) => c.trim().startsWith('token='))?.split('=')[1];
       if (token) {
-        const decoded: any = jwt.verify(token, jwtSecret);
-        return decoded.uid ? {
+        const decoded = decodeUserSessionToken(token, jwtSecret);
+        return decoded ? {
           uid: decoded.uid,
           username: decoded.username || '',
           role: decoded.role || 'user',

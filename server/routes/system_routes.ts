@@ -765,7 +765,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
   });
 
   // Token usage aggregation
-  router.get("/llm/usage", (req, res) => {
+  router.get("/llm/usage", requireAuth, (req, res) => {
     let token = req.cookies.token;
     // Fallback: WebView2 may not send httpOnly cookies, check Authorization header
     if (!token && req.headers.authorization?.startsWith('Bearer ')) {

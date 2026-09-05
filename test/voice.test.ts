@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { makeApp, JWT_SECRET, COOKIE_OPTS } from './helpers';
 import voiceRoutes from '../routes/voice';
 import { mountAuthRoutes } from '../server/routes/auth';
+import { addMember, createOrg } from '../server/org/db';
 
 let url: string;
 let cleanup: () => void;
@@ -533,11 +534,14 @@ describe('Voice API', () => {
     ))).toBe(true);
 
     const identity = jwt.verify(token, JWT_SECRET) as any;
-    const workToken = jwt.sign({ ...identity, orgId: 'biometric-work-scope' }, JWT_SECRET);
+    const workOrg = createOrg('Biometric test organization', 'biometric-work-scope', identity.uid);
+    addMember(workOrg.id, identity.uid, 'owner');
+    const workToken = jwt.sign({ ...identity, orgId: workOrg.id }, JWT_SECRET);
     const workList = await fetch(`${url}/api/auth/biometric/list`, {
       headers: { Cookie: `token=${workToken}` },
     });
     const work = await workList.json();
+    expect(workList.status).toBe(200);
     expect(work).toMatchObject({ voiceprints: [], faces: [], personalContextRequired: true });
   });
 
