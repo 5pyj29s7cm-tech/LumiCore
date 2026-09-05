@@ -5,6 +5,7 @@ import {
   mcpManager,
   getMCPConfig,
   updateMCPConfig,
+  setMCPServerEnabled,
   recoverServerTools,
   getRegisteredMCPToolNames,
   requireSafeMCPServerName,
@@ -152,12 +153,7 @@ export function mountMcpRoutes(router: Router) {
       }
       const current = getMCPConfig()[name];
       if (!current) return res.status(404).json({ error: 'MCP server not found' });
-      const result = await updateMCPConfig({
-        [name]: { ...current, enabled: req.body.enabled },
-      }, {
-        mode: 'merge',
-        forceRestartNames: req.body.enabled ? [name] : [],
-      });
+      const result = await setMCPServerEnabled(name, req.body.enabled);
       res.status(result.ok ? 200 : 409).json(publicConfigUpdateResult(result));
     } catch (err: any) {
       reportMcpRouteFailure('server state update', err);

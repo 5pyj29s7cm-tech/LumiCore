@@ -544,7 +544,7 @@ export interface MCPConfigUpdateResult {
 type MCPConfigRuntimeManager = Pick<
   MCPClientManager,
   'getConfig' | 'saveConfig' | 'restartServer' | 'disconnectServer' | 'getConnectedServers'
->;
+> & Partial<Pick<MCPClientManager, 'beginSkillActivation' | 'commitSkillActivation'>>;
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -728,12 +728,22 @@ async function activateMCPServerRuntime(
   name: string,
   config: MCPServerConfig,
 ): Promise<string[]> {
+  const pending = Boolean(config.installationState && config.installationState !== 'active');
+  if (pending && (!manager.beginSkillActivation || !manager.commitSkillActivation)) {
+    throw new Error(`MCP Skill "${name}" activation manager cannot commit a pending installation.`);
+  }
+  const activationConfig = pending ? manager.beginSkillActivation!(name) : config;
   const tools = await manager.restartServer(name);
   if (!Array.isArray(tools) || tools.length === 0) {
     unregisterServerTools(name, registry);
     throw new Error(`MCP server "${name}" connected without exposing any tools.`);
   }
-  return recoverServerTools(name, tools, registry, config);
+  if (config.installationState) {
+    const activation = await registerConnectedSkillTools(name, tools, { registry, serverConfig: activationConfig });
+    if (pending) manager.commitSkillActivation!(name);
+    return activation.registeredToolNames;
+  }
+  return recoverServerTools(name, tools, registry, activationConfig);
 }
 
 /**
@@ -750,14 +760,25 @@ async function updateMCPConfigUnlocked(
     removeNames?: string[];
     manager?: MCPConfigRuntimeManager;
     registry?: ToolRegistry;
+    /** Only the dedicated server-owned state operation may supply this. */
+    runtimeStateChange?: { name: string; enabled: boolean };
   } = {},
 ): Promise<MCPConfigUpdateResult> {
   const mode = options.mode || 'merge';
   if (mode !== 'merge' && mode !== 'replace') throw new Error('Invalid MCP config update mode.');
   const manager = options.manager || mcpManager;
   const registry = options.registry || toolRegistry;
-  const submitted = validateMCPServerMap(servers);
   const previous = manager.getConfig();
+  let submitted: Record<string, MCPServerConfig>;
+  if (options.runtimeStateChange) {
+    const { name, enabled } = options.runtimeStateChange;
+    if (!Object.prototype.hasOwnProperty.call(previous, name)) throw new Error('MCP server not found');
+    // Preserve identity, attestation and credentials from the current server
+    // configuration under the same update lock. None come from the request.
+    submitted = { [name]: { ...previous[name], enabled } };
+  } else {
+    submitted = validateMCPServerMap(servers);
+  }
   const next = mode === 'replace'
     ? { ...submitted }
     : { ...previous, ...submitted };
@@ -922,6 +943,26 @@ async function updateMCPConfigUnlocked(
 }
 
 let mcpConfigUpdateTail: Promise<void> = Promise.resolve();
+
+/** Toggle an existing runtime without treating server-owned metadata as user input. */
+export function setMCPServerEnabled(
+  name: string,
+  enabled: boolean,
+  options: { manager?: MCPConfigRuntimeManager; registry?: ToolRegistry } = {},
+): Promise<MCPConfigUpdateResult> {
+  const safeName = requireSafeMCPServerName(name);
+  if (typeof enabled !== 'boolean') throw new Error('enabled must be boolean');
+  const operation = () => updateMCPConfigUnlocked({}, {
+    manager: options.manager,
+    registry: options.registry,
+    mode: 'merge',
+    forceRestartNames: enabled ? [safeName] : [],
+    runtimeStateChange: { name: safeName, enabled },
+  });
+  const run = mcpConfigUpdateTail.then(operation, operation);
+  mcpConfigUpdateTail = run.then(() => undefined, () => undefined);
+  return run;
+}
 
 export function updateMCPConfig(
   servers: Record<string, MCPServerConfig>,

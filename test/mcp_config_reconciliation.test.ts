@@ -6,6 +6,7 @@ import {
   mcpServerConfigFingerprint,
   recoverServerTools,
   updateMCPConfig,
+  setMCPServerEnabled,
   validateMCPServerConfig,
 } from '../server/mcp';
 import type { MCPServerConfig, MCPToolDef } from '../server/mcp';
@@ -80,6 +81,44 @@ class FakeMcpManager {
 }
 
 describe('MCP config reconciliation', () => {
+  it('toggles an installed runtime while preserving server-owned identity, credentials and metadata', async () => {
+    const original = {
+      ...stdio('node', 'probe'),
+      installationState: 'active' as const,
+      env: { FIXTURE_KEY: 'synthetic-key' },
+      cachedToolsAttestation: 'synthetic-attestation',
+    };
+    const manager = new FakeMcpManager({ installed: original });
+    const registry = new ToolRegistry();
+    await recoverServerTools('installed', [tool('installed', 'probe')], registry, original);
+    const disabled = await setMCPServerEnabled('installed', false, { manager, registry });
+    expect(disabled).toMatchObject({ ok: true, services: [{ enabled: false, registered: false }] });
+    expect(manager.getConfig().installed).toEqual({ ...original, enabled: false });
+    const enabled = await setMCPServerEnabled('installed', true, { manager, registry });
+    expect(enabled).toMatchObject({ ok: true, services: [{ enabled: true, registered: true, usable: true }] });
+    expect(manager.getConfig().installed).toEqual(original);
+    expect(() => validateMCPServerConfig('installed', original)).toThrow(/installationState is runtime-managed/);
+  });
+
+  it.each(['pending', 'disabled'] as const)('commits a %s installation only after registering exact tools', async (installationState) => {
+    const manager = new FakeMcpManager({ installed: { ...stdio('node', 'probe', false), installationState } });
+    const registry = new ToolRegistry();
+    const result = await setMCPServerEnabled('installed', true, { manager, registry });
+    expect(result).toMatchObject({ ok: true, services: [{ registered: true, usable: true }] });
+    expect(manager.config.installed.installationState).toBe('active');
+    expect(registry.get('mcp_installed_probe')).toBeDefined();
+  });
+
+  it('restores the original pending installation when activation fails', async () => {
+    const original = { ...stdio('fail-node', 'probe', false), installationState: 'pending' as const };
+    const manager = new FakeMcpManager({ installed: original });
+    const registry = new ToolRegistry();
+    const result = await setMCPServerEnabled('installed', true, { manager, registry });
+    expect(result).toMatchObject({ ok: false, services: [{ action: 'rolled_back', enabled: false, usable: false }] });
+    expect(manager.config.installed).toEqual(original);
+    expect(registry.get('mcp_installed_probe')).toBeUndefined();
+  });
+
   it('strictly validates names, transports, commands and remote URLs', () => {
     expect(() => validateMCPServerConfig('__proto__', stdio('node', 'action'))).toThrow();
     expect(() => validateMCPServerConfig('empty', { enabled: true, transport: 'stdio', command: '' })).toThrow();

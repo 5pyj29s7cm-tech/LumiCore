@@ -329,6 +329,27 @@ describe('MCP management route security', () => {
     expect(await localAdmin.json()).toHaveProperty('devices');
   });
 
+  it('accepts the enabled-only request for an installed MCP entry without accepting replacement metadata', async () => {
+    let config: any = { installed_toggle: { command: 'node', args: ['synthetic-only'], source: 'external', transport: 'stdio', enabled: true, installationState: 'active' } };
+    const getConfig = vi.spyOn(mcpManager, 'getConfig').mockImplementation(() => structuredClone(config));
+    const saveConfig = vi.spyOn(mcpManager, 'saveConfig').mockImplementation(value => { config = structuredClone(value); });
+    const disconnect = vi.spyOn(mcpManager, 'disconnectServer').mockResolvedValue();
+    const connected = vi.spyOn(mcpManager, 'getConnectedServers').mockReturnValue([]);
+    try {
+      const response = await fetch(`${url}/api/mcp/installed_toggle/state`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}`, [DESKTOP_SESSION_HEADER]: adminDesktopSessionProof },
+        body: JSON.stringify({ enabled: false, installationState: 'pending', command: 'unexpected-command' }),
+        signal: AbortSignal.timeout(5000),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ ok: true, services: [{ enabled: false, registered: false }] });
+      expect(config.installed_toggle).toMatchObject({ enabled: false, installationState: 'active', command: 'node' });
+    } finally {
+      getConfig.mockRestore(); saveConfig.mockRestore(); disconnect.mockRestore(); connected.mockRestore();
+    }
+  });
+
   it('rejects non-WebSocket remote-device endpoints before persisting them', async () => {
     const response = await fetch(`${url}/api/remote-devices`, {
       method: 'PUT',
