@@ -192,6 +192,9 @@ async function main() {
     HOST: '127.0.0.1',
     LUMI_DESKTOP: '1',
     LUMI_DATA_DIR: dataRoot,
+    // Startup probes must never contact a developer's already-running models.
+    OLLAMA_BASE_URL: `${baseUrl}/__smoke_no_model__`,
+    LMSTUDIO_BASE_URL: `${baseUrl}/__smoke_no_model__`,
     LUMI_LOG_FILE: path.join(dataRoot, 'logs', 'server.log'),
     USERPROFILE: homeDir,
     HOME: homeDir,
@@ -260,6 +263,28 @@ async function main() {
       }
     }
     console.log(`[packaged-smoke] Privacy: ${privacy.mode}; locked=${privacy.locked}; persistence checked=${!privacy.locked}`);
+
+    if (privacy.mode === 'strict') {
+      const acquire = await fetch(`${baseUrl}/marketplace/skills/acquire`, {
+        method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skillId: args.skillId, installSource: 'bundled' }),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (acquire.status !== 403 || (await acquire.json()).code !== 'PRIVACY_STRICT_BLOCKED') {
+        throw new Error('Strict mode must reject skill installation before starting its runtime.');
+      }
+      const chat = await fetch(`${baseUrl}/chat`, {
+        method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json', 'X-API-Key': 'synthetic-smoke-key' },
+        body: JSON.stringify({ provider: 'openai', message: 'synthetic privacy probe' }),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (chat.status !== 403 || (await chat.json()).code !== 'CHAT_PRIVACY_RESTRICTED') {
+        throw new Error('Strict mode did not block the direct cloud chat path.');
+      }
+      console.log(JSON.stringify({ ok: true, port, runtime: runtimeMeta.buildId, privacy: 'strict', socketHandshake: true,
+        skillInstallationBlocked: true, cloudChatBlocked: true, cleanup: args.keep ? 'kept' : 'removed' }, null, 2));
+      return;
+    }
 
     const marketplace = await fetchJson(`${baseUrl}/marketplace/skills?lang=zh`, { timeoutMs: 8000 });
     const bundledSkillCount = (await fs.readdir(bundledSkillsDir, { withFileTypes: true }))

@@ -1,4 +1,5 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
+import { isStrictPrivacy } from '../config/privacy';
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
@@ -281,6 +282,10 @@ export function mountMarketplaceRoutes(
 
   // Acquire/install a skill from the marketplace
   router.post("/marketplace/skills/acquire", requireAuth, requireAdmin, requirePersonalMarketplaceMutation, requireLocalRequest, requireNativeDesktopSession, async (req, res) => {
+    if (isStrictPrivacy()) {
+      res.status(403).json({ code: 'PRIVACY_STRICT_BLOCKED', error: 'Strict mode pauses automatic tools. Disable it and restart Lumi before installing skills.' });
+      return;
+    }
     try {
       const { skillId, skillName, installSource } = req.body;
       if (!skillId || !skillName) return res.status(400).json({ error: "skillId and skillName required" });
