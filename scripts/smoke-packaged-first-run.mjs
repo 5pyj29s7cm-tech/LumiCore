@@ -5,6 +5,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import sqlite3 from 'sqlite3';
 import {
   bootstrapDesktopTestSession,
   DESKTOP_SESSION_HEADER,
@@ -124,6 +125,41 @@ async function tail(filePath, lines = 80) {
   } catch {
     return '';
   }
+}
+
+async function verifyPackagedShutdown(baseUrl, dataRoot, headers, child) {
+  const marker = `shutdown-smoke-${Date.now()}`;
+  await fetchJson(`${baseUrl}/preferences/pet`, {
+    method: 'PUT', headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pet: { id: marker }, accessories: [] }), timeoutMs: 8000,
+  });
+  // Quit immediately after the ordinary write acknowledgement, without a
+  // caller-side sleep that could accidentally mask the coalesced-write window.
+  const receipt = await fetchJson(`${baseUrl}/runtime/shutdown`, {
+    method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expectedPid: child.pid }), timeoutMs: 45000,
+  });
+  if (receipt.ok !== true || receipt.status !== 'saved' || receipt.pid !== child.pid) {
+    throw new Error('Packaged shutdown did not return its owned-process save receipt.');
+  }
+  await waitFor('packaged backend graceful exit', 8000, 50, async () => child.exitCode !== null || child.signalCode !== null);
+  if (child.exitCode !== 0 || child.signalCode !== null) throw new Error('Packaged backend did not exit normally after saving.');
+  const database = await new Promise((resolve, reject) => {
+    const handle = new sqlite3.Database(path.join(dataRoot, 'data', 'lumi.db'), sqlite3.OPEN_READONLY,
+      error => error ? reject(error) : resolve(handle));
+  });
+  try {
+    const rows = await new Promise((resolve, reject) => database.all(
+      "SELECT value FROM settings WHERE key LIKE 'pet_prefs_%'", [],
+      (error, values) => error ? reject(error) : resolve(values),
+    ));
+    if (!rows.some(row => JSON.parse(row.value).pet?.id === marker)) {
+      throw new Error('The last acknowledged setting was not present on disk after graceful exit.');
+    }
+  } finally {
+    await new Promise((resolve, reject) => database.close(error => error ? reject(error) : resolve()));
+  }
+  return { savedReceipt: true, normalExit: true, lastSettingPersisted: true };
 }
 
 async function main() {
@@ -281,7 +317,8 @@ async function main() {
       if (chat.status !== 403 || (await chat.json()).code !== 'CHAT_PRIVACY_RESTRICTED') {
         throw new Error('Strict mode did not block the direct cloud chat path.');
       }
-      console.log(JSON.stringify({ ok: true, port, runtime: runtimeMeta.buildId, privacy: 'strict', socketHandshake: true,
+      const shutdown = await verifyPackagedShutdown(baseUrl, dataRoot, authHeaders, child);
+      console.log(JSON.stringify({ ok: true, port, runtime: runtimeMeta.buildId, privacy: 'strict', socketHandshake: true, shutdown,
         skillInstallationBlocked: true, cloudChatBlocked: true, cleanup: args.keep ? 'kept' : 'removed' }, null, 2));
       return;
     }
@@ -352,8 +389,10 @@ async function main() {
       }
     }
 
+    const shutdown = await verifyPackagedShutdown(baseUrl, dataRoot, authHeaders, child);
     const summary = {
       ok: true,
+      shutdown,
       distServer,
       port,
       runtime: {
@@ -383,20 +422,24 @@ async function main() {
     console.error(await tail(errLog));
     process.exitCode = 1;
   } finally {
-    child.kill('SIGTERM');
-    await new Promise(resolve => {
-      const timer = setTimeout(() => {
-        if (!child.killed) child.kill('SIGKILL');
-        resolve();
-      }, 5000);
-      child.once('exit', () => {
-        clearTimeout(timer);
-        resolve();
+    if (!childExited) {
+      child.kill('SIGTERM');
+      await new Promise(resolve => {
+        const timer = setTimeout(() => {
+          if (!childExited) child.kill('SIGKILL');
+          resolve();
+        }, 5000);
+        child.once('exit', () => {
+          clearTimeout(timer);
+          resolve();
+        });
       });
-    });
+    }
     await out.close();
     await err.close();
     if (!args.keep && process.exitCode !== 1) {
+      const allowedParent = path.resolve(root, '.codex-run');
+      if (path.dirname(path.resolve(runRoot)) !== allowedParent) throw new Error('Unsafe smoke cleanup directory.');
       await fs.rm(runRoot, { recursive: true, force: true });
     } else {
       console.log(`[packaged-smoke] Kept temp profile: ${runRoot}`);

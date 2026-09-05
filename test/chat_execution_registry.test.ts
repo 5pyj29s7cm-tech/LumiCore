@@ -16,6 +16,7 @@ import {
 } from '../server/conversation/manager';
 import {
   beginChatExecution,
+  countUnsettledChatExecutions,
   beginChatExecutionDurably,
   beginQueuedChatExecution,
   beginChatSidecarExecution,
@@ -103,8 +104,12 @@ describe('chat execution registry', () => {
 
     vi.setSystemTime(now + 121_000);
     expect(getChatExecution(scope, 'queued-B')).toMatchObject({ queued: true, terminal: false });
+    expect(countUnsettledChatExecutions()).toBe(1);
     expect(beginChatExecution(scope, 'queued-B')).toBeNull();
     expect(getChatExecution(scope, 'queued-B')).toMatchObject({ queued: false, terminal: false });
+    expect(countUnsettledChatExecutions()).toBe(1);
+    recordChatExecutionEvent(scope, 'queued-B', 'agent:response', { finalized: true, reason: 'request_cancelled' });
+    expect(countUnsettledChatExecutions()).toBe(0);
   });
 
   it('durably commits cancellation before replacing a superseded execution', async () => {

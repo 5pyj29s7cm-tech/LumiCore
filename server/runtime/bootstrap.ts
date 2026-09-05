@@ -2,6 +2,7 @@ import {
   readDB,
   writeDB,
   flushDB,
+  closeDatabase,
   ensureDatabaseInitialized,
   isDbDirty,
   pruneOldData,
@@ -20,6 +21,8 @@ import { initializeDesktopBootstrapProof } from "../config/desktop_bootstrap";
 import { markLegacyProductDataMigrationVerified } from "../config/data_path";
 import { repairCorruptedOrganizationNames } from "../org/db";
 import { startMessagingConnections, stopMessagingConnections } from "./messaging";
+import { stopMessagingIngressAndDrain } from '../messaging/routes';
+import { waitForBranchSyncCommits } from '../org/branch_sync';
 import { recoverOrphanedConversationActionExecutions } from "../conversation/manager";
 import { stopGptSovitsRuntime } from "../tts/gptsovits_runtime";
 import { stopVoiceprintRuntime } from "../biometrics/voiceprint_provider";
@@ -32,6 +35,7 @@ import {
   persistWorkflowRuntimeBarrier,
   reconcileExpiredWorkflowRuns,
   startWorkflowRuntimeMaintenance,
+  stopWorkflowRuntimeMaintenance,
 } from "../workflows/runtime";
 import { recoverInterruptedExternalAiHistorySyncs } from "../agents/external_ai_history_sync";
 import { hydrateActiveExtensions } from "../extensions/registry";
@@ -46,9 +50,12 @@ import {
 import {
   initializeChatExecutionRegistryPersistence,
   waitForChatExecutionPersistence,
+  countUnsettledChatExecutions,
 } from "../socket/chat_execution_registry";
 import { installRuntimeFileLogger } from './file_logger';
 import { ensurePendingConfirmationPersistenceInitialized } from '../tools/pending_confirmation_repository';
+import { RuntimeShutdownCoordinator, registerShutdownSignals, type ShutdownIngress } from './shutdown';
+import { runtimeBackgroundWork, runtimeShutdownCancellation, waitUntilRuntimeIdle } from './shutdown_work';
 
 interface BootstrapContext {
   server: any;
@@ -56,6 +63,8 @@ interface BootstrapContext {
   PORT: number;
   HOST: string;
   jwtSecret: string;
+  shutdownIngress: ShutdownIngress;
+  shutdownMcp: () => Promise<void>;
   llm: {
     getDeepSeek: any; getGemini: any; getOpenAI: any; getAnthropic: any; getQwen: any;
     getOllama?: any; getLmStudio?: any; getArk?: any; getXiaomi?: any; getKimi?: any; getGlm?: any; getRelay?: any;
@@ -65,16 +74,18 @@ interface BootstrapContext {
 }
 
 let unifiedRuntimeSupervisor: UnifiedRuntimeSupervisor | null = null;
+const startupTimers = new Set<ReturnType<typeof setTimeout>>();
 
 function scheduleFirstBootExploration(runtimeDir: string, delayMs = 30000) {
   const timer = setTimeout(() => {
+    startupTimers.delete(timer);
     if (isFirstBootComplete()) return;
     if (!isSystemExplorationAllowed()) {
       console.log('[Bootstrap] First-boot exploration is waiting for local-admin authorization.');
       return;
     }
     console.log('[Bootstrap] First boot detected - running system exploration in an isolated worker...');
-    void collectSystemSnapshotInWorker(runtimeDir)
+    void runtimeBackgroundWork.track(collectSystemSnapshotInWorker(runtimeDir)
       .then(snapshot => {
         if (isFirstBootComplete()) return;
         if (!isSystemExplorationAllowed()) {
@@ -86,19 +97,22 @@ function scheduleFirstBootExploration(runtimeDir: string, delayMs = 30000) {
       })
       .catch((err: Error) => {
         console.warn('[Bootstrap] System exploration failed:', err.message);
-      });
+      }));
   }, delayMs);
   if (typeof (timer as any).unref === 'function') (timer as any).unref();
+  startupTimers.add(timer);
 }
 
 function schedulePostStartupFlush(delayMs: number) {
   const timer = setTimeout(() => {
+    startupTimers.delete(timer);
     if (!isDbDirty()) return;
-    flushDB()
+    void runtimeBackgroundWork.track(flushDB()
       .then(() => console.log(`[Bootstrap] Database flushed after startup writes (${delayMs}ms)`))
-      .catch((err: any) => console.warn('[Bootstrap] Post-startup database flush failed:', err?.message || err));
+      .catch((err: any) => console.warn('[Bootstrap] Post-startup database flush failed:', err?.message || err)));
   }, delayMs);
   if (typeof (timer as any).unref === 'function') (timer as any).unref();
+  startupTimers.add(timer);
 }
 
 export async function bootstrap(ctx: BootstrapContext) {
@@ -189,7 +203,7 @@ export async function bootstrap(ctx: BootstrapContext) {
       `[ExternalCapabilities] Active=${initialExternalCapabilities.active}, ready=${initialExternalCapabilities.ready}, proxies=${initialExternalCapabilities.proxies}`,
     );
   }
-  registerMCPTools(io).then(mcpTools => {
+  void runtimeBackgroundWork.track(registerMCPTools(io).then(mcpTools => {
     if (mcpTools.length > 0) {
       console.log(`[MCP] Registered ${mcpTools.length} MCP tools (total: ${toolRegistry.list().length})`);
     }
@@ -202,7 +216,7 @@ export async function bootstrap(ctx: BootstrapContext) {
     }
   }).catch(err => {
     console.warn('[MCP] Tool registration warning:', err.message);
-  });
+  }));
 
   unifiedRuntimeSupervisor = new UnifiedRuntimeSupervisor([
     {
@@ -241,6 +255,7 @@ export async function bootstrap(ctx: BootstrapContext) {
   });
 
   server.listen(PORT, HOST, () => {
+    if (!ctx.shutdownIngress.isAccepting()) return;
     console.log(`Server running on http://${HOST}:${PORT}`);
     void startMessagingConnections().catch((err: any) => {
       console.warn('[Messaging] Long-connection startup failed:', err?.message || err);
@@ -253,37 +268,44 @@ export async function bootstrap(ctx: BootstrapContext) {
     schedulePostStartupFlush(30_000);
   });
 
-  // Cleanup on exit
-  let cleaningUp = false;
-  const cleanup = async () => {
-    if (cleaningUp) return;
-    cleaningUp = true;
-    console.log('[Shutdown] Cleaning up...');
-    stopSystemExplorationWorker();
-    scheduler.stop();
-    unifiedRuntimeSupervisor?.stop();
-    unifiedRuntimeSupervisor = null;
-    setUnifiedRuntimeSupervisor(null);
-    try {
-      await stopMessagingConnections();
-      console.log('[Messaging] Long connections stopped');
-    } catch (err: any) {
-      console.warn('[Messaging] Shutdown error:', err?.message || err);
-    }
-    try {
+  const shutdown = new RuntimeShutdownCoordinator({
+    stopAdmission: () => {
+      runtimeShutdownCancellation.request();
+      ctx.shutdownIngress.stopAdmission();
+      for (const timer of startupTimers) clearTimeout(timer);
+      startupTimers.clear();
+      stopSystemExplorationWorker();
+      scheduler.stop();
+      unifiedRuntimeSupervisor?.stop();
+    },
+    drain: async () => {
+      await Promise.all([
+        stopMessagingIngressAndDrain(),
+        stopMessagingConnections(),
+        ctx.shutdownMcp(),
+        stopWorkflowRuntimeMaintenance(),
+        ctx.shutdownIngress.waitForIdle(),
+        waitUntilRuntimeIdle(() => scheduler.listTasks().every(task => !task.running && !task.settlementPending)),
+        waitUntilRuntimeIdle(() => !unifiedRuntimeSupervisor?.status().jobs.some(job => job.inFlight)),
+        waitUntilRuntimeIdle(() => countUnsettledChatExecutions() === 0),
+      ]);
+      // Admitted handlers can enqueue summaries/memories while winding down.
+      // Wait after those handlers, then await their durable receipt writes.
+      await runtimeBackgroundWork.waitForIdle();
+      await waitForBranchSyncCommits();
       await waitForChatExecutionPersistence();
-      await flushDB();
-      console.log('[Shutdown] Database flushed');
-    } catch {}
-    try {
       await mcpManager.disconnectAll();
-      console.log('[MCP] All servers disconnected');
-    } catch (err: any) {
-      console.warn('[MCP] Disconnect error:', err.message);
-    }
-    stopGptSovitsRuntime();
-    await stopVoiceprintRuntime();
-  };
-  process.on('SIGINT', () => { cleanup().then(() => process.exit(0)); });
-  process.on('SIGTERM', () => { cleanup().then(() => process.exit(0)); });
+      stopGptSovitsRuntime();
+      await stopVoiceprintRuntime();
+    },
+    saveAndClose: async () => {
+      await closeDatabase();
+      unifiedRuntimeSupervisor = null;
+      setUnifiedRuntimeSupervisor(null);
+      console.log('[Shutdown] Database saved and closed');
+    },
+    exit: () => process.exit(0),
+  });
+  ctx.shutdownIngress.configure(shutdown);
+  registerShutdownSignals(shutdown);
 }

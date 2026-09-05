@@ -20,9 +20,11 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 mod local_bootstrap;
+mod backend_shutdown;
 mod native_identity;
 mod window_activation;
 use local_bootstrap::bootstrap_local_identity;
+use backend_shutdown::{request_backend_save, ShutdownBarrier};
 use native_identity::get_native_client_identity;
 use window_activation::{execute_window_activation_steps, WindowActivationOps};
 
@@ -3997,17 +3999,50 @@ fn show_main_window(app: tauri::AppHandle) -> Result<WindowActivationDiagnostic,
     }
 }
 
-#[tauri::command]
-fn quit_app(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Mutex<ResidentState>>,
-) -> Result<(), String> {
-    {
-        let mut resident = state.lock().map_err(|e| e.to_string())?;
+fn save_before_app_exit(app: &tauri::AppHandle) -> Result<(), String> {
+    app.state::<ShutdownBarrier>().run(|| {
+        let owned_pid = {
+            let state = app.state::<Mutex<BackendProcesses>>();
+            let mut processes = state.lock().map_err(|error| error.to_string())?;
+            match processes.node.as_mut() {
+                // Development/attached backends remain running independently.
+                None => None,
+                Some(child) => match child.try_wait().map_err(|error| error.to_string())? {
+                    None => Some(child.id()),
+                    Some(_) => return Err("The owned backend exited before it confirmed saving. Closing was cancelled.".into()),
+                },
+            }
+        };
+        if let Some(pid) = owned_pid { request_backend_save(pid)?; }
+        Ok(())
+    })?;
+    if let Ok(mut resident) = app.state::<Mutex<ResidentState>>().lock() {
         resident.force_quit = true;
     }
     app.exit(0);
     Ok(())
+}
+
+fn request_app_exit(app: &tauri::AppHandle) {
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Err(error) = save_before_app_exit(&handle) {
+            eprintln!("[LumiCore] Shutdown cancelled: {error}");
+            show_main_window_impl(&handle, "shutdown_failed");
+            let _ = handle.emit("lumi:shutdown-failed", &error);
+            #[cfg(not(test))]
+            handle.dialog().message(format!("暂时无法退出：后台尚未确认保存。\n\n{error}\n\n数据仍保留在后台。请解决保存问题后重新退出。"))
+                .title("LumiCore — 保存未完成")
+                .kind(tauri_plugin_dialog::MessageDialogKind::Error)
+                .show(|_| {});
+        }
+    });
+}
+
+#[tauri::command]
+async fn quit_app(app: tauri::AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || save_before_app_exit(&app))
+        .await.map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -4389,11 +4424,7 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
                 let _ = hide_main_window_impl(app);
             }
             "quit" => {
-                let state = app.state::<Mutex<ResidentState>>();
-                if let Ok(mut resident) = state.lock() {
-                    resident.force_quit = true;
-                }
-                app.exit(0);
+                request_app_exit(app);
             }
             _ => {}
         })
@@ -6144,6 +6175,7 @@ pub fn run() {
     };
 
     builder
+        .manage(ShutdownBarrier::default())
         .manage(Mutex::new(BackendProcesses {
             node: None,
             python: None,
@@ -6345,6 +6377,9 @@ pub fn run() {
                     let max_restarts: u32 = 30;
                     loop {
                         std::thread::sleep(std::time::Duration::from_secs(5));
+                        // An acknowledged graceful shutdown must not be
+                        // mistaken for a crash and immediately restarted.
+                        if app_handle.state::<ShutdownBarrier>().prevents_restart() { continue; }
                         let app_state = app_handle.state::<Mutex<BackendProcesses>>();
                         let mut state = app_state.lock().unwrap();
 
@@ -6464,6 +6499,15 @@ pub fn run() {
                     if let Some(window) = app.get_webview_window("main") {
                         let _ = window.hide();
                     }
+                } else if label == "main" && !app.state::<ShutdownBarrier>().is_saved() {
+                    api.prevent_close();
+                    request_app_exit(app);
+                }
+            }
+            tauri::RunEvent::ExitRequested { api, .. } => {
+                if !app.state::<ShutdownBarrier>().is_saved() {
+                    api.prevent_exit();
+                    request_app_exit(app);
                 }
             }
             #[cfg(target_os = "macos")]
@@ -6479,8 +6523,9 @@ pub fn run() {
                 let state = app.state::<Mutex<BackendProcesses>>();
                 let mut procs = state.lock().unwrap();
                 if let Some(child) = procs.node.as_mut() {
-                    println!("[LumiCore] Stopping Node backend...");
-                    let _ = child.kill();
+                    // The backend exited after its save receipt. Never kill
+                    // an unacknowledged process from an OS close callback.
+                    let _ = child.try_wait();
                 }
                 if let Some(child) = procs.python.as_mut() {
                     println!("[LumiCore] Stopping GPT-SoVITS API...");

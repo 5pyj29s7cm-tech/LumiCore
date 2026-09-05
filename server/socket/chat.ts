@@ -9,6 +9,7 @@ import { resolveModelRequestInputBudget } from "../llm/request_context_budget";
 import { LLMUsage, ToolExecutionRecord, type ToolContext } from "../tools/types";
 import { buildMediaArtifactReceipt, type MediaArtifactReceipt } from './media_artifact_receipt';
 import { projectCustomerVisibleExecutionEvent } from './public_agent_event_projection';
+import { runtimeBackgroundWork, runtimeShutdownCancellation } from '../runtime/shutdown_work';
 import {
   normalizeStructuredMediaRequest,
   structuredMediaRoutingEnvelope,
@@ -1769,9 +1770,11 @@ export function registerChatHandler(
       return chatExecutionQueue.reserve(sessionKey, requestId);
     });
     const abortController = sessionLease.controller;
+    const unregisterShutdownCancellation = runtimeShutdownCancellation.register(abortController);
     let releaseDesktopControlLease: (() => void) | null = null;
     let foregroundRequestIdentity: ChatForegroundRequestIdentity | null = null;
     const releaseChatTransportResources = (): void => {
+      unregisterShutdownCancellation();
       actionLeaseHeartbeat?.stop();
       releaseDesktopControlLease?.();
       releaseDesktopControlLease = null;
@@ -4865,7 +4868,7 @@ export function registerChatHandler(
       const branchNodes = queryMemories({ userId: uid, nodeType: 'branch', limit: 50, domain: resolvedDomain, orgId: resolvedOrgId });
       const treeBranches = branchNodes.map(b => b.content);
       const locationTag = sensory.locationTag || undefined;
-      extractMemories(
+      void runtimeBackgroundWork.track(extractMemories(
         { userMessage: text, assistantResponse: responseText, existingMemories: relevantMemories.map(m => m.content), provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, treeBranches, locationTag },
         llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
         llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
@@ -4892,7 +4895,7 @@ export function registerChatHandler(
             orgId: resolvedOrgId,
           });
         }
-      }).catch(err => console.error('[Memory] Extraction failed:', err));
+      }).catch(err => console.error('[Memory] Extraction failed:', err)));
       }
 
       // Update emotional state — reconnect if user was away for a while

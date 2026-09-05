@@ -1,4 +1,5 @@
 import { makeLLMCall } from '../llm/providers';
+import { runtimeBackgroundWork } from '../runtime/shutdown_work';
 import {
   beginConversationSummary,
   cancelConversationSummary,
@@ -135,7 +136,7 @@ export function scheduleConversationSummary(
     };
   }
 
-  const completion = (async () => {
+  const completion = runtimeBackgroundWork.track((async () => {
     try {
       const summary = String(
         input.generateSummary
@@ -160,7 +161,7 @@ export function scheduleConversationSummary(
       input.log?.warn?.(`[Conversation] Auto-summary failed for ${input.conversationId}`, error);
       return false;
     }
-  })();
+  })());
 
   return {
     scheduled: true,

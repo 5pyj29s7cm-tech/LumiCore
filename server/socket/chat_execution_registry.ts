@@ -74,6 +74,8 @@ export type DurableChatCancellationStatusFence = {
 };
 
 type StoredExecution = ChatExecutionSnapshot & {
+  /** Recovered cancellation receipts are history, not a live process task. */
+  inProcess?: boolean;
   scopeKey: string;
   recoveryScopeKey: string;
   controlIntentTarget?: string;
@@ -463,6 +465,7 @@ export function beginChatExecution(
   }
   executions.set(key, {
     scopeKey,
+    inProcess: true,
     recoveryScopeKey: normalizedRecoveryScopeKey(scope),
     requestId,
     source: scope.source || 'chat',
@@ -586,6 +589,7 @@ export function beginQueuedChatExecution(
   const now = new Date().toISOString();
   executions.set(key, {
     scopeKey: normalizedScopeKey(scope),
+    inProcess: true,
     recoveryScopeKey: normalizedRecoveryScopeKey(scope),
     requestId,
     source: scope.source || 'chat',
@@ -621,6 +625,7 @@ export function beginChatSidecarExecution(
   const durabilityBoundary = createSidecarDurabilityBoundary();
   executions.set(key, {
     scopeKey: normalizedScopeKey(scope),
+    inProcess: true,
     recoveryScopeKey: normalizedRecoveryScopeKey(scope),
     requestId,
     source: scope.source || 'chat',
@@ -1301,6 +1306,15 @@ export async function initializeChatExecutionRegistryPersistence(
 
 export async function waitForChatExecutionPersistence(): Promise<void> {
   await persistenceQueue;
+}
+
+/** Includes queued foreground turns and control sidecars, not just the current slot. */
+export function countUnsettledChatExecutions(): number {
+  let count = 0;
+  for (const record of executions.values()) {
+    if (record.inProcess && (!record.terminal || record.terminalReceiptPending)) count += 1;
+  }
+  return count;
 }
 
 export function resetChatExecutionRegistryForTests(): void {

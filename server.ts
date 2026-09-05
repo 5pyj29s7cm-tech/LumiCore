@@ -89,6 +89,7 @@ import { setupMcpServer } from "./server/runtime/mcp_server";
 import { setupMessaging } from "./server/runtime/messaging";
 import { setupStatic } from "./server/runtime/static";
 import { bootstrap } from "./server/runtime/bootstrap";
+import { installShutdownIngress } from "./server/runtime/shutdown";
 import { lapRoutes } from "./server/lap/routes";
 import voiceRoutes from "./routes/voice";
 import fileRoutes, { configureKnowledgeFileRoutes } from "./routes/files";
@@ -99,6 +100,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const { app, server, io, apiRouter, PORT, HOST, JWT_SECRET, getCookieOptions } = createApp();
+const shutdownIngress = installShutdownIngress(app, apiRouter, io);
 const llm = createLLMRuntime();
 
 // ── Static serve for lumi_output (charts, images, generated files) ──
@@ -142,12 +144,13 @@ apiRouter.use("/", lapRoutes);
 
 // ── Infrastructure ──
 setupMessaging(apiRouter, llm, io);
-setupMcpServer(app, server, io, llm, path.join(__dirname, 'server'));
+const shutdownMcp = setupMcpServer(app, server, io, llm, path.join(__dirname, 'server'));
 initSocketRuntime({ io, jwtSecret: JWT_SECRET, llm });
 
 async function start() {
   await setupStatic(app, __filename, __dirname);
-  await bootstrap({ server, io, PORT, HOST, jwtSecret: JWT_SECRET, llm, __dirname });
+  shutdownIngress.trackRegisteredHttpHandlers();
+  await bootstrap({ server, io, PORT, HOST, jwtSecret: JWT_SECRET, llm, __dirname, shutdownIngress, shutdownMcp });
 }
 
 start().catch((err) => {

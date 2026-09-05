@@ -1850,8 +1850,13 @@ export function pruneOldData(): void {
 
 // Write lock to prevent concurrent SQLite transactions
 let writeLock: Promise<void> = Promise.resolve();
+let databaseClosing = false;
+let databaseClosePromise: Promise<void> | null = null;
 
-function withDatabaseWriteLock<T>(operation: () => Promise<T>): Promise<T> {
+function withDatabaseWriteLock<T>(operation: () => Promise<T>, duringClose = false): Promise<T> {
+  if (databaseClosing && !duringClose) {
+    return Promise.reject(new Error('Database is closing; new writes are not accepted.'));
+  }
   const scheduled = writeLock.catch((error) => {
     console.error('[DB] Previous write failed before durable journal operation:', error);
   }).then(operation);
@@ -1907,7 +1912,7 @@ function recordDatabaseFlushFailure(error: unknown): void {
 }
 
 function scheduleDatabaseFlush(delayMs = 100): void {
-  if (writeDebounceTimer || writeInFlight) return;
+  if (databaseClosing || writeDebounceTimer || writeInFlight) return;
   writeDebounceTimer = setTimeout(() => {
     writeDebounceTimer = null;
     if (writeInFlight || persistedRevision >= writeRevision) return;
@@ -2008,6 +2013,7 @@ function configureSqliteExternalCommitJournal(): void {
 }
 
 export function writeDB(data: any): void {
+  if (databaseClosing) throw new Error('Database is closing; new writes are not accepted.');
   if (!db) {
     throw new Error('Database not initialized.');
   }
@@ -2021,33 +2027,35 @@ export function writeDB(data: any): void {
   scheduleDatabaseFlush(100);
 }
 
+async function flushPendingDatabaseLocked(): Promise<void> {
+  if (persistedRevision < writeRevision || dbDirty) {
+    const targetRevision = writeRevision;
+    writeInFlight = true;
+    try {
+      await persistMemoryDB();
+      persistedRevision = Math.max(persistedRevision, targetRevision);
+      recordSuccessfulDatabaseFlush();
+    } catch (error) {
+      recordDatabaseFlushFailure(error);
+      throw error;
+    }
+  }
+}
+
 async function flushDatabaseStrict(): Promise<void> {
   if (writeDebounceTimer) {
     clearTimeout(writeDebounceTimer);
     writeDebounceTimer = null;
   }
-  await withDatabaseWriteLock(async () => {
-    if (persistedRevision < writeRevision || dbDirty) {
-      const targetRevision = writeRevision;
-      writeInFlight = true;
-      try {
-        await persistMemoryDB();
-        persistedRevision = Math.max(persistedRevision, targetRevision);
-        recordSuccessfulDatabaseFlush();
-      } catch (error) {
-        recordDatabaseFlushFailure(error);
-        throw error;
-      }
-    }
-  });
+  await withDatabaseWriteLock(flushPendingDatabaseLocked);
 }
 
 /**
- * Durability boundary for transactional registries. Unlike the normal
- * best-effort flush, this propagates persistence failures so the caller can
- * restore its prior in-memory/runtime state.
+ * Durability boundary for transactional registries. Propagates persistence
+ * failures so the caller can restore its prior in-memory/runtime state.
  */
 export async function flushDBOrThrow(): Promise<void> {
+  if (databaseClosePromise) return databaseClosePromise;
   try {
     await flushDatabaseStrict();
   } finally {
@@ -2063,6 +2071,7 @@ export async function flushDB(): Promise<void> {
   } catch (err) {
     recordDatabaseFlushFailure(err);
     console.error('[DB] flushDB failed:', err);
+    throw err;
   }
 }
 
@@ -2103,42 +2112,52 @@ export function getDatabasePersistenceStatus(nowMs = Date.now()): {
 }
 
 /** Flush pending work and release the SQLite handle (tests and graceful shutdown). */
-export async function closeDatabase(): Promise<void> {
-  await flushDB();
+export function closeDatabase(): Promise<void> {
+  if (databaseClosePromise) return databaseClosePromise;
+  if (!db) return Promise.resolve();
+  // Seal writes synchronously. Previously admitted SQL operations finish under
+  // the same lock before the final snapshot and SQLite close. On any failure
+  // the live handle, snapshot and revisions stay available for a later retry.
+  databaseClosing = true;
   if (writeDebounceTimer) {
     clearTimeout(writeDebounceTimer);
     writeDebounceTimer = null;
   }
-  await writeLock.catch((err) => {
-    console.error('[DB] Previous write failed before close:', err);
-  });
+  databaseClosePromise = withDatabaseWriteLock(async () => {
+    await flushPendingDatabaseLocked();
+    const closingDb = db;
+    if (closingDb) {
+      await new Promise<void>((resolve, reject) => {
+        closingDb.close(err => err ? reject(err) : resolve());
+      });
+    }
+    db = null;
+    memoryDB = null;
+    startupQuickCheckPassed = false;
+    initPromise = null;
+    writeRevision = 0;
+    persistedRevision = 0;
+    writeInFlight = false;
+    dirtySinceMs = 0;
+    lastSuccessfulFlushAt = '';
+    lastPersistenceError = '';
+    persistenceTableDigests = new Map();
+    lastFlushTables = [];
+    totalTableWrites = 0;
+    totalSkippedTableWrites = 0;
+    dbDirty = false;
+    configureExternalCommitJournal(null);
 
-  const closingDb = db;
-  db = null;
-  memoryDB = null;
-  startupQuickCheckPassed = false;
-  initPromise = null;
-  writeLock = Promise.resolve();
-  writeRevision = 0;
-  persistedRevision = 0;
-  writeInFlight = false;
-  dirtySinceMs = 0;
-  lastSuccessfulFlushAt = '';
-  lastPersistenceError = '';
-  persistenceTableDigests = new Map();
-  lastFlushTables = [];
-  totalTableWrites = 0;
-  totalSkippedTableWrites = 0;
-  dbDirty = false;
-  configureExternalCommitJournal(null);
-
-  if (!closingDb) return;
-  await new Promise<void>((resolve, reject) => {
-    closingDb.close((err) => {
-      if (err) reject(err);
-      else resolve();
-    });
+  }, true).catch(error => {
+    recordDatabaseFlushFailure(error);
+    throw error;
+  }).finally(() => {
+    databaseClosing = false;
+    databaseClosePromise = null;
+    writeInFlight = false;
+    if (db && persistedRevision < writeRevision) scheduleDatabaseFlush(100);
   });
+  return databaseClosePromise;
 }
 
 /**

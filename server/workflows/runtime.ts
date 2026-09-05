@@ -1601,6 +1601,13 @@ export function stopWorkflowRuntimeMaintenanceForTest(): void {
   workflowMaintenanceRunning = false;
 }
 
+/** Stop future sweeps and retain the running lease until the current save finishes. */
+export async function stopWorkflowRuntimeMaintenance(): Promise<void> {
+  if (workflowMaintenanceTimer) clearInterval(workflowMaintenanceTimer);
+  workflowMaintenanceTimer = null;
+  while (workflowMaintenanceRunning) await new Promise(resolve => setTimeout(resolve, 20));
+}
+
 /** Await SQLite durability before exposing a workflow state transition. */
 export async function persistWorkflowRuntimeBarrier(): Promise<void> {
   await flushDBOrThrow();

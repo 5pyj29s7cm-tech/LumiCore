@@ -18,6 +18,13 @@ const pendingBranchSyncCommits = new Map<string, {
   promise: Promise<BranchSyncReceipt>;
 }>();
 
+/** Wait for accepted commits, including their compensation and receipt guards. */
+export async function waitForBranchSyncCommits(): Promise<void> {
+  while (pendingBranchSyncCommits.size) {
+    await Promise.allSettled([...pendingBranchSyncCommits.values()].map(entry => entry.promise));
+  }
+}
+
 async function commitBranchSync(
   batchKey: string,
   payloadDigest: string,

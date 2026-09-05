@@ -9,7 +9,7 @@ vi.mock('../db_layer', async importOriginal => ({
 import { initDatabase, readDB, writeDB, runSQL, querySQL } from '../db_layer';
 import { createOrg, addMember } from '../server/org/db';
 import { registerOrganizationDevice } from '../server/org/resource_acl';
-import { getBranchSyncReceipt, persistBranchSyncBatch } from '../server/org/branch_sync';
+import { getBranchSyncReceipt, persistBranchSyncBatch, waitForBranchSyncCommits } from '../server/org/branch_sync';
 
 let realFlush: () => Promise<void>;
 let sequence = 0;
@@ -88,8 +88,13 @@ describe('organization branch commit isolation', () => {
     await untilFlush();
     const duplicate = persistBranchSyncBatch(batch);
     const result = Promise.allSettled([first, duplicate]);
+    let drained = false;
+    const drain = waitForBranchSyncCommits().then(() => { drained = true; });
+    await Promise.resolve();
+    expect(drained).toBe(false);
     gate.reject(new Error('synthetic disk failure'));
     expect((await result).map(item => item.status)).toEqual(['rejected', 'rejected']);
+    await drain;
     expect(getBranchSyncReceipt(batch.payload)).toBeNull();
     expect(readDB().memories.some((row: any) => row.orgId === orgId)).toBe(false);
     const retry = await persistBranchSyncBatch(batch);
