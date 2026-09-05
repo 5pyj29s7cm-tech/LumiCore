@@ -9,6 +9,39 @@ const MAX_LEDGER_BATCHES = 1_000;
 const MAX_LEDGER_ITEMS = 20_000;
 const MAX_TEXT_BYTES = 512 * 1024;
 
+// The ledger is shared across branches. Serialize its commits, while allowing
+// ordinary chat/settings writes to continue. Readers must not publish an
+// in-memory receipt until the corresponding durability barrier has completed.
+let branchSyncCommitQueue: Promise<void> = Promise.resolve();
+const pendingBranchSyncCommits = new Map<string, {
+  digest: string;
+  promise: Promise<BranchSyncReceipt>;
+}>();
+
+async function commitBranchSync(
+  batchKey: string,
+  payloadDigest: string,
+  operation: () => Promise<BranchSyncReceipt>,
+): Promise<BranchSyncReceipt> {
+  const pending = pendingBranchSyncCommits.get(batchKey);
+  if (pending) {
+    if (pending.digest !== payloadDigest) {
+      throw new BranchSyncValidationError('The batchId was already used with a different payload', 409);
+    }
+    return { ...await pending.promise, replayed: true };
+  }
+  const promise = branchSyncCommitQueue.then(operation);
+  pendingBranchSyncCommits.set(batchKey, { digest: payloadDigest, promise });
+  branchSyncCommitQueue = promise.then(() => undefined, () => undefined);
+  try {
+    return await promise;
+  } finally {
+    if (pendingBranchSyncCommits.get(batchKey)?.promise === promise) {
+      pendingBranchSyncCommits.delete(batchKey);
+    }
+  }
+}
+
 type BranchSyncKind = 'memory' | 'interaction';
 
 export interface BranchSyncPayload {
@@ -273,6 +306,7 @@ export function getBranchSyncReceipt(input: {
   const orgId = validateStableId(input.orgId, 'orgId');
   const branchId = validateStableId(input.branchId, 'branchId');
   const batchId = validateStableId(input.batchId, 'batchId');
+  if (pendingBranchSyncCommits.has(`${orgId}:${branchId}:${batchId}`)) return null;
   const ledger = loadLedger(readDB());
   return ledger.batches[`${orgId}:${branchId}:${batchId}`] || null;
 }
@@ -333,22 +367,31 @@ function trimLedger(ledger: BranchSyncLedger): void {
   }
 }
 
-function upsertById(values: any[], item: NormalizedItem): 'inserted' | 'updated' {
+function upsertById(
+  collection: 'memories' | 'interactions',
+  item: NormalizedItem,
+  compensate: Array<() => void>,
+): 'inserted' | 'updated' {
+  const values = readDB()[collection] as any[];
   const index = values.findIndex(candidate => candidate?.id === item.targetId);
+  const previous = index < 0 ? undefined : values[index];
+  const appliedDigest = digest(item.value);
+  compensate.push(() => {
+    const current = readDB()[collection] as any[];
+    const currentIndex = current.findIndex(candidate => candidate?.id === item.targetId);
+    // Another writer may replace, delete, or mutate this row while SQLite is
+    // busy. Only undo the exact row version still owned by this batch.
+    if (currentIndex < 0 || current[currentIndex] !== item.value
+      || digest(current[currentIndex]) !== appliedDigest) return;
+    if (previous === undefined) current.splice(currentIndex, 1);
+    else current[currentIndex] = previous;
+  });
   if (index < 0) {
     values.push(item.value);
     return 'inserted';
   }
   values[index] = item.value;
   return 'updated';
-}
-
-function restoreSnapshot(db: any, snapshot: Record<string, any>): void {
-  db.memories = snapshot.memories;
-  db.interactions = snapshot.interactions;
-  db.settings = snapshot.settings;
-  db.auditLog = snapshot.auditLog;
-  writeDB(db);
 }
 
 export async function persistBranchSyncBatch(input: {
@@ -384,97 +427,140 @@ export async function persistBranchSyncBatch(input: {
   ];
   const payloadDigest = digest(normalized.map(item => ({ kind: item.kind, sourceId: item.sourceId, digest: item.digest })));
   const batchKey = `${orgId}:${branchId}:${batchId}`;
-  const db = readDB();
-  const ledger = loadLedger(db);
-  const existing = ledger.batches[batchKey];
-  if (existing) {
-    if (existing.payloadDigest !== payloadDigest) {
-      throw new BranchSyncValidationError('The batchId was already used with a different payload', 409);
+  const receipt = await commitBranchSync(batchKey, payloadDigest, async () => {
+    // A different branch may have held the commit queue while this device was
+    // revoked. Check current authority before applying any queued mutation.
+    authorizeOrganizationDevice({ orgId, branchId, userId: input.authenticatedUserId, permission: 'sync_write' });
+    const db = readDB();
+    const ledger = loadLedger(db);
+    const existing = ledger.batches[batchKey];
+    if (existing) {
+      if (existing.payloadDigest !== payloadDigest) {
+        throw new BranchSyncValidationError('The batchId was already used with a different payload', 409);
+      }
+      return { ...existing, replayed: true };
     }
-    return { ...existing, replayed: true };
-  }
 
-  const snapshot = {
-    memories: db.memories,
-    interactions: db.interactions,
-    settings: db.settings,
-    auditLog: db.auditLog,
-  };
-  db.memories = [...(db.memories || [])];
-  db.interactions = [...(db.interactions || [])];
-  db.settings = (db.settings || []).map((item: any) => ({ ...item }));
-  db.auditLog = [...(db.auditLog || [])];
+    const compensate: Array<() => void> = [];
+    db.memories ||= [];
+    db.interactions ||= [];
+    db.settings ||= [];
+    db.auditLog ||= [];
+    try {
+      const persistedAt = new Date().toISOString();
+      const itemReceipts: BranchSyncItemReceipt[] = [];
+      for (const item of normalized) {
+        const itemKey = `${orgId}:${branchId}:${item.kind}:${item.sourceId}`;
+        const previous = ledger.items[itemKey];
+        let outcome: BranchSyncItemReceipt['outcome'];
+        if (previous?.digest === item.digest && previous.targetId === item.targetId) {
+          outcome = 'unchanged';
+        } else {
+          const collection = item.kind === 'memory' ? 'memories' : 'interactions';
+          outcome = upsertById(collection, item, compensate);
+        }
+        ledger.items[itemKey] = { digest: item.digest, targetId: item.targetId, updatedAt: persistedAt };
+        ledger.itemOrder.push(itemKey);
+        itemReceipts.push({
+          kind: item.kind,
+          sourceId: item.sourceId,
+          targetId: item.targetId,
+          digest: item.digest,
+          outcome,
+        });
+      }
 
-  const persistedAt = new Date().toISOString();
-  const itemReceipts: BranchSyncItemReceipt[] = [];
-  for (const item of normalized) {
-    const itemKey = `${orgId}:${branchId}:${item.kind}:${item.sourceId}`;
-    const previous = ledger.items[itemKey];
-    let outcome: BranchSyncItemReceipt['outcome'];
-    if (previous?.digest === item.digest && previous.targetId === item.targetId) {
-      outcome = 'unchanged';
-    } else {
-      const collection = item.kind === 'memory' ? db.memories : db.interactions;
-      outcome = upsertById(collection, item);
+      const receipt: BranchSyncReceipt = {
+        version: 1,
+        receiptId: crypto.randomUUID(),
+        orgId,
+        branchId,
+        batchId,
+        payloadDigest,
+        verified: true,
+        accepted: itemReceipts.length,
+        inserted: itemReceipts.filter(item => item.outcome === 'inserted').length,
+        updated: itemReceipts.filter(item => item.outcome === 'updated').length,
+        unchanged: itemReceipts.filter(item => item.outcome === 'unchanged').length,
+        rejected: 0,
+        replayed: false,
+        items: itemReceipts,
+        persistedAt,
+      };
+      ledger.batches[batchKey] = receipt;
+      ledger.batchOrder.push(batchKey);
+      trimLedger(ledger);
+      const previousSetting = db.settings.find((item: any) => item?.key === SYNC_LEDGER_SETTING);
+      const previousLedger = parseSetting<Partial<BranchSyncLedger>>(db, SYNC_LEDGER_SETTING, {});
+      const nextSetting = { key: SYNC_LEDGER_SETTING, value: JSON.stringify(ledger) };
+      const settingIndex = db.settings.indexOf(previousSetting);
+      if (settingIndex < 0) db.settings.push(nextSetting);
+      else db.settings[settingIndex] = nextSetting;
+      const appliedSettingValue = nextSetting.value;
+      compensate.push(() => {
+        const settings = readDB().settings as any[];
+        const index = settings.findIndex(item => item?.key === SYNC_LEDGER_SETTING);
+        if (index < 0) return;
+        if (settings[index].value === appliedSettingValue) {
+          if (previousSetting === undefined) settings.splice(index, 1);
+          else settings[index] = previousSetting;
+          return;
+        }
+        // Even if a writer copied/changed the settings table, a failed batch
+        // must never leave its own verified receipt behind. Preserve other
+        // ledger entries and only compensate item versions from this batch.
+        const currentLedger = loadLedger(readDB());
+        if (currentLedger.batches[batchKey]?.receiptId !== receipt.receiptId) return;
+        delete currentLedger.batches[batchKey];
+        currentLedger.batchOrder = currentLedger.batchOrder.filter(key => key !== batchKey);
+        for (const item of normalized) {
+          const key = `${orgId}:${branchId}:${item.kind}:${item.sourceId}`;
+          const current = currentLedger.items[key];
+          if (current?.digest !== item.digest || current.targetId !== item.targetId || current.updatedAt !== persistedAt) continue;
+          if (previousLedger.items?.[key]) currentLedger.items[key] = previousLedger.items[key];
+          else {
+            delete currentLedger.items[key];
+            currentLedger.itemOrder = currentLedger.itemOrder.filter(value => value !== key);
+          }
+        }
+        settings[index] = { key: SYNC_LEDGER_SETTING, value: JSON.stringify(currentLedger) };
+      });
+      const auditEntry = {
+        id: crypto.randomUUID(),
+        orgId,
+        userId: input.authenticatedUserId,
+        action: 'branch.sync.persisted',
+        resourceType: 'branch_sync_batch',
+        resourceId: batchId,
+        details: JSON.stringify({
+          branchId,
+          payloadDigest,
+          accepted: receipt.accepted,
+          inserted: receipt.inserted,
+          updated: receipt.updated,
+          unchanged: receipt.unchanged,
+        }),
+        ipAddress: null,
+        userAgent: null,
+        timestamp: persistedAt,
+      };
+      db.auditLog.push(auditEntry);
+      compensate.push(() => {
+        const auditLog = readDB().auditLog as any[];
+        const index = auditLog.indexOf(auditEntry);
+        if (index >= 0) auditLog.splice(index, 1);
+      });
+
+      writeDB(db);
+      await flushDBOrThrow();
+      return receipt;
+    } catch (error) {
+      for (const undo of compensate.reverse()) undo();
+      writeDB(readDB());
+      throw error;
     }
-    ledger.items[itemKey] = { digest: item.digest, targetId: item.targetId, updatedAt: persistedAt };
-    ledger.itemOrder.push(itemKey);
-    itemReceipts.push({
-      kind: item.kind,
-      sourceId: item.sourceId,
-      targetId: item.targetId,
-      digest: item.digest,
-      outcome,
-    });
-  }
-
-  const receipt: BranchSyncReceipt = {
-    version: 1,
-    receiptId: crypto.randomUUID(),
-    orgId,
-    branchId,
-    batchId,
-    payloadDigest,
-    verified: true,
-    accepted: itemReceipts.length,
-    inserted: itemReceipts.filter(item => item.outcome === 'inserted').length,
-    updated: itemReceipts.filter(item => item.outcome === 'updated').length,
-    unchanged: itemReceipts.filter(item => item.outcome === 'unchanged').length,
-    rejected: 0,
-    replayed: false,
-    items: itemReceipts,
-    persistedAt,
-  };
-  ledger.batches[batchKey] = receipt;
-  ledger.batchOrder.push(batchKey);
-  trimLedger(ledger);
-  writeSetting(db, SYNC_LEDGER_SETTING, ledger);
-  db.auditLog.push({
-    id: crypto.randomUUID(),
-    orgId,
-    userId: input.authenticatedUserId,
-    action: 'branch.sync.persisted',
-    resourceType: 'branch_sync_batch',
-    resourceId: batchId,
-    details: JSON.stringify({
-      branchId,
-      payloadDigest,
-      accepted: receipt.accepted,
-      inserted: receipt.inserted,
-      updated: receipt.updated,
-      unchanged: receipt.unchanged,
-    }),
-    ipAddress: null,
-    userAgent: null,
-    timestamp: persistedAt,
   });
-
-  try {
-    writeDB(db);
-    await flushDBOrThrow();
-    return receipt;
-  } catch (error) {
-    restoreSnapshot(db, snapshot);
-    throw error;
-  }
+  // Do not return a queued/replayed receipt to a device revoked while waiting.
+  authorizeOrganizationDevice({ orgId, branchId, userId: input.authenticatedUserId, permission: 'sync_write' });
+  return receipt;
 }
