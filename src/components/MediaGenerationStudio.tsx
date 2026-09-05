@@ -1,4 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
+import { FileResourceImage, FileResourceVideo } from './FileResourceMedia';
+import { saveFileResource } from '@/services/fileResource';
 import {
   CheckCircle2,
   Download,
@@ -189,7 +192,7 @@ function SourceImageField({
                       : 'border-white/10 hover:border-white/25'
                   }`}
                 >
-                  <img src={artifact.url} alt={artifact.fileName || label} className="h-full w-full object-cover" />
+                  <FileResourceImage src={artifact.url} alt={artifact.fileName || label} className="h-full w-full object-cover" />
                 </button>
               );
             })}
@@ -426,14 +429,8 @@ export function MediaGenerationStudio({
       onSaveArtifact(artifact);
       return;
     }
-    if (typeof document === 'undefined') return;
-    const anchor = document.createElement('a');
-    anchor.href = artifact.url;
-    anchor.download = artifact.fileName || (artifact.kind === 'image' ? 'lumi-image' : 'lumi-video');
-    anchor.rel = 'noopener noreferrer';
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
+    void saveFileResource(artifact.url, artifact.fileName || (artifact.kind === 'image' ? 'lumi-image' : 'lumi-video'))
+      .catch(() => toast.error(copy.artifactLoadFailed));
   };
 
   const focusPromptSoon = () => {
@@ -716,20 +713,22 @@ export function MediaGenerationStudio({
                   <article key={artifact.id} className="group overflow-hidden rounded-2xl border border-white/10 bg-black/35">
                     <div className="aspect-video overflow-hidden bg-black/45">
                       {artifact.kind === 'image' ? (
-                        <img
+                        <FileResourceImage
                           src={artifact.url}
                           alt={artifact.fileName || copy.generateImage}
                           onLoad={() => onArtifactReady(artifact)}
                           onError={() => onArtifactError(artifact)}
+                          onResourceError={() => onArtifactError(artifact)}
                           className="h-full w-full object-contain"
                         />
                       ) : (
-                        <video
+                        <FileResourceVideo
                           src={artifact.url}
                           controls
                           preload="metadata"
                           onLoadedMetadata={() => onArtifactReady(artifact)}
                           onError={() => onArtifactError(artifact)}
+                          onResourceError={() => onArtifactError(artifact)}
                           className="h-full w-full object-contain"
                         />
                       )}

@@ -188,6 +188,6 @@ describe('single-core command center', () => {
     expect(videoGenerationIndex).toBeGreaterThan(imageGenerationIndex);
     expect(chatPage).toContain('data-media-generation-studio');
     expect(chatPage).toContain("kind === 'video'");
-    expect(chatPage).toContain('<video');
+    expect(chatPage).toContain('<FileResourceVideo');
   });
 });
