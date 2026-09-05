@@ -23,12 +23,32 @@ function withAuthHeaders(headers?: HeadersInit): HeadersInit {
   return next;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+function throwIfAborted(signal?: AbortSignal | null): void {
+  if (signal?.aborted) throw signal.reason ?? new DOMException('The request was aborted.', 'AbortError');
+}
+
+function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+      reject(signal?.reason ?? new DOMException('The request was aborted.', 'AbortError'));
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+  });
+}
+
+function isLocalBackend(url: string): boolean {
+  try { return new URL(url).origin === LOCAL_BACKEND_ORIGIN; } catch { return false; }
 }
 
 function shouldRetryLocalBackend(url: string, error: unknown): boolean {
-  if (!url.startsWith(LOCAL_BACKEND_ORIGIN)) return false;
+  if (!isLocalBackend(url)) return false;
   const message = error instanceof Error ? error.message : String(error || '');
   return /failed to fetch|networkerror|load failed|fetch/i.test(message);
 }
@@ -40,16 +60,21 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     ...init,
     headers: withAuthHeaders(init.headers),
   };
-  const attempts = url.startsWith(LOCAL_BACKEND_ORIGIN) ? 10 : 1;
+  // A failed response does not prove that a write failed. Retrying POST/PUT/
+  // DELETE can repeat a completed action, so only safe reads retry startup.
+  const method = String(request.method || 'GET').toUpperCase();
+  const attempts = isLocalBackend(url) && ['GET', 'HEAD'].includes(method) ? 10 : 1;
   let lastError: unknown;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
+      throwIfAborted(request.signal);
       return await fetch(url, request);
     } catch (error) {
       lastError = error;
+      throwIfAborted(request.signal);
       if (attempt >= attempts - 1 || !shouldRetryLocalBackend(url, error)) break;
-      await sleep(Math.min(250 + attempt * 350, 1500));
+      await sleep(Math.min(250 + attempt * 350, 1500), request.signal);
     }
   }
 
