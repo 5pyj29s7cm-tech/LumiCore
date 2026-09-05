@@ -6,8 +6,14 @@ import {
 import { registerDesktopTools } from '../server/tools/definitions/desktop_tools';
 import { registerSystemOpsTools } from '../server/tools/definitions/system_ops';
 import { ToolRegistry } from '../server/tools/registry';
+import boundaryCases from './fixtures/windows_command_boundaries.json';
 
 describe('host-platform command validation', () => {
+  it.each(boundaryCases)('matches shared shell quote boundaries: $command', ({ command, windowsAccepted, posixAccepted }) => {
+    // Parser-only checks: these inputs are never submitted to a process.
+    expect(validateCommandForHost(command, 'win32').ok).toBe(windowsAccepted);
+    expect(validateCommandForHost(command, 'linux').ok).toBe(posixAccepted);
+  });
   it.each([
     'find /',
     'find ~',

@@ -1036,13 +1036,13 @@ fn decode_command_bytes(bytes: &[u8]) -> String {
     }
 }
 
-fn parse_command_executable(command: &str) -> (String, String) {
+fn parse_command_executable(command: &str, host: &str) -> (String, String) {
     let trimmed = command.trim();
     if trimmed.is_empty() {
         return (String::new(), String::new());
     }
     let first = trimmed.chars().next().unwrap_or_default();
-    if first == '"' || first == '\'' {
+    if first == '"' || (host != "windows" && first == '\'') {
         if let Some(end) = trimmed[1..].find(first) {
             let executable = trimmed[1..end + 1].to_string();
             let remainder = trimmed[end + 2..].trim().to_string();
@@ -1074,7 +1074,8 @@ fn shell_control_operator(command: &str, host: &str) -> Option<&'static str> {
             index += 2;
             continue;
         }
-        if current == '\'' && quote != Some('"') {
+        // cmd.exe does not use apostrophes to quote shell control characters.
+        if host != "windows" && current == '\'' && quote != Some('"') {
             quote = if quote == Some('\'') {
                 None
             } else {
@@ -1116,7 +1117,7 @@ fn validate_command_for_host(command: &str, host: &str) -> Result<(), String> {
             operator
         ));
     }
-    let (executable, remainder) = parse_command_executable(command);
+    let (executable, remainder) = parse_command_executable(command, host);
     let normalized = executable.replace('\\', "/").to_lowercase();
     let name = normalized
         .rsplit('/')
@@ -1167,6 +1168,29 @@ fn validate_command_for_host(command: &str, host: &str) -> Result<(), String> {
 #[cfg(test)]
 mod command_platform_validation_tests {
     use super::validate_command_for_host;
+
+    #[test]
+    fn shared_windows_quote_boundaries() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!(
+            "../../test/fixtures/windows_command_boundaries.json"
+        ))
+        .unwrap();
+        for case in cases.as_array().unwrap() {
+            let command = case["command"].as_str().unwrap();
+            assert_eq!(
+                validate_command_for_host(command, "windows").is_ok(),
+                case["windowsAccepted"].as_bool().unwrap(),
+                "{}",
+                command
+            );
+            assert_eq!(
+                validate_command_for_host(command, "linux").is_ok(),
+                case["posixAccepted"].as_bool().unwrap(),
+                "{}",
+                command
+            );
+        }
+    }
 
     #[test]
     fn rejects_posix_commands_on_windows() {
@@ -2818,6 +2842,173 @@ fn focus_running_windows_app(def: &WindowsAppDefinition) -> Option<CommandResult
 }
 
 #[cfg(target_os = "windows")]
+fn quote_windows_open_argument(value: &str) -> String {
+    let mut quoted = String::from("\"");
+    let mut slashes = 0;
+    for current in value.chars() {
+        if current == '\\' {
+            slashes += 1;
+            continue;
+        }
+        if current == '"' {
+            quoted.push_str(&"\\".repeat(slashes * 2 + 1));
+        } else {
+            quoted.push_str(&"\\".repeat(slashes));
+        }
+        slashes = 0;
+        quoted.push(current);
+    }
+    quoted.push_str(&"\\".repeat(slashes * 2));
+    quoted.push('"');
+    quoted
+}
+
+#[cfg(target_os = "windows")]
+fn shell_open_windows(target: &str, args: &[String]) -> CommandResult {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "shell32")]
+    extern "system" {
+        fn ShellExecuteW(
+            hwnd: isize,
+            operation: *const u16,
+            file: *const u16,
+            parameters: *const u16,
+            directory: *const u16,
+            show_command: i32,
+        ) -> isize;
+    }
+    if target.is_empty()
+        || target.chars().any(char::is_control)
+        || args.iter().any(|arg| arg.chars().any(char::is_control))
+    {
+        return CommandResult {
+            success: false,
+            output: "Invalid open target or argument".to_string(),
+        };
+    }
+    let wide = |value: &str| {
+        std::ffi::OsStr::new(value)
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<u16>>()
+    };
+    let operation = wide("open");
+    let file = wide(target);
+    let parameters = wide(
+        &args
+            .iter()
+            .map(|arg| quote_windows_open_argument(arg))
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
+    // The target is a separate native API parameter, never cmd.exe source text.
+    let result = unsafe {
+        ShellExecuteW(
+            0,
+            operation.as_ptr(),
+            file.as_ptr(),
+            if args.is_empty() {
+                std::ptr::null()
+            } else {
+                parameters.as_ptr()
+            },
+            std::ptr::null(),
+            1,
+        )
+    };
+    CommandResult {
+        success: result > 32,
+        output: if result > 32 {
+            format!("Opened: {}", target)
+        } else {
+            format!("Windows could not open {} (error {})", target, result)
+        },
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn validate_windows_open_target(target: &str) -> Result<String, String> {
+    if target.is_empty() || target.chars().any(char::is_control) {
+        return Err("Invalid open target".to_string());
+    }
+    if Path::new(target).exists() {
+        let absolute = std::fs::canonicalize(target).map_err(|error| error.to_string())?;
+        let absolute = absolute.to_string_lossy();
+        // Windows shell APIs expect ordinary DOS/UNC names, rather than Rust's
+        // verbatim filesystem namespace returned by canonicalize.
+        return Ok(if let Some(unc) = absolute.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{}", unc)
+        } else {
+            absolute
+                .strip_prefix(r"\\?\")
+                .unwrap_or(&absolute)
+                .to_string()
+        });
+    }
+    if let Ok(url) = tauri::Url::parse(target) {
+        if matches!(url.scheme(), "http" | "https") && url.host_str().is_some() {
+            return Ok(url.to_string());
+        }
+        if url.scheme() == "mailto" && !url.path().is_empty() {
+            return Ok(url.to_string());
+        }
+    }
+    Err("Open target must be an existing file or folder, an installed application, or an HTTP(S)/mailto URL".to_string())
+}
+
+#[cfg(target_os = "windows")]
+#[cfg(test)]
+mod windows_open_target_tests {
+    use super::{quote_windows_open_argument, validate_windows_open_target};
+
+    #[test]
+    fn validates_supported_urls_without_launching_them() {
+        for target in [
+            "https://example.invalid/docs?a=1&b=2",
+            "mailto:test@example.invalid",
+        ] {
+            assert!(validate_windows_open_target(target).is_ok(), "{}", target);
+        }
+        for target in [
+            "",
+            "unknown-protocol:example",
+            "mailto:",
+            "missing-file.txt",
+            "https://example.invalid/\n",
+        ] {
+            assert!(
+                validate_windows_open_target(target).is_err(),
+                "{:?}",
+                target
+            );
+        }
+    }
+
+    #[test]
+    fn preserves_existing_file_names_as_one_native_target() {
+        let target =
+            std::env::temp_dir().join(format!("lumi-open-test-{}-a & b.txt", std::process::id()));
+        std::fs::write(&target, "validation fixture").unwrap();
+        let result = validate_windows_open_target(&target.to_string_lossy());
+        std::fs::remove_file(&target).unwrap();
+        let normalized = result.unwrap();
+        assert!(normalized.ends_with("-a & b.txt"));
+        assert!(!normalized.starts_with(r"\\?\"));
+    }
+
+    #[test]
+    fn quotes_application_arguments_with_windows_backslash_rules() {
+        assert_eq!(quote_windows_open_argument(""), "\"\"");
+        assert_eq!(quote_windows_open_argument("a & b"), "\"a & b\"");
+        assert_eq!(quote_windows_open_argument("a\"b"), "\"a\\\"b\"");
+        assert_eq!(
+            quote_windows_open_argument("C:\\directory with spaces\\"),
+            "\"C:\\directory with spaces\\\\\""
+        );
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn launch_windows_path(path: &Path, extra_args: &[String]) -> CommandResult {
     let extension = path
         .extension()
@@ -2825,15 +3016,16 @@ fn launch_windows_path(path: &Path, extra_args: &[String]) -> CommandResult {
         .unwrap_or("")
         .to_lowercase();
 
-    let spawned = if matches!(extension.as_str(), "bat" | "cmd" | "lnk" | "url") {
-        let mut cmd = Command::new("cmd");
-        cmd.args(["/C", "start", ""]);
-        cmd.arg(path);
-        for arg in extra_args {
-            cmd.arg(arg);
+    if matches!(extension.as_str(), "bat" | "cmd" | "lnk" | "url") {
+        if matches!(extension.as_str(), "bat" | "cmd") && !extra_args.is_empty() {
+            return CommandResult {
+                success: false,
+                output: "Script arguments require the command execution workflow".to_string(),
+            };
         }
-        spawn_hidden(&mut cmd)
-    } else {
+        return shell_open_windows(&path.to_string_lossy(), extra_args);
+    }
+    let spawned = {
         let mut cmd = Command::new(path);
         for arg in extra_args {
             cmd.arg(arg);
@@ -3101,35 +3293,24 @@ fn open_item(
         }
     }
 
-    if cfg!(target_os = "windows") && Path::new(&target).is_dir() {
-        let mut cmd = Command::new("explorer.exe");
-        cmd.arg(&target);
-        return match spawn_hidden(&mut cmd) {
-            Ok(_) => CommandResult {
-                success: true,
-                output: format!("Opened folder: {}", target),
-            },
-            Err(e) => CommandResult {
+    #[cfg(target_os = "windows")]
+    {
+        return match validate_windows_open_target(&target) {
+            Ok(target) => shell_open_windows(&target, &[]),
+            Err(error) => CommandResult {
                 success: false,
-                output: e.to_string(),
+                output: error,
             },
         };
     }
 
-    let result = if cfg!(target_os = "windows") {
-        let mut cmd = Command::new("cmd");
-        cmd.args(["/C", "start", "", &target]);
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000u32);
-        }
-        cmd.output()
-    } else if cfg!(target_os = "macos") {
+    #[cfg(not(target_os = "windows"))]
+    let result = if cfg!(target_os = "macos") {
         Command::new("open").arg(&target).output()
     } else {
         Command::new("xdg-open").arg(&target).output()
     };
+    #[cfg(not(target_os = "windows"))]
     match result {
         Ok(out) => {
             if out.status.success() {

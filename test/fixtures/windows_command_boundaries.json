@@ -1,0 +1,10 @@
+[
+  { "command": "boundary_probe 'left & right'", "windowsAccepted": false, "posixAccepted": true },
+  { "command": "boundary_probe 'left | right'", "windowsAccepted": false, "posixAccepted": true },
+  { "command": "boundary_probe 'left > right'", "windowsAccepted": false, "posixAccepted": true },
+  { "command": "boundary_probe \"left & right\"", "windowsAccepted": true, "posixAccepted": true },
+  { "command": "boundary_probe \"author's & notes\"", "windowsAccepted": true, "posixAccepted": true },
+  { "command": "boundary_probe left^&right", "windowsAccepted": true, "posixAccepted": false },
+  { "command": "boundary_probe 'ordinary words'", "windowsAccepted": true, "posixAccepted": true },
+  { "command": "\"C:\\Program Files\\Boundary Probe\\probe.exe\" \"normal text\"", "windowsAccepted": true, "posixAccepted": true }
+]

@@ -20,9 +20,11 @@ function normalizePlatform(platform: CommandHostPlatform): NodeJS.Platform {
   return platform;
 }
 
-function parseExecutable(command: string): { executable: string; remainder: string } {
+function parseExecutable(command: string, platform: NodeJS.Platform): { executable: string; remainder: string } {
   const trimmed = command.trim();
-  const match = trimmed.match(/^(?:"([^"]+)"|'([^']+)'|([^\s]+))(?:\s+([\s\S]*))?$/);
+  const match = trimmed.match(platform === 'win32'
+    ? /^(?:"([^"]+)"|()|([^\s]+))(?:\s+([\s\S]*))?$/
+    : /^(?:"([^"]+)"|'([^']+)'|([^\s]+))(?:\s+([\s\S]*))?$/);
   const executable = String(match?.[1] || match?.[2] || match?.[3] || '');
   return { executable, remainder: String(match?.[4] || '').trim() };
 }
@@ -47,7 +49,8 @@ function findShellControlOperator(command: string, platform: NodeJS.Platform): s
       index += 1;
       continue;
     }
-    if (char === "'" && quote !== 'double') {
+    // cmd.exe treats apostrophes as ordinary characters, not quote boundaries.
+    if (platform !== 'win32' && char === "'" && quote !== 'double') {
       quote = quote === 'single' ? null : 'single';
       continue;
     }
@@ -83,7 +86,7 @@ export function validateCommandForHost(
   }
 
   const shellOperator = findShellControlOperator(command, platform);
-  const parsed = parseExecutable(command);
+  const parsed = parseExecutable(command, platform);
   const name = executableName(parsed.executable);
   if (shellOperator) {
     return {
