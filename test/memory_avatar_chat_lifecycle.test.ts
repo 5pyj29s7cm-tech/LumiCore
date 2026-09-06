@@ -1,4 +1,4 @@
-﻿import { makeApp } from './helpers';
+import { makeApp } from './helpers';
 import { afterEach, expect, it, vi } from 'vitest';
 import { Server } from 'socket.io';
 import { io as createClient, type Socket } from 'socket.io-client';
@@ -95,4 +95,3 @@ it.each(['archive', 'remove-material'])('cancels a real model turn after %s and 
   expect(JSON.stringify(getMessages(h.conversationId, 20))).not.toContain(marker);
   expect(mocks.extract).not.toHaveBeenCalled();
 }, 10000);
-
