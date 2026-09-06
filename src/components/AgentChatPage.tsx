@@ -451,7 +451,7 @@ function extractPersistedMediaArtifacts(message: any): MediaGenerationArtifact[]
   const collected: MediaGenerationArtifact[] = [];
   for (const record of records) {
     const toolName = String(record.name || record.toolName || '').trim();
-    if (!MEDIA_GENERATION_TOOL_NAMES.has(toolName)) continue;
+    if (!MEDIA_GENERATION_TOOL_NAMES.has(toolName) && toolName !== 'get_image_generation_status') continue;
     const fallbackKind: MediaGenerationKind = toolName === 'generate_video' ? 'video' : 'image';
     const args = record.arguments && typeof record.arguments === 'object'
       ? record.arguments
@@ -1719,7 +1719,7 @@ export function AgentChatPage({
   const lastResumedRequestIdsRef = useRef(new Set<string>());
   const initialLoadDoneRef = useRef(false);
   const lastConversationScopeRef = useRef<string>('');
-  const chatRecoveryUserId = String(user?.id || '').trim();
+  const chatRecoveryUserId = String(user?.uid || '').trim();
   const recoveryOwner = useMemo<ChatRecoveryOwner>(() => ({
     userId: chatRecoveryUserId, agentId, domain: activeDomain, orgId: activeOrgId, source: chatExecutionSource,
   }), [chatRecoveryUserId, agentId, activeDomain, activeOrgId, chatExecutionSource]);
