@@ -1,5 +1,6 @@
 import { ToolRegistry } from '../registry';
 import { createHash } from 'crypto';
+import { captureOrganizationMembershipAuthorization, isOrganizationMembershipAuthorizationCurrent } from '../../org/membership_authorization';
 import type { CapabilityManifestEntry } from '../types';
 import {
   attachedExternalCommitReconciliationFingerprint,
@@ -34,6 +35,7 @@ import {
   renewWorkflowRunLease,
   recordWorkflowReconciliation,
   requestWorkflowCancel,
+  stopUnauthorizedWorkflowRun,
   requestWorkflowPause,
   decideWorkflowConfirmation,
   editWorkflowRunPlan,
@@ -128,7 +130,18 @@ function requireWorkflowRunForContext(runId: string, context?: any) {
   if (run.scope.domain !== scope.domain || run.scope.orgId !== scope.orgId) {
     throw new Error(`Workflow run '${runId}' was not found in this scope.`);
   }
+  assertWorkflowAuthorization(run);
   return run;
+}
+
+function workflowAuthorizationCurrent(run: NonNullable<ReturnType<typeof getWorkflowRun>>): boolean {
+  return run.scope.domain !== 'work' || isOrganizationMembershipAuthorizationCurrent(run.membershipAuthorization, run.scope.orgId, run.userId);
+}
+
+function assertWorkflowAuthorization(run: NonNullable<ReturnType<typeof getWorkflowRun>>): void {
+  if (workflowAuthorizationCurrent(run)) return;
+  stopUnauthorizedWorkflowRun(run.runId, run.userId);
+  throw new Error('Original workflow organization authorization is unavailable. Review the cancelled run before creating new work.');
 }
 
 async function durablyBlockWorkflowRun(input: Parameters<typeof blockWorkflowRun>[0]) {
@@ -345,11 +358,35 @@ function scheduleWorkflowWorker(args: Record<string, any>, context: any, runId: 
   if (!scheduledRun || scheduledRun.status !== 'running' || !leaseId) return;
   const generationKey = `${runId}:${leaseId}`;
   if (activeWorkflowWorkers.has(generationKey)) return;
+  const controller = new AbortController();
+  let authorityStopped = false;
+  const stop = () => {
+    if (!controller.signal.aborted) controller.abort(new DOMException('Workflow execution stopped.', 'AbortError'));
+  };
+  const check = () => {
+    const current = getWorkflowRun(runId, userId);
+    if (!current) { stop(); return true; }
+    if (!workflowAuthorizationCurrent(scheduledRun) || context?.isCancelled?.() === true || context?.executionSignal?.aborted) {
+      // A late watcher for one lease must never stop a newer resumed worker.
+      if (!authorityStopped && current.lastWorkerLeaseId === leaseId) {
+        authorityStopped = true;
+        stopUnauthorizedWorkflowRun(runId, userId);
+      }
+      stop();
+    }
+    if (current.cancelRequestedAt || current.pauseRequestedAt || current.status !== 'running' || current.lease?.leaseId !== leaseId) stop();
+    return controller.signal.aborted;
+  };
+  const authorizationTimer = setInterval(check, 100);
+  authorizationTimer.unref?.();
+  const parentAbort = () => { check(); };
+  context?.executionSignal?.addEventListener('abort', parentAbort);
   const workerContext = {
     ...context,
     autonomous: true,
     source: 'workflow-runtime',
-    isCancelled: () => false,
+    executionSignal: controller.signal,
+    isCancelled: check,
   };
   const promise = Promise.resolve().then(async () => {
     let renewing = false;
@@ -393,11 +430,17 @@ function scheduleWorkflowWorker(args: Record<string, any>, context: any, runId: 
       }
     } finally {
       clearInterval(heartbeat);
+      clearInterval(authorizationTimer);
+      context?.executionSignal?.removeEventListener('abort', parentAbort);
+      await persistWorkflowRuntimeBarrier();
     }
   }).finally(() => {
     activeWorkflowWorkers.delete(generationKey);
   });
   activeWorkflowWorkers.set(generationKey, promise);
+  // Failed persistence remains dirty and observable through the run reader's
+  // strict barrier; a detached worker must not create an unhandled rejection.
+  void promise.catch(() => {});
 }
 
 async function handleRunWorkflow(args: Record<string, any>, context?: any): Promise<string> {
@@ -409,6 +452,7 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
   if (run && (run.scope.domain !== requestedScope.domain || run.scope.orgId !== requestedScope.orgId)) {
     throw new Error(`Workflow run '${run.runId}' was not found in this scope.`);
   }
+  if (run) assertWorkflowAuthorization(run);
   const wf = run
     ? listWorkflows(userId, undefined, requestedScope).find(item => item.runtimeWorkflowId === run!.workflowId) || null
     : (name ? getWorkflow(userId, name, requestedScope) : null);
@@ -459,6 +503,8 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
       userId,
       variables: args.inputs || {},
       actor: 'user',
+      membershipAuthorization: requestedScope.domain === 'work'
+        ? captureOrganizationMembershipAuthorization(requestedScope.orgId, userId) : undefined,
     });
   } else if (run.status === 'completed') {
     return JSON.stringify({
@@ -494,6 +540,7 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
       leaseMs: 120_000,
     });
     await persistWorkflowRuntimeBarrier();
+    assertWorkflowAuthorization(run);
     scheduleWorkflowWorker({ ...args, expectedRevision: run.revision }, context, run.runId);
     return JSON.stringify({
       ok: true,
@@ -539,6 +586,7 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
   if (!workerLeaseId) throw new Error(`Workflow run '${run.runId}' has no live worker lease.`);
 
   for (let i = 0; i < orderedSteps.length; i++) {
+    context?.isCancelled?.();
     const currentBeforeStep = getWorkflowRun(run.runId, userId);
     if (!currentBeforeStep
       || currentBeforeStep.status !== 'running'
@@ -551,6 +599,7 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
     // Heartbeats and durable barriers may advance the ledger revision without
     // changing worker ownership. Always use the latest same-lease revision.
     run = currentBeforeStep;
+    assertWorkflowAuthorization(run);
     const step = orderedSteps[i];
     const capabilityId = step.capabilityId;
     if (!capabilityId || capabilityId.startsWith('unresolved:') || capabilityId.startsWith('skill:')) {
@@ -721,6 +770,8 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
         taskId: run.runId,
         idempotencyKey: executionKey,
         onAdapterStart: async (call: { name: string; attempt: number }) => {
+          assertWorkflowAuthorization(run!);
+          if (context?.isCancelled?.()) throw new Error('Workflow execution stopped before adapter start.');
           if (!capabilityContractMatchesReviewedDefinition()) {
             throw new Error(capabilityContractAdapterError);
           }
@@ -733,6 +784,8 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
             actor: 'workflow-tool',
           });
           await upstreamAdapterStart?.(call);
+          assertWorkflowAuthorization(run!);
+          if (context?.isCancelled?.()) throw new Error('Workflow execution stopped before adapter start.');
           if (!capabilityContractMatchesReviewedDefinition()) {
             throw new Error(capabilityContractAdapterError);
           }
@@ -742,6 +795,7 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
     const verified = record.terminalVerification?.status === 'verified'
       && record.envelope?.status === 'verified_success'
       && record.envelope.verification.status === 'verified';
+    context?.isCancelled?.();
     const latestRun = getWorkflowRun(run.runId, userId);
     if (!latestRun || latestRun.status !== 'running' || !latestRun.lease
       || latestRun.lease.leaseId !== run.lease?.leaseId) {
@@ -829,6 +883,7 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
     throw new Error('Workflow lease changed before terminal completion could be recorded.');
   }
   run = latestForCompletion;
+  assertWorkflowAuthorization(run);
   run = completeWorkflowRun({
     runId: run.runId,
     expectedRevision: run.revision,
@@ -838,6 +893,7 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
   });
   if (wf) recordWorkflowRun(userId, wf.name, requestedScope);
   await persistWorkflowRuntimeBarrier();
+  assertWorkflowAuthorization(run);
 
   return JSON.stringify({
     ok: true,
@@ -906,6 +962,7 @@ async function readDurableWorkflowRunForContext(runId: string, context?: any) {
   // revision (or a later one) is durable before it is exposed to the caller.
   const run = requireWorkflowRunForContext(runId, context);
   await persistWorkflowRuntimeBarrier();
+  assertWorkflowAuthorization(run);
   return run;
 }
 

@@ -183,6 +183,7 @@ async function prepareServer() {
   await copyIfExists(path.join(src, 'entry.cjs'), path.join(dest, 'entry.cjs'));
   await copyIfExists(path.join(src, 'server.mjs'), path.join(dest, 'server.mjs'));
   await copyIfExists(path.join(src, 'system-explorer-worker.mjs'), path.join(dest, 'system-explorer-worker.mjs'));
+  await copyIfExists(path.join(src, 'javascript-sandbox-worker.cjs'), path.join(dest, 'javascript-sandbox-worker.cjs'));
   await copyIfExists(path.join(src, 'runtime-meta.json'), path.join(dest, 'runtime-meta.json'));
   await copyIfExists(path.join(src, 'server.cjs'), path.join(dest, 'server.cjs'));
   await copyIfExists(path.join(src, 'package.json'), path.join(dest, 'package.json'));
@@ -279,7 +280,16 @@ async function prepareWebView2Dll() {
   }
 }
 
-await fs.rm(outDir, { recursive: true, force: true });
+const resolvedOutDir = path.resolve(outDir);
+if (resolvedOutDir !== path.join(path.resolve(root), 'desktop-resources')) {
+  throw new Error(`Refusing to refresh unexpected desktop resource directory: ${resolvedOutDir}`);
+}
+// Fail before refreshing the last prepared package if its calculation worker
+// was omitted. This worker is required; Node execution is never a fallback.
+if (!existsSync(path.join(root, 'dist-server', 'javascript-sandbox-worker.cjs'))) {
+  throw new Error('Missing JavaScript calculation worker. Run npm run build:server before packaging the desktop app.');
+}
+await fs.rm(resolvedOutDir, { recursive: true, force: true });
 await fs.mkdir(outDir, { recursive: true });
 await prepareServer();
 await prepareGptSovits();

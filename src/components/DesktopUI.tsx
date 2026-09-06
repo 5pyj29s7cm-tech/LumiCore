@@ -2533,6 +2533,11 @@ export function DesktopUI({
   const { callState, audioLevel, startCall, startCallRef, switchVoice, endCall, error: callError, transcript, interrupt, toggleMute, isMuted, switchPersonality } = useVoiceCall({
     socket,
     onTranscript: appendMeetingTranscript,
+    proactive: {
+      userId: String(user?.uid || ''), domain: workDomain,
+      orgId: workDomain === 'work' ? orgConnection?.orgId : '',
+      voiceId: selectedVoiceId, outputMuted: volume <= 0,
+    },
   });
   const voiceScopeOptions = useMemo(() => (
     workDomain === 'work' && orgConnection?.connected && orgConnection?.orgId
@@ -2789,6 +2794,7 @@ export function DesktopUI({
   // Idle→active return greeting — listens for ambient idle reports and fires on return
   const lastIdleRef = useRef<number>(0);
   const greetedRef = useRef(false);
+  useEffect(() => { lastIdleRef.current = 0; greetedRef.current = false; }, [socket, user?.uid, workDomain]);
   useEffect(() => {
     if (!socket) return;
     const onIdleReport = (data: { idle_ms: number; idle_seconds: number }) => {
@@ -2796,7 +2802,7 @@ export function DesktopUI({
       const wasAway = lastIdleRef.current > IDLE_AWAY_SECONDS;
       const isBack = idleS < RETURN_IDLE_SECONDS;
       const allowProactiveGreeting = localStorage.getItem('lumi_allow_proactive_voice') === 'true';
-      if (wasAway && isBack && !greetedRef.current && allowProactiveGreeting) {
+      if (wasAway && isBack && !greetedRef.current && allowProactiveGreeting && callState === 'idle' && !isMuted && volume > 0 && workDomain === 'personal') {
         greetedRef.current = true;
         // LLM-generated personalized greeting — server generates, TTS speaks
         socket.emit('greeting:generate', { scene: 'return' });
@@ -2808,7 +2814,7 @@ export function DesktopUI({
     };
     socket.on('ambient:idle_echo', onIdleReport);
     return () => { socket.off('ambient:idle_echo', onIdleReport); };
-  }, [socket]);
+  }, [socket, callState, isMuted, volume, workDomain, user?.uid]);
 
   useEffect(() => {
     if (callError) toast.error(callError);

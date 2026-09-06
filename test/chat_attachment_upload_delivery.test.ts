@@ -49,6 +49,7 @@ function extract(file: string, name: string, dependencies: Record<string, any>) 
   }).outputText, dependencies);
 }
 function sendButtonDisabled(dependencies: Record<string, unknown>) {
+  dependencies = { conversationTransitionPending: false, ...dependencies };
   let expression = '';
   const visit = (node: ts.Node) => {
     if (ts.isJsxAttribute(node) && node.name.getText(pageAst) === 'disabled'
@@ -83,7 +84,7 @@ function pageHarness(withOldAttachment = false, transport?: (url: string, init: 
   const registry = new ChatViewWorkRegistry();
   const emitted: any[] = [];
   const deps: Record<string, any> = {
-    isOptimizing: false, attachmentUploadFailures: [], chatUploadsRef: { current: new ChatAttachmentUploads() },
+    conversationTransitionRef: { current: null }, conversationTransitionPending: false, isOptimizing: false, attachmentUploadFailures: [], chatUploadsRef: { current: new ChatAttachmentUploads() },
     attachmentUploadText: chatAttachmentCopy(false), conversationAttachmentsRef: { current: withOldAttachment ? [oldAttachment()] : [] },
     pendingAttachmentsRef: { current: [] }, pendingAttachments: [], draftTextRef: { current: 'Summarize the document I just selected.' },
     messagesRef: { current: [] }, messages: [], user: { uid: 'synthetic-owner', username: 'synthetic-owner' },

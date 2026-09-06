@@ -202,7 +202,7 @@ import { createDesktopRelay } from "./desktop_relay";
 import { normalizeVoiceHistoryRecord } from "./voice_history";
 import {
   buildSocketToolSecurityContext,
-  resolveSocketScope,
+  resolveAuthorizedSocketScope,
   scopedEmotionalStateKey,
 } from "./scope";
 import {
@@ -662,10 +662,11 @@ export function registerChatHandler(
     ack?: (payload: { ok: boolean; snapshot?: ReturnType<typeof getChatExecution>; error?: string }) => void,
   ) => {
     const uid = userIdFn(socket);
-    const requestScope = resolveSocketScope(socket, uid, {
-      domain: data.domain === 'work' ? 'work' : data.domain === 'personal' ? 'personal' : undefined,
-      orgId: data.orgId,
-    });
+    const requestScope = resolveAuthorizedSocketScope(socket, uid);
+    if (!requestScope) {
+      try { ack?.({ ok: false, error: 'Workspace access is unavailable.' }); } catch {}
+      return;
+    }
     const scope: ChatExecutionScope = {
       userId: uid,
       domain: requestScope.domain,
@@ -697,10 +698,14 @@ export function registerChatHandler(
     ack?: (payload: { ok: boolean; requestId?: string; status?: string; error?: string }) => void,
   ) => {
     const uid = userIdFn(socket);
-    const requestScope = resolveSocketScope(socket, uid, {
-      domain: data.domain === 'work' ? 'work' : data.domain === 'personal' ? 'personal' : undefined,
-      orgId: data.orgId,
-    });
+    // Revoked credentials may only stop their exact original request. They
+    // never become personal credentials and cannot read a recovery payload.
+    if (socket.data?.authenticatedUserId !== uid || !data.requestId) {
+      try { ack?.({ ok: false, error: 'An authenticated exact request is required.' }); } catch {}
+      return;
+    }
+    const originalOrgId = String(socket.data?.authenticatedOrgId || '').trim();
+    const requestScope = { domain: originalOrgId ? 'work' as const : 'personal' as const, orgId: originalOrgId };
     const scope: ChatExecutionScope = {
       userId: uid,
       domain: requestScope.domain,
@@ -800,13 +805,12 @@ export function registerChatHandler(
     let pendingConfirmationPrompt = '';
     console.log('[ChatHandler] uid:', uid, 'agentId:', requestedAgentId || 'lumi', 'source:', source);
 
-    // Work context comes from the authenticated socket token. Personal mode can be
-    // explicitly requested by the desktop UI to avoid a stale org token leaking into
-    // local personal conversations.
-    const socketScope = resolveSocketScope(socket, uid, {
-      domain: data.domain === 'work' ? 'work' : data.domain === 'personal' ? 'personal' : undefined,
-      orgId: data.orgId,
-    });
+    // UI scope hints cannot turn an invalid work credential into personal access.
+    const socketScope = resolveAuthorizedSocketScope(socket, uid);
+    if (!socketScope) {
+      try { ack?.({ ok: false, requestId, error: 'Workspace access is unavailable.' }); } catch {}
+      return;
+    }
     // Only a user-owned Memory Avatar may opt into the private persona lane.
     // Ordinary chat always remains the single LumiCore identity; arbitrary
     // client-supplied Agent IDs cannot create another conversation owner or

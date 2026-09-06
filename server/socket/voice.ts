@@ -12,6 +12,7 @@ import { logger } from "../../logger";
 import { createVoiceCallAdmission } from './voice_call_admission';
 import { registerMemoryAvatarVoiceHandlers } from './memory_avatar_voice';
 import { captureChatAuthorization } from './chat_authorization';
+import { getGateConfig } from '../autonomy/safety_gate';
 import { getMember } from '../org/db';
 import { beginMeetingCapture, appendMeetingAudio, takeMeetingRecording, findPausedMeetingRecording, releasePausedMeetingRecording, readMeetingPcm, removeMeetingRecordingFiles, normalizeMeetingId, type MeetingCapture, type MeetingRecording } from './meeting_recordings';
 import { NormalizedMessage, makeLLMCallStreaming, makeLLMCall } from "../llm/providers";
@@ -188,6 +189,7 @@ import {
 } from './voice_durability';
 import {
   buildSocketToolSecurityContext,
+  resolveAuthorizedSocketScope,
   resolveSocketScope,
   scopedEmotionalStateKey,
 } from "./scope";
@@ -5505,6 +5507,7 @@ export function registerVoiceHandlers(
     captureSessionId?: string;
   }) => {
     logger.info(`[Audio] Voice call started by ${socket.id}`);
+    cancelProactive();
     const pendingOwner = { sessionId: normalizeVoiceSessionId(data.sessionId), cancelled: false };
     pendingStandardStart = pendingOwner;
     let admittedSession: AudioSession | undefined;
@@ -6458,6 +6461,45 @@ export function registerVoiceHandlers(
   });
 
   // Track ambient noise level for environment-gated proactive speech
+  type ProactiveContext = { contextId: string; userId: string; domain: 'personal' | 'work'; orgId: string; voiceId: string | null; enabled: boolean };
+  let proactiveContext: ProactiveContext | null = null;
+  let proactiveController: AbortController | null = null;
+  const cancelProactive = () => { proactiveController?.abort(); proactiveController = null; };
+  socket.on('proactive:configure', (data: Partial<ProactiveContext>) => {
+    cancelProactive();
+    proactiveContext = null;
+    const userId = getUserId(socket);
+    const scope = resolveAuthorizedSocketScope(socket, userId);
+    const contextId = normalizeVoiceSessionId(data?.contextId);
+    if (!scope || !contextId || data?.userId !== userId || data.domain !== scope.domain || String(data.orgId || '') !== scope.orgId) return;
+    proactiveContext = { contextId, userId, ...scope, voiceId: normalizeVoiceSwitchId(data.voiceId) || null, enabled: data.enabled === true };
+  });
+  function beginProactive() {
+    const context = proactiveContext;
+    if (!context?.enabled || proactiveController || callAdmission.hasCall() || !socket.connected) return null;
+    const scope = resolveAuthorizedSocketScope(socket, getUserId(socket));
+    if (!scope || getUserId(socket) !== context.userId || scope.domain !== context.domain || scope.orgId !== context.orgId) return null;
+    const authorization = captureChatAuthorization(context.userId, scope);
+    if (!authorization.isCurrent() || shouldStayQuiet(context.userId).quiet) return null;
+    // A notification must not need an earlier microphone call to initialize
+    // identity, emotional state, model preferences or the selected speaker.
+    const session: AudioSession = { ...getAudioSession(socket), userId: context.userId, ...scope, personalityId: 'lumi', currentVoiceId: context.voiceId };
+    const controller = new AbortController();
+    proactiveController = controller;
+    const stopWatch = authorization.watch(controller);
+    const assertCurrent = () => {
+      authorization.assertCurrent();
+      if (controller.signal.aborted || proactiveContext !== context || !socket.connected || getUserId(socket) !== context.userId || callAdmission.hasCall() || shouldStayQuiet(context.userId).quiet) {
+        throw new DOMException('Proactive voice is no longer allowed', 'AbortError');
+      }
+    };
+    return {
+      session, authorization, controller, assertCurrent,
+      envelope: { contextId: context.contextId, userId: context.userId, domain: context.domain, orgId: context.orgId },
+      release: () => { stopWatch(); if (proactiveController === controller) proactiveController = null; },
+    };
+  }
+  socket.on('disconnect', () => { proactiveContext = null; cancelProactive(); });
   socket.on("ambient:noise_level", (data: { rms: number; isSpeaking: boolean; callState: string }) => {
     ambientRms = data.rms;
     ambientRmsLastUpdate = Date.now();
@@ -6469,6 +6511,12 @@ export function registerVoiceHandlers(
   function shouldStayQuiet(userId: string): { quiet: boolean; reason: string } {
     const hour = new Date().getHours();
     const nightHours = hour >= 23 || hour < 7;
+    const gate = getGateConfig(userId);
+    const withinQuietHours = gate.quietHoursStart === gate.quietHoursEnd
+      || (gate.quietHoursStart < gate.quietHoursEnd
+        ? hour >= gate.quietHoursStart && hour < gate.quietHoursEnd
+        : hour >= gate.quietHoursStart || hour < gate.quietHoursEnd);
+    if (gate.quietHoursEnabled && withinQuietHours) return { quiet: true, reason: 'user_quiet_hours' };
 
     if (nightHours) {
       return { quiet: true, reason: 'night_hours' };
@@ -6494,12 +6542,12 @@ export function registerVoiceHandlers(
   }
 
   socket.on("proactive:request_speak", async (data: { message: string }) => {
-    const userId = getUserId(socket);
-    if (!userId || !data.message) return;
-    const session = getAudioSession(socket);
-    if (socket.data?.authenticatedOrgId && session.domain !== 'work') return;
-    const authorization = session.authorization || captureChatAuthorization(userId, session);
-    if (!authorization.isCurrent()) return;
+    if (typeof data?.message !== 'string' || !data.message.trim() || data.message.length > 4000) return;
+    const operation = beginProactive();
+    if (!operation) return;
+    try {
+    const { session, authorization } = operation;
+    const userId = session.userId;
 
     session.isSpeaking = true;
     const resetSpeaking = () => { session.isSpeaking = false; };
@@ -6534,7 +6582,6 @@ export function registerVoiceHandlers(
       );
       voiceId = personalityCfg?.ttsVoiceId || null;
     }
-    if (!voiceId) { resetSpeaking(); return; }
 
     // Gate: check initiative level — Lumi only speaks first when comfortable enough
     const es = loadEmotionalState(getVoiceStateKey(session));
@@ -6550,10 +6597,10 @@ export function registerVoiceHandlers(
     if (!proactiveRoute) { resetSpeaking(); return; }
 
     let proactiveTtsCounted = false;
-    const controller = new AbortController();
+    const controller = operation.controller;
     const stopWatch = authorization.watch(controller);
     try {
-      authorization.assertCurrent();
+      operation.assertCurrent();
       ttsSpeakingCount++;
       proactiveTtsCounted = true;
       addEchoText(proactiveText, voiceEchoScope(session));
@@ -6567,9 +6614,10 @@ export function registerVoiceHandlers(
         signal: controller.signal,
         allowFallback: false,
       });
-      authorization.assertCurrent();
+      operation.assertCurrent();
       const proactiveGain = computeVolumeGain();
       socket.emit("audio:proactive_speak", {
+        ...operation.envelope,
         audioBuffer: result.audioBuffer,
         text: proactiveText,
         timestamp: new Date().toISOString(),
@@ -6583,17 +6631,16 @@ export function registerVoiceHandlers(
       if (proactiveTtsCounted) ttsSpeakingCount = Math.max(0, ttsSpeakingCount - 1);
       resetSpeaking();
     }
+    } finally { operation.release(); }
   });
 
   // LLM-generated greeting — replaces hardcoded templates with personalized, scene-aware greetings
   socket.on("greeting:generate", async (data: { scene?: string }) => {
-    const userId = getUserId(socket);
-    if (!userId) return;
-
-    const session = getAudioSession(socket);
-    if (socket.data?.authenticatedOrgId && session.domain !== 'work') return;
-    const authorization = session.authorization || captureChatAuthorization(userId, session);
-    if (!authorization.isCurrent()) return;
+    const operation = beginProactive();
+    if (!operation) return;
+    try {
+    const { session, authorization } = operation;
+    const userId = session.userId;
     let voiceId = session.currentVoiceId;
     if (!voiceId) {
       const personalityCfg = personalityRegistry.getForUser(
@@ -6603,7 +6650,6 @@ export function registerVoiceHandlers(
       );
       voiceId = personalityCfg?.ttsVoiceId || null;
     }
-    if (!voiceId) return;
 
     const es = loadEmotionalState(getVoiceStateKey(session));
     if (es.initiative < 0.3) return; // Lower gate for greetings
@@ -6663,10 +6709,10 @@ export function registerVoiceHandlers(
       : null;
     if (!greetingTtsRoute) return;
 
-    const controller = new AbortController();
+    const controller = operation.controller;
     const stopWatch = authorization.watch(controller);
     try {
-      authorization.assertCurrent();
+      operation.assertCurrent();
       const greetingLLM = {
         ...getUserPreferredLLMConfig(session.userId, {
           maxTokens: 120,
@@ -6694,7 +6740,7 @@ export function registerVoiceHandlers(
         llmGetters.getRelay,
       );
 
-      authorization.assertCurrent();
+      operation.assertCurrent();
       recordTokenUsage(session.userId, greetingLLM.provider, greetingLLM.model, response.usage, `voice_greet_${Date.now()}`, 'voice');
 
       const greeting = response.text?.trim() || '';
@@ -6717,8 +6763,9 @@ export function registerVoiceHandlers(
         signal: controller.signal,
         allowFallback: false,
       });
-      authorization.assertCurrent();
+      operation.assertCurrent();
       socket.emit("audio:proactive_speak", {
+        ...operation.envelope,
         audioBuffer: result.audioBuffer,
         text: spokenGreeting,
         timestamp: new Date().toISOString(),
@@ -6736,7 +6783,8 @@ export function registerVoiceHandlers(
       } as any, { tier: 'episodic', perspective: 'shared_memory', importance: 0.2, domain: session.domain, orgId: session.orgId, source: 'voice' });
       logger.info(`[Greeting] LLM-generated for ${userId} (${spokenGreeting.length} chars)`);
     } catch (err: any) {
-      if (!authorization.isCurrent()) return;
+      if (!authorization.isCurrent() || controller.signal.aborted) return;
+      try { operation.assertCurrent(); } catch { return; }
       logger.warn(`[Greeting] LLM generation failed, using fallback: ${err.message}`);
       const hour = new Date().getHours();
       const fallback = hour < 6 ? '夜深了，还在忙吗？' : hour < 12 ? '早上好，欢迎回来。' : hour < 18 ? '下午好，继续吧。' : '晚上好，欢迎回来。';
@@ -6748,10 +6796,11 @@ export function registerVoiceHandlers(
           signal: controller.signal,
         allowFallback: false,
         });
-        authorization.assertCurrent();
-        socket.emit("audio:proactive_speak", { audioBuffer: result.audioBuffer, text: fallback, timestamp: new Date().toISOString(), volumeGain: computeVolumeGain() });
+        operation.assertCurrent();
+        socket.emit("audio:proactive_speak", { ...operation.envelope, audioBuffer: result.audioBuffer, text: fallback, timestamp: new Date().toISOString(), volumeGain: computeVolumeGain() });
       } catch {}
     } finally { stopWatch(); }
+    } finally { operation.release(); }
   });
 
   socket.on("audio:switch-personality", (data: { personalityId: string }) => {

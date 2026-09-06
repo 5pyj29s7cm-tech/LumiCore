@@ -73,6 +73,13 @@ await build({
 });
 
 const serverBundleSource = readFileSync('dist-server/server.mjs', 'utf8');
+await build({
+  entryPoints: ['server/tools/javascript_sandbox_worker.cjs'],
+  bundle: true,
+  platform: 'node',
+  format: 'cjs',
+  outfile: 'dist-server/javascript-sandbox-worker.cjs',
+});
 if (/function isFileSystemCaseSensitive\(\)[\s\S]{0,500}swapCase\(__filename\)/u.test(serverBundleSource)) {
   throw new Error('TypeScript CommonJS runtime was bundled into the ESM server output. Keep typescript external.');
 }
@@ -134,4 +141,4 @@ console.log('[build-server] Skipped hide-console.cjs (not Windows)');
 }
 
 console.log(`[build-server] Generated runtime metadata ${runtimeMeta.version} ${runtimeMeta.buildId.slice(0, 7)} (${runtimeMeta.channel}, source ${runtimeMeta.sourceFingerprint.slice(0, 12)}${runtimeMeta.sourceDirty ? ', dirty' : ''})`);
-console.log('[build-server] Generated dist-server/server.mjs + dist-server/system-explorer-worker.mjs + dist-server/entry.cjs + dist-server/runtime-meta.json + dist-server/hide-console.cjs');
+console.log('[build-server] Generated server, exploration/calculation workers, entry, runtime metadata and platform resources.');

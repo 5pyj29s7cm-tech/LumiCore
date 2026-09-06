@@ -7,6 +7,7 @@ import {
   initDatabase,
   readDB,
   writeDB,
+  runSQL,
 } from '../db_layer';
 import {
   configureExtensionRuntimeForTests,
@@ -932,6 +933,36 @@ describe('signed extension and Provider registry', () => {
     expect(failed).toMatchObject({ ok: false, status: 'rolled_back', rollback: 'previous_revision_restored' });
     expect(registry.get(`${v1.id}_observe`)?.description).toContain('@1.0.0');
     expect(JSON.parse(listExtensions({ userId: USER_ID })).extensions.find((item: any) => item.version === '1.0.0').status).toBe('active');
+    expect(failed).toMatchObject({ verified: false, persistence: 'pending' });
+    configureRuntime();
+    const observed = JSON.parse(await registry.execute(`${v1.id}_observe`, { query: 'after rollback' }, {
+      userId: USER_ID, taskId: 'rollback-call', requestId: 'rollback-call', userConfirmed: true,
+    }));
+    expect(observed).toMatchObject({ ok: true, extensionVersion: '1.0.0', value: 'after rollback' });
+    expect(registry.get(`${v1.id}_observe`)).toBeDefined();
+  });
+
+  it('restores callable handlers after real SQLite activation failure and preserves them through reopening', async () => {
+    const keys = keyPair();
+    const v1 = signedManifest({ keys, version: '1.0.0' });
+    const v2 = signedManifest({ keys, version: '2.0.0' });
+    await install(v1);
+    await flushDBOrThrow();
+    await runSQL('PRAGMA query_only=ON');
+    try {
+      const failed = await install(v2);
+      expect(failed).toMatchObject({ status: 'rolled_back', rollback: 'previous_revision_restored', verified: false, persistence: 'pending' });
+    } finally { await runSQL('PRAGMA query_only=OFF'); }
+    await flushDBOrThrow();
+    const execute = async (taskId: string, target = registry) => JSON.parse(await target.execute(`${v1.id}_observe`, { query: 'saved old revision' }, {
+      userId: USER_ID, userConfirmed: true, taskId, requestId: taskId,
+    }));
+    expect(await execute('sqlite-restored-call')).toMatchObject({ ok: true, extensionVersion: '1.0.0' });
+    await flushDBOrThrow();
+    resetExtensionRegistryForTests(); await closeDatabase(); await initDatabase(); configureRuntime();
+    const restarted = new ToolRegistry(); registerExtensionRegistryTools(restarted);
+    expect(await hydrateActiveExtensions(restarted)).toMatchObject({ activated: 1, failed: 0 });
+    expect(await execute('sqlite-reopened-call', restarted)).toMatchObject({ ok: true, extensionVersion: '1.0.0' });
   });
 
   it('restores an active extension when disable persistence fails', async () => {

@@ -2,6 +2,7 @@ import sqlite3 from 'sqlite3';
 import fs from 'fs';
 import path from 'path';
 import { createHash } from 'node:crypto';
+import { hasCurrentMemoryEmbedding, parsePersistedMemoryEmbedding } from './server/memory/embedding_identity';
 import bcrypt from 'bcryptjs';
 import {
   assertSafeSqliteDataPath,
@@ -713,6 +714,9 @@ function migrateSchema(): Promise<void> {
       parentId TEXT,
       agentId TEXT DEFAULT '',
       nodeType TEXT NOT NULL DEFAULT 'leaf',
+      embedding TEXT,
+      embeddingNamespace TEXT,
+      embeddingContentHash TEXT,
       domain TEXT DEFAULT 'personal',
       orgId TEXT DEFAULT ''
     )`, onAlter);
@@ -735,6 +739,9 @@ function migrateSchema(): Promise<void> {
     db!.run("ALTER TABLE memories ADD COLUMN importance REAL NOT NULL DEFAULT 0.3", onAlter);
     db!.run("ALTER TABLE memories ADD COLUMN parentId TEXT", onAlter);
     db!.run("ALTER TABLE memories ADD COLUMN nodeType TEXT NOT NULL DEFAULT 'leaf'", onAlter);
+    db!.run("ALTER TABLE memories ADD COLUMN embedding TEXT", onAlter);
+    db!.run("ALTER TABLE memories ADD COLUMN embeddingNamespace TEXT", onAlter);
+    db!.run("ALTER TABLE memories ADD COLUMN embeddingContentHash TEXT", onAlter);
     // Add token_usage table if it doesn't exist
     db!.run(`CREATE TABLE IF NOT EXISTS token_usage (
       id TEXT PRIMARY KEY,
@@ -1440,10 +1447,10 @@ async function loadMemoryDB(): Promise<void> {
 
   // Load memories
   const memoriesRaw = await query<any>('SELECT * FROM memories');
-  const memories = memoriesRaw.map((m: any) => ({
-    ...m,
-    keywords: m.keywords ? JSON.parse(m.keywords) : [],
-  }));
+  const memories = memoriesRaw.map((m: any) => {
+    const memory = { ...m, keywords: m.keywords ? JSON.parse(m.keywords) : [] };
+    return { ...memory, ...parsePersistedMemoryEmbedding(memory) };
+  });
   const memoryAvatarsRaw = await query<any>('SELECT * FROM memory_avatars');
   const memoryAvatars = memoryAvatarsRaw.map((row: any) => {
     let payload: Record<string, any> = {};
@@ -2204,9 +2211,12 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
     },
     {
       name: 'memories',
-      createSQL: `CREATE TABLE _temp_memories (id TEXT PRIMARY KEY, userId TEXT NOT NULL, type TEXT NOT NULL, content TEXT NOT NULL, keywords TEXT NOT NULL DEFAULT '[]', confidence REAL NOT NULL DEFAULT 0.5, sourceInteractionId TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, lastRetrievedAt TEXT, retrieveCount INTEGER NOT NULL DEFAULT 0, tier TEXT NOT NULL DEFAULT 'episodic', perspective TEXT NOT NULL DEFAULT 'owner_trait', importance REAL NOT NULL DEFAULT 0.3, parentId TEXT, agentId TEXT DEFAULT '', nodeType TEXT NOT NULL DEFAULT 'leaf', location TEXT DEFAULT '', domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '')`,
-      insertSQL: `INSERT INTO _temp_memories (id, userId, type, content, keywords, confidence, sourceInteractionId, createdAt, updatedAt, lastRetrievedAt, retrieveCount, tier, perspective, importance, parentId, agentId, nodeType, location, domain, orgId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.memories || []).map((m: any) => [m.id, m.userId, m.type, m.content, JSON.stringify(m.keywords || []), m.confidence || 0.5, m.sourceInteractionId || '', m.createdAt, m.updatedAt, m.lastRetrievedAt, m.retrieveCount || 0, m.tier || 'episodic', m.perspective || 'owner_trait', m.importance ?? 0.3, m.parentId || null, m.agentId || '', m.nodeType || 'leaf', m.location || '', m.domain || 'personal', m.orgId || '']),
+      createSQL: `CREATE TABLE _temp_memories (id TEXT PRIMARY KEY, userId TEXT NOT NULL, type TEXT NOT NULL, content TEXT NOT NULL, keywords TEXT NOT NULL DEFAULT '[]', confidence REAL NOT NULL DEFAULT 0.5, sourceInteractionId TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, lastRetrievedAt TEXT, retrieveCount INTEGER NOT NULL DEFAULT 0, tier TEXT NOT NULL DEFAULT 'episodic', perspective TEXT NOT NULL DEFAULT 'owner_trait', importance REAL NOT NULL DEFAULT 0.3, parentId TEXT, agentId TEXT DEFAULT '', nodeType TEXT NOT NULL DEFAULT 'leaf', location TEXT DEFAULT '', domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '', embedding TEXT, embeddingNamespace TEXT, embeddingContentHash TEXT)`,
+      insertSQL: `INSERT INTO _temp_memories (id, userId, type, content, keywords, confidence, sourceInteractionId, createdAt, updatedAt, lastRetrievedAt, retrieveCount, tier, perspective, importance, parentId, agentId, nodeType, location, domain, orgId, embedding, embeddingNamespace, embeddingContentHash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.memories || []).map((m: any) => {
+        const indexed = hasCurrentMemoryEmbedding(m);
+        return [m.id, m.userId, m.type, m.content, JSON.stringify(m.keywords || []), m.confidence || 0.5, m.sourceInteractionId || '', m.createdAt, m.updatedAt, m.lastRetrievedAt, m.retrieveCount || 0, m.tier || 'episodic', m.perspective || 'owner_trait', m.importance ?? 0.3, m.parentId || null, m.agentId || '', m.nodeType || 'leaf', m.location || '', m.domain || 'personal', m.orgId || '', indexed ? JSON.stringify(m.embedding) : null, indexed ? JSON.stringify(m.embeddingNamespace) : null, indexed ? m.embeddingContentHash : null];
+      }),
     },
     {
       name: 'memory_avatars',

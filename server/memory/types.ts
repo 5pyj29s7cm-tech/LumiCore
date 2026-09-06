@@ -93,6 +93,8 @@ export interface Memory {
   /** Vector space identity must match the query before cosine comparison. */
   embedding?: number[];
   embeddingNamespace?: { provider: string; model: string; dimensions: number };
+  /** Digest of the exact indexed text and its owning scope. */
+  embeddingContentHash?: string;
   /** Domain: personal or work */
   domain?: string;
   /** Organization ID (work domain only) */

@@ -1,26 +1,14 @@
 import { Socket } from "socket.io";
-import jwt from "jsonwebtoken";
 import { readDB } from "../../db_layer";
-import { getJwtSecret } from "../config/local_identity";
-
-const JWT_SECRET = getJwtSecret();
-
-function getOrgIdFromSocket(socket: Socket): string | undefined {
-  try {
-    const authToken = socket.handshake?.auth?.token;
-    if (authToken) {
-      const decoded: any = jwt.verify(authToken, JWT_SECRET);
-      return decoded.orgId;
-    }
-  } catch {}
-  return undefined;
-}
+import { resolveAuthorizedSocketScope } from './scope';
 
 export function registerConversationHandlers(socket: Socket, getUserId: (s: Socket) => string) {
   socket.on("chat:conversations", async () => {
     try {
       const uid = getUserId(socket);
-      const orgId = getOrgIdFromSocket(socket);
+      const scope = resolveAuthorizedSocketScope(socket, uid);
+      if (!scope) { socket.emit('chat:conversations', { conversations: [], error: 'Workspace access is unavailable.' }); return; }
+      const orgId = scope.orgId;
       const db = readDB();
 
       const convs = (db.conversations || [])
@@ -68,7 +56,9 @@ export function registerConversationHandlers(socket: Socket, getUserId: (s: Sock
         return;
       }
       const uid = getUserId(socket);
-      const orgId = getOrgIdFromSocket(socket);
+      const scope = resolveAuthorizedSocketScope(socket, uid);
+      if (!scope) { socket.emit('chat:messages', { conversationId: data.conversationId, messages: [], error: 'Workspace access is unavailable.' }); return; }
+      const orgId = scope.orgId;
       const db = readDB();
 
       // Ownership + domain verification

@@ -25,6 +25,7 @@ import {
   resolveDesktopSession,
 } from "../config/desktop_bootstrap";
 import { authorizeTaskRegressionDesktopRelaySocket } from "../evidence/task_regression_desktop_relay";
+import { setOfficeBroadcast } from '../tools/definitions/office_tools';
 
 interface SocketContext {
   io: Server;
@@ -85,6 +86,12 @@ function getUserIdFromSocket(socket: any, jwtSecret: string): string | null {
 }
 
 export function initSocketRuntime({ io, jwtSecret, llm }: SocketContext) {
+  setOfficeBroadcast((scope, event, data) => {
+    if (scope.domain === 'work' && getMember(scope.orgId, scope.userId)?.status !== 'active') return;
+    const room = scope.domain === 'work'
+      ? `user:${scope.userId}:org:${scope.orgId}` : `user:${scope.userId}:personal`;
+    io.to(room).emit(event, data);
+  });
   // Personality loading
   personalityRegistry.load();
 

@@ -904,6 +904,10 @@ export function AgentChatPage({
   const [isSearchingHistory, setIsSearchingHistory] = useState(false);
   const [searchError, setSearchError] = useState('');
   const [isCreatingConversation, setIsCreatingConversation] = useState(false);
+  // Reserve the transcript synchronously: React state alone leaves a same-tick
+  // send/new/history shortcut able to submit against the previous conversation.
+  const conversationTransitionRef = useRef<symbol | null>(null);
+  const [conversationTransitionPending, setConversationTransitionPending] = useState(false);
   const [conversationHistoryOpen, setConversationHistoryOpen] = useState(true);
   // The history rail stays mounted at the left edge, but its selector deck
   // retracts until the user points at it or tabs into it.
@@ -1606,6 +1610,8 @@ export function AgentChatPage({
     const conversationScopeKey = `${user?.id || user?.username || 'anonymous'}:${buildChatConversationScopeKey(agentId, activeDomain, activeOrgId)}`;
     if (conversationScopeKey !== lastConversationScopeRef.current) {
       invalidateChatViewWork();
+      setIsCreatingConversation(false);
+      setRestoringConversationId('');
       lastConversationScopeRef.current = conversationScopeKey;
       initialLoadDoneRef.current = false;
       chatTurnTimerGuardRef.current.invalidate();
@@ -1637,6 +1643,9 @@ export function AgentChatPage({
 
     const initialConversationId = attachmentConversationIdRef.current;
     const initialMessageCount = messagesRef.current.length;
+    const transition = Symbol('initial-conversation');
+    conversationTransitionRef.current = transition;
+    setConversationTransitionPending(true);
     let cancelled = false;
 
     // Load the single active conversation messages. The request may resolve
@@ -1675,10 +1684,21 @@ export function AgentChatPage({
         const persistedMessages = normalizePersistedMessages(msgData.messages);
         messagesRef.current = persistedMessages;
         setMessages(persistedMessages);
-      } catch {}
+      } catch {} finally {
+        if (conversationTransitionRef.current === transition) {
+          conversationTransitionRef.current = null;
+          setConversationTransitionPending(false);
+        }
+      }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      if (conversationTransitionRef.current === transition) {
+        conversationTransitionRef.current = null;
+        setConversationTransitionPending(false);
+      }
+    };
   }, [activeDomain, activeOrgId, agentId, attachmentContextStoragePrefix, bindAttachmentContextToConversation, invalidateChatViewWork, isFounder, normalizePersistedMessages, resetMediaGenerationSurface, scopedConversationUrl, setMessages, user?.id, user?.username]);
 
   useEffect(() => {
@@ -2649,7 +2669,10 @@ export function AgentChatPage({
   }, [activeDomain, activeExecutionStorageKey, activeOrgId, agentId, bindAttachmentContextToConversation, chatExecutionSource, clearPersistedExecution, isFounder, isOfficeCommandCenter, isZh, mediaGenerationText.statusGenerating, pushChatProgress, recoveryOwner, resetMediaGenerationSurface, scopedConversationUrl, settleTrackedChatRequest, socket]);
 
   const startNewTextConversation = useCallback(async () => {
-    if (isCreatingConversation || restoringConversationId) return;
+    if (conversationTransitionRef.current || isCreatingConversation || restoringConversationId) return;
+    const transition = Symbol('new-conversation');
+    conversationTransitionRef.current = transition;
+    setConversationTransitionPending(true);
     setIsCreatingConversation(true);
     invalidateChatViewWork();
     const work = chatViewWorkRef.current.begin();
@@ -2689,7 +2712,6 @@ export function AgentChatPage({
       messagesRef.current = [];
       setPendingAttachments([]);
       pendingAttachmentsRef.current = [];
-      setDraftText('');
       setSearchQuery('');
       setSearchResults([]);
       setSearchError('');
@@ -2703,9 +2725,13 @@ export function AgentChatPage({
       if (work.isCurrent()) toast.error(error?.message || 'Unable to create a new conversation');
     } finally {
       work.finish();
-      setIsCreatingConversation(false);
+      if (conversationTransitionRef.current === transition) {
+        conversationTransitionRef.current = null;
+        setConversationTransitionPending(false);
+        setIsCreatingConversation(false);
+      }
     }
-  }, [activeDomain, agentId, bindAttachmentContextToConversation, clearChatProgress, clearPersistedExecution, invalidateChatViewWork, isCreatingConversation, resetMediaGenerationSurface, restoringConversationId, scopedConversationUrl, setDraftText, setMessages]);
+  }, [activeDomain, agentId, bindAttachmentContextToConversation, clearChatProgress, clearPersistedExecution, invalidateChatViewWork, isCreatingConversation, resetMediaGenerationSurface, restoringConversationId, scopedConversationUrl, setMessages]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -2836,10 +2862,13 @@ export function AgentChatPage({
   }, [conversationHistory]);
 
   const restoreTextConversation = useCallback(async (conversationId: string) => {
-    if (!conversationId || restoringConversationId || isCreatingConversation) return;
+    if (!conversationId || conversationTransitionRef.current || restoringConversationId || isCreatingConversation) return;
     if (conversationId === attachmentConversationIdRef.current) {
       return;
     }
+    const transition = Symbol('restore-conversation');
+    conversationTransitionRef.current = transition;
+    setConversationTransitionPending(true);
     setRestoringConversationId(conversationId);
     invalidateChatViewWork();
     const work = chatViewWorkRef.current.begin();
@@ -2885,7 +2914,6 @@ export function AgentChatPage({
       messagesRef.current = restoredMessages;
       setPendingAttachments([]);
       pendingAttachmentsRef.current = [];
-      setDraftText('');
       setSearchQuery('');
       setSearchResults([]);
       setSearchError('');
@@ -2904,9 +2932,13 @@ export function AgentChatPage({
       if (work.isCurrent()) toast.error(error?.message || 'Unable to open this conversation');
     } finally {
       work.finish();
-      setRestoringConversationId('');
+      if (conversationTransitionRef.current === transition) {
+        conversationTransitionRef.current = null;
+        setConversationTransitionPending(false);
+        setRestoringConversationId('');
+      }
     }
-  }, [activeDomain, agentId, bindAttachmentContextToConversation, clearChatProgress, clearPersistedExecution, invalidateChatViewWork, isCreatingConversation, normalizePersistedMessages, resetMediaGenerationSurface, restoringConversationId, scopedConversationUrl, setDraftText, setMessages]);
+  }, [activeDomain, agentId, bindAttachmentContextToConversation, clearChatProgress, clearPersistedExecution, invalidateChatViewWork, isCreatingConversation, normalizePersistedMessages, resetMediaGenerationSurface, restoringConversationId, scopedConversationUrl, setMessages]);
 
   const deleteConversationFromHistory = useCallback(async (conversationId: string) => {
     const id = String(conversationId || '').trim();
@@ -3021,6 +3053,7 @@ export function AgentChatPage({
   ) => {
     // All entry points (form, Enter, shell command, suggested text) use this
     // synchronous barrier, including the interval before React re-renders.
+    if (conversationTransitionRef.current) return;
     if (chatUploadsRef.current.busy || chatUploadsRef.current.canRetry) {
       toast.info(chatUploadsRef.current.busy ? attachmentUploadText.processing : attachmentUploadText.failed);
       return;
@@ -5050,7 +5083,7 @@ export function AgentChatPage({
               ) : (
                 <Button
                   type="submit"
-                  disabled={isOptimizing || attachmentUploadFailures.length > 0 || (!hasDraftText && pendingAttachments.length === 0)}
+                  disabled={conversationTransitionPending || isOptimizing || attachmentUploadFailures.length > 0 || (!hasDraftText && pendingAttachments.length === 0)}
                   className="lumi-chat-send bg-celestial-saturn text-black rounded-2xl px-6 hover:scale-105 transition-transform disabled:opacity-50 disabled:hover:scale-100"
                   style={{
                     backgroundColor: chatAccentTheme.saturn,

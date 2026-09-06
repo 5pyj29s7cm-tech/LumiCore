@@ -15,6 +15,15 @@ export interface RequestedRuntimeScope {
   orgId?: string;
 }
 
+/** A credential for an unavailable workspace must never become a personal credential. */
+export function resolveAuthorizedSocketScope(socket: Socket, userId: string): RuntimeScope | null {
+  if (!userId || socket.data?.authenticatedUserId !== userId) return null;
+  const orgId = String(socket.data?.authenticatedOrgId || '').trim();
+  if (!orgId) return { domain: 'personal', orgId: '' };
+  const member = getMember(orgId, userId);
+  return member?.status === 'active' ? { domain: 'work', orgId, orgRole: member.role } : null;
+}
+
 export type SocketToolSecurityContext = Pick<
   ToolContext,
   'authenticated' | 'authRole' | 'orgRole' | 'localExecution' | 'executionBoundary'

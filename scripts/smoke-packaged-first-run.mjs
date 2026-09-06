@@ -162,12 +162,113 @@ async function verifyPackagedShutdown(baseUrl, dataRoot, headers, child) {
   return { savedReceipt: true, normalExit: true, lastSettingPersisted: true };
 }
 
+async function verifyPackagedJavaScriptWorker(nodePath, workerPath) {
+  // Run with the shipped Node, not the smoke runner's Node or a source-loader.
+  // Both this parent and the child runner have hard deadlines: even a broken
+  // worker termination must not strand the packaged smoke process.
+  const runner = String.raw`
+    const { Worker } = require('node:worker_threads');
+    const workerPath = process.argv[1];
+    const outerDeadline = setTimeout(() => process.exit(2), 12000);
+    function calculate(code, timeoutMs) {
+      return new Promise((resolve, reject) => {
+        const worker = new Worker(workerPath, {
+          workerData: { code, deadline: Date.now() + timeoutMs, maxOutputBytes: 128 * 1024 },
+          execArgv: [], env: {}, stdout: true, stderr: true,
+          resourceLimits: { maxOldGenerationSizeMb: 64, maxYoungGenerationSizeMb: 16, stackSizeMb: 2 },
+        });
+        let finishing = false;
+        const finish = (error, result) => {
+          if (finishing) return;
+          finishing = true;
+          clearTimeout(timer);
+          worker.terminate().then(() => error ? reject(error) : resolve(result),
+            () => reject(new Error('worker shutdown failed')));
+        };
+        const timer = setTimeout(() => finish(new Error('worker reply timed out')), timeoutMs + 1000);
+        worker.once('message', value => {
+          if (typeof value !== 'string' || Buffer.byteLength(value) > 130 * 1024) {
+            finish(new Error('invalid worker response')); return;
+          }
+          try { finish(null, JSON.parse(value)); }
+          catch { finish(new Error('invalid worker JSON')); }
+        });
+        worker.once('error', () => finish(new Error('worker failed')));
+        worker.once('exit', () => finish(new Error('worker exited without a response')));
+        let diagnosticBytes = 0;
+        for (const stream of [worker.stdout, worker.stderr]) stream.on('data', chunk => {
+          diagnosticBytes += chunk.length;
+          if (diagnosticBytes > 128 * 1024) finish(new Error('worker diagnostic limit exceeded'));
+        });
+      });
+    }
+    (async () => {
+      const promise = await calculate('Promise.resolve(6).then(value => value * 7)', 4000);
+      if (promise.ok !== true || promise.status !== 'completed' || promise.output !== 42) throw new Error('promise calculation failed');
+      // Query only whether the guest can resolve process; never read a host
+      // property, environment value, path, credential, or user file.
+      const isolation = await calculate("(() => { try { return typeof console.log.constructor('return process')() === 'undefined' ? 'blocked' : 'accessible'; } catch { return 'blocked'; } })()", 4000);
+      if (isolation.ok !== true || isolation.output !== 'blocked') throw new Error('host process boundary failed');
+      const started = Date.now();
+      const loop = await calculate('for (;;) {}', 250);
+      if (loop.ok !== false || loop.status !== 'failed' || !/timed out|interrupted/i.test(String(loop.error)) || Date.now() - started > 2000) throw new Error('loop deadline failed');
+      clearTimeout(outerDeadline);
+      process.stdout.write(JSON.stringify({ promise42: true, hostProcessBlocked: true, loopBounded: true }));
+    })().catch(() => {
+      clearTimeout(outerDeadline);
+      process.stderr.write('Packaged JavaScript sandbox probe failed.');
+      process.exitCode = 1;
+    });
+  `;
+  return new Promise((resolve, reject) => {
+    const child = spawn(nodePath, ['--eval', runner, workerPath], {
+      cwd: path.dirname(workerPath), env: {}, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+    });
+    let output = '';
+    let bytes = 0;
+    let failure;
+    let completed = false;
+    const finish = error => {
+      if (completed) return;
+      completed = true;
+      clearTimeout(deadline);
+      clearTimeout(killDeadline);
+      if (error) { reject(error); return; }
+      try {
+        const result = JSON.parse(output);
+        if (result.promise42 !== true || result.hostProcessBlocked !== true || result.loopBounded !== true) throw new Error();
+        resolve(result);
+      } catch { reject(new Error('Packaged JavaScript sandbox returned an invalid receipt.')); }
+    };
+    let killDeadline;
+    const stop = reason => {
+      if (failure || completed) return;
+      failure = new Error(reason);
+      child.kill('SIGKILL');
+      killDeadline = setTimeout(() => {
+        child.stdout.destroy(); child.stderr.destroy(); child.unref();
+        finish(failure);
+      }, 1000);
+    };
+    const deadline = setTimeout(() => stop('Packaged JavaScript sandbox probe exceeded its total deadline.'), 15000);
+    child.stdout.on('data', chunk => {
+      bytes += chunk.length;
+      if (bytes > 4096) { stop('Packaged JavaScript sandbox probe exceeded its output limit.'); return; }
+      output += chunk.toString('utf8');
+    });
+    child.stderr.on('data', chunk => { bytes += chunk.length; if (bytes > 4096) stop('Packaged JavaScript sandbox probe exceeded its output limit.'); });
+    child.once('error', () => finish(new Error('Packaged Node could not start the JavaScript sandbox probe.')));
+    child.once('close', code => finish(failure || (code === 0 ? null : new Error('Packaged JavaScript sandbox probe failed.'))));
+  });
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const distServer = args.distServer;
   const nodePath = path.join(distServer, nodeBinaryName());
   const entryPath = path.join(distServer, 'entry.cjs');
   const serverBundle = path.join(distServer, 'server.mjs');
+  const javascriptWorker = path.join(distServer, 'javascript-sandbox-worker.cjs');
   const runtimeMetaPath = path.join(distServer, 'runtime-meta.json');
   const bundledSkillsDir = path.join(distServer, 'server', 'skills', 'bundled');
   const mcpFactoryConfig = path.join(distServer, 'server', 'mcp', 'config.example.json');
@@ -182,6 +283,7 @@ async function main() {
   await assertPath(nodePath, 'packaged Node runtime');
   await assertPath(entryPath, 'packaged entry.cjs');
   await assertPath(serverBundle, 'packaged server.mjs');
+  await assertPath(javascriptWorker, 'packaged JavaScript sandbox worker');
   await assertPath(runtimeMetaPath, 'packaged runtime metadata');
   await assertPath(bundledSkillsDir, 'bundled skills directory');
   await assertPath(mcpFactoryConfig, 'factory MCP config');
@@ -251,6 +353,7 @@ async function main() {
   });
 
   try {
+    const javascriptSandbox = await verifyPackagedJavaScriptWorker(nodePath, javascriptWorker);
     let health = await waitFor('packaged backend health endpoint', args.timeoutMs, 500, async () => {
       if (childExited) throw new Error('backend process exited before becoming healthy');
       return fetchJson(`${baseUrl}/health`, { timeoutMs: 2000 });
@@ -318,7 +421,7 @@ async function main() {
         throw new Error('Strict mode did not block the direct cloud chat path.');
       }
       const shutdown = await verifyPackagedShutdown(baseUrl, dataRoot, authHeaders, child);
-      console.log(JSON.stringify({ ok: true, port, runtime: runtimeMeta.buildId, privacy: 'strict', socketHandshake: true, shutdown,
+      console.log(JSON.stringify({ ok: true, port, runtime: runtimeMeta.buildId, privacy: 'strict', socketHandshake: true, shutdown, javascriptSandbox,
         skillInstallationBlocked: true, cloudChatBlocked: true, cleanup: args.keep ? 'kept' : 'removed' }, null, 2));
       return;
     }
@@ -393,6 +496,7 @@ async function main() {
     const summary = {
       ok: true,
       shutdown,
+      javascriptSandbox,
       distServer,
       port,
       runtime: {

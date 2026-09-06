@@ -525,6 +525,8 @@ export function cancelRuntimeWork(input: {
   taskIds?: string[];
   kinds?: RuntimeWorkKind[];
   scope?: RuntimeWorkScope;
+  /** HTTP persistence retry of an exact cancellation, not a new batch action. */
+  confirmCancelled?: boolean;
 }): RuntimeWorkCancellationResult {
   const selected = normalizeKinds(input.kinds);
   const before = getRuntimeWorkSnapshot(input.userId, [...selected], input.scope);
@@ -543,7 +545,7 @@ export function cancelRuntimeWork(input: {
   const alreadyCancelling = hasExactTargetSet
     ? before.items.filter(item => (
         requestedTaskIdSet.has(item.id)
-        && item.phase === 'cancelling'
+        && (item.phase === 'cancelling' || (input.confirmCancelled && item.phase === 'cancelled'))
       ))
     : [];
 
@@ -652,7 +654,7 @@ export function cancelRuntimeWork(input: {
     cancellingTaskIds,
     notCancelledTaskIds,
     targetResults,
-    matchedCount: matched.length,
+    matchedCount: input.confirmCancelled ? outcomeCandidates.length : matched.length,
     cancelledCount,
     cancellingCount,
     failedCount,

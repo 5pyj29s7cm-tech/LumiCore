@@ -8,14 +8,17 @@ import nodemailer from 'nodemailer';
 import PptxGenJS from 'pptxgenjs';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 import { ToolRegistry } from '../registry';
+import type { ToolContext } from '../types';
 import { getGeneratedOutputDir } from '../../config/data_path';
 
 const execFileAsync = promisify(execFile);
 const OUTPUT_DIR = getGeneratedOutputDir();
 
-let broadcastFn: ((event: string, data: any) => void) | null = null;
+type OfficeScope = { userId: string; domain: 'personal' | 'work'; orgId: string };
+let broadcastFn: ((scope: OfficeScope, event: string, data: any) => void) | null = null;
 
-export function setOfficeBroadcast(fn: (event: string, data: any) => void): void {
+/** Installed by runtime bootstrap, never by an individual MCP connection. */
+export function setOfficeBroadcast(fn: (scope: OfficeScope, event: string, data: any) => void): void {
   broadcastFn = fn;
 }
 
@@ -105,7 +108,7 @@ function addPresentationHeading(
   slide.addShape(pptx.ShapeType.line, { x: 1.45, y: 1.18, w: 1.15, h: 0, line: { color: theme.accent2, width: 2.5 } });
 }
 
-async function createPptHandler(args: Record<string, any>): Promise<string> {
+async function createPptHandler(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const title = String(args.title || '').trim();
   const slides = Array.isArray(args.slides) ? args.slides as PresentationSlideInput[] : [];
   if (!title || slides.length === 0) throw new Error('Title and at least one content slide are required.');
@@ -119,7 +122,16 @@ async function createPptHandler(args: Record<string, any>): Promise<string> {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi-ppt-'));
   const cache = new Map<string, string | null>();
   const topLevelImages = Array.isArray(args.images) ? args.images.map(String) : [];
-  const bc = broadcastFn || (() => {});
+  const userId = String(context?.userId || '').trim();
+  const domain = context?.domain === 'work' ? 'work' : 'personal';
+  const orgId = domain === 'work' ? String(context?.orgId || '').trim() : '';
+  const dispatch = broadcastFn;
+  const bc = (event: string, data: any) => {
+    const scopeIsExplicit = (context?.domain === 'personal' && !context.orgId) || (context?.domain === 'work' && Boolean(orgId));
+    if (userId && scopeIsExplicit && context?.isCancelled?.() !== true && !context?.executionSignal?.aborted) {
+      dispatch?.({ userId, domain, orgId }, event, data);
+    }
+  };
   bc('mcp:activity', { device: 'desktop', action: 'create_ppt', status: 'started', title, slidesCount: slides.length });
 
   try {

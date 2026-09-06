@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { claimVoiceCapture, releaseVoiceCapture } from '@/lib/voiceCaptureLease';
+import { claimVoiceCapture, releaseVoiceCapture, hasVoiceCapture, subscribeVoiceCapture } from '@/lib/voiceCaptureLease';
 import {
   sanitizeAgentResponseTextForDisplay,
   shouldDisplayAgentResponse,
@@ -45,6 +45,8 @@ interface UseVoiceCallOptions {
   canSendMicAudio?: () => boolean;
   /** Keep a compatibility hook mounted without owning sockets or microphone state. */
   disabled?: boolean;
+  /** Only the signed-in main desktop owns unsolicited speech. */
+  proactive?: { userId: string; domain: 'personal' | 'work'; orgId?: string; voiceId?: string; outputMuted?: boolean };
 }
 
 interface StartCallOptions {
@@ -207,7 +209,9 @@ export function useVoiceCall({
   canSendMicAudio,
   disabled = false,
   privateCapture = false,
+  proactive,
 }: UseVoiceCallOptions) {
+  const proactiveContextRef = useRef<{ contextId: string; userId: string; domain: string; orgId: string; enabled: boolean } | null>(null);
   const [callState, setCallState] = useState<CallState>('idle');
   // Server readiness and local output have independent lifetimes. Decoding or
   // queued audio still owns the stop button after the server returns to STT.
@@ -387,6 +391,53 @@ export function useVoiceCall({
     nextStartTime.current = 0;
     void closeAudioContext(context);
   }, [stopAllPlayback]);
+
+  useEffect(() => {
+    if (!socket || disabled || privateCapture || !proactive?.userId) return;
+    const stopProactive = () => {
+      proactivePlaybackGenerationRef.current++;
+      if (proactiveStateTimerRef.current) clearTimeout(proactiveStateTimerRef.current);
+      proactiveStateTimerRef.current = null;
+      releaseAudioBufferSource(proactiveSource.current, true);
+      proactiveSource.current = null;
+      void closeAudioContext(proactiveContext.current);
+      proactiveContext.current = null;
+      isTtsPlaying.current = isConversationTtsPlaying.current;
+      if (!isCallActive.current) setCallState(current => current === 'speaking' ? 'idle' : current);
+    };
+    const publish = () => {
+      stopProactive();
+      const context = {
+        contextId: createVoiceSessionId(), userId: proactive.userId,
+        domain: proactive.domain, orgId: proactive.orgId || '',
+        voiceId: normalizeSelectedVoiceId(proactive.voiceId),
+        enabled: localStorage.getItem('lumi_allow_proactive_voice') === 'true'
+          && !proactive.outputMuted && !isMutedRef.current && !hasVoiceCapture(),
+      };
+      proactiveContextRef.current = context;
+      if (socket.connected) socket.emit('proactive:configure', context);
+    };
+    const onSetting = (event: Event) => {
+      const key = (event as CustomEvent<{ key?: string }>).detail?.key;
+      if (!key || key === 'lumi_allow_proactive_voice') publish();
+    };
+    const onDisconnect = () => { proactiveContextRef.current = null; stopProactive(); };
+    publish();
+    socket.on('connect', publish);
+    socket.on('disconnect', onDisconnect);
+    window.addEventListener('lumi:setting-changed', onSetting);
+    const unsubscribe = subscribeVoiceCapture(publish);
+    return () => {
+      const old = proactiveContextRef.current;
+      proactiveContextRef.current = null;
+      stopProactive();
+      if (socket.connected && old) socket.emit('proactive:configure', { ...old, enabled: false });
+      socket.off('connect', publish);
+      socket.off('disconnect', onDisconnect);
+      window.removeEventListener('lumi:setting-changed', onSetting);
+      unsubscribe();
+    };
+  }, [disabled, privateCapture, socket, proactive?.userId, proactive?.domain, proactive?.orgId, proactive?.voiceId, proactive?.outputMuted, isMuted]);
 
   const cleanupCapture = useCallback(() => {
     if (typeof window !== 'undefined' && !privateCaptureRef.current) {
@@ -1073,10 +1124,18 @@ export function useVoiceCall({
       setResponseText(sanitizeAgentResponseTextForDisplay(data.text));
     };
 
-    const onAudioProactiveSpeak = (data: { audioBuffer: ArrayBuffer; text: string; timestamp: string }) => {
+    const onAudioProactiveSpeak = (data: { audioBuffer: ArrayBuffer; text: string; timestamp: string; contextId?: string; userId?: string; domain?: string; orgId?: string; volumeGain?: number }) => {
       // A proactive greeting is optional. Never let it share ownership of the
       // conversation playback queue or reset the foreground speaking state.
-      if (isConversationTtsPlaying.current) return;
+      const acceptedContext = proactiveContextRef.current;
+      const canPlay = () => Boolean(acceptedContext?.enabled
+        && proactiveContextRef.current === acceptedContext
+        && data.contextId === acceptedContext.contextId && data.userId === acceptedContext.userId
+        && data.domain === acceptedContext.domain && String(data.orgId || '') === acceptedContext.orgId
+        && localStorage.getItem('lumi_allow_proactive_voice') === 'true'
+        && socket.connected && !isMutedRef.current && !hasVoiceCapture()
+        && !isCallActive.current && !isConversationTtsPlaying.current);
+      if (!canPlay()) return;
 
       void (async () => {
         let ctx: AudioContext | null = null;
@@ -1133,6 +1192,8 @@ export function useVoiceCall({
           const decoded = await ctx.decodeAudioData(audioBuffer.slice(0));
           if (
             playbackGeneration !== playbackGenerationRef.current
+            || proactiveGeneration !== proactivePlaybackGenerationRef.current
+            || !canPlay()
             || (ctx.state as string) === 'closed'
             || isConversationTtsPlaying.current
           ) {
@@ -1143,7 +1204,10 @@ export function useVoiceCall({
           source = ctx.createBufferSource();
           proactiveSource.current = source;
           source.buffer = decoded;
-          source.connect(ctx.destination);
+          const gain = ctx.createGain();
+          gain.gain.value = typeof data.volumeGain === 'number' ? Math.max(0, Math.min(1.5, data.volumeGain)) : 1;
+          source.connect(gain);
+          gain.connect(ctx.destination);
           source.onended = () => finish(false);
           source.start(0);
           // Keep a bounded fallback in case a WebView never dispatches `ended`.

@@ -2,6 +2,7 @@
 export function createVoiceCallAdmission() {
   let current: { token: symbol; lane: string; stop: () => Promise<void> } | null = null;
   return {
+    hasCall: () => current !== null,
     claim(stop: () => Promise<void>, lane = 'avatar') {
       const previous = current;
       const reservation = { token: Symbol('voice-call'), lane, stop };

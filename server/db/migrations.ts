@@ -82,6 +82,9 @@ export const MIGRATIONS: Migration[] = [
   { version: 44, description: 'Remove retired external AI answer fan-in', sql: `DROP TABLE IF EXISTS external_ai_answers` },
   { version: 45, description: 'Bind command center plans to accepted organization membership', sql: `ALTER TABLE command_center_plans ADD COLUMN membershipAuthorization TEXT NOT NULL DEFAULT ''` },
   { version: 46, description: 'Expose blocked command center plan authorization', sql: `ALTER TABLE command_center_plans ADD COLUMN authorizationBlockedReason TEXT NOT NULL DEFAULT ''` },
+  { version: 47, description: 'Persist memory vectors', sql: `ALTER TABLE memories ADD COLUMN embedding TEXT` },
+  { version: 48, description: 'Persist memory vector model identity', sql: `ALTER TABLE memories ADD COLUMN embeddingNamespace TEXT` },
+  { version: 49, description: 'Bind memory vectors to indexed text and scope', sql: `ALTER TABLE memories ADD COLUMN embeddingContentHash TEXT` },
 ];
 
 // Indexes are safe to create repeatedly

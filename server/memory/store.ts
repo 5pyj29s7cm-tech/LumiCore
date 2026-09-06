@@ -13,6 +13,7 @@ import { applyMemoryFirewallMetadata, evaluateMemoryFirewall } from './firewall'
 import { generateConfiguredEmbedding, getEmbeddingRoute, type EmbeddingResult } from '../llm/embedding_provider';
 import { getRerankSelection, rerankConfiguredDocuments } from '../llm/rerank_provider';
 import { isProviderLocalOnly, isStrictPrivacy } from '../config/privacy';
+import { hasCurrentMemoryEmbedding, invalidateMemoryEmbedding, memoryEmbeddingInputHash } from './embedding_identity';
 
 function getMemoryStore(): Memory[] {
   const db = readDB();
@@ -176,22 +177,28 @@ export async function generateEmbeddingWithIdentity(text: string, userId = 'anon
 
 /** Async background embedding generation — updates memory in-place */
 async function attachEmbedding(memory: Memory): Promise<void> {
-  if (memory.embedding && memory.embedding.length > 0) return;
+  if (hasCurrentMemoryEmbedding(memory)) return;
+  const inputHash = memoryEmbeddingInputHash(memory);
   const text = `${memory.type}: ${memory.content} ${memory.keywords.join(' ')}`;
   const result = await generateEmbeddingWithIdentity(text, memory.userId);
   if (result) {
-    memory.embedding = result.vector;
-    memory.embeddingNamespace = embeddingNamespace(result);
     try {
       const all = getMemoryStore();
       const existing = all.find(m => m.id === memory.id);
-      if (existing) {
+      if (existing && memoryEmbeddingInputHash(existing) === inputHash) {
         existing.embedding = result.vector;
         existing.embeddingNamespace = embeddingNamespace(result);
+        existing.embeddingContentHash = inputHash;
         saveMemoryStore(all);
       }
     } catch {}
   }
+}
+
+/** Clear the old index synchronously; background work can only attach to this content. */
+export function refreshMemoryEmbedding(memory: Memory): void {
+  invalidateMemoryEmbedding(memory);
+  void attachEmbedding(memory).catch(() => {});
 }
 
 // ── Hebbian Co-Retrieval Map — "cells that fire together, wire together" ──
@@ -573,7 +580,7 @@ export async function queryMemoriesVector(q: MemoryQuery): Promise<Memory[]> {
   const ranked = scopedMemories
     .map(m => {
       let score = 0;
-      if (!m.embedding || m.embedding.length === 0
+      if (!hasCurrentMemoryEmbedding(m) || !m.embedding
         || m.embedding.length !== queryEmbedding.vector.length
         || m.embeddingNamespace?.provider !== queryEmbedding.provider
         || m.embeddingNamespace?.model !== queryEmbedding.model
@@ -587,7 +594,7 @@ export async function queryMemoriesVector(q: MemoryQuery): Promise<Memory[]> {
         score *= typeBias[m.type] || 1;
         score *= perspectiveBias[m.perspective] || 1;
       }
-      return { m, score: +score.toFixed(4) };
+      return { m, inputHash: memoryEmbeddingInputHash(m), score: +score.toFixed(4) };
     })
     .filter(({ score }) => score > 0)
     .sort((a, b) => b.score - a.score);
@@ -598,6 +605,18 @@ export async function queryMemoriesVector(q: MemoryQuery): Promise<Memory[]> {
     seenSemanticKeys.add(key);
     return true;
   });
+
+  const publishCurrent = (candidates: typeof scored): Memory[] => {
+    q.signal?.throwIfAborted();
+    const current = new Map(getMemoryStore().map(memory => [memory.id, memory]));
+    const result = candidates.flatMap(candidate => {
+      const memory = current.get(candidate.m.id);
+      return memory && matchesMemoryQueryFilters(memory, q)
+        && memoryEmbeddingInputHash(memory) === candidate.inputHash ? [memory] : [];
+    }).slice(0, limit);
+    markMemoriesRetrieved(result);
+    return result;
+  };
 
   const retrievalUserId = q.userId || 'anonymous';
   const rerank = getRerankSelection(retrievalUserId);
@@ -620,9 +639,7 @@ export async function queryMemoriesVector(q: MemoryQuery): Promise<Memory[]> {
         })
         .filter(Boolean);
       reordered.push(...candidates.filter((_, index) => !seen.has(index)));
-      const result = reordered.slice(0, limit).map(({ m }) => m);
-      markMemoriesRetrieved(result);
-      return result;
+      return publishCurrent(reordered);
     } catch (error: any) {
       q.signal?.throwIfAborted();
       console.warn(`[Memory] Rerank unavailable; preserving vector order: ${error?.message || String(error)}`);
@@ -630,9 +647,7 @@ export async function queryMemoriesVector(q: MemoryQuery): Promise<Memory[]> {
   }
 
   q.signal?.throwIfAborted();
-  const result = scored.slice(0, limit).map(({ m }) => m);
-  markMemoriesRetrieved(result);
-  return result;
+  return publishCurrent(scored);
 }
 
 /** Explicitly migrate missing, legacy or differently configured vector spaces. */
@@ -641,17 +656,21 @@ export async function backfillEmbeddings(userId?: string): Promise<number> {
   const targets = all.filter(m => {
     if (userId && m.userId !== userId) return false;
     const primary = getEmbeddingRoute(m.userId).primary;
-    return !m.embedding || !m.embeddingNamespace
+    return !hasCurrentMemoryEmbedding(m) || !m.embedding || !m.embeddingNamespace
       || m.embeddingNamespace.provider !== primary.provider
       || m.embeddingNamespace.model !== primary.model
       || m.embeddingNamespace.dimensions !== m.embedding.length;
   });
   let count = 0;
   for (const m of targets) {
+    const inputHash = memoryEmbeddingInputHash(m);
     const result = await generateEmbeddingWithIdentity(`${m.type}: ${m.content} ${m.keywords.join(' ')}`, m.userId);
-    if (result) {
-      m.embedding = result.vector;
-      m.embeddingNamespace = embeddingNamespace(result);
+    const current = getMemoryStore().find(memory => memory.id === m.id);
+    if (result && current && memoryEmbeddingInputHash(current) === inputHash) {
+      current.embedding = result.vector;
+      current.embeddingNamespace = embeddingNamespace(result);
+      current.embeddingContentHash = inputHash;
+      saveMemoryStore(getMemoryStore());
       count++;
     }
     // Small delay to avoid rate limits
@@ -659,7 +678,6 @@ export async function backfillEmbeddings(userId?: string): Promise<number> {
       await new Promise(r => setTimeout(r, 200));
     }
   }
-  if (count > 0) saveMemoryStore(all);
   return count;
 }
 
@@ -829,6 +847,7 @@ export function addMemory(
 
   if (existing) {
     // Merge: increase confidence, update content if new one has higher confidence
+    const previousInput = memoryEmbeddingInputHash(existing);
     existing.content = memory.confidence > existing.confidence ? memory.content : existing.content;
     existing.keywords = dedupeKeywords([...existing.keywords, ...memory.keywords]);
     existing.confidence = Math.min(1, existing.confidence + 0.1);
@@ -837,6 +856,10 @@ export function addMemory(
     existing.domain = domain;
     existing.orgId = orgId;
     Object.assign(existing, applyMemoryFirewallMetadata(existing, firewall));
+    if (memoryEmbeddingInputHash(existing) !== previousInput) {
+      invalidateMemoryEmbedding(existing);
+      if (overrides?.generateEmbedding !== false) void attachEmbedding(existing).catch(() => {});
+    }
     saveMemoryStore(all);
     return existing;
   }
@@ -858,6 +881,11 @@ export function addMemory(
     domain,
     orgId,
   }, firewall);
+
+  if (newMemory.embedding && newMemory.embeddingNamespace) {
+    newMemory.embeddingContentHash = memoryEmbeddingInputHash(newMemory);
+    if (!hasCurrentMemoryEmbedding(newMemory)) invalidateMemoryEmbedding(newMemory);
+  }
 
   if (contradictions.length > 0) {
     const detectedAt = now;

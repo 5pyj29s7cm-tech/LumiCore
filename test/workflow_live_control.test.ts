@@ -3,6 +3,7 @@ import { initDatabase, querySQL } from '../db_layer';
 import { saveWorkflowDraftCandidate } from '../server/agents/workflows';
 import { registerWorkflowTools } from '../server/tools/definitions/workflow_tools';
 import { ToolRegistry } from '../server/tools/registry';
+import { createOrg, addMember } from '../server/org/db';
 import {
   createWorkflowRun,
   persistWorkflowRuntimeBarrier,
@@ -559,7 +560,9 @@ describe('live versioned workflow control', () => {
     registry.register({ name: 'workflow_live_scoped', description: 'test', parameters: {}, permission: 'public', securityLevel: 'safe', handler: async () => '{}' });
     const userId = `workflow-live-scope-${Date.now()}`;
     const name = `scope-${Date.now()}`;
-    const workContext = { domain: 'work', orgId: 'org-a' };
+    const org = createOrg('Synthetic workflow control organization', `workflow-control-${Date.now()}`, userId);
+    addMember(org.id, userId, 'owner');
+    const workContext = { domain: 'work', orgId: org.id };
     await saveAndPublish(registry, userId, name, 'workflow_live_scoped', workContext);
     const started = JSON.parse(await registry.execute('run_workflow', { name }, { userId, ...workContext, requestConfirmation: async () => true }));
     const waiting = await waitForRun(registry, userId, started.runId, ['waiting_confirmation'], workContext);

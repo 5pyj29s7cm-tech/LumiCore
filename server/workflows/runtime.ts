@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'crypto';
 import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
+import type { OrganizationMembershipAuthorization } from '../org/membership_authorization';
 import type { ToolExecutionRecord } from '../tools/types';
 import {
   getCanonicalToolExecutionInputDigests,
@@ -151,6 +152,10 @@ export interface WorkflowRun {
   definitionHash: string;
   userId: string;
   scope: WorkflowScope;
+  /** Frozen with the run; never reconstructed from a replacement membership. */
+  membershipAuthorization?: OrganizationMembershipAuthorization;
+  /** Survives lease release so a finishing old worker cannot stop a new generation. */
+  lastWorkerLeaseId?: string;
   status: WorkflowRunStatus;
   revision: number;
   planRevision: number;
@@ -761,6 +766,7 @@ export function createWorkflowRun(input: {
   userId: string;
   variables?: Record<string, unknown>;
   actor?: string;
+  membershipAuthorization?: OrganizationMembershipAuthorization;
 }): WorkflowRun {
   const store = loadStore();
   const definition = store.definitions.find(item => (
@@ -779,6 +785,7 @@ export function createWorkflowRun(input: {
     definitionHash: definition.hash,
     userId: definition.userId,
     scope: clone(definition.scope),
+    membershipAuthorization: input.membershipAuthorization ? clone(input.membershipAuthorization) : undefined,
     status: 'queued',
     revision: 0,
     planRevision: 1,
@@ -809,6 +816,22 @@ export function getWorkflowRun(runId: string, userId: string): WorkflowRun | nul
   return run ? clone(run) : null;
 }
 
+/** Authorization loss stops future work without erasing an in-flight outcome. */
+export function stopUnauthorizedWorkflowRun(runId: string, userId: string): WorkflowRun | null {
+  const current = getWorkflowRun(runId, userId);
+  if (!current || current.status === 'cancelled') return current;
+  return mutateRun(runId, current.revision, userId, 'authorization', 'authorization_revoked', run => {
+    run.cancelRequestedAt ||= nowIso();
+    run.blockedReason = 'Original workflow authorization is no longer valid. Remaining work was cancelled.';
+    run.confirmation = undefined;
+    if (run.pendingExecution?.phase === 'adapter_started' || run.reconciliationRequired) return;
+    run.pendingExecution = undefined;
+    run.status = 'cancelled';
+    run.completedAt = nowIso();
+    run.lease = undefined;
+  });
+}
+
 /** Prevent a replacement invocation from bypassing unfinished or unknown work. */
 export function findBlockingWorkflowRun(workflowId: string, userId: string): WorkflowRun | null {
   const candidates = loadStore().runs
@@ -837,6 +860,7 @@ export function claimWorkflowRun(input: {
     const leaseMs = Math.max(5_000, Math.min(input.leaseMs || 60_000, 10 * 60_000));
     run.status = 'running';
     run.lease = { leaseId: randomUUID(), owner: input.owner, expiresAt: new Date(Date.now() + leaseMs).toISOString() };
+    run.lastWorkerLeaseId = run.lease.leaseId;
     return { leaseId: run.lease.leaseId, expiresAt: run.lease.expiresAt };
   });
 }

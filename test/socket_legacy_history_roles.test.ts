@@ -18,7 +18,7 @@ describe('legacy Socket history role compatibility', () => {
     db.interactions.push({ ...common, id: 'assistant-fallback', role: 'assistant', message: '', response: 'Assistant response fallback', timestamp: '2026-09-05T00:00:04Z' });
     writeDB(db);
     const handlers = new Map<string, Function>();
-    const socket = { handshake: {}, data: {}, on: (event: string, handler: Function) => handlers.set(event, handler), emit: vi.fn() };
+    const socket = { handshake: {}, data: { authenticatedUserId: userId }, on: (event: string, handler: Function) => handlers.set(event, handler), emit: vi.fn() };
     registerConversationHandlers(socket as any, () => userId);
     await handlers.get('chat:messages')!({ conversationId: conversation.id });
     const messages = socket.emit.mock.calls.at(-1)![1].messages;

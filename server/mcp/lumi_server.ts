@@ -14,7 +14,6 @@ import { toolRegistry, ToolRegistry } from '../tools/registry';
 import { personalityRegistry } from '../personality';
 import { deviceRegistry } from '../devices';
 import { canOutputHolographic, textToHolographicOutput } from '../output/holographic';
-import { setOfficeBroadcast } from '../tools/definitions/office_tools';
 import { synthesizeSpeech, getActiveProvider } from '../tts/adapter';
 import os from 'os';
 import fs from 'fs';
@@ -186,7 +185,6 @@ export function createLumiMcpServer(llmGetters?: {
       source: 'mcp_remote',
     };
   };
-  setOfficeBroadcast(bc);
   const mcp = new McpServer({
     name: 'lumi-mcp',
     version: '2.0.0',

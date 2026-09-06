@@ -16,6 +16,8 @@ import { makeLLMCall } from "../llm/providers";
 import { getMemoryFirewallPolicy } from "../memory/firewall";
 import { getUserPreferredLLMConfig } from "../llm/user_preferences";
 import { requireAuth, resolveDomain } from "../middleware/auth";
+import { refreshMemoryEmbedding } from '../memory/store';
+import { memoryEmbeddingInputHash } from '../memory/embedding_identity';
 
 type MemoryScope = { domain: 'personal' | 'work'; orgId: string };
 
@@ -112,6 +114,7 @@ export function mountMemoryRoutes(
       if (idx === -1) return res.status(404).json({ error: "Memory not found" });
 
       const existing = all[idx];
+      const previousInput = memoryEmbeddingInputHash(existing);
       if (content !== undefined) existing.content = content;
       if (keywords !== undefined) existing.keywords = keywords;
       if (confidence !== undefined) existing.confidence = confidence;
@@ -119,6 +122,7 @@ export function mountMemoryRoutes(
       if (parentId !== undefined) existing.parentId = parentId;
       if (nodeType !== undefined) existing.nodeType = nodeType;
       existing.updatedAt = new Date().toISOString();
+      if (memoryEmbeddingInputHash(existing) !== previousInput) refreshMemoryEmbedding(existing);
 
       const db = readDB();
       db.memories = all;

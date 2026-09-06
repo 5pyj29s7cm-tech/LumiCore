@@ -103,9 +103,18 @@ export class DidPortraitProvider {
 
   async uploadAudio(key: string, data: Buffer, format: string, signal?: AbortSignal) {
     const formats: Record<string, string> = { mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', opus: 'audio/ogg', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac' };
-    const mime = formats[format.toLowerCase()];
+    // Existing TTS adapters return either an encoding or a MIME type. Raw PCM
+    // has no container/sample metadata here and must never be relabeled as WAV.
+    const aliases: Record<string, string> = {
+      'audio/mp3': 'mp3', 'audio/mpeg': 'mp3', 'audio/wav': 'wav', 'audio/wave': 'wav', 'audio/x-wav': 'wav',
+      'audio/ogg': 'ogg', 'audio/opus': 'opus', 'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a',
+      'audio/aac': 'aac', 'audio/flac': 'flac', 'audio/x-flac': 'flac',
+    };
+    const supplied = String(format || '').trim().toLowerCase();
+    const encoding = Object.hasOwn(aliases, supplied) ? aliases[supplied] : supplied;
+    const mime = Object.hasOwn(formats, encoding) ? formats[encoding] : undefined;
     if (!mime || !data.length || data.length > 6 * 1024 * 1024) throw new PortraitError('portrait_audio_invalid', 'Live portraits require a supported encoded audio reply up to 6 MB.', 400);
-    const form = new FormData(); form.set('audio', new Blob([new Uint8Array(data)], { type: mime }), `reply.${format.toLowerCase()}`);
+    const form = new FormData(); form.set('audio', new Blob([new Uint8Array(data)], { type: mime }), `reply.${encoding}`);
     return uploadResult(await this.request(key, '/audios', 'POST', form, signal));
   }
 
