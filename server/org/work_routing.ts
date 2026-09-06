@@ -109,6 +109,9 @@ export interface OrganizationWorkHandoff {
   status: OrganizationWorkHandoffStatus;
   actorUserId: string;
   from: OrganizationWorkHandoffTarget;
+  fromStatus?: OrganizationWorkItemStatus;
+  fromBlocker?: string;
+  fromCollaboratorMemberIds?: string[];
   to: OrganizationWorkHandoffTarget;
   reason: string;
   decidedBy: string | null;
@@ -201,6 +204,7 @@ function ensureTables(db: any): void {
     retainFields(handoff, [
       'id', 'orgId', 'workItemId', 'workItemRevision', 'type', 'status', 'actorUserId',
       'from', 'to', 'reason', 'decidedBy', 'createdAt', 'decidedAt', 'updatedAt',
+      'fromStatus', 'fromBlocker', 'fromCollaboratorMemberIds',
     ]);
     retainFields(handoff.from, ['departmentId', 'positionId', 'memberId']);
     retainFields(handoff.to, ['departmentId', 'positionId', 'memberId']);
@@ -553,6 +557,117 @@ function createApproval(db: any, workItem: OrganizationWorkItem): OrganizationWo
   return approval;
 }
 
+function pendingHandoff(db: any, item: OrganizationWorkItem): boolean {
+  return db.orgWorkHandoffs.some((handoff: OrganizationWorkHandoff) => (
+    handoff.orgId === item.orgId && handoff.workItemId === item.id && handoff.status === 'pending'
+  ));
+}
+
+function approvalExecutionBlocker(db: any, item: OrganizationWorkItem): string | null {
+  if (!item.approvalId) return item.status === 'waiting_approval' ? 'Organization approval is required.' : null;
+  const approval = (db.orgWorkApprovals as OrganizationWorkApproval[]).find(candidate => (
+    candidate.orgId === item.orgId && candidate.workItemId === item.id && candidate.id === item.approvalId
+  ));
+  if (approval?.status === 'approved' && approval.workItemRevision === item.revision) return null;
+  return approval?.status === 'rejected'
+    ? 'Organization approval was rejected.'
+    : 'Organization approval is required for the current work item revision.';
+}
+
+function applyWorkConstraints(db: any, item: OrganizationWorkItem): boolean {
+  if (['completed', 'cancelled'].includes(item.status)) return false;
+  const previous = `${item.status}\n${item.lastBlocker}`;
+  const approvalBlocker = approvalExecutionBlocker(db, item);
+  if (approvalBlocker) {
+    const approval = db.orgWorkApprovals.find((candidate: OrganizationWorkApproval) => candidate.id === item.approvalId);
+    item.status = approval?.status === 'rejected' ? 'blocked' : 'waiting_approval';
+    item.lastBlocker = approvalBlocker;
+  } else if (pendingHandoff(db, item) || item.humanOwnerUserId || item.assignedMemberId) {
+    item.status = 'waiting_human';
+  } else if (item.status === 'waiting_approval') {
+    item.status = 'assigned';
+    item.lastBlocker = '';
+  }
+  return previous !== `${item.status}\n${item.lastBlocker}`;
+}
+
+export interface OrganizationWorkExecution {
+  readonly orgId: string;
+  readonly workItemId: string;
+  readonly revision: number;
+  readonly actorUserId: string;
+  isCurrent(): boolean;
+  assertCurrent(): void;
+  release(): void;
+}
+
+const workExecutions = new Map<string, Set<OrganizationWorkExecution>>();
+const workExecutionKey = (orgId: string, workItemId: string) => JSON.stringify([orgId, workItemId]);
+
+function notifyWorkExecutionChanged(item: OrganizationWorkItem): void {
+  for (const execution of workExecutions.get(workExecutionKey(item.orgId, item.id)) || []) execution.isCurrent();
+}
+
+export function registerOrganizationWorkExecution(input: {
+  orgId: string;
+  workItemId: string;
+  actorUserId: string;
+  abortController: AbortController;
+}): OrganizationWorkExecution {
+  assertActiveMember(input.orgId, input.actorUserId, true);
+  if (input.abortController.signal.aborted) throw new Error('The work item execution was already cancelled');
+  const db = readDB();
+  ensureTables(db);
+  const item = getOrganizationWorkItem(input.orgId, input.workItemId);
+  if (!item || item.requesterUserId !== input.actorUserId) throw new Error('The work item execution owner does not match');
+  const blocker = approvalExecutionBlocker(db, item);
+  if (blocker) throw new Error(blocker);
+  if (pendingHandoff(db, item) || item.humanOwnerUserId || item.assignedMemberId || item.status === 'waiting_human') {
+    throw new Error('The work item is owned by a human or is waiting for handoff');
+  }
+  if (['completed', 'cancelled'].includes(item.status)) throw new Error('The work item is already terminal');
+  const key = workExecutionKey(input.orgId, input.workItemId);
+  const executions = workExecutions.get(key) || new Set<OrganizationWorkExecution>();
+  if (executions.size) throw new Error('The previous work item execution is still settling');
+  const revision = item.revision;
+  const requesterUserId = item.requesterUserId;
+  const assignedMemberId = item.assignedMemberId;
+  const humanOwnerUserId = item.humanOwnerUserId;
+  let revoked = false;
+  const execution: OrganizationWorkExecution = {
+    orgId: input.orgId, workItemId: input.workItemId, revision, actorUserId: input.actorUserId,
+    isCurrent() {
+      if (revoked) return false;
+      const currentDb = readDB();
+      const current = (currentDb.orgWorkItems as OrganizationWorkItem[]).find(candidate => (
+        candidate.orgId === input.orgId && candidate.id === input.workItemId
+      ));
+      const member = getMember(input.orgId, input.actorUserId);
+      if (!current || current.revision !== revision || current.requesterUserId !== requesterUserId
+        || current.assignedMemberId !== assignedMemberId || current.humanOwnerUserId !== humanOwnerUserId
+        || !member || member.status !== 'active' || member.role === 'viewer'
+        || pendingHandoff(currentDb, current) || approvalExecutionBlocker(currentDb, current)) {
+        revoked = true;
+        input.abortController.abort(new Error('Organization work execution ownership changed'));
+      }
+      return !revoked;
+    },
+    assertCurrent() {
+      if (execution.isCurrent()) return;
+      const error = new Error('Organization work execution ownership changed');
+      error.name = 'AbortError';
+      throw error;
+    },
+    release() {
+      executions.delete(execution);
+      if (!executions.size) workExecutions.delete(key);
+    },
+  };
+  executions.add(execution);
+  workExecutions.set(key, executions);
+  return execution;
+}
+
 function bypassRedundantSelfApproval(input: {
   orgId: string;
   requesterUserId: string;
@@ -589,6 +704,7 @@ export function routeOrganizationWork(input: RouteOrganizationWorkInput): RouteO
     item.orgId === input.orgId && item.idempotencyKey === idempotencyKey
   ));
   if (existing) {
+    if (applyWorkConstraints(db, existing)) writeDB(db);
     const existingApproval = existing.approvalId
       ? (db.orgWorkApprovals as OrganizationWorkApproval[]).find(item => item.id === existing.approvalId && item.orgId === input.orgId) || null
       : null;
@@ -613,6 +729,7 @@ export function routeOrganizationWork(input: RouteOrganizationWorkInput): RouteO
       ))
     : null;
   if (existingTask) {
+    if (applyWorkConstraints(db, existingTask)) writeDB(db);
     const existingApproval = existingTask.approvalId
       ? (db.orgWorkApprovals as OrganizationWorkApproval[]).find(item => item.id === existingTask.approvalId && item.orgId === input.orgId) || null
       : null;
@@ -723,6 +840,7 @@ export function routeOrganizationWork(input: RouteOrganizationWorkInput): RouteO
 export function listOrganizationWorkItems(orgId: string, filters: {
   status?: OrganizationWorkItemStatus;
   requesterUserId?: string;
+  visibleToUserId?: string;
   taskId?: string;
   limit?: number;
 } = {}): OrganizationWorkItem[] {
@@ -733,6 +851,7 @@ export function listOrganizationWorkItems(orgId: string, filters: {
     .filter(item => item.orgId === orgId)
     .filter(item => !filters.status || item.status === filters.status)
     .filter(item => !filters.requesterUserId || item.requesterUserId === filters.requesterUserId)
+    .filter(item => !filters.visibleToUserId || organizationWorkItemInvolvesUser(item, filters.visibleToUserId))
     .filter(item => !filters.taskId || item.taskId === filters.taskId)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .slice(0, limit)
@@ -741,6 +860,11 @@ export function listOrganizationWorkItems(orgId: string, filters: {
       collaboratorMemberIds: [...(item.collaboratorMemberIds || [])],
       skillTags: [...item.skillTags],
     }));
+}
+
+export function organizationWorkItemInvolvesUser(item: OrganizationWorkItem, userId: string): boolean {
+  return item.requesterUserId === userId || item.assignedMemberId === userId
+    || item.humanOwnerUserId === userId || (item.collaboratorMemberIds || []).includes(userId);
 }
 
 export function getOrganizationWorkItem(orgId: string, workItemId: string): OrganizationWorkItem | null {
@@ -782,6 +906,7 @@ export function setOrganizationWorkItemExecutionStatus(input: {
   workItemId: string;
   status: Extract<OrganizationWorkItemStatus, 'executing' | 'completed' | 'blocked' | 'cancelled'>;
   actorUserId: string;
+  execution: OrganizationWorkExecution | null;
   blocker?: string;
 }): OrganizationWorkItem | null {
   const db = readDB();
@@ -794,6 +919,10 @@ export function setOrganizationWorkItemExecutionStatus(input: {
   if (item.status === 'waiting_human' && input.status === 'executing') {
     throw new Error('The work item is owned by a human and cannot be started by LumiCore');
   }
+  const execution = input.execution;
+  if (!execution || execution.orgId !== input.orgId || execution.workItemId !== input.workItemId
+    || execution.actorUserId !== input.actorUserId || execution.revision !== item.revision
+    || !workExecutions.get(workExecutionKey(input.orgId, input.workItemId))?.has(execution) || !execution.isCurrent()) return null;
   item.status = input.status;
   item.lastBlocker = input.status === 'blocked' ? normalizeText(input.blocker, 500) : '';
   item.updatedAt = now();
@@ -856,8 +985,10 @@ export function decideOrganizationWorkApproval(input: {
     workItem.status = 'blocked';
     workItem.lastBlocker = approval.reason || 'Organization approval was rejected';
   }
+  applyWorkConstraints(db, workItem);
   workItem.updatedAt = timestamp;
   writeDB(db);
+  notifyWorkExecutionChanged(workItem);
   logAudit({
     orgId: input.orgId,
     userId: input.actorUserId,
@@ -893,6 +1024,7 @@ export function requestOrganizationWorkHandoff(input: {
   const item = (db.orgWorkItems as OrganizationWorkItem[]).find(candidate => candidate.id === input.workItemId && candidate.orgId === input.orgId);
   if (!item) return null;
   if (['completed', 'cancelled'].includes(item.status)) throw new Error('A terminal work item cannot be transferred');
+  if (pendingHandoff(db, item)) throw new Error('A handoff for this work item is already pending');
   const actor = getMember(input.orgId, input.actorUserId)!;
   const actorCanTransfer = ['owner', 'admin'].includes(actor.role)
     || item.requesterUserId === input.actorUserId
@@ -903,6 +1035,9 @@ export function requestOrganizationWorkHandoff(input: {
   const position = validatePosition(db, input.orgId, input.targetPositionId);
   const departmentId = validateDepartment(input.orgId, input.targetDepartmentId ?? position?.departmentId);
   const memberId = validateMember(input.orgId, input.targetMemberId);
+  if (position?.departmentId && departmentId && position.departmentId !== departmentId) {
+    throw new Error('The target position does not belong to the target department');
+  }
   if (type === 'human_takeover' && !memberId) throw new Error('Human takeover requires a target member');
   if (!departmentId && !position && !memberId) throw new Error('A handoff target is required');
   const timestamp = now();
@@ -915,6 +1050,9 @@ export function requestOrganizationWorkHandoff(input: {
     status: 'pending',
     actorUserId: input.actorUserId,
     from: handoffTarget(item),
+    fromStatus: item.status,
+    fromBlocker: item.lastBlocker,
+    fromCollaboratorMemberIds: [...(item.collaboratorMemberIds || [])],
     to: { departmentId, positionId: position?.id || null, memberId },
     reason: normalizeText(input.reason, 500),
     decidedBy: null,
@@ -926,8 +1064,10 @@ export function requestOrganizationWorkHandoff(input: {
   db.orgWorkHandoffs.push(handoff);
   item.status = 'waiting_human';
   item.lastBlocker = `Waiting for handoff ${handoff.id} to be accepted`;
+  applyWorkConstraints(db, item);
   item.updatedAt = timestamp;
   writeDB(db);
+  notifyWorkExecutionChanged(item);
   logAudit({
     orgId: input.orgId,
     userId: input.actorUserId,
@@ -963,6 +1103,14 @@ export function decideOrganizationWorkHandoff(input: {
     || handoff.to.memberId === input.actorUserId;
   if (!canDecide) throw new Error('Only the target member or an organization administrator may decide this handoff');
   if (handoff.workItemRevision !== item.revision) throw new Error('This handoff expired because the work item routing changed');
+  if (input.decision === 'accept') {
+    const position = validatePosition(db, input.orgId, handoff.to.positionId);
+    const departmentId = validateDepartment(input.orgId, handoff.to.departmentId);
+    validateMember(input.orgId, handoff.to.memberId);
+    if (position?.departmentId && departmentId && position.departmentId !== departmentId) {
+      throw new Error('The target position does not belong to the target department');
+    }
+  }
   const timestamp = now();
   handoff.status = input.decision === 'accept' ? 'accepted' : 'declined';
   handoff.decidedBy = input.actorUserId;
@@ -983,19 +1131,26 @@ export function decideOrganizationWorkHandoff(input: {
         oldApproval.status = 'expired';
         oldApproval.updatedAt = timestamp;
       }
-      item.approvalId = null;
+      createApproval(db, item);
     }
   } else {
     item.departmentId = handoff.from.departmentId;
     item.positionId = handoff.from.positionId;
     item.assignedMemberId = handoff.from.memberId;
-    item.collaboratorMemberIds = [];
+    item.collaboratorMemberIds = [...(handoff.fromCollaboratorMemberIds || [])];
     item.humanOwnerUserId = item.assignedMemberId || null;
-    item.status = item.assignedMemberId ? 'waiting_human' : 'assigned';
-    item.lastBlocker = '';
+    // An interrupted executor must settle its existing action receipts before a
+    // subsequent turn resumes. Never manufacture a running executor here.
+    item.status = handoff.fromStatus === 'executing' ? 'blocked'
+      : handoff.fromStatus || (item.assignedMemberId ? 'waiting_human' : 'assigned');
+    item.lastBlocker = handoff.fromStatus === 'executing'
+      ? 'The previous execution was interrupted by a handoff; review its receipts before continuing.'
+      : handoff.fromBlocker || '';
   }
+  applyWorkConstraints(db, item);
   item.updatedAt = timestamp;
   writeDB(db);
+  notifyWorkExecutionChanged(item);
   logAudit({
     orgId: input.orgId,
     userId: input.actorUserId,

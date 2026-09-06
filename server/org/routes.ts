@@ -244,12 +244,11 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
 
   router.get('/org/org/:orgId/work-items', requireAuth, requireOrgMember, (req: Request, res: Response) => {
     const membership = EDB.getMember(req.params.orgId, req.user!.uid)!;
-    const requesterUserId = ['owner', 'admin'].includes(membership.role)
-      ? String(req.query.requesterUserId || '') || undefined
-      : req.user!.uid;
+    const isAdministrator = ['owner', 'admin'].includes(membership.role);
     res.json(WorkRouting.listOrganizationWorkItems(req.params.orgId, {
       status: req.query.status as WorkRouting.OrganizationWorkItemStatus | undefined,
-      requesterUserId,
+      requesterUserId: String(req.query.requesterUserId || '') || undefined,
+      visibleToUserId: isAdministrator ? undefined : req.user!.uid,
       taskId: String(req.query.taskId || '') || undefined,
       limit: Number(req.query.limit) || undefined,
     }));
@@ -263,10 +262,7 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
     }
     const membership = EDB.getMember(req.params.orgId, req.user!.uid)!;
     const canRead = ['owner', 'admin'].includes(membership.role)
-      || item.requesterUserId === req.user!.uid
-      || item.assignedMemberId === req.user!.uid
-      || (item.collaboratorMemberIds || []).includes(req.user!.uid)
-      || item.humanOwnerUserId === req.user!.uid;
+      || WorkRouting.organizationWorkItemInvolvesUser(item, req.user!.uid);
     if (!canRead) {
       res.status(403).json({ error: 'This work item is not assigned to the current member' });
       return;

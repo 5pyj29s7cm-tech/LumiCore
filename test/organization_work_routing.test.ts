@@ -290,6 +290,7 @@ describe('durable organization business routing', () => {
       workItemId: routed.workItem.id,
       status: 'executing',
       actorUserId: memberA,
+      execution: null,
     })).toThrow(/owned by a human/i);
 
     expect(listOrganizationWorkHandoffs(orgId, routed.workItem.id)).toHaveLength(1);

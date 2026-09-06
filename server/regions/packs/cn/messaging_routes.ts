@@ -44,8 +44,10 @@ import { parseDocument } from '../../../legal/parser';
 import { getMember } from '../../../org/db';
 import {
   bindOrganizationWorkItemTask,
+  registerOrganizationWorkExecution,
   routeOrganizationWork,
   setOrganizationWorkItemExecutionStatus,
+  type OrganizationWorkExecution,
   type RouteOrganizationWorkResult,
 } from '../../../org/work_routing';
 import * as OrgKB from '../../../org/kb';
@@ -1885,8 +1887,9 @@ function updateCaseHintsFromText(orgId: string, userId: string, caseFile: LegalC
   }
 }
 
-export async function handleRemoteOrgCommand(msg: IncomingMessage): Promise<string | null> {
+export async function handleRemoteOrgCommand(msg: IncomingMessage, assertExecutionCurrent?: () => void): Promise<string | null> {
   assertMessagingAuthorization(msg);
+  assertExecutionCurrent?.();
   const requestText = getRequestText(msg);
   const platformLabel = remotePlatformLabel(msg.platform);
   const materialSource = remoteMaterialSource(msg.platform);
@@ -1912,6 +1915,7 @@ export async function handleRemoteOrgCommand(msg: IncomingMessage): Promise<stri
   const textAttachments = (msg.attachments || []).filter(item => item.extractedText?.trim());
   const extractionReply = await handleRemoteExtractionCommand(msg, textAttachments);
   assertMessagingAuthorization(msg);
+  assertExecutionCurrent?.();
   if (extractionReply) return extractionReply;
 
   if (/知识库|制度|资料|文档库/.test(requestText) && /(查|搜|找|检索|搜索)/.test(requestText)) {
@@ -2639,6 +2643,7 @@ export async function processWithPersonality(
     return correlated.text;
   }
   const actionAbortController = new AbortController();
+  let organizationWorkExecution: OrganizationWorkExecution | null = null;
   const releaseActiveMessageRouteController = registerActiveMessageRouteController(
     msg,
     actionAbortController,
@@ -2655,9 +2660,11 @@ export async function processWithPersonality(
   const actionLeaseWasLost = () => Boolean(actionLeaseHeartbeat?.isLeaseLost());
   const actionWasCancelled = () => (
     actionAbortController.signal.aborted || newerMessageSupersedesThisTurn(msg) || !isMessagingAuthorizationCurrent(msg)
+    || Boolean(organizationWorkExecution && !organizationWorkExecution.isCurrent())
   );
   const throwIfActionLeaseWasLost = () => {
     assertMessagingAuthorization(msg);
+    organizationWorkExecution?.assertCurrent();
     if (!actionLeaseWasLost()) return;
     const error = new Error('Remote conversation action execution lease was lost');
     error.name = 'AbortError';
@@ -2749,6 +2756,14 @@ export async function processWithPersonality(
         taskId: actionTaskExecution.state!.taskId,
       });
       const route = organizationWorkRoute.workItem;
+      if (!['waiting_approval', 'waiting_human'].includes(route.status)) {
+        organizationWorkExecution = registerOrganizationWorkExecution({
+          orgId,
+          workItemId: route.id,
+          actorUserId: effectiveUserId,
+          abortController: actionAbortController,
+        });
+      }
       systemPrompt += [
         '',
         '## Organization Business Route',
@@ -2803,6 +2818,7 @@ export async function processWithPersonality(
         workItemId: organizationWorkRoute.workItem.id,
         status: 'executing',
         actorUserId: effectiveUserId,
+        execution: organizationWorkExecution,
       });
     }
   }
@@ -2934,10 +2950,25 @@ export async function processWithPersonality(
     }
   };
 
+  const settleTransferredExecution = async (records: ToolExecutionRecord[]): Promise<boolean> => {
+    if (!organizationWorkExecution || organizationWorkExecution.isCurrent()) return false;
+    // Keep any terminal action evidence in its original conversation ledger,
+    // while suppressing prose and completion claims from the former owner.
+    if (records.length) {
+      const evidenceMessage = persistBoundMessagingMessage(msg, 'assistant', '', undefined, records);
+      removeSupersededAssistantMessage(evidenceMessage);
+    }
+    const blocker = 'Organization work was handed off; the previous execution has stopped.';
+    if (conversation) setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'blocked', { blocker, requestId });
+    settleRemoteTask(blocker);
+    await flushTerminalReply();
+    return true;
+  };
+  let toolRecords: ToolExecutionRecord[] = [];
+
   try {
     const usageInteractionId = `messaging_${msg.platform}_${Date.now()}`;
     let responseText = '';
-    let toolRecords: ToolExecutionRecord[] = [];
     let callbackReply: Awaited<ReturnType<MessageHandler>> | null = null;
     const callbackBlockedForExternalCommit = Boolean(
       options?.onMessage && organizationWorkRoute?.workItem.sideEffectClass === 'external_commit',
@@ -2947,6 +2978,7 @@ export async function processWithPersonality(
     // through the receipt-producing tool route and its exact confirmation gate.
     if (options?.onMessage && !callbackBlockedForExternalCommit) {
       assertMessagingAuthorization(msg);
+      organizationWorkExecution?.assertCurrent();
       callbackReply = await options.onMessage(msg);
       throwIfActionLeaseWasLost();
     }
@@ -3051,7 +3083,10 @@ export async function processWithPersonality(
         executionSignal: actionAbortController.signal,
       });
       assertMessagingAuthorization(msg);
-      if (!deterministicEntryReply) deterministicEntryReply = await handleRemoteOrgCommand(msg);
+      if (!deterministicEntryReply) {
+        organizationWorkExecution?.assertCurrent();
+        deterministicEntryReply = await handleRemoteOrgCommand(msg, () => organizationWorkExecution?.assertCurrent());
+      }
       if (deterministicEntryReply) {
         responseText = deterministicEntryReply;
         toolRecords.push({
@@ -3314,6 +3349,8 @@ export async function processWithPersonality(
       await actionLeaseHeartbeat!.leaseLoss;
       return CN_TASK_EXECUTION_MESSAGES.persistenceUnknown;
     }
+    if (await settleTransferredExecution(toolRecords)) return '';
+    organizationWorkExecution?.assertCurrent();
     const correlated = correlateMessagingReply(msg, finalized.text);
     if (correlated.superseded) {
       if (organizationWorkRoute) {
@@ -3322,6 +3359,7 @@ export async function processWithPersonality(
           workItemId: organizationWorkRoute.workItem.id,
           status: 'cancelled',
           actorUserId: effectiveUserId,
+          execution: organizationWorkExecution,
           blocker: 'The remote turn was superseded by a newer user message.',
         });
       }
@@ -3350,6 +3388,7 @@ export async function processWithPersonality(
         workItemId: organizationWorkRoute.workItem.id,
         status: organizationStatus,
         actorUserId: effectiveUserId,
+        execution: organizationWorkExecution,
         blocker: organizationBlocker,
       });
       if (organizationStatus === 'blocked' && conversation) {
@@ -3401,6 +3440,7 @@ export async function processWithPersonality(
       return CN_TASK_EXECUTION_MESSAGES.persistenceUnknown;
     }
     if (isMessagingReplyDurabilityError(err)) throw err;
+    if (await settleTransferredExecution(toolRecords)) return '';
     console.warn(`[Messaging] ${msg.platform} model pipeline failed:`, err?.message || err);
     const fallback = '当前语言模型暂时不可用，这次处理没有完成，请稍后再试。';
     const correlated = correlateMessagingReply(msg, fallback);
@@ -3411,6 +3451,7 @@ export async function processWithPersonality(
           workItemId: organizationWorkRoute.workItem.id,
           status: 'cancelled',
           actorUserId: effectiveUserId,
+          execution: organizationWorkExecution,
           blocker: 'The remote turn failed after it was superseded by a newer user message.',
         });
       }
@@ -3427,6 +3468,7 @@ export async function processWithPersonality(
         workItemId: organizationWorkRoute.workItem.id,
         status: 'blocked',
         actorUserId: effectiveUserId,
+        execution: organizationWorkExecution,
         blocker: err?.message || 'The remote model/tool pipeline failed before a terminal receipt was recorded.',
       });
     }
@@ -3435,6 +3477,7 @@ export async function processWithPersonality(
     return correlated.text;
   }
   } finally {
+    organizationWorkExecution?.release();
     actionLeaseHeartbeat?.stop();
     releaseActiveMessageRouteController();
   }
