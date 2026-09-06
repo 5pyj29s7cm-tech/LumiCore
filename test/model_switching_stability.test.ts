@@ -630,7 +630,7 @@ describe('reasoning model switching stability', () => {
       expect(source).toContain('selectionMode: userLLMPrefs.selectionMode');
       expect(source).toContain('fallbackCandidates: userLLMPrefs.fallbackCandidates');
       expect(source).toContain('allowCloudFallback: userLLMPrefs.allowCloudFallback');
-      expect(source).toMatch(/(?:makeLLMCall(?:Streaming)?|runWithTools)\([\s\S]{0,1600}\.\.\.reasoningRoutePolicy/);
+      expect(source).toMatch(/(?:makeLLMCall(?:Streaming)?|runWithTools|callAuthorizedModel|streamAuthorizedModel|runAuthorizedTools)\([\s\S]{0,1600}\.\.\.reasoningRoutePolicy/);
     }
   });
 

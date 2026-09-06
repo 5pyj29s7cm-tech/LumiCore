@@ -49,10 +49,11 @@ describe('chat task feedback binding integration', () => {
 
   it('propagates foreground cancellation through classification and the tool/model loop', () => {
     const classifier = chat.indexOf('const llmClassifier = async');
-    const classifierCall = chat.indexOf('const result = await makeLLMCall(', classifier);
-    const toolLoop = chat.indexOf('const result = await runWithTools(', classifierCall);
-    const cancellationCatch = chat.lastIndexOf("if (abortController.signal.aborted || error?.name === 'AbortError')");
+    const classifierCall = chat.indexOf('const result = await callAuthorizedModel(', classifier);
+    const toolLoop = chat.indexOf('const result = await runAuthorizedTools(', classifierCall);
+    const cancellationCatch = chat.lastIndexOf("if (isChatCancelled() || error?.name === 'AbortError')");
 
+    expect(chat).toContain('const isChatCancelled = () => !turnAuthorization.isCurrent() || abortController.signal.aborted');
     expect(classifier).toBeGreaterThan(-1);
     expect(classifierCall).toBeGreaterThan(classifier);
     expect(chat.slice(classifierCall, classifierCall + 1_200)).toContain('signal: abortController.signal');

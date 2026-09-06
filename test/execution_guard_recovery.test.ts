@@ -1140,7 +1140,7 @@ describe('execution guard recovery', () => {
     const root = process.cwd();
     const cases = [{
       source: readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8'),
-      cancellationCheck: 'isAborted: () => abortController.signal.aborted',
+      cancellationCheck: 'isAborted: isChatCancelled',
     }, {
       source: readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8'),
       cancellationCheck: 'isAborted: () => taskLease.signal.aborted',
@@ -1150,6 +1150,9 @@ describe('execution guard recovery', () => {
     }];
 
     for (const { source, cancellationCheck } of cases) {
+      if (cancellationCheck === 'isAborted: isChatCancelled') {
+        expect(source).toContain('const isChatCancelled = () => !turnAuthorization.isCurrent() || abortController.signal.aborted');
+      }
       const recoveryStart = source.indexOf('const guardRecovery = await recoverBlockedExecutionOnce({');
       expect(recoveryStart).toBeGreaterThanOrEqual(0);
       const recoveryBlock = source.slice(recoveryStart, recoveryStart + 13_000);
