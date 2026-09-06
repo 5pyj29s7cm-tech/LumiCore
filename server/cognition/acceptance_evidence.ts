@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { projectAutonomousTaskFinalization } from '../autonomy/task_finalization';
 import { getJwtSecret } from '../config/local_identity';
 import type { CapabilityManifestEntry, ToolExecutionRecord } from '../tools/types';
 import {
@@ -845,7 +846,7 @@ export function buildTaskAcceptanceProjections(db: any, input: {
     });
   const autonomous = (Array.isArray(db?.autonomousTasks) ? db.autonomousTasks : [])
     .filter((task: any) => scopeMatches(task, input))
-    .map((task: any) => projectDurableTask(task));
+    .map((task: any) => projectDurableTask(projectAutonomousTaskFinalization(task)));
   return [...conversation, ...autonomous]
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { projectAutonomousTaskFinalization } from '../autonomy/task_finalization';
 import type {
   ConversationActionReceiptRow,
   ConversationActionTaskRow,
@@ -217,6 +218,7 @@ export function buildStructuredRuntimeStatus(
   const autonomous = input.domain === 'personal'
     ? (Array.isArray(db?.autonomousTasks) ? db.autonomousTasks : [])
       .filter((task: any) => task.userId === input.userId)
+      .map(projectAutonomousTaskFinalization)
       .map((task: any) => ({
         taskId: compact(task.id, 180),
         runtime: 'autonomous' as const,

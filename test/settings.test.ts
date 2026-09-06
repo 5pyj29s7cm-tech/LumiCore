@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { makeApp, JWT_SECRET } from './helpers';
 import { mountSystemRoutes } from '../server/routes/system_routes';
+import { flushDBOrThrow, querySQL, readDB, writeDB } from '../db_layer';
+import { setAutonomousTaskFinalizationPending } from '../server/autonomy/task_finalization';
 import jwt from 'jsonwebtoken';
 
 let url: string;
@@ -151,6 +153,39 @@ describe('Settings & Keys API', () => {
         signal: AbortSignal.timeout(5000),
       });
       expect(response.status, endpoint).toBe(403);
+    }
+  });
+
+  it('counts a pending autonomous completion as blocked in detailed health until its final state is saved', async () => {
+    const taskId = 'settings-health-pending-finalization';
+    const timestamp = new Date().toISOString();
+    const db = readDB();
+    db.autonomousTasks = [...(db.autonomousTasks || []), {
+      id: taskId, userId: 'settings-admin', title: 'Synthetic completed work', description: 'Synthetic health projection fixture',
+      source: 'user_request', status: 'completed', priority: 5, mode: 'analysis', domain: 'personal', orgId: '',
+      createdAt: timestamp, updatedAt: timestamp, completedAt: timestamp, finalized: true, verified: true, blocked: false,
+    }];
+    writeDB(db);
+    setAutonomousTaskFinalizationPending(taskId, true);
+    try {
+      const pending = await fetch(`${url}/api/health?details=1`, { headers: adminHeaders() });
+      expect(pending.status).toBe(200);
+      const pendingCounts = (await pending.json()).queues.durableWork.autonomy;
+      expect(pendingCounts.blocked).toBeGreaterThanOrEqual(1);
+
+      await flushDBOrThrow();
+      expect(await querySQL('SELECT status FROM autonomous_tasks WHERE id = ?', [taskId])).toEqual([{ status: 'completed' }]);
+      setAutonomousTaskFinalizationPending(taskId, false);
+      const saved = await fetch(`${url}/api/health?details=1`, { headers: adminHeaders() });
+      expect(saved.status).toBe(200);
+      const savedCounts = (await saved.json()).queues.durableWork.autonomy;
+      expect(savedCounts.completed || 0).toBe((pendingCounts.completed || 0) + 1);
+      expect(savedCounts.blocked || 0).toBe(pendingCounts.blocked - 1);
+    } finally {
+      setAutonomousTaskFinalizationPending(taskId, false);
+      const current = readDB();
+      current.autonomousTasks = (current.autonomousTasks || []).filter((task: any) => task.id !== taskId);
+      writeDB(current);
     }
   });
 

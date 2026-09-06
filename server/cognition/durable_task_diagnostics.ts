@@ -1,4 +1,5 @@
 import { readDB } from '../../db_layer';
+import { projectAutonomousTaskFinalization } from '../autonomy/task_finalization';
 import type { DurableTaskRecoveryState } from './durable_task_recovery';
 
 export interface DurableTaskDiagnosticItem {
@@ -68,7 +69,7 @@ export function getDurableTaskHealthSnapshot(
   const isWork = scope.domain === 'work' && Boolean(scope.orgId);
   const autonomous = (Array.isArray(db.autonomousTasks) ? db.autonomousTasks : [])
     .filter((task: any) => !isWork && task.userId === userId)
-    .map((task: any) => toItem(task, 'autonomous'));
+    .map((task: any) => toItem(projectAutonomousTaskFinalization(task), 'autonomous'));
   const items = autonomous;
   return {
     active: items.filter(item => ['pending', 'queued', 'running', 'pausing', 'paused'].includes(item.status)).length,

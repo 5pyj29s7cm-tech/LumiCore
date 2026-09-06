@@ -2076,8 +2076,16 @@ export function registerScheduledTasks(
     auditMode: 'compact',
     lastRun: null,
     executionClass: 'autonomous_orchestration',
-    handler: async () => {
+    handler: async context => {
+      if (context?.signal.aborted) return null;
       dispatchDueCommandCenterPlans();
+      if (scheduler.io && !context?.signal.aborted) {
+        const { dispatchManualCommandCenterPlanTasks } = await import('./command_center/runtime');
+        await dispatchManualCommandCenterPlanTasks(scheduler.io, {
+          getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
+          getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay,
+        }, { signal: context?.signal });
+      }
       return null;
     },
   });
@@ -3408,8 +3416,8 @@ Output ONLY the prediction message — no preamble, no labels.`;
     quiet: true,
     lastRun: null,
     executionClass: 'autonomous_orchestration',
-    handler: async () => {
-      if (!scheduler.io) return null;
+    handler: async context => {
+      if (!scheduler.io || context?.signal.aborted) return null;
 
       const userIds = getAllUserIds();
       let totalGenerated = 0;
@@ -3421,6 +3429,7 @@ Output ONLY the prediction message — no preamble, no labels.`;
       };
 
       for (const userId of userIds) {
+        if (context?.signal.aborted) break;
         try {
           // Check if user has autonomous mode enabled
           const db = readDB();
@@ -3432,14 +3441,17 @@ Output ONLY the prediction message — no preamble, no labels.`;
 
           // Generate tasks
           const { generateAutonomousTasks } = await import('./autonomy/task_generator');
-          const generated = await generateAutonomousTasks(userId, getters);
+          if (context?.signal.aborted) break;
+          const generated = await generateAutonomousTasks(userId, getters, context?.signal);
           totalGenerated += generated;
+          if (context?.signal.aborted) break;
 
           // Execute pending tasks, bounded by the current safety gate.
           const { executeNextAutonomousTask } = await import('./autonomy/task_executor');
           const maxTasks = Math.max(1, Math.min(50, getGateConfig(userId).maxConsecutiveTasks || 1));
           for (let i = 0; i < maxTasks; i++) {
-            const result = await executeNextAutonomousTask(scheduler.io!, getters, userId);
+            if (context?.signal.aborted) break;
+            const result = await executeNextAutonomousTask(scheduler.io!, getters, userId, { signal: context?.signal });
             if (!result.executed) break;
             totalExecuted++;
           }
@@ -3498,6 +3510,5 @@ Output ONLY the prediction message — no preamble, no labels.`;
     },
   });
 }
-
 
 

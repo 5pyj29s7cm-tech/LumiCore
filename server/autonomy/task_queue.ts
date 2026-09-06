@@ -2,6 +2,9 @@
 import { randomUUID } from 'crypto';
 import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
 import type { ToolExecutionRecord } from '../tools/types';
+import type { OrganizationMembershipAuthorization } from '../org/membership_authorization';
+import { isAutonomousTaskFinalizationPending, projectAutonomousTaskFinalization, resetAutonomousTaskFinalizationsForTests } from './task_finalization';
+export { setAutonomousTaskFinalizationPending } from './task_finalization';
 import { sanitizeDiagnosticValue } from '../client/diagnostic_sanitizer';
 import type { PersistedCapabilityExecutionPlan } from '../conversation/action_ledger';
 import {
@@ -56,6 +59,8 @@ export interface AutonomousTask {
   conversationId?: string;
   workflowId?: string;
   planId?: string;
+  /** Exact member authority accepted with a work-domain manual plan request. */
+  membershipAuthorization?: OrganizationMembershipAuthorization;
   priority: number;  // 0-10
   mode: 'desktop' | 'terminal' | 'analysis';
   createdAt: string;
@@ -88,6 +93,8 @@ export interface AutonomousTask {
   executionPlan?: PersistedCapabilityExecutionPlan;
   /** Unified terminal acceptance receipt. Completed tasks require a verified receipt. */
   terminalReceipt?: TaskTerminalReceipt;
+  /** Public projection only: the settled task still needs a successful save. */
+  finalizationPending?: boolean;
 }
 
 export interface AutonomousTaskLeaseInput {
@@ -170,6 +177,7 @@ function resumeSafety(task: AutonomousTask) {
 function cloneTask(task: AutonomousTask): AutonomousTask {
   return {
     ...task,
+    membershipAuthorization: task.membershipAuthorization ? { ...task.membershipAuthorization } : undefined,
     actions: task.actions ? structuredClone(task.actions) : undefined,
     checkpoint: task.checkpoint ? {
       ...task.checkpoint,
@@ -480,10 +488,11 @@ export function enqueue(
   return cloneTask(newTask);
 }
 
-export function dequeue(userId?: string): AutonomousTask | null {
+export function dequeue(userId?: string, taskId?: string): AutonomousTask | null {
   ensureHydrated();
   const pending = queue
-    .filter(task => task.status === 'pending' && isDurableTaskReady(task.nextAttemptAt) && (!userId || task.userId === userId))
+    .filter(task => task.status === 'pending' && isDurableTaskReady(task.nextAttemptAt)
+      && (!userId || task.userId === userId) && (!taskId || task.id === taskId))
     .sort((a, b) => b.priority - a.priority || a.createdAt.localeCompare(b.createdAt));
   return pending[0] ? cloneTask(pending[0]) : null;
 }
@@ -788,12 +797,12 @@ export function isTaskCancellationRequested(id: string, userId?: string): boolea
   return cancellationRequests.has(id) || Boolean(task?.cancelRequestedAt);
 }
 
-export function markCancelled(id: string, reason = 'Cancelled by user'): AutonomousTask | null {
-  ensureHydrated();
-  const task = findTask(id);
-  if (!task) return null;
+function applyCancelledTaskState(task: AutonomousTask, reason: string): void {
   const timestamp = nowIso();
   task.status = 'cancelled';
+  task.finalized = false;
+  task.verified = false;
+  task.blocked = false;
   task.completedAt = timestamp;
   task.updatedAt = timestamp;
   task.error = reason;
@@ -807,7 +816,25 @@ export function markCancelled(id: string, reason = 'Cancelled by user'): Autonom
     createdAt: timestamp,
   });
   clearLease(task);
+}
+
+export function markCancelled(id: string, reason = 'Cancelled by user'): AutonomousTask | null {
+  ensureHydrated();
+  const task = findTask(id);
+  if (!task) return null;
+  applyCancelledTaskState(task, reason);
   moveToHistory(task);
+  persist();
+  return cloneTask(task);
+}
+
+/** Only an unpublished completion can change after it moved into history. */
+export function cancelAutonomousTaskFinalization(id: string, reason: string): AutonomousTask | null {
+  ensureHydrated();
+  if (!isAutonomousTaskFinalizationPending(id)) return null;
+  const task = history.find(candidate => candidate.id === id);
+  if (!task) return null;
+  applyCancelledTaskState(task, reason);
   persist();
   return cloneTask(task);
 }
@@ -825,12 +852,14 @@ export function getTaskHistory(limit: number = 50, offset: number = 0, userId?: 
     .filter(task => !userId || task.userId === userId)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(offset, offset + limit)
-    .map(cloneTask);
+    .map(task => projectAutonomousTaskFinalization(cloneTask(task)));
 }
 
 export function getRunningTask(userId?: string): AutonomousTask | null {
   ensureHydrated();
-  const task = queue.find(item => (item.status === 'running' || item.status === 'pausing') && (!userId || item.userId === userId));
+  const task = [...queue, ...history].find(item => (
+    item.status === 'running' || item.status === 'pausing' || activeExecutors.has(item.id)
+  ) && (!userId || item.userId === userId));
   return task ? cloneTask(task) : null;
 }
 
@@ -851,6 +880,7 @@ export function resetAutonomousTaskQueueForTest(options: { clearPersisted?: bool
   cancellationRequests.clear();
   activeExecutors.clear();
   executorStops.clear();
+  resetAutonomousTaskFinalizationsForTests();
   hydrated = options.markHydrated === true;
   if (options.clearPersisted) persist();
 }

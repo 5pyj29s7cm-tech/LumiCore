@@ -284,7 +284,7 @@ describe('autonomous durable action lifecycle', () => {
     expect(getTaskHistory(50, 0, owner)[0]).toMatchObject({ status: 'cancelled', actions: [{ state: 'settled' }] });
   });
 
-  it.each(['pause', 'cancel', 'voice'] as const)('forwards %s immediately to an in-flight adapter signal and records its real settlement', async kind => {
+  it.each(['pause', 'cancel', 'voice', 'parent'] as const)('forwards %s immediately to an in-flight adapter signal and records its real settlement', async kind => {
     const queued = task();
     let signal: AbortSignal | undefined;
     let entered = false;
@@ -297,10 +297,12 @@ describe('autonomous durable action lifecycle', () => {
         return 'unreachable';
       } });
     mocks.model.mockResolvedValue({ text: '', toolCalls: [{ id: 'one', name: 'write_file', arguments: { path: 'synthetic.txt', content: 'text' } }] });
-    const pending = executeNextAutonomousTask({ to: () => ({ emit: vi.fn() }) } as any, { getDeepSeek: () => null, getGemini: () => null }, owner);
+    const parent = new AbortController();
+    const pending = executeNextAutonomousTask({ to: () => ({ emit: vi.fn() }) } as any, { getDeepSeek: () => null, getGemini: () => null }, owner, { signal: parent.signal });
     await vi.waitFor(() => expect(entered).toBe(true));
     if (kind === 'pause') requestPauseAutonomousTask(queued.id, owner);
     else if (kind === 'cancel') cancelTask(queued.id, owner);
+    else if (kind === 'parent') parent.abort(new Error('Parent cycle stopped'));
     else setRealtimeVoiceSessionActive(owner, 'synthetic-session', true);
     expect(signal?.aborted).toBe(true);
     await pending;

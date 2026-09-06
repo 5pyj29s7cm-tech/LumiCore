@@ -99,7 +99,7 @@ export function mountAllRoutes({ apiRouter, jwtSecret, llm, getCookieOptions, io
   // System Exploration & Plans
   mountExploreRoutes(apiRouter);
   mountPlanRoutes(apiRouter);
-  mountCommandCenterPlanRoutes(apiRouter);
+  mountCommandCenterPlanRoutes(apiRouter, { io, getters: llmGetters });
 
   // Autonomy
   apiRouter.use('/autonomy', autonomyRoutes());

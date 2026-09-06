@@ -14,6 +14,8 @@ import {
   runCommandCenterPlan,
 } from '../server/command_center/plans';
 import { mountCommandCenterPlanRoutes } from '../server/routes/command_center_plan_routes';
+import { addMember, createOrg } from '../server/org/db';
+import { captureOrganizationMembershipAuthorization } from '../server/org/membership_authorization';
 import { JWT_SECRET, makeApp } from './helpers';
 
 describe('command center durable plans', () => {
@@ -122,7 +124,10 @@ describe('command center durable plans', () => {
 
   it('reuses a plan-scoped active run if a retry occurs before the plan row records its task id', () => {
     const retryUser = `command-center-retry-${Date.now()}`;
-    const plan = createCommandCenterPlan({ userId: retryUser, domain: 'work', orgId: 'org-retry' }, {
+    const org = createOrg('Synthetic retry organization', `synthetic-retry-${Date.now()}`, retryUser);
+    addMember(org.id, retryUser, 'owner');
+    const membershipAuthorization = captureOrganizationMembershipAuthorization(org.id, retryUser);
+    const plan = createCommandCenterPlan({ userId: retryUser, domain: 'work', orgId: org.id }, {
       kind: 'long_term_goal',
       title: 'Recover interrupted dispatch',
       instruction: 'Continue the active plan run without duplicating it.',
@@ -136,7 +141,8 @@ describe('command center durable plans', () => {
       description: plan.instruction,
       source: 'user_request',
       domain: 'work',
-      orgId: 'org-retry',
+      orgId: org.id,
+      membershipAuthorization,
       conversationId: `command-center-plan:${plan.id}`,
       planId: plan.id,
       priority: 6,
@@ -148,11 +154,12 @@ describe('command center durable plans', () => {
       id: plan.id,
       userId: retryUser,
       domain: 'work',
-      orgId: 'org-retry',
+      orgId: org.id,
       manual: true,
     });
 
     expect(retried).toMatchObject({ reused: true, task: { id: existing.id, status: 'pending' } });
+    expect(retried?.task.membershipAuthorization).toEqual(membershipAuthorization);
     expect(retried?.plan.lastRuntimeTaskId).toBe(existing.id);
     expect(readDB().commandCenterPlans.find((candidate: any) => candidate.id === plan.id)).toMatchObject({
       lastRuntimeTaskId: existing.id,

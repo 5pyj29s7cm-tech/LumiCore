@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { readDB, writeDB } from '../../db_layer';
+import { captureOrganizationMembershipAuthorization } from '../org/membership_authorization';
 import {
   enqueue,
   getTaskHistory,
@@ -225,7 +226,7 @@ function activeManualRun(plan: CommandCenterPlan): AutonomousTask | null {
     if (!byId.has(task.id)) byId.set(task.id, task);
   }
   const candidates = Array.from(byId.values()).filter(task => {
-    if (!ACTIVE_RUNTIME_STATUSES.has(task.status) || !String(task.idempotencyKey || '').startsWith(prefix)) {
+    if ((!ACTIVE_RUNTIME_STATUSES.has(task.status) && !task.finalizationPending) || !String(task.idempotencyKey || '').startsWith(prefix)) {
       return false;
     }
     const domain = task.domain === 'work' ? 'work' : 'personal';
@@ -247,6 +248,9 @@ export function runCommandCenterPlan(input: {
     && candidate.domain === input.domain
     && candidate.orgId === input.orgId);
   if (!plan) return null;
+  const membershipAuthorization = input.manual && plan.domain === 'work'
+    ? captureOrganizationMembershipAuthorization(plan.orgId, plan.userId)
+    : undefined;
   if (input.manual) {
     const active = activeManualRun(plan);
     if (active) {
@@ -270,6 +274,7 @@ export function runCommandCenterPlan(input: {
     orgId: plan.orgId,
     conversationId: plan.conversationId || `command-center-plan:${plan.id}`,
     planId: plan.id,
+    membershipAuthorization,
     priority: plan.kind === 'daily_task' ? 7 : 6,
     mode: 'analysis',
     idempotencyKey: `command-center-plan:${plan.id}:${slot}`,

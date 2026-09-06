@@ -4,6 +4,7 @@ import os from "os";
 import fs from "fs";
 import path from "path";
 import { getDatabasePersistenceStatus, readDB, writeDB, isDbDirty } from "../../db_layer";
+import { projectAutonomousTaskFinalization } from "../autonomy/task_finalization";
 import { logger } from "../../logger";
 import { getDataRoot } from "../config/data_path";
 import { toolRegistry } from "../tools/registry";
@@ -396,7 +397,8 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
       const capabilityMetrics = getCapabilityRuntimeMetrics();
       const ollama = getLocalModelConfig('ollama');
       const lmstudio = getLocalModelConfig('lmstudio');
-      const autonomousTasks = Array.isArray(db.autonomousTasks) ? db.autonomousTasks : [];
+      const autonomousTasks = (Array.isArray(db.autonomousTasks) ? db.autonomousTasks : [])
+        .map(projectAutonomousTaskFinalization);
       const externalAiHistorySources = Array.isArray(db.externalAiHistorySources) ? db.externalAiHistorySources : [];
       const externalAiHistorySyncJobs = Array.isArray(db.externalAiHistorySyncJobs) ? db.externalAiHistorySyncJobs : [];
       const externalAiHistoryMessages = Array.isArray(db.externalAiHistoryMessages) ? db.externalAiHistoryMessages : [];

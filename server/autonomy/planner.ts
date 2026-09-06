@@ -41,6 +41,76 @@ export interface PlanScope {
 
 type PlanFilter = { status?: string; source?: string; limit?: number };
 
+interface PendingAutonomousPlanCompletion {
+  planId: string;
+  stepId: string;
+  before: Pick<LumiPlan, 'status' | 'result' | 'completedAt'>;
+  staged: Pick<LumiPlan, 'status' | 'result' | 'completedAt'>;
+  stepBefore: Pick<PlanStep, 'status' | 'result'>;
+  stepStaged: Pick<PlanStep, 'status' | 'result'>;
+}
+
+const pendingAutonomousPlanCompletions = new Map<string, PendingAutonomousPlanCompletion>();
+
+function projectPlanCompletion(plan: LumiPlan): LumiPlan {
+  const pending = [...pendingAutonomousPlanCompletions.values()].filter(item => item.planId === plan.id);
+  if (!pending.length) return plan;
+  const projected = { ...plan, steps: plan.steps.map(step => ({ ...step })) };
+  for (const item of pending) {
+    // Mask only the exact staged fields. A later user edit is not rolled back,
+    // and releasing this read projection never writes an old snapshot to DB.
+    for (const key of ['status', 'result', 'completedAt'] as const) {
+      if (plan[key] === item.staged[key] && item.before[key] !== item.staged[key]) {
+        Object.assign(projected, { [key]: item.before[key] });
+      }
+    }
+    const step = projected.steps.find(candidate => candidate.id === item.stepId);
+    const actualStep = plan.steps.find(candidate => candidate.id === item.stepId);
+    if (step && actualStep) {
+      for (const key of ['status', 'result'] as const) {
+        if (actualStep[key] === item.stepStaged[key] && item.stepBefore[key] !== item.stepStaged[key]) {
+          Object.assign(step, { [key]: item.stepBefore[key] });
+        }
+      }
+    }
+  }
+  return projected;
+}
+
+/** Stage alongside the task, but expose completion only after its save barrier. */
+export function stageAutonomousPlanCompletion(
+  taskId: string, planId: string, scope: PlanScope, summary: string,
+): () => void {
+  if (pendingAutonomousPlanCompletions.has(taskId)) {
+    const pending = pendingAutonomousPlanCompletions.get(taskId)!;
+    return () => { if (pendingAutonomousPlanCompletions.get(taskId) === pending) pendingAutonomousPlanCompletions.delete(taskId); };
+  }
+  const db = readDB();
+  const plan = migrateLegacyPlans(db).find(candidate => candidate.id === planId && planMatchesScope(candidate, scope));
+  if (!plan || plan.status !== 'active') return () => {};
+  const step = plan.steps.find(candidate => candidate.status === 'in_progress')
+    || plan.steps.find(candidate => candidate.status === 'pending');
+  if (!step) return () => {};
+  const before = { status: plan.status, result: plan.result, completedAt: plan.completedAt };
+  const stepBefore = { status: step.status, result: step.result };
+  step.status = 'done';
+  step.result = summary;
+  plan.updatedAt = new Date().toISOString();
+  if (plan.steps.every(candidate => candidate.status === 'done' || candidate.status === 'skipped')) {
+    plan.status = 'completed';
+    plan.completedAt = plan.updatedAt;
+    plan.result = summary;
+  }
+  const pending: PendingAutonomousPlanCompletion = {
+    planId, stepId: step.id, before,
+    staged: { status: plan.status, result: plan.result, completedAt: plan.completedAt },
+    stepBefore, stepStaged: { status: step.status, result: step.result },
+  };
+  pendingAutonomousPlanCompletions.set(taskId, pending);
+  writeDB(db);
+  return () => { if (pendingAutonomousPlanCompletions.get(taskId) === pending) pendingAutonomousPlanCompletions.delete(taskId); };
+}
+
 function normalizeScope(scope: PlanScope): PlanScope {
   return scope.domain === 'work' && scope.orgId
     ? { userId: scope.userId, domain: 'work', orgId: scope.orgId }
@@ -133,7 +203,7 @@ export function updatePlan(id: string, updates: PlanUpdate, scope: PlanScope): L
     ...(normalizedUpdates.status === "completed" ? { completedAt: new Date().toISOString() } : {}),
   });
   writeDB(db);
-  return plan;
+  return projectPlanCompletion(plan);
 }
 
 export function updatePlanStep(planId: string, stepId: string, updates: Partial<Pick<PlanStep, "status" | "title" | "description" | "result">>, scope: PlanScope): LumiPlan | null {
@@ -154,12 +224,12 @@ export function updatePlanStep(planId: string, stepId: string, updates: Partial<
   }
 
   writeDB(db);
-  return plan;
+  return projectPlanCompletion(plan);
 }
 
 export function listPlans(scope: PlanScope, filter?: PlanFilter): LumiPlan[] {
   const db = readDB();
-  let plans: LumiPlan[] = migrateLegacyPlans(db).filter(plan => planMatchesScope(plan, scope)).map(plan => (
+  let plans: LumiPlan[] = migrateLegacyPlans(db).filter(plan => planMatchesScope(plan, scope)).map(projectPlanCompletion).map(plan => (
     (plan as any).status === "done"
       ? { ...plan, status: "completed", completedAt: plan.completedAt || plan.updatedAt }
       : plan
@@ -179,7 +249,8 @@ export function listPlans(scope: PlanScope, filter?: PlanFilter): LumiPlan[] {
 
 export function getPlan(id: string, scope: PlanScope): LumiPlan | null {
   const db = readDB();
-  return migrateLegacyPlans(db).find((p: LumiPlan) => p.id === id && planMatchesScope(p, scope)) || null;
+  const plan = migrateLegacyPlans(db).find((p: LumiPlan) => p.id === id && planMatchesScope(p, scope));
+  return plan ? projectPlanCompletion(plan) : null;
 }
 
 export function deletePlan(id: string, scope: PlanScope): boolean {

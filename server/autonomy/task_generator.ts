@@ -267,7 +267,9 @@ function seedFallbackLearningTasksIfDue(
 export async function generateAutonomousTasks(
   userId: string,
   getters: LLMGetters,
+  signal?: AbortSignal,
 ): Promise<number> {
+  if (signal?.aborted) return 0;
   // Safety gate check
   const gate = isAutonomousWorkAllowed(userId);
   if (!gate.allowed) {
@@ -411,13 +413,13 @@ ${contextParts.join('\n')}
     const routingRequestId = `autonomous_task_generation_${crypto.randomUUID()}`;
     const result = await makeLLMCall(
       messages, [],
-      getUserPreferredLLMConfig(userId, {
+      { ...getUserPreferredLLMConfig(userId, {
         maxTokens: 500,
         domain: 'personal',
         source: 'autonomous_task_generation',
         requestId: routingRequestId,
         interactionId: routingRequestId,
-      }),
+      }), signal },
       getters.getDeepSeek, getters.getGemini,
       getters.getOpenAI || (() => null),
       getters.getAnthropic || (() => null),
@@ -431,6 +433,7 @@ ${contextParts.join('\n')}
       getters.getRelay || (() => null),
     );
 
+    if (signal?.aborted) return 0;
     const text = (result.text || '').replace(/```json|```/g, '').trim();
     if (!text || text === '[]') return seedFallbackLearningTasksIfDue(userId, workflows, contextParts);
 
@@ -486,6 +489,7 @@ ${contextParts.join('\n')}
     console.log(`[AutoTasks] Generated ${enqueued} autonomous tasks for ${userId}`);
     return enqueued;
   } catch (err: any) {
+    if (signal?.aborted) return 0;
     console.warn(`[AutoTasks] Generation failed:`, err.message);
     return seedFallbackLearningTasksIfDue(userId, workflows, contextParts);
   }
