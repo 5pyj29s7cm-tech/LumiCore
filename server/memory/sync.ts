@@ -1,4 +1,5 @@
 import { Server as SocketIOServer } from 'socket.io';
+import type { MutationScope } from '../persistence/durable_scope_mutation';
 
 let _io: SocketIOServer | null = null;
 const userSockets: Map<string, Set<string>> = new Map();
@@ -24,9 +25,13 @@ export function unregisterUserSocket(socketId: string): void {
 }
 
 /** Broadcast memory change to all connected devices of a user */
-export function broadcastMemoryChange(userId: string, action: 'added' | 'updated' | 'deleted', memoryId?: string): void {
+export function broadcastMemoryChange(scope: MutationScope, action: 'added' | 'updated' | 'deleted', memoryId?: string): void {
   if (!_io) return;
-  _io.to(`user:${userId}:personal`).emit('memories:changed', { action, memoryId, userId, domain: 'personal', timestamp: new Date().toISOString() });
+  if (!scope.userId || (scope.domain === 'work' ? !scope.orgId : scope.orgId !== '')) return;
+  const room = scope.domain === 'work'
+    ? `user:${scope.userId}:org:${scope.orgId}`
+    : `user:${scope.userId}:personal`;
+  _io.to(room).emit('memories:changed', { action, memoryId, ...scope, timestamp: new Date().toISOString() });
 }
 
 /** Broadcast device list change */

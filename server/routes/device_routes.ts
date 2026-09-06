@@ -8,6 +8,8 @@ import type { DeviceScope } from "../devices";
 import { DESKTOP_SESSION_HEADER, resolveDesktopSession } from "../config/desktop_bootstrap";
 import { requireAdmin, requireAuth, requireLocalRequest } from "../middleware/auth";
 import { readDB, writeDB } from "../../db_layer";
+import { serializedScopeRoute, sendDurableMutation } from './durable_mutation';
+import { readScopedDeletionReceipt, recordScopedDeletionReceipt } from '../persistence/durable_scope_mutation';
 
 function pairedKey(userId: string, scope: DeviceScope): string {
   const scopeKey = scope.domain === 'work' ? `work_${scope.orgId}` : 'personal';
@@ -42,7 +44,7 @@ export function mountDeviceRoutes(router: Router, _jwtSecret: string) {
     ? { domain: 'work', orgId: req.user.orgId }
     : { domain: 'personal', orgId: '' };
 
-  router.post("/devices/pair", requireAuth, (req, res) => {
+  router.post("/devices/pair", requireAuth, serializedScopeRoute('devices', async (req, res) => {
     const { deviceId } = req.body || {};
     if (!deviceId) return res.status(400).json({ error: "deviceId required" });
     const normalizedDeviceId = String(deviceId).trim();
@@ -60,14 +62,18 @@ export function mountDeviceRoutes(router: Router, _jwtSecret: string) {
       scope,
       [...getPairedDeviceIds(userId, scope), normalizedDeviceId],
     );
-    res.json({ success: true, paired: normalizedDeviceId, pairedDeviceIds, timestamp: new Date().toISOString() });
-  });
+    return sendDurableMutation(req, res, { success: true, paired: normalizedDeviceId, pairedDeviceIds, timestamp: new Date().toISOString() });
+  }));
 
-  router.delete("/devices/pair/:deviceId", requireAuth, (req, res) => {
+  router.delete("/devices/pair/:deviceId", requireAuth, serializedScopeRoute('devices', async (req, res) => {
     const userId = req.user!.uid;
     const scope = requestScope(req);
     const current = getPairedDeviceIds(userId, scope);
+    const ownerScope = { userId, ...scope };
     if (!current.includes(req.params.deviceId)) {
+      if (readScopedDeletionReceipt(ownerScope, 'device-pair', req.params.deviceId)) {
+        return sendDurableMutation(req, res, { success: true, unpaired: req.params.deviceId, pairedDeviceIds: current, timestamp: new Date().toISOString() });
+      }
       return res.status(404).json({ error: 'Paired device not found in the active user and domain scope' });
     }
     const pairedDeviceIds = savePairedDeviceIds(
@@ -75,8 +81,9 @@ export function mountDeviceRoutes(router: Router, _jwtSecret: string) {
       scope,
       current.filter(id => id !== req.params.deviceId),
     );
-    res.json({ success: true, unpaired: req.params.deviceId, pairedDeviceIds, timestamp: new Date().toISOString() });
-  });
+    recordScopedDeletionReceipt(ownerScope, 'device-pair', req.params.deviceId, { success: true });
+    return sendDurableMutation(req, res, { success: true, unpaired: req.params.deviceId, pairedDeviceIds, timestamp: new Date().toISOString() });
+  }));
 
   // Formal acceptance needs an exact registry-bound Tauri identity, but that
   // process metadata must never ride the ordinary device API.  This separate

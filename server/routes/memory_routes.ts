@@ -1,4 +1,6 @@
 import { Router } from "express";
+import { serializedScopeRoute, sendDurableMutation } from "./durable_mutation";
+import { readScopedDeletionReceipt, recordScopedDeletionReceipt } from "../persistence/durable_scope_mutation";
 import { readDB, writeDB } from "../../db_layer";
 import {
   queryMemories, addMemory, removeMemory, updateMemoryLifecycle,
@@ -69,7 +71,7 @@ export function mountMemoryRoutes(
     }
   });
 
-  router.post("/memories", requireAuth, (req, res) => {
+  router.post("/memories", requireAuth, serializedScopeRoute("memory", async (req, res) => {
     try {
       const decoded = req.user!;
       const { type, content, keywords, confidence } = req.body;
@@ -80,21 +82,20 @@ export function mountMemoryRoutes(
       }
 
       const memory = addMemory({
-        userId: decoded.uid.replace(/[^a-zA-Z0-9_-]/g, '_'),
+        userId: decoded.uid,
         type,
         content,
         keywords: keywords || [],
         confidence: confidence || 0.5,
         sourceInteractionId: 'manual',
       }, { domain: scope.domain, orgId: scope.orgId, source: 'manual', userApproved: true });
-      broadcastMemoryChange(decoded.uid, 'added', memory.id);
-      res.json(memory);
+      return sendDurableMutation(req, res, memory, () => broadcastMemoryChange({ userId: decoded.uid, ...scope }, 'added', memory.id));
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
-  });
+  }));
 
-  router.put("/memories/:id", requireAuth, (req, res) => {
+  router.put("/memories/:id", requireAuth, serializedScopeRoute("memory", async (req, res) => {
     try {
       const decoded = req.user!;
       const { id } = req.params;
@@ -122,18 +123,22 @@ export function mountMemoryRoutes(
       const db = readDB();
       db.memories = all;
       writeDB(db);
-      broadcastMemoryChange(decoded.uid, 'updated', existing.id);
-      res.json(existing);
+      return sendDurableMutation(req, res, existing, () => broadcastMemoryChange({ userId: decoded.uid, ...scope }, 'updated', existing.id));
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
-  });
+  }));
 
-  router.delete("/memories/:id", requireAuth, (req, res) => {
+  router.delete("/memories/:id", requireAuth, serializedScopeRoute("memory", async (req, res) => {
     try {
       const decoded = req.user!;
       const { id } = req.params;
       const scope = getMemoryScope(req);
+      const ownerScope = { userId: decoded.uid, ...scope };
+      const previousDeletion = readScopedDeletionReceipt(ownerScope, 'memory', id);
+      if (previousDeletion) {
+        return sendDurableMutation(req, res, previousDeletion, () => broadcastMemoryChange(ownerScope, 'deleted', id));
+      }
 
       const all = readDB().memories || [];
       const idx = all.findIndex((m: any) => (
@@ -146,23 +151,23 @@ export function mountMemoryRoutes(
 
       const memoryId = all[idx].id;
       removeMemory(memoryId);
-      broadcastMemoryChange(decoded.uid, 'deleted', memoryId);
-      res.json({ success: true });
+      recordScopedDeletionReceipt(ownerScope, 'memory', memoryId, { success: true });
+      return sendDurableMutation(req, res, { success: true }, () => broadcastMemoryChange({ userId: decoded.uid, ...scope }, 'deleted', memoryId));
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
-  });
+  }));
 
   // Behavioral analysis
-  router.post("/memory/analyze-behavior", requireAuth, (req, res) => {
+  router.post("/memory/analyze-behavior", requireAuth, serializedScopeRoute("memory", async (req, res) => {
     try {
       const scope = getMemoryScope(req);
       const count = runBehavioralAnalysis(req.user!.uid, scope.domain, scope.orgId);
-      res.json({ success: true, patternsFound: count });
+      return sendDurableMutation(req, res, { success: true, patternsFound: count }, () => broadcastMemoryChange({ userId: req.user!.uid, ...scope }, 'updated', 'behavioral-analysis'));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
-  });
+  }));
 
   // Reminders CRUD
   router.get("/reminders", requireAuth, (req, res) => {
@@ -259,7 +264,7 @@ export function mountMemoryRoutes(
   });
 
   // Memory consolidation
-  router.post("/memory/consolidate", requireAuth, async (req, res) => {
+  router.post("/memory/consolidate", requireAuth, serializedScopeRoute("memory", async (req, res) => {
     try {
       const userId = req.user!.uid;
       const scope = getMemoryScope(req);
@@ -279,8 +284,7 @@ export function mountMemoryRoutes(
         llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
       );
       if (result) {
-        broadcastMemoryChange(userId, 'updated', result.id);
-        res.json({ success: true, memory: result });
+        return sendDurableMutation(req, res, { success: true, memory: result }, () => broadcastMemoryChange({ userId, ...scope }, 'updated', result.id));
       } else {
         const unconsolidated = getUnconsolidatedEpisodic(userId, scope.domain, scope.orgId);
         res.json({ success: false, reason: 'Not enough unconsolidated episodic memories', unconsolidatedCount: unconsolidated.length, threshold: minCount });
@@ -288,10 +292,10 @@ export function mountMemoryRoutes(
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
-  });
+  }));
 
   // Self-reflection
-  router.post("/memory/self-reflect", requireAuth, async (req, res) => {
+  router.post("/memory/self-reflect", requireAuth, serializedScopeRoute("memory", async (req, res) => {
     try {
       const userId = req.user!.uid;
       const scope = getMemoryScope(req);
@@ -310,15 +314,14 @@ export function mountMemoryRoutes(
         llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
       );
       if (result) {
-        broadcastMemoryChange(userId, 'updated', result.id);
-        res.json({ success: true, memory: result });
+        return sendDurableMutation(req, res, { success: true, memory: result }, () => broadcastMemoryChange({ userId, ...scope }, 'updated', result.id));
       } else {
         res.json({ success: false, reason: 'No growth memories to reflect on' });
       }
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
-  });
+  }));
 
   // Growth timeline
   router.get("/memory/growth", requireAuth, (req, res) => {
@@ -329,7 +332,7 @@ export function mountMemoryRoutes(
     res.json({ growth, coreIdentity: core });
   });
 
-  router.post("/memory/:id/conflict/resolve", requireAuth, (req, res) => {
+  router.post("/memory/:id/conflict/resolve", requireAuth, serializedScopeRoute("memory", async (req, res) => {
     try {
       const decoded = req.user!;
       const scope = getMemoryScope(req);
@@ -345,13 +348,14 @@ export function mountMemoryRoutes(
         domain: scope.domain,
         orgId: scope.orgId,
       });
-      for (const memory of memories) broadcastMemoryChange(decoded.uid, 'updated', memory.id);
-      res.json({ success: true, memories });
+      return sendDurableMutation(req, res, { success: true, memories }, () => {
+        for (const memory of memories) broadcastMemoryChange({ userId: decoded.uid, ...scope }, 'updated', memory.id);
+      });
     } catch (error: any) {
       const message = error?.message || String(error);
       res.status(/not found|no related/i.test(message) ? 404 : 400).json({ error: message });
     }
-  });
+  }));
 
   // Memory tiers
   router.get("/memory/tiers", requireAuth, (req, res) => {
@@ -365,7 +369,7 @@ export function mountMemoryRoutes(
   });
 
   // Change memory tier
-  router.put("/memory/:id/tier", requireAuth, (req, res) => {
+  router.put("/memory/:id/tier", requireAuth, serializedScopeRoute("memory", async (req, res) => {
     const decoded = req.user!;
     const { tier } = req.body;
     const validTiers = ['episodic', 'internalized', 'growth', 'core_identity'];
@@ -393,9 +397,8 @@ export function mountMemoryRoutes(
       userApproved: tier === 'core_identity' ? true : mem.userApproved,
     });
     if (!updated) return res.status(404).json({ error: 'Memory not found' });
-    broadcastMemoryChange(mem.userId, 'updated', updated.id);
-    res.json({ success: true, memory: updated });
-  });
+    return sendDurableMutation(req, res, { success: true, memory: updated }, () => broadcastMemoryChange({ userId: mem.userId, ...scope }, 'updated', updated.id));
+  }));
 
   // Memory tree — returns full nested tree structure
   router.get("/memory/tree", requireAuth, (req, res) => {
@@ -413,7 +416,7 @@ export function mountMemoryRoutes(
   });
 
   // Move a memory node to a new parent
-  router.put("/memory/:id/move", requireAuth, (req, res) => {
+  router.put("/memory/:id/move", requireAuth, serializedScopeRoute("memory", async (req, res) => {
     try {
       const decoded = req.user!;
       const { parentId } = req.body;
@@ -428,15 +431,14 @@ export function mountMemoryRoutes(
       if (!mem) return res.status(404).json({ error: "Memory not found" });
       const ok = moveNode(req.params.id, parentId ?? null, { userId: decoded.uid, domain: scope.domain, orgId: scope.orgId });
       if (!ok) return res.status(400).json({ error: "Cannot move: circular reference or parent not found" });
-      broadcastMemoryChange(decoded.uid, 'updated', mem.id);
-      res.json({ success: true, memory: mem });
+      return sendDurableMutation(req, res, { success: true, memory: mem }, () => broadcastMemoryChange({ userId: decoded.uid, ...scope }, 'updated', mem.id));
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
-  });
+  }));
 
   // LLM auto-organize — group unorganized leaf memories into topic branches
-  router.post("/memory/auto-organize", requireAuth, async (req, res) => {
+  router.post("/memory/auto-organize", requireAuth, serializedScopeRoute("memory", async (req, res) => {
     try {
       const decoded = req.user!;
       const userId = decoded.uid;
@@ -519,22 +521,30 @@ Rules:
         }
       }
 
-      broadcastMemoryChange(userId, 'updated', 'auto-organize');
-      res.json({ success: true, branchesCreated: branchCount, memoriesAssigned: assignedCount });
+      return sendDurableMutation(req, res, { success: true, branchesCreated: branchCount, memoriesAssigned: assignedCount }, () => broadcastMemoryChange({ userId, ...scope }, 'updated', 'auto-organize'));
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
-  });
+  }));
 
   // Toggle core identity protection
-  router.put("/memory/:id/protect", requireAuth, (req, res) => {
+  router.put("/memory/:id/protect", requireAuth, serializedScopeRoute("memory", async (req, res) => {
     const decoded3 = req.user!;
     const scope = getMemoryScope(req);
     const all = queryMemories({ userId: decoded3.uid, limit: 9999, domain: scope.domain, orgId: scope.orgId });
     const mem = all.find(m => m.id === req.params.id);
     if (!mem) return res.status(404).json({ error: 'Memory not found' });
 
-    if (mem.tier === 'core_identity') {
+    if (req.body?.protected !== undefined && typeof req.body.protected !== 'boolean') {
+      return res.status(400).json({ error: 'protected must be a boolean' });
+    }
+    // New clients send a target state, making a failed-save retry idempotent.
+    // Retain the old toggle for clients which have not yet migrated.
+    const shouldProtect = req.body?.protected ?? (mem.tier !== 'core_identity');
+    if (!shouldProtect && mem.tier !== 'core_identity') {
+      return sendDurableMutation(req, res, { success: true, protected: false, memory: mem }, () => broadcastMemoryChange({ userId: mem.userId, ...scope }, 'updated', mem.id));
+    }
+    if (!shouldProtect) {
       const updated = updateMemoryLifecycle({
         userId: mem.userId,
         memoryId: mem.id,
@@ -547,8 +557,7 @@ Rules:
         userApproved: mem.userApproved,
       });
       if (!updated) return res.status(404).json({ error: 'Memory not found' });
-      broadcastMemoryChange(mem.userId, 'updated', updated.id);
-      res.json({ success: true, protected: false, memory: updated });
+      return sendDurableMutation(req, res, { success: true, protected: false, memory: updated }, () => broadcastMemoryChange({ userId: mem.userId, ...scope }, 'updated', updated.id), { retryable: typeof req.body?.protected === 'boolean' });
     } else {
       const updated = updateMemoryLifecycle({
         userId: mem.userId,
@@ -562,10 +571,9 @@ Rules:
         userApproved: true,
       });
       if (!updated) return res.status(404).json({ error: 'Memory not found' });
-      broadcastMemoryChange(mem.userId, 'updated', updated.id);
-      res.json({ success: true, protected: true, memory: updated });
+      return sendDurableMutation(req, res, { success: true, protected: true, memory: updated }, () => broadcastMemoryChange({ userId: mem.userId, ...scope }, 'updated', updated.id), { retryable: typeof req.body?.protected === 'boolean' });
     }
-  });
+  }));
 
   // Memory narrative chain — weave related memories into a chronological story
   router.get("/memory/narrative", requireAuth, async (req, res) => {

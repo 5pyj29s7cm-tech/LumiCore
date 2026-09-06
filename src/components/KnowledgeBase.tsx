@@ -356,9 +356,15 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
   };
 
   const handleToggleProtect = async (id: string) => {
+    const memory = memories.find(item => item.id === id);
+    if (!memory) return;
     try {
-      const res = await fetch(scopedMemoryUrl(`/api/memory/${id}/protect`), { method: 'PUT' });
+      const res = await fetch(scopedMemoryUrl(`/api/memory/${id}/protect`), {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ protected: memory.tier !== 'core_identity' }),
+      });
       const d = await res.json();
+      if (!res.ok || d.success !== true) throw new Error('Protection was not saved');
       toast.success(d.protected ? (t.kbProtected || 'Protected') : (t.kbUnprotected || 'Unprotected'));
       fetchAll();
     } catch { toast.error(t.kbProtectFailed || 'Protect failed'); }
