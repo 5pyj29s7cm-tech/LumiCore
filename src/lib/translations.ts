@@ -1522,7 +1522,7 @@ export const translations: TranslationMap = {
     // ── Neural Synthesis Monitor ──
     noSensorData: "No sensor data",
     // ── Sanctuary ──
-    memoryAvatars: "Memory Avatars",
+    memoryAvatars: "Memory Territory",
     passive: "Passive",
     defaultMemoryLabel: "Memory",
     defaultYouLabel: "You",
@@ -3046,7 +3046,7 @@ export const translations: TranslationMap = {
     // ── Neural Synthesis Monitor ──
     noSensorData: "无传感器数据",
     // ── Sanctuary ──
-    memoryAvatars: "记忆化身",
+    memoryAvatars: "记忆领地",
     passive: "待机",
     defaultMemoryLabel: "记忆",
     defaultYouLabel: "你",

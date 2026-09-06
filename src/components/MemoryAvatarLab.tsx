@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Upload, FileText, Sparkles, Heart, Users, Briefcase, GraduationCap, User, X, ArrowRight, ArrowLeft, Eye, Castle, Loader2, CheckCircle, AlertTriangle, Zap, Mic, Headphones } from 'lucide-react';
 import { toast } from 'sonner';
@@ -6,6 +6,8 @@ import { useApp } from '../contexts/AppContext';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 import { memoryAvatarCopy } from '../i18n/locales/memoryAvatar';
 import { CN_WECHAT_ALIASES } from '../i18n/regions/cn/recognition';
+import { MemoryAvatarCreate } from './MemoryAvatarCreate';
+import { apiFetch } from '../services/apiClient';
 
 interface DistillSummary {
   messageCount: number;
@@ -88,6 +90,7 @@ function EvidenceBadge({ grade, isZh = true }: { grade: 'verbatim' | 'artifact' 
 
 export function MemoryAvatarLab({ t, lang, onEnterSanctuary }: { t: any; lang?: 'en' | 'zh'; onEnterSanctuary?: (agent: any) => void }) {
   const { user, login } = useApp();
+  const [creationMode, setCreationMode] = useState<'direct' | 'records'>('direct');
   // `lang` is passed by DesktopUI as the authoritative shell locale.  Keep
   // the `t.langCode` fallback for callers/tests that render the lab alone.
   const isZh = (lang || t?.langCode || 'zh') !== 'en';
@@ -113,10 +116,45 @@ export function MemoryAvatarLab({ t, lang, onEnterSanctuary }: { t: any; lang?: 
   const [audioTranscript, setAudioTranscript] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const audioInputRef = useRef<HTMLInputElement>(null);
+  const ownerScope = useMemo(() => ({ id: user?.uid || '' }), [user?.uid]);
+  const currentOwner = useRef(ownerScope);
+  currentOwner.current = ownerScope;
+  const operationGeneration = useRef(0);
+  const operationAbort = useRef(new AbortController());
+  const createOperation = useRef<{ fingerprint: string; id: string } | null>(null);
+  const createBusy = useRef(false);
+  const readers = useRef(new Set<FileReader>());
+  const cancelOperations = useCallback(() => {
+    operationGeneration.current++;
+    operationAbort.current.abort();
+    for (const reader of readers.current) { if (reader.readyState === FileReader.LOADING) reader.abort(); }
+    readers.current.clear();
+  }, []);
+  const reset = useCallback(() => {
+    cancelOperations();
+    operationAbort.current = new AbortController();
+    createOperation.current = null; createBusy.current = false;
+    setCurrentStep(1); setChatLog(''); setFileName(''); setFormat('wechat');
+    setRelationshipType('close_friend'); setDistillResult(null); setCreatedAvatar(null);
+    setSanctuaryName(''); setAudioFile(null); setAudioTranscript('');
+    setDistilling(false); setCreating(false); setAudioTranscribing(false);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    if (audioInputRef.current) audioInputRef.current.value = '';
+  }, [cancelOperations]);
+  useEffect(() => {
+    reset(); setCreationMode('direct');
+    return cancelOperations;
+  }, [ownerScope, reset, cancelOperations]);
+  const beginOperation = useCallback(() => {
+    const generation = operationGeneration.current;
+    const signal = operationAbort.current.signal;
+    return { signal, current: () => currentOwner.current === ownerScope && generation === operationGeneration.current && !signal.aborted };
+  }, [ownerScope]);
 
   const handleFileLoad = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const operation = beginOperation();
     setFileName(file.name);
     // Detect format from filename
     if (CN_WECHAT_ALIASES.some(alias => file.name.includes(alias)) || file.name.includes('wechat')) setFormat('wechat');
@@ -124,33 +162,44 @@ export function MemoryAvatarLab({ t, lang, onEnterSanctuary }: { t: any; lang?: 
     else setFormat('plain');
 
     const reader = new FileReader();
+    readers.current.add(reader);
+    reader.onloadend = () => readers.current.delete(reader);
     reader.onload = (ev) => {
+      if (!operation.current()) return;
       const text = ev.target?.result as string;
       setChatLog(text);
       const lineCount = text.split('\n').filter(l => l.trim()).length;
       toast.success(formatUiMessage('memory-avatar-lab.loaded-value0-lines-from-value1.f8752f8cd7', { value0: lineCount, value1: file.name }, locale));
     };
     reader.readAsText(file);
-  }, [locale]);
+  }, [locale, beginOperation]);
 
   const handleAudioUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!ownerScope.id) { login(); return; }
+    const operation = beginOperation();
     setAudioFile(file);
     // Transcribe audio via server
     setAudioTranscribing(true);
     const reader = new FileReader();
+    readers.current.add(reader);
+    reader.onloadend = () => readers.current.delete(reader);
     reader.onload = async () => {
+      if (!operation.current()) return;
       try {
         const base64 = (reader.result as string).split(',')[1];
-        const res = await fetch('/api/audio/transcribe', {
+        const res = await apiFetch('/api/audio/transcribe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ audio: base64, fileName: file.name }),
           credentials: 'include',
+          signal: operation.signal,
         });
+        if (!operation.current()) return;
         if (res.ok) {
           const data = await res.json();
+          if (!operation.current()) return;
           setAudioTranscript(data.text || '');
           // Append transcript to chat log for richer distillation
           if (data.text) {
@@ -162,20 +211,21 @@ export function MemoryAvatarLab({ t, lang, onEnterSanctuary }: { t: any; lang?: 
           toast.error(copy.transcriptionFailed);
         }
       } catch {
-        toast.error(copy.transcriptionFailed);
+        if (operation.current()) toast.error(copy.transcriptionFailed);
       } finally {
-        setAudioTranscribing(false);
+        if (operation.current()) setAudioTranscribing(false);
       }
     };
     reader.readAsDataURL(file);
-  }, [copy.audioRecordHeader, copy.transcriptionFailed, locale]);
+  }, [copy.audioRecordHeader, copy.transcriptionFailed, locale, ownerScope.id, login, beginOperation]);
 
   const handleDistill = async () => {
     if (!user) { login(); return; }
     if (!chatLog.trim()) { toast.error(copy.uploadChatLogFirst); return; }
+    const operation = beginOperation();
     setDistilling(true);
     try {
-      const res = await fetch('/api/memory-avatars/distill', {
+      const res = await apiFetch('/api/memory-avatars/distill', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -185,67 +235,61 @@ export function MemoryAvatarLab({ t, lang, onEnterSanctuary }: { t: any; lang?: 
           ...(audioTranscript ? { audioTranscript } : {}),
         }),
         credentials: 'include',
+        signal: operation.signal,
       });
       if (!res.ok) throw new Error((await res.json()).error || copy.distillationFailed);
       const result: DistillResult = await res.json();
+      if (!operation.current()) return;
       setDistillResult(result);
       setSanctuaryName(result.inferredName);
       setCurrentStep(2);
       toast.success(copy.distilledPersonality(result.inferredName, result.seedMemories.length));
     } catch (err: any) {
-      toast.error(err.message || copy.distillationFailed);
+      if (operation.current()) toast.error(err.message || copy.distillationFailed);
     } finally {
-      setDistilling(false);
+      if (operation.current()) setDistilling(false);
     }
   };
 
   const handleCreateSanctuary = async () => {
     if (!user) { login(); return; }
-    if (!distillResult) return;
+    if (!distillResult || createBusy.current) return;
+    const operation = beginOperation();
+    const fields = {
+      name: sanctuaryName || distillResult.inferredName,
+      relationshipType: distillResult.relationshipType,
+      personalityConfig: distillResult.personalityConfig,
+      evidenceMap: distillResult.evidenceMap,
+      seedMemories: distillResult.seedMemories,
+      narrative: distillResult.narrative,
+    };
+    const fingerprint = JSON.stringify(fields);
+    if (createOperation.current?.fingerprint !== fingerprint) createOperation.current = { fingerprint, id: crypto.randomUUID() };
+    createBusy.current = true;
     setCreating(true);
     try {
-      const res = await fetch('/api/memory-avatars', {
+      const res = await apiFetch('/api/memory-avatars', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({
-          name: sanctuaryName || distillResult.inferredName,
-          relationshipType: distillResult.relationshipType,
-          personalityConfig: distillResult.personalityConfig,
-          evidenceMap: distillResult.evidenceMap,
-          seedMemories: distillResult.seedMemories,
-          narrative: distillResult.narrative,
-        }),
+        signal: operation.signal,
+        body: JSON.stringify({ ...fields, clientRequestId: createOperation.current.id }),
       });
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
         throw new Error(payload.error || copy.memoryAvatarCreationFailed);
       }
       const avatar = await res.json();
+      if (!operation.current()) return;
       setCreatedAvatar(avatar);
       toast.success(copy.sanctuaryCreatedFor(avatar.name));
       setCurrentStep(3);
       onEnterSanctuary?.(avatar);
     } catch (err: any) {
-      toast.error(err.message || copy.creationFailed);
+      if (operation.current()) toast.error(err.message || copy.creationFailed);
     } finally {
-      setCreating(false);
+      if (operation.current()) { createBusy.current = false; setCreating(false); }
     }
-  };
-
-  const reset = () => {
-    setCurrentStep(1);
-    setChatLog('');
-    setFileName('');
-    setFormat('wechat');
-    setRelationshipType('close_friend');
-    setDistillResult(null);
-    setCreatedAvatar(null);
-    setSanctuaryName('');
-    setAudioFile(null);
-    setAudioTranscript('');
-    if (fileInputRef.current) fileInputRef.current.value = '';
-    if (audioInputRef.current) audioInputRef.current.value = '';
   };
 
   const steps = [
@@ -258,6 +302,9 @@ export function MemoryAvatarLab({ t, lang, onEnterSanctuary }: { t: any; lang?: 
     const rel = (copy.relationships as Record<string, { label: string; desc: string }>)[id];
     return rel?.label || id;
   };
+
+  if (creationMode === 'direct') return <MemoryAvatarCreate locale={locale} ownerId={user?.uid || ''}
+    onCreated={avatar => onEnterSanctuary?.(avatar)} onImport={() => setCreationMode('records')} onLogin={login} />;
 
   return (
     <div className="h-full flex flex-col bg-zinc-950/90">

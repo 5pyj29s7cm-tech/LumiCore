@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import ts from 'typescript';
 import {
   sanitizeAgentResponseTextForDisplay,
   sanitizeAgentStreamingTextForDisplay,
@@ -9,6 +10,10 @@ import { containsInternalExecutionLanguage } from '../shared/public_execution_la
 
 const root = process.cwd();
 const source = (relativePath: string) => fs.readFileSync(path.join(root, relativePath), 'utf8');
+const code = (relativePath: string) => ts.createPrinter({ removeComments: true }).printFile(
+  ts.createSourceFile(relativePath, source(relativePath), ts.ScriptTarget.Latest, true,
+    relativePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS),
+);
 
 describe('customer-facing assistant output projection', () => {
   it('keeps ordinary Markdown intact and replaces runtime diagnostics', () => {
@@ -73,7 +78,7 @@ describe('customer-facing assistant output projection', () => {
   it('applies the shared sanitizer at every secondary assistant surface', () => {
     const surfaces = [
       'src/components/ChatPanel.tsx',
-      'src/components/Sanctuary.tsx',
+      'src/hooks/useMemoryAvatarConversation.ts',
       'src/components/org/CentralLumiChat.tsx',
       'src/hooks/useVoiceCall.ts',
       'src/components/ProactiveNotifications.tsx',
@@ -92,11 +97,15 @@ describe('customer-facing assistant output projection', () => {
     expect(source('src/components/AgentChatPage.tsx')).toMatch(
       /onChunk[\s\S]*streamingRawTextRef[\s\S]*sanitizeAgentStreamingTextForDisplay\(rawText[\s\S]*onError[\s\S]*sanitizeAgentResponseTextForDisplay/,
     );
-    expect(source('src/components/Sanctuary.tsx')).toMatch(
-      /memory-avatars[\s\S]*sanitizeAgentResponseTextForDisplay[\s\S]*onResponse[\s\S]*sanitizeAgentResponseTextForDisplay/,
+    const territoryConversation = code('src/hooks/useMemoryAvatarConversation.ts');
+    expect(territoryConversation).toMatch(
+      /memoryAvatarService\.history\(avatarId\)[\s\S]*sanitizeAgentResponseTextForDisplay\(row\.content, locale\)[\s\S]*const response[\s\S]*sanitizeAgentResponseTextForDisplay\(data\.text, locale\)/,
     );
-    expect(source('src/components/Sanctuary.tsx')).toMatch(
-      /onChunk[\s\S]*streamingRawText[\s\S]*sanitizeAgentStreamingTextForDisplay/,
+    expect(territoryConversation).toMatch(
+      /const chunk[\s\S]*raw\.current\s*\+=[\s\S]*sanitizeAgentStreamingTextForDisplay\(raw\.current, locale\)/,
+    );
+    expect(territoryConversation).toMatch(
+      /const appendVoiceResponse[\s\S]*put\('assistant', sanitizeAgentResponseTextForDisplay\(text, locale\)/,
     );
     expect(source('src/components/org/CentralLumiChat.tsx')).toMatch(
       /normalizeHistoryMessage[\s\S]*sanitizeAgentResponseTextForDisplay[\s\S]*onResponse[\s\S]*sanitizeAgentResponseTextForDisplay/,
@@ -110,5 +119,19 @@ describe('customer-facing assistant output projection', () => {
     expect(source('src/components/ProactiveNotifications.tsx')).toMatch(
       /handleProactive[\s\S]*sanitizeAgentResponseTextForDisplay[\s\S]*handleAwaySummary[\s\S]*sanitizeAgentResponseTextForDisplay/,
     );
+  });
+
+  it('connects the territory UI and recovered private responses to the same projected message stream', () => {
+    const territory = code('src/components/Sanctuary.tsx');
+    const conversation = code('src/hooks/useMemoryAvatarConversation.ts');
+    expect(territory).toMatch(/useMemoryAvatarConversation\(\{ socket, avatarId: avatar\.id, ownerId, locale \}\)/);
+    expect(territory).toMatch(/onTranscript: conversation\.appendVoiceTranscript, onResponse: conversation\.appendVoiceResponse/);
+    expect(territory).toContain('conversation.send(draft)');
+    expect(territory).toMatch(/conversation\.messages\.map\(message[\s\S]*\{message\.text\}/);
+    expect(conversation).toMatch(/ownedPendingChatExecutions\([\s\S]*owner\)/);
+    expect(conversation).toMatch(/data\?\.requestId === active\.current\.requestId[\s\S]*data\.agentId === avatarId/);
+    expect(conversation).toMatch(/socket\.emit\('agent:execution_resume',[\s\S]*requestId: execution\.requestId,[\s\S]*source: owner\.source/);
+    expect(conversation).toContain("socket?.on('agent:response', response)");
+    expect(conversation).toContain("socket?.off('agent:response', response)");
   });
 });

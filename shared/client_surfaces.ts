@@ -202,11 +202,11 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
   },
   {
     id: 'memory-avatar',
-    label: 'Memory Avatar sanctuary',
+    label: 'Memory Territory',
     target: 'memory-avatar',
-    navigationAliases: ['memory avatar', 'memory avatars', '记忆化身', '记忆头像', '记忆空间'],
+    navigationAliases: ['memory territory', 'memory avatar', 'memory avatars', 'memory sanctuary', '记忆领地', '记忆化身', '记忆头像', '记忆空间'],
     actions: ['open_memory_avatar'],
-    useWhen: 'Open a private, frozen, tool-free Memory Avatar distilled from user-provided conversation records.',
+    useWhen: 'Open Memory Territory to create private digital people, add source materials, and have text, voice, or video conversations. These personal companions cannot execute tools or autonomous tasks.',
     // Memory Avatar is entered from the Command Center switcher. It is still
     // a registered surface/action, but it is intentionally not a desktop
     // launcher icon anymore.

@@ -1,34 +1,24 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { ArrowLeft, Heart, Users, Briefcase, GraduationCap, User, Send, Loader2, Sparkles, AlertTriangle, Castle, Plus, ChevronDown } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ArrowLeft, Camera, CameraOff, Check, ChevronDown, Loader2, MessageCircle, Mic, MicOff, Phone, PhoneOff, Plus, Send, Settings2, Square, UserRound, Video } from 'lucide-react';
 import { useSocket } from '@/hooks/useSocket';
-import { useT } from '../lib/useT';
 import { useApp } from '@/contexts/AppContext';
-import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
+import { useLocale } from '../lib/useT';
 import { memoryAvatarCopy } from '../i18n/locales/memoryAvatar';
-import { CN_DEPENDENCY_SIGNALS } from '../i18n/regions/cn/recognition';
-import {
-  isTerminalAgentStatus,
-  sanitizeAgentResponseTextForDisplay,
-  sanitizeAgentStreamingTextForDisplay,
-  shouldDisplayAgentResponse,
-  type AgentResponseDelivery,
-} from '@/lib/agentResponseDelivery';
+import { memoryTerritoryCopy } from '../i18n/locales/memoryTerritory';
+import { DEFAULT_MEMORY_AVATAR_APPEARANCE, type MemoryAvatar, type MemoryAvatarAppearance } from '../../shared/memory_avatar';
+import { useMemoryAvatarConversation } from '../hooks/useMemoryAvatarConversation';
+import { useMemoryAvatarCall } from '../hooks/useMemoryAvatarCall';
+import { MemoryAvatarStage } from './MemoryAvatarStage';
+import { MemoryAvatarProfile } from './MemoryAvatarProfile';
 
-interface SanctuaryAgent {
+interface SanctuaryAgent extends Partial<MemoryAvatar> {
   id: string;
   name: string;
   category?: string;
   territory?: string;
-  relationshipType?: string;
   distilledFrom?: string;
-  evidenceMap?: Array<{ memoryIndex: number; grade: string; source: string }>;
-  isFrozen?: boolean;
-  seedMemoryIds?: string[];
   data?: string;
-  createdAt?: string;
 }
-
 interface SanctuaryProps {
   agent: SanctuaryAgent | null;
   lang?: 'en' | 'zh';
@@ -37,559 +27,167 @@ interface SanctuaryProps {
   avatars?: SanctuaryAgent[];
   onSelectAvatar?: (id: string) => void;
   onCreateAnother?: () => void;
+  onAvatarUpdated?: (avatar: MemoryAvatar) => void;
+  onAvatarArchived?: (id: string) => void;
+}
+function asRecord(agent: SanctuaryAgent): MemoryAvatar {
+  return {
+    id: agent.id, name: agent.name, relationshipType: agent.relationshipType || 'close_friend',
+    status: agent.status || 'active', revision: agent.revision || 1, narrative: agent.narrative || '',
+    appearance: { ...DEFAULT_MEMORY_AVATAR_APPEARANCE, ...agent.appearance }, voice: agent.voice || {},
+    memoryCount: agent.memoryCount ?? agent.seedMemoryIds?.length ?? 0, isFrozen: agent.isFrozen !== false,
+    personalityConfig: agent.personalityConfig || {}, evidenceMap: agent.evidenceMap || [], seedMemoryIds: agent.seedMemoryIds || [],
+    createdAt: agent.createdAt || '', updatedAt: agent.updatedAt || agent.createdAt || '',
+  };
 }
 
-type RelationshipMeta = { color: string; bg: string; border: string; icon: React.ReactNode };
-
-const RELATIONSHIP_META: Record<string, RelationshipMeta> = {
-  family: { color: 'text-amber-400', bg: 'from-amber-950/60 to-zinc-950', border: 'border-amber-500/20', icon: <Heart size={14} /> },
-  close_friend: { color: 'text-emerald-400', bg: 'from-emerald-950/60 to-zinc-950', border: 'border-emerald-500/20', icon: <Users size={14} /> },
-  lover: { color: 'text-rose-400', bg: 'from-rose-950/60 to-zinc-950', border: 'border-rose-500/20', icon: <Heart size={14} className="text-rose-400" /> },
-  mentor: { color: 'text-blue-400', bg: 'from-blue-950/60 to-zinc-950', border: 'border-blue-500/20', icon: <GraduationCap size={14} /> },
-  colleague: { color: 'text-violet-400', bg: 'from-violet-950/60 to-zinc-950', border: 'border-violet-500/20', icon: <Briefcase size={14} /> },
-};
-
-const DEFAULT_META: RelationshipMeta = { color: 'text-fuchsia-400', bg: 'from-fuchsia-950/60 to-zinc-950', border: 'border-fuchsia-500/20', icon: <User size={14} /> };
-
-const DEPENDENCY_SIGNALS = [
-  ...CN_DEPENDENCY_SIGNALS,
-  { patterns: ["can't live without you", 'cannot live without you', "you're my only one", 'you are my only one', "don't leave me"], level: 'high' },
-  { patterns: ['miss you', 'want to see you', 'wish you were here'], level: 'medium' },
-  { patterns: ['come every day', 'stay with me', "don't go"], level: 'medium' },
-];
-
-function checkDependencySignals(text: string): { detected: boolean; level: string; matched: string } {
-  for (const sig of DEPENDENCY_SIGNALS) {
-    for (const p of sig.patterns) {
-      if (text.includes(p)) return { detected: true, level: sig.level, matched: p };
-    }
-  }
-  return { detected: false, level: '', matched: '' };
-}
-
-export function Sanctuary({ agent, lang, isOpen, onClose, avatars = [], onSelectAvatar, onCreateAnother }: SanctuaryProps) {
-  const [messages, setMessages] = useState<any[]>([]);
-  const [newMessage, setNewMessage] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
-  const [showGuardrail, setShowGuardrail] = useState(true);
-  const [showAvatarMenu, setShowAvatarMenu] = useState(false);
-  const [dependencyWarning, setDependencyWarning] = useState<string | null>(null);
-  const t_s = useT();
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const socket = useSocket();
+/** Closing really unmounts the call, even when the desktop keeps this lazy surface loaded. */
+export function Sanctuary(props: SanctuaryProps) {
   const { user } = useApp();
-  // The desktop shell owns the active language; useT remains a fallback for
-  // standalone renders so a lazy-loaded Sanctuary cannot briefly fall back to
-  // English during a shell locale transition.
-  const isZh = (lang || t_s.langCode || 'zh') !== 'en';
-  const locale = isZh ? 'zh' : 'en';
-  // Bind lazy-loaded sanctuary labels to the shell locale.  The old calls
-  // relied on uiMessage's global default, which can still be English during
-  // the render immediately after switching the desktop language.
-  const message = useCallback(
-    (key: Parameters<typeof uiMessage>[0]) => uiMessage(key, locale),
-    [locale],
-  );
-  const memoryCopy = memoryAvatarCopy(isZh ? 'zh' : 'en');
+  const fallbackLocale = useLocale();
+  const ownerId = String(user?.uid || '');
+  if (!props.isOpen || !props.agent || !ownerId) return null;
+  return <MemoryTerritory key={JSON.stringify([ownerId, props.agent.id])} {...props} agent={props.agent} ownerId={ownerId} locale={props.lang || fallbackLocale} />;
+}
 
-  const relationshipType = agent?.relationshipType || '';
-  const meta = RELATIONSHIP_META[relationshipType] || DEFAULT_META;
-  const relationshipLabel = memoryCopy.relationships[relationshipType as keyof typeof memoryCopy.relationships]?.label || memoryCopy.memoryLabel;
-  const agentId = agent?.id || '';
-  // Prefer the explicitly selected locale for all generated/fallback labels.
-  // `useT()` can still contain the previous shell locale for one lazy render.
-  const agentName = agent?.name || memoryCopy.memoryLabel;
-  const activeRequestIdRef = useRef<string | null>(null);
-  const safetyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+function MemoryTerritory({ agent, ownerId, locale, avatars = [], onClose, onSelectAvatar, onCreateAnother, onAvatarUpdated, onAvatarArchived }: SanctuaryProps & { agent: SanctuaryAgent; ownerId: string; locale: 'zh' | 'en' }) {
+  const copy = memoryTerritoryCopy(locale);
+  const relationshipCopy = memoryAvatarCopy(locale);
+  const socket = useSocket();
+  const [avatar, setAvatar] = useState(() => asRecord(agent));
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [preview, setPreview] = useState<MemoryAvatarAppearance | null>(null);
+  const [draft, setDraft] = useState('');
+  const [startingCall, setStartingCall] = useState(false);
+  const [startError, setStartError] = useState('');
+  const startBusy = useRef(false);
+  const startGeneration = useRef(0);
+  const mounted = useRef(true);
+  const transcriptEnd = useRef<HTMLDivElement>(null);
+  const cameraPreview = useRef<HTMLVideoElement>(null);
+  const conversation = useMemoryAvatarConversation({ socket, avatarId: avatar.id, ownerId, locale });
+  const call = useMemoryAvatarCall({ socket, avatarId: avatar.id, ownerId, voiceId: avatar.voice.voiceId, enabled: true,
+    onTranscript: conversation.appendVoiceTranscript, onResponse: conversation.appendVoiceResponse });
+  const callActive = call.state !== 'idle' || startingCall;
+  const relationship = relationshipCopy.relationships[avatar.relationshipType as keyof typeof relationshipCopy.relationships]?.label || relationshipCopy.memoryLabel;
+  const people = avatars.some(person => person.id === avatar.id) ? avatars : [avatar, ...avatars];
+  const canStartCall = !callActive && !conversation.busy && Boolean(socket?.connected);
+  const canSend = !callActive && !conversation.busy && !conversation.loading && Boolean(draft.trim());
+  const stateLabel = call.state === 'idle' ? (startingCall ? copy.connecting : conversation.busy ? copy.thinking : copy.ready)
+    : call.state === 'queued' ? copy.waiting : copy[call.state];
+  const errorCode = 'errorCode' in call ? String(call.errorCode || '') : '';
+  const callError = !call.error ? startError : errorCode === 'CAMERA_UNAVAILABLE' ? copy.cameraUnavailable
+    : errorCode === 'AVATAR_UNAVAILABLE' ? copy.avatarUnavailable
+    : errorCode === 'STT_UNAVAILABLE' || errorCode === 'STT_FAILED' || errorCode === 'STRICT_VOICE_UNAVAILABLE' ? copy.speechInputUnavailable
+    : errorCode === 'TTS_OUTPUT_UNAVAILABLE' ? copy.voiceOutputUnavailable
+    : errorCode === 'PERSISTENCE_UNKNOWN' ? copy.callSaveFailed
+    : errorCode === 'VOICE_INPUT_UNAVAILABLE' ? copy.voiceInputUnavailable : copy.callUnavailable;
 
-  const clearActiveRequest = useCallback(() => {
-    if (safetyTimerRef.current) {
-      clearTimeout(safetyTimerRef.current);
-      safetyTimerRef.current = null;
-    }
-    activeRequestIdRef.current = null;
-    streamingMsgId.current = null;
-    streamingRawText.current = '';
-  }, []);
-
-  const eventBelongsToAvatar = useCallback((data?: {
-    agentId?: string;
-    requestId?: string;
-  }) => {
-    const eventAgentId = String(data?.agentId || '').trim();
-    if (eventAgentId && eventAgentId !== agentId) return false;
-    const expectedRequestId = activeRequestIdRef.current;
-    if (!expectedRequestId) return false;
-    const eventRequestId = String(data?.requestId || '').trim();
-    // Request IDs are the primary fence.  The agent ID fallback keeps the
-    // client compatible with older server frames that did not echo a request
-    // ID, while still rejecting frames belonging to another avatar.
-    return eventRequestId === expectedRequestId
-      || (!eventRequestId && eventAgentId === agentId);
-  }, [agentId]);
-
-  // Load existing messages for this agent
+  useEffect(() => { setAvatar(asRecord(agent)); }, [agent]);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
-    // Switching avatars must never leave the previous avatar's transcript on
-    // screen while the new history is loading.
-    setMessages([]);
-    setIsTyping(false);
-    setDependencyWarning(null);
-    setShowAvatarMenu(false);
-    clearActiveRequest();
-    if (!agentId || !user) return undefined;
-    let cancelled = false;
-    fetch(`/api/memory-avatars/${agentId}/history`, { credentials: 'include' })
-      .then(r => r.json())
-      .then(data => {
-        if (!cancelled && Array.isArray(data)) {
-          const history = data.map((m: any, idx: number) => ({
-            id: `hist-${idx}`,
-            text: m.role === 'assistant'
-              ? sanitizeAgentResponseTextForDisplay(m.content || m.message || '', locale)
-              : (m.content || m.message || ''),
-            userName: m.role === 'assistant' ? agentName : (user.displayName || user.username || memoryCopy.youLabel),
-            timestamp: m.timestamp || new Date().toISOString(),
-            type: m.role === 'assistant' ? 'agent' : 'user',
-          }));
-          setMessages(history);
-        }
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [agentId, user, agentName, memoryCopy.youLabel, clearActiveRequest, locale]);
-
-  // Socket listeners
-  const streamingMsgId = useRef<string | null>(null);
-  const streamingRawText = useRef('');
-
+    transcriptEnd.current?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+  }, [conversation.messages]);
   useEffect(() => {
-    if (!socket) return;
+    const video = cameraPreview.current;
+    if (!video || !call.cameraStream) return;
+    video.srcObject = call.cameraStream;
+    void video.play().catch(() => {});
+    return () => { video.pause(); video.srcObject = null; };
+  }, [call.cameraStream]);
 
-    const onChunk = (data: { text: string; agentName: string; agentId?: string; requestId?: string }) => {
-      if (!eventBelongsToAvatar(data)) return;
-      streamingRawText.current += data.text;
-      const publicText = sanitizeAgentStreamingTextForDisplay(streamingRawText.current, locale);
-      if (!publicText) return;
-      if (streamingMsgId.current) {
-        setMessages(prev => prev.map(m =>
-          m.id === streamingMsgId.current ? { ...m, text: publicText } : m
-        ));
-      } else {
-        const id = Date.now().toString();
-        streamingMsgId.current = id;
-        setMessages(prev => [...prev, { id, text: publicText, userName: data.agentName, timestamp: new Date().toISOString(), type: 'agent' }]);
-      }
-    };
+  const updateAvatar = useCallback((next: MemoryAvatar) => { setAvatar(next); setPreview(null); onAvatarUpdated?.(next); }, [onAvatarUpdated]);
+  const closeProfile = () => { setProfileOpen(false); setPreview(null); };
+  const endVoice = call.end;
+  const endCall = useCallback(() => {
+    startGeneration.current++; startBusy.current = false; setStartingCall(false); endVoice();
+  }, [endVoice]);
+  const leave = () => { endCall(); onClose(); };
+  const selectAvatar = (id: string) => { if (id !== avatar.id) { endCall(); onSelectAvatar?.(id); } };
+  const createAnother = () => { endCall(); onCreateAnother?.(); };
+  const archive = (id: string) => { endCall(); if (onAvatarArchived) onAvatarArchived(id); else onClose(); };
+  const startCall = (video: boolean) => {
+    if (!canStartCall || startBusy.current) return;
+    const current = ++startGeneration.current;
+    startBusy.current = true; setStartingCall(true); setStartError('');
+    const operation = video ? call.startVideo() : call.startVoice();
+    void Promise.resolve(operation).catch(() => { if (mounted.current && current === startGeneration.current) setStartError(copy.callUnavailable); })
+      .finally(() => { if (current === startGeneration.current) { startBusy.current = false; if (mounted.current) setStartingCall(false); } });
+  };
+  const send = (event?: React.FormEvent) => {
+    event?.preventDefault();
+    if (!canSend) return;
+    if (conversation.send(draft)) setDraft('');
+  };
+  const controlClass = 'inline-flex h-10 items-center justify-center gap-2 rounded-full px-4 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-35';
 
-    const onResponse = (data: AgentResponseDelivery & { agentName?: string; agentId?: string; requestId?: string }) => {
-      if (!eventBelongsToAvatar(data)) return;
-      if (safetyTimerRef.current) {
-        clearTimeout(safetyTimerRef.current);
-        safetyTimerRef.current = null;
-      }
-      setIsTyping(false);
-      activeRequestIdRef.current = null;
-      if (!shouldDisplayAgentResponse(data)) {
-        if (streamingMsgId.current) {
-          const streamingId = streamingMsgId.current;
-          setMessages(prev => prev.filter(m => m.id !== streamingId));
-          streamingMsgId.current = null;
-        }
-        streamingRawText.current = '';
-        return;
-      }
-      const publicText = sanitizeAgentResponseTextForDisplay(data.text, locale);
-      if (!publicText) {
-        streamingRawText.current = '';
-        return;
-      }
-      if (streamingMsgId.current) {
-        setMessages(prev => prev.map(m =>
-          m.id === streamingMsgId.current ? { ...m, text: publicText } : m
-        ));
-        streamingMsgId.current = null;
-      } else {
-        setMessages(prev => [...prev, { id: Date.now().toString(), text: publicText, userName: data.agentName || agentName, timestamp: new Date().toISOString(), type: 'agent' }]);
-      }
-      streamingRawText.current = '';
-    };
+  return <div role="dialog" aria-modal="true" aria-label={copy.title} className="fixed inset-0 z-[210] flex min-h-0 flex-col overflow-hidden bg-[#14191b] text-[#e4e7df]">
+    <header className="flex h-16 shrink-0 items-center gap-3 border-b border-white/[.07] px-4 sm:h-[72px] sm:px-6">
+      <button type="button" onClick={leave} aria-label={copy.leave} title={copy.leave} className="flex shrink-0 items-center gap-2 rounded-lg py-2 pr-2 text-sm text-[#b7bdb5] hover:text-white"><ArrowLeft size={19} /><span className="hidden sm:inline">{copy.leave}</span></button>
+      <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium tracking-wide text-[#e5ddcb]">{copy.title}</p><p className="mt-0.5 hidden truncate text-[11px] text-[#8e9990] sm:block">{copy.subtitle}</p></div>
+      <button type="button" onClick={() => profileOpen ? closeProfile() : setProfileOpen(true)} aria-pressed={profileOpen} aria-label={profileOpen ? copy.conversation : copy.profile} title={profileOpen ? copy.conversation : copy.profile} className="flex shrink-0 items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs text-[#d4d8ce] hover:bg-white/5">{profileOpen ? <MessageCircle size={16} /> : <Settings2 size={16} />}<span className="hidden min-[420px]:inline">{profileOpen ? copy.conversation : copy.profile}</span></button>
+      {onCreateAnother && <button type="button" onClick={createAnother} aria-label={copy.create} title={copy.create} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-[#d4c5a8] px-3 py-2 text-xs font-semibold text-[#242b26]"><Plus size={16} /><span className="hidden min-[420px]:inline">{copy.create}</span></button>}
+    </header>
 
-    const onStatus = (data: { status: string; agentId?: string; requestId?: string }) => {
-      if (!eventBelongsToAvatar(data)) return;
-      if (data.status === 'thinking' || data.status === 'responding') {
-        setIsTyping(true);
-      } else if (isTerminalAgentStatus(data.status)) {
-        if (safetyTimerRef.current) {
-          clearTimeout(safetyTimerRef.current);
-          safetyTimerRef.current = null;
-        }
-        setIsTyping(false);
-        if (streamingMsgId.current) {
-          const streamingId = streamingMsgId.current;
-          setMessages(prev => prev.filter(m => m.id !== streamingId));
-        }
-        streamingMsgId.current = null;
-        streamingRawText.current = '';
-        activeRequestIdRef.current = null;
-      }
-    };
+    <div className="flex min-h-0 flex-1">
+      <aside aria-label={copy.people} className="hidden w-48 shrink-0 flex-col border-r border-white/[.07] bg-[#171d1e] lg:flex">
+        <div className="px-5 pb-3 pt-6 text-[11px] tracking-wide text-[#8d9a90]">{copy.people}</div>
+        <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-6">{people.map(person => <button type="button" key={person.id} onClick={() => selectAvatar(person.id)} aria-current={person.id === avatar.id ? 'page' : undefined} className={`mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors ${person.id === avatar.id ? 'bg-[#c5baa2]/10 text-[#e2d8c3]' : 'text-[#a7b1a7] hover:bg-white/[.035]'}`}>
+          <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm ${person.id === avatar.id ? 'bg-[#d4c5a8]/15' : 'bg-white/[.04]'}`}>{person.name.trim().slice(0, 1) || <UserRound size={16} />}</span>
+          <span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium">{person.id === avatar.id ? avatar.name : person.name}</span><span className="mt-1 block truncate text-[10px] text-[#8b998d]">{relationshipCopy.relationships[(person.relationshipType || 'close_friend') as keyof typeof relationshipCopy.relationships]?.label || relationshipCopy.memoryLabel}</span></span>
+          {person.id === avatar.id && <Check size={12} className="shrink-0 text-[#a7b69c]" />}
+        </button>)}</nav>
+        <p className="border-t border-white/[.05] px-5 py-5 text-[10px] leading-5 text-[#77847b]">{copy.private}</p>
+      </aside>
 
-    const onError = (data: { message: string; agentId?: string; requestId?: string }) => {
-      if (!eventBelongsToAvatar(data)) return;
-      if (safetyTimerRef.current) {
-        clearTimeout(safetyTimerRef.current);
-        safetyTimerRef.current = null;
-      }
-      setIsTyping(false);
-      streamingMsgId.current = null;
-      streamingRawText.current = '';
-      setMessages(prev => [...prev, {
-        id: `error-${Date.now()}`,
-        text: sanitizeAgentResponseTextForDisplay(data.message, locale),
-        userName: agentName,
-        timestamp: new Date().toISOString(),
-        type: 'error',
-      }]);
-      activeRequestIdRef.current = null;
-    };
-
-    socket.on('agent:chunk', onChunk);
-    socket.on('agent:response', onResponse);
-    socket.on('agent:status', onStatus);
-    socket.on('agent:error', onError);
-
-    return () => {
-      socket.off('agent:chunk', onChunk);
-      socket.off('agent:response', onResponse);
-      socket.off('agent:status', onStatus);
-      socket.off('agent:error', onError);
-    };
-  }, [socket, agentName, eventBelongsToAvatar, locale]);
-
-  useEffect(() => () => clearActiveRequest(), [clearActiveRequest]);
-
-  // Auto-scroll
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages]);
-
-  // Clear dependency warning after 10s
-  useEffect(() => {
-    if (!dependencyWarning) return;
-    const t = setTimeout(() => setDependencyWarning(null), 10000);
-    return () => clearTimeout(t);
-  }, [dependencyWarning]);
-
-  const handleSend = useCallback((e: React.FormEvent) => {
-    e.preventDefault();
-    const text = newMessage.trim();
-    if (!text || !socket?.connected) return;
-
-    const userMsg = {
-      id: Date.now().toString(),
-      text,
-      userName: user?.displayName || user?.username || memoryCopy.youLabel,
-      timestamp: new Date().toISOString(),
-      type: 'user',
-    };
-    setMessages(prev => [...prev, userMsg]);
-    setNewMessage('');
-    setIsTyping(true);
-
-    // Check for dependency signals
-    const dep = checkDependencySignals(text);
-    if (dep.detected && dep.level === 'high') {
-      setDependencyWarning(message('sanctuary.a-gentle-lumi-reminder-this.68e34eba16'));
-    }
-
-    const requestId = `memory_avatar_${agentId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    activeRequestIdRef.current = requestId;
-    if (safetyTimerRef.current) clearTimeout(safetyTimerRef.current);
-    // Safety timeout
-    safetyTimerRef.current = setTimeout(() => {
-      if (activeRequestIdRef.current !== requestId) return;
-      setIsTyping(false);
-      streamingMsgId.current = null;
-      streamingRawText.current = '';
-      activeRequestIdRef.current = null;
-      safetyTimerRef.current = null;
-    }, 45000);
-
-    socket.emit('agent:chat', {
-      text,
-      history: messages.map(m => ({
-        role: m.type === 'agent' ? 'assistant' : 'user',
-        content: m.type === 'agent'
-          ? sanitizeAgentResponseTextForDisplay(m.text, locale)
-          : m.text,
-      })),
-      personalityId: 'lumi',
-      agentId,
-      requestId,
-      source: 'memory-avatar',
-      domain: 'personal',
-      orgId: null,
-    }, (ack?: { ok?: boolean; error?: string }) => {
-      if (ack?.ok !== false || activeRequestIdRef.current !== requestId) return;
-      clearActiveRequest();
-      setIsTyping(false);
-      setMessages(prev => [...prev, {
-        id: `error-${Date.now()}`,
-        text: ack.error || message('sanctuary.request-unavailable.9d1c4a7e20'),
-        userName: agentName,
-        timestamp: new Date().toISOString(),
-        type: 'error',
-      }]);
-    });
-  }, [newMessage, socket, messages, user, agentId, agentName, memoryCopy.youLabel, clearActiveRequest, locale, message]);
-
-  if (!agent) return null;
-
-  return (
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.5 }}
-          className="fixed inset-0 z-[220] flex flex-col"
-          style={{
-            background: `linear-gradient(to bottom, ${meta.bg.split(' ')[0].replace('from-', '') === 'amber-950/60' ? '#1a1208' : meta.bg.includes('emerald') ? '#0a1610' : meta.bg.includes('rose') ? '#1a0d10' : meta.bg.includes('blue') ? '#08101a' : meta.bg.includes('violet') ? '#0f0a1a' : '#0f0a1a'}, #05050a)`,
-          }}
-        >
-          {/* Ambient particles / subtle glow */}
-          <div className="absolute inset-0 pointer-events-none overflow-hidden">
-            <div className={`absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[600px] rounded-full blur-[120px] opacity-10 ${meta.color.replace('text-', 'bg-')}`} />
-            {[...Array(12)].map((_, i) => (
-              <motion.div
-                key={i}
-                className={`absolute w-1 h-1 rounded-full ${meta.color.replace('text-', 'bg-')}/60`}
-                style={{ left: `${10 + Math.random() * 80}%`, top: `${10 + Math.random() * 80}%` }}
-                animate={{ opacity: [0, 0.6, 0], scale: [0, 1, 0] }}
-                transition={{ duration: 2 + Math.random() * 3, repeat: Infinity, delay: Math.random() * 4 }}
-              />
-            ))}
-          </div>
-
-          {/* Header */}
-          <div className="relative z-10 flex items-center justify-between px-6 py-4 border-b border-white/5 flex-shrink-0">
-            <button
-              onClick={onClose}
-              className="flex items-center gap-2 px-4 py-2 bg-white/5 border border-white/10 rounded-xl text-white/40 hover:text-white hover:border-white/20 transition-all text-xs font-bold"
-            >
-              <ArrowLeft size={14} />
-              {message('sanctuary.leave-sanctuary.52b6dd4924')}
-            </button>
-
-            <div className="flex items-center gap-3">
-              <div className={`w-8 h-8 rounded-xl bg-gradient-to-br ${meta.color.replace('text-', 'from-')} ${meta.color.replace('text-', 'to-')}/40 flex items-center justify-center border ${meta.border}`}>
-                {meta.icon}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="flex shrink-0 items-center gap-3 border-b border-white/[.06] bg-[#171d1e] px-4 py-3 lg:hidden"><UserRound size={15} className="shrink-0 text-[#c5baa2]" /><label className="relative min-w-0 flex-1"><span className="sr-only">{copy.people}</span><select aria-label={copy.people} value={avatar.id} onChange={event => selectAvatar(event.target.value)} className="w-full appearance-none rounded-lg bg-transparent py-1 pr-6 text-sm outline-none">{people.map(person => <option key={person.id} value={person.id} className="bg-[#1c2224]">{person.id === avatar.id ? avatar.name : person.name}</option>)}</select><ChevronDown size={14} className="pointer-events-none absolute right-0 top-1.5 text-[#95a091]" /></label><span className="text-[10px] text-[#8c988d]">{relationship}</span></div>
+        <main className={`flex min-h-0 min-w-0 flex-1 flex-col ${profileOpen ? 'overflow-hidden' : 'overflow-y-auto'} md:flex-row md:overflow-hidden`}>
+          <section aria-label={avatar.name} className={`relative min-w-0 shrink-0 overflow-hidden ${profileOpen ? 'hidden md:block' : 'block'} h-[min(56vh,500px)] min-h-[380px] bg-[#1c2424] md:h-auto md:min-h-0 md:flex-1`}>
+            <div className="pointer-events-none absolute inset-0" style={{ background: `radial-gradient(ellipse at 50% 33%, ${preview?.backgroundColor || avatar.appearance.backgroundColor}88, #1a2222 80%)` }} />
+            <div className="absolute inset-0 bottom-10"><MemoryAvatarStage appearance={preview || avatar.appearance} outputLevelRef={call.outputLevelRef} state={call.state} name={avatar.name} locale={locale} active /></div>
+            <div className="absolute left-5 right-5 top-5 flex items-start justify-between gap-3 sm:left-7 sm:right-7 sm:top-6">
+              <p role="status" className="flex max-w-[75%] items-start gap-2 text-[11px] leading-5 text-[#b9c3b5]"><span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${callActive ? 'bg-[#b8d3a4]' : 'bg-[#7d9484]'}`} />{stateLabel}</p>
+              {callActive && call.elapsedSeconds > 0 && <span className="font-mono text-[10px] tabular-nums text-[#91a38f]">{Math.floor(call.elapsedSeconds / 60).toString().padStart(2, '0')}:{Math.floor(call.elapsedSeconds % 60).toString().padStart(2, '0')}</span>}
+            </div>
+            {call.cameraStream && <div className="absolute right-4 top-14 w-[104px] overflow-hidden rounded-xl border border-[#d4ddcd]/20 bg-black/40 shadow-xl sm:right-6 sm:w-32"><video ref={cameraPreview} muted autoPlay playsInline aria-label={copy.cameraLocal} className="aspect-[4/3] w-full -scale-x-100 object-cover" /><p className="px-2 py-1 text-center text-[9px] text-[#d4ddcd]">{copy.cameraSharing}</p></div>}
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[55%] bg-gradient-to-t from-[#17201f] via-[#17201f]/80 to-transparent" />
+            <div className="absolute inset-x-0 bottom-0 px-4 pb-5 pt-12 text-center sm:px-6 md:pb-8">
+              <p className="text-[9px] tracking-wide text-[#95a28f]">{copy.digitalLabel}</p>
+              <h2 className="mt-1.5 truncate text-2xl font-medium tracking-tight text-[#e4e3d7] sm:text-3xl">{avatar.name}</h2>
+              <p className="mt-2 text-[11px] text-[#a2af9b]">{relationship}<span className="mx-2 opacity-40">·</span>{copy.memoryCount(avatar.memoryCount)}</p>
+              <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                {!callActive ? <>
+                  <button type="button" onClick={() => startCall(false)} disabled={!canStartCall} className={`${controlClass} bg-[#d4c5a8] text-[#273024] hover:bg-[#e1d4b9]`}><Phone size={15} />{copy.voiceCall}</button>
+                  <button type="button" onClick={() => startCall(true)} disabled={!canStartCall} className={`${controlClass} border border-[#b8c2ab]/20 bg-[#8c9c82]/10 text-[#d4ddca] hover:bg-[#8c9c82]/20`}><Video size={16} />{copy.videoCall}</button>
+                </> : <>
+                  <button type="button" aria-label={call.isMuted ? copy.unmute : copy.mute} title={call.isMuted ? copy.unmute : copy.mute} aria-pressed={call.isMuted} onClick={call.toggleMute} className={`${controlClass} w-10 !px-0 ${call.isMuted ? 'bg-[#c5baa2]/25' : 'bg-[#b4c4a3]/10'} text-[#d2dcc7]`}>{call.isMuted ? <MicOff size={17} /> : <Mic size={17} />}</button>
+                  <button type="button" aria-label={call.isCameraOn ? copy.cameraOff : copy.cameraOn} title={call.isCameraOn ? copy.cameraOff : copy.cameraOn} aria-pressed={call.isCameraOn} onClick={call.toggleCamera} className={`${controlClass} w-10 !px-0 ${call.isCameraOn ? 'bg-[#c5baa2]/25' : 'bg-[#b4c4a3]/10'} text-[#d2dcc7]`}>{call.isCameraOn ? <Camera size={17} /> : <CameraOff size={17} />}</button>
+                  <button type="button" onClick={endCall} className={`${controlClass} bg-[#8e5e51] text-[#f3e4db] hover:bg-[#9d6e60]`}><PhoneOff size={16} />{copy.endCall}</button>
+                  {(call.state === 'speaking' || call.state === 'thinking' || call.state === 'queued') && <button type="button" onClick={call.interrupt} aria-label={copy.interrupt} title={copy.interrupt} className={`${controlClass} w-10 !px-0 bg-[#b4c4a3]/10 text-[#d2dcc7]`}><Square size={12} /></button>}
+                </>}
               </div>
-              <div className="text-center">
-                <h2 className="text-sm font-black text-white/80 tracking-tight">{agentName}</h2>
-                <div className="flex items-center gap-2">
-                  <span className={`text-[12px] font-bold uppercase tracking-wider ${meta.color}`}>{relationshipLabel}</span>
-                  <span className="text-xs text-white/40 font-mono">{message('sanctuary.sanctuary.d94722bbd1')}</span>
-                </div>
+              {callError && <p role="alert" className="mx-auto mt-3 max-w-sm text-[11px] leading-5 text-[#dfbfa4]">{callError}</p>}
+            </div>
+          </section>
+
+          <aside className={`${profileOpen ? 'h-full min-h-0' : 'min-h-[320px] flex-1'} flex w-full shrink-0 flex-col border-t border-white/[.07] bg-[#1c2224] md:h-full md:min-h-0 md:w-[330px] md:flex-none md:border-l md:border-t-0`}>
+            {profileOpen ? <MemoryAvatarProfile avatar={avatar} ownerId={ownerId} locale={locale} onUpdated={updateAvatar} onArchived={archive} onClose={closeProfile} onBeforeMutation={endCall} onPreviewAppearance={setPreview} /> : <>
+              <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/[.05] px-5"><h3 className="text-xs font-medium text-[#cbd0c4]">{copy.conversation}</h3><button type="button" aria-label={copy.profile} title={copy.profile} onClick={() => setProfileOpen(true)} className="rounded-lg p-2 text-[#8c9b8c] hover:bg-white/5"><Settings2 size={15} /></button></div>
+              <div aria-live="polite" aria-relevant="additions text" className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5">
+                {conversation.loading && <p className="flex items-center gap-2 text-xs text-[#8e9d8b]"><Loader2 size={13} className="animate-spin" />{copy.connecting}</p>}
+                {!conversation.loading && !conversation.error && conversation.messages.length === 0 && <p className="py-7 text-center text-xs leading-6 text-[#889888]">{copy.noMessages}</p>}
+                {conversation.messages.map(message => <article key={message.id} className={message.role === 'user' ? 'ml-5' : 'mr-2'}><p className="mb-1.5 text-[10px] text-[#90a08b]">{message.role === 'user' ? copy.you : avatar.name}</p><p className={`whitespace-pre-wrap break-words text-[13px] leading-6 ${message.role === 'user' ? 'rounded-2xl rounded-tr-sm bg-[#b6c4a4]/[.07] px-3 py-2 text-[#c7d0bc]' : 'text-[#d6dccd]'}`}>{message.text}{message.pending && <span className="ml-1 inline-block h-3 w-0.5 animate-pulse bg-[#c5baa2]" />}</p></article>)}
+                {conversation.error && <div role="alert" className="text-xs leading-6 text-[#ddc4a3]">{conversation.error}<button type="button" onClick={() => void conversation.refresh()} className="ml-2 underline underline-offset-2">{copy.retry}</button></div>}
+                <div ref={transcriptEnd} />
               </div>
-            </div>
-
-            <div className="relative flex min-w-[100px] items-center justify-end gap-2">
-              {onSelectAvatar && avatars.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => setShowAvatarMenu(value => !value)}
-                  className="flex h-9 items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-2.5 text-white/55 transition-colors hover:border-fuchsia-300/25 hover:bg-fuchsia-300/10 hover:text-white"
-                  title={message('memory-avatar.switch-avatar.2c6f8a1d04')}
-                  aria-label={message('memory-avatar.switch-avatar.2c6f8a1d04')}
-                  aria-expanded={showAvatarMenu}
-                >
-                  <Users size={14} />
-                  <ChevronDown size={12} className={`transition-transform ${showAvatarMenu ? 'rotate-180' : ''}`} />
-                </button>
-              )}
-              {onCreateAnother && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowAvatarMenu(false);
-                    onCreateAnother();
-                  }}
-                  className="flex h-9 w-9 items-center justify-center rounded-xl border border-fuchsia-300/20 bg-fuchsia-300/10 text-fuchsia-100/75 transition-colors hover:border-fuchsia-200/35 hover:bg-fuchsia-300/20 hover:text-white"
-                  title={message('memory-avatar-lab.create-another.e1f98b1538')}
-                  aria-label={message('memory-avatar-lab.create-another.e1f98b1538')}
-                >
-                  <Plus size={15} />
-                </button>
-              )}
-              {showAvatarMenu && onSelectAvatar && avatars.length > 1 && (
-                <div className="absolute right-0 top-11 z-40 w-64 overflow-hidden rounded-2xl border border-fuchsia-300/15 bg-[#090b12]/98 p-1.5 shadow-2xl shadow-black/50 backdrop-blur-2xl">
-                  <div className="px-2.5 py-2 text-[10px] font-black uppercase tracking-[0.16em] text-white/40">
-                    {message('memory-avatar.switch-avatar.2c6f8a1d04')}
-                  </div>
-                  {avatars.map(option => {
-                    const optionMeta = RELATIONSHIP_META[option.relationshipType || ''] || DEFAULT_META;
-                    const selected = option.id === agentId;
-                    return (
-                      <button
-                        key={option.id}
-                        type="button"
-                        onClick={() => {
-                          setShowAvatarMenu(false);
-                          onSelectAvatar(option.id);
-                        }}
-                        className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition-colors ${selected ? 'bg-fuchsia-300/12 text-white' : 'text-white/60 hover:bg-white/[0.06] hover:text-white'}`}
-                      >
-                        <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border ${optionMeta.border} bg-white/[0.04] ${optionMeta.color}`}>
-                          {optionMeta.icon}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate text-xs font-semibold">{option.name}</span>
-                        {selected && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-fuchsia-300" />}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Guardrail notice */}
-          <AnimatePresence>
-            {showGuardrail && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-                className="relative z-10 px-6"
-              >
-                <div className="max-w-2xl mx-auto p-4 bg-amber-500/5 border border-amber-500/15 rounded-2xl flex items-start gap-3">
-                  <AlertTriangle size={16} className="text-amber-400/60 mt-0.5 flex-shrink-0" />
-                  <div className="flex-1">
-                    <p className="text-xs text-amber-300/70 leading-relaxed">
-                      {message('sanctuary.this-is-a-simulation-distilled.86cae03071')}
-                    </p>
-                    <div className="flex items-center gap-3 mt-2 text-[12px] text-white/45 font-mono">
-                      <span>{message('sanctuary.evidence.00759cc2ae')}<span className="text-emerald-400/60">{message('sanctuary.quote.fcb6e37e05')}</span>/<span className="text-blue-400/60">{message('sanctuary.fact.0dfbbdcfc8')}</span>/<span className="text-amber-400/60">{message('sanctuary.inferred.9b6e0e37e2')}</span></span>
-                      {agent.isFrozen !== false && <span>{message('sanctuary.evolution-frozen.d66cdb416b')}</span>}
-                      <span>{message('sanctuary.tools-disabled.4e1aaa0eb6')}</span>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => setShowGuardrail(false)}
-                    className="text-white/40 hover:text-white/40 transition-colors text-xs font-bold uppercase tracking-wider flex-shrink-0 mt-0.5"
-                  >
-                    {message('sanctuary.got-it.83aa55c237')}
-                  </button>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Dependency warning toast */}
-          <AnimatePresence>
-            {dependencyWarning && (
-              <motion.div
-                initial={{ opacity: 0, y: -10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                className="relative z-10 px-6"
-              >
-                <div className="max-w-2xl mx-auto p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-xs text-rose-300/70 flex items-center gap-2">
-                  <AlertTriangle size={12} />
-                  {dependencyWarning}
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Messages */}
-          <div
-            ref={scrollRef}
-            className="relative z-10 flex-1 overflow-y-auto custom-scrollbar px-6 py-4"
-          >
-            <div className="max-w-3xl mx-auto space-y-4">
-              {messages.length === 0 && !isTyping && (
-                <div className="h-full flex flex-col items-center justify-center text-center py-20 space-y-4 opacity-30">
-                  <Castle size={48} className={meta.color.replace('text-', 'text-')} />
-                  <div>
-                  <p className="text-sm font-medium text-white/60">{formatUiMessage('sanctuary.this-is-value0-s-sanctuary.b6612d3d3e', { value0: agentName }, locale)}</p>
-                    <p className="text-xs text-white/45 mt-1">{message('sanctuary.they-are-here-and-only.b927165289')}</p>
-                  </div>
-                </div>
-              )}
-
-              <AnimatePresence initial={false}>
-                {messages.map(msg => (
-                  <motion.div
-                    key={msg.id}
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className={`flex flex-col ${msg.type === 'agent' ? 'items-start' : 'items-end'}`}
-                  >
-                    <div className={`relative max-w-[80%] px-5 py-3 rounded-2xl text-sm leading-relaxed ${
-                      msg.type === 'agent'
-                        ? `${meta.color.replace('text-', 'bg-')}/10 ${meta.color.replace('text-', 'text-')}/80 border ${meta.border} rounded-tl-sm`
-                        : 'bg-white/5 text-white/70 border border-white/10 rounded-tr-sm'
-                    }`}>
-                      <span className="whitespace-pre-wrap">
-                        {msg.type === 'agent' || msg.type === 'error'
-                          ? sanitizeAgentResponseTextForDisplay(msg.text, locale)
-                          : msg.text}
-                      </span>
-                    </div>
-                    <span className="text-xs uppercase tracking-wider opacity-20 mt-1.5 px-2 font-mono">
-                      {msg.userName} · {new Date(msg.timestamp).toLocaleTimeString(isZh ? 'zh-CN' : undefined, { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-
-              {isTyping && (
-                <div className="flex items-center gap-2 px-2">
-                  <div className="flex gap-1">
-                    {[...Array(3)].map((_, i) => (
-                      <motion.div
-                        key={i}
-                        animate={{ scale: [1, 1.4, 1], opacity: [0.2, 0.7, 0.2] }}
-                        transition={{ duration: 0.8, repeat: Infinity, delay: i * 0.15 }}
-                        className={`w-1.5 h-1.5 rounded-full ${meta.color.replace('text-', 'bg-')}`}
-                      />
-                    ))}
-                  </div>
-                  <span className="text-[12px] text-white/40 font-mono">{message('sanctuary.thinking.0bd67fc167')}</span>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Input */}
-          <div className="relative z-10 px-6 py-4 border-t border-white/5">
-            <form onSubmit={handleSend} className="max-w-3xl mx-auto flex gap-3">
-              <input
-                value={newMessage}
-                onChange={e => setNewMessage(e.target.value)}
-                placeholder={formatUiMessage('sanctuary.say-something-to-value0.6793beb5ca', { value0: agentName }, locale)}
-                className="flex-1 bg-white/5 border border-white/10 rounded-2xl px-5 py-3.5 text-sm text-white/80 placeholder:text-white/40 focus:outline-none focus:border-fuchsia-500/20 transition-colors"
-                autoFocus
-              />
-              <button
-                type="submit"
-                disabled={isTyping || !newMessage.trim()}
-                className={`px-5 py-3 rounded-2xl font-bold text-xs transition-all disabled:opacity-30 disabled:hover:scale-100 ${meta.color.replace('text-', 'bg-')}/20 border ${meta.border} ${meta.color} hover:scale-105`}
-              >
-                {isTyping ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-              </button>
-            </form>
-            <div className="max-w-3xl mx-auto mt-2 text-center">
-              <span className="text-xs text-white/35 font-mono">{message('sanctuary.esc-leave-sanctuary-no-tools.7937ac5393')}</span>
-            </div>
-          </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
-  );
+              <form onSubmit={send} className="shrink-0 border-t border-white/[.06] p-4">
+                <div className="rounded-2xl border border-[#becbb0]/10 bg-[#151c1d] p-3"><textarea aria-label={copy.textPlaceholder} placeholder={copy.textPlaceholder} value={draft} maxLength={20000} rows={2} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); send(); } }} className="w-full resize-none bg-transparent text-[13px] leading-6 text-[#d3dcc8] outline-none placeholder:text-[#6f806e]" /><div className="mt-1 flex items-center justify-end gap-2">{conversation.busy && !callActive && <button type="button" onClick={conversation.interrupt} aria-label={copy.interrupt} title={copy.interrupt} className="rounded-lg p-2 text-[#b9c7ae] hover:bg-white/5"><Square size={12} /></button>}<button type="submit" disabled={!canSend} aria-label={copy.send} title={copy.send} className="rounded-xl bg-[#c5baa2]/20 p-2 text-[#dfd5bd] transition-colors hover:bg-[#c5baa2]/30 disabled:opacity-30"><Send size={16} /></button></div></div>
+              </form>
+            </>}
+          </aside>
+        </main>
+      </div>
+    </div>
+  </div>;
 }

@@ -449,10 +449,10 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
   },
   {
     id: 'workspace.memory_avatar',
-    label: 'Memory Avatar sanctuary',
+    label: 'Memory Territory',
     kind: 'workspace',
     actions: ['open_memory_avatar', 'close_client_surface(memory-avatar)'],
-    notes: 'A private, tool-free Memory Avatar distilled from user-provided conversation records. It is a frozen personal reflection, not an execution worker or an autonomous task runner.',
+    notes: 'Memory Territory holds private digital people created from a name or supplied records. Owners can add materials, edit appearance and voice, and have text, voice, or video conversations. The companions are tool-free and cannot run autonomous tasks.',
     stateKeys: ['surfaces.memoryAvatarOpen'],
   },
   {
@@ -1163,6 +1163,13 @@ export function normalizeClientActionTarget(value?: string): string {
     sound: 'personalization',
     'memory-avatar': 'memory-avatar',
     'memory-avatars': 'memory-avatar',
+    'memory avatar': 'memory-avatar',
+    'memory avatars': 'memory-avatar',
+    'memory sanctuary': 'memory-avatar',
+    'memory-sanctuary': 'memory-avatar',
+    'memory territory': 'memory-avatar',
+    'memory-territory': 'memory-avatar',
+    '\u8bb0\u5fc6\u9886\u5730': 'memory-avatar', // i18n-allow: Chinese client-surface input alias; not user-visible copy.
     '\u8bb0\u5fc6\u5316\u8eab': 'memory-avatar', // i18n-allow: Chinese client-surface input alias; not user-visible copy.
     '\u8bb0\u5fc6\u5934\u50cf': 'memory-avatar', // i18n-allow: Chinese client-surface input alias; not user-visible copy.
     '\u8bb0\u5fc6\u7a7a\u95f4': 'memory-avatar', // i18n-allow: Chinese client-surface input alias; not user-visible copy.
@@ -1421,7 +1428,7 @@ export function getClientActionExpectation(args: Record<string, any> = {}): Clie
       setSurface('personalization', 'personalization voice');
       break;
     case 'open_memory_avatar':
-      setSurface('memory-avatar', 'memory avatar');
+      setSurface('memory-avatar', 'Memory Territory');
       break;
     case 'open_skills':
       setSurface('skills', 'skills');

@@ -107,6 +107,7 @@ import {
 } from '@/services/systemService';
 import { usePlatform } from '@/hooks/usePlatform';
 import { apiFetch } from '@/services/apiClient';
+import { memoryAvatarService } from '@/services/memoryAvatarService';
 import {
   canUseExternalCapabilitiesForSurface,
   createExternalCapabilityExecutionCorrelation,
@@ -1613,6 +1614,20 @@ export function DesktopUI({
   const [sanctuaryLoaded, setSanctuaryLoaded] = useState(false);
   const [sanctuaryAgent, setSanctuaryAgent] = useState<any>(null);
   const [memoryAvatars, setMemoryAvatars] = useState<any[]>([]);
+  const memoryAvatarOwnerScope = useMemo(() => ({ userId: String(user?.uid || '') }), [user?.uid]);
+  const memoryAvatarOwnerRef = useRef(memoryAvatarOwnerScope);
+  const memoryAvatarListOwnerRef = useRef('');
+  const memoryAvatarOpenGenerationRef = useRef(0);
+  memoryAvatarOwnerRef.current = memoryAvatarOwnerScope;
+  const memoryAvatarSurfaceGeneration = memoryAvatarOpenGenerationRef.current;
+  useEffect(() => {
+    memoryAvatarOpenGenerationRef.current++;
+    memoryAvatarListOwnerRef.current = '';
+    setMemoryAvatars([]);
+    setSanctuaryAgent(null);
+    setSanctuaryOpen(false);
+    setMemoryLabOpen(false);
+  }, [user?.uid]);
   const [petReaction, setPetReaction] = useState<{ animation: string; until: number } | null>(null);
   const [activePersonality, setActivePersonality] = useState('lumi');
   const petReactionTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1934,19 +1949,32 @@ export function DesktopUI({
   // avatars, or start another distillation without being trapped on the first
   // one that was created.
   const loadMemoryAvatars = useCallback(async (): Promise<any[]> => {
+    const ownerId = memoryAvatarOwnerScope.userId;
+    if (!ownerId) return [];
     try {
-      const res = await fetch('/api/memory-avatars', { credentials: 'include' });
-      if (res.ok) {
-        const data = await res.json();
-        const avatars = Array.isArray(data?.avatars) ? data.avatars : [];
-        setMemoryAvatars(avatars);
-        return avatars;
-      }
+      const data = await memoryAvatarService.list();
+      if (memoryAvatarOwnerRef.current !== memoryAvatarOwnerScope) return [];
+      memoryAvatarListOwnerRef.current = ownerId;
+      setMemoryAvatars(data.avatars);
+      return data.avatars;
     } catch {}
-    return memoryAvatars;
-  }, [memoryAvatars]);
+    return memoryAvatarOwnerRef.current === memoryAvatarOwnerScope && memoryAvatarListOwnerRef.current === ownerId ? memoryAvatars : [];
+  }, [memoryAvatars, memoryAvatarOwnerScope]);
+
+  const enterCreatedMemoryAvatar = useCallback((avatar: any) => {
+    // Exit animations can keep a closed lab mounted. Its late request must not
+    // reopen a surface that was closed, replaced, or belongs to an old login.
+    if (memoryAvatarOwnerRef.current !== memoryAvatarOwnerScope
+      || memoryAvatarOpenGenerationRef.current !== memoryAvatarSurfaceGeneration) return;
+    setMemoryAvatars(previous => [...previous.filter(existing => existing?.id !== avatar?.id), avatar]);
+    setMemoryLabOpen(false);
+    setSanctuaryAgent(avatar);
+    setSanctuaryLoaded(true);
+    setSanctuaryOpen(true);
+  }, [memoryAvatarOwnerScope, memoryAvatarSurfaceGeneration]);
 
   const openMemoryAvatar = useCallback(async (avatarId?: string, returnTarget?: SurfaceReturnTarget) => {
+    const openGeneration = ++memoryAvatarOpenGenerationRef.current;
     try { sounds.playClick(); } catch {}
     // The right rail invokes this while the Command Center is still open;
     // direct desktop launches use the personal surface.  Avatar switching
@@ -1959,6 +1987,7 @@ export function DesktopUI({
       surfaceReturnTargetRef.current = 'home';
     }
     const avatars = await loadMemoryAvatars();
+    if (openGeneration !== memoryAvatarOpenGenerationRef.current) return;
     const selected = avatarId
       ? avatars.find(avatar => avatar?.id === avatarId)
       : avatars[0];
@@ -1985,6 +2014,7 @@ export function DesktopUI({
   }, [activeTab, chatOpen, loadMemoryAvatars, memoryLabOpen, sanctuaryOpen, setActiveTab]);
 
   const openMemoryAvatarLab = useCallback((returnTarget?: SurfaceReturnTarget) => {
+    memoryAvatarOpenGenerationRef.current++;
     if (returnTarget) {
       surfaceReturnTargetRef.current = returnTarget;
     } else if (!sanctuaryOpen && !memoryLabOpen && !(chatOpen || activeTab === 'command-center')) {
@@ -2001,6 +2031,7 @@ export function DesktopUI({
   }, [activeTab, chatOpen, memoryLabOpen, sanctuaryOpen, setActiveTab]);
 
   const closeMemoryAvatar = useCallback(() => {
+    memoryAvatarOpenGenerationRef.current++;
     setMemoryLabOpen(false);
     setSanctuaryOpen(false);
     setSanctuaryAgent(null);
@@ -6570,6 +6601,16 @@ export function DesktopUI({
             avatars={memoryAvatars}
             onSelectAvatar={(avatarId) => { void openMemoryAvatar(avatarId); }}
             onCreateAnother={openMemoryAvatarLab}
+            onAvatarUpdated={(avatar) => {
+              setMemoryAvatars(previous => previous.map(existing => existing.id === avatar.id ? avatar : existing));
+              setSanctuaryAgent(previous => previous?.id === avatar.id ? avatar : previous);
+            }}
+            onAvatarArchived={(avatarId) => {
+              const remaining = memoryAvatars.filter(avatar => avatar.id !== avatarId);
+              setMemoryAvatars(remaining);
+              setSanctuaryAgent(remaining[0] || null);
+              if (remaining.length === 0) { setSanctuaryOpen(false); setMemoryLabOpen(true); }
+            }}
           />
         </Suspense>
       )}
@@ -6597,16 +6638,7 @@ export function DesktopUI({
               <MemoryAvatarLab
                 t={t}
                 lang={lang}
-                onEnterSanctuary={(avatar: any) => {
-                  setMemoryAvatars(previous => [
-                    ...previous.filter(existing => existing?.id !== avatar?.id),
-                    avatar,
-                  ]);
-                  setMemoryLabOpen(false);
-                  setSanctuaryAgent(avatar);
-                  setSanctuaryLoaded(true);
-                  setSanctuaryOpen(true);
-                }}
+                onEnterSanctuary={enterCreatedMemoryAvatar}
               />
             </Suspense>
           </motion.div>
