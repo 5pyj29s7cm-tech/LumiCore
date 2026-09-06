@@ -244,7 +244,7 @@ function stableValue(value: unknown): unknown {
   ]));
 }
 
-function executionIdempotencyKey(name: string, args: Record<string, any>, context?: ToolContext): string {
+export function executionIdempotencyKey(name: string, args: Record<string, any>, context?: ToolContext): string {
   if (context?.idempotencyKey) return context.idempotencyKey;
   return crypto.createHash('sha256').update(JSON.stringify(stableValue({
     userId: context?.userId || '',

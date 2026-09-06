@@ -23,6 +23,7 @@ import {
 import { downloadPublicMedia, readResponseBytes } from '../media_artifact';
 import { cancelDashScopeTaskBestEffort } from '../dashscope_async_task';
 import { CN_MEDIA_PROGRESS } from '../../regions/packs/cn/media_progress';
+import { validateVideoContainer } from '../video_container';
 
 const OUTPUT_DIR = getGeneratedOutputDir();
 const POLL_DELAY_MS = process.env.NODE_ENV === 'test' ? 0 : 5_000;
@@ -68,43 +69,14 @@ function ensureOutputDir(): string {
   return OUTPUT_DIR;
 }
 
-class InvalidVideoContainerError extends Error {
-  constructor() {
-    super('Generated video bytes are not a valid MP4 or WebM container.');
-    this.name = 'InvalidVideoContainerError';
-  }
-}
-
-function detectVideoContainer(bytes: Buffer): 'mp4' | 'webm' {
-  if (
-    bytes.length >= 8
-    && bytes[0] === 0x1a
-    && bytes[1] === 0x45
-    && bytes[2] === 0xdf
-    && bytes[3] === 0xa3
-  ) return 'webm';
-
-  if (bytes.length >= 12 && bytes.toString('ascii', 4, 8) === 'ftyp') {
-    const declaredSize = bytes.readUInt32BE(0);
-    const regularSizeIsValid = declaredSize === 0
-      || (declaredSize >= 12 && declaredSize <= bytes.length);
-    const extendedSizeIsValid = declaredSize === 1
-      && bytes.length >= 20
-      && bytes.readBigUInt64BE(8) >= 20n
-      && bytes.readBigUInt64BE(8) <= BigInt(bytes.length);
-    if (regularSizeIsValid || extendedSizeIsValid) return 'mp4';
-  }
-
-  throw new InvalidVideoContainerError();
-}
-
 function writeVideoAtomically(
   bytes: Buffer,
   provider: string,
   signal?: AbortSignal,
   onBeforeWrite?: () => void,
 ): string {
-  const extension = detectVideoContainer(bytes);
+  throwIfAborted(signal);
+  const { extension } = validateVideoContainer(bytes);
   throwIfAborted(signal);
   onBeforeWrite?.();
   const outputDir = ensureOutputDir();
@@ -293,6 +265,7 @@ function completedResult(input: {
     success: true,
     verified: true,
     verificationStatus: 'verified',
+    verification: { strategy: 'container_and_video_samples', decoded: false },
     provider: input.provider,
     model: input.model,
     prompt: input.prompt,
@@ -795,14 +768,14 @@ export function registerVideoTools(registry: ToolRegistry): void {
         successStatuses: ['generated'],
         failureStatuses: ['failed', 'timed_out'],
         requiredArtifactCollections: ['artifacts'],
-        successSignals: ['provider completed video generation and Lumi decoded and atomically saved a local MP4 or WebM artifact'],
-        limitations: ['Artifact verification does not by itself prove subjective video quality or prompt fidelity.'],
+        successSignals: ['provider completed video generation and Lumi validated container structure, video tracks, bounded sample references, and atomically saved the artifact'],
+        limitations: ['Container and sample validation does not decode frames or prove subjective video quality or prompt fidelity.'],
       },
     }),
     evidence: capabilityEvidence({
       id: 'media.video.generate',
       operation: 'create',
-      limitations: ['The receipt proves local container validation and persistence, not subjective video quality.'],
+      limitations: ['The receipt proves container/video-sample structure and persistence, not codec decoding or subjective video quality.'],
     }),
   });
 }

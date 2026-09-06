@@ -107,6 +107,8 @@ export function buildMediaArtifactReceipt(
   result: unknown,
   error?: unknown,
 ): MediaArtifactReceipt | undefined {
+  const recoveringImage = toolName === 'get_image_generation_status';
+  if (recoveringImage) toolName = 'generate_image';
   const kind = MEDIA_TOOL_KIND.get(String(toolName || ''));
   if (!kind || error) return undefined;
   const payload = parseResult(result);
@@ -153,7 +155,13 @@ export function buildMediaArtifactReceipt(
   }
   if (artifacts.length === 0) return undefined;
 
-  const parameters = args && typeof args === 'object' ? args as Record<string, unknown> : {};
+  // Status calls carry only an opaque recovery ID. The original settings are
+  // supplied by the server-owned durable task receipt, never by query args.
+  const storedSettings = recoveringImage && payload.generationSettings && typeof payload.generationSettings === 'object'
+    ? payload.generationSettings as Record<string, unknown> : undefined;
+  const parameters: Record<string, unknown> = recoveringImage
+    ? { size: storedSettings?.size, n: storedSettings?.count }
+    : args && typeof args === 'object' ? args as Record<string, unknown> : {};
   const size = String(parameters.size || '').trim().slice(0, 40) || undefined;
   const count = Number(parameters.n);
   const duration = Number(parameters.duration);

@@ -23,6 +23,7 @@ import { getGeneratedOutputDir } from '../../config/data_path';
 import { downloadPublicMedia } from '../media_artifact';
 import { cancelDashScopeTaskBestEffort } from '../dashscope_async_task';
 import { CN_MEDIA_PROGRESS } from '../../regions/packs/cn/media_progress';
+import { assertImageTaskOwner, imageGenerationRecoveryId, prepareImageGenerationTask, readImageGenerationTask, saveImageGenerationTask, type ImageGenerationTask } from '../media_generation_journal';
 
 const OUTPUT_DIR = getGeneratedOutputDir();
 const MAX_GENERATED_IMAGE_BYTES = 25 * 1024 * 1024;
@@ -77,7 +78,14 @@ function providerCompletedError(error: unknown): Error & { imageProviderComplete
 }
 
 function throwIfProviderCompleted(error: unknown): void {
-  if ((error as { imageProviderCompleted?: boolean } | null)?.imageProviderCompleted === true) throw error;
+  const typed = error as { imageProviderCompleted?: boolean; imageAutomaticFallbackBlocked?: boolean } | null;
+  if (typed?.imageProviderCompleted === true || typed?.imageAutomaticFallbackBlocked === true) throw error;
+}
+
+function stopImageAutomaticFallback(error: unknown): Error {
+  const normalized = error instanceof Error ? error : new Error(String(error));
+  (normalized as Error & { imageAutomaticFallbackBlocked?: boolean }).imageAutomaticFallbackBlocked = true;
+  return normalized;
 }
 
 function writeVerifiedImageBytes(
@@ -313,10 +321,24 @@ async function generateImageDalle(args: Record<string, any>, context?: ToolConte
 }
 
 async function generateImageDashScope(
+  args: Record<string, any>, selectedModel: string, signal?: AbortSignal, onProgress?: ImageProgress, context?: ToolContext,
+): Promise<string> {
+  try { return await generateImageDashScopeTask(args, selectedModel, signal, onProgress, context); }
+  catch (error) {
+    // A definite pre-admission HTTP rejection can use the configured fallback.
+    // Persistence, authorization, and ambiguous submission failures fail closed
+    // without claiming that a provider completed work.
+    if ((error as { imageSubmissionRejected?: boolean })?.imageSubmissionRejected) throw error;
+    throw stopImageAutomaticFallback(error);
+  }
+}
+
+async function generateImageDashScopeTask(
   args: Record<string, any>,
   selectedModel: string,
   signal?: AbortSignal,
   onProgress?: ImageProgress,
+  context?: ToolContext,
 ): Promise<string> {
   const prompt = args.prompt || '';
   if (!prompt) throw new Error('prompt is required');
@@ -328,8 +350,12 @@ async function generateImageDashScope(
   const model = selectedModel || 'wan2.2-t2i-plus';
   const size = args.size?.replace('*', 'x') || '1024*1024';
   const n = Math.min(args.n || 1, 4);
-
-  const response = await fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis', {
+  const { task, created } = prepareImageGenerationTask(args, model, context);
+  if (!created) return queryImageGenerationTask(task, context);
+  let response: Response;
+  try {
+    throwIfAborted(signal);
+    response = await fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis', {
     method: 'POST',
     headers: {
       'Authorization': 'Bearer ' + apiKey,
@@ -342,13 +368,34 @@ async function generateImageDashScope(
       parameters: { size, n },
     }),
     signal,
-  });
-
-  const data = await response.json() as any;
-  if (data.code) throw new Error('DashScope image error (' + data.code + '): ' + data.message);
-
-  const taskId = data.output?.task_id;
-  if (!taskId) throw new Error('No task_id returned from DashScope');
+    });
+  } catch (error) {
+    task.state = 'unknown'; task.updatedAt = new Date().toISOString(); saveImageGenerationTask(task);
+    throwIfAborted(signal);
+    return unknownImageTask(task, 'The submission response was lost. Automatic resubmission is blocked.');
+  }
+  let data: any;
+  try { data = await response.json(); } catch {
+    task.state = 'unknown'; saveImageGenerationTask(task);
+    return unknownImageTask(task, 'The provider response could not establish whether submission was accepted.');
+  }
+  const taskId = String(data.output?.task_id || '').trim();
+  if (!taskId) {
+    if ([400, 401, 403, 404, 422].includes(response.status)) {
+      task.state = 'rejected'; task.updatedAt = new Date().toISOString(); saveImageGenerationTask(task);
+      const rejection = new Error(`DashScope rejected image submission before admission (HTTP ${response.status}).`);
+      (rejection as Error & { imageSubmissionRejected?: boolean }).imageSubmissionRejected = true;
+      throw rejection;
+    }
+    task.state = 'unknown'; saveImageGenerationTask(task);
+    return unknownImageTask(task, 'The provider returned no task identity. Automatic resubmission is blocked.');
+  }
+  task.providerTaskId = taskId; task.state = 'accepted'; task.updatedAt = new Date().toISOString();
+  try { saveImageGenerationTask(task); } catch (error) {
+    // The cloud already accepted this exact task. A disk error cannot turn it
+    // into an unsubmitted request or permit another provider POST.
+    throw stopImageAutomaticFallback(new Error(`Image task ${taskId} was accepted, but its recovery identity could not be saved. Automatic resubmission is blocked.`, { cause: error }));
+  }
   reportImageProgress(onProgress, CN_MEDIA_PROGRESS.imageTaskSubmitted);
   reportImageProgress(onProgress, CN_MEDIA_PROGRESS.imageGenerating);
 
@@ -356,56 +403,92 @@ async function generateImageDashScope(
     throwIfAborted(signal);
     for (let i = 0; i < 30; i++) {
       await waitForPoll(2000, signal);
-      const pollRes = await fetch(
-        `https://dashscope.aliyuncs.com/api/v1/tasks/${encodeURIComponent(String(taskId))}`,
-        { headers: { 'Authorization': 'Bearer ' + apiKey }, signal },
-      );
-      const pollData = await pollRes.json() as any;
-      throwIfAborted(signal);
-      if (pollData.output?.task_status === 'SUCCEEDED') {
-        const results = pollData.output.results || [];
-        const urls = results.map((result: any) => result.url).filter(Boolean).slice(0, MAX_IMAGE_RESULTS);
-        if (urls.length === 0) throw providerCompletedError(new Error('Image generation completed but no URLs returned'));
-        throwIfAborted(signal);
-        reportImageProgress(onProgress, CN_MEDIA_PROGRESS.imageSaving);
-        const outputPaths: string[] = [];
-        try {
-          for (const [index, url] of urls.entries()) {
-            outputPaths.push(await persistRemoteImage(String(url), 'dashscope_image', index, signal));
-          }
-        } catch (error) {
-          removeGeneratedFiles(outputPaths);
-          throw providerCompletedError(error);
-        }
-        throwIfAborted(signal);
-        reportImageProgress(onProgress, CN_MEDIA_PROGRESS.imageComplete);
-        return JSON.stringify({
-          ok: true,
-          status: 'generated',
-          success: true,
-          verified: true,
-          verificationStatus: 'verified',
-          prompt,
-          images: outputPaths,
-          artifacts: outputPaths.map(outputPath => ({ type: 'image', path: outputPath })),
-          taskId,
-          provider: 'qwen',
-          model,
-          tip: 'Generated and saved ' + outputPaths.length + ' image(s).',
-        });
-      }
-      if (pollData.output?.task_status === 'FAILED') {
-        throw new Error('Image generation failed: ' + (pollData.output.message || 'unknown error'));
-      }
+      const result = await queryImageGenerationTask(task, { ...context, executionSignal: signal, onProgress });
+      if (JSON.parse(result).status !== 'pending') return result;
     }
   } catch (error: any) {
     if (signal?.aborted) {
       await reportDashScopeRemoteImageCancellation(String(taskId), apiKey, onProgress);
+      task.state = 'cancelled'; task.updatedAt = new Date().toISOString(); saveImageGenerationTask(task);
       throw signal.reason || error;
     }
-    throw error;
+    throw stopImageAutomaticFallback(error);
   }
-  throw new Error('Image generation timed out (60s). Task: ' + taskId);
+  return unknownImageTask(task, 'Image generation polling reached its deadline. Query the existing task instead of submitting another.');
+}
+
+function unknownImageTask(task: ImageGenerationTask, reason: string, status = 'unknown'): string {
+  return JSON.stringify({ ok: false, success: false, status, verified: false, verificationStatus: 'unverified',
+    provider: task.provider, model: task.model, taskId: task.providerTaskId, recoveryId: task.recoveryId,
+    recoveryTool: 'get_image_generation_status', automaticResubmissionBlocked: true, reason });
+}
+
+const activeImageQueries = new Map<string, Promise<string>>();
+
+async function queryImageGenerationTask(task: ImageGenerationTask, context?: ToolContext): Promise<string> {
+  assertImageTaskOwner(task, context);
+  const active = activeImageQueries.get(task.recoveryId);
+  if (active) { const result = await active; assertImageTaskOwner(task, context); return result; }
+  const query = queryImageGenerationTaskOnce(task, context);
+  activeImageQueries.set(task.recoveryId, query);
+  try { const result = await query; assertImageTaskOwner(task, context); return result; }
+  finally { if (activeImageQueries.get(task.recoveryId) === query) activeImageQueries.delete(task.recoveryId); }
+}
+
+async function queryImageGenerationTaskOnce(task: ImageGenerationTask, context?: ToolContext): Promise<string> {
+  const signal = context?.executionSignal;
+  assertImageTaskOwner(task, context);
+  // Re-open the durable record: another read-only query may have completed it.
+  task = readImageGenerationTask(task.recoveryId, context) || task;
+  if (task.state === 'completed' && task.result) {
+    const result = JSON.parse(task.result);
+    if (result.images?.length && result.images.every((file: string) => fs.existsSync(file))) return task.result;
+  }
+  if (task.state === 'cancelled' || task.state === 'failed' || task.state === 'rejected') return unknownImageTask(task, `The original task is ${task.state}.`, task.state);
+  if (!task.providerTaskId) return unknownImageTask(task, 'No provider task identity was received; no new generation request will be sent.');
+  const keys = loadKeys();
+  const apiKey = process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY || keys.DASHSCOPE_API_KEY || keys.QWEN_API_KEY;
+  if (!apiKey) return unknownImageTask(task, 'The original provider is unavailable. Restore its configuration to query this task.');
+  const controller = new AbortController();
+  const abort = () => controller.abort(signal?.reason);
+  if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, { once: true });
+  const timer = setTimeout(() => controller.abort(new Error('Image status query timed out')), 15_000); timer.unref?.();
+  try {
+    const response = await fetch(`https://dashscope.aliyuncs.com/api/v1/tasks/${encodeURIComponent(task.providerTaskId)}`, {
+      headers: { Authorization: `Bearer ${apiKey}` }, signal: controller.signal,
+    });
+    const data = await response.json() as any;
+    assertImageTaskOwner(task, context);
+    if (!response.ok) return unknownImageTask(task, 'The provider status query failed. The original task was retained.');
+    const state = String(data.output?.task_status || '');
+    if (state === 'FAILED' || state === 'CANCELED' || state === 'CANCELLED') {
+      task.state = state === 'FAILED' ? 'failed' : 'cancelled'; task.updatedAt = new Date().toISOString(); saveImageGenerationTask(task);
+      return unknownImageTask(task, 'The provider reported an unsuccessful terminal state.', task.state);
+    }
+    if (state !== 'SUCCEEDED') return unknownImageTask(task, 'The accepted provider task has not completed.', 'pending');
+    const urls = (data.output?.results || []).map((item: any) => item.url).filter(Boolean).slice(0, MAX_IMAGE_RESULTS);
+    if (!urls.length) return unknownImageTask(task, 'The provider completed but returned no downloadable image.');
+    reportImageProgress(context?.onProgress, CN_MEDIA_PROGRESS.imageSaving);
+    const images: string[] = [];
+    try {
+      for (const [index, url] of urls.entries()) {
+        assertImageTaskOwner(task, context);
+        images.push(await persistRemoteImage(String(url), 'dashscope_image', index, controller.signal));
+      }
+      assertImageTaskOwner(task, context);
+      const result = JSON.stringify({ ok: true, success: true, status: 'generated', verified: true, verificationStatus: 'verified',
+        provider: 'qwen', model: task.model, taskId: task.providerTaskId, recoveryId: task.recoveryId, images, generationSettings: task.settings,
+        artifacts: images.map(file => ({ type: 'image', path: file })), reconciliationStatus: 'committed' });
+      task.state = 'completed'; task.result = result; task.updatedAt = new Date().toISOString(); saveImageGenerationTask(task);
+      assertImageTaskOwner(task, context);
+      reportImageProgress(context?.onProgress, CN_MEDIA_PROGRESS.imageComplete);
+      return result;
+    } catch (error) { removeGeneratedFiles(images); throw error; }
+  } catch (error) {
+    throwIfAborted(signal);
+    assertImageTaskOwner(task, context);
+    return unknownImageTask(task, `The existing image task could not be verified: ${String((error as Error)?.message || error).slice(0, 200)}`);
+  } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
 }
 
 async function generateImageSiliconFlow(
@@ -599,7 +682,7 @@ async function generateImage(args: Record<string, any>, context?: ToolContext): 
     return generateImageOpenAI(args, prefs.model || prefs.models.openai, signal, onProgress);
   }
   if (prefs.provider === 'qwen') {
-    return generateImageDashScope(args, prefs.model || prefs.models.qwen, signal, onProgress);
+    return generateImageDashScope(args, prefs.model || prefs.models.qwen, signal, onProgress, context);
   }
   if (prefs.provider === 'siliconflow') {
     return generateImageSiliconFlow(args, prefs.model || prefs.models.siliconflow, signal, onProgress);
@@ -621,7 +704,7 @@ async function generateImage(args: Record<string, any>, context?: ToolContext): 
   }
   if (process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY || keys.DASHSCOPE_API_KEY || keys.QWEN_API_KEY) {
     try {
-      return await generateImageDashScope(args, prefs.models.qwen, signal, onProgress);
+      return await generateImageDashScope(args, prefs.models.qwen, signal, onProgress, context);
     } catch (error: any) {
       throwIfProviderCompleted(error);
       throwIfAborted(signal);
@@ -873,6 +956,37 @@ async function editImage(args: Record<string, any>): Promise<string> {
 
 export function registerImageTools(registry: ToolRegistry): void {
   registry.register({
+    name: 'get_image_generation_status',
+    description: 'Query an existing image generation recoveryId returned by generate_image. Reads only the original provider task and retrieves completed artifacts; never submits another generation request. The task must belong to the current user and organization membership.',
+    parameters: { type: 'object', properties: { recoveryId: { type: 'string', description: 'Exact recoveryId from the original image task receipt.' } }, required: ['recoveryId'] },
+    handler: async (args, context) => {
+      requireNotStrict('Cloud image task query');
+      const task = readImageGenerationTask(String(args.recoveryId || ''), context);
+      if (!task) throw new Error('Image generation recovery task was not found.');
+      return queryImageGenerationTask(task, context);
+    },
+    localIdempotencyReplay: 'durable_handler',
+    permission: 'user', securityLevel: 'safe',
+    capability: capabilityContract({ id: 'media.image.status', family: 'media-generation', lane: 'media', operation: 'observe', risk: 'low',
+      sideEffects: [{ type: 'network_read', scope: 'original persisted image provider task', reversible: true },
+        { type: 'local_write', scope: 'verified recovered image artifacts', reversible: true }],
+      verification: { strategy: 'artifact', required: true, requiredFields: ['status', 'verified', 'verificationStatus'],
+        requiredValues: { verified: true, verificationStatus: 'verified' }, successStatuses: ['generated'],
+        failureStatuses: ['unknown', 'pending', 'failed', 'cancelled'], requiredArtifactCollections: ['artifacts'],
+        successSignals: ['original image task completed and its decoded local artifacts were recovered'], limitations: ['A pending or unknown status never permits a new provider submission.'] },
+      reconciliation: { reconcilesCapabilityIds: ['media.image.generate'], outcomeField: 'reconciliationStatus', committedValues: ['committed'], notCommittedValues: [] },
+    }),
+    evidence: capabilityEvidence({
+      id: 'media.image.status',
+      operation: 'observe',
+      subjectArgument: 'recoveryId',
+      limitations: [
+        'Only a verified completed receipt proves that the original task artifacts were decoded and persisted locally; pending or unknown status is not completion evidence.',
+        'Recovery never submits a new generation request and does not prove subjective image quality.',
+      ],
+    }),
+  });
+  registry.register({
     name: 'generate_image',
     description: 'Generate AI images from text prompts using the image provider and model selected in Settings > Generative Models. Lumi Official API, OpenAI, DashScope, and SiliconFlow are supported; an explicitly selected provider never silently switches to another provider.',
     parameters: {
@@ -887,6 +1001,13 @@ export function registerImageTools(registry: ToolRegistry): void {
       required: ['prompt'],
     },
     handler: (args, context) => generateImage(args, context),
+    reconcileExternalCommit: async (args, context, idempotencyKey) => {
+      requireNotStrict('Cloud image task reconciliation');
+      const task = readImageGenerationTask(imageGenerationRecoveryId(args, { ...context, idempotencyKey }), context);
+      if (!task) return null;
+      const result = await queryImageGenerationTask(task, context);
+      return JSON.parse(result).verified === true ? result : null;
+    },
     permission: 'user',
     securityLevel: 'safe',
     capability: capabilityContract({

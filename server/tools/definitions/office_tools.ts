@@ -2,6 +2,7 @@ import { execFile } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { randomUUID } from 'node:crypto';
 import { promisify } from 'util';
 import nodemailer from 'nodemailer';
 import PptxGenJS from 'pptxgenjs';
@@ -55,7 +56,9 @@ function presentationOutputPath(filename: unknown, title: string): string {
     ? path.dirname(requested)
     : ensureOutputDir();
   fs.mkdirSync(parent, { recursive: true });
-  return path.join(parent, `${safeBase}.pptx`);
+  // A title is a label, not a durable artifact identity. Explicit paths may
+  // name a new file, but publication below never replaces an existing one.
+  return path.join(parent, requested ? `${safeBase}.pptx` : `${safeBase}_${randomUUID()}.pptx`);
 }
 
 async function resolvePresentationImage(
@@ -111,6 +114,8 @@ async function createPptHandler(args: Record<string, any>): Promise<string> {
   const themeName = String(args.theme || 'dark').toLowerCase();
   const theme = PRESENTATION_THEMES[themeName] || PRESENTATION_THEMES.dark;
   const outputPath = presentationOutputPath(args.filename, title);
+  if (fs.existsSync(outputPath)) throw new Error('Presentation output already exists. Choose a new filename to preserve the existing artifact.');
+  const pendingOutput = path.join(path.dirname(outputPath), `.${path.basename(outputPath)}.${randomUUID()}.partial.pptx`);
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi-ppt-'));
   const cache = new Map<string, string | null>();
   const topLevelImages = Array.isArray(args.images) ? args.images.map(String) : [];
@@ -188,10 +193,17 @@ async function createPptHandler(args: Record<string, any>): Promise<string> {
     ending.addShape(pptx.ShapeType.line, { x: 5.45, y: 3.63, w: 2.45, h: 0, line: { color: theme.accent, width: 3 } });
     ending.addText(title, { x: 1.4, y: 3.95, w: 10.5, h: 0.55, fontSize: 15, align: 'center', color: theme.muted, margin: 0 });
 
-    await pptx.writeFile({ fileName: outputPath, compression: true });
-    if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size === 0) {
+    await pptx.writeFile({ fileName: pendingOutput, compression: true });
+    if (!fs.existsSync(pendingOutput) || fs.statSync(pendingOutput).size === 0) {
       throw new Error('Presentation writer returned without creating a non-empty PPTX file.');
     }
+    // Same-directory hard-link publication is atomic and fails if the target
+    // appeared while the writer was running; rename would overwrite on POSIX.
+    try { fs.linkSync(pendingOutput, outputPath); }
+    catch (error) {
+      throw new Error('Could not publish the presentation without replacing an existing file. Use a local filesystem that supports hard links and choose a new filename.', { cause: error });
+    }
+    fs.unlinkSync(pendingOutput);
     bc('mcp:activity', { device: 'desktop', action: 'create_ppt', status: 'completed', path: outputPath, slidesCount: slides.length });
     return JSON.stringify({
       ok: true,
@@ -204,6 +216,7 @@ async function createPptHandler(args: Record<string, any>): Promise<string> {
       theme: themeName,
     });
   } finally {
+    try { fs.unlinkSync(pendingOutput); } catch {}
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
   }
 }

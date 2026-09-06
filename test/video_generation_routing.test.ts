@@ -9,6 +9,7 @@ import { upsertUserPreferredGenerationModels } from '../server/llm/generation_pr
 import { registerVideoTools } from '../server/tools/definitions/video_tools';
 import { ToolRegistry } from '../server/tools/registry';
 import type { ToolContext } from '../server/tools/types';
+import { VALID_MP4 as MINIMAL_MP4, VALID_WEBM as MINIMAL_WEBM } from './fixtures/synthetic_video';
 
 function response(body: any, ok = true, status = 200): any {
   return { ok, status, json: async () => body };
@@ -26,13 +27,6 @@ const OFFICIAL_I2V_MODEL = 'huawei_maas/Wan2.2-I2V-A14B';
 const ORIGINAL_RELAY_VIDEO_MODEL = process.env.RELAY_VIDEO_MODEL;
 const ORIGINAL_RELAY_IMAGE_TO_VIDEO_MODEL = process.env.RELAY_IMAGE_TO_VIDEO_MODEL;
 const ORIGINAL_RELAY_VIDEO_REQUEST_FORMAT = process.env.RELAY_VIDEO_REQUEST_FORMAT;
-const MINIMAL_MP4 = Buffer.from([
-  0x00, 0x00, 0x00, 0x10,
-  0x66, 0x74, 0x79, 0x70,
-  0x69, 0x73, 0x6f, 0x6d,
-  0x00, 0x00, 0x00, 0x00,
-]);
-const MINIMAL_WEBM = Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x42, 0x86, 0x81, 0x01]);
 const VALID_PNG_BYTES = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
   'base64',
@@ -169,7 +163,7 @@ describe('video generation model routing', () => {
       .mockResolvedValueOnce(mediaResponse(Buffer.from('<html>not a video</html>'), 'text/html'));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(runVideo(userId)).rejects.toThrow('not a valid MP4 or WebM container');
+    await expect(runVideo(userId)).rejects.toThrow('container validation failed');
     expect(generatedFiles()).toEqual(before);
   });
 
@@ -429,7 +423,7 @@ describe('video generation model routing', () => {
       video_base64: `data:video/mp4;base64,${invalidBytes.toString('base64')}`,
     })));
 
-    await expect(runVideo(userId)).rejects.toThrow('not a valid MP4 or WebM container');
+    await expect(runVideo(userId)).rejects.toThrow('container validation failed');
     expect(generatedFiles()).toEqual(before);
   });
 
