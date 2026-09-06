@@ -143,6 +143,10 @@ export interface LAPTaskDelegateRequest extends LAPMessage {
 export interface LAPTaskDelegateResponse {
   accepted: boolean;
   taskId: string;
+  status?: LAPTaskStatus;
+  result?: Record<string, any>;
+  error?: string;
+  lateResultAt?: string;
   reason?: string;
   estimatedCompletion?: string; // ISO timestamp or human-readable ETA
 }

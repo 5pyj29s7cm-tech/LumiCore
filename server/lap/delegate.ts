@@ -1,4 +1,3 @@
-import { randomUUID } from 'crypto';
 import type {
   LAPTask,
   LAPTaskDelegateRequest,
@@ -23,6 +22,33 @@ export interface TaskRecord {
 }
 
 const tasks: Map<string, TaskRecord> = new Map();
+const taskKey = (sessionId: string, taskId: string) => JSON.stringify([sessionId, taskId]);
+
+function immutableJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function canonicalJson(value: unknown): string {
+  const sort = (entry: any): any => Array.isArray(entry) ? entry.map(sort)
+    : entry && typeof entry === 'object'
+      ? Object.fromEntries(Object.keys(entry).sort().map(key => [key, sort(entry[key])]))
+      : entry;
+  return JSON.stringify(sort(immutableJson(value)));
+}
+
+function acceptedTaskResponse(record: TaskRecord): LAPTaskDelegateResponse {
+  return {
+    accepted: true,
+    taskId: record.task.taskId,
+    status: record.status,
+    ...(record.result ? { result: immutableJson(record.result) } : {}),
+    ...(record.error ? { error: record.error } : {}),
+    ...(record.lateResultAt ? { lateResultAt: record.lateResultAt } : {}),
+    estimatedCompletion: record.status === 'accepted'
+      ? record.task.type === 'code_review' ? '~5min' : record.task.type === 'web_search' ? '~30s' : undefined
+      : undefined,
+  };
+}
 
 export function delegateTask(
   request: LAPTaskDelegateRequest,
@@ -33,6 +59,9 @@ export function delegateTask(
 
   if (session.authorizationStatus !== 'approved') {
     return { accepted: false, taskId: task.taskId || '', reason: 'Session is waiting for local user approval' };
+  }
+  if (request.sessionId !== session.sessionId) {
+    return { accepted: false, taskId: task.taskId || '', reason: 'Task session does not match the authenticated session' };
   }
 
   // Validate task
@@ -45,23 +74,31 @@ export function delegateTask(
     return { accepted: false, taskId: task.taskId, reason: 'Session does not permit task delegation' };
   }
 
-  // Check deadline
-  if (task.deadline) {
-    const deadlineMs = new Date(task.deadline).getTime();
-    if (deadlineMs < Date.now()) {
-      return { accepted: false, taskId: task.taskId, reason: 'Task deadline is in the past' };
-    }
-  }
-
   const toAgentId = session.peerA.agentId === fromAgentId
     ? session.peerB.agentId
     : session.peerB.agentId === fromAgentId
       ? session.peerA.agentId
       : '';
   if (!toAgentId) return { accepted: false, taskId: task.taskId, reason: 'Delegating peer is not part of this session' };
+  const key = taskKey(session.sessionId, task.taskId);
+  const existing = tasks.get(key);
+  if (existing) {
+    if (existing.from !== fromAgentId || existing.to !== toAgentId || canonicalJson(existing.task) !== canonicalJson(task)) {
+      return { accepted: false, taskId: task.taskId, reason: 'Task identity is already bound to another sender or immutable payload' };
+    }
+    // A retry is a lookup, including after its deadline. Preserve completed,
+    // failed and unknown receipts rather than accepting a fresh execution.
+    return acceptedTaskResponse(existing);
+  }
+  if (task.deadline) {
+    const deadlineMs = new Date(task.deadline).getTime();
+    if (!Number.isFinite(deadlineMs) || deadlineMs < Date.now()) {
+      return { accepted: false, taskId: task.taskId, reason: 'Task deadline is invalid or in the past' };
+    }
+  }
 
   const record: TaskRecord = {
-    task,
+    task: immutableJson(task),
     sessionId: session.sessionId,
     from: fromAgentId,
     to: toAgentId,
@@ -69,13 +106,8 @@ export function delegateTask(
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
-  tasks.set(task.taskId, record);
-
-  return {
-    accepted: true,
-    taskId: task.taskId,
-    estimatedCompletion: task.type === 'code_review' ? '~5min' : task.type === 'web_search' ? '~30s' : undefined,
-  };
+  tasks.set(key, record);
+  return acceptedTaskResponse(record);
 }
 
 export function registerOutboundTask(task: LAPTask, session: LAPSession, fromAgentId: string): TaskRecord {
@@ -85,16 +117,17 @@ export function registerOutboundTask(task: LAPTask, session: LAPSession, fromAge
       ? session.peerA.agentId
       : '';
   if (!toAgentId) throw new Error('Outbound LAP sender is not part of this session.');
-  const existing = tasks.get(task.taskId);
+  const key = taskKey(session.sessionId, task.taskId);
+  const existing = tasks.get(key);
   if (existing) {
-    if (existing.sessionId !== session.sessionId || existing.from !== fromAgentId) {
-      throw new Error('LAP task id is already bound to another session or sender.');
+    if (existing.from !== fromAgentId || existing.to !== toAgentId || canonicalJson(existing.task) !== canonicalJson(task)) {
+      throw new Error('LAP task id is already bound to another sender or immutable payload.');
     }
     return existing;
   }
   const now = new Date().toISOString();
   const record: TaskRecord = {
-    task,
+    task: immutableJson(task),
     sessionId: session.sessionId,
     from: fromAgentId,
     to: toAgentId,
@@ -102,7 +135,7 @@ export function registerOutboundTask(task: LAPTask, session: LAPSession, fromAge
     createdAt: now,
     updatedAt: now,
   };
-  tasks.set(task.taskId, record);
+  tasks.set(key, record);
   return record;
 }
 
@@ -114,13 +147,17 @@ export function updateTaskStatus(
   error?: string,
   fromAgentId?: string,
 ): boolean {
-  const record = tasks.get(taskId);
-  if (!record || record.sessionId !== sessionId) return false;
+  const record = tasks.get(taskKey(sessionId, taskId));
+  if (!record) return false;
   if (fromAgentId && record.to !== fromAgentId) return false;
   if (!['pending', 'accepted', 'rejected', 'running', 'completed', 'failed', 'unknown'].includes(status)) return false;
   const previousStatus = record.status;
   const terminal = new Set<LAPTaskStatus>(['completed', 'failed', 'rejected']);
-  if (terminal.has(previousStatus) && status !== previousStatus) return false;
+  if (terminal.has(previousStatus)) {
+    return status === previousStatus
+      && (!output || canonicalJson(record.result || {}) === canonicalJson(boundedOutput(output)))
+      && (!error || record.error === String(error).slice(0, 2_000));
+  }
   if (previousStatus === 'unknown' && status !== 'completed' && status !== 'failed') return false;
   if ((previousStatus === 'running' || previousStatus === 'accepted') && status === 'pending') return false;
   if (previousStatus === 'running' && status === 'accepted') return false;
@@ -130,17 +167,24 @@ export function updateTaskStatus(
     record.lateResultAt = record.updatedAt;
   }
   if (output) {
-    const serialized = JSON.stringify(output);
-    record.result = serialized.length <= 16_000
-      ? output
-      : { truncated: true, preview: serialized.slice(0, 12_000) };
+    record.result = boundedOutput(output);
   }
   if (error) record.error = String(error).slice(0, 2_000);
   return true;
 }
 
-export function getTask(taskId: string): TaskRecord | undefined {
-  return tasks.get(taskId);
+function boundedOutput(output: Record<string, any>): Record<string, any> {
+  const serialized = JSON.stringify(output);
+  return serialized.length <= 16_000
+    ? JSON.parse(serialized)
+    : { truncated: true, preview: serialized.slice(0, 12_000) };
+}
+
+export function getTask(taskId: string, sessionId?: string): TaskRecord | undefined {
+  if (sessionId) return tasks.get(taskKey(sessionId, taskId));
+  // Legacy in-process callers may omit scope only when the ID is unambiguous.
+  const matches = Array.from(tasks.values()).filter(record => record.task.taskId === taskId);
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 export function getTasksForSession(sessionId: string): TaskRecord[] {
@@ -153,8 +197,8 @@ export function getTasksForAgent(agentId: string): TaskRecord[] {
 
 export function cancelTasksForSession(sessionId: string): number {
   let count = 0;
-  for (const [id, record] of tasks) {
-    if (record.sessionId === sessionId && record.status !== 'completed' && record.status !== 'failed') {
+  for (const record of tasks.values()) {
+    if (record.sessionId === sessionId && !['completed', 'failed', 'rejected'].includes(record.status)) {
       record.status = 'failed';
       record.error = 'Session revoked';
       count++;

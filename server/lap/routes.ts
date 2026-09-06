@@ -151,7 +151,7 @@ lapRoutes.post('/lap/sessions/:sessionId/sandbox-probe', requireAuth, requireLoc
       updateTaskStatus(session.sessionId, task.taskId, response.outcome === 'unknown' ? 'unknown' : 'rejected', undefined, response.error || response.reason);
       return res.status(502).json({ error: response.error || response.reason || 'The peer rejected the sandbox probe.', taskId: task.taskId });
     }
-    if (getTask(task.taskId)?.status === 'pending') updateTaskStatus(session.sessionId, task.taskId, 'accepted');
+    if (getTask(task.taskId, session.sessionId)?.status === 'pending') updateTaskStatus(session.sessionId, task.taskId, 'accepted');
     res.status(202).json({
       accepted: true,
       taskId: task.taskId,
