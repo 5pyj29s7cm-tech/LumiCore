@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, BookOpen, Loader2, Sparkles } from 'lucide-react';
 import { memoryTerritoryCopy } from '../i18n/locales/memoryTerritory';
 import { memoryAvatarCopy } from '../i18n/locales/memoryAvatar';
+import { memoryMediaCopy } from '../i18n/locales/memoryMedia';
 import { memoryAvatarService } from '../services/memoryAvatarService';
 import type { MemoryAvatar } from '../../shared/memory_avatar';
 
@@ -20,11 +21,12 @@ export function MemoryAvatarCreate({ locale, ownerId, onCreated, onImport, onLog
   const busy = useRef(false);
   const generation = useRef(0);
   useEffect(() => {
-    generation.current++;
+    const generationRef = generation;
+    generationRef.current++;
     busy.current = false;
     operation.current = null;
     setPending(false); setError(''); setName(''); setNarrative(''); setRelationship('close_friend');
-    return () => { generation.current++; };
+    return () => { generationRef.current++; };
   }, [ownerId]);
 
   const create = async (event: React.FormEvent) => {
@@ -53,6 +55,7 @@ export function MemoryAvatarCreate({ locale, ownerId, onCreated, onImport, onLog
         <p className="text-xs tracking-[.18em] text-[#c5baa2]">{copy.title}</p>
         <h2 className="mt-4 text-3xl font-medium leading-snug tracking-tight sm:text-4xl">{copy.createTitle}</h2>
         <p className="mt-5 max-w-sm text-sm leading-7 text-[#a3a5a4]">{copy.createHint}</p>
+        <p className="mt-4 max-w-sm text-xs leading-6 text-[#8f9892]">{memoryMediaCopy(locale).createHint}</p>
         <button type="button" disabled={pending} onClick={onImport} className="mt-9 flex items-center gap-3 rounded-xl border border-white/10 px-4 py-3 text-sm text-[#c7c8c2] transition-colors hover:bg-white/5 disabled:opacity-40">
           <BookOpen size={17} />{copy.createFromRecords}<ArrowRight size={15} />
         </button>

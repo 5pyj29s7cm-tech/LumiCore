@@ -2,7 +2,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { act, renderHook } from '@testing-library/react';
-const fixture = vi.hoisted(() => ({ tracks: [] as any[], sources: [] as any[], processors: [] as any[], cameras: [] as any[] }));
+const fixture = vi.hoisted(() => ({ tracks: [] as any[], sources: [] as any[], processors: [] as any[], cameras: [] as any[], portraits: [] as any[] }));
+vi.mock('../src/lib/memoryAvatarPortraitConnection', () => ({ createMemoryAvatarPortraitConnection: (options: any) => {
+  const connection = { connect: vi.fn(async () => {}), close: vi.fn(), options };
+  fixture.portraits.push(connection); return connection;
+} }));
 vi.mock('../src/lib/voiceDevicePreferences', () => ({
   VOICE_DEVICE_PREFERENCE_CHANGED: 'fixture-devices', applyPreferredVoiceOutputDevice: async () => {},
   requestPreferredMicrophoneStream: async () => {
@@ -37,7 +41,7 @@ class AudioContextFixture {
   async close() { this.state = 'closed'; }
 }
 beforeEach(() => {
-  fixture.tracks = []; fixture.sources = []; fixture.processors = []; fixture.cameras = [];
+  fixture.tracks = []; fixture.sources = []; fixture.processors = []; fixture.cameras = []; fixture.portraits = [];
   vi.stubGlobal('AudioContext', AudioContextFixture);
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
   vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
@@ -45,6 +49,60 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('private avatar audio socket bridge', () => {
+  it('does not let a cancelled portrait reconnect end its newer replacement in the same call', async () => {
+    const client = new Client();
+    const hook = renderHook(() => useMemoryAvatarCall({ socket: client, avatarId: 'person', ownerId: 'owner', portrait: true, portraitMediaId: 'photo', enabled: true }));
+    try {
+      await act(async () => { await hook.result.current.startVoice(); });
+      const start = client.outputs.find(([event]) => event === 'avatar:audio:start')![1];
+      const portrait = fixture.portraits.at(-1);
+      let rejectOld!: (error: Error) => void;
+      portrait.connect.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectOld = reject; }));
+      await act(async () => { client.deliver('avatar:audio:interrupt-ack', start); });
+      await act(async () => { client.deliver('avatar:audio:interrupt-ack', start); });
+      await act(async () => { rejectOld(new DOMException('Old peer cancelled', 'AbortError')); });
+      expect(portrait.connect).toHaveBeenCalledTimes(3);
+      expect(fixture.tracks[0].stop).not.toHaveBeenCalled();
+      expect(client.outputs.filter(([event]) => event === 'avatar:audio:stop')).toHaveLength(0);
+      expect(hook.result.current.error).toBeNull();
+    } finally { hook.unmount(); }
+  });
+
+  it('keeps microphone chunks local until the selected talking portrait is connected', async () => {
+    const client = new Client();
+    let connect!: () => void;
+    const gate = new Promise<void>(resolve => { connect = resolve; });
+    const prepareStart = vi.fn(() => gate);
+    const adapter = createMemoryAvatarVoiceSocket(client, 'person', { prepareStart });
+    adapter.emit('audio:start', { sessionId: 'portrait-call' });
+    adapter.emit('audio:chunk', new Uint8Array([1, 2]));
+    expect(client.outputs).toEqual([]);
+    connect(); await adapter.startPending;
+    expect(client.outputs).toEqual([['avatar:audio:start', expect.objectContaining({ avatarId: 'person', sessionId: 'portrait-call', portrait: true })]]);
+    adapter.emit('audio:chunk', new Uint8Array([3, 4]));
+    expect(client.outputs.at(-1)?.[0]).toBe('avatar:audio:chunk');
+    adapter.emit('audio:stop');
+  });
+
+  it('stopping while the portrait is connecting never starts a late microphone session', async () => {
+    const client = new Client(); let connect!: () => void;
+    const prepareStart = vi.fn((_sessionId: string, _signal: AbortSignal) => new Promise<void>(resolve => { connect = resolve; }));
+    const onStop = vi.fn();
+    const adapter = createMemoryAvatarVoiceSocket(client, 'person', { prepareStart, onStop });
+    adapter.emit('audio:start', { sessionId: 'portrait-call' });
+    const pending = expect(adapter.startPending).rejects.toThrow();
+    adapter.emit('audio:stop'); connect(); await pending;
+    expect(client.outputs).toEqual([]); expect(adapter.sessionId).toBe('');
+    expect(prepareStart.mock.calls[0][1].aborted).toBe(true); expect(onStop).toHaveBeenCalledOnce();
+  });
+
+  it('clears the private session and renderer even if the socket disconnected first', () => {
+    const client = new Client(); const onStop = vi.fn();
+    const adapter = createMemoryAvatarVoiceSocket(client, 'person', { onStop });
+    adapter.emit('audio:start', { sessionId: 'call' }); client.connected = false;
+    adapter.emit('audio:stop'); expect(adapter.sessionId).toBe(''); expect(onStop).toHaveBeenCalledOnce();
+  });
+
   it('namespaces input and output, fences exact avatar/session, and excludes perception messages', () => {
     const client = new Client(); const adapter = createMemoryAvatarVoiceSocket(client, 'memory_avatar_a');
     const listener = vi.fn(); adapter.on('agent:response', listener);

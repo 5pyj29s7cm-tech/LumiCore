@@ -10,6 +10,8 @@ import { useMemoryAvatarConversation } from '../hooks/useMemoryAvatarConversatio
 import { useMemoryAvatarCall } from '../hooks/useMemoryAvatarCall';
 import { MemoryAvatarStage } from './MemoryAvatarStage';
 import { MemoryAvatarProfile } from './MemoryAvatarProfile';
+import { MemoryAvatarPortraitStage } from './MemoryAvatarPortraitStage';
+import { memoryPortraitCopy } from '../i18n/locales/memoryPortrait';
 
 interface SanctuaryAgent extends Partial<MemoryAvatar> {
   id: string;
@@ -35,6 +37,7 @@ function asRecord(agent: SanctuaryAgent): MemoryAvatar {
     id: agent.id, name: agent.name, relationshipType: agent.relationshipType || 'close_friend',
     status: agent.status || 'active', revision: agent.revision || 1, narrative: agent.narrative || '',
     appearance: { ...DEFAULT_MEMORY_AVATAR_APPEARANCE, ...agent.appearance }, voice: agent.voice || {},
+    presentation: agent.presentation,
     memoryCount: agent.memoryCount ?? agent.seedMemoryIds?.length ?? 0, isFrozen: agent.isFrozen !== false,
     personalityConfig: agent.personalityConfig || {}, evidenceMap: agent.evidenceMap || [], seedMemoryIds: agent.seedMemoryIds || [],
     createdAt: agent.createdAt || '', updatedAt: agent.updatedAt || agent.createdAt || '',
@@ -53,6 +56,7 @@ export function Sanctuary(props: SanctuaryProps) {
 function MemoryTerritory({ agent, ownerId, locale, avatars = [], onClose, onSelectAvatar, onCreateAnother, onAvatarUpdated, onAvatarArchived }: SanctuaryProps & { agent: SanctuaryAgent; ownerId: string; locale: 'zh' | 'en' }) {
   const copy = memoryTerritoryCopy(locale);
   const relationshipCopy = memoryAvatarCopy(locale);
+  const portraitCopy = memoryPortraitCopy(locale);
   const socket = useSocket();
   const [avatar, setAvatar] = useState(() => asRecord(agent));
   const [profileOpen, setProfileOpen] = useState(false);
@@ -60,6 +64,8 @@ function MemoryTerritory({ agent, ownerId, locale, avatars = [], onClose, onSele
   const [draft, setDraft] = useState('');
   const [startingCall, setStartingCall] = useState(false);
   const [startError, setStartError] = useState('');
+  const [portraitConsent, setPortraitConsent] = useState(false);
+  const portraitMediaId = avatar.presentation?.mode === 'portrait' ? avatar.presentation.mediaId : undefined;
   const startBusy = useRef(false);
   const startGeneration = useRef(0);
   const mounted = useRef(true);
@@ -67,6 +73,7 @@ function MemoryTerritory({ agent, ownerId, locale, avatars = [], onClose, onSele
   const cameraPreview = useRef<HTMLVideoElement>(null);
   const conversation = useMemoryAvatarConversation({ socket, avatarId: avatar.id, ownerId, locale });
   const call = useMemoryAvatarCall({ socket, avatarId: avatar.id, ownerId, voiceId: avatar.voice.voiceId, enabled: true,
+    portrait: Boolean(portraitMediaId && portraitConsent), portraitMediaId,
     onTranscript: conversation.appendVoiceTranscript, onResponse: conversation.appendVoiceResponse });
   const callActive = call.state !== 'idle' || startingCall;
   const relationship = relationshipCopy.relationships[avatar.relationshipType as keyof typeof relationshipCopy.relationships]?.label || relationshipCopy.memoryLabel;
@@ -81,9 +88,11 @@ function MemoryTerritory({ agent, ownerId, locale, avatars = [], onClose, onSele
     : errorCode === 'STT_UNAVAILABLE' || errorCode === 'STT_FAILED' || errorCode === 'STRICT_VOICE_UNAVAILABLE' ? copy.speechInputUnavailable
     : errorCode === 'TTS_OUTPUT_UNAVAILABLE' ? copy.voiceOutputUnavailable
     : errorCode === 'PERSISTENCE_UNKNOWN' ? copy.callSaveFailed
+    : errorCode === 'PORTRAIT_UNAVAILABLE' ? portraitCopy.unavailable
     : errorCode === 'VOICE_INPUT_UNAVAILABLE' ? copy.voiceInputUnavailable : copy.callUnavailable;
 
   useEffect(() => { setAvatar(asRecord(agent)); }, [agent]);
+  useEffect(() => { setPortraitConsent(false); }, [portraitMediaId]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
     transcriptEnd.current?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
@@ -145,7 +154,9 @@ function MemoryTerritory({ agent, ownerId, locale, avatars = [], onClose, onSele
         <main className={`flex min-h-0 min-w-0 flex-1 flex-col ${profileOpen ? 'overflow-hidden' : 'overflow-y-auto'} md:flex-row md:overflow-hidden`}>
           <section aria-label={avatar.name} className={`relative min-w-0 shrink-0 overflow-hidden ${profileOpen ? 'hidden md:block' : 'block'} h-[min(56vh,500px)] min-h-[380px] bg-[#1c2424] md:h-auto md:min-h-0 md:flex-1`}>
             <div className="pointer-events-none absolute inset-0" style={{ background: `radial-gradient(ellipse at 50% 33%, ${preview?.backgroundColor || avatar.appearance.backgroundColor}88, #1a2222 80%)` }} />
-            <div className="absolute inset-0 bottom-10"><MemoryAvatarStage appearance={preview || avatar.appearance} outputLevelRef={call.outputLevelRef} state={call.state} name={avatar.name} locale={locale} active /></div>
+            <div className="absolute inset-0 bottom-10">{portraitMediaId && !preview
+              ? <MemoryAvatarPortraitStage key={portraitMediaId} ownerId={ownerId} avatarId={avatar.id} mediaId={portraitMediaId} stream={call.portraitStream || null} speaking={Boolean(call.portraitSpeaking)} name={avatar.name} locale={locale} />
+              : <MemoryAvatarStage appearance={preview || avatar.appearance} outputLevelRef={call.outputLevelRef} state={call.state} name={avatar.name} locale={locale} active />}</div>
             <div className="absolute left-5 right-5 top-5 flex items-start justify-between gap-3 sm:left-7 sm:right-7 sm:top-6">
               <p role="status" className="flex max-w-[75%] items-start gap-2 text-[11px] leading-5 text-[#b9c3b5]"><span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${callActive ? 'bg-[#b8d3a4]' : 'bg-[#7d9484]'}`} />{stateLabel}</p>
               {callActive && call.elapsedSeconds > 0 && <span className="font-mono text-[10px] tabular-nums text-[#91a38f]">{Math.floor(call.elapsedSeconds / 60).toString().padStart(2, '0')}:{Math.floor(call.elapsedSeconds % 60).toString().padStart(2, '0')}</span>}
@@ -153,9 +164,13 @@ function MemoryTerritory({ agent, ownerId, locale, avatars = [], onClose, onSele
             {call.cameraStream && <div className="absolute right-4 top-14 w-[104px] overflow-hidden rounded-xl border border-[#d4ddcd]/20 bg-black/40 shadow-xl sm:right-6 sm:w-32"><video ref={cameraPreview} muted autoPlay playsInline aria-label={copy.cameraLocal} className="aspect-[4/3] w-full -scale-x-100 object-cover" /><p className="px-2 py-1 text-center text-[9px] text-[#d4ddcd]">{copy.cameraSharing}</p></div>}
             <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[55%] bg-gradient-to-t from-[#17201f] via-[#17201f]/80 to-transparent" />
             <div className="absolute inset-x-0 bottom-0 px-4 pb-5 pt-12 text-center sm:px-6 md:pb-8">
-              <p className="text-[9px] tracking-wide text-[#95a28f]">{copy.digitalLabel}</p>
+              <p className="text-[9px] tracking-wide text-[#95a28f]">{portraitMediaId ? (call.portraitStream ? portraitCopy.label : portraitCopy.still) : copy.digitalLabel}</p>
               <h2 className="mt-1.5 truncate text-2xl font-medium tracking-tight text-[#e4e3d7] sm:text-3xl">{avatar.name}</h2>
               <p className="mt-2 text-[11px] text-[#a2af9b]">{relationship}<span className="mx-2 opacity-40">·</span>{copy.memoryCount(avatar.memoryCount)}</p>
+              {portraitMediaId && <label className="mx-auto mt-3 flex max-w-sm cursor-pointer items-start gap-2 text-left text-[10px] leading-4 text-[#bec9b3]">
+                <input type="checkbox" checked={portraitConsent} disabled={callActive} onChange={event => setPortraitConsent(event.target.checked)} className="mt-0.5 shrink-0 accent-[#d4c5a8]" />
+                <span><span className="mb-1 block font-medium">{portraitCopy.enable}</span>{portraitCopy.consent}</span>
+              </label>}
               <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
                 {!callActive ? <>
                   <button type="button" onClick={() => startCall(false)} disabled={!canStartCall} className={`${controlClass} bg-[#d4c5a8] text-[#273024] hover:bg-[#e1d4b9]`}><Phone size={15} />{copy.voiceCall}</button>
@@ -164,7 +179,7 @@ function MemoryTerritory({ agent, ownerId, locale, avatars = [], onClose, onSele
                   <button type="button" aria-label={call.isMuted ? copy.unmute : copy.mute} title={call.isMuted ? copy.unmute : copy.mute} aria-pressed={call.isMuted} onClick={call.toggleMute} className={`${controlClass} w-10 !px-0 ${call.isMuted ? 'bg-[#c5baa2]/25' : 'bg-[#b4c4a3]/10'} text-[#d2dcc7]`}>{call.isMuted ? <MicOff size={17} /> : <Mic size={17} />}</button>
                   <button type="button" aria-label={call.isCameraOn ? copy.cameraOff : copy.cameraOn} title={call.isCameraOn ? copy.cameraOff : copy.cameraOn} aria-pressed={call.isCameraOn} onClick={call.toggleCamera} className={`${controlClass} w-10 !px-0 ${call.isCameraOn ? 'bg-[#c5baa2]/25' : 'bg-[#b4c4a3]/10'} text-[#d2dcc7]`}>{call.isCameraOn ? <Camera size={17} /> : <CameraOff size={17} />}</button>
                   <button type="button" onClick={endCall} className={`${controlClass} bg-[#8e5e51] text-[#f3e4db] hover:bg-[#9d6e60]`}><PhoneOff size={16} />{copy.endCall}</button>
-                  {(call.state === 'speaking' || call.state === 'thinking' || call.state === 'queued') && <button type="button" onClick={call.interrupt} aria-label={copy.interrupt} title={copy.interrupt} className={`${controlClass} w-10 !px-0 bg-[#b4c4a3]/10 text-[#d2dcc7]`}><Square size={12} /></button>}
+                  {(call.state === 'speaking' || call.state === 'thinking' || call.state === 'queued' || (portraitConsent && portraitMediaId && call.state !== 'connecting')) && <button type="button" onClick={call.interrupt} aria-label={copy.interrupt} title={copy.interrupt} className={`${controlClass} w-10 !px-0 bg-[#b4c4a3]/10 text-[#d2dcc7]`}><Square size={12} /></button>}
                 </>}
               </div>
               {callError && <p role="alert" className="mx-auto mt-3 max-w-sm text-[11px] leading-5 text-[#dfbfa4]">{callError}</p>}

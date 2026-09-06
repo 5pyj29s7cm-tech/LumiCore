@@ -7,6 +7,12 @@ const fixture = vi.hoisted(() => ({
   model: vi.fn(), synthesis: vi.fn(), stts: [] as any[], provider: 'ark' as string | null,
   strict: false, flush: null as null | ((actual: () => Promise<void>) => Promise<void>),
   memories: vi.fn(async () => []), rag: vi.fn(async () => []),
+  portraitReady: true, portraitSpeak: vi.fn(), portraitStop: vi.fn(),
+}));
+vi.mock('../server/memory_avatar/portrait_sessions', () => ({
+  isMemoryAvatarPortraitReady: () => fixture.portraitReady,
+  speakMemoryAvatarPortrait: (...args: any[]) => fixture.portraitSpeak(...args),
+  stopMemoryAvatarPortrait: (...args: any[]) => fixture.portraitStop(...args),
 }));
 vi.mock('../db_layer', async original => {
   const actual = await original<typeof import('../db_layer')>();
@@ -36,17 +42,19 @@ import { isRealtimeUserActive } from '../server/autonomy/foreground_activity';
 
 class Socket extends EventEmitter {
   id = `fixture-${Math.random()}`; connected = true; userId = `fixture-user-${Math.random()}`;
+  data = { authenticatedOrgId: '' };
   outputs: Array<[string, any]> = [];
   emit(event: string, data?: any): boolean { this.outputs.push([event, data]); return true; }
   async receive(event: string, data?: any) { await Promise.all(this.listeners(event).map(fn => fn(data))); }
 }
 function deferred<T = void>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
-async function setup() {
+async function setup(portrait = false, orgId = '') {
   const socket = new Socket();
+  socket.data.authenticatedOrgId = orgId;
   const avatar = await createMemoryAvatar({ userId: socket.userId, name: 'Mira', voice: { voiceId: 'default-fixture' }, narrative: 'Mira enjoys observing garden birds.', seedMemories: [{ content: 'Our favorite flower was lavender.' }] });
   const admission = createVoiceCallAdmission();
   registerMemoryAvatarVoiceHandlers(socket as any, {} as any, s => (s as any).userId, admission);
-  const data = { avatarId: avatar.id, sessionId: 'fixture-call-a' };
+  const data = { avatarId: avatar.id, sessionId: 'fixture-call-a', portrait };
   await socket.receive('avatar:audio:start', data);
   const stt = fixture.stts.at(-1);
   return { socket, avatar, data, stt, admission };
@@ -58,9 +66,59 @@ beforeEach(() => {
   fixture.model.mockReset().mockResolvedValue({ text: 'I remember the lavender garden.', toolCalls: [] });
   fixture.synthesis.mockReset().mockResolvedValue({ audioBuffer: Buffer.from([1, 2, 3]), format: 'wav' });
   fixture.memories.mockClear(); fixture.rag.mockClear();
+  fixture.portraitReady = true; fixture.portraitSpeak.mockReset().mockResolvedValue({ status: 'accepted' });
+  fixture.portraitStop.mockReset().mockResolvedValue(undefined);
 });
 
 describe('private Memory Territory voice handlers', () => {
+  it('rejects a work-scoped socket before opening private speech recognition', async () => {
+    const { socket } = await setup(false, 'organization');
+    expect(fixture.stts).toHaveLength(0);
+    expect(socket.outputs.at(-1)?.[1].code).toBe('AVATAR_UNAVAILABLE');
+  });
+
+  it('releases private input and prevents a late reply after changing to a work session', async () => {
+    const { socket, data, stt } = await setup(true);
+    const gate = deferred<any>(); fixture.model.mockReturnValueOnce(gate.promise);
+    const pending = stt.result({ text: 'A private memory', isFinal: true });
+    await vi.waitFor(() => expect(fixture.model).toHaveBeenCalledOnce());
+    socket.data.authenticatedOrgId = 'organization'; gate.resolve({ text: 'Private reply' }); await pending;
+    expect(stt.end).toHaveBeenCalled(); expect(fixture.portraitSpeak).not.toHaveBeenCalled();
+    expect(fixture.synthesis).not.toHaveBeenCalled(); expect(terminal(socket)).toEqual([]);
+    await socket.receive('avatar:audio:stop', data);
+  });
+
+  it('uses the saved reply and existing TTS to speak through the portrait without duplicate local audio', async () => {
+    const { socket, data, stt, avatar } = await setup(true);
+    await stt.result({ text: 'Tell me about the garden', isFinal: true });
+    expect(fixture.portraitSpeak).toHaveBeenCalledOnce();
+    expect(fixture.portraitSpeak).toHaveBeenCalledWith(expect.objectContaining({ userId: socket.userId, avatarId: avatar.id,
+      callSessionId: data.sessionId, audioBuffer: Buffer.from([1, 2, 3]), format: 'wav', signal: expect.any(AbortSignal) }));
+    expect(terminal(socket)).toHaveLength(1);
+    expect(socket.outputs.filter(([event]) => event === 'avatar:audio:response')).toEqual([]);
+    await socket.receive('avatar:audio:stop', data);
+    expect(fixture.portraitStop).toHaveBeenCalledWith(expect.objectContaining({ userId: socket.userId, avatarId: avatar.id, callSessionId: data.sessionId }));
+  });
+
+  it('does not open recognition before the portrait is ready', async () => {
+    fixture.portraitReady = false;
+    const { socket } = await setup(true);
+    expect(fixture.stts).toHaveLength(0);
+    expect(socket.outputs.some(([event, data]) => event === 'avatar:audio:error' && data.code === 'PORTRAIT_UNAVAILABLE')).toBe(true);
+    expect(fixture.portraitStop).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the durable text when renderer acceptance is unknown, without replaying speech', async () => {
+    fixture.portraitSpeak.mockRejectedValueOnce(new Error('Upstream response lost'));
+    const { socket, data, stt } = await setup(true);
+    await stt.result({ text: 'Remember our walk?', isFinal: true });
+    expect(terminal(socket)).toHaveLength(1);
+    expect(socket.outputs.some(([event, data]) => event === 'avatar:audio:tts_error' && data.code === 'PORTRAIT_UNAVAILABLE')).toBe(true);
+    expect(socket.outputs.filter(([event]) => event === 'avatar:audio:response')).toEqual([]);
+    expect(fixture.portraitSpeak).toHaveBeenCalledOnce();
+    await socket.receive('avatar:audio:stop', data);
+  });
+
   it('uses the same private text history and frozen sources, empty tools and a durable terminal before speech', async () => {
     const { socket, avatar, data, stt } = await setup();
     const conversation = getOrCreateActiveConversation(socket.userId, avatar.id, 'personal', '');

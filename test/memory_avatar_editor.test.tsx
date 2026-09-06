@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({ create: vi.fn(), update: vi.fn(), get: vi.fn()
 vi.mock('../src/services/apiClient', () => ({ apiFetch: mocks.api }));
 vi.mock('../src/services/memoryAvatarService', async original => ({ ...await original<typeof import('../src/services/memoryAvatarService')>(), memoryAvatarService: mocks }));
 vi.mock('../src/services/voiceService', () => ({ listVoices: mocks.voices }));
+vi.mock('../src/components/MemoryAvatarPortraitSettings', () => ({ MemoryAvatarPortraitSettings: () => null }));
 import { MemoryAvatarCreate } from '../src/components/MemoryAvatarCreate';
 import { MemoryAvatarProfile } from '../src/components/MemoryAvatarProfile';
 import { MemoryAvatarApiError } from '../src/services/memoryAvatarService';

@@ -43,6 +43,14 @@ function voice(value: unknown, userId: string): MemoryAvatarVoice {
   if (!isVoiceProfileAccessible(voiceProfileScope(userId, 'personal', ''), id)) throw new MemoryAvatarError(403, 'voice_not_accessible', 'Voice does not belong to this personal workspace');
   return id ? { voiceId: id } : {};
 }
+function presentation(value: unknown, payload: Record<string, any>): { mode: 'human3d' | 'portrait'; mediaId?: string } {
+  const input = object(value);
+  if (input.mode === 'human3d') return { mode: 'human3d' };
+  if (input.mode !== 'portrait' || typeof input.mediaId !== 'string') bad('Unsupported avatar presentation');
+  const media = (payload.media || []).find((item: any) => item.id === input.mediaId);
+  if (!media || !((media.kind === 'image' && media.hasThumbnail) || (media.kind === 'video' && media.hasPoster))) bad('Select a saved image or video belonging to this person');
+  return { mode: 'portrait', mediaId: media.id };
+}
 function personality(value: unknown, name: string, id: string, selectedVoice: MemoryAvatarVoice): Record<string, any> {
   const config = object(value);
   const style = object(config.expressionStyle);
@@ -91,6 +99,7 @@ function normalize(row: any): MemoryAvatarRecord {
     seedMemoryIds: seeds.map((seed: any, index: number) => String(seed.id || `${row.id}:seed:${index}`)),
     narrative: typeof payload.narrative === 'string' ? payload.narrative : '',
     appearance: { ...DEFAULT_MEMORY_AVATAR_APPEARANCE, ...object(payload.appearance) }, voice: selectedVoice,
+    presentation: payload.presentation || { mode: 'human3d' },
     memoryCount: seeds.length + materialRows(payload).reduce((count, material) => count + chunks(material.text).length, 0),
     isFrozen: true, createdAt: row.createdAt, updatedAt: row.updatedAt || row.createdAt,
   };
@@ -136,6 +145,24 @@ function checkRevision(row: any, revision: unknown): void {
   if (!Number.isSafeInteger(revision) || Number(revision) < 1) bad('revision must be a positive integer');
   if ((Number(row.payload.revision) || 1) !== revision) throw new MemoryAvatarError(409, 'memory_avatar_revision_conflict', 'Memory avatar changed. Refresh before editing.');
 }
+/** Private media metadata shares the avatar's save/revision boundary. No global KB writes. */
+export function mutateMemoryAvatarPayload<T>(userId: string, id: string, change: (payload: Record<string, any>) => { value: T; changed?: boolean; invalidate?: boolean }, revision?: number): Promise<{ value: T; avatar: MemoryAvatarRecord }> {
+  return serial(async () => {
+    const row = ownedRow(userId, id);
+    if (revision !== undefined) checkRevision(row, revision);
+    const draft = structuredClone(row.payload);
+    const result = change(draft);
+    if (result.changed !== false) {
+      draft.revision = (Number(row.payload.revision) || 1) + 1;
+      if (result.invalidate) draft.sourceGeneration = (Number(row.payload.sourceGeneration) || 0) + 1;
+      row.payload = draft;
+      if (result.invalidate) invalidateMemoryAvatarAuthorization(userId, id);
+      write(row);
+    }
+    await save();
+    return { value: result.value, avatar: normalize(row) };
+  });
+}
 export function createMemoryAvatar(input: Omit<CreateMemoryAvatarInput, 'clientRequestId'> & { userId: string; clientRequestId?: string }): Promise<MemoryAvatarRecord> {
   return serial(async () => {
     const clientRequestId = requestId(input.clientRequestId, true);
@@ -160,6 +187,7 @@ export function createMemoryAvatar(input: Omit<CreateMemoryAvatarInput, 'clientR
       narrative: shortText(input.narrative || '', 2000, 'narrative'), isFrozen: true,
       appearance: input.appearance === undefined ? { ...DEFAULT_MEMORY_AVATAR_APPEARANCE } : appearance(input.appearance),
       voice: selectedVoice, materials: [],
+      presentation: input.presentation === undefined ? { mode: 'human3d' } : presentation(input.presentation, {}),
     };
     const row = { id, userId: input.userId, name, relationshipType: shortText(input.relationshipType || 'close_friend', 40, 'relationshipType', false), status: 'active', payload, createdAt: now, updatedAt: now };
     const db = readDB();
@@ -180,9 +208,14 @@ export function updateMemoryAvatar(userId: string, id: string, input: PatchMemor
       narrative: input.narrative === undefined ? row.payload.narrative : shortText(input.narrative, 2000, 'narrative'),
       appearance: input.appearance === undefined ? row.payload.appearance : appearance(input.appearance),
       voice: input.voice === undefined ? row.payload.voice : voice(input.voice, userId),
+      presentation: input.presentation === undefined ? row.payload.presentation || { mode: 'human3d' } : presentation(input.presentation, row.payload),
       revision: input.revision + 1, lastMutation: fingerprint,
     };
     next.personalityConfig = personality(row.payload.personalityConfig, name, id, next.voice || {});
+    if (input.presentation !== undefined || input.voice !== undefined || input.appearance !== undefined) {
+      next.sourceGeneration = (Number(row.payload.sourceGeneration) || 0) + 1;
+      invalidateMemoryAvatarAuthorization(userId, id);
+    }
     row.name = name; row.relationshipType = relationshipType; row.payload = next;
     write(row); await save(); return normalize(row);
   });

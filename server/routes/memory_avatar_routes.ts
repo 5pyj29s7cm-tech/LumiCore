@@ -1,6 +1,8 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { getActiveConversation, getMessages } from '../conversation/manager';
 import { requireAuth } from '../middleware/auth';
+import { mountMemoryAvatarMediaRoutes } from '../memory_avatar/media_routes';
+import { mountMemoryAvatarPortraitRoutes } from '../memory_avatar/portrait_routes';
 import { createMemoryAvatar, getMemoryAvatar, listMemoryAvatars, archiveMemoryAvatar, updateMemoryAvatar, listMemoryAvatarMaterials, addMemoryAvatarMaterial, removeMemoryAvatarMaterial, MemoryAvatarError } from '../memory_avatar/store';
 
 const asyncHandler = (fn: (req: Request, res: Response, next: NextFunction) => Promise<any>) =>
@@ -21,6 +23,7 @@ function publicAvatar(avatar: any) {
     revision: avatar.revision,
     appearance: avatar.appearance,
     voice: avatar.voice,
+    presentation: avatar.presentation,
     narrative: avatar.narrative || '',
     personalityConfig: avatar.personalityConfig || {},
     createdAt: avatar.createdAt,
@@ -38,6 +41,12 @@ export function mountMemoryAvatarRoutes(
     getKimi?: () => any; getGlm?: () => any; getRelay?: () => any;
   },
 ) {
+  router.use('/memory-avatars', requireAuth, (req, res, next) => {
+    if (req.user?.orgId) return res.status(403).json({ error: 'Memory Territory requires your personal workspace.', code: 'memory_avatar_personal_scope_required' });
+    next();
+  });
+  mountMemoryAvatarMediaRoutes(router, llmGetters, publicAvatar);
+  mountMemoryAvatarPortraitRoutes(router);
   router.post('/memory-avatars/distill', requireAuth, asyncHandler(async (req, res) => {
     const { chatLog, format, relationshipType, name: targetName, audioTranscript } = req.body || {};
     if (typeof chatLog !== 'string' || !chatLog.trim() || !format) {

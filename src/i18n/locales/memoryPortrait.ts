@@ -1,0 +1,36 @@
+import type { Locale } from '../runtime';
+const COPY = {
+  zh: {
+    settings: '真人视频服务', provider: 'D-ID', key: 'D-ID API 密钥',
+    hint: '真人说话画面由 D-ID 生成，回答和声音沿用主程序。需要你自己的 D-ID 服务额度。',
+    configured: '已保存服务密钥', missing: '尚未配置服务密钥', loading: '正在读取服务设置…',
+    save: '保存密钥', saving: '正在保存…', clear: '移除密钥', saved: '设置已保存', failed: '设置未确认保存，请重新读取后再试。',
+    loadFailed: '暂时无法读取设置。', retry: '重新读取', strict: '严格隐私模式下无法使用云端真人视频服务。',
+    keyHint: '密钥只交给本机后台保存，不会显示在人物资料中。',
+    cleanupPending: '部分云端素材或会话的删除尚未确认，请在 D-ID 账号中核对。',
+    enable: '启用真人形象对话',
+    consent: '我有权使用此人物形象，同意通话时将选定的人像和回复音频发送给 D-ID，并使用该服务额度。',
+    unavailable: '真人视频连接未成功，请在人物资料中检查服务设置。文字对话仍可使用。',
+    label: 'AI 生成的真人形象', still: '当前显示已保存的人像',
+    play: '播放真人画面和声音', playbackFailed: '浏览器暂停了声音，请点击播放。',
+    previewFailed: '暂时无法读取人物形象，请在人物资料中重新选择。',
+    fromVideo: '视频会提取一帧作为说话人像，不会复刻原视频中的动作。',
+  },
+  en: {
+    settings: 'Talking portrait service', provider: 'D-ID', key: 'D-ID API key',
+    hint: 'D-ID renders the talking portrait. Lumi keeps generating replies and speech. Your own D-ID service credits are required.',
+    configured: 'Service key saved', missing: 'No service key configured', loading: 'Loading service settings…',
+    save: 'Save key', saving: 'Saving…', clear: 'Remove key', saved: 'Settings saved', failed: 'Saving was not confirmed. Reload before trying again.',
+    loadFailed: 'Settings could not be loaded.', retry: 'Reload settings', strict: 'Cloud talking portraits are unavailable in strict privacy mode.',
+    keyHint: 'The key is stored by the local backend and is never included in person details.',
+    cleanupPending: 'Deletion of some cloud assets or sessions is not yet confirmed. Check your D-ID account.',
+    enable: 'Enable talking portrait',
+    consent: 'I have the right to use this likeness and agree to send the selected portrait and reply audio to D-ID during calls, using my service credits.',
+    unavailable: 'The talking portrait could not connect. Check the service in person details. Text conversation remains available.',
+    label: 'AI-generated talking portrait', still: 'Showing the saved portrait',
+    play: 'Play portrait and audio', playbackFailed: 'The browser paused audio. Select play to continue.',
+    previewFailed: 'The portrait could not be loaded. Select it again in person details.',
+    fromVideo: 'A still frame from the video is used as the talking portrait. Original movements are not cloned.',
+  },
+} as const;
+export const memoryPortraitCopy = (locale: Locale) => COPY[locale];

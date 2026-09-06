@@ -19,6 +19,7 @@ import { getUserPreferredVisionConfig } from '../llm/vision_preferences';
 import type { LLMGetters } from '../llm/dispatch';
 import { setRealtimeVoiceSessionActive } from '../autonomy/foreground_activity';
 import type { VoiceCallAdmission } from './voice_call_admission';
+import { isMemoryAvatarPortraitReady, speakMemoryAvatarPortrait, stopMemoryAvatarPortrait } from '../memory_avatar/portrait_sessions';
 
 const CANCELLED = 'This voice reply was cancelled.';
 const UNKNOWN = 'The reply could not be saved. Please try again.';
@@ -37,6 +38,7 @@ function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
 
 interface PrivateCall {
   avatarId: string; userId: string; sessionId: string; active: boolean;
+  portrait: boolean;
   authorization: ReturnType<typeof captureMemoryAvatarAuthorization>;
   controller: AbortController; unwatch: () => void;
   stt: ReturnType<typeof createResilientStreamingSession> | null;
@@ -54,13 +56,22 @@ interface PrivateCall {
 export function registerMemoryAvatarVoiceHandlers(socket: Socket, getters: LLMGetters, getUserId: (socket: Socket) => string, admission: VoiceCallAdmission) {
   let current: PrivateCall | undefined;
   const matches = (call: PrivateCall, data: any) => data?.sessionId === call.sessionId && data?.avatarId === call.avatarId;
-  const authorized = (call: PrivateCall) => call.authorization.isCurrent() && getUserId(socket) === call.userId;
-  const live = (call: PrivateCall) => current === call && call.active && socket.connected && authorized(call);
+  const personalSocket = () => !String(socket.data?.authenticatedOrgId || '').trim();
+  const authorized = (call: PrivateCall) => personalSocket() && call.authorization.isCurrent() && getUserId(socket) === call.userId;
+  const live = (call: PrivateCall) => {
+    if (current !== call || !call.active || !socket.connected) return false;
+    if (!authorized(call)) {
+      void stop(call, { code: 'AVATAR_UNAVAILABLE', message: 'The private call no longer has an active personal session.' });
+      return false;
+    }
+    return true;
+  };
   const emit = (call: PrivateCall, event: string, data: object) => {
     if (socket.connected) socket.emit(`avatar:${event}`, { ...data, avatarId: call.avatarId, agentId: call.avatarId, sessionId: call.sessionId });
   };
   const stop = async (call: PrivateCall, error?: { code: string; message: string }) => {
     call.active = false;
+    const portraitCleanup = call.portrait ? stopMemoryAvatarPortrait({ userId: call.userId, avatarId: call.avatarId, callSessionId: call.sessionId }).catch(() => {}) : Promise.resolve();
     call.frame = undefined;
     call.controller.abort();
     call.turn?.controller.abort();
@@ -74,6 +85,7 @@ export function registerMemoryAvatarVoiceHandlers(socket: Socket, getters: LLMGe
     // admission/drain link until that call's final save really converges.
     await call.handover?.catch(() => undefined);
     await call.inputTail;
+    await portraitCleanup;
     call.admission?.release();
     if (current === call) {
       current = undefined;
@@ -182,9 +194,16 @@ export function registerMemoryAvatarVoiceHandlers(socket: Socket, getters: LLMGe
           assertCurrent();
           call.playbackUntil = Date.now() + Math.min(120_000, Math.max(3000, reply.length * 170));
           emit(call, 'audio:status', { status: 'speaking', requestId, lane: 'conversation' });
-          emit(call, 'audio:response', { buffer: audio.audioBuffer, format: audio.format, requestId, lane: 'conversation' });
+          if (call.portrait) {
+            await speakMemoryAvatarPortrait({ userId: call.userId, avatarId: call.avatarId, callSessionId: call.sessionId,
+              requestId, audioBuffer: audio.audioBuffer, format: audio.format, signal: controller.signal });
+            assertCurrent();
+          } else emit(call, 'audio:response', { buffer: audio.audioBuffer, format: audio.format, requestId, lane: 'conversation' });
         } catch {
-          if (isCurrent()) emit(call, 'audio:tts_error', { requestId, lane: 'conversation', code: 'TTS_OUTPUT_UNAVAILABLE' });
+          if (isCurrent()) {
+            emit(call, 'audio:tts_error', { requestId, lane: 'conversation', code: call.portrait ? 'PORTRAIT_UNAVAILABLE' : 'TTS_OUTPUT_UNAVAILABLE' });
+            if (call.portrait) void stop(call);
+          }
         }
       } catch (error) {
         if (accepted && !terminalCommitted) {
@@ -209,12 +228,12 @@ export function registerMemoryAvatarVoiceHandlers(socket: Socket, getters: LLMGe
     const avatarId = String(data?.avatarId || '');
     const sessionId = String(data?.sessionId || '');
     const avatar = getMemoryAvatar(userId, avatarId);
-    if (!userId || !avatar || avatar.status !== 'active' || !/^[\w-]{1,128}$/.test(sessionId)) {
+    if (!personalSocket() || !userId || !avatar || avatar.status !== 'active' || !/^[\w-]{1,128}$/.test(sessionId)) {
       socket.emit('avatar:audio:error', { avatarId, sessionId, code: 'AVATAR_UNAVAILABLE', message: 'This memory person is unavailable.' });
       return;
     }
     const call: PrivateCall = {
-      avatarId, userId, sessionId, active: true, authorization: captureMemoryAvatarAuthorization(userId, avatarId),
+      avatarId, userId, sessionId, active: true, portrait: data.portrait === true, authorization: captureMemoryAvatarAuthorization(userId, avatarId),
       controller: new AbortController(), unwatch: () => {}, stt: null,
       frameSequence: 0, videoGeneration: 0, lastFrameAt: 0, inputTail: Promise.resolve(), lastTranscript: '', lastTranscriptAt: 0, lastReply: '', playbackUntil: 0,
     };
@@ -228,6 +247,10 @@ export function registerMemoryAvatarVoiceHandlers(socket: Socket, getters: LLMGe
       call.admission = await call.handover;
       if (!call.admission.isCurrent() || !call.active || !authorized(call) || !socket.connected) { await stop(call); return; }
       current = call;
+      if (call.portrait && !isMemoryAvatarPortraitReady({ userId, avatarId, callSessionId: sessionId })) {
+        await stop(call, { code: 'PORTRAIT_UNAVAILABLE', message: 'The talking portrait is not ready. Start a new call.' });
+        return;
+      }
       setRealtimeVoiceSessionActive(userId, `avatar:${socket.id}:${sessionId}`, true);
       const provider = getActiveStreamingSTTProvider();
       if (!provider) {
@@ -251,6 +274,7 @@ export function registerMemoryAvatarVoiceHandlers(socket: Socket, getters: LLMGe
         const frame = call.frame && Date.now() - call.frame.receivedAt <= FRAME_TTL_MS ? { ...call.frame } : undefined;
         const oldTurn = call.turn;
         if (oldTurn || call.playbackUntil > Date.now()) {
+          if (call.portrait) void stopMemoryAvatarPortrait({ userId, avatarId, callSessionId: sessionId }).catch(() => {});
           emit(call, 'audio:interrupt-ack', { requestId: oldTurn?.requestId, workContinues: false });
           call.playbackUntil = 0;
         }
@@ -298,6 +322,7 @@ export function registerMemoryAvatarVoiceHandlers(socket: Socket, getters: LLMGe
     const turn = call.turn;
     if (data.requestId && turn && data.requestId !== turn.requestId) return;
     turn?.controller.abort();
+    if (call.portrait) void stopMemoryAvatarPortrait({ userId: call.userId, avatarId: call.avatarId, callSessionId: call.sessionId }).catch(() => {});
     call.playbackUntil = 0;
     emit(call, 'audio:interrupt-ack', { requestId: turn?.requestId, workContinues: false });
     await turn?.pending;

@@ -9,6 +9,34 @@ export interface MemoryAvatarAppearance {
 
 export interface MemoryAvatarVoice { voiceId?: string }
 
+/** The selected private media remains owned by this memory person. */
+export interface MemoryAvatarPresentation {
+  mode: 'human3d' | 'portrait';
+  mediaId?: string;
+}
+
+export type MemoryAvatarMediaKind = 'image' | 'video' | 'audio';
+export type MemoryAvatarMediaVariant = 'original' | 'thumbnail' | 'poster' | 'audio';
+export interface MemoryAvatarMedia {
+  id: string;
+  kind: MemoryAvatarMediaKind;
+  title: string;
+  caption?: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: string;
+  updatedAt: string;
+  status: 'stored' | 'processing' | 'ready' | 'failed' | 'cancelled';
+  error?: string;
+  width?: number;
+  height?: number;
+  durationSeconds?: number;
+  hasThumbnail: boolean;
+  hasPoster: boolean;
+  hasAudio: boolean;
+  materialId?: string;
+}
+
 export const DEFAULT_MEMORY_AVATAR_APPEARANCE: MemoryAvatarAppearance = {
   style: 'human3d', preset: 'neutral', skinColor: '#c89b7b',
   hairColor: '#302a28', outfitColor: '#64748b', backgroundColor: '#121827',
@@ -32,6 +60,7 @@ export interface MemoryAvatar {
   narrative: string;
   appearance: MemoryAvatarAppearance;
   voice: MemoryAvatarVoice;
+  presentation?: MemoryAvatarPresentation;
   memoryCount: number;
   isFrozen: boolean;
   personalityConfig: Record<string, any>;
@@ -48,6 +77,7 @@ export interface CreateMemoryAvatarInput {
   narrative?: string;
   appearance?: MemoryAvatarAppearance;
   voice?: MemoryAvatarVoice;
+  presentation?: MemoryAvatarPresentation;
   personalityConfig?: Record<string, any>;
   evidenceMap?: any[];
   seedMemories?: any[];
@@ -60,6 +90,7 @@ export interface PatchMemoryAvatarInput {
   narrative?: string;
   appearance?: MemoryAvatarAppearance;
   voice?: MemoryAvatarVoice;
+  presentation?: MemoryAvatarPresentation;
 }
 
 export interface AddMemoryAvatarMaterialInput {
