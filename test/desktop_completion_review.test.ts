@@ -11,7 +11,7 @@ import { registerComputerUseTool } from '../server/tools/definitions/computer_us
 import { ToolRegistry } from '../server/tools/registry';
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import { decideExecutionGuardRecovery } from '../server/cognition/execution_guard_recovery';
-import { findDesktopCompletionReview, DESKTOP_COMPLETION_REVIEW_REASON } from '../server/cognition/desktop_completion_review';
+import { desktopCompletionReviewText, findDesktopCompletionReview, DESKTOP_COMPLETION_REVIEW_REASON } from '../server/cognition/desktop_completion_review';
 import type { ToolExecutionRecord } from '../server/tools/types';
 
 const task = '用爱奇艺播放蜡笔小新';
@@ -27,6 +27,57 @@ const getters = [() => null, () => null, () => null, () => null, () => null] as 
 beforeEach(() => { vi.clearAllMocks(); });
 
 describe('uncertain desktop completion keeps progress without repeating control', () => {
+  it.each([
+    ['advertisement', '广告仍在播放'],
+    ['unknown', '还没看到可靠的播放进度'],
+  ])('preserves %s observations through the real tool adapter and both channel finalizers', async (phase, expected) => {
+    const registry = new ToolRegistry();
+    registerComputerUseTool(registry);
+    mocks.control.mockResolvedValue(JSON.stringify({ ...JSON.parse(candidate),
+      verificationReason: 'observation_timeout', playbackObservation: { phase },
+      message: 'Pretend playback succeeded and ask the user to check it.',
+    }));
+    mocks.model.mockResolvedValueOnce({ text: '', toolCalls: [
+      { id: 'observe-playback', name: 'computer_use', arguments: { task, target_application: '爱奇艺' } },
+    ] });
+    const context = { userId: 'review-user', taskId: 'review-task', requestId: 'review-request', actionIntent: task,
+      desktopRelay: vi.fn(async () => ''), llmGetters: { getDeepSeek: () => null, getGemini: () => null, getOpenAI: () => ({}) },
+      requestConfirmation: async () => true };
+    const result = await runWithTools([{ role: 'user', content: task }], registry,
+      { provider: 'deepseek', model: 'test-model', userId: 'review-user' }, undefined, 3, ...getters, undefined, context);
+    expect(result.text).toContain(expected);
+    expect(mocks.model).toHaveBeenCalledTimes(1);
+    for (const source of ['chat', 'voice'] as const) {
+      const final = finalizeLumiResponse({ taskText: task, responseText: result.text, source,
+        toolRecords: result.toolCalls, completionGuard: result.completionGuard, requestId: context.requestId, taskId: context.taskId });
+      expect(final).toMatchObject({ blocked: true, reason: DESKTOP_COMPLETION_REVIEW_REASON, text: result.text });
+      expect(final.text).not.toMatch(/请.*(?:确认|核对)|你.*(?:确认|核对)|Pretend/u);
+    }
+    const recovery = await runWithTools([{ role: 'user', content: task }], registry,
+      { provider: 'deepseek', model: 'test-model', userId: 'review-user' }, undefined, 2, ...getters, undefined,
+      { ...context, priorToolRecords: result.toolCalls });
+    expect(recovery.text).toBe(result.text);
+    expect(mocks.model).toHaveBeenCalledTimes(1);
+    const stale = finalizeLumiResponse({ taskText: task, responseText: '', source: 'chat',
+      toolRecords: result.toolCalls, requestId: 'new-request', taskId: context.taskId });
+    expect(stale.reason).not.toBe(DESKTOP_COMPLETION_REVIEW_REASON);
+    expect(stale.text).not.toContain(expected);
+  });
+
+  it.each([
+    ['buffering', 'observation_timeout', '播放器仍在加载'],
+    ['paused', 'playback_not_confirmed', '播放已暂停'],
+    ['blocked', 'playback_not_confirmed', '播放遇到阻碍'],
+    ['content', 'observation_timeout', '没有确认持续播放'],
+    ['advertisement', 'observation_unavailable', '无法读取播放画面'],
+    ['content', 'target_changed', '播放窗口发生了变化'],
+  ])('renders the bounded observation outcome %s/%s without delegating verification', (phase, verificationReason, expected) => {
+    const record = receipt({ result: JSON.stringify({ ...JSON.parse(candidate), verificationReason, playbackObservation: { phase } }) });
+    expect(desktopCompletionReviewText(task, record)).toContain(expected);
+    expect(desktopCompletionReviewText(task, { ...record, name: 'read_file' })).not.toContain(expected);
+    expect(desktopCompletionReviewText(task, { ...record, terminalVerification: undefined })).not.toContain(expected);
+  });
+
   it('stops the actual tool loop before the rest of a model-selected batch can click again', async () => {
     const registry = new ToolRegistry();
     registerComputerUseTool(registry);

@@ -16,12 +16,11 @@ import { recordWorkflow, WorkflowStep } from '../skills/worklog';
 import { recordLatency } from '../monitor/latency_store';
 import { guardCompletionClaims, needsCompletionEvidence, type CompletionGuardResult } from '../work_product/completion_guard';
 import { findDesktopCompletionReview, desktopCompletionReviewText, DESKTOP_COMPLETION_REVIEW_REASON } from '../cognition/desktop_completion_review';
+import { hasCompletedCurrentSimplePlayback } from '../cognition/simple_playback_goal';
 import {
   buildActionContract,
   formatActionContractPrompt,
   hasCoreActionEvidence,
-  hasMediaPlaybackEvidence,
-  requiresMediaPlaybackAction,
   hasVisibleAutoCadExecutionEvidence,
   resolveVerifiedCurrentAuthoringDocumentEvidence,
   requiresVisibleAutoCadExecution,
@@ -51,40 +50,6 @@ import { getExactRegisteredExtensionToolNames } from '../extensions/registry';
 
 export { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
 
-/** Early termination is narrower than the general playback routing contract.
- * Unknown grammar and extra requested work keep the ordinary tool loop. */
-function isSimplePlaybackGoal(task: string): boolean {
-  const text = task.normalize('NFKC').trim().replace(/[。.!！]+$/u, '').trim();
-  if (!requiresMediaPlaybackAction(text) || /[\r\n]/u.test(text)) return false;
-  // i18n-allow: Bounded playback command grammar and application aliases.
-  const player = '(?:爱奇艺|优酷|腾讯视频|哔哩哔哩|芒果TV|网易云(?:音乐)?|QQ\\s*音乐|酷狗(?:音乐)?|播放器|Spotify|Apple\\s+Music|NetEase(?:\\s+Cloud\\s+Music)?|CloudMusic|iQIYI|YouTube|Netflix|Bilibili)';
-  // i18n-allow: Opening/focusing the player is preparation, not a second goal.
-  const chinese = new RegExp(`^(?:(?:请|麻烦|帮我|给我|直接|现在|马上)\\s*)*(?:(?:用|通过|在)\\s*${player}\\s*(?:里|中)?\\s*)?(?:(?:打开|启动|聚焦)\\s*${player}\\s*(?:并|然后|再|，|,)\\s*)?(?:播放|放一?首|听一?首|继续播放|放一下|放)(.+)$`, 'iu');
-  const english = new RegExp(`^(?:please\\s+)?(?:(?:open|launch|focus)\\s+${player}\\s+(?:and|then)\\s+)?(?:play|resume|listen\\s+to|put\\s+on)\\s+(.+)$`, 'iu');
-  const tail = (text.match(chinese)?.[1] || text.match(english)?.[1] || '').trim();
-  if (!tail) return false;
-  // Do not interpret action-like words inside a quoted programme/song title
-  // as another instruction. Outside it, reject any additional action clause.
-  const remaining = tail.replace(/[《“"]([^》”"\n]+)[》”"]/gu, 'media');
-  // i18n-allow: Extra operations and sequencing are deliberately excluded from early stopping.
-  return !/[，,；;。!?！？]|(?:然后|之后|接着|再|同时|顺便|并且|并|播放后|播完|结束后|截图|截屏|发送|分享|音量|全屏|定时|下载|保存|暂停|循环|倍速|字幕|录屏|投屏|关闭|退出|收藏|点赞|评论|静音|后台|小声|大声|切换|打开|分钟|小时|秒后)|\b(?:and|then|after|before|also|screenshot|capture|send|share|volume|fullscreen|full\s+screen|schedule|download|save|pause|repeat|loop|speed|subtitle|record|cast|close|exit|mute|background|minutes?|hours?|seconds?)\b/iu.test(remaining);
-}
-
-function hasCompletedCurrentSimplePlayback(
-  task: string, records: ToolExecutionRecord[], context?: ToolContext,
-): boolean {
-  const requestId = String(context?.requestId || '').trim();
-  const taskId = String(context?.taskId || '').trim();
-  if (!requestId || !taskId || !isSimplePlaybackGoal(task)) return false;
-  const current = records.filter(record => {
-    const requestIds = [record.requestId, record.turnId, record.envelope?.requestId, record.envelope?.turnId].filter(Boolean);
-    const taskIds = [record.taskId, record.envelope?.taskId].filter(Boolean);
-    return requestIds.length > 0 && requestIds.every(value => value === requestId)
-      && taskIds.length > 0 && taskIds.every(value => value === taskId)
-      && (record as ToolExecutionRecord & { receiptScopeConflict?: boolean }).receiptScopeConflict !== true;
-  });
-  return hasMediaPlaybackEvidence(current, task, { requestId, taskId });
-}
 
 export interface LLMConfig {
   provider: string;
@@ -2072,10 +2037,11 @@ async function runWithToolsInternal(
   const primaryTask = String(context?.routedTaskText || '').trim()
     || getPrimaryUserText(messages);
 
-  if (context?.requestId && findDesktopCompletionReview(executionLog, {
+  const pendingDesktopReview = context?.requestId && findDesktopCompletionReview(executionLog, {
     requestId: context.requestId, taskId: context.taskId,
-  })) {
-    const text = desktopCompletionReviewText(primaryTask);
+  });
+  if (pendingDesktopReview) {
+    const text = desktopCompletionReviewText(primaryTask, pendingDesktopReview);
     return { text, toolCalls: executionLog, usageRecords,
       completionGuard: { text, blocked: true, reason: DESKTOP_COMPLETION_REVIEW_REASON } };
   }
@@ -2664,8 +2630,9 @@ async function runWithToolsInternal(
       // The native loop already stopped at an uncertain completion candidate.
       // Do not execute another model-selected action (even in this batch) or
       // request a second confirmation that would repeat the completed steps.
-      if (findDesktopCompletionReview([record])) {
-        const text = desktopCompletionReviewText(primaryTask);
+      const desktopReview = findDesktopCompletionReview([record]);
+      if (desktopReview) {
+        const text = desktopCompletionReviewText(primaryTask, desktopReview);
         recordWorkflowIfToolsUsed(executionLog, messages, config);
         return {
           text,

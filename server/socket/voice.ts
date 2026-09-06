@@ -29,6 +29,8 @@ import {
 import { toolRegistry } from "../tools/registry";
 import { ToolExecutionRecord } from "../tools/types";
 import { executeToolCall } from "../tools/execution_engine";
+import { desktopCompletionReviewText, findDesktopCompletionReview } from '../cognition/desktop_completion_review';
+import { hasCompletedCurrentSimplePlayback } from '../cognition/simple_playback_goal';
 import {
   GENERIC_TOOL_REPLAN_PROMPT,
   hasRelevantEvidenceTool,
@@ -3189,6 +3191,7 @@ async function processVoiceInput(
     executionSignal: pipelineAbort?.signal,
     isCancelled: () => !isCurrentTurn(),
     onProgress: (step: string) => {
+      if (!isCurrentTurn()) return;
       if (session.isBackgroundWork && step.trim()) {
         session.activeWorkStatus = 'executing';
         session.activeWorkStep = step.trim().slice(0, 160);
@@ -4821,6 +4824,19 @@ async function processVoiceInput(
         // re-plan, replace the pending action, or run later calls from the same
         // batch before the user has confirmed the exact stored arguments.
         if (pendingConfirmationCreatedThisTurn || isConfirmationBlockedToolRecord(executionRecord)) {
+          break voiceToolLoop;
+        }
+        const desktopReview = findDesktopCompletionReview([executionRecord], {
+          requestId, taskId: actionTaskExecution.state?.taskId,
+        });
+        if (desktopReview) {
+          responseText = desktopCompletionReviewText(actionIntentText, desktopReview);
+          break voiceToolLoop;
+        }
+        if (hasCompletedCurrentSimplePlayback(actionIntentText, toolResults, toolContext)) {
+          // The terminal finalizer owns verified wording; speech is queued only
+          // after the task, assistant message and terminal receipt are durable.
+          responseText = '';
           break voiceToolLoop;
         }
       }

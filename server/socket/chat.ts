@@ -1845,6 +1845,11 @@ export function registerChatHandler(
     const abortController = sessionLease.controller;
     const stopAuthorizationWatch = turnAuthorization.watch(abortController);
     const isChatCancelled = () => !turnAuthorization.isCurrent() || abortController.signal.aborted;
+    const forwardToolProgress = (step: string) => {
+      if (!isChatCancelled() && shouldForwardPreFinalizationProgress(step)) {
+        emitAgent('agent:progress', { text: step, agentName: 'Lumi' });
+      }
+    };
     const unregisterShutdownCancellation = runtimeShutdownCancellation.register(abortController);
     let releaseDesktopControlLease: (() => void) | null = null;
     let foregroundRequestIdentity: ChatForegroundRequestIdentity | null = null;
@@ -3851,6 +3856,7 @@ export function registerChatHandler(
             localWriteIntentReason,
             executionSignal: abortController.signal,
             isCancelled: isChatCancelled,
+            onProgress: forwardToolProgress,
             userConfirmed: true,
             actionIntent: confirmedTask,
             currentTurnExecutionRequested: executionPipeline.executionRequested,
@@ -3949,6 +3955,7 @@ export function registerChatHandler(
               localWriteIntentReason,
               executionSignal: abortController.signal,
               isCancelled: isChatCancelled,
+              onProgress: forwardToolProgress,
               requestConfirmation: requestToolConfirmation,
               actionIntent: confirmedTask,
               currentTurnExecutionRequested: executionPipeline.executionRequested,
@@ -4430,11 +4437,7 @@ export function registerChatHandler(
                   arguments: call.arguments,
                 });
               },
-              onProgress: (step: string) => {
-                if (shouldForwardPreFinalizationProgress(step)) {
-                  emitAgent("agent:progress", { text: step, agentName: "Lumi" });
-                }
-              },
+              onProgress: forwardToolProgress,
               toolPolicy: modelCapabilityPolicy,
               modelToolProjection,
               actionIntent: visibleUserText,
@@ -4617,6 +4620,7 @@ export function registerChatHandler(
               localWriteIntentReason,
               executionSignal: abortController.signal,
               isCancelled: isChatCancelled,
+              onProgress: forwardToolProgress,
               onToolStart: call => {
                 if (isDirectDesktopTool(call.name)) return;
                 emitToolLifecycle({

@@ -391,6 +391,12 @@ export function toolRecordKey(record: Pick<ToolExecutionRecord, 'name' | 'argume
   return `${compact(record.name, 160)}:${args}`;
 }
 
+function hasPlaybackObservation(record: Pick<ToolExecutionRecord, 'name' | 'result' | 'receipt'>): boolean {
+  const payload = record.name === 'computer_use' ? toolRecordTerminalPayload(record) : null;
+  return Boolean(payload && typeof payload === 'object' && !Array.isArray(payload)
+    && Object.prototype.hasOwnProperty.call(payload, 'playbackVerification'));
+}
+
 /**
  * A retry is one logical step. Once the same tool with the same arguments
  * succeeds, an earlier precondition/transport failure must not poison the
@@ -405,6 +411,14 @@ export function coalesceToolExecutionRecords(
   for (const record of records) {
     if (!record?.name) continue;
     const key = toolRecordKey(record);
+    if (hasPlaybackObservation(record)) {
+      // A new capture can supersede earlier playback, including an ad, pause
+      // or unreadable progress. Preserve runtime observation order instead of
+      // treating the new protocol as a retry of an immutable write operation.
+      latestIndexByKey.set(key, output.length);
+      output.push(record);
+      continue;
+    }
     const previousIndex = latestIndexByKey.get(key);
     if (previousIndex === undefined) {
       latestIndexByKey.set(key, output.length);
@@ -559,10 +573,14 @@ export function mergeTaskReceipts(
   const order: string[] = [];
   for (const receipt of [...previous, ...recordsToTaskReceipts(records, recordedAt)]) {
     if (!receipt?.key || !receipt.name) continue;
-    if (!merged.has(receipt.key)) order.push(receipt.key);
-    const prior = merged.get(receipt.key);
+    const playback = hasPlaybackObservation(receipt);
+    const mergeKey = playback
+      ? JSON.stringify(['playback', receipt.requestId || '', receipt.taskId || '', receipt.id || receipt.key])
+      : receipt.key;
+    if (!merged.has(mergeKey)) order.push(mergeKey);
+    const prior = merged.get(mergeKey);
     const rank = { failure: 0, partial: 1, success: 2 } as const;
-    if (!prior || rank[receipt.outcome] >= rank[prior.outcome]) merged.set(receipt.key, receipt);
+    if (playback || !prior || rank[receipt.outcome] >= rank[prior.outcome]) merged.set(mergeKey, receipt);
   }
   return order
     .map(key => merged.get(key))

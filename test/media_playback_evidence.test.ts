@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { buildActionEvidenceContract, hasCoreActionEvidence, hasMediaPlaybackEvidence } from '../server/cognition/action_contract';
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import type { ToolExecutionRecord } from '../server/tools/types';
-import { recordsToTaskReceipts, taskCompletionFromReceipts, taskReceiptsToRecords } from '../server/cognition/task_execution_ledger';
+import { mergeTaskReceipts, normalizeConversationTaskReceipt, recordsToTaskReceipts, taskCompletionFromReceipts, taskReceiptsToRecords } from '../server/cognition/task_execution_ledger';
 import { DESKTOP_COMPLETION_REVIEW_REASON } from '../server/cognition/desktop_completion_review';
+import { buildPlaybackVerification, type PlaybackSample } from '../server/cognition/playback_verification';
 
 function record(name: string, result: unknown, args: Record<string, unknown> = {}): ToolExecutionRecord {
   return { name, arguments: args, result: typeof result === 'string' ? result : JSON.stringify(result), terminalVerification: { status: 'verified', strategy: 'state_diff', reason: 'Synthetic observed playback state.' } };
@@ -14,6 +15,110 @@ const prepare = () => [
   record('keyboard_press', { ok: true, targetMatched: true }, { key: 'space' }),
 ];
 const playing = (patch = {}) => record('desktop_ui_snapshot', { player: '网易云音乐', playerState: 'playing', currentTrack: { title: '秋天不回来' }, ...patch });
+
+describe('captured progress reaches media finalization and the durable task ledger', () => {
+  const task = '用爱奇艺播放《蜡笔小新》第八季第一集';
+  const scope = { requestId: 'verified-progress-request', taskId: 'verified-progress-task' };
+  const samples = (): [PlaybackSample, PlaybackSample] => [
+    { phase: 'content', player: '爱奇艺', title: '蜡笔小新', season: '8', episode: '1', positionSeconds: 31,
+      capturedAt: 1_800_000_000_000, windowId: '100', pid: 100, frameDigest: 'a'.repeat(64) },
+    { phase: 'content', player: '爱奇艺', title: '蜡笔小新', season: '8', episode: '1', positionSeconds: 34,
+      capturedAt: 1_800_000_003_000, windowId: '100', pid: 100, frameDigest: 'b'.repeat(64) },
+  ];
+  const receipt = (requestedTask = task, patch = {}): ToolExecutionRecord => ({
+    ...record('computer_use', { ok: true, status: 'verified', completionVerified: true, observations: 2, observationAttempts: 6,
+      applicationMatched: true, applicationIdentity: 'desktop-browser', message: 'Captured two progressing content samples.',
+      playbackVerification: buildPlaybackVerification(requestedTask, samples()), ...patch }, { task: requestedTask }), ...scope,
+  });
+
+  it('accepts current runtime-verified progress without needing a model done message or another control input', () => {
+    const actual = receipt();
+    expect(hasMediaPlaybackEvidence([actual], task, scope)).toBe(true);
+    const final = finalizeLumiResponse({ taskText: task, responseText: '', source: 'chat', toolRecords: [actual], ...scope });
+    expect(final).toMatchObject({ blocked: false, reason: 'verified_playback_progress' });
+    expect(final.text).toContain('已确认爱奇艺正在播放《蜡笔小新》第8季第1集');
+    expect(taskCompletionFromReceipts(task, JSON.parse(JSON.stringify(recordsToTaskReceipts([actual]))), undefined, scope).complete).toBe(true);
+    const normalized = JSON.parse(JSON.stringify(recordsToTaskReceipts([actual]))).map(normalizeConversationTaskReceipt);
+    expect(JSON.parse(taskReceiptsToRecords(normalized)[0].result).playbackVerification).toEqual(buildPlaybackVerification(task, samples()));
+    expect(taskCompletionFromReceipts(task, normalized, undefined, scope).complete).toBe(true);
+  });
+  it.each(['chat', 'voice'])('does not preserve invented model season/episode or a denial in %s', source => {
+    for (const responseText of ['已开始播放第一季第9集。', '刚才没能完成播放。']) {
+      const final = finalizeLumiResponse({ taskText: task, responseText, source, toolRecords: [receipt()], ...scope });
+      expect(final.blocked).toBe(false);
+      expect(final.text).toContain('第8季第1集');
+      expect(final.text).not.toContain('第9集');
+      expect(final.text).not.toContain('没能');
+    }
+  });
+  it('does not insert observed but unrequested season/episode into the proactive confirmation', () => {
+    const generic = '用爱奇艺播放蜡笔小新';
+    const final = finalizeLumiResponse({ taskText: generic, responseText: '蜡笔小新第8季第1集正在播放。', source: 'chat', toolRecords: [receipt(generic)], ...scope });
+    expect(final.blocked).toBe(false);
+    expect(final.text).toContain('《蜡笔小新》');
+    expect(final.text).not.toMatch(/第\d+[季集]/u);
+  });
+  it('refuses invalid structured progress despite an otherwise convincing legacy done message', () => {
+    const good = buildPlaybackVerification(task, samples())!;
+    const invalid = JSON.parse(JSON.stringify(good)); invalid.samples[1].positionSeconds = 31;
+    const bad = receipt(task, { playbackVerification: invalid, message: '爱奇艺正在播放《蜡笔小新》第8季第1集，正片已开始。' });
+    expect(hasMediaPlaybackEvidence([bad], task, scope)).toBe(false);
+    expect(hasMediaPlaybackEvidence([receipt(), bad], task, scope)).toBe(false);
+    expect(finalizeLumiResponse({ taskText: task, responseText: '播放成功。', source: 'chat', toolRecords: [bad], ...scope }).blocked).toBe(true);
+    expect(hasMediaPlaybackEvidence([receipt(task, { playbackVerification: null, message: '爱奇艺正在播放《蜡笔小新》第8季第1集。' })], task, scope)).toBe(false);
+  });
+  it('retains a new unverified observation instead of an earlier successful sample pair', () => {
+    const pending = { ...receipt(task, { ok: false, status: 'unverified', completionVerified: false,
+      playbackVerification: { version: 1, source: 'visual_progress', verified: false }, resumeStrategy: 'observe_only', completionCandidate: 'The requested player has opened.' }),
+      terminalVerification: { status: 'failed' as const, strategy: 'visual' as const, reason: 'No progressing samples.' } };
+    expect(hasMediaPlaybackEvidence([receipt(), pending], task, scope)).toBe(false);
+    expect(finalizeLumiResponse({ taskText: task, responseText: '', source: 'chat', toolRecords: [receipt(), pending], ...scope }).reason)
+      .toBe(DESKTOP_COMPLETION_REVIEW_REASON);
+    const persisted = JSON.parse(JSON.stringify(recordsToTaskReceipts([receipt(), pending]))).map(normalizeConversationTaskReceipt);
+    expect(persisted).toHaveLength(2);
+    expect(taskCompletionFromReceipts(task, persisted, undefined, scope).complete).toBe(false);
+    const oldFailure = { ...pending, requestId: 'previous-request' };
+    expect(finalizeLumiResponse({ taskText: task, responseText: '', source: 'chat', toolRecords: [receipt(), oldFailure], ...scope }).blocked).toBe(false);
+    expect(taskCompletionFromReceipts(task, recordsToTaskReceipts([receipt(), oldFailure]), undefined, scope).complete).toBe(true);
+  });
+  it('merges actual task receipts without losing a later observation, and deduplicates re-delivery of that call', () => {
+    const original = { ...receipt(), id: 'original-observation' };
+    const pending = { ...receipt(task, { ok: false, status: 'unverified', completionVerified: false,
+      playbackVerification: { version: 1, source: 'visual_progress', verified: false } }), id: 'later-observation',
+      terminalVerification: { status: 'unverified' as const, strategy: 'visual' as const, reason: 'No readable progress.' } };
+    const previous = recordsToTaskReceipts([original]);
+    const merged = mergeTaskReceipts(previous, [pending]);
+    expect(merged).toHaveLength(2);
+    const recovered = JSON.parse(JSON.stringify(merged)).map(normalizeConversationTaskReceipt);
+    expect(taskCompletionFromReceipts(task, recovered, undefined, scope).complete).toBe(false);
+    expect(mergeTaskReceipts(recovered, [pending])).toHaveLength(2);
+    const nextScope = { requestId: 'next-request', taskId: scope.taskId };
+    const next = { ...receipt(), id: 'later-observation', ...nextScope };
+    const nextMerged = mergeTaskReceipts(recovered, [next]);
+    expect(nextMerged).toHaveLength(3);
+    expect(taskCompletionFromReceipts(task, nextMerged, undefined, nextScope).complete).toBe(true);
+    expect(taskCompletionFromReceipts(task, nextMerged, undefined, scope).complete).toBe(false);
+  });
+  it.each([
+    { requestId: 'old-request' }, { taskId: 'old-task' }, { taskId: undefined }, { turnId: 'conflicting-turn' },
+    { envelope: { requestId: 'conflicting-envelope' } as any },
+  ])('keeps the complete request/task fence for structured progress: %j', patch => {
+    expect(hasMediaPlaybackEvidence([{ ...receipt(), ...patch }], task, scope)).toBe(false);
+  });
+  it('rejects wrong original computer_use task and false application or capability verification', () => {
+    expect(hasMediaPlaybackEvidence([{ ...receipt(), arguments: { task: '用爱奇艺播放《蜡笔小新》第1季第1集' } }], task, scope)).toBe(false);
+    expect(hasMediaPlaybackEvidence([receipt(task, { applicationMatched: false })], task, scope)).toBe(false);
+    expect(hasMediaPlaybackEvidence([{ ...receipt(), terminalVerification: { status: 'failed', strategy: 'visual', reason: 'No terminal receipt' } }], task, scope)).toBe(false);
+    expect(hasMediaPlaybackEvidence([receipt()], task)).toBe(false);
+  });
+  it('enforces requested seasons in the compatible legacy observations too', () => {
+    const frame = (season?: number) => ({ ...record('desktop_ui_snapshot', { player: '爱奇艺', isPlaying: true,
+      currentMedia: { title: '蜡笔小新', season, episode: 1 } }), ...scope });
+    expect(hasMediaPlaybackEvidence([frame(8)], task, scope)).toBe(true);
+    expect(hasMediaPlaybackEvidence([frame(1)], task, scope)).toBe(false);
+    expect(hasMediaPlaybackEvidence([frame()], task, scope)).toBe(false);
+  });
+});
 
 describe('playback evidence binds the current player and requested content', () => {
   it('accepts the requested track in the correct playing player and preserves generic playback', () => {

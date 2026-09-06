@@ -67,7 +67,11 @@ async function computerUse(args: Record<string, any>, context?: any): Promise<st
       onProgress: context.onProgress || ((step: string) => {
         console.log(`[ComputerUse] ${step}`);
       }),
-      isCancelled: context.isCancelled,
+      isCancelled: () => {
+        if (context.isCancelled?.() || context.executionSignal?.aborted) return true;
+        try { return Boolean(context.desktopRelay.getControlPauseReason?.()); }
+        catch { return false; }
+      },
       expectedApplication: expectedApplication.family === 'unknown' ? undefined : expectedApplication,
     });
   } finally {
@@ -90,7 +94,7 @@ export function registerComputerUseTool(registry: ToolRegistry): void {
         },
         max_steps: {
           type: 'number',
-          description: 'Maximum number of desktop-control iterations. Default 12; capped by the active tool policy up to 50. A completion candidate may use one additional read-only screenshot check, which cannot perform any input action.',
+          description: 'Maximum number of desktop-control iterations. Default 12; capped by the active tool policy up to 50. Ordinary completion may use one additional read-only screenshot. Video playback uses a separate bounded read-only observation period (at most 90 seconds) to wait through ads/loading and verify the requested programme is advancing. Observation cannot perform input actions.',
         },
         target_application: {
           type: 'string',

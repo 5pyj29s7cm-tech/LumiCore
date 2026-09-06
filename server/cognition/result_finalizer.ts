@@ -98,6 +98,7 @@ import { buildOperationModeMetaResponse } from './capability_meta';
 import { CN_UNVERIFIED_CLIENT_STATE_CLAIM } from '../regions/packs/cn/capability_meta_messages';
 import { formatRuntimeCleanupReceipt } from '../i18n/runtime_cleanup_messages';
 import type { LumiClientMode } from '../../shared/operation_modes';
+import { validatePlaybackVerification } from './playback_verification';
 
 export interface LumiResultFinalizerInput {
   taskText: string;
@@ -1523,6 +1524,22 @@ function formatGoalSpecificDesktopResult(
     const video = isVideoPlaybackRequest(taskText);
     const opened = hasRequestedDesktopOpenEvidence(records, taskText, label);
     if (hasMediaPlaybackEvidence(records, taskText, { requestId: input.requestId, taskId: input.taskId })) {
+      const proofRecord = [...records].reverse().find(record => record.name === 'computer_use'
+        && hasMediaPlaybackEvidence([record], taskText, { requestId: input.requestId, taskId: input.taskId })
+        && validatePlaybackVerification(parseReceiptObject(toolRecordTerminalPayload(record))?.playbackVerification, taskText));
+      const proof = proofRecord && parseReceiptObject(toolRecordTerminalPayload(proofRecord))?.playbackVerification;
+      if (validatePlaybackVerification(proof, taskText)) {
+        const goal = proof.target;
+        const targetLabel = goal.player || label;
+        const contentLabel = [goal.title, goal.season ? `season ${goal.season}` : '', goal.episode ? `episode ${goal.episode}` : ''].filter(Boolean).join(', ');
+        return {
+          text: zh
+            ? CN_EXECUTION_EVIDENCE_MESSAGES.verifiedPlaybackTarget(targetLabel, goal.title, goal.season, goal.episode)
+            : `Confirmed ${contentLabel || 'the requested content'} is playing in ${targetLabel}; playback is advancing.`,
+          blocked: false,
+          reason: 'verified_playback_progress',
+        };
+      }
       return {
         text: zh
           ? CN_EXECUTION_EVIDENCE_MESSAGES.mediaPlaybackActive(label, video)
@@ -2527,6 +2544,9 @@ function preserveModelWordingOnGroundedSuccess(
   input: LumiResultFinalizerInput,
   grounded: LumiResultFinalizerResult,
 ): LumiResultFinalizerResult {
+  // Specific programme/season/episode claims come only from the target bound
+  // to the verified progress samples, never an embellished model tail.
+  if (grounded.reason === 'verified_playback_progress') return grounded;
   const modelText = String(input.responseText || '').trim();
   // Grounders reach this helper only after their structured receipt contract
   // has accepted the current outcome. Compatibility uses a domain-neutral
@@ -2754,9 +2774,10 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   if (knowledgeObservation) return { text: knowledgeObservation, blocked: false, reason: 'Grounded current-turn knowledge observation.' };
   const mediaGeneration = groundedMediaGeneration(input);
   if (mediaGeneration) return mediaGeneration;
-  if (findDesktopCompletionReview(input.toolRecords || [], { requestId: input.requestId, taskId: input.taskId })
+  const desktopReview = findDesktopCompletionReview(input.toolRecords || [], { requestId: input.requestId, taskId: input.taskId });
+  if (desktopReview
     && !hasMediaPlaybackEvidence(input.toolRecords || [], actionText, { requestId: input.requestId, taskId: input.taskId })) {
-    return { text: desktopCompletionReviewText(actionText), blocked: true, reason: DESKTOP_COMPLETION_REVIEW_REASON };
+    return { text: desktopCompletionReviewText(actionText, desktopReview), blocked: true, reason: DESKTOP_COMPLETION_REVIEW_REASON };
   }
   if (protocolLeak) return protocolLeak;
   const safeResponseText = sanitizeInternalExecutionText(

@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
 import type { CapabilityExecutionPlan } from '../cognition/capability_execution_plan';
 import type { LumiCapabilityLane } from '../cognition/capability_selection';
+import { isVideoPlaybackRequest } from '../cognition/media_intent';
+import { parsePlaybackGoal } from '../cognition/playback_verification';
 import {
   normalizeActionIntent,
   type NormalizedSideEffectClass,
@@ -634,7 +636,8 @@ export function resolveDesktopApplicationIdentity(
   text: string,
   lane?: LumiCapabilityLane,
 ): ApplicationIdentity {
-  const normalized = String(text || '').toLowerCase();
+  const playbackPlayer = isVideoPlaybackRequest(text) ? parsePlaybackGoal(text).player : '';
+  const normalized = String(playbackPlayer || text || '').toLowerCase();
   // i18n-allow: Reviewed multilingual local artifact target recognition; not user-visible copy.
   const fileOrArtifactTarget = /(?:[a-z]:[\\/]|(?:^|[\\/])[^\\/]+\.(?:pdf|pptx?|docx?|xlsx?|dwg|dxf|txt|md|csv|zip)|\b(?:pdf|pptx?|docx?|xlsx?|dwg|dxf|file|folder|document|presentation|spreadsheet|drawing)\b|文件夹|文件|资料|文档|图纸|演示文稿)/iu.test(normalized);
   // i18n-allow: Reviewed multilingual Lumi client-surface recognition; not user-visible copy.
@@ -643,9 +646,9 @@ export function resolveDesktopApplicationIdentity(
   // the follow-on payload. In "Open WPS and create a Word document", WPS is
   // the application identity while Word is the requested document type.
   const normalizedIntent = normalizeActionIntent(text);
-  const semanticTarget = normalizedIntent.kind === 'desktop_operation'
+  const semanticTarget = playbackPlayer || (normalizedIntent.kind === 'desktop_operation'
     ? String(normalizedIntent.target || '').trim().toLowerCase()
-    : '';
+    : '');
   const semanticApplication = semanticTarget
     ? DESKTOP_APPLICATION_REGISTRY
         .flatMap(application => application.aliases
@@ -889,7 +892,11 @@ export function buildDesktopExecutionPlan(input: {
   recoveredCurrentAppEdit?: boolean;
 }): DesktopExecutionPlan {
   const application = resolveDesktopApplicationIdentity(input.text, input.lane);
-  const requestedTarget = String(input.capabilityExecutionPlan?.intent.target || input.text || '').trim();
+  // A programme request is not the name of an executable/window. Preserve
+  // the existing unknown-application boundary while observing the actual
+  // explicitly selected player, rather than looking for the whole sentence.
+  const playbackPlayer = isVideoPlaybackRequest(input.text) ? parsePlaybackGoal(input.text).player : '';
+  const requestedTarget = String(playbackPlayer || input.capabilityExecutionPlan?.intent.target || input.text || '').trim();
   const sideEffectClass = input.capabilityExecutionPlan?.risk.sideEffectClass || 'none';
   const operation = input.capabilityExecutionPlan?.intent.operation || 'mutate';
   const verificationProfile = desktopVerificationProfile({

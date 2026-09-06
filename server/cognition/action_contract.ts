@@ -2,6 +2,7 @@ import type { CapabilityLane, CapabilityOperation, ToolExecutionRecord } from '.
 import { LEGAL_ENTRY_PREFERRED_TOOLS, isLegalEntryTurn, isRemoteLegalMessageTurn } from './legal_entry';
 import { isInformationOnlyQuestion } from './tool_intent';
 import { isVideoPlaybackRequest } from './media_intent';
+import { parsePlaybackGoal, validatePlaybackVerification } from './playback_verification';
 import {
   buildDesktopObservationPlan,
   evaluateDesktopObservationEvidence,
@@ -1879,28 +1880,11 @@ function playbackEpisode(value: unknown): string {
   return tens ? String((tens[1] ? digits.indexOf(tens[1]) : 1) * 10 + (tens[2] ? digits.indexOf(tens[2]) : 0)) : '';
 }
 
-function requestedPlaybackContent(taskText: string): { title: string; episode: string } {
-  const text = compact(extractPrimaryTaskText(taskText)).replace(/[。.!！]+$/u, '').trim();
-  const episodeMatch = text.match(/第\s*[\d一二三四五六七八九十百零〇两]+\s*集|\bepisode\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b/iu); // i18n-allow: Requested episode identity.
-  const episode = episodeMatch ? playbackEpisode(episodeMatch[0]) || `unresolved:${episodeMatch[0]}` : '';
-  const quoted = text.match(/[《“"]([^》”"\n]{1,120})[》”"]/u)?.[1];
-  if (quoted) return { title: quoted.trim(), episode };
-  // Read the object of the playback verb, never a title mentioned elsewhere.
-  // i18n-allow: Requested media object and optional named player grammar.
-  let title = text.match(/(?:播放|放一?首|听一?首)\s*(?:歌曲|音乐)?\s*([^，。！？!?\n]{1,120})/u)?.[1]
-    || text.match(/\b(?:play|listen\s+to|put\s+on)\s+(?:the\s+)?(.{1,120}?)(?:\s+(?:on|in|using)\s+|[.!?]|$)/iu)?.[1] || '';
-  title = title.replace(/(?:吧|就行|就可以了|这首歌|这首歌曲)$/u, '').trim(); // i18n-allow: Command suffixes.
-  // The episode is a separate requirement. In natural unquoted commands it
-  // may directly follow the programme name without whitespace.
-  if (episodeMatch && title.endsWith(episodeMatch[0])) {
-    title = title.slice(0, -episodeMatch[0].length).trim();
-  }
-  // i18n-allow: Generic/current-media requests impose no new title.
-  if (/^(?:(?:当前|现在|这首|这个|这部|一首|一个|一集|随机|随便)(?:的)?)*(?:音乐|歌曲?|视频|电影|电视剧|它|music|songs?|videos?|movies?|current\s+(?:track|song|music|video))?$|^episode\b|^第[\d一二三四五六七八九十百零〇两]+集/iu.test(title)) title = '';
-  return { title, episode };
+function requestedPlaybackContent(taskText: string) {
+  return parsePlaybackGoal(taskText);
 }
 
-interface ObservedPlaybackState { playing: boolean; title: string; episode: string }
+interface ObservedPlaybackState { playing: boolean; title: string; season: string; episode: string }
 
 // i18n-allow: Recognize observations of the playing content, never a play button or search result.
 const PLAYING_OBSERVATION_RE = /正在播放|播放中|(?:已经|已)开始播放|已打开并开始播放|\b(?:now\s+playing|playback\s+(?:started|is\s+playing))\b/iu;
@@ -1945,7 +1929,9 @@ function observedPlaybackState(record: ToolExecutionRecord): ObservedPlaybackSta
       const directMediaAction = /(?:^|_)(?:media|music|audio)(?:_|.*_)(?:play|resume|control)(?:_|$)/i.test(record.name);
       const title = compact(typeof current === 'string' ? current : current?.title || current?.name
         || state.currentTitle || state.trackTitle || state.songTitle || (directMediaAction ? state.title : ''));
-      return { playing: positive && !negative, title, episode: playbackEpisode(current?.episode ?? state.episode ?? state.episodeNumber) || playbackEpisode(title) };
+      return { playing: positive && !negative, title,
+        season: playbackEpisode(current?.season ?? state.season ?? state.seasonNumber) || parsePlaybackGoal(title).season,
+        episode: playbackEpisode(current?.episode ?? state.episode ?? state.episodeNumber) || playbackEpisode(title) };
     }
   }
   // i18n-allow: A finished advertisement is historical context, not a current ad phase.
@@ -1961,7 +1947,7 @@ function observedPlaybackState(record: ToolExecutionRecord): ObservedPlaybackSta
   // the requested title in a search result elsewhere is never enough.
   // i18n-allow: Current-title statement extraction.
   const currentClause = playbackObservationClauses(record).filter(value => PLAYING_OBSERVATION_RE.test(value)).at(-1) || '';
-  if (PLAYBACK_SEARCH_RE.test(currentClause)) return negative ? { playing: false, title: '', episode: '' } : null;
+  if (PLAYBACK_SEARCH_RE.test(currentClause)) return negative ? { playing: false, title: '', season: '', episode: '' } : null;
   const currentContent = currentClause.match(/(?:正在播放|播放中|(?:已经|已)开始播放|\bnow\s+playing)[：:是为\s-]*(?:(?:歌曲|曲目|视频|正片)[：:是为\s]*)?(.+)/iu)?.[1] || ''; // i18n-allow: Current-content label recognition.
   const precedingTitle = !currentContent || /^[，,；;（(]/u.test(currentContent)
     ? currentClause.split(PLAYING_OBSERVATION_RE)[0].match(/[《“"]([^》”"\n]+)[》”"]/u)?.[1] || '' : '';
@@ -1969,7 +1955,8 @@ function observedPlaybackState(record: ToolExecutionRecord): ObservedPlaybackSta
     : precedingTitle || currentContent.match(/^[《“"]([^》”"\n]+)[》”"]/u)?.[1]
       || currentContent.split(/[，,；;（(]/u)[0].trim();
   const episode = currentClause.match(/第\s*[\d一二三四五六七八九十百零〇两]+\s*集|\bepisode\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b/iu)?.[0]; // i18n-allow: Episode tied to active playback.
-  return { playing: positive && !negative, title, episode: playbackEpisode(episode) || playbackEpisode(title) };
+  return { playing: positive && !negative, title, season: parsePlaybackGoal(currentClause).season,
+    episode: playbackEpisode(episode) || playbackEpisode(title) };
 }
 
 function playbackPlayerMatch(record: ToolExecutionRecord, target: string): boolean | null {
@@ -2015,7 +2002,7 @@ function playbackTitleMatches(observed: string, requested: string): boolean {
   if (!requested) return true;
   // Permit a separately delimited artist/episode suffix, never another title
   // containing the requested string (for example the DJ remix/search result).
-  const title = observed.split(/\s+[-–—|]\s+|\s*第\s*[\d一二三四五六七八九十百]+\s*集|\s+episode\s+/iu)[0]; // i18n-allow: Artist/episode metadata delimiter.
+  const title = observed.split(/\s+[-–—|]\s+|\s*第\s*[\d一二三四五六七八九十百]+\s*[季集]|\s+(?:season|episode)\s+/iu)[0]; // i18n-allow: Artist/episode metadata delimiter.
   const normalize = (value: string) => value.normalize('NFKC').toLowerCase().replace(/[\s《》“”"'.,，。!！?？:：]/gu, '');
   return Boolean(title) && normalize(title) === normalize(requested);
 }
@@ -2051,7 +2038,9 @@ export function hasMediaPlaybackEvidence(
       if (currentTurn?.taskId && (taskIds.length === 0
         || taskIds.some(value => value !== currentTurn.taskId))) return false;
     }
-    return expandSuccessfulRecords([record]).length > 0;
+    const payload = record.name === 'computer_use' ? parseRecordJson(record) : null;
+    return expandSuccessfulRecords([record]).length > 0
+      || Boolean(payload && Object.prototype.hasOwnProperty.call(payload, 'playbackVerification'));
   });
   const requested = requestedPlaybackContent(taskText);
   let target = requestedMediaPlayerTarget(taskText);
@@ -2060,6 +2049,20 @@ export function hasMediaPlaybackEvidence(
   let actuated = false;
   let verified = false;
   for (const record of successful) {
+    const payload = parseRecordJson(record);
+    if (record.name === 'computer_use' && payload && Object.prototype.hasOwnProperty.call(payload, 'playbackVerification')) {
+      // A structured attempt owns its outcome. Invalid evidence cannot fall
+      // back to a model's free-text "done" claim or a previous success.
+      const executedTask = String(record.arguments?.task || record.arguments?.prompt || '');
+      verified = Boolean(expandSuccessfulRecords([record]).length > 0
+        && currentTurn?.requestId && currentTurn?.taskId && requiresMediaPlaybackAction(executedTask)
+        && payload.ok === true && payload.status === 'verified' && payload.completionVerified === true
+        && payload.observations === 2 && payload.applicationMatched === true
+        && validatePlaybackVerification(payload.playbackVerification, taskText)
+        && validatePlaybackVerification(payload.playbackVerification, executedTask));
+      if (!verified) { playerMatched = false; actuated = false; }
+      continue;
+    }
     const observation = /^(?:desktop_open|browser_open_task|desktop_ui_snapshot|ocr_screen|ocr_region|desktop_capture_screen|computer_vision|desktop_active_window|get_active_window_info|computer_use)$/i.test(record.name);
     const action = isPlaybackActuation(record);
     if (!observation && !action) continue;
@@ -2072,6 +2075,7 @@ export function hasMediaPlaybackEvidence(
       const matchesTarget = (value: string) => matchesRequestedDesktopTarget(value, requestedDesktopTargetAliases(target));
       if (!currentObservation || !playbackObservationText(record) || !requiresMediaPlaybackAction(executedTask)
         || !playbackTitleMatches(executedContent.title, requested.title)
+        || (requested.season && requested.season !== executedContent.season)
         || (requested.episode && requested.episode !== executedContent.episode)
         || (target && executedPlayer && !matchesTarget(executedPlayer))
         || (target && applicationIdentity && !/^(?:chrome-browser|edge-browser|firefox-browser|desktop-browser)$/.test(applicationIdentity)
@@ -2098,6 +2102,7 @@ export function hasMediaPlaybackEvidence(
     // player identity in the same receipt, not an old open result.
     if ((requested.title || requested.episode) && match !== true) continue;
     verified = playbackTitleMatches(state.title, requested.title)
+      && (!requested.season || state.season === requested.season)
       && (!requested.episode || state.episode === requested.episode);
   }
   return verified;

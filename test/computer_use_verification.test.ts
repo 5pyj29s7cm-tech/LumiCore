@@ -135,14 +135,25 @@ describe('computer use completion verification', () => {
   });
 
   it('does not count pre-roll advertising as two observations of the requested programme', async () => {
-    mocks.makeLLMCall.mockResolvedValue(modelResult(JSON.stringify({ action: 'done', message: '视频页面已打开，当前正在播放片前广告，广告结束后将播放正片。' })));
-    const desktop = createDesktopRelay();
-    const result = JSON.parse(await computerUseLoop('用爱奇艺播放蜡笔小新', {
-      desktopRelay: desktop.relay, llmGetters: { getOpenAI: () => ({}) }, maxIterations: 1,
-    }));
-    expect(result).toMatchObject({ completionVerified: false, resumeStrategy: 'observe_only' });
-    expect(result.message).toContain('pre-roll');
-    expect(desktop.captures()).toBe(2);
+    vi.useFakeTimers();
+    try {
+      mocks.makeLLMCall
+        .mockResolvedValueOnce(modelResult(JSON.stringify({ action: 'done', message: '视频页面已打开，当前正在播放片前广告，广告结束后将播放正片。' })))
+        .mockResolvedValue(modelResult(JSON.stringify({ phase: 'advertisement', player: '爱奇艺', title: '蜡笔小新', season: '', episode: '', positionSeconds: null })));
+      const desktop = createDesktopRelay();
+      const relay = async (name: string) => name === 'desktop_active_window'
+        ? JSON.stringify({ window_id: 'iqiyi', pid: 34, process_name: 'iqiyi.exe', title: '爱奇艺' })
+        : desktop.relay(name);
+      const pending = computerUseLoop('用爱奇艺播放蜡笔小新', {
+        desktopRelay: relay, llmGetters: { getOpenAI: () => ({}) }, maxIterations: 1,
+        playbackVerification: { maxAttempts: 2, intervalMs: 1000 },
+      });
+      await vi.runAllTimersAsync();
+      const result = JSON.parse(await pending);
+      expect(result).toMatchObject({ completionVerified: false, resumeStrategy: 'observe_only',
+        playbackObservation: { phase: 'advertisement' }, observationAttempts: 2 });
+      expect(desktop.captures()).toBe(3);
+    } finally { vi.useRealTimers(); }
   });
 
   it('accepts done only after a fresh screenshot produces a second done observation', async () => {
