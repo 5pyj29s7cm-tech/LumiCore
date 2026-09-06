@@ -560,7 +560,8 @@ export function useVoiceCall({
   useEffect(() => {
     if (disabled || !socket) return;
 
-    const onAudioStatus = (data: { status: string; requestId?: string; lane?: string }) => {
+    const onAudioStatus = (data: { status: string; requestId?: string; lane?: string; sessionId?: string }) => {
+      if (data.sessionId && data.sessionId !== activeStartPayload.current?.sessionId) return;
       if (!isCallActive.current) return;
       const activeRequestId = activeVoiceRequestIdRef.current;
       if (!shouldAcceptVoiceStatus(data, activeRequestId)) return;
@@ -884,8 +885,9 @@ export function useVoiceCall({
       onResponse?.(publicText);
     };
 
-    const onAudioError = (data: { message: string }) => {
+    const onAudioError = (data: { message: string; sessionId?: string }) => {
       if (!isCallActive.current) return;
+      if (data.sessionId && data.sessionId !== activeStartPayload.current?.sessionId) return;
       callGenerationRef.current++;
       isCallActive.current = false;
       activeStartPayload.current = null;
@@ -948,7 +950,10 @@ export function useVoiceCall({
         : 'The selected voice could not be applied to the active call.');
     };
 
-    const onAudioInterruptAck = (data?: { workContinues?: boolean; requestId?: string }) => {
+    const onAudioInterruptAck = (data?: { workContinues?: boolean; requestId?: string; sessionId?: string }) => {
+      if (!isCallActive.current) return;
+      if (data?.sessionId && data.sessionId !== activeStartPayload.current?.sessionId) return;
+      if (data?.requestId && activeVoiceRequestIdRef.current && data.requestId !== activeVoiceRequestIdRef.current) return;
       if (data?.workContinues) {
         if (data.requestId) activeVoiceRequestIdRef.current = data.requestId;
       } else {
@@ -960,8 +965,9 @@ export function useVoiceCall({
       setCallState('listening');
     };
 
-    const onAudioEndCallRequest = () => {
+    const onAudioEndCallRequest = (data?: { sessionId?: string }) => {
       if (!isCallActive.current) return;
+      if (data?.sessionId && data.sessionId !== activeStartPayload.current?.sessionId) return;
       endCall();
     };
 
@@ -1264,14 +1270,14 @@ export function useVoiceCall({
 
   const interrupt = useCallback(() => {
     if (callState === 'speaking' || callState === 'thinking') {
-      socket?.emit('audio:interrupt', { source: 'user_control' });
+      socket?.emit('audio:interrupt', { source: 'user_control', sessionId: activeStartPayload.current?.sessionId, requestId: activeVoiceRequestIdRef.current || undefined });
       stopAllPlayback();
     }
   }, [socket, callState, stopAllPlayback]);
 
   useEffect(() => {
     const stopVoiceOutput = () => {
-      if (isCallActive.current) socketRef.current?.emit('audio:interrupt', { source: 'user_control' });
+      if (isCallActive.current) socketRef.current?.emit('audio:interrupt', { source: 'user_control', sessionId: activeStartPayload.current?.sessionId, requestId: activeVoiceRequestIdRef.current || undefined });
       stopAllPlayback();
     };
     window.addEventListener('lumi:stop-voice-output', stopVoiceOutput);

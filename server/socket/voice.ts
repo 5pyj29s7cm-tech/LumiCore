@@ -271,6 +271,9 @@ interface AudioSession {
   ttsAbortController: AbortController | null;
   currentVoiceId: string | null;
   voiceSwitchGeneration: number;
+  /** Call lifecycle ownership, independent of an in-call voice selection. */
+  callControlGeneration: number;
+  voiceTurnGeneration: number;
   personalityId: string;
   userId: string;
   agentId: string;
@@ -827,18 +830,33 @@ export function quiesceActiveVoiceTransport(session: Pick<
   session.sidecarAbortController?.abort();
 }
 
+function captureVoiceTurnOwner(session: AudioSession) {
+  const { callControlGeneration, voiceTurnGeneration, sessionId, activeTurnRequestId, pipelineAbortController,
+    activeForegroundRequestIdentity, activeRoutingText, activeWorkStep } = session;
+  return {
+    foregroundIdentity: activeForegroundRequestIdentity,
+    interruptedRoutingText: activeRoutingText.trim(),
+    assistantState: activeWorkStep || undefined,
+    isCurrent: () => session.callControlGeneration === callControlGeneration
+      && session.voiceTurnGeneration === voiceTurnGeneration
+      && session.sessionId === sessionId
+      && (session.activeTurnRequestId === activeTurnRequestId || session.activeTurnRequestId === null)
+      && (!session.pipelineAbortController || session.pipelineAbortController === pipelineAbortController),
+  };
+}
+
 async function cancelActiveVoiceTurn(
   session: AudioSession,
   preserveInterruptedTurn = false,
   preserveDurableTask = false,
   preserveInputQueue = false,
+  owner = captureVoiceTurnOwner(session),
 ): Promise<boolean> {
-  const foregroundIdentity = session.activeForegroundRequestIdentity;
-  const interruptedRoutingText = session.activeRoutingText.trim();
+  const { foregroundIdentity, interruptedRoutingText } = owner;
   // Quiesce the old transport owner before the first awaited durability step.
   // Previously barge-in waited for convergence while the old model/TTS lane
   // remained live, allowing it to publish or speak after the new utterance.
-  quiesceActiveVoiceTransport(session);
+  if (owner.isCurrent()) quiesceActiveVoiceTransport(session);
   const releaseReason = preserveDurableTask
     ? 'The voice request yielded to an exact continuation before terminal delivery.'
     : 'The active voice request was cancelled before transport resources were released.';
@@ -876,9 +894,10 @@ async function cancelActiveVoiceTurn(
     identity: foregroundIdentity,
     aborted: !preserveDurableTask,
     reason: releaseReason,
-    assistantState: session.activeWorkStep || undefined,
+    assistantState: owner.assistantState,
   });
   if (foregroundIdentity && !durableRelease?.converged) return false;
+  if (!owner.isCurrent()) return false;
   if (preserveInterruptedTurn && interruptedRoutingText) {
     session.pendingInterruptedTurn = {
       text: interruptedRoutingText,
@@ -1070,6 +1089,8 @@ function getAudioSession(socket: Socket): AudioSession {
       ttsAbortController: null,
       currentVoiceId: null,
       voiceSwitchGeneration: 0,
+      callControlGeneration: 0,
+      voiceTurnGeneration: 0,
       personalityId: 'lumi',
       accumulatedText: '',
       isSpeaking: false,
@@ -1320,6 +1341,8 @@ async function handlePriorityVoiceStop(
   session: AudioSession,
   persistCancellation?: () => Promise<void>,
 ): Promise<void> {
+  const owner = captureVoiceTurnOwner(session);
+  const sessionId = session.sessionId;
   const workContinues = session.isBackgroundWork && session.activeWorkStatus !== 'completed';
   const requestId = session.activeTurnRequestId;
   if (workContinues && requestId) session.suppressedSpeechRequestIds.add(requestId);
@@ -1329,11 +1352,13 @@ async function handlePriorityVoiceStop(
     if (persistCancellation) await persistCancellation();
     else await cancelActiveVoiceTurn(session);
   }
-  socket.emit('audio:status', { status: 'interrupted', requestId });
-  socket.emit('audio:interrupt-ack', { workContinues, requestId });
+  if (!owner.isCurrent()) return;
+  socket.emit('audio:status', { status: 'interrupted', requestId, sessionId });
+  socket.emit('audio:interrupt-ack', { workContinues, requestId, sessionId });
   socket.emit('audio:status', {
     status: 'listening',
     requestId,
+    sessionId,
     ...(workContinues ? { lane: 'work' } : {}),
   });
   resetSilenceTimer(session, socket);
@@ -2046,6 +2071,7 @@ async function processVoiceInput(
   });
   session.pipelineAbortController = pipelineAbort;
   session.activeTurnText = userText;
+  session.voiceTurnGeneration += 1;
   session.activeTurnRequestId = requestId;
   session.activeRoutingText = actionIntentText;
   emitAgent("agent:status", { status: "thinking", agentName: "Lumi" });
@@ -5227,8 +5253,10 @@ export function registerVoiceHandlers(
       preserveInterruptedTurn?: boolean;
     } = {},
   ): Promise<boolean> => {
+    const owner = captureVoiceTurnOwner(session);
+    const { userId, agentId, personalityId, domain, orgId } = session;
     const requestId = session.activeTurnRequestId;
-    if (!requestId || !session.userId) {
+    if (!requestId || !userId) {
       await cancelActiveVoiceTurn(session, options.preserveInterruptedTurn === true);
       return false;
     }
@@ -5236,17 +5264,17 @@ export function registerVoiceHandlers(
     // before persistence can yield, so it cannot race in a late success.
     quiesceActiveVoiceTransport(session);
     const conversationId = session.activeTaskConversationId || getOrCreateActiveConversation(
-      session.userId,
-      session.agentId,
-      session.domain,
-      session.orgId,
+      userId,
+      agentId,
+      domain,
+      orgId,
     ).id;
     const source = options.source || 'voice_cancelled';
     const text = options.text || CN_TASK_EXECUTION_MESSAGES.cancelled;
     const scope: ChatExecutionScope = {
-      userId: session.userId,
-      domain: session.domain,
-      orgId: session.orgId,
+      userId,
+      domain,
+      orgId,
       source: 'voice',
       conversationId,
     };
@@ -5275,7 +5303,7 @@ export function registerVoiceHandlers(
     const committed = await commitChatTerminalBoundary({
       persistTerminalState: () => cancelConversationActionExecution(
         conversationId,
-        session.userId,
+        userId,
         options.preserveInterruptedTurn
           ? 'The active request was replaced by the user correction.'
           : 'The active voice request was cancelled.',
@@ -5283,7 +5311,7 @@ export function registerVoiceHandlers(
       ),
       persistAssistantMessage: () => {
         const updated = updateAssistantMessageTerminalPresentation({
-          userId: session.userId,
+          userId,
           conversationId,
           requestId,
           content: text,
@@ -5296,18 +5324,18 @@ export function registerVoiceHandlers(
         });
         if (updated) return;
         addMessageIdempotent({
-          userId: session.userId,
-          agentId: session.agentId,
+          userId,
+          agentId,
           conversationId,
           role: 'assistant',
           content: text,
-          personality: session.personalityId,
+          personality: personalityId,
           mode: 'voice',
           channel: 'voice',
           cognitiveIntent: 'voice_turn_cancelled',
           llmWasCalled: false,
-          domain: session.domain,
-          orgId: session.orgId,
+          domain,
+          orgId,
           requestId,
           completionFeedback: {
             status: 'cancelled',
@@ -5330,17 +5358,17 @@ export function registerVoiceHandlers(
         unknownPayload,
       ),
       publishCommitted: () => {
-        if (!shouldPublish || !socket.connected) return;
+        if (!shouldPublish || !socket.connected || !owner.isCurrent()) return;
         socket.emit('agent:response', terminalPayload);
         socket.emit('chat:conversation_updated', {
           conversationId,
-          agentId: session.agentId,
+          agentId,
           source,
           requestId,
         });
       },
       publishUnknown: () => {
-        if (shouldPublish && socket.connected) socket.emit('agent:response', unknownPayload);
+        if (shouldPublish && socket.connected && owner.isCurrent()) socket.emit('agent:response', unknownPayload);
       },
       persistenceUnknownProjection: {
         text: unknownPayload.text,
@@ -5348,8 +5376,45 @@ export function registerVoiceHandlers(
       },
       onPersistenceError: error => logger.warn('[Audio] Voice cancellation persistence failed:', error),
     });
-    await cancelActiveVoiceTurn(session, options.preserveInterruptedTurn === true);
+    await cancelActiveVoiceTurn(session, options.preserveInterruptedTurn === true, false, false, owner);
     return committed;
+  };
+
+  const stopVoiceCall = async (
+    session: AudioSession,
+    options: { source: string; refineTranscript?: boolean; publish?: boolean; error?: { code: string; message: string } },
+  ): Promise<void> => {
+    const generation = ++session.callControlGeneration;
+    const { sessionId, userId, meetingPcmPath, meetingPcmBytes } = session;
+    const meetingSession = { ...session };
+    const shouldRefineMeeting = session.transcriptionOnly && options.refineTranscript === true;
+    // Stop admission synchronously; durable cancellation may wait for storage.
+    session.isActive = false;
+    clearVoiceSessionTtsSelection(session);
+    if (session.silenceTimer) { clearTimeout(session.silenceTimer); session.silenceTimer = null; }
+    const sttSession = session.sttSession;
+    session.sttSession = null;
+    try { sttSession?.end(); } catch (error) { logger.warn('[Audio] STT close failed:', error); }
+    session.transcriptionOnly = false;
+    session.meetingPcmPath = null;
+    session.meetingPcmBytes = 0;
+    try {
+      await commitActiveVoiceCancellation(session, { source: options.source, publish: false });
+    } finally {
+      // A newer start owns the same socket's priority registration and UI.
+      if (session.callControlGeneration === generation) {
+        setRealtimeVoiceSessionActive(userId, socket.id, false);
+        if (options.publish !== false && socket.connected) {
+          socket.emit('audio:status', { status: 'idle', sessionId });
+          if (options.error) socket.emit('audio:error', { ...options.error, sessionId });
+        }
+      }
+      if (shouldRefineMeeting && meetingPcmPath) {
+        void refineMeetingTranscript(io, socket, meetingSession, meetingPcmPath, meetingPcmBytes);
+      } else if (meetingPcmPath) {
+        try { fs.unlinkSync(meetingPcmPath); } catch {}
+      }
+    }
   };
 
   socket.on("audio:start", async (data: {
@@ -5365,7 +5430,19 @@ export function registerVoiceHandlers(
   }) => {
     logger.info(`[Audio] Voice call started by ${socket.id}`);
     const session = getAudioSession(socket);
-    if (session.isActive && session.userId) {
+    const startControlGeneration = ++session.callControlGeneration;
+    // Reserve the incoming id before waiting, so a stop for this pending start
+    // can cancel it and old STT callbacks cannot admit work into it.
+    session.sessionId = normalizeVoiceSessionId(data.sessionId);
+    const voiceStartSessionId = session.sessionId;
+    session.isActive = false;
+    if (session.silenceTimer) { clearTimeout(session.silenceTimer); session.silenceTimer = null; }
+    const previousSttSession = session.sttSession;
+    session.sttSession = null;
+    try { previousSttSession?.end(); } catch (error) { logger.warn('[Audio] Previous STT close failed:', error); }
+    // Even an inactive call can still have cancellation timers awaiting
+    // convergence. The new owner must finish clearing those before admission.
+    if (session.userId) {
       setRealtimeVoiceSessionActive(session.userId, socket.id, false);
       if (session.activeTurnRequestId) {
         await commitActiveVoiceCancellation(session, { source: 'voice_restarted' });
@@ -5373,6 +5450,7 @@ export function registerVoiceHandlers(
         await cancelActiveVoiceTurn(session);
       }
     }
+    if (session.callControlGeneration !== startControlGeneration || !socket.connected) return;
     session.isActive = true;
     session.voiceSwitchGeneration += 1;
     const voiceStartGeneration = session.voiceSwitchGeneration;
@@ -5414,8 +5492,6 @@ export function registerVoiceHandlers(
       return;
     }
     session.agentId = requestedAgentId;
-    session.sessionId = normalizeVoiceSessionId(data.sessionId);
-    const voiceStartSessionId = session.sessionId;
     session.voiceCaptureProvenance = createVoiceCaptureProvenance({
       captureSessionId: String(data.captureSessionId || '') === session.sessionId
         ? data.captureSessionId
@@ -5478,6 +5554,7 @@ export function registerVoiceHandlers(
             activeTtsProvider,
             requestedVoiceId,
           );
+          if (session.callControlGeneration !== startControlGeneration) return;
           const voiceStartFence = resolveVoiceStartAsyncFence({
             sessionActive: session.isActive,
             currentSessionId: session.sessionId,
@@ -5503,6 +5580,7 @@ export function registerVoiceHandlers(
             }
           }
         } catch (error: any) {
+          if (session.callControlGeneration !== startControlGeneration) return;
           const voiceStartFence = resolveVoiceStartAsyncFence({
             sessionActive: session.isActive,
             currentSessionId: session.sessionId,
@@ -5528,9 +5606,6 @@ export function registerVoiceHandlers(
     }
     session.personalityId = data.personalityId || 'lumi';
 
-    // End previous STT session if re-starting without explicit stop
-    if (session.sttSession) { try { session.sttSession.end(); } catch {} session.sttSession = null; }
-
     const sttProvider = getActiveStreamingSTTProvider();
     if (sttProvider) {
       try {
@@ -5539,20 +5614,21 @@ export function registerVoiceHandlers(
           { provider: sttProvider, language, interimResults: true },
           {
             onRecovering: ({ attempt, delayMs, error }) => {
-              if (!session.isActive) return;
+              if (!session.isActive || session.callControlGeneration !== startControlGeneration) return;
               logger.warn(`[Audio] STT connection recovering (attempt=${attempt}, delayMs=${delayMs}): ${error.message}`);
               socket.emit('audio:status', {
                 status: 'connecting',
+                sessionId: voiceStartSessionId,
                 reason: 'stt_recovering',
                 attempt,
                 delayMs,
               });
             },
             onRecovered: ({ attempt }) => {
-              if (!session.isActive) return;
+              if (!session.isActive || session.callControlGeneration !== startControlGeneration) return;
               logger.info(`[Audio] STT connection recovered after attempt ${attempt}`);
               if (!session.isProcessing && !session.isSpeaking) {
-                socket.emit('audio:status', { status: 'listening', reason: 'stt_recovered' });
+                socket.emit('audio:status', { status: 'listening', reason: 'stt_recovered', sessionId: voiceStartSessionId });
               }
             },
           },
@@ -5576,6 +5652,7 @@ export function registerVoiceHandlers(
             session.lastSpeechStartedAt = Date.now();
             session.lastSpeechEndedAt = 0;
           }
+          const inputOwner = captureVoiceTurnOwner(session);
           if (result.speechFinal) session.lastSpeechEndedAt = Date.now();
           const immediateText = String(result.text || '').trim();
           if (
@@ -5600,8 +5677,9 @@ export function registerVoiceHandlers(
             logger.info(`[Audio] Voice-call end command recognized (${result.isFinal ? 'final' : 'interim'})`);
             session.accumulatedText = '';
             await commitActiveVoiceCancellation(session, { source: 'voice_end_command' });
+            if (!inputOwner.isCurrent()) return;
             resetUtteranceVoiceprint(session);
-            socket.emit('audio:end-call-request');
+            socket.emit('audio:end-call-request', { sessionId: callbackSessionId });
             return;
           }
           if (
@@ -5734,8 +5812,8 @@ export function registerVoiceHandlers(
               );
               const workRequestId = session.activeTurnRequestId;
               interruptVoiceSpeech(session);
-              socket.emit('audio:status', { status: 'interrupted' });
-              socket.emit('audio:interrupt-ack', { workContinues: true, requestId: workRequestId });
+              socket.emit('audio:status', { status: 'interrupted', sessionId: callbackSessionId });
+              socket.emit('audio:interrupt-ack', { sessionId: callbackSessionId, workContinues: true, requestId: workRequestId });
               socket.emit('audio:confirm', { text });
               void respondAlongsideActiveVoiceWork(
                 socket,
@@ -5776,9 +5854,9 @@ export function registerVoiceHandlers(
                   // Replace only the transport owner. The durable task and its
                   // exact pending action remain intact for the confirmation
                   // turn that starts immediately below.
-                  await reservePriorityVoiceHandoff(session, false);
-                  socket.emit('audio:status', { status: 'interrupted' });
-                  socket.emit('audio:interrupt-ack', { workContinues: false });
+                  if (!await reservePriorityVoiceHandoff(session, false)) return;
+                  socket.emit('audio:status', { status: 'interrupted', sessionId: callbackSessionId });
+                  socket.emit('audio:interrupt-ack', { sessionId: callbackSessionId, workContinues: false });
                   // Fall through to the normal pipeline, which executes the
                   // exact one-time pending action deterministically.
                 } else {
@@ -5791,8 +5869,9 @@ export function registerVoiceHandlers(
                 logger.info(`[Audio] Work-lane interruption=${interruptionKind} source=semantic_transcript request=${session.activeTurnRequestId || 'none'} (${text.length} chars)`);
                 if (interruptionKind === 'cancel_work') {
                   await commitActiveVoiceCancellation(session, { source: 'voice_cancel_command' });
-                  socket.emit("audio:status", { status: "interrupted" });
-                  socket.emit("audio:interrupt-ack", { workContinues: false });
+                  if (!inputOwner.isCurrent()) return;
+                  socket.emit("audio:status", { status: "interrupted", sessionId: callbackSessionId });
+                  socket.emit("audio:interrupt-ack", { sessionId: callbackSessionId, workContinues: false });
                   socket.emit("audio:status", { status: "listening" });
                   resetSilenceTimer(session, socket);
                   return;
@@ -5802,15 +5881,15 @@ export function registerVoiceHandlers(
                   // keep acting on stale instructions, but preserve the
                   // durable task id, receipts, permission snapshot, and
                   // pending confirmation for the corrected continuation.
-                  await reservePriorityVoiceHandoff(session, true);
-                  socket.emit("audio:status", { status: "interrupted" });
-                  socket.emit("audio:interrupt-ack", { workContinues: false });
+                  if (!await reservePriorityVoiceHandoff(session, true)) return;
+                  socket.emit("audio:status", { status: "interrupted", sessionId: callbackSessionId });
+                  socket.emit("audio:interrupt-ack", { sessionId: callbackSessionId, workContinues: false });
                   // Fall through: the correction is merged into a replacement work turn.
                 } else {
                   const workRequestId = session.activeTurnRequestId;
                   interruptVoiceSpeech(session);
-                  socket.emit("audio:status", { status: "interrupted" });
-                  socket.emit("audio:interrupt-ack", { workContinues: true, requestId: workRequestId });
+                  socket.emit("audio:status", { status: "interrupted", sessionId: callbackSessionId });
+                  socket.emit("audio:interrupt-ack", { sessionId: callbackSessionId, workContinues: true, requestId: workRequestId });
                   if (interruptionKind === 'stop_speaking') {
                     socket.emit("audio:status", { status: "listening", requestId: workRequestId, lane: 'work' });
                     resetSilenceTimer(session, socket);
@@ -5855,11 +5934,13 @@ export function registerVoiceHandlers(
                 logger.info(`[Audio] Barge-in during speech source=semantic_transcript request=${session.activeTurnRequestId || 'none'} (${text.length} chars)`);
                 if (isPureInterruptCommand(text)) {
                   await commitActiveVoiceCancellation(session, { source: 'voice_interrupt_command' });
+                  if (!inputOwner.isCurrent()) return;
                 } else {
                   await cancelActiveVoiceTurn(session, true);
+                  if (!inputOwner.isCurrent()) return;
                 }
-                socket.emit("audio:status", { status: "interrupted" });
-                socket.emit("audio:interrupt-ack", {});
+                socket.emit("audio:status", { status: "interrupted", sessionId: callbackSessionId });
+                socket.emit("audio:interrupt-ack", { sessionId: callbackSessionId });
                 if (isPureInterruptCommand(text)) {
                   socket.emit("audio:status", { status: "listening" });
                   resetSilenceTimer(session, socket);
@@ -5869,11 +5950,13 @@ export function registerVoiceHandlers(
                 logger.info(`[Audio] Barge-in during processing source=semantic_transcript request=${session.activeTurnRequestId || 'none'} (${text.length} chars)`);
                 if (isPureInterruptCommand(text)) {
                   await commitActiveVoiceCancellation(session, { source: 'voice_interrupt_command' });
+                  if (!inputOwner.isCurrent()) return;
                 } else {
                   await cancelActiveVoiceTurn(session, true);
+                  if (!inputOwner.isCurrent()) return;
                 }
-                socket.emit("audio:status", { status: "interrupted" });
-                socket.emit("audio:interrupt-ack", {});
+                socket.emit("audio:status", { status: "interrupted", sessionId: callbackSessionId });
+                socket.emit("audio:interrupt-ack", { sessionId: callbackSessionId });
                 if (isPureInterruptCommand(text)) {
                   socket.emit("audio:status", { status: "listening" });
                   resetSilenceTimer(session, socket);
@@ -5929,7 +6012,7 @@ export function registerVoiceHandlers(
           }
         });
 
-        session.sttSession.onError((err: Error) => {
+        session.sttSession.onError(async (err: Error) => {
           if (!isCurrentVoiceInputSource({
             sessionActive: session.isActive,
             currentSessionId: session.sessionId,
@@ -5938,26 +6021,25 @@ export function registerVoiceHandlers(
             callbackSttSession,
           })) return;
           logger.error("[Audio STT Error]:", err);
-          socket.emit("audio:error", {
+          await stopVoiceCall(session, { source: 'voice_stt_failed', error: {
             code: 'STT_RUNTIME_FAILED',
             message: 'Speech recognition temporarily failed. Please try again.',
-          });
+          } });
         });
 
-        socket.emit("audio:status", { status: "listening" });
+        socket.emit("audio:status", { status: "listening", sessionId: voiceStartSessionId });
       } catch (err: any) {
         logger.error("[Audio Start Error]:", err);
-        socket.emit("audio:error", {
+        await stopVoiceCall(session, { source: 'voice_start_failed', error: {
           code: 'VOICE_START_FAILED',
           message: 'Voice input could not be started. Check the voice settings and try again.',
-        });
+        } });
       }
     } else {
-      socket.emit("audio:status", { status: "idle" });
-      socket.emit("audio:error", {
+      await stopVoiceCall(session, { source: 'voice_stt_not_configured', error: {
         code: 'STT_NOT_CONFIGURED',
         message: 'Realtime speech recognition is not configured. Choose an available speech-recognition service in Voice settings.',
-      });
+      } });
     }
   });
 
@@ -6106,24 +6188,33 @@ export function registerVoiceHandlers(
     logger.info(`[Audio] Interrupt candidate source=${String(data?.source || 'unknown')} rms=${Number(data?.rms || 0).toFixed(4)} threshold=${Number(data?.threshold || 0).toFixed(4)} frames=${Math.max(0, Number(data?.frames || 0))} ttsAgeMs=${Math.max(0, Number(data?.ttsAgeMs || 0))} speaking=${session.isSpeaking} processing=${session.isProcessing} request=${session.activeTurnRequestId || 'none'}`);
   });
 
-  socket.on("audio:interrupt", async (data?: { source?: string }) => {
+  socket.on("audio:interrupt", async (data?: { source?: string; sessionId?: string; requestId?: string }) => {
     logger.info(`[Audio] Interrupt source=${String(data?.source || 'legacy')} socket=${socket.id}`);
     const session = getAudioSession(socket);
+    if (data?.sessionId && data.sessionId !== session.sessionId) return;
+    if (data?.requestId && data.requestId !== session.activeTurnRequestId) return;
+    const owner = captureVoiceTurnOwner(session);
+    const sessionId = session.sessionId;
+    const requestId = session.activeTurnRequestId;
     if (session.isBackgroundWork && session.isProcessing && session.pipelineAbortController) {
       const workRequestId = session.activeTurnRequestId;
       if (workRequestId) session.suppressedSpeechRequestIds.add(workRequestId);
       interruptVoiceSpeech(session);
-      socket.emit("audio:status", { status: "interrupted" });
-      socket.emit("audio:interrupt-ack", { workContinues: true, requestId: workRequestId });
+      socket.emit("audio:status", { status: "interrupted", sessionId, requestId: workRequestId });
+      socket.emit("audio:interrupt-ack", { workContinues: true, sessionId, requestId: workRequestId });
       return;
     }
     await commitActiveVoiceCancellation(session, { source: 'voice_interrupt' });
-    socket.emit("audio:status", { status: "interrupted" });
-    socket.emit("audio:interrupt-ack", { workContinues: false });
+    if (!owner.isCurrent()) return;
+    socket.emit("audio:status", { status: "interrupted", sessionId, requestId });
+    socket.emit("audio:interrupt-ack", { workContinues: false, sessionId, requestId });
   });
 
-  socket.on('audio:cancel_turn', async (data?: { requestId?: string; reason?: string }) => {
+  socket.on('audio:cancel_turn', async (data?: { requestId?: string; reason?: string; sessionId?: string }) => {
     const session = getAudioSession(socket);
+    if (data?.sessionId && data.sessionId !== session.sessionId) return;
+    const owner = captureVoiceTurnOwner(session);
+    const sessionId = session.sessionId;
     const requestId = session.activeTurnRequestId;
     if (!requestId || (data?.requestId && data.requestId !== requestId)) return;
     if (data?.reason === 'thinking_watchdog') {
@@ -6147,8 +6238,9 @@ export function registerVoiceHandlers(
       text: CN_VOICE_WORK_MESSAGES.processingTimedOut,
       source: 'voice_turn_timeout',
     });
-    socket.emit('audio:interrupt-ack', { workContinues: false, requestId });
-    socket.emit('audio:status', { status: 'listening', requestId });
+    if (!owner.isCurrent()) return;
+    socket.emit('audio:interrupt-ack', { workContinues: false, requestId, sessionId });
+    socket.emit('audio:status', { status: 'listening', requestId, sessionId });
     resetSilenceTimer(session, socket);
   });
 
@@ -6203,31 +6295,7 @@ export function registerVoiceHandlers(
     logger.info(`[Audio] Voice call ended by ${socket.id}`);
     const session = getAudioSession(socket);
     if (data?.sessionId && session.sessionId && data.sessionId !== session.sessionId) return;
-    const shouldRefineMeeting = session.transcriptionOnly && data?.refineTranscript === true;
-    const meetingPcmPath = session.meetingPcmPath;
-    const meetingPcmBytes = session.meetingPcmBytes;
-    await commitActiveVoiceCancellation(session, {
-      source: 'voice_call_stopped',
-      publish: false,
-    });
-    session.isActive = false;
-    clearVoiceSessionTtsSelection(session);
-    setRealtimeVoiceSessionActive(session.userId, socket.id, false);
-    session.transcriptionOnly = false;
-    if (session.silenceTimer) { clearTimeout(session.silenceTimer); session.silenceTimer = null; }
-    if (session.sttSession) {
-      session.sttSession.end();
-      session.sttSession = null;
-    }
-    session.meetingPcmPath = null;
-    session.meetingPcmBytes = 0;
-    // Clear tracked timers to prevent post-session mutations
-    socket.emit("audio:status", { status: "idle" });
-    if (shouldRefineMeeting && meetingPcmPath) {
-      void refineMeetingTranscript(io, socket, session, meetingPcmPath, meetingPcmBytes);
-    } else if (meetingPcmPath) {
-      try { fs.rmSync(meetingPcmPath, { force: true }); } catch {}
-    }
+    await stopVoiceCall(session, { source: 'voice_call_stopped', refineTranscript: data?.refineTranscript });
   });
 
   // Track ambient noise level for environment-gated proactive speech
@@ -6516,21 +6584,7 @@ export function registerVoiceHandlers(
   socket.on("disconnect", async () => {
     const session = socket.data.audioSession as AudioSession | undefined;
     if (session) {
-      await commitActiveVoiceCancellation(session, {
-        source: 'voice_disconnected',
-        publish: false,
-      });
-      session.isActive = false;
-      clearVoiceSessionTtsSelection(session);
-      setRealtimeVoiceSessionActive(session.userId, socket.id, false);
-      if (session.silenceTimer) { clearTimeout(session.silenceTimer); session.silenceTimer = null; }
-      if (session.bargeinTimer) { clearTimeout(session.bargeinTimer); session.bargeinTimer = null; }
-      for (const t of session.ttsDecayTimers) { clearTimeout(t); }
-      session.ttsDecayTimers = [];
-      if (session.sttSession) {
-        session.sttSession.end();
-        session.sttSession = null;
-      }
+      await stopVoiceCall(session, { source: 'voice_disconnected', publish: false });
     }
     console.log(`[Socket] Client disconnected: ${socket.id}`);
   });
