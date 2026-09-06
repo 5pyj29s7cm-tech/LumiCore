@@ -66,4 +66,33 @@ describe('shared conversation summary scheduler', () => {
       lastSummaryMessageCount: 20,
     });
   });
+
+  it('does not start or write a derived summary after its original authorization changes', async () => {
+    const userId = `summary-revoked-${Date.now()}`;
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    for (let index = 0; index < 20; index++) addMessage({
+      userId, agentId: 'lumi', conversationId: conversation.id,
+      role: index % 2 ? 'assistant' : 'user', content: `summary input ${index}`, source: 'chat',
+    });
+    let allowed = false;
+    let generated = 0;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const input = {
+      conversationId: conversation.id, userId, provider: 'test', model: 'test', domain: 'personal',
+      isAuthorized: () => allowed,
+      generateSummary: async () => { generated++; await gate; return 'Revoked summary'; },
+    };
+    expect(scheduleConversationSummary(input).scheduled).toBe(false);
+    expect(generated).toBe(0);
+    allowed = true;
+    const started = scheduleConversationSummary(input);
+    expect(started.scheduled).toBe(true);
+    allowed = false;
+    release();
+    await expect(started.completion).resolves.toBe(false);
+    expect(getConversationSummary(conversation.id)).toBeFalsy();
+    allowed = true;
+    await expect(scheduleConversationSummary({ ...input, generateSummary: async () => 'Fresh authorized summary' }).completion).resolves.toBe(true);
+  });
 });

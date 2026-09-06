@@ -9,6 +9,7 @@ function compact(value: unknown): string {
 }
 
 export type PersistedPendingChatExecution = {
+  userId?: string;
   requestId: string;
   source: string;
   domain: 'personal' | 'work';
@@ -76,6 +77,7 @@ function normalizePendingExecution(value: unknown): PersistedPendingChatExecutio
   } : undefined;
   return {
     requestId,
+    ...(compact(candidate.userId) ? { userId: compact(candidate.userId) } : {}),
     source: compact(candidate.source) || 'chat',
     domain: candidate.domain === 'work' ? 'work' : 'personal',
     orgId: compact(candidate.orgId) || undefined,

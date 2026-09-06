@@ -66,6 +66,7 @@ import {
   shouldDisplayAgentResponse,
 } from '@/lib/agentResponseDelivery';
 import { buildChatConversationScopeKey } from '@/lib/chatConversationScope';
+import { chatExecutionStorageKey, ownedPendingChatExecutions, type ChatRecoveryOwner } from '@/lib/chatExecutionRecovery';
 import {
   resolveChatExecutionEvent,
   shouldApplyInitialConversationMessages,
@@ -76,7 +77,6 @@ import {
   ChatRequestLedger,
   ChatTurnTimerGuard,
   finalizeStreamedChatMessage,
-  normalizePersistedPendingChatExecutions,
   removePersistedPendingChatExecution,
   upsertPersistedPendingChatExecution,
   type PersistedPendingChatExecution,
@@ -1719,10 +1719,16 @@ export function AgentChatPage({
   const lastResumedRequestIdsRef = useRef(new Set<string>());
   const initialLoadDoneRef = useRef(false);
   const lastConversationScopeRef = useRef<string>('');
-  const activeExecutionStorageKey = `lumi_active_chat_execution:${agentId}:${activeDomain}:${activeOrgId || ''}`;
+  const chatRecoveryUserId = String(user?.id || '').trim();
+  const recoveryOwner = useMemo<ChatRecoveryOwner>(() => ({
+    userId: chatRecoveryUserId, agentId, domain: activeDomain, orgId: activeOrgId, source: chatExecutionSource,
+  }), [chatRecoveryUserId, agentId, activeDomain, activeOrgId, chatExecutionSource]);
+  const activeExecutionStorageKey = chatExecutionStorageKey(recoveryOwner);
   const persistActiveExecution = useCallback((requestId: string) => {
+    if (!activeExecutionStorageKey) return;
     try {
       const execution: PersistedPendingChatExecution = {
+        userId: chatRecoveryUserId,
         requestId,
         source: chatExecutionSource,
         domain: activeDomain,
@@ -1733,14 +1739,17 @@ export function AgentChatPage({
           ? { mediaGeneration: { ...activeMediaGenerationRef.current.request } }
           : {}),
       };
-      const current = JSON.parse(localStorage.getItem(activeExecutionStorageKey) || 'null');
+      const current = { version: 2, pending: ownedPendingChatExecutions(
+        JSON.parse(localStorage.getItem(activeExecutionStorageKey) || 'null'), recoveryOwner,
+      ) };
       localStorage.setItem(
         activeExecutionStorageKey,
         JSON.stringify(upsertPersistedPendingChatExecution(current, execution)),
       );
     } catch {}
-  }, [activeDomain, activeExecutionStorageKey, activeOrgId, chatExecutionSource]);
+  }, [activeDomain, activeExecutionStorageKey, activeOrgId, chatExecutionSource, chatRecoveryUserId, recoveryOwner]);
   const clearPersistedExecution = useCallback((requestId?: string) => {
+    if (!activeExecutionStorageKey) return;
     try {
       if (!requestId) return localStorage.removeItem(activeExecutionStorageKey);
       const current = JSON.parse(localStorage.getItem(activeExecutionStorageKey) || 'null');
@@ -2507,11 +2516,20 @@ export function AgentChatPage({
   useEffect(() => {
     if (isFounder || !socket) return;
 
+    let disposed = false;
+    let recoveryAttempt = 0;
     const resumeActiveExecution = async () => {
+      if (!activeExecutionStorageKey) return;
+      const attempt = ++recoveryAttempt;
+      let ownsView = chatViewWorkRef.current.capture();
+      const isCurrentRecovery = () => !disposed && attempt === recoveryAttempt && ownsView();
       let pending: PersistedPendingChatExecution[] = [];
       try {
-        pending = normalizePersistedPendingChatExecutions(
+        // Legacy keys have no verifiable user owner; only the v3 key is read.
+        localStorage.removeItem(`lumi_active_chat_execution:${agentId}:${activeDomain}:${activeOrgId || ''}`);
+        pending = ownedPendingChatExecutions(
           JSON.parse(localStorage.getItem(activeExecutionStorageKey) || 'null'),
+          recoveryOwner,
         );
       } catch {
         localStorage.removeItem(activeExecutionStorageKey);
@@ -2528,25 +2546,6 @@ export function AgentChatPage({
       const mediaExecution = isOfficeCommandCenter
         ? [...pending].reverse().find(execution => execution.mediaGeneration)
         : undefined;
-      if (mediaExecution?.mediaGeneration) {
-        const request = mediaExecution.mediaGeneration;
-        activeMediaGenerationRef.current = {
-          requestId: mediaExecution.requestId,
-          mode: request.mode,
-          request,
-        };
-        mediaStudioOpenRef.current = true;
-        mediaGenerationArtifactsRef.current = [];
-        mediaGenerationArtifactValidationRef.current = null;
-        setMediaGenerationArtifacts([]);
-        setMediaGenerationStatus('generating');
-        setMediaGenerationDetail(mediaGenerationText.statusGenerating);
-        setMediaStudioMode(request.mode);
-        setMediaPrimaryImage(request.primaryImage || '');
-        setMediaReferenceImages(request.referenceImages || []);
-        setMediaVideoReferenceImage(request.referenceImage || '');
-      }
-
       for (const execution of pending) {
         if (!chatRequestLedgerRef.current.has(execution.requestId)) {
           chatRequestLedgerRef.current.begin(execution.requestId);
@@ -2566,14 +2565,24 @@ export function AgentChatPage({
         try {
           const activeResponse = await fetch(scopedConversationUrl('/api/conversations/active'), { credentials: 'include' });
           const activeData = await activeResponse.json();
+          if (!isCurrentRecovery()) return;
           fallbackConversationId = String(activeData.activeConversation?.id || '').trim();
           if (fallbackConversationId && !attachmentConversationIdRef.current) {
             bindAttachmentContextToConversation(fallbackConversationId, { carryCurrent: true });
-            pending.forEach(execution => persistActiveExecution(execution.requestId));
+            // This recovery itself adopted the server's conversation; later
+            // user navigation must still invalidate its acknowledgement.
+            ownsView = chatViewWorkRef.current.capture();
+            const stored = JSON.parse(localStorage.getItem(activeExecutionStorageKey) || 'null');
+            let updated = { version: 2 as const, pending: ownedPendingChatExecutions(stored, recoveryOwner) };
+            for (const execution of pending) {
+              if (!execution.conversationId) updated = upsertPersistedPendingChatExecution(updated, { ...execution, conversationId: fallbackConversationId });
+            }
+            localStorage.setItem(activeExecutionStorageKey, JSON.stringify(updated));
           }
         } catch {}
       }
 
+      if (!isCurrentRecovery()) return;
       for (const execution of pending) {
         const recoveryConversationId = String(
           execution.conversationId || fallbackConversationId || '',
@@ -2585,9 +2594,10 @@ export function AgentChatPage({
           orgId: execution.orgId || null,
           conversationId: recoveryConversationId || undefined,
         }, (result?: { ok?: boolean; snapshot?: ChatExecutionSnapshot; error?: string }) => {
-          if (!chatRequestLedgerRef.current.has(execution.requestId)) return;
+          if (!isCurrentRecovery() || !chatRequestLedgerRef.current.has(execution.requestId)) return;
           const snapshot = result?.snapshot;
-          if (!result?.ok || !snapshot) {
+          if (!result?.ok || !snapshot || snapshot.requestId !== execution.requestId || snapshot.source !== execution.source) {
+            if (activeMediaGenerationRef.current?.requestId === execution.requestId) resetMediaGenerationSurface();
             const tracked = settleTrackedChatRequest(execution.requestId);
             setIsTyping(tracked.remaining > 0);
             if (tracked.remaining === 0) {
@@ -2599,7 +2609,22 @@ export function AgentChatPage({
             }
             return;
           }
-
+          // Restore local references only after this user's exact execution
+          // has been found by the authenticated backend.
+          if (mediaExecution?.requestId === execution.requestId && mediaExecution.mediaGeneration) {
+            const request = mediaExecution.mediaGeneration;
+            activeMediaGenerationRef.current = { requestId: execution.requestId, mode: request.mode, request };
+            mediaStudioOpenRef.current = true;
+            mediaGenerationArtifactsRef.current = [];
+            mediaGenerationArtifactValidationRef.current = null;
+            setMediaGenerationArtifacts([]);
+            setMediaGenerationStatus('generating');
+            setMediaGenerationDetail(mediaGenerationText.statusGenerating);
+            setMediaStudioMode(request.mode);
+            setMediaPrimaryImage(request.primaryImage || '');
+            setMediaReferenceImages(request.referenceImages || []);
+            setMediaVideoReferenceImage(request.referenceImage || '');
+          }
           if (snapshot.terminal) return; // The server replays the terminal event.
           if (snapshot.status === 'waiting_confirmation') setWorkflowStatus('waiting_confirmation');
           else if (snapshot.status === 'cancelling') setWorkflowStatus('cancelling');
@@ -2612,8 +2637,8 @@ export function AgentChatPage({
 
     socket.on('connect', resumeActiveExecution);
     if (socket.connected) resumeActiveExecution();
-    return () => { socket.off('connect', resumeActiveExecution); };
-  }, [activeExecutionStorageKey, bindAttachmentContextToConversation, chatExecutionSource, clearPersistedExecution, isFounder, isOfficeCommandCenter, isZh, mediaGenerationText.statusGenerating, persistActiveExecution, pushChatProgress, scopedConversationUrl, settleTrackedChatRequest, socket]);
+    return () => { disposed = true; socket.off('connect', resumeActiveExecution); };
+  }, [activeDomain, activeExecutionStorageKey, activeOrgId, agentId, bindAttachmentContextToConversation, chatExecutionSource, clearPersistedExecution, isFounder, isOfficeCommandCenter, isZh, mediaGenerationText.statusGenerating, pushChatProgress, recoveryOwner, resetMediaGenerationSurface, scopedConversationUrl, settleTrackedChatRequest, socket]);
 
   const startNewTextConversation = useCallback(async () => {
     if (isCreatingConversation || restoringConversationId) return;
