@@ -14,7 +14,7 @@ import os from 'os';
 import crypto from 'crypto';
 import { spawn } from 'child_process';
 import iconv from 'iconv-lite';
-import { readDB, writeDB } from '../db_layer';
+import { readDB, writeDB, flushDBOrThrow } from '../db_layer';
 import { chunkText, ingestDocument, verifyIngestedDocument } from '../server/agents/rag';
 import type { KnowledgeIngestionManifest } from '../server/knowledge/ingestion_manifest';
 import { buildKnowledgeIngestionManifest, evaluateKnowledgeManifest, hashKnowledgeContent } from '../server/knowledge/ingestion_manifest';
@@ -26,6 +26,7 @@ import {
 } from '../server/middleware/auth';
 import * as OrgKB from '../server/org/kb';
 import { getMember } from '../server/org/db';
+import { captureOrganizationMembershipAuthorization, isOrganizationMembershipAuthorizationCurrent } from '../server/org/membership_authorization';
 import { analyzeScreen } from '../server/llm/adapter';
 import { getUserPreferredVision, type VisionProvider } from '../server/llm/vision_preferences';
 import { AUDIO_FILE_EXTS, isAudioTranscriptionUnavailable, transcribeAudioFile } from '../server/stt/file_transcription';
@@ -189,6 +190,95 @@ interface KnowledgeFileInput {
   size?: number;
   mimeType?: string;
   move?: boolean;
+  assertAuthorized?: () => void;
+}
+
+interface UploadItemIdentity { batchId: string; itemId: string }
+const activeUploadItems = new Map<string, Promise<any>>();
+
+function captureUploadAuthorization(scope: FileScope) {
+  const snapshot = scope.domain === 'work' ? captureOrganizationMembershipAuthorization(scope.orgId!, scope.userId) : undefined;
+  let revoked = false;
+  return {
+    key: snapshot ? JSON.stringify(snapshot) : scope.userId,
+    assertCurrent() {
+      if (snapshot && !isOrganizationMembershipAuthorizationCurrent(snapshot, scope.orgId!, scope.userId)) revoked = true;
+      if (revoked) throw Object.assign(new Error('Organization access changed during this upload.'), { status: 403 });
+    },
+  };
+}
+
+function uploadItemIdentities(body: any, count: number): Array<UploadItemIdentity | undefined> {
+  if (!body?.uploadBatchId) return Array(count).fill(undefined); // Older clients remain supported.
+  const batchId = String(body.uploadBatchId);
+  let items: unknown;
+  try { items = typeof body.uploadItemIds === 'string' ? JSON.parse(body.uploadItemIds) : body.uploadItemIds; } catch {}
+  if (!/^[a-zA-Z0-9_-]{8,100}$/.test(batchId) || !Array.isArray(items) || items.length !== count
+    || items.some(item => typeof item !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(item))
+    || new Set(items).size !== items.length) {
+    throw Object.assign(new Error('Invalid upload batch identity'), { status: 400 });
+  }
+  return items.map(itemId => ({ batchId, itemId }));
+}
+
+async function hashUploadFile(filePath: string): Promise<string> {
+  const info = fs.lstatSync(filePath);
+  if (!info.isFile() || info.isSymbolicLink() || info.size > MAX_UPLOAD_BYTES) throw new Error('Invalid upload source');
+  const digest = crypto.createHash('sha256');
+  for await (const chunk of fs.createReadStream(filePath)) digest.update(chunk);
+  return digest.digest('hex');
+}
+
+/** Retry the same authenticated batch item, without changing normal copy-upload semantics. */
+async function saveUploadedKnowledgeFile(
+  input: KnowledgeFileInput, userId: string, scope: FileScope, db: any,
+  authorization: ReturnType<typeof captureUploadAuthorization>, identity?: UploadItemIdentity,
+): Promise<any> {
+  authorization.assertCurrent();
+  input.assertAuthorized = authorization.assertCurrent;
+  if (!identity) return saveKnowledgeFile(input, userId, scope, db);
+  const digest = await hashUploadFile(input.sourcePath);
+  authorization.assertCurrent();
+  const key = crypto.createHash('sha256').update(JSON.stringify([
+    userId, scope.domain, scope.orgId || '', identity.batchId, identity.itemId,
+    authorization.key, sanitizeKnowledgeFilename(input.originalName), input.mimeType || '', digest,
+  ])).digest('hex');
+  const inFlight = activeUploadItems.get(key);
+  if (inFlight) {
+    const result = await inFlight;
+    authorization.assertCurrent();
+    return { ...result, reused: true };
+  }
+  const operation = (async () => {
+    const candidates = [...(db.knowledgeFiles || [])].reverse().filter((meta: any) => (
+      metaMatchesScope(meta, scope) && meta.userId === userId && meta.uploadReceipt?.key === key
+      && meta.uploadReceipt.response?.id === meta.filename
+    ));
+    for (const meta of candidates) {
+      const savedPath = path.join(scope.dir, path.basename(meta.filename));
+      try {
+        if (meta.filename !== path.basename(meta.filename) || await hashUploadFile(savedPath) !== digest) continue;
+      } catch { continue; }
+      authorization.assertCurrent();
+      // A previous flush may have failed. Never return a success before retrying that boundary.
+      writeDB(db);
+      await flushDBOrThrow();
+      authorization.assertCurrent();
+      return { ...meta.uploadReceipt.response, path: savedPath, reused: true };
+    }
+    const entry = await saveKnowledgeFile(input, userId, scope, db);
+    authorization.assertCurrent();
+    const meta = findFileMeta(db, entry.id, scope);
+    if (!meta) throw new Error('Uploaded file metadata is unavailable');
+    meta.uploadReceipt = { key, contentSha256: digest, response: entry };
+    writeDB(db);
+    await flushDBOrThrow();
+    authorization.assertCurrent();
+    return entry;
+  })();
+  activeUploadItems.set(key, operation);
+  try { return await operation; }
+  finally { if (activeUploadItems.get(key) === operation) activeUploadItems.delete(key); }
 }
 
 const MOJIBAKE_TOKENS = [
@@ -1145,6 +1235,7 @@ async function saveKnowledgeFile(
   scope: FileScope,
   db: any,
 ): Promise<any> {
+  input.assertAuthorized?.();
   const dest = uniqueKnowledgeDestination(scope, input.originalName || path.basename(input.sourcePath));
   copyOrMoveKnowledgeSource(input, dest);
   const finalName = path.basename(dest);
@@ -1202,6 +1293,7 @@ async function saveKnowledgeFile(
     extraction = isAudioUpload && !AUDIO_KNOWLEDGE_EXTS.test(ext)
       ? await extractAudioKnowledge(dest)
       : await extractKnowledgeFileContent(dest, userId);
+    input.assertAuthorized?.();
     extractedContent = extraction.content;
     if (extractedContent) {
       entry.content = extractedContent.slice(0, 50000); // cap at 50KB for chat context
@@ -1224,6 +1316,7 @@ async function saveKnowledgeFile(
       if (meta) applyExtractionMeta(meta, extraction, extractedContent);
       if (extractedContent?.trim()) {
         const article = await ensureOrgArticleFromFile(scope, userId, finalName, extractedContent, meta?.orgArticleId, extraction.sourceMetadata);
+        input.assertAuthorized?.();
         const manifest = article?.id && scope.orgId
           ? OrgKB.getArticleIngestionManifest(scope.orgId, article.id)
           : null;
@@ -1264,6 +1357,7 @@ async function saveKnowledgeFile(
         sourceMetadata: extraction.sourceMetadata,
         extraction,
       });
+      input.assertAuthorized?.();
       const meta = findFileMeta(db, finalName, scope);
       if (meta) {
         if (!Array.isArray(meta.agentIds)) meta.agentIds = [];
@@ -1298,6 +1392,7 @@ async function saveKnowledgeFile(
     }
   }
 
+  input.assertAuthorized?.();
   return entry;
 }
 
@@ -1958,8 +2053,8 @@ router.delete('/files/obsidian/:id', requireAuth, (req: Request, res: Response) 
 
 // ── POST /files/upload — upload files + auto-ingest into Lumi's memory ──
 router.post('/files/upload', requireAuth, upload.array('files', MAX_UPLOAD_FILES), async (req: Request, res: Response) => {
+  const uploadedFiles = (req.files || []) as Express.Multer.File[];
   try {
-    const uploadedFiles = req.files as Express.Multer.File[];
     if (!uploadedFiles || uploadedFiles.length === 0) {
       return res.status(400).json({ error: 'No files provided' });
     }
@@ -1971,19 +2066,39 @@ router.post('/files/upload', requireAuth, upload.array('files', MAX_UPLOAD_FILES
     if (!db.knowledgeFiles) db.knowledgeFiles = [];
 
     const saved: any[] = [];
-    for (const file of uploadedFiles) {
-      saved.push(await saveKnowledgeFile({
-        sourcePath: file.path,
-        originalName: file.originalname,
-        size: file.size,
-        mimeType: file.mimetype || '',
-        move: true,
-      }, userId, scope, db));
+    const failed: Array<{ index: number; itemId?: string; fileName: string; error: string }> = [];
+    const authorization = captureUploadAuthorization(scope);
+    const identities = uploadItemIdentities(req.body, uploadedFiles.length);
+    for (const [index, file] of uploadedFiles.entries()) {
+      try {
+        const entry = await saveUploadedKnowledgeFile({
+          sourcePath: file.path,
+          originalName: file.originalname,
+          size: file.size,
+          mimeType: file.mimetype || '',
+          move: true,
+        }, userId, scope, db, authorization, identities[index]);
+        saved.push({ ...entry, uploadIndex: index, uploadItemId: identities[index]?.itemId });
+      } catch (error: any) {
+        authorization.assertCurrent();
+        failed.push({ index, itemId: identities[index]?.itemId, fileName: repairFilename(file.originalname), error: error?.message || 'Upload failed' });
+      }
     }
+    authorization.assertCurrent();
     writeDB(db);
-    res.json({ success: true, files: saved });
+    await flushDBOrThrow();
+    authorization.assertCurrent();
+    res.status(saved.length > 0 ? 200 : 400).json({
+      success: failed.length === 0, partial: saved.length > 0 && failed.length > 0,
+      files: saved, failed, ...(saved.length === 0 ? { error: failed[0]?.error || 'No files uploaded' } : {}),
+    });
   } catch (err: any) {
     sendRouteError(res, err);
+  } finally {
+    // Multer owns these temporary paths; a replay/failure must not leave its staged copy behind.
+    for (const file of uploadedFiles) {
+      try { if (fs.existsSync(file.path)) fs.unlinkSync(file.path); } catch {}
+    }
   }
 });
 
@@ -2007,36 +2122,39 @@ router.post('/files/import-paths', requireUnifiedAuth, requireUnifiedAdmin, requ
 
     const saved: any[] = [];
     const skipped: Array<{ path: string; error: string }> = [];
-    for (const rawPath of uniquePaths) {
+    const failed: Array<{ index: number; itemId?: string; fileName: string; error: string }> = [];
+    const authorization = captureUploadAuthorization(scope);
+    const identities = uploadItemIdentities(req.body, uniquePaths.length);
+    for (const [index, rawPath] of uniquePaths.entries()) {
       try {
         const sourcePath = resolveLocalImportPath(rawPath);
         const stat = fs.statSync(sourcePath);
-        if (!stat.isFile()) {
-          skipped.push({ path: rawPath, error: 'Only files can be imported' });
-          continue;
-        }
-        if (stat.size > MAX_UPLOAD_BYTES) {
-          skipped.push({ path: rawPath, error: 'File is larger than 500 MB' });
-          continue;
-        }
-        saved.push(await saveKnowledgeFile({
+        if (!stat.isFile()) throw new Error('Only files can be imported');
+        if (stat.size > MAX_UPLOAD_BYTES) throw new Error('File is larger than 500 MB');
+        const entry = await saveUploadedKnowledgeFile({
           sourcePath,
           originalName: path.basename(sourcePath),
           size: stat.size,
           mimeType: getDownloadMime(sourcePath) || '',
           move: false,
-        }, userId, scope, db));
+        }, userId, scope, db, authorization, identities[index]);
+        saved.push({ ...entry, uploadIndex: index, uploadItemId: identities[index]?.itemId });
       } catch (err: any) {
+        authorization.assertCurrent();
         skipped.push({ path: rawPath, error: err?.message || String(err) });
+        failed.push({ index, itemId: identities[index]?.itemId, fileName: path.basename(rawPath), error: err?.message || String(err) });
       }
     }
 
+    authorization.assertCurrent();
     if (saved.length === 0) {
-      return res.status(400).json({ error: skipped[0]?.error || 'No files imported', skipped });
+      return res.status(400).json({ error: skipped[0]?.error || 'No files imported', files: [], failed, skipped });
     }
 
     writeDB(db);
-    res.json({ success: true, files: saved, skipped });
+    await flushDBOrThrow();
+    authorization.assertCurrent();
+    res.json({ success: failed.length === 0, partial: failed.length > 0, files: saved, failed, skipped });
   } catch (err: any) {
     sendRouteError(res, err);
   }

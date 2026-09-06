@@ -1,5 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChatViewWorkRegistry } from '@/lib/chatViewWork';
+import { ChatAttachmentUploads, type ChatUploadFailure, type ChatUploadKind, type ChatUploadSource } from '@/lib/chatAttachmentUploads';
+import { ChatAttachmentUploadStatus } from './ChatAttachmentUploadStatus';
+import { chatAttachmentCopy } from '../i18n/locales/chatAttachments';
 import { FileResourceImage, FileResourceVideo } from './FileResourceMedia';
 import { saveFileResource } from '@/services/fileResource';
 import { createPortal } from 'react-dom';
@@ -578,17 +581,19 @@ export function AgentChatPage({
   const messagesRevisionRef = useRef(0);
   const historyRefreshRevisionRef = useRef(0);
   const chatViewWorkRef = useRef(new ChatViewWorkRegistry());
+  const chatUploadsRef = useRef(new ChatAttachmentUploads());
   const setMessages = useCallback((update: React.SetStateAction<any[]>) => {
     const next = typeof update === 'function' ? update(messagesRef.current) : update;
     messagesRevisionRef.current += 1;
     messagesRef.current = next;
     setMessageState(next);
   }, []);
-  useEffect(() => () => chatViewWorkRef.current.invalidate(), []);
+  useEffect(() => () => { chatViewWorkRef.current.invalidate(); chatUploadsRef.current.reset(); }, []);
   const isOfficeCommandCenter = layout === 'command-center' && commandCenterView === 'office';
   const isCommandCenterUtility = layout === 'command-center' && !isOfficeCommandCenter;
   const chatExecutionSource = layout === 'command-center' ? 'command-center-chat' : 'chat';
   const isZh = t?.langCode !== 'en';
+  const attachmentUploadText = chatAttachmentCopy(isZh);
   const commandCenterPlannerText = commandCenterPlannerCopy(isZh ? 'zh' : 'en');
   const mediaGenerationText = mediaGenerationCopy(isZh ? 'zh' : 'en');
   const ui = (zh: string, en: string) => isZh ? zh : en;
@@ -847,6 +852,7 @@ export function AgentChatPage({
   const [hasDraftText, setHasDraftText] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);
+  const [attachmentUploadFailures, setAttachmentUploadFailures] = useState<ChatUploadFailure[]>([]);
   const [isListening, setIsListening] = useState(false);
   const [optimizationProgress, setOptimizationProgress] = useState(0);
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
@@ -1120,6 +1126,8 @@ export function AgentChatPage({
   const attachmentContextStoragePrefix = `lumi_chat_attachment_context:${user?.id || user?.username || 'anonymous'}:${buildChatConversationScopeKey(agentId, activeDomain, activeOrgId)}`;
   const invalidateChatViewWork = useCallback(() => {
     chatViewWorkRef.current.invalidate();
+    chatUploadsRef.current.reset();
+    setAttachmentUploadFailures([]);
     setIsOptimizing(false);
     setOptimizationProgress(0);
     setMediaSourceUploading(false);
@@ -3011,6 +3019,12 @@ export function AgentChatPage({
     attachments: ChatAttachment[] = pendingAttachments,
     options: ChatSendOptions = {},
   ) => {
+    // All entry points (form, Enter, shell command, suggested text) use this
+    // synchronous barrier, including the interval before React re-renders.
+    if (chatUploadsRef.current.busy || chatUploadsRef.current.canRetry) {
+      toast.info(chatUploadsRef.current.busy ? attachmentUploadText.processing : attachmentUploadText.failed);
+      return;
+    }
     const trimmedText = text.trim();
     const directAttachments = attachments.map(serializeChatAttachment);
     const reusableConversationAttachments = options.includeConversationAttachments === false
@@ -3300,6 +3314,7 @@ export function AgentChatPage({
     return requestId;
   }, [
     acceptChatExecutionEvent,
+    attachmentUploadText,
     activeDomain,
     activeOrgId,
     agentCategory,
@@ -3680,11 +3695,6 @@ export function AgentChatPage({
     const mergeResult = appendPendingAttachments(attachments, { announce: false });
     const addedAttachments = mergeResult.added;
     setOptimizationProgress(100);
-    window.setTimeout(() => {
-      if (!work.isCurrent()) return;
-      setIsOptimizing(false);
-      setOptimizationProgress(0);
-    }, 500);
     const audioTranscripts = addedAttachments
       .filter(item => item.kind === 'audio' && item.transcript)
       .map(item => `${item.fileName}:\n${item.transcript}`);
@@ -3704,56 +3714,64 @@ export function AgentChatPage({
     notifyKnowledgeUpdated(attachments.map(item => ({ id: item.path || item.fileName, name: item.fileName, displayName: item.fileName })));
   }, [appendPendingAttachments, mapImportedFilesToAttachments, notifyKnowledgeUpdated, setDraftText]);
 
-  const uploadChatAttachments = useCallback(async (files: FileList | null) => {
-    if (!files || files.length === 0 || isOptimizing) return;
+  const runChatAttachmentUpload = useCallback(async (
+    kind: ChatUploadKind, sources: ChatUploadSource[], retry = false,
+  ) => {
+    if ((!retry && sources.length === 0) || chatUploadsRef.current.busy) return;
     const occupiedCount = mergeChatAttachmentReferences(
-      conversationAttachmentsRef.current,
-      pendingAttachmentsRef.current,
+      conversationAttachmentsRef.current, pendingAttachmentsRef.current,
     ).attachments.length;
     const remainingSlots = MAX_CHAT_ATTACHMENTS - occupiedCount;
     if (remainingSlots <= 0) {
       toast.error(formatUiMessage('agent-chat-page.up-to-value0-files-can.349aa29325', { value0: MAX_CHAT_ATTACHMENTS }));
       return;
     }
+    const attempt = chatUploadsRef.current.begin(kind, sources, remainingSlots, retry);
+    if (!attempt) return;
     setIsOptimizing(true);
+    setAttachmentUploadFailures([]);
     setOptimizationProgress(30);
     const work = chatViewWorkRef.current.begin();
-
-    const fileList = Array.from(files).slice(0, remainingSlots);
-    if (files.length > remainingSlots) {
+    if (!retry && sources.length > attempt.items.length) {
       toast.error(formatUiMessage('agent-chat-page.up-to-value0-files-can.349aa29325', { value0: MAX_CHAT_ATTACHMENTS }));
     }
-    const formData = new FormData();
-    fileList.forEach(f => formData.append('files', f));
-
     try {
-      formData.append('domain', activeDomain);
-      if (activeDomain === 'work' && activeOrgId) formData.append('orgId', activeOrgId);
-
-      const res = await fetch('/api/files/upload', { method: 'POST', body: formData, credentials: 'include', signal: work.signal });
-      if (res.ok) {
-        const d = await res.json();
-        acceptImportedChatFiles(d.files || [], 0, work);
+      const uploadItemIds = attempt.items.map(item => item.id);
+      let response: Response;
+      if (attempt.batch.kind === 'files') {
+        const formData = new FormData();
+        attempt.items.forEach(item => formData.append('files', item.source as File));
+        formData.append('domain', activeDomain);
+        if (activeDomain === 'work' && activeOrgId) formData.append('orgId', activeOrgId);
+        formData.append('uploadBatchId', attempt.batch.id);
+        formData.append('uploadItemIds', JSON.stringify(uploadItemIds));
+        response = await fetch('/api/files/upload', { method: 'POST', body: formData, credentials: 'include', signal: work.signal });
       } else {
-        if (!work.isCurrent()) return;
-        setIsOptimizing(false);
-        setOptimizationProgress(0);
-        try {
-          const err = await res.json();
-          toast.error(err.error || (t.uploadFailed || 'Upload failed'));
-        } catch {
-          toast.error(t.uploadFailed || 'Upload failed');
-        }
+        response = await fetch(scopedFileUrl('/api/files/import-paths'), {
+          signal: work.signal, method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json', 'X-Lumi-Desktop-Import': 'file-drop' },
+          body: JSON.stringify({ paths: attempt.items.map(item => item.source), uploadBatchId: attempt.batch.id, uploadItemIds }),
+        });
       }
-    } catch {
+      const payload = await response.json().catch(() => ({}));
       if (!work.isCurrent()) return;
-      setIsOptimizing(false);
-      setOptimizationProgress(0);
-      toast.error(t.chatConnError || 'Connection error during upload');
+      const failures = chatUploadsRef.current.complete(attempt, payload, t.uploadFailed || attachmentUploadText.unknown);
+      setAttachmentUploadFailures(failures);
+      if (Array.isArray(payload.files) && payload.files.length > 0) acceptImportedChatFiles(payload.files, 0, work);
+      if (!response.ok && failures.length === 0) toast.error(payload.error || t.uploadFailed || attachmentUploadText.unknown);
+    } catch (error: any) {
+      if (!work.isCurrent()) return;
+      setAttachmentUploadFailures(chatUploadsRef.current.complete(attempt, null, error?.message || t.chatConnError || attachmentUploadText.unknown));
     } finally {
+      chatUploadsRef.current.finish(attempt);
+      if (work.isCurrent()) { setIsOptimizing(false); setOptimizationProgress(0); }
       work.finish();
     }
-  }, [acceptImportedChatFiles, activeDomain, activeOrgId, isOptimizing, t.chatConnError, t.uploadFailed]);
+  }, [acceptImportedChatFiles, activeDomain, activeOrgId, attachmentUploadText, scopedFileUrl, t.chatConnError, t.uploadFailed]);
+
+  const uploadChatAttachments = useCallback(async (files: FileList | null) => {
+    await runChatAttachmentUpload('files', Array.from(files || []));
+  }, [runChatAttachmentUpload]);
 
   const uploadMediaSourceImage = useCallback(async (files: FileList | null) => {
     const target = mediaSourceUploadTargetRef.current;
@@ -3819,41 +3837,8 @@ export function AgentChatPage({
 
   const importChatAttachmentPaths = useCallback(async (paths: string[]) => {
     const uniquePaths = [...new Set(paths.map(item => String(item || '').trim()).filter(Boolean))];
-    if (uniquePaths.length === 0 || isOptimizing) return;
-    const occupiedCount = mergeChatAttachmentReferences(
-      conversationAttachmentsRef.current,
-      pendingAttachmentsRef.current,
-    ).attachments.length;
-    const remainingSlots = MAX_CHAT_ATTACHMENTS - occupiedCount;
-    if (remainingSlots <= 0) {
-      toast.error(formatUiMessage('agent-chat-page.up-to-value0-files-can.349aa29325', { value0: MAX_CHAT_ATTACHMENTS }));
-      return;
-    }
-    setIsOptimizing(true);
-    setOptimizationProgress(30);
-    const work = chatViewWorkRef.current.begin();
-    try {
-      const importPaths = uniquePaths.slice(0, remainingSlots);
-      const res = await fetch(scopedFileUrl('/api/files/import-paths'), {
-        signal: work.signal,
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Lumi-Desktop-Import': 'file-drop' },
-        body: JSON.stringify({ paths: importPaths }),
-        credentials: 'include',
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!work.isCurrent()) return;
-      if (!res.ok) throw new Error(data.error || t.uploadFailed || 'Upload failed');
-      acceptImportedChatFiles(data.files || [], (data.skipped || []).length + Math.max(0, uniquePaths.length - importPaths.length), work);
-    } catch (error: any) {
-      if (!work.isCurrent()) return;
-      setIsOptimizing(false);
-      setOptimizationProgress(0);
-      toast.error(error?.message || t.chatConnError || 'Connection error during upload');
-    } finally {
-      work.finish();
-    }
-  }, [acceptImportedChatFiles, isOptimizing, scopedFileUrl, t.chatConnError, t.uploadFailed]);
+    await runChatAttachmentUpload('paths', uniquePaths);
+  }, [runChatAttachmentUpload]);
 
   useEffect(() => {
     if (!isOpen || typeof window === 'undefined' || !(window as any).__TAURI_INTERNALS__) return;
@@ -4934,6 +4919,13 @@ export function AgentChatPage({
                 ))}
               </div>
             )}
+            <ChatAttachmentUploadStatus
+              busy={isOptimizing}
+              failures={attachmentUploadFailures}
+              isZh={isZh}
+              onRetry={() => { void runChatAttachmentUpload('files', [], true); }}
+              onDismiss={() => { chatUploadsRef.current.reset(); setAttachmentUploadFailures([]); }}
+            />
             {isOptimizing && (
               <div className="mb-3 h-1 w-full overflow-hidden rounded-full bg-white/5">
                 <motion.div
@@ -5058,7 +5050,7 @@ export function AgentChatPage({
               ) : (
                 <Button
                   type="submit"
-                  disabled={!hasDraftText && pendingAttachments.length === 0}
+                  disabled={isOptimizing || attachmentUploadFailures.length > 0 || (!hasDraftText && pendingAttachments.length === 0)}
                   className="lumi-chat-send bg-celestial-saturn text-black rounded-2xl px-6 hover:scale-105 transition-transform disabled:opacity-50 disabled:hover:scale-100"
                   style={{
                     backgroundColor: chatAccentTheme.saturn,

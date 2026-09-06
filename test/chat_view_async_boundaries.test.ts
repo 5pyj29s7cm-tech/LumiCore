@@ -5,6 +5,8 @@ import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { shouldReloadPersistedConversation } from '../src/lib/conversationSync';
 import { ChatViewWorkRegistry } from '../src/lib/chatViewWork';
+import { ChatAttachmentUploads } from '../src/lib/chatAttachmentUploads';
+import { chatAttachmentCopy } from '../src/i18n/locales/chatAttachments';
 import { createChatAttachmentReference, mergeChatAttachmentReferences, MAX_CHAT_ATTACHMENTS } from '../src/lib/chatAttachmentReferences';
 
 // Run the actual mounted page callbacks against delayed transport responses.
@@ -129,8 +131,10 @@ function uploadHarness() {
     uiMessage: (key: string) => key, formatUiMessage: (key: string) => key,
     notifyKnowledgeUpdated: noop,
   });
-  const deps = {
+  const deps: Record<string, any> = {
     isOptimizing: false, conversationAttachmentsRef, pendingAttachmentsRef,
+    chatUploadsRef: { current: new ChatAttachmentUploads() }, attachmentUploadText: chatAttachmentCopy(false),
+    setAttachmentUploadFailures: noop,
     mergeChatAttachmentReferences, MAX_CHAT_ATTACHMENTS, toast,
     formatUiMessage: (key: string) => key, setIsOptimizing: noop,
     setOptimizationProgress: noop, activeDomain: 'personal', activeOrgId: '',
@@ -139,6 +143,7 @@ function uploadHarness() {
     chatViewWorkRef: { current: registry }, scopedFileUrl: (url: string) => url,
     acceptImportedChatFiles, t: {},
   };
+  deps.runChatAttachmentUpload = callback('runChatAttachmentUpload', deps);
   return {
     upload: callback('uploadChatAttachments', deps), importPaths: callback('importChatAttachmentPaths', deps),
     response, registry, pendingAttachmentsRef, draft: () => draft, signal: () => signal,
