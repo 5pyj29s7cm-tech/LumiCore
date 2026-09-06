@@ -14,6 +14,7 @@ import {
 } from './normalized_action_intent';
 import { formatUserVisibleReplyForReadability } from './reply_style';
 import { containsInternalExecutionLanguage } from '../../shared/public_execution_language';
+import { DESKTOP_COMPLETION_REVIEW_REASON } from './desktop_completion_review';
 
 export type ExecutionGuardIntent = 'conversation' | 'status_query' | 'action_execution';
 
@@ -277,6 +278,9 @@ export function decideExecutionGuardRecovery(input: ExecutionGuardRecoveryInput)
       ? classifyExecutionGuardIntent(input.task, records)
       : 'action_execution');
   if (!input.blocked && !missingFreshConfirmation) return { recoverable: false, reason: 'response_not_blocked', intent };
+  if (input.reason === DESKTOP_COMPLETION_REVIEW_REASON) {
+    return { recoverable: false, reason: DESKTOP_COMPLETION_REVIEW_REASON, intent };
+  }
   if (intent === 'conversation') {
     return { recoverable: false, reason: 'conversation_requires_natural_clarification', intent };
   }

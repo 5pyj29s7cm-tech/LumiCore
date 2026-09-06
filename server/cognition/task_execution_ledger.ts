@@ -73,6 +73,11 @@ export interface ConversationTaskPolicySnapshot {
 
 export interface ConversationTaskReceipt {
   id: string;
+  taskId?: string;
+  turnId?: string;
+  requestId?: string;
+  /** Preserve conflicting source fences instead of laundering them on hydration. */
+  scopeConflict?: true;
   key: string;
   name: string;
   arguments: Record<string, unknown>;
@@ -259,6 +264,7 @@ export function normalizeConversationTaskReceipt(value: unknown): ConversationTa
   if (!name || !key) return null;
   return {
     id: compact(candidate.id, 180) || key,
+    ...receiptScope(candidate),
     key,
     name,
     arguments: candidate.arguments && typeof candidate.arguments === 'object' && !Array.isArray(candidate.arguments)
@@ -282,6 +288,21 @@ export function normalizeConversationTaskReceipt(value: unknown): ConversationTa
     capability: cloneCapability(candidate.capability),
     recordedAt: compact(candidate.recordedAt, 80) || new Date(0).toISOString(),
   };
+}
+
+function receiptScope(value: Record<string, any>): {
+  taskId?: string; turnId?: string; requestId?: string; scopeConflict?: true;
+} {
+  const scope: { taskId?: string; turnId?: string; requestId?: string; scopeConflict?: true } = {};
+  for (const field of ['taskId', 'turnId', 'requestId'] as const) {
+    const values = [value[field], value.envelope?.[field]]
+      .filter(candidate => typeof candidate === 'string' && candidate.trim())
+      .map(candidate => candidate.trim());
+    if (values.length) scope[field] = values[0].slice(0, 180);
+    if (new Set(values).size > 1 || values.some(value => value.length > 180)) scope.scopeConflict = true;
+  }
+  if (value.scopeConflict === true || value.receiptScopeConflict === true) scope.scopeConflict = true;
+  return scope;
 }
 
 function parseResult(value: unknown): unknown {
@@ -493,6 +514,7 @@ export function recordsToTaskReceipts(
       : null;
     return ({
     id: compact(record.id, 180) || `receipt_${Date.now()}_${index}`,
+    ...receiptScope(record),
     key: toolRecordKey(record),
     name: compact(record.name, 160),
     arguments: stableValue(record.arguments || {}) as Record<string, unknown>,
@@ -548,6 +570,10 @@ export function taskReceiptsToRecords(receipts: ConversationTaskReceipt[] = []):
     if (!receipt) return null;
     return {
     id: receipt.id,
+    ...(receipt.taskId ? { taskId: receipt.taskId } : {}),
+    ...(receipt.turnId ? { turnId: receipt.turnId } : {}),
+    ...(receipt.requestId ? { requestId: receipt.requestId } : {}),
+    ...(receipt.scopeConflict ? { receiptScopeConflict: true } : {}),
     name: receipt.name,
     arguments: receipt.arguments || {},
     result: receipt.result || '',
@@ -567,6 +593,7 @@ export function taskCompletionFromReceipts(
   goal: string,
   receipts: ConversationTaskReceipt[] = [],
   taskCapsule?: TaskCapsuleV1 | null,
+  currentTurn?: { requestId?: string; taskId?: string },
 ): { complete: boolean; blocker: string; records: ToolExecutionRecord[] } {
   const records = coalesceToolExecutionRecords(taskReceiptsToRecords(receipts));
   const contract = buildActionEvidenceContract(goal);
@@ -577,7 +604,7 @@ export function taskCompletionFromReceipts(
     record.name === 'wps_create_document' && toolRecordSucceeded(record)
   ));
   const complete = contract.applies
-    ? hasCoreActionEvidence(contract, records, goal, taskCapsule) || legacyVerifiedWpsCreate
+    ? hasCoreActionEvidence(contract, records, goal, taskCapsule, currentTurn) || legacyVerifiedWpsCreate
     : records.some(toolRecordVerifiedForCompletion);
   const failures = [...records].reverse().filter(record => !toolRecordSucceeded(record));
   // A later policy/routing rejection is useful diagnostic evidence, but it

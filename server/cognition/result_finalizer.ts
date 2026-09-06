@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { guardCompletionClaims, type CompletionGuardResult } from '../work_product/completion_guard';
 import { containsCompactToolEvidenceMarker } from '../conversation/summary_grounding';
+import { findDesktopCompletionReview, desktopCompletionReviewText, DESKTOP_COMPLETION_REVIEW_REASON } from './desktop_completion_review';
 import { formatGroundedKnowledgeObservation } from './knowledge_result';
 import { buildMediaArtifactReceipt } from '../socket/media_artifact_receipt';
 import { isVideoPlaybackRequest } from './media_intent';
@@ -336,7 +337,7 @@ function hasVerifiedEvidenceForRealWorldClaim(
   }
   if (kind === 'playback') {
     return requiresMediaPlaybackAction(taskText)
-      && hasMediaPlaybackEvidence(records, taskText);
+      && hasMediaPlaybackEvidence(records, taskText, { requestId: input.requestId, taskId: input.taskId });
   }
   if (kind === 'communication') {
     if (!['messaging_send', 'public_post'].includes(contract.kind)) return false;
@@ -1521,7 +1522,7 @@ function formatGoalSpecificDesktopResult(
     const label = requestedMediaPlayerLabel(taskText, records);
     const video = isVideoPlaybackRequest(taskText);
     const opened = hasRequestedDesktopOpenEvidence(records, taskText, label);
-    if (hasMediaPlaybackEvidence(records, taskText)) {
+    if (hasMediaPlaybackEvidence(records, taskText, { requestId: input.requestId, taskId: input.taskId })) {
       return {
         text: zh
           ? CN_EXECUTION_EVIDENCE_MESSAGES.mediaPlaybackActive(label, video)
@@ -2753,6 +2754,10 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   if (knowledgeObservation) return { text: knowledgeObservation, blocked: false, reason: 'Grounded current-turn knowledge observation.' };
   const mediaGeneration = groundedMediaGeneration(input);
   if (mediaGeneration) return mediaGeneration;
+  if (findDesktopCompletionReview(input.toolRecords || [], { requestId: input.requestId, taskId: input.taskId })
+    && !hasMediaPlaybackEvidence(input.toolRecords || [], actionText, { requestId: input.requestId, taskId: input.taskId })) {
+    return { text: desktopCompletionReviewText(actionText), blocked: true, reason: DESKTOP_COMPLETION_REVIEW_REASON };
+  }
   if (protocolLeak) return protocolLeak;
   const safeResponseText = sanitizeInternalExecutionText(
     input.responseText,

@@ -15,6 +15,7 @@ import { recordTokenUsage } from './token_tracker';
 import { recordWorkflow, WorkflowStep } from '../skills/worklog';
 import { recordLatency } from '../monitor/latency_store';
 import { guardCompletionClaims, needsCompletionEvidence, type CompletionGuardResult } from '../work_product/completion_guard';
+import { findDesktopCompletionReview, desktopCompletionReviewText, DESKTOP_COMPLETION_REVIEW_REASON } from '../cognition/desktop_completion_review';
 import {
   buildActionContract,
   formatActionContractPrompt,
@@ -2034,6 +2035,14 @@ async function runWithToolsInternal(
   const primaryTask = String(context?.routedTaskText || '').trim()
     || getPrimaryUserText(messages);
 
+  if (context?.requestId && findDesktopCompletionReview(executionLog, {
+    requestId: context.requestId, taskId: context.taskId,
+  })) {
+    const text = desktopCompletionReviewText(primaryTask);
+    return { text, toolCalls: executionLog, usageRecords,
+      completionGuard: { text, blocked: true, reason: DESKTOP_COMPLETION_REVIEW_REASON } };
+  }
+
   // Auto-detect hybrid mode: if provider is 'auto' and Ollama is available, use local→cloud dispatch
   const effectiveProvider = config.provider === 'auto' && getOllama?.()
     ? 'auto'  // Keep as 'auto' for the dispatch logic below
@@ -2604,6 +2613,20 @@ async function runWithToolsInternal(
       }
       executionLog.push(record);
       await onToolCall?.(record);
+
+      // The native loop already stopped at an uncertain completion candidate.
+      // Do not execute another model-selected action (even in this batch) or
+      // request a second confirmation that would repeat the completed steps.
+      if (findDesktopCompletionReview([record])) {
+        const text = desktopCompletionReviewText(primaryTask);
+        recordWorkflowIfToolsUsed(executionLog, messages, config);
+        return {
+          text,
+          toolCalls: executionLog,
+          usageRecords,
+          completionGuard: { text, blocked: true, reason: DESKTOP_COMPLETION_REVIEW_REASON },
+        };
+      }
 
       conversationHistory.push({
         role: 'tool',

@@ -1,3 +1,4 @@
+import './helpers';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -73,7 +74,7 @@ describe('computer use completion verification', () => {
     mocks.makeLLMCall.mockResolvedValueOnce(modelResult(JSON.stringify({
       action: 'done',
       message: 'The app looks open.',
-    })));
+    }))).mockResolvedValueOnce(modelResult(JSON.stringify({ action: 'wait', reason: 'The state is not yet clear.' })));
     const desktop = createDesktopRelay();
     const progress: string[] = [];
 
@@ -84,10 +85,64 @@ describe('computer use completion verification', () => {
       onProgress: message => progress.push(message),
     });
 
-    expect(desktop.captures()).toBe(1);
+    expect(desktop.captures()).toBe(2);
     expect(result).not.toContain('"status":"verified"');
     expect(progress.some(message => message.includes('完成候选'))).toBe(true);
     expect(progress).not.toContain('[1/1] 完成');
+  });
+
+  it('verifies a last-step completion candidate without increasing the input-action budget', async () => {
+    mocks.makeLLMCall
+      .mockResolvedValueOnce(modelResult(JSON.stringify({ action: 'done', message: 'The target window is visible.' })))
+      .mockResolvedValueOnce(modelResult(JSON.stringify({ action: 'done', message: 'The target window remains visible.' })));
+    const desktop = createDesktopRelay();
+    const result = JSON.parse(await computerUseLoop('Open the requested app', {
+      desktopRelay: desktop.relay, llmGetters: { getOpenAI: () => ({}) }, maxIterations: 1,
+    }));
+    expect(result).toMatchObject({ ok: true, status: 'verified', observations: 2 });
+    expect(desktop.captures()).toBe(2);
+    expect(mocks.makeLLMCall.mock.calls[1][0][1].content[0].text).toContain('read-only completion check');
+    expect(desktop.relay.mock.calls.some(([name]) => /desktop_(?:mouse|keyboard)/u.test(name))).toBe(false);
+  });
+
+  it.each(['click', 'type', 'key_press'])('does not execute a new %s after a completion candidate', async action => {
+    mocks.makeLLMCall
+      .mockResolvedValueOnce(modelResult(JSON.stringify({ action: 'done', message: 'The requested programme is playing.' })))
+      .mockResolvedValueOnce(modelResult(JSON.stringify({ action, x: 20, y: 20, text: 'duplicate search', key: 'enter' })));
+    const desktop = createDesktopRelay();
+    const result = JSON.parse(await computerUseLoop('Play the requested programme', {
+      desktopRelay: desktop.relay, llmGetters: { getOpenAI: () => ({}) }, maxIterations: 8,
+    }));
+    expect(result).toMatchObject({ ok: false, status: 'unverified', resumeStrategy: 'observe_only', completionCandidate: 'The requested programme is playing.' });
+    expect(mocks.makeLLMCall).toHaveBeenCalledTimes(2);
+    expect(desktop.relay.mock.calls.some(([name]) => /desktop_(?:mouse|keyboard)/u.test(name))).toBe(false);
+  });
+
+  it('preserves an uncertain playback candidate when the final screenshot fails', async () => {
+    mocks.makeLLMCall.mockResolvedValueOnce(modelResult(JSON.stringify({ action: 'done', message: 'The requested programme is playing.' })));
+    let captures = 0;
+    const relay = vi.fn(async (name: string) => {
+      if (name !== 'desktop_capture_screen') return '';
+      if (++captures === 2) throw new Error('Synthetic screenshot failure');
+      return JSON.stringify({ image_base64: 'screen-1', format: 'png' });
+    });
+    const result = JSON.parse(await computerUseLoop('Play the requested programme', {
+      desktopRelay: relay, llmGetters: { getOpenAI: () => ({}) }, maxIterations: 1,
+    }));
+    expect(result).toMatchObject({ completionVerified: false, resumeStrategy: 'observe_only' });
+    expect(result.message).toContain('screenshot was unavailable');
+    expect(captures).toBe(2);
+  });
+
+  it('does not count pre-roll advertising as two observations of the requested programme', async () => {
+    mocks.makeLLMCall.mockResolvedValue(modelResult(JSON.stringify({ action: 'done', message: '视频页面已打开，当前正在播放片前广告，广告结束后将播放正片。' })));
+    const desktop = createDesktopRelay();
+    const result = JSON.parse(await computerUseLoop('用爱奇艺播放蜡笔小新', {
+      desktopRelay: desktop.relay, llmGetters: { getOpenAI: () => ({}) }, maxIterations: 1,
+    }));
+    expect(result).toMatchObject({ completionVerified: false, resumeStrategy: 'observe_only' });
+    expect(result.message).toContain('pre-roll');
+    expect(desktop.captures()).toBe(2);
   });
 
   it('accepts done only after a fresh screenshot produces a second done observation', async () => {

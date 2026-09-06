@@ -1889,6 +1889,7 @@ function finalizeConversationActionRequestInDb(
       previous.goal,
       previous.receipts || [],
       previous.taskCapsule,
+      { requestId: normalizedRequestId, taskId: previous.taskId },
     );
     const requestWasRunning = conversationTaskStatusOwnsExecutionLease(previous.status);
     const authoritativeBlocked = Boolean(
@@ -1973,6 +1974,7 @@ export function completeConversationActionFromUserObservation(
   conversationId: string,
   userId: string,
   userText: string,
+  ownership?: { taskId: string; requestId: string; userMessageId: string },
 ): ConversationActionContinuationState | null {
   const db = readDB();
   const conversation = (db.conversations || []).find((item: Conversation) => (
@@ -1981,15 +1983,35 @@ export function completeConversationActionFromUserObservation(
   if (conversation) hydrateConversationActionState(db, conversation);
   const previous = normalizeConversationActionState(conversation?.actionContinuationState);
   if (!conversation || !previous || !isUserObservedTaskCompletion(userText, previous)) return null;
+  if (ownership) {
+    if (!ownership.taskId || previous.taskId !== ownership.taskId) return null;
+    const acceptedObservation = (db.interactions || []).find((row: any) => (
+      row.id === ownership.userMessageId
+      && row.userId === userId
+      && row.conversationId === conversationId
+      && row.role === 'user'
+      && String(row.requestId || row.externalMessageId || '') === ownership.requestId
+      && String(row.message || row.content || '').trim() === userText.trim()
+    ));
+    if (!ownership.requestId || !acceptedObservation) return null;
+    const turn = getConversationActionTurn({ conversationId, userId, requestId: ownership.requestId });
+    if (turn?.taskId && turn.taskId !== previous.taskId) return null;
+  }
   const finalized = finalizeConversationActionTask(db, {
     conversation,
     state: previous,
     outcome: 'completed',
-    requestId: previous.activeRequestId,
+    requestId: ownership?.requestId || previous.activeRequestId,
     assistantState: userText,
     completionSource: 'user_observation',
     userText,
   });
+  if (finalized?.state.status !== 'completed') return null;
+  // A closed task cannot keep an old pairing slot that a later "continue"
+  // could mistake for a still-pending execution. Do not touch another owner.
+  if (conversation.pendingActionContinuation?.requestId === previous.activeRequestId) {
+    delete conversation.pendingActionContinuation;
+  }
   writeDB(db);
   return finalized?.state || previous;
 }

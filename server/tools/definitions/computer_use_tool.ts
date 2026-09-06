@@ -90,7 +90,7 @@ export function registerComputerUseTool(registry: ToolRegistry): void {
         },
         max_steps: {
           type: 'number',
-          description: 'Maximum number of screenshot/action iterations. Default 12; capped by the active tool policy up to 50.',
+          description: 'Maximum number of desktop-control iterations. Default 12; capped by the active tool policy up to 50. A completion candidate may use one additional read-only screenshot check, which cannot perform any input action.',
         },
         target_application: {
           type: 'string',

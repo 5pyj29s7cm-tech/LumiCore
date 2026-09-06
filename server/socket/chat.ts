@@ -124,6 +124,7 @@ import {
   getConversationActionStatus,
   bindConversationActionExecutionTurn,
   cancelConversationActionExecution,
+  completeConversationActionFromUserObservation,
   createDurableForegroundReleaseGate,
   convergeConversationActionRequestLease,
   convergeConversationActionRequestLeaseDurably,
@@ -159,6 +160,7 @@ import {
   classifyConversationActionFollowupIntent,
   conversationActionRequiresFreshConfirmationReview,
   formatConversationActionTaskStatus,
+  isUserObservedTaskCompletion,
   pendingRuntimeCancellationRecheck,
   RECONFIRMATION_REQUIRED_BLOCKER,
 } from "../cognition/action_continuation";
@@ -1742,6 +1744,10 @@ export function registerChatHandler(
       { userText: visibleUserText, conversationId: selectedConversationId },
     );
     let conversation = conversationTurn.conversation;
+    const userObservedCompletionTaskId = attachments.length === 0
+      && isUserObservedTaskCompletion(visibleUserText, conversation.actionContinuationState)
+      ? conversation.actionContinuationState?.taskId
+      : undefined;
     if (conversation.id !== selectedConversationId) {
       selectedConversationId = conversation.id;
       pendingAssistantOfferContext = undefined;
@@ -2018,7 +2024,10 @@ export function registerChatHandler(
         },
       );
       emitAgent('agent:task_relation', { relation: resolvedTaskRelation });
-      if (resolvedTaskRelation.binding === 'stale') {
+      if (resolvedTaskRelation.binding === 'stale' || (
+        userObservedCompletionTaskId
+        && conversation.actionContinuationState?.taskId !== userObservedCompletionTaskId
+      )) {
         await commitDeterministicTerminal({
           payload: {
             text: CN_TASK_EXECUTION_MESSAGES.staleControl,
@@ -2043,6 +2052,49 @@ export function registerChatHandler(
             skipActionContinuation: true,
           }),
           errorContext: 'Stale foreground task terminal',
+        });
+        await releaseChatSession();
+        return;
+      }
+
+      if (userObservedCompletionTaskId && isUserObservedTaskCompletion(visibleUserText, conversation.actionContinuationState)) {
+        const observedTask = conversation.actionContinuationState!;
+        await clearPendingConfirmationDurably(uid, buildTransportNeutralConfirmationScope({
+          domain: resolvedDomain,
+          orgId: resolvedOrgId,
+          conversationId: conversation.id,
+          taskId: observedTask.taskId,
+        }));
+        pendingConfirmation = null;
+        pendingConfirmationPrompt = '';
+        const responseText = formatConversationActionTaskStatus({
+          ...observedTask, status: 'completed', unfinished: false,
+          latestBlocker: '', completionSource: 'user_observation',
+        });
+        await commitDeterministicTerminal({
+          payload: {
+            text: responseText, agentName: 'Lumi', finalized: true,
+            blocked: false, reason: 'task_user_observation',
+          },
+          persistAssistantMessage: () => {
+            const completed = completeConversationActionFromUserObservation(
+              conversation.id, uid, visibleUserText,
+              { taskId: observedTask.taskId!, requestId, userMessageId: acceptedUserMessageId },
+            );
+            if (!completed) throw new Error('User observation no longer owns the pending task');
+            addMessageIdempotent({
+              userId: uid, agentId: conversationAgentId, conversationId: conversation.id,
+              role: 'assistant', content: responseText, domain: resolvedDomain, orgId: resolvedOrgId,
+              source: 'chat_task_user_observation', channel: 'chat',
+              cognitiveIntent: 'task_user_observation', llmWasCalled: false,
+              requestId, skipActionContinuation: true,
+            });
+          },
+          publishAfter: () => emitConversationUpdated({
+            conversationId: conversation.id, agentId: conversationAgentId,
+            source: 'chat_task_user_observation',
+          }),
+          errorContext: 'User-observed task completion terminal',
         });
         await releaseChatSession();
         return;

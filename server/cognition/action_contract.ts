@@ -1902,36 +1902,73 @@ function requestedPlaybackContent(taskText: string): { title: string; episode: s
 
 interface ObservedPlaybackState { playing: boolean; title: string; episode: string }
 
+// i18n-allow: Recognize observations of the playing content, never a play button or search result.
+const PLAYING_OBSERVATION_RE = /正在播放|播放中|(?:已经|已)开始播放|已打开并开始播放|\b(?:now\s+playing|playback\s+(?:started|is\s+playing))\b/iu;
+// i18n-allow: These labels describe candidate results, not the current media.
+const PLAYBACK_SEARCH_RE = /搜索|联想|推荐|search|suggestion/iu;
+
+function playbackObservationText(record: ToolExecutionRecord): string {
+  const payload = parseRecordJson(record);
+  if (!payload) return terminalPayloadText(record).replace(/[*`]/g, '');
+  if (record.name === 'computer_use') {
+    return payload.ok === true && payload.status === 'verified'
+      && payload.completionVerified === true && payload.observations === 2
+      && payload.applicationMatched === true && typeof payload.message === 'string'
+      ? payload.message.replace(/[*`]/g, '') : '';
+  }
+  // OCR can return a JSON-formatted model description. Do not treat a raw
+  // screenshot, arbitrary accessibility tree or tool arguments as analysis.
+  if (!/^(?:ocr_screen|ocr_region|computer_vision)$/i.test(record.name)
+    || payload.format === 'screenshot_base64' || payload.error) return '';
+  return [payload.description, payload.text, payload.analysis]
+    .find(value => typeof value === 'string')?.replace(/[*`]/g, '') || '';
+}
+
+function playbackObservationClauses(record: ToolExecutionRecord): string[] {
+  return playbackObservationText(record).split(/[。！？!?\n]/u).map(value => value.trim()).filter(Boolean);
+}
+
 function observedPlaybackState(record: ToolExecutionRecord): ObservedPlaybackState | null {
   const payload = parseRecordJson(record);
   if (payload) {
     const state = payload.playback && typeof payload.playback === 'object' ? payload.playback : payload;
     const flags = [state.isPlaying, state.playing, state.playbackStarted];
     const statuses = [state.playbackState, state.playerState, state.state, state.status].map(value => String(value || '').toLowerCase());
-    const negative = flags.includes(false) || statuses.some(value => /^(?:paused|stopped|idle|not_playing|not_started|failed|error|cancelled|blocked)$/.test(value));
+    const negative = flags.includes(false) || state.isAd === true || state.isAdvertisement === true
+      || /^(?:ad|advertisement|preroll|pre-roll)$/i.test(String(state.phase || state.contentType || ''))
+      || statuses.some(value => /^(?:paused|stopped|idle|not_playing|not_started|failed|error|cancelled|blocked)$/.test(value));
     const positive = flags.includes(true) || statuses.some(value => /^(?:playing|started)$/.test(value));
-    if (!negative && !positive) return null;
-    const current = state.currentTrack || state.nowPlaying || state.currentMedia;
-    // Only current-media fields paired with a playing state qualify. A
-    // searchQuery, result list, arbitrary window tree, or tool args do not.
-    const directMediaAction = /(?:^|_)(?:media|music|audio)(?:_|.*_)(?:play|resume|control)(?:_|$)/i.test(record.name);
-    const title = compact(typeof current === 'string' ? current : current?.title || current?.name
-      || state.currentTitle || state.trackTitle || state.songTitle || (directMediaAction ? state.title : ''));
-    return { playing: positive && !negative, title, episode: playbackEpisode(current?.episode ?? state.episode ?? state.episodeNumber) || playbackEpisode(title) };
+    if (negative || positive) {
+      const current = state.currentTrack || state.nowPlaying || state.currentMedia;
+      // Only current-media fields paired with a playing state qualify. A
+      // searchQuery, result list, arbitrary window tree, or tool args do not.
+      const directMediaAction = /(?:^|_)(?:media|music|audio)(?:_|.*_)(?:play|resume|control)(?:_|$)/i.test(record.name);
+      const title = compact(typeof current === 'string' ? current : current?.title || current?.name
+        || state.currentTitle || state.trackTitle || state.songTitle || (directMediaAction ? state.title : ''));
+      return { playing: positive && !negative, title, episode: playbackEpisode(current?.episode ?? state.episode ?? state.episodeNumber) || playbackEpisode(title) };
+    }
   }
-  const text = terminalPayloadText(record).replace(/[*`]/g, '');
+  // i18n-allow: A finished advertisement is historical context, not a current ad phase.
+  const text = playbackObservationText(record).replace(/(?:片前|贴片)?广告(?:已经|已)(?:结束|播放完毕)/gu, '');
   // i18n-allow: Negative/current playback state, not a play/pause button label.
-  const negative = /(?:尚未|并未|没有|还没|未|不是|并非).{0,10}(?:开始|正在|已经)?播放|(?:当前|现在|目前|处于|已经|已).{0,12}(?:暂停|停止播放)|(?:尚未|并未|没有|未).{0,8}切换|\b(?:not\s+(?:yet\s+)?playing|not\s+started|has\s+not\s+(?:started|switched)|is\s+paused|playback\s+(?:paused|stopped))\b/iu.test(text);
+  const negative = /(?:尚未|并未|没有|还没|未|不是|并非).{0,10}(?:开始|正在|已经)?播放|(?:当前|现在|目前|处于|已经|已).{0,12}(?:暂停|停止播放)|(?:尚未|并未|没有|未).{0,8}切换|\b(?:not\s+(?:yet\s+)?playing|not\s+started|has\s+not\s+(?:started|switched)|is\s+paused|playback\s+(?:paused|stopped))\b/iu.test(text)
+    // i18n-allow: An advertisement or a prediction is not observed programme playback.
+    || /(?:片前|贴片)广告|(?:当前|现在|正在|仍在).{0,12}广告|广告.{0,12}(?:播放中|剩余|倒计时)|\b(?:pre[- ]?roll|playing\s+(?:an?\s+)?ad(?:vertisement)?|ad\s+break)\b|(?:可能|似乎|应该|即将|将会|等待).{0,8}(?:正在)?播放|\b(?:may|might|will|should)\s+(?:be\s+)?play/iu.test(text);
   // i18n-allow: A playing-state assertion, not a question or a search match.
-  const positive = /(?:当前|现在|目前|已经|已)?正在播放|(?:状态[：:]?\s*)播放中|已开始播放|\b(?:now\s+playing|playback\s+(?:started|is\s+playing))\b/iu.test(text);
+  const positive = PLAYING_OBSERVATION_RE.test(text);
   if (!negative && !positive) return null;
   // Keep the title bound to the current playback statement. Merely finding
   // the requested title in a search result elsewhere is never enough.
   // i18n-allow: Current-title statement extraction.
-  const currentClause = text.split(/[。！？!?\n]/u).find(value => /正在播放|播放中|now\s+playing/iu.test(value)) || ''; // i18n-allow: Current playback clause.
-  const title = /搜索|联想|推荐|search|suggestion/iu.test(currentClause) ? '' : currentClause.match(/(?:当前|现在|目前)?(?:正在播放|播放中的|当前(?:播放的)?(?:歌曲|曲目|视频))[：:是为\s]*(?:歌曲[：:是为\s]*)?[《“"]([^》”"\n]+)[》”"]/u)?.[1] // i18n-allow: Search labels are not active-media metadata.
-    || currentClause.match(/\bnow\s+playing\s*[:：-]?\s*["“]([^"”\n]+)["”]/iu)?.[1] || '';
-  const episode = text.match(/(?:正在播放|播放中|now\s+playing)[^。！？!?\n]{0,100}?(第\s*[\d一二三四五六七八九十百零〇两]+\s*集|episode\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten))/iu)?.[1]; // i18n-allow: Episode tied to active playback.
+  const currentClause = playbackObservationClauses(record).filter(value => PLAYING_OBSERVATION_RE.test(value)).at(-1) || '';
+  if (PLAYBACK_SEARCH_RE.test(currentClause)) return negative ? { playing: false, title: '', episode: '' } : null;
+  const currentContent = currentClause.match(/(?:正在播放|播放中|(?:已经|已)开始播放|\bnow\s+playing)[：:是为\s-]*(?:(?:歌曲|曲目|视频|正片)[：:是为\s]*)?(.+)/iu)?.[1] || ''; // i18n-allow: Current-content label recognition.
+  const precedingTitle = !currentContent || /^[，,；;（(]/u.test(currentContent)
+    ? currentClause.split(PLAYING_OBSERVATION_RE)[0].match(/[《“"]([^》”"\n]+)[》”"]/u)?.[1] || '' : '';
+  const title = PLAYBACK_SEARCH_RE.test(currentClause) ? ''
+    : precedingTitle || currentContent.match(/^[《“"]([^》”"\n]+)[》”"]/u)?.[1]
+      || currentContent.split(/[，,；;（(]/u)[0].trim();
+  const episode = currentClause.match(/第\s*[\d一二三四五六七八九十百零〇两]+\s*集|\bepisode\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b/iu)?.[0]; // i18n-allow: Episode tied to active playback.
   return { playing: positive && !negative, title, episode: playbackEpisode(episode) || playbackEpisode(title) };
 }
 
@@ -1951,11 +1988,25 @@ function playbackPlayerMatch(record: ToolExecutionRecord, target: string): boole
     const identities = names.length ? names : processes;
     if (identities.length) return identities.every(matches);
     if (sources.some(value => matches(value.windowTitle || value.title))) return true;
-  } else {
+  }
+  if (!payload || playbackObservationText(record)) {
     // A textual observation can identify the player in the same current-state
     // sentence. A separate mention of the target app elsewhere cannot do so.
-    const clause = terminalPayloadText(record).split(/[。！？!?\n]/u).find(value => /正在播放|播放中|now\s+playing/iu.test(value)); // i18n-allow: Current-player observation clause.
-    if (clause && matches(clause)) return true;
+    const clauses = playbackObservationClauses(record);
+    let index = clauses.length - 1;
+    while (index >= 0 && !PLAYING_OBSERVATION_RE.test(clauses[index])) index--;
+    if (index < 0 || PLAYBACK_SEARCH_RE.test(clauses[index])) return null;
+    const current = clauses[index];
+    // A neighbouring identity statement belongs to the same screenshot, but
+    // an explicit different player in the playing statement takes priority.
+    // i18n-allow: Known player identity, not arbitrary mentions of a song.
+    const namedPlayer = /(?:爱奇艺|优酷|腾讯视频|哔哩哔哩|芒果TV|网易云(?:音乐)?|QQ\s*音乐|酷狗(?:音乐)?)|\b(?:iqiyi|youku|youtube|netflix|bilibili|Spotify|Apple\s+Music|NetEase(?:\s+Cloud\s+Music)?|CloudMusic)\b/giu;
+    const currentNames = current.match(namedPlayer) || [];
+    if (currentNames.length) return currentNames.every(matches);
+    const adjacent = clauses.slice(Math.max(0, index - 1), index + 2).filter(value => !PLAYBACK_SEARCH_RE.test(value));
+    const names = adjacent.flatMap(value => value.match(namedPlayer) || []);
+    if (names.length) return names.every(matches);
+    if (matches(current)) return true;
   }
   return null;
 }
@@ -1964,7 +2015,7 @@ function playbackTitleMatches(observed: string, requested: string): boolean {
   if (!requested) return true;
   // Permit a separately delimited artist/episode suffix, never another title
   // containing the requested string (for example the DJ remix/search result).
-  const title = observed.split(/\s+[-–—|]\s+|\s+第[\d一二三四五六七八九十百]+集|\s+episode\s+/iu)[0]; // i18n-allow: Artist/episode metadata delimiter.
+  const title = observed.split(/\s+[-–—|]\s+|\s*第\s*[\d一二三四五六七八九十百]+\s*集|\s+episode\s+/iu)[0]; // i18n-allow: Artist/episode metadata delimiter.
   const normalize = (value: string) => value.normalize('NFKC').toLowerCase().replace(/[\s《》“”"'.,，。!！?？:：]/gu, '');
   return Boolean(title) && normalize(title) === normalize(requested);
 }
@@ -1983,6 +2034,7 @@ function isPlaybackActuation(record: ToolExecutionRecord): boolean {
 export function hasMediaPlaybackEvidence(
   records: ToolExecutionRecord[] = [],
   taskText = '',
+  currentTurn?: { requestId?: string; taskId?: string },
 ): boolean {
   const successful = records.map((record, index) => ({ record, index }))
     .filter(({ record }) => expandSuccessfulRecords([record]).length > 0);
@@ -1993,9 +2045,28 @@ export function hasMediaPlaybackEvidence(
   let actuated = false;
   let verified = false;
   for (const { record } of successful) {
-    const observation = /^(?:desktop_open|browser_open_task|desktop_ui_snapshot|ocr_screen|ocr_region|desktop_capture_screen|computer_vision|desktop_active_window|get_active_window_info)$/i.test(record.name);
+    const observation = /^(?:desktop_open|browser_open_task|desktop_ui_snapshot|ocr_screen|ocr_region|desktop_capture_screen|computer_vision|desktop_active_window|get_active_window_info|computer_use)$/i.test(record.name);
     const action = isPlaybackActuation(record);
     if (!observation && !action) continue;
+    const requestIds = [record.requestId, record.envelope?.requestId].filter(Boolean);
+    const taskIds = [record.taskId, record.envelope?.taskId].filter(Boolean);
+    const currentObservation = observation && Boolean(currentTurn?.requestId)
+      && (record as ToolExecutionRecord & { receiptScopeConflict?: boolean }).receiptScopeConflict !== true
+      && requestIds.length > 0 && requestIds.every(value => value === currentTurn!.requestId)
+      && (!currentTurn?.taskId || (taskIds.length > 0 && taskIds.every(value => value === currentTurn.taskId)));
+    if (record.name === 'computer_use') {
+      const executedTask = String(record.arguments?.task || record.arguments?.prompt || '');
+      const executedContent = requestedPlaybackContent(executedTask);
+      const executedPlayer = requestedMediaPlayerTarget(executedTask);
+      const applicationIdentity = String(parseRecordJson(record)?.applicationIdentity || '').trim();
+      const matchesTarget = (value: string) => matchesRequestedDesktopTarget(value, requestedDesktopTargetAliases(target));
+      if (!currentObservation || !playbackObservationText(record) || !requiresMediaPlaybackAction(executedTask)
+        || !playbackTitleMatches(executedContent.title, requested.title)
+        || (requested.episode && requested.episode !== executedContent.episode)
+        || (target && executedPlayer && !matchesTarget(executedPlayer))
+        || (target && applicationIdentity && !/^(?:chrome-browser|edge-browser|firefox-browser|desktop-browser)$/.test(applicationIdentity)
+          && !matchesTarget(applicationIdentity))) continue;
+    }
     const match = playbackPlayerMatch(record, target);
     if (match !== null) {
       playerMatched = match;
@@ -2008,7 +2079,10 @@ export function hasMediaPlaybackEvidence(
     // later observation explicitly showing another title/paused state does.
     if (!state.playing) { verified = false; continue; }
     verified = false;
-    if (!actuated || !playerMatched) continue;
+    // Current, target-bound observation may confirm autoplay/Enter/coordinate
+    // selection. Requiring another play/pause action could stop valid playback.
+    if ((!actuated && !currentObservation) || !playerMatched) continue;
+    if (!actuated && match !== true) continue;
     // A bare root=active state may inherit the immediately established player
     // identity for generic playback, but a named song/episode needs a current
     // player identity in the same receipt, not an old open result.
@@ -3165,6 +3239,7 @@ export function hasCoreActionEvidence(
   records: ToolExecutionRecord[] = [],
   taskText = '',
   taskCapsule?: TaskCapsuleV1 | null,
+  currentTurn?: { requestId?: string; taskId?: string },
 ): boolean {
   if (!contract.applies) return true;
   const successful = expandSuccessfulRecords(records);
@@ -3333,7 +3408,7 @@ export function hasCoreActionEvidence(
       return hasVisualModelAvailabilityEvidence(records);
     }
     if (requiresMediaPlaybackAction(taskText)) {
-      return hasMediaPlaybackEvidence(records, taskText);
+      return hasMediaPlaybackEvidence(records, taskText, currentTurn);
     }
     const windowAction = requestedDesktopWindowAction(taskText);
     if (windowAction) {

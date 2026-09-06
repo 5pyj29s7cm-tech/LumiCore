@@ -70,6 +70,7 @@ import {
   prepareConversationActionExecution,
   persistConversationExecutionPlan,
   cancelConversationActionExecution,
+  completeConversationActionFromUserObservation,
   createDurableForegroundReleaseGate,
   convergeConversationActionRequestLease,
   convergeConversationActionRequestLeaseDurably,
@@ -1863,6 +1864,9 @@ async function processVoiceInput(
     actionIntentText,
     conversationTurn.conversation.actionContinuationState,
   );
+  const userObservedCompletionTask = userObservedCompletion
+    ? conversationTurn.conversation.actionContinuationState
+    : null;
   if (conversationTurn.rolledOver) {
     logger.info(
       `[Audio] Rolled over oversized conversation ${conversationTurn.previousConversationId} -> ${conversationTurn.conversation.id}`,
@@ -2431,7 +2435,7 @@ async function processVoiceInput(
     ? { state: null, kind: 'conversation' as const }
     : userObservedCompletion
     ? {
-        state: conversationTurn.conversation.actionContinuationState || null,
+        state: null,
         kind: 'conversation' as const,
       }
     : prepareConversationActionExecution({
@@ -3702,6 +3706,7 @@ async function processVoiceInput(
   }
 
   const deterministicConversationResponse = (() => {
+    if (userObservedCompletion) return null;
     if (isConversationExecutionFactQuestion(actionIntentText)) {
       return {
         text: formatConversationExecutionFactAnswer(getConversationExecutionFacts({
@@ -3741,18 +3746,17 @@ async function processVoiceInput(
 
   if (userObservedCompletion) {
     const conversation = conversationTurn.conversation;
-    const updatedConversation = getOrCreateActiveConversation(
-      session.userId,
-      session.agentId,
-      voiceScope.domain,
-      voiceScope.orgId,
-    );
-    responseText = getConversationActionStatus(
-      updatedConversation.id,
-      session.userId,
-      actionIntentText,
-      updatedConversation.actionContinuationState,
-    );
+    const observedTask = userObservedCompletionTask!;
+    await clearPendingConfirmationDurably(session.userId, buildTransportNeutralConfirmationScope({
+      domain: voiceScope.domain, orgId: voiceScope.orgId,
+      conversationId: conversation.id, taskId: observedTask.taskId,
+    }));
+    pendingConfirmation = null;
+    pendingConfirmationPrompt = '';
+    responseText = formatConversationActionTaskStatus({
+      ...observedTask, status: 'completed', unfinished: false,
+      latestBlocker: '', completionSource: 'user_observation',
+    });
     await commitVoiceTerminal({
       text: responseText,
       source: 'voice_task_user_observation',
@@ -3761,6 +3765,14 @@ async function processVoiceInput(
       cognitiveIntent: 'task_user_observation',
       llmWasCalled: false,
       speechText: responseText,
+      persistTerminalState: () => {
+        const completed = completeConversationActionFromUserObservation(
+          conversation.id, session.userId, userText,
+          { taskId: observedTask.taskId!, requestId, userMessageId: voiceUserMessageId },
+        );
+        if (!completed) throw new Error('User observation no longer owns the pending task');
+        return completed;
+      },
     });
     await Promise.allSettled(ttsPromises);
     await releaseVoiceTurnResources('Voice task observation response completed.');

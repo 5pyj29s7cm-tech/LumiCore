@@ -21,6 +21,7 @@ import { parseScreenshotBase64 } from '../llm/adapter';
 import type { VisionProvider } from '../llm/vision_preferences';
 import { getUserPreferredWorldModel } from '../llm/world_preferences';
 import { recordTokenUsage } from '../llm/token_tracker';
+import { isVideoPlaybackRequest } from '../cognition/media_intent';
 import {
   desktopFingerprintMatchesApplication,
   type ApplicationIdentity,
@@ -266,6 +267,7 @@ async function callWorldModel(
   actionHistory: string[],
   llmGetters: Record<string, () => any>,
   userId?: string,
+  verificationOnly = false,
 ): Promise<string> {
   const g = llmGetters;
   const world = getUserPreferredWorldModel(userId || 'anonymous');
@@ -292,8 +294,11 @@ async function callWorldModel(
     ? `Screenshot size: ${screen.width}x${screen.height} pixels. Return screenshot-local x/y coordinates within that image. Virtual desktop origin: (${screen.screenX}, ${screen.screenY}); do not add this origin yourself.\n\n`
     : '';
 
+  const instruction = verificationOnly
+    ? 'This is a read-only completion check using a fresh screenshot. Independently compare the visible state with the original task. Return done only if the requested state is actually present; otherwise return wait and describe what remains uncertain. An advertisement, search result, or loading screen does not prove that the requested video content is playing. Do not plan another click, keystroke, or text entry, and do not repeat previous actions.'
+    : 'What is the SINGLE next action? Output ONLY the JSON.';
   const userContent: NormalizedMessage['content'] = [
-    { type: 'text', text: `${historyContext}${geometryContext}Task: ${task}\n\nWhat is the SINGLE next action? Output ONLY the JSON.` },
+    { type: 'text', text: `${historyContext}${geometryContext}Task: ${task}\n\n${instruction}` },
     { type: 'image_url', image_url: { url: `data:${screenshotMime};base64,${screenshotBase64}`, detail: 'auto' as const } },
   ];
 
@@ -413,6 +418,14 @@ function doneMessageDescribesBlocker(message: string): boolean {
     .test(String(message || ''));
 }
 
+function playbackIsStillWaiting(task: string, message: string): boolean {
+  // i18n-allow: Playback evidence recognition, not user-facing copy.
+  return isVideoPlaybackRequest(task)
+    && !/(?:广告|advertisement|commercial)/iu.test(task)
+    // i18n-allow: Recognize observed pre-roll/loading states in visual-model output.
+    && /(?:片前广告|(?:当前|正在|仍在|还在).{0,16}广告|广告.{0,12}(?:结束后|倒计时|播放中)|等待.{0,12}正片|(?:pre[- ]?roll|advertisement|commercial).{0,35}(?:playing|before|finish)|(?:playing|watching).{0,20}(?:advertisement|commercial)|(?:waiting|buffering|loading).{0,25}(?:video|playback|content))/iu.test(message);
+}
+
 // ── Main loop ──
 
 /**
@@ -430,8 +443,21 @@ export async function computerUseLoop(
   const actionHistory: string[] = [];
   let consecutiveErrors = 0;
   let wallpaperModeEnabled = false;
-  let doneCandidate: { iteration: number; message: string } | null = null;
+  let doneCandidate: { iteration: number; message: string; window: DesktopWindowFingerprint | null } | null = null;
   let targetApplicationObserved = false;
+  const unconfirmedCandidate = (steps: number, message: string): string => JSON.stringify({
+    ok: false,
+    status: 'unverified',
+    completionVerified: false,
+    observations: 1,
+    steps: Math.min(steps, maxIter),
+    applicationIdentity: options.expectedApplication?.id || '',
+    applicationMatched: options.expectedApplication ? targetApplicationObserved : true,
+    completionCandidate: doneCandidate?.message || '',
+    resumeStrategy: 'observe_only',
+    message: `${message} Existing desktop changes were preserved. Inspect the current result before considering any further control action; do not repeat the search or restart playback.`,
+    lastActions: actionHistory.slice(-3),
+  });
 
   // ── Enter desktop control: show cursor glow so user sees where Lumi is clicking ──
   try {
@@ -454,7 +480,11 @@ export async function computerUseLoop(
   }
 
   try {
-    for (let i = 0; i < maxIter; i++) {
+    // The control budget never grants extra input actions. A completion
+    // candidate on the final control iteration gets one bounded, read-only
+    // observation instead of being discarded solely at the iteration boundary.
+    for (let i = 0; i < maxIter || (i === maxIter && doneCandidate !== null); i++) {
+    const verificationOnly = doneCandidate !== null;
     if (isCancelled(options)) {
       return terminalComputerUseReceipt('cancelled', 'The user cancelled desktop control.', i, actionHistory);
     }
@@ -473,6 +503,7 @@ export async function computerUseLoop(
       screenGeometry = parseDesktopScreenGeometry(relayResult);
       observedWindow = await readDesktopWindowFingerprint(options.desktopRelay);
       if (windowBeforeCapture && observedWindow && !sameDesktopWindow(windowBeforeCapture, observedWindow)) {
+        if (verificationOnly) return unconfirmedCandidate(i + 1, 'The foreground changed while the completion screenshot was captured.');
         options.onProgress?.(`[${i + 1}/${maxIter}] Foreground changed during screenshot capture; refreshing before planning an action.`);
         await sleep(200);
         continue;
@@ -486,6 +517,7 @@ export async function computerUseLoop(
       }
     } catch (err: any) {
       options.onProgress?.(`[${i + 1}/${maxIter}] Screenshot failed: ${err.message}`);
+      if (verificationOnly) return unconfirmedCandidate(i + 1, 'The completion screenshot was unavailable.');
       consecutiveErrors++;
       if (consecutiveErrors >= 3) return terminalComputerUseReceipt('blocked', 'Desktop capture failed three times.', i + 1, actionHistory);
       await sleep(1000);
@@ -499,9 +531,10 @@ export async function computerUseLoop(
 
     let responseText: string;
     try {
-      responseText = await callWorldModel(screenshotBase64, screenshotMime, screenGeometry, task, actionHistory, options.llmGetters, options.userId);
+      responseText = await callWorldModel(screenshotBase64, screenshotMime, screenGeometry, task, actionHistory, options.llmGetters, options.userId, verificationOnly);
     } catch (err: any) {
       options.onProgress?.(`[${i + 1}/${maxIter}] World model call failed: ${err.message}`);
+      if (verificationOnly) return unconfirmedCandidate(i + 1, 'The read-only completion check was unavailable.');
       consecutiveErrors++;
       if (consecutiveErrors >= 3) {
         return terminalComputerUseReceipt('blocked', `The desktop-action model failed three times: ${err.message}`, i + 1, actionHistory);
@@ -517,6 +550,7 @@ export async function computerUseLoop(
 
     let action = extractActionJSON(responseText);
     if (!action) {
+      if (verificationOnly) return unconfirmedCandidate(i + 1, 'The read-only completion check returned no usable observation.');
       options.onProgress?.(`[${i + 1}/${maxIter}] Could not parse action from: ${responseText.slice(0, 80)}`);
       consecutiveErrors++;
       if (consecutiveErrors >= 5) return terminalComputerUseReceipt('blocked', 'The desktop-action model returned five invalid action plans.', i + 1, actionHistory);
@@ -527,8 +561,12 @@ export async function computerUseLoop(
     consecutiveErrors = 0; // Reset on successful parse
 
     // ── 4. Report progress ──
-    options.onProgress?.(progressForAction(action, i + 1, maxIter));
-    actionHistory.push(historyForAction(action, i + 1, maxIter));
+    if (verificationOnly && action.action !== 'done') {
+      actionHistory.push(`COMPLETION_CHECK_ONLY: ${action.action} proposed; no further input executed.`);
+      return unconfirmedCandidate(i + 1, action.message || action.reason || 'The fresh screenshot did not confirm completion.');
+    }
+    options.onProgress?.(progressForAction(action, Math.min(i + 1, maxIter), maxIter));
+    actionHistory.push(historyForAction(action, Math.min(i + 1, maxIter), maxIter));
 
     // ── 5. Execute ──
     if (action.action === 'done') {
@@ -537,11 +575,18 @@ export async function computerUseLoop(
           `[${i + 1}/${maxIter}] Completion rejected because the active window does not match ${options.expectedApplication.displayName}.`,
         );
         actionHistory.push(`[${i + 1}/${maxIter}] REJECTED_TARGET_MISMATCH:${options.expectedApplication.id}`);
+        if (verificationOnly) return unconfirmedCandidate(i + 1, 'The target window changed during the completion check.');
         doneCandidate = null;
         await sleep(300);
         continue;
       }
       if (doneCandidate && doneCandidate.iteration < i) {
+        if (doneCandidate.window && observedWindow && !sameDesktopWindow(doneCandidate.window, observedWindow)) {
+          return unconfirmedCandidate(i + 1, 'The completion observations belong to different windows.');
+        }
+        if (playbackIsStillWaiting(task, action.message || '') || playbackIsStillWaiting(task, doneCandidate.message)) {
+          return unconfirmedCandidate(i + 1, 'The player reached a pre-roll or loading stage; two observations have not yet confirmed the requested video content.');
+        }
         options.onProgress?.(
           `[${i + 1}/${maxIter}] \u65b0\u622a\u56fe\u590d\u6838\u5b8c\u6210\uff0c\u6b63\u5728\u751f\u6210\u53ef\u9a8c\u8bc1\u7ed3\u679c`, // i18n-allow: reviewed Chinese computer-control progress copy.
         );
@@ -560,13 +605,14 @@ export async function computerUseLoop(
       doneCandidate = {
         iteration: i,
         message: action.message || '',
+        window: observedWindow,
       };
       await sleep(600);
       continue;
     }
 
-    // A fresh screenshot contradicted the earlier completion candidate. Keep
-    // operating and require a new two-observation candidate before accepting it.
+    // Completion checks return above without issuing any input. Only an
+    // ordinary control iteration may continue operating the desktop.
     doneCandidate = null;
 
     if (action.action === 'error') {
@@ -598,6 +644,7 @@ export async function computerUseLoop(
     }
   }
 
+  if (doneCandidate) return unconfirmedCandidate(maxIter + 1, 'The final completion observation could not be confirmed.');
   return terminalComputerUseReceipt('unverified', 'The iteration limit was reached without stable completion evidence.', maxIter, actionHistory);
   } finally {
     await options.desktopRelay('desktop_cursor_glow_hide', {}).catch(() => undefined);

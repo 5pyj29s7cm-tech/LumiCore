@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { hasMediaPlaybackEvidence } from '../server/cognition/action_contract';
+import { buildActionEvidenceContract, hasCoreActionEvidence, hasMediaPlaybackEvidence } from '../server/cognition/action_contract';
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import type { ToolExecutionRecord } from '../server/tools/types';
+import { recordsToTaskReceipts, taskCompletionFromReceipts, taskReceiptsToRecords } from '../server/cognition/task_execution_ledger';
 
 function record(name: string, result: unknown, args: Record<string, unknown> = {}): ToolExecutionRecord {
   return { name, arguments: args, result: typeof result === 'string' ? result : JSON.stringify(result), terminalVerification: { status: 'verified', strategy: 'state_diff', reason: 'Synthetic observed playback state.' } };
@@ -83,5 +84,119 @@ describe('playback evidence binds the current player and requested content', () 
     expect(hasMediaPlaybackEvidence(records(title, 1), task)).toBe(true);
     expect(hasMediaPlaybackEvidence(records(title, 2), task)).toBe(false);
     expect(hasMediaPlaybackEvidence(records('Another Programme', 1), task)).toBe(false);
+  });
+});
+
+describe('production playback observations confirm the goal without toggling playback again', () => {
+  const task = '用爱奇艺播放蜡笔小新第一集';
+  const scope = { requestId: 'playback-current-request', taskId: 'playback-current-task' };
+  const fresh = (name: string, result: unknown, args: Record<string, unknown> = {}): ToolExecutionRecord => ({
+    ...record(name, result, args), ...scope,
+  });
+  const goodText = '当前窗口是爱奇艺播放器。正在播放蜡笔小新第一集，正片进度 00:37 / 23:58。';
+
+  it.each([
+    goodText,
+    '爱奇艺正在播放《蜡笔小新》第一集，正片进度 00:37 / 23:58。',
+    '爱奇艺。当前正在播放蜡笔小新第1集（正片），画面为小新家中。',
+    '当前正在播放《蜡笔小新》第1集。播放器是爱奇艺。',
+    '爱奇艺中《蜡笔小新》第一集正在播放，正片进度 00:37。',
+    '爱奇艺中《蜡笔小新》第一集，视频页面已打开并开始播放。',
+    '爱奇艺正在播放蜡笔小新第一集，片前广告已结束，正片进度00:37。',
+  ])('accepts normal fresh OCR description with quoted/unquoted title and neighbouring player: %s', text => {
+    const records = [fresh('ocr_screen', text)];
+    expect(hasMediaPlaybackEvidence(records, task, scope)).toBe(true);
+    expect(hasCoreActionEvidence(buildActionEvidenceContract(task), records, task, undefined, scope)).toBe(true);
+    expect(finalizeLumiResponse({ taskText: task, responseText: '正在播放蜡笔小新第一集。', toolRecords: records, source: 'chat', ...scope }).blocked).toBe(false);
+  });
+
+  it.each([
+    ['keyboard_press', { key: 'enter' }],
+    ['desktop_mouse_click', { x: 640, y: 420, expectedProcessId: 1234 }],
+    ['desktop_ui_click', { name: '第1集', processId: 1234 }],
+  ])('accepts observed playback after %s, without requiring a play/pause shortcut', (name, args) => {
+    expect(hasMediaPlaybackEvidence([fresh(name, { ok: true }, args), fresh('ocr_screen', goodText)], task, scope)).toBe(true);
+  });
+
+  it('accepts a JSON-formatted OCR description while refusing screenshot bytes and a normal UIA tree', () => {
+    expect(hasMediaPlaybackEvidence([fresh('ocr_screen', { description: goodText })], task, scope)).toBe(true);
+    const uiTree = { status: 'ok', platform: 'win32', root: 'active', count: 3, truncated: false,
+      tree: { name: '爱奇艺', processId: 1234, controlType: 'Window', children: [
+        { name: '蜡笔小新 第1集', controlType: 'Text' }, { name: '暂停', controlType: 'Button' },
+      ] } };
+    expect(hasMediaPlaybackEvidence([fresh('desktop_ui_snapshot', uiTree)], task, scope)).toBe(false);
+    expect(hasMediaPlaybackEvidence([fresh('desktop_capture_screen', { image_base64: 'synthetic-image', text: goodText })], task, scope)).toBe(false);
+    expect(hasMediaPlaybackEvidence([fresh('ocr_screen', { format: 'screenshot_base64', data: 'synthetic-image', note: goodText })], task, scope)).toBe(false);
+  });
+
+  it.each([
+    '当前窗口是爱奇艺。正在播放《旧节目》第一集。搜索结果有《蜡笔小新》第一集。',
+    '爱奇艺搜索结果显示正在播放《蜡笔小新》第一集。',
+    '当前窗口是爱奇艺。正在播放蜡笔小新第二集。',
+    '爱奇艺正在播放蜡笔小新第一集，当前片前广告，剩余30秒。',
+    '爱奇艺正在播放蜡笔小新第一集，当前播放的是广告。',
+    '爱奇艺正在播放蜡笔小新第一集，但当前已经暂停。',
+    '爱奇艺尚未开始播放蜡笔小新第一集。',
+    '爱奇艺可能正在播放蜡笔小新第一集。',
+    '爱奇艺搜索页已打开。优酷正在播放蜡笔小新第一集。',
+    '正在播放蜡笔小新第一集。',
+  ])('does not promote candidate/ad/paused/other-player/other-episode observations: %s', text => {
+    expect(hasMediaPlaybackEvidence([fresh('ocr_screen', text)], task, scope)).toBe(false);
+  });
+
+  it('requires current request identity, rejects conflicting envelope scope, and preserves the no-ID legacy boundary', () => {
+    const current = fresh('ocr_screen', goodText);
+    expect(hasMediaPlaybackEvidence([{ ...current, requestId: 'old-request' }], task, scope)).toBe(false);
+    expect(hasMediaPlaybackEvidence([{ ...current, taskId: 'other-task' }], task, scope)).toBe(false);
+    expect(hasMediaPlaybackEvidence([{ ...current, taskId: undefined }], task, scope)).toBe(false);
+    expect(hasMediaPlaybackEvidence([{ ...current, envelope: { requestId: 'old-request', taskId: scope.taskId } as any }], task, scope)).toBe(false);
+    expect(hasMediaPlaybackEvidence([record('ocr_screen', goodText)], task, scope)).toBe(false);
+    expect(hasMediaPlaybackEvidence([current], task)).toBe(false);
+    expect(hasCoreActionEvidence(buildActionEvidenceContract(task), [current], task)).toBe(false);
+  });
+
+  it('uses a later paused observation and does not erase success on a later unavailable OCR request', () => {
+    const current = fresh('ocr_screen', goodText);
+    expect(hasMediaPlaybackEvidence([current, fresh('ocr_screen', '爱奇艺当前已经暂停播放蜡笔小新第一集。')], task, scope)).toBe(false);
+    expect(hasMediaPlaybackEvidence([current, { ...fresh('ocr_screen', ''), error: 'Synthetic OCR unavailable' }], task, scope)).toBe(true);
+  });
+
+  it('preserves original request identity across persisted task receipts without laundering a conflicting envelope', () => {
+    const current = fresh('ocr_screen', goodText);
+    const roundTrip = (records: ToolExecutionRecord[]) => JSON.parse(JSON.stringify(recordsToTaskReceipts(records)));
+    const receipts = roundTrip([current]);
+    expect(taskReceiptsToRecords(receipts)[0]).toMatchObject(scope);
+    expect(taskCompletionFromReceipts(task, receipts, undefined, scope).complete).toBe(true);
+    expect(taskCompletionFromReceipts(task, receipts, undefined, { ...scope, requestId: 'another-request' }).complete).toBe(false);
+    expect(taskCompletionFromReceipts(task, receipts).complete).toBe(false);
+    const conflict = roundTrip([{ ...current, envelope: { requestId: 'other-request', taskId: scope.taskId } as any }]);
+    expect(conflict[0].scopeConflict).toBe(true);
+    expect(taskCompletionFromReceipts(task, conflict, undefined, scope).complete).toBe(false);
+    const legacy = roundTrip([record('ocr_screen', goodText)]);
+    expect(taskReceiptsToRecords(legacy)[0].requestId).toBeUndefined();
+    expect(taskCompletionFromReceipts(task, legacy, undefined, scope).complete).toBe(false);
+  });
+
+  const computerReceipt = (patch = {}) => ({ ok: true, status: 'verified', completionVerified: true,
+    observations: 2, applicationIdentity: '', applicationMatched: true, message: goodText, ...patch });
+  it('accepts the production computer_use two-observation receipt only for this playback task', () => {
+    const current = fresh('computer_use', computerReceipt(), { task });
+    expect(hasMediaPlaybackEvidence([current], task, scope)).toBe(true);
+    expect(finalizeLumiResponse({ taskText: task, responseText: '已播放。', toolRecords: [current], source: 'chat', ...scope }).blocked).toBe(false);
+    expect(hasMediaPlaybackEvidence([fresh('computer_use', computerReceipt(), { task: '打开爱奇艺' })], task, scope)).toBe(false);
+    expect(hasMediaPlaybackEvidence([fresh('computer_use', computerReceipt(), { task: '用爱奇艺播放其他节目第一集' })], task, scope)).toBe(false);
+    expect(hasMediaPlaybackEvidence([fresh('computer_use', computerReceipt(), { task: '用优酷播放蜡笔小新第一集' })], task, scope)).toBe(false);
+    expect(hasMediaPlaybackEvidence([{ ...current, requestId: 'old-request' }], task, scope)).toBe(false);
+  });
+  it.each([
+    { ok: false, status: 'unverified', completionVerified: false, observations: 1 },
+    { observations: 1 },
+    { applicationMatched: false },
+    { applicationIdentity: 'netease-cloud-music' },
+    { message: '爱奇艺正在播放蜡笔小新第一集，当前片前广告。' },
+    { message: '已完成打开页面。' },
+    { message: '爱奇艺正在播放蜡笔小新第二集。' },
+  ])('refuses an incomplete, mismatched or non-programme computer_use receipt: %j', patch => {
+    expect(hasMediaPlaybackEvidence([fresh('computer_use', computerReceipt(patch), { task })], task, scope)).toBe(false);
   });
 });

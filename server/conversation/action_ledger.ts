@@ -1010,6 +1010,7 @@ export function archiveBoundConversationActionReceipts(
         state.goal || task.goal,
         receipts,
         state.taskCapsule,
+        exactRequestOwnsActiveTask ? { requestId: receiptRequestId, taskId } : undefined,
       );
       const waitingForConfirmation = records.some(isConfirmationBlockedToolRecord);
       const hasFailure = records.some(record => !toolRecordSucceeded(record));
