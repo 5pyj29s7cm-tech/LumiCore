@@ -101,7 +101,8 @@ import { queryMemories, queryMemoriesVector, addMemory, addReminder, extractMemo
 import { loadEmotionalState, saveEmotionalState, updateEmotionalState, updateEmotionalStateWithHIM, loadHIMState, saveHIMState, generateContextualGreeting, vectorMemoryBias } from "../personality/state";
 import { buildModeOverlay, generateSystemPrompt } from "../personality/engine";
 import { personalityRegistry } from "../personality";
-import { getMemoryAvatar } from '../memory_avatar/store';
+import { getMemoryAvatar, buildMemoryAvatarContext } from '../memory_avatar/store';
+import { captureMemoryAvatarAuthorization } from '../memory_avatar/lifecycle';
 import { lightweightEvolve } from "../personality/evolution";
 import {
   getOrCreateConversationForTurn,
@@ -833,7 +834,9 @@ export function registerChatHandler(
     const resolvedOrgId = requestScope.orgId;
     const allowAdaptiveLearning = !isMemoryAvatar && shouldPersistPostTurnLearningSource(eventSource);
     const toolSecurityContext = buildSocketToolSecurityContext(socket, requestScope);
-    const turnAuthorization = captureChatAuthorization(uid, requestScope);
+    const turnAuthorization = isMemoryAvatar
+      ? captureMemoryAvatarAuthorization(uid, conversationAgentId)
+      : captureChatAuthorization(uid, requestScope);
     const runAuthorizedTools = (...args: Parameters<typeof runWithTools>) => {
       turnAuthorization.assertCurrent();
       return runWithTools(...args);
@@ -848,7 +851,7 @@ export function registerChatHandler(
     };
     const rejectRevokedRequest = () => {
       if (turnAuthorization.isCurrent()) return false;
-      try { ack?.({ ok: false, requestId, error: 'Organization access changed. Start a new request in an available workspace.' }); } catch {}
+      try { ack?.({ ok: false, requestId, error: isMemoryAvatar ? 'Memory avatar or its sources changed. Start a new request.' : 'Organization access changed. Start a new request in an available workspace.' }); } catch {}
       return true;
     };
     const requestedConversationId = String(data.conversationId || '').trim();
@@ -2502,7 +2505,9 @@ export function registerChatHandler(
       console.log('[ChatHandler] relevantMemories (vector):', relevantMemories.length);
 
       // RAG: retrieve relevant knowledge chunks from agent-scoped and Lumi knowledge.
-      let ragChunks: string[] = [];
+      let ragChunks: string[] = isMemoryAvatar
+        ? buildMemoryAvatarContext(uid, conversationAgentId, text)
+        : [];
       const ragAgentIds = isMemoryAvatar
         ? [conversationAgentId]
         : Array.from(new Set([conversationAgentId, 'lumi'].filter(Boolean)));

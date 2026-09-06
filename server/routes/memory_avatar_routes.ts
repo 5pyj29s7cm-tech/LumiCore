@@ -1,10 +1,13 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { getActiveConversation, getMessages } from '../conversation/manager';
 import { requireAuth } from '../middleware/auth';
-import { createMemoryAvatar, getMemoryAvatar, listMemoryAvatars, archiveMemoryAvatar } from '../memory_avatar/store';
+import { createMemoryAvatar, getMemoryAvatar, listMemoryAvatars, archiveMemoryAvatar, updateMemoryAvatar, listMemoryAvatarMaterials, addMemoryAvatarMaterial, removeMemoryAvatarMaterial, MemoryAvatarError } from '../memory_avatar/store';
 
 const asyncHandler = (fn: (req: Request, res: Response, next: NextFunction) => Promise<any>) =>
-  (req: Request, res: Response, next: NextFunction) => Promise.resolve(fn(req, res, next)).catch(next);
+  (req: Request, res: Response, next: NextFunction) => Promise.resolve(fn(req, res, next)).catch(error => {
+    if (error instanceof MemoryAvatarError) return res.status(error.status).json({ error: error.message, code: error.code });
+    next(error);
+  });
 
 function publicAvatar(avatar: any) {
   return {
@@ -14,12 +17,15 @@ function publicAvatar(avatar: any) {
     status: avatar.status,
     isFrozen: avatar.isFrozen !== false,
     evidenceMap: avatar.evidenceMap || [],
-    seedMemoryIds: (avatar.seedMemories || []).map((_: unknown, index: number) => `${avatar.id}:seed:${index}`),
+    seedMemoryIds: avatar.seedMemoryIds || [],
+    revision: avatar.revision,
+    appearance: avatar.appearance,
+    voice: avatar.voice,
     narrative: avatar.narrative || '',
     personalityConfig: avatar.personalityConfig || {},
     createdAt: avatar.createdAt,
     updatedAt: avatar.updatedAt,
-    memoryCount: (avatar.seedMemories || []).length,
+    memoryCount: avatar.memoryCount,
   };
 }
 
@@ -93,39 +99,29 @@ export function mountMemoryAvatarRoutes(
     return res.json(publicAvatar(avatar));
   });
 
-  router.post('/memory-avatars', requireAuth, (req, res) => {
-    const body = req.body || {};
-    if (!body.personalityConfig || typeof body.personalityConfig !== 'object') {
-      return res.status(400).json({ error: 'personalityConfig is required' });
-    }
-    const config = {
-      ...body.personalityConfig,
-      // A memory avatar is deliberately a private conversational persona. It
-      // cannot acquire tools or alter the single-core task scheduler.
-      toolPolicy: {
-        ...(body.personalityConfig.toolPolicy || {}),
-        allowedTools: [],
-        requireConfirmation: [],
-        forbiddenTools: ['*'],
-        maxIterations: 0,
-      },
-      memoryPolicy: {
-        ...(body.personalityConfig.memoryPolicy || {}),
-        retrieveLimit: Math.min(20, Math.max(1, Number(body.personalityConfig.memoryPolicy?.retrieveLimit) || 10)),
-        autoExtract: true,
-      },
-    };
-    const avatar = createMemoryAvatar({
-      userId: req.user!.uid,
-      name: String(body.name || 'Memory').slice(0, 120),
-      relationshipType: String(body.relationshipType || 'close_friend').slice(0, 40),
-      personalityConfig: config,
-      evidenceMap: Array.isArray(body.evidenceMap) ? body.evidenceMap : [],
-      seedMemories: Array.isArray(body.seedMemories) ? body.seedMemories : [],
-      narrative: String(body.narrative || '').slice(0, 2000),
-    });
+  router.post('/memory-avatars', requireAuth, asyncHandler(async (req, res) => {
+    const avatar = await createMemoryAvatar({ ...req.body, userId: req.user!.uid });
     return res.status(201).json(publicAvatar(avatar));
-  });
+  }));
+
+  router.patch('/memory-avatars/:id', requireAuth, asyncHandler(async (req, res) => {
+    const avatar = await updateMemoryAvatar(req.user!.uid, String(req.params.id), req.body || {});
+    return res.json(publicAvatar(avatar));
+  }));
+
+  router.get('/memory-avatars/:id/materials', requireAuth, asyncHandler(async (req, res) => {
+    return res.json(listMemoryAvatarMaterials(req.user!.uid, String(req.params.id)));
+  }));
+
+  router.post('/memory-avatars/:id/materials', requireAuth, asyncHandler(async (req, res) => {
+    const result = await addMemoryAvatarMaterial(req.user!.uid, String(req.params.id), req.body || {});
+    return res.status(201).json({ material: result.material, avatar: publicAvatar(result.avatar) });
+  }));
+
+  router.delete('/memory-avatars/:id/materials/:materialId', requireAuth, asyncHandler(async (req, res) => {
+    const avatar = await removeMemoryAvatarMaterial(req.user!.uid, String(req.params.id), String(req.params.materialId), req.body?.revision);
+    return res.json({ ok: true, avatar: publicAvatar(avatar) });
+  }));
 
   router.get('/memory-avatars/:id/history', requireAuth, (req, res) => {
     const id = String(req.params.id || '');
@@ -134,17 +130,16 @@ export function mountMemoryAvatarRoutes(
     const conversation = getActiveConversation(req.user!.uid, id, 'personal', '');
     const messages = conversation ? getMessages(conversation.id, 150) : [];
     return res.json(messages.map((message: any) => ({
+      id: message.id,
+      requestId: message.requestId || message.externalMessageId || '',
       role: message.role,
       content: message.content || message.message || '',
       timestamp: message.createdAt || message.timestamp,
     })));
   });
 
-  router.delete('/memory-avatars/:id', requireAuth, (req, res) => {
-    if (!archiveMemoryAvatar(req.user!.uid, String(req.params.id || ''))) {
-      return res.status(404).json({ error: 'Memory avatar not found' });
-    }
+  router.delete('/memory-avatars/:id', requireAuth, asyncHandler(async (req, res) => {
+    await archiveMemoryAvatar(req.user!.uid, String(req.params.id), req.body?.revision);
     return res.json({ ok: true });
-  });
+  }));
 }
-
