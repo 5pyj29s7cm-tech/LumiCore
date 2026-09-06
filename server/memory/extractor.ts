@@ -66,6 +66,7 @@ Assistant: {assistantResponse}
 JSON output:`;
 
 export interface ExtractionContext {
+  signal?: AbortSignal;
   userMessage: string;
   assistantResponse: string;
   existingMemories: string[];
@@ -110,6 +111,7 @@ export async function extractMemories(
   getGlm?: () => any,
   getRelay?: () => any,
 ): Promise<{ memories: (ExtractedMemory & { branchHint?: string })[]; reminders: ExtractedReminder[] }> {
+  ctx.signal?.throwIfAborted();
   const existingStr = ctx.existingMemories.length > 0
     ? ctx.existingMemories.map(m => `- ${m}`).join('\n')
     : '(none yet)';
@@ -139,7 +141,7 @@ export async function extractMemories(
     const response = await makeLLMCall(
       messages,
       [],
-      { provider: ctx.provider, model: ctx.model, maxTokens: 1024, userId: ctx.userId, domain: ctx.domain, orgId: ctx.orgId, source: 'memory_extraction' },
+      { provider: ctx.provider, model: ctx.model, maxTokens: 1024, userId: ctx.userId, domain: ctx.domain, orgId: ctx.orgId, source: 'memory_extraction', signal: ctx.signal },
       getDeepSeek,
       getGemini,
       getOpenAI,
@@ -154,6 +156,7 @@ export async function extractMemories(
       getRelay,
     );
 
+    ctx.signal?.throwIfAborted();
     const text = response.text || '';
     const jsonMatch = text.match(/\\{[\\s\\S]*\\}|\\[[\\s\\S]*\\]/);
     if (!jsonMatch) return { memories: [], reminders: [] };

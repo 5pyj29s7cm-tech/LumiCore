@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { requireAuth } from "../middleware/auth";
-import { readDB } from "../../db_layer";
+import { readDB, flushDBOrThrow } from "../../db_layer";
+import { forgetConversationChatExecutionsDurably } from '../socket/chat_execution_registry';
+import { mutationScopeKey, runSerializedMutation, readScopedDeletionReceipt, recordScopedDeletionReceipt } from '../persistence/durable_scope_mutation';
 import {
   getUserConversations,
   getMessages,
@@ -217,40 +219,58 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
 
   router.delete("/conversations/:id", requireAuth, async (req, res) => {
     const scope = getConversationScope(req);
-    const db = readDB();
-    const conversation = (db.conversations || []).find((candidate: any) => (
-      candidate.id === req.params.id
-      && candidate.userId === req.user!.uid
-      && conversationMatchesScope(candidate, scope)
-    ));
-    if (!conversation) return res.status(404).json({ error: "Not found" });
-    let pendingConfirmationsCancelled = 0;
+    const owner = { userId: req.user!.uid, domain: scope.domain, orgId: scope.orgId };
+    const stillAuthorized = () => {
+      let allowed = false;
+      requireAuth(req, res, () => { allowed = true; });
+      return allowed;
+    };
     try {
-      await ensurePendingConfirmationPersistenceInitialized();
-      const channelScope = buildTransportNeutralConfirmationScope({
-        domain: scope.domain,
-        orgId: scope.orgId,
-        conversationId: conversation.id,
+      await runSerializedMutation(`conversation:${mutationScopeKey(owner)}`, async () => {
+        if (!stillAuthorized()) return;
+        const db = readDB();
+        const conversation = (db.conversations || []).find((candidate: any) => (
+          candidate.id === req.params.id
+          && candidate.userId === owner.userId
+          && conversationMatchesScope(candidate, scope)
+        ));
+        if (!conversation) {
+          const receipt = readScopedDeletionReceipt(owner, 'conversation', req.params.id);
+          if (!receipt) { res.status(404).json({ error: "Not found" }); return; }
+          await forgetConversationChatExecutionsDurably({ ...owner, conversationId: req.params.id });
+          await flushDBOrThrow();
+          if (stillAuthorized()) res.json({ ...receipt, replayed: true });
+          return;
+        }
+        let pendingConfirmationsCancelled = 0;
+        try {
+          await ensurePendingConfirmationPersistenceInitialized();
+          const channelScope = buildTransportNeutralConfirmationScope({
+            ...scope, conversationId: conversation.id,
+          });
+          pendingConfirmationsCancelled = await revokePendingConfirmationChannelDurably(
+            owner.userId, { ...scope, channelId: String(channelScope.channelId || '') },
+          );
+        } catch (error) {
+          console.error('[Conversations] Failed to revoke pending confirmations before deletion:', error);
+          res.status(503).json({ error: 'Conversation confirmation cleanup is unavailable' });
+          return;
+        }
+        if (!stillAuthorized()) return;
+        const deleted = deleteConversationData(req.params.id, owner.userId, scope.domain, scope.orgId);
+        if (!deleted) { res.status(404).json({ error: "Not found" }); return; }
+        const receipt = { success: true, deleted, pendingConfirmationsCancelled };
+        recordScopedDeletionReceipt(owner, 'conversation', req.params.id, receipt);
+        await forgetConversationChatExecutionsDurably({ ...owner, conversationId: req.params.id });
+        await flushDBOrThrow();
+        if (stillAuthorized()) res.json(receipt);
       });
-      pendingConfirmationsCancelled = await revokePendingConfirmationChannelDurably(
-        req.user!.uid,
-        {
-          domain: scope.domain,
-          orgId: scope.orgId,
-          channelId: String(channelScope.channelId || ''),
-        },
-      );
     } catch (error) {
-      console.error('[Conversations] Failed to revoke pending confirmations before deletion:', error);
-      return res.status(503).json({ error: 'Conversation confirmation cleanup is unavailable' });
+      console.error('[Conversations] Deletion could not be durably confirmed:', error);
+      if (!res.headersSent) res.status(503).json({
+        error: 'Conversation deletion is not yet saved. Retry to confirm the deletion.',
+        code: 'CONVERSATION_DELETE_NOT_DURABLE', retryable: true,
+      });
     }
-    const deleted = deleteConversationData(
-      req.params.id,
-      req.user!.uid,
-      scope.domain,
-      scope.orgId,
-    );
-    if (!deleted) return res.status(404).json({ error: "Not found" });
-    res.json({ success: true, deleted, pendingConfirmationsCancelled });
   });
 }

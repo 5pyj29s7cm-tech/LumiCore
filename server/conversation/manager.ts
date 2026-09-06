@@ -3450,6 +3450,15 @@ export function addMessage(msg: {
   skipActionContinuation?: boolean;
 }): string {
   const db = readDB();
+  // Conversation IDs are parent identities, not optional labels. A delayed
+  // model/voice/tool reply must never recreate content after that parent was
+  // deleted. Unbound legacy interactions remain supported without an ID.
+  if (msg.conversationId && !(db.conversations || []).some((conversation: Conversation) => (
+    conversation.id === msg.conversationId
+    && conversation.userId === msg.userId
+    && (!msg.agentId || conversation.agentId === msg.agentId)
+    && conversationMatchesScope(conversation, msg.domain, msg.orgId)
+  ))) return '';
   const id = 'msg_' + crypto.randomUUID();
   const now = msg.timestamp || new Date().toISOString();
   const normalizedToolCalls = normalizeToolCalls(msg.toolCalls);

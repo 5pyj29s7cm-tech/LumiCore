@@ -11,6 +11,8 @@ import { buildMediaArtifactReceipt, type MediaArtifactReceipt } from './media_ar
 import { projectCustomerVisibleExecutionEvent } from './public_agent_event_projection';
 import { runtimeBackgroundWork, runtimeShutdownCancellation } from '../runtime/shutdown_work';
 import { captureChatAuthorization } from './chat_authorization';
+import { captureConversationAuthorization, combineRequestAuthorizations, runAuthorizedEnrichment } from '../conversation/lifecycle';
+import { readScopedDeletionReceipt } from '../persistence/durable_scope_mutation';
 import {
   normalizeStructuredMediaRequest,
   structuredMediaRoutingEnvelope,
@@ -834,9 +836,14 @@ export function registerChatHandler(
     const resolvedOrgId = requestScope.orgId;
     const allowAdaptiveLearning = !isMemoryAvatar && shouldPersistPostTurnLearningSource(eventSource);
     const toolSecurityContext = buildSocketToolSecurityContext(socket, requestScope);
-    const turnAuthorization = isMemoryAvatar
+    const ownerAuthorization = isMemoryAvatar
       ? captureMemoryAvatarAuthorization(uid, conversationAgentId)
       : captureChatAuthorization(uid, requestScope);
+    let selectedConversationId = '';
+    const conversationAuthorization = captureConversationAuthorization(
+      { userId: uid, agentId: conversationAgentId, ...requestScope }, () => selectedConversationId,
+    );
+    const turnAuthorization = combineRequestAuthorizations(ownerAuthorization, conversationAuthorization);
     const runAuthorizedTools = (...args: Parameters<typeof runWithTools>) => {
       turnAuthorization.assertCurrent();
       return runWithTools(...args);
@@ -851,7 +858,7 @@ export function registerChatHandler(
     };
     const rejectRevokedRequest = () => {
       if (turnAuthorization.isCurrent()) return false;
-      try { ack?.({ ok: false, requestId, error: isMemoryAvatar ? 'Memory avatar or its sources changed. Start a new request.' : 'Organization access changed. Start a new request in an available workspace.' }); } catch {}
+      try { ack?.({ ok: false, requestId, error: !conversationAuthorization.isCurrent() ? 'Conversation is no longer available. Start a new conversation.' : isMemoryAvatar ? 'Memory avatar or its sources changed. Start a new request.' : 'Organization access changed. Start a new request in an available workspace.' }); } catch {}
       return true;
     };
     const requestedConversationId = String(data.conversationId || '').trim();
@@ -890,7 +897,7 @@ export function registerChatHandler(
       try { ack?.({ ok: false, requestId, error: 'Conversation is unavailable for this user, agent, or workspace' }); } catch {}
       return;
     }
-    let selectedConversationId = selectedConversation.id;
+    selectedConversationId = selectedConversation.id;
     try {
       await ensurePendingConfirmationPersistenceInitialized();
     } catch (error) {
@@ -936,6 +943,7 @@ export function registerChatHandler(
       orgId: resolvedOrgId,
       source: eventSource,
       conversationId: selectedConversationId,
+      requireConversation: true,
     };
     let executionRoom = chatExecutionRoom(executionScope);
     let sessionKey = `${uid}:${resolvedDomain}:${resolvedOrgId || ''}:${eventSource}:${selectedConversationId}`;
@@ -1055,6 +1063,7 @@ export function registerChatHandler(
     };
     let actionLeaseHeartbeat: ReturnType<typeof startConversationActionExecutionHeartbeat> | null = null;
     const emitAgent = (event: string, payload: Record<string, any> = {}) => {
+      if (!conversationAuthorization.isCurrent()) return false;
       const normalizedPayload = normalizeAgentPayload(event, payload);
       // A late duplicate from the same handler is not a reconnect replay. The
       // explicit request/recovery entry points above own replay delivery; doing
@@ -1070,6 +1079,7 @@ export function registerChatHandler(
       publishAfter?: () => void;
       errorContext?: string;
     }): Promise<boolean> => {
+      if (!conversationAuthorization.isCurrent()) return false;
       if (actionLeaseHeartbeat?.isLeaseLost()) {
         await actionLeaseHeartbeat.leaseLoss;
         return false;
@@ -1840,6 +1850,17 @@ export function registerChatHandler(
       converge: async reason => {
         // Pre-binding exits own no durable action-turn lease.
         if (!foregroundRequestIdentity) return true;
+        // An explicit deletion removes this request's transcript and action
+        // projection together. Once that deletion is durable there is no
+        // deleted lease to reconstruct or endlessly retry. Independently
+        // running native work retains its own execution/settlement fencing.
+        if (!conversationAuthorization.isCurrent() && readScopedDeletionReceipt(
+          { userId: uid, domain: resolvedDomain, orgId: resolvedOrgId },
+          'conversation', selectedConversationId,
+        )) {
+          await flushDBOrThrow();
+          return true;
+        }
         const releaseResult = await convergeChatForegroundRequestBeforeRelease({
           identity: foregroundRequestIdentity,
           aborted: abortController.signal.aborted,
@@ -4851,11 +4872,12 @@ export function registerChatHandler(
       const isCorrection = correctionPatterns.some(p => p.test(text));
       if (allowAdaptiveLearning && resolvedDomain === 'personal' && isCorrection && responseText && !finalResponse.blocked) {
         try {
-          const corrected = await extractMemories(
-            { userMessage: text, assistantResponse: responseText, existingMemories: relevantMemories.map(m => m.content), provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, treeBranches: [] },
+          const corrected = await runAuthorizedEnrichment(turnAuthorization, signal => extractMemories(
+            { userMessage: text, assistantResponse: responseText, existingMemories: relevantMemories.map(m => m.content), provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, treeBranches: [], signal },
             llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
             llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
-          );
+          ));
+          turnAuthorization.assertCurrent();
           for (const mem of corrected.memories) {
             addMemory({
               userId: uid, type: mem.type, content: mem.content,
@@ -4880,6 +4902,7 @@ export function registerChatHandler(
               llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
               llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
             );
+            turnAuthorization.assertCurrent();
             const identityResult = JSON.parse((identityCheck.text || '').replace(/```json|```/g, '').trim() || '{}');
             if (identityResult.correctsIdentity) {
               const removed = await personalityRegistry.correctIdentity(personalityId, {
@@ -4898,6 +4921,7 @@ export function registerChatHandler(
       }
 
       // Lightweight per-conversation evolution — micro-shifts after meaningful chats
+      if (!turnAuthorization.isCurrent()) return;
       // Fires if enough owner_trait memories have accumulated, no 7-day wait needed
       if (allowAdaptiveLearning && resolvedDomain === 'personal' && responseText && !finalResponse.blocked && cognition.intent.category !== 'command' && !personalityRegistry.isEvolutionFrozen(personalityId, uid)) {
         try {
@@ -4920,6 +4944,7 @@ export function registerChatHandler(
             llmGetters.getGlm,
             llmGetters.getRelay,
           );
+          turnAuthorization.assertCurrent();
           if (step) {
             personalityRegistry.applyEvolution(personalityId, step, { userId: uid });
             console.log(`[ChatHandler] Lightweight evolution: v${step.version}, ${step.mutations.length} mutation(s)`);
@@ -4935,11 +4960,11 @@ export function registerChatHandler(
       const branchNodes = queryMemories({ userId: uid, nodeType: 'branch', limit: 50, domain: resolvedDomain, orgId: resolvedOrgId });
       const treeBranches = branchNodes.map(b => b.content);
       const locationTag = sensory.locationTag || undefined;
-      void runtimeBackgroundWork.track(extractMemories(
-        { userMessage: text, assistantResponse: responseText, existingMemories: relevantMemories.map(m => m.content), provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, treeBranches, locationTag },
+      void runtimeBackgroundWork.track(runAuthorizedEnrichment(turnAuthorization, signal => extractMemories(
+        { userMessage: text, assistantResponse: responseText, existingMemories: relevantMemories.map(m => m.content), provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, treeBranches, locationTag, signal },
         llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
         llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
-      ).then(extracted => {
+      )).then(extracted => {
         if (!turnAuthorization.isCurrent()) return;
         for (const mem of extracted.memories) {
           let parentId: string | null = null;
@@ -4967,6 +4992,7 @@ export function registerChatHandler(
       }
 
       // Update emotional state — reconnect if user was away for a while
+      if (!turnAuthorization.isCurrent()) return;
       const hoursSinceLast = emotionalState.lastInteractionAt
         ? (Date.now() - new Date(emotionalState.lastInteractionAt).getTime()) / (1000 * 60 * 60)
         : 24;

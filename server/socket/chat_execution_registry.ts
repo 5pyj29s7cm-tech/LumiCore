@@ -1,6 +1,7 @@
 import { ensureDatabaseInitialized, querySQL, runSQL } from '../../db_layer';
 import { normalizeCompletionFeedbackForPersistence } from '../conversation/completion_feedback';
 import { sanitizeMediaArtifactReceipt } from './media_artifact_receipt';
+import { conversationExists } from '../conversation/lifecycle';
 
 export type ChatExecutionStatus =
   | 'acknowledged'
@@ -18,6 +19,8 @@ export type ChatExecutionScope = {
   orgId?: string;
   source: string;
   conversationId?: string;
+  /** Main chat receipts cannot outlive the transcript that authorized them. */
+  requireConversation?: boolean;
 };
 
 export type ChatExecutionEvent = {
@@ -120,6 +123,7 @@ export type ChatExecutionPersistenceAdapter = {
   loadRecoverable(nowIso: string): Promise<PersistedChatExecutionReceipt[]>;
   upsert(receipt: PersistedChatExecutionReceipt): Promise<void>;
   purgeExpired(nowIso: string): Promise<void>;
+  deleteConversation?(scope: Pick<ChatExecutionScope, 'userId' | 'domain' | 'orgId' | 'conversationId'>): Promise<void>;
 };
 
 const TERMINAL_RETENTION_MS = 30 * 60 * 1000;
@@ -145,6 +149,10 @@ function normalizedRecoveryScopeKey(scope: ChatExecutionScope): string {
 
 function executionKey(scope: ChatExecutionScope, requestId: string): string {
   return `${normalizedScopeKey(scope)}:${requestId}`;
+}
+
+function conversationReceiptAllowed(scope: ChatExecutionScope): boolean {
+  return !scope.requireConversation || conversationExists(String(scope.conversationId || ''), scope);
 }
 
 function compactString(value: unknown, limit: number): string {
@@ -308,7 +316,9 @@ function enqueueStrictPersistence(
 function persistTerminal(scope: ChatExecutionScope, record: StoredExecution): void {
   const receipt = persistedReceipt(scope, record);
   if (!receipt) return;
-  enqueuePersistence(adapter => adapter.upsert(receipt));
+  enqueuePersistence(async adapter => {
+    if (conversationReceiptAllowed(scope)) await adapter.upsert(receipt);
+  });
 }
 
 const sqlitePersistenceAdapter: ChatExecutionPersistenceAdapter = {
@@ -355,7 +365,32 @@ const sqlitePersistenceAdapter: ChatExecutionPersistenceAdapter = {
     await ensureDatabaseInitialized();
     await runSQL('DELETE FROM chat_execution_terminal_receipts WHERE expiresAt <= ?', [nowIso]);
   },
+  async deleteConversation(scope) {
+    await ensureDatabaseInitialized();
+    await runSQL(
+      'DELETE FROM chat_execution_terminal_receipts WHERE userId = ? AND domain = ? AND orgId = ? AND conversationId = ?',
+      [scope.userId, scope.domain, scope.domain === 'work' ? String(scope.orgId || '') : '', String(scope.conversationId || '')],
+    );
+  },
 };
+
+/** Delete recovery copies too, after any receipt write already in flight. */
+export async function forgetConversationChatExecutionsDurably(
+  scope: Pick<ChatExecutionScope, 'userId' | 'domain' | 'orgId' | 'conversationId'>,
+): Promise<void> {
+  if (!scope.conversationId) throw new Error('A conversation identity is required for deletion');
+  for (const [key, record] of executions) {
+    if (record.scopeKey !== normalizedScopeKey({ ...scope, source: record.source })) continue;
+    // Release duplicate sidecar waiters without keeping private recovery text.
+    resolveSidecarDurability(record);
+    executions.delete(key);
+    if (activeByScope.get(record.scopeKey) === key) activeByScope.delete(record.scopeKey);
+  }
+  await enqueueStrictPersistence(async adapter => {
+    if (!adapter.deleteConversation) throw new Error('Conversation recovery deletion is unavailable');
+    await adapter.deleteConversation(scope);
+  });
+}
 
 function copySnapshot(record?: StoredExecution): ChatExecutionSnapshot | null {
   if (!record) return null;
@@ -947,6 +982,7 @@ export function recordChatExecutionEvent(
   event: string,
   payload: Record<string, any>,
 ): boolean {
+  if (!conversationReceiptAllowed(scope)) return false;
   const key = executionKey(scope, requestId);
   const record = executions.get(key);
   if (!record) return false;
@@ -992,6 +1028,7 @@ export async function recordChatExecutionTerminalEventDurably(
   payload: Record<string, any>,
   persistenceUnknownPayload: Record<string, any> = {},
 ): Promise<boolean> {
+  if (!conversationReceiptAllowed(scope)) return false;
   const key = executionKey(scope, requestId);
   const record = executions.get(key);
   if (!record) throw new Error('Chat execution is not reserved');
@@ -1043,7 +1080,9 @@ export async function recordChatExecutionTerminalEventDurably(
   // Install the private pending marker synchronously, before the first await,
   // so another handler cannot append a late event or observe a success frame.
   record.terminalReceiptPending = pending;
-  const barrier = enqueueStrictPersistence(adapter => adapter.upsert(receipt))
+  const barrier = enqueueStrictPersistence(async adapter => {
+    if (conversationReceiptAllowed(scope)) await adapter.upsert(receipt);
+  })
     .then(() => {
       if (record.terminalReceiptPending !== pending) {
         throw new Error('Chat terminal receipt ownership changed before commit');
@@ -1106,6 +1145,7 @@ export async function recordChatExecutionPersistenceUnknownDurably(
   requestId: string,
   payload: Record<string, any> = {},
 ): Promise<boolean> {
+  if (!conversationReceiptAllowed(scope)) return false;
   const record = executions.get(executionKey(scope, requestId));
   if (!record) throw new Error('Chat execution is not reserved');
 
@@ -1155,7 +1195,9 @@ export async function recordChatExecutionPersistenceUnknownDurably(
 
   const receipt = persistedReceipt(scope, record);
   if (!receipt) throw new Error('Persistence-unknown terminal cannot produce a durable receipt');
-  const barrier = enqueueStrictPersistence(adapter => adapter.upsert(receipt)).then(
+  const barrier = enqueueStrictPersistence(async adapter => {
+    if (conversationReceiptAllowed(scope)) await adapter.upsert(receipt);
+  }).then(
     () => {
       record.terminalReceiptDurable = true;
       resolveSidecarDurability(record);
