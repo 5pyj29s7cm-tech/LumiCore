@@ -3,6 +3,7 @@ import { buildActionEvidenceContract, hasCoreActionEvidence, hasMediaPlaybackEvi
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import type { ToolExecutionRecord } from '../server/tools/types';
 import { recordsToTaskReceipts, taskCompletionFromReceipts, taskReceiptsToRecords } from '../server/cognition/task_execution_ledger';
+import { DESKTOP_COMPLETION_REVIEW_REASON } from '../server/cognition/desktop_completion_review';
 
 function record(name: string, result: unknown, args: Record<string, unknown> = {}): ToolExecutionRecord {
   return { name, arguments: args, result: typeof result === 'string' ? result : JSON.stringify(result), terminalVerification: { status: 'verified', strategy: 'state_diff', reason: 'Synthetic observed playback state.' } };
@@ -159,6 +160,47 @@ describe('production playback observations confirm the goal without toggling pla
     const current = fresh('ocr_screen', goodText);
     expect(hasMediaPlaybackEvidence([current, fresh('ocr_screen', '爱奇艺当前已经暂停播放蜡笔小新第一集。')], task, scope)).toBe(false);
     expect(hasMediaPlaybackEvidence([current, { ...fresh('ocr_screen', ''), error: 'Synthetic OCR unavailable' }], task, scope)).toBe(true);
+  });
+
+  const legacyPlayback = () => [
+    record('desktop_active_window', { appName: '爱奇艺' }),
+    record('keyboard_press', { ok: true }, { key: 'space' }),
+    record('desktop_ui_snapshot', { player: '爱奇艺', isPlaying: true, currentMedia: { title: '蜡笔小新', episode: 1 } }),
+  ];
+  it('does not let old legacy playback hide the current production observe-only completion candidate in finalizer', () => {
+    const old = legacyPlayback().map(record => ({ ...record, requestId: 'previous-request', taskId: scope.taskId }));
+    const candidate = { ...fresh('computer_use', {
+      ok: false, status: 'unverified', completionVerified: false, observations: 1,
+      resumeStrategy: 'observe_only', completionCandidate: 'The current programme page has opened.',
+      message: 'A fresh observation is still required.',
+    }, { task }), terminalVerification: { status: 'failed' as const, strategy: 'visual' as const, reason: 'Unverified completion' } };
+    expect(hasMediaPlaybackEvidence(old, task)).toBe(true);
+    expect(hasMediaPlaybackEvidence(old, task, scope)).toBe(false);
+    const final = finalizeLumiResponse({ taskText: task, responseText: '已经播放成功。', source: 'chat',
+      toolRecords: [...old, candidate], ...scope });
+    expect(final.blocked).toBe(true);
+    expect(final.reason).toBe(DESKTOP_COMPLETION_REVIEW_REASON);
+    expect(final.text).toContain('已保留当前进度');
+  });
+
+  it.each([
+    { requestId: undefined },
+    { taskId: undefined },
+    { requestId: 'previous-request' },
+    { taskId: 'another-task' },
+    { turnId: 'previous-request' },
+    { envelope: { requestId: 'previous-request', taskId: scope.taskId } },
+    { envelope: { requestId: scope.requestId, turnId: 'previous-request', taskId: scope.taskId } },
+    { envelope: { requestId: scope.requestId, taskId: 'another-task' } },
+  ])('rejects missing/conflicting scope throughout the legacy observation and actuation path: %j', patch => {
+    const records = legacyPlayback().map(record => ({ ...record, ...scope, ...patch } as ToolExecutionRecord));
+    expect(hasMediaPlaybackEvidence(records, task, scope)).toBe(false);
+  });
+
+  it('retains current scoped legacy evidence and the explicit no-scope compatibility path', () => {
+    expect(hasMediaPlaybackEvidence(legacyPlayback(), task)).toBe(true);
+    expect(hasMediaPlaybackEvidence(legacyPlayback(), task, scope)).toBe(false);
+    expect(hasMediaPlaybackEvidence(legacyPlayback().map(record => ({ ...record, ...scope, turnId: scope.requestId })), task, scope)).toBe(true);
   });
 
   it('preserves original request identity across persisted task receipts without laundering a conflicting envelope', () => {

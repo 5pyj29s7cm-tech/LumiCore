@@ -9,11 +9,13 @@ import {
   applyTaskPolicySnapshot,
   coalesceToolExecutionRecords,
   confirmedStepNeedsContinuation,
+  normalizeConversationTaskReceipt,
   recordsToTaskReceipts,
   taskCompletionFromReceipts,
   taskReceiptsToRecords,
   toolRecordSucceeded,
 } from '../server/cognition/task_execution_ledger';
+import { toolRecordIdempotencyKey } from '../server/tools/execution_envelope';
 
 const CUSTOMER_INTERNAL_EXECUTION_COPY = /(?:\u6b63\u5728\u505a\u4ec0\u4e48|\u5f53\u524d\u76ee\u6807|\u5df2\u5b8c\u6210\u4ec0\u4e48|\u5361\u5728\u54ea\u91cc|\u662f\u5426\u9700\u8981\u4f60\u64cd\u4f5c|\u4e0b\u4e00\u6b65|\u72b6\u6001|\u8bc1\u636e|\u5177\u4f53\u963b\u585e|\u6267\u884c\u56de\u9988)\s*[:\uff1a]|\u56de\u6267|target_mismatch|terminalVerification|\b(?:taskId|requestId|desktop_open|client_action|desktop_execution_plan_receipt|verified|blocked|failed)\b|No successful current-turn tool execution/iu;
 
@@ -22,6 +24,25 @@ function expectNaturalCustomerStatus(value: string): void {
 }
 
 describe('durable conversation task execution ledger', () => {
+  it.each(['source-idempotency-fixture', `custom:${'exact/'.repeat(50)}`])('preserves the original archive key through compact persistence: %s', idempotencyKey => {
+    const record = {
+      id: 'source-receipt', taskId: 'source-task', requestId: 'source-request', turnId: 'source-request',
+      idempotencyKey, name: 'read_file', arguments: { path: 'D:/isolated/fixture.txt' }, result: 'Synthetic fixture.',
+    };
+    const stored = JSON.parse(JSON.stringify(recordsToTaskReceipts([record])));
+    const normalized = normalizeConversationTaskReceipt(stored[0])!;
+    const restored = taskReceiptsToRecords([normalized])[0];
+    expect(restored).toMatchObject({ id: record.id, taskId: record.taskId, requestId: record.requestId, idempotencyKey });
+    expect(toolRecordIdempotencyKey(restored)).toBe(toolRecordIdempotencyKey(record));
+  });
+
+  it('keeps legacy receipts without explicit archive keys compatible with the existing computed key', () => {
+    const record = { name: 'read_file', arguments: { path: 'D:/isolated/legacy.txt' }, result: 'Legacy fixture.' };
+    const restored = taskReceiptsToRecords(JSON.parse(JSON.stringify(recordsToTaskReceipts([record]))))[0];
+    expect(restored.idempotencyKey).toBeUndefined();
+    expect(toolRecordIdempotencyKey(restored)).toBe(toolRecordIdempotencyKey(record));
+  });
+
   it('does not promote uncertain or target-mismatched actuation into success', () => {
     expect(toolRecordSucceeded({
       name: 'wechat_send_message',

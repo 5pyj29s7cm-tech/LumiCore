@@ -1880,7 +1880,7 @@ function playbackEpisode(value: unknown): string {
 }
 
 function requestedPlaybackContent(taskText: string): { title: string; episode: string } {
-  const text = compact(extractPrimaryTaskText(taskText));
+  const text = compact(extractPrimaryTaskText(taskText)).replace(/[。.!！]+$/u, '').trim();
   const episodeMatch = text.match(/第\s*[\d一二三四五六七八九十百零〇两]+\s*集|\bepisode\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b/iu); // i18n-allow: Requested episode identity.
   const episode = episodeMatch ? playbackEpisode(episodeMatch[0]) || `unresolved:${episodeMatch[0]}` : '';
   const quoted = text.match(/[《“"]([^》”"\n]{1,120})[》”"]/u)?.[1];
@@ -2036,24 +2036,34 @@ export function hasMediaPlaybackEvidence(
   taskText = '',
   currentTurn?: { requestId?: string; taskId?: string },
 ): boolean {
-  const successful = records.map((record, index) => ({ record, index }))
-    .filter(({ record }) => expandSuccessfulRecords([record]).length > 0);
+  const scoped = Boolean(currentTurn?.requestId || currentTurn?.taskId);
+  const successful = records.filter(record => {
+    if (scoped) {
+      if ((record as ToolExecutionRecord & { receiptScopeConflict?: boolean }).receiptScopeConflict === true) return false;
+      const requestIds = [record.requestId, record.envelope?.requestId].filter(Boolean);
+      const turnIds = [record.turnId, record.envelope?.turnId].filter(Boolean);
+      const taskIds = [record.taskId, record.envelope?.taskId].filter(Boolean);
+      // Scope the entire state machine, including its legacy actuation path.
+      // A previous request's playing state cannot settle this request's
+      // uncertain completion candidate or supply its player/input evidence.
+      if (currentTurn?.requestId && (requestIds.length === 0
+        || [...requestIds, ...turnIds].some(value => value !== currentTurn.requestId))) return false;
+      if (currentTurn?.taskId && (taskIds.length === 0
+        || taskIds.some(value => value !== currentTurn.taskId))) return false;
+    }
+    return expandSuccessfulRecords([record]).length > 0;
+  });
   const requested = requestedPlaybackContent(taskText);
   let target = requestedMediaPlayerTarget(taskText);
   if (/^(?:音乐|歌曲?|播放器|视频|music|song|player|video)$/iu.test(target)) target = ''; // i18n-allow: Generic player labels.
   let playerMatched = !target;
   let actuated = false;
   let verified = false;
-  for (const { record } of successful) {
+  for (const record of successful) {
     const observation = /^(?:desktop_open|browser_open_task|desktop_ui_snapshot|ocr_screen|ocr_region|desktop_capture_screen|computer_vision|desktop_active_window|get_active_window_info|computer_use)$/i.test(record.name);
     const action = isPlaybackActuation(record);
     if (!observation && !action) continue;
-    const requestIds = [record.requestId, record.envelope?.requestId].filter(Boolean);
-    const taskIds = [record.taskId, record.envelope?.taskId].filter(Boolean);
-    const currentObservation = observation && Boolean(currentTurn?.requestId)
-      && (record as ToolExecutionRecord & { receiptScopeConflict?: boolean }).receiptScopeConflict !== true
-      && requestIds.length > 0 && requestIds.every(value => value === currentTurn!.requestId)
-      && (!currentTurn?.taskId || (taskIds.length > 0 && taskIds.every(value => value === currentTurn.taskId)));
+    const currentObservation = observation && Boolean(currentTurn?.requestId);
     if (record.name === 'computer_use') {
       const executedTask = String(record.arguments?.task || record.arguments?.prompt || '');
       const executedContent = requestedPlaybackContent(executedTask);

@@ -76,6 +76,8 @@ export interface ConversationTaskReceipt {
   taskId?: string;
   turnId?: string;
   requestId?: string;
+  /** Preserve the exact archive deduplication identity across task hydration. */
+  idempotencyKey?: string;
   /** Preserve conflicting source fences instead of laundering them on hydration. */
   scopeConflict?: true;
   key: string;
@@ -265,6 +267,8 @@ export function normalizeConversationTaskReceipt(value: unknown): ConversationTa
   return {
     id: compact(candidate.id, 180) || key,
     ...receiptScope(candidate),
+    ...(typeof candidate.idempotencyKey === 'string' && candidate.idempotencyKey
+      ? { idempotencyKey: candidate.idempotencyKey } : {}),
     key,
     name,
     arguments: candidate.arguments && typeof candidate.arguments === 'object' && !Array.isArray(candidate.arguments)
@@ -515,6 +519,8 @@ export function recordsToTaskReceipts(
     return ({
     id: compact(record.id, 180) || `receipt_${Date.now()}_${index}`,
     ...receiptScope(record),
+    ...(typeof record.idempotencyKey === 'string' && record.idempotencyKey
+      ? { idempotencyKey: record.idempotencyKey } : {}),
     key: toolRecordKey(record),
     name: compact(record.name, 160),
     arguments: stableValue(record.arguments || {}) as Record<string, unknown>,
@@ -573,6 +579,7 @@ export function taskReceiptsToRecords(receipts: ConversationTaskReceipt[] = []):
     ...(receipt.taskId ? { taskId: receipt.taskId } : {}),
     ...(receipt.turnId ? { turnId: receipt.turnId } : {}),
     ...(receipt.requestId ? { requestId: receipt.requestId } : {}),
+    ...(receipt.idempotencyKey ? { idempotencyKey: receipt.idempotencyKey } : {}),
     ...(receipt.scopeConflict ? { receiptScopeConflict: true } : {}),
     name: receipt.name,
     arguments: receipt.arguments || {},
