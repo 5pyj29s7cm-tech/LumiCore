@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { claimVoiceCapture, releaseVoiceCapture } from '@/lib/voiceCaptureLease';
 import {
   sanitizeAgentResponseTextForDisplay,
   shouldDisplayAgentResponse,
@@ -20,6 +21,7 @@ export type CallState = 'idle' | 'connecting' | 'listening' | 'thinking' | 'spea
 const THINKING_WATCHDOG_MS = 45000;
 
 export interface VoiceTranscriptMeta {
+  requestId?: string;
   speakerLabel?: string | null;
   speakerConfidence?: number;
   speakerSource?: string;
@@ -37,7 +39,9 @@ export interface VoiceTranscriptEventDetail extends VoiceTranscriptMeta {
 interface UseVoiceCallOptions {
   socket: any;
   onTranscript?: (text: string, isFinal: boolean, meta?: VoiceTranscriptMeta) => void;
-  onResponse?: (text: string) => void;
+  onResponse?: (text: string, meta?: { requestId?: string }) => void;
+  /** Private personas do not feed the main Lumi perception/learning bus. */
+  privateCapture?: boolean;
   canSendMicAudio?: () => boolean;
   /** Keep a compatibility hook mounted without owning sockets or microphone state. */
   disabled?: boolean;
@@ -201,6 +205,7 @@ export function useVoiceCall({
   onResponse,
   canSendMicAudio,
   disabled = false,
+  privateCapture = false,
 }: UseVoiceCallOptions) {
   const [callState, setCallState] = useState<CallState>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -212,6 +217,12 @@ export function useVoiceCall({
   const audioContext = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const rawAudioLevelRef = useRef(0);
+  const outputLevelRef = useRef(0);
+  const outputAnalyserRef = useRef<AnalyserNode | null>(null);
+  const outputMeterTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const captureLeaseToken = useRef(Symbol('voice-capture'));
+  const privateCaptureRef = useRef(privateCapture);
+  privateCaptureRef.current = privateCapture;
   const proactiveSource = useRef<AudioBufferSourceNode | null>(null);
   const proactiveContext = useRef<AudioContext | null>(null);
   const proactiveStateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -292,7 +303,22 @@ export function useVoiceCall({
       ttsContext.current = new AudioContext();
       void applyPreferredVoiceOutputDevice(ttsContext.current);
       ttsGainNode.current = ttsContext.current.createGain();
-      ttsGainNode.current.connect(ttsContext.current.destination);
+      const analyser = ttsContext.current.createAnalyser?.();
+      if (analyser) {
+        analyser.fftSize = 256;
+        outputAnalyserRef.current = analyser;
+        ttsGainNode.current.connect(analyser);
+        analyser.connect(ttsContext.current.destination);
+        const samples = new Uint8Array(analyser.fftSize);
+        if (outputMeterTimerRef.current) clearInterval(outputMeterTimerRef.current);
+        outputMeterTimerRef.current = setInterval(() => {
+          if (outputAnalyserRef.current !== analyser || !isConversationTtsPlaying.current) { outputLevelRef.current = 0; return; }
+          analyser.getByteTimeDomainData(samples);
+          let total = 0;
+          for (const sample of samples) total += ((sample - 128) / 128) ** 2;
+          outputLevelRef.current = Math.min(1, Math.sqrt(total / samples.length));
+        }, 50);
+      } else ttsGainNode.current.connect(ttsContext.current.destination);
       nextStartTime.current = 0;
     }
     return ttsContext.current;
@@ -300,6 +326,7 @@ export function useVoiceCall({
 
   const stopAllPlayback = useCallback(() => {
     playbackGenerationRef.current++;
+    outputLevelRef.current = 0;
     proactivePlaybackGenerationRef.current++;
     playbackStartTime.current = 0;
     // Clear sentence audio queue
@@ -339,6 +366,10 @@ export function useVoiceCall({
 
   const disposePlaybackContexts = useCallback(() => {
     stopAllPlayback();
+    if (outputMeterTimerRef.current) clearInterval(outputMeterTimerRef.current);
+    outputMeterTimerRef.current = null;
+    try { outputAnalyserRef.current?.disconnect(); } catch {}
+    outputAnalyserRef.current = null;
     const gain = ttsGainNode.current;
     ttsGainNode.current = null;
     try { gain?.disconnect(); } catch {}
@@ -349,7 +380,7 @@ export function useVoiceCall({
   }, [stopAllPlayback]);
 
   const cleanupCapture = useCallback(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && !privateCaptureRef.current) {
       window.dispatchEvent(new CustomEvent('lumi:voice-capture-state', { detail: { active: false } }));
     }
     if (streamRef.current) {
@@ -403,7 +434,7 @@ export function useVoiceCall({
         const chunk = new Uint8Array(int16.buffer);
         const frameRms = Math.sqrt(frameSum / Math.max(1, input.length));
         rawAudioLevelRef.current = frameRms;
-        window.dispatchEvent(new CustomEvent('lumi:voice-audio-level', {
+        if (!privateCaptureRef.current) window.dispatchEvent(new CustomEvent('lumi:voice-audio-level', {
           detail: { level: frameRms },
         }));
 
@@ -428,7 +459,7 @@ export function useVoiceCall({
             ttsBargeInFramesRef.current = frameRms > adaptiveThreshold
               ? ttsBargeInFramesRef.current + 1
               : 0;
-            if (ttsBargeInFramesRef.current > 0 && !transcriptionOnlyRef.current) {
+            if (ttsBargeInFramesRef.current > 0 && !transcriptionOnlyRef.current && !privateCaptureRef.current) {
               window.dispatchEvent(new CustomEvent('lumi:voice-pcm-frame', {
                 detail: { samples: new Float32Array(input), rms: frameRms },
               }));
@@ -452,7 +483,7 @@ export function useVoiceCall({
         const micAllowed = transcriptionOnlyRef.current || (canSendMicAudioRef.current?.() ?? true);
         if (!micAllowed) return;
 
-        if (!transcriptionOnlyRef.current) {
+        if (!transcriptionOnlyRef.current && !privateCaptureRef.current) {
           window.dispatchEvent(new CustomEvent('lumi:voice-pcm-frame', {
             detail: { samples: new Float32Array(input), rms: frameRms },
           }));
@@ -485,7 +516,7 @@ export function useVoiceCall({
       audioContext.current = nextContext;
       scriptProcessorRef.current = scriptProcessor;
       lastCaptureFrameAtRef.current = Date.now();
-      window.dispatchEvent(new CustomEvent('lumi:voice-capture-state', { detail: { active: true } }));
+      if (!privateCaptureRef.current) window.dispatchEvent(new CustomEvent('lumi:voice-capture-state', { detail: { active: true } }));
     } catch (error) {
       stream.getTracks().forEach(track => track.stop());
       void closeAudioContext(nextContext);
@@ -536,6 +567,7 @@ export function useVoiceCall({
 
   const endCall = useCallback((options: EndCallOptions = {}) => {
     callGenerationRef.current++;
+    releaseVoiceCapture(captureLeaseToken.current);
     isCallActive.current = false;
     clearPassiveTimers();
     clearThinkingWatchdog();
@@ -625,7 +657,7 @@ export function useVoiceCall({
     const onAudioConfirm = (data: { text: string }) => {
       if (!isCallActive.current) return;
       setTranscript(data.text);
-      if (typeof window !== 'undefined') {
+      if (typeof window !== 'undefined' && !privateCaptureRef.current) {
         window.dispatchEvent(new CustomEvent<VoiceTranscriptEventDetail>(LUMI_VOICE_TRANSCRIPT_EVENT, {
           detail: { text: data.text, isFinal: true, source: 'confirm' },
         }));
@@ -855,7 +887,7 @@ export function useVoiceCall({
       if (disconnectTimer.current) { clearTimeout(disconnectTimer.current); disconnectTimer.current = null; }
       if (prevCallState.current === 'passive') setCallState('listening');
       setTranscript(data.text);
-      if (typeof window !== 'undefined') {
+      if (typeof window !== 'undefined' && !privateCaptureRef.current) {
         window.dispatchEvent(new CustomEvent<VoiceTranscriptEventDetail>(LUMI_VOICE_TRANSCRIPT_EVENT, {
           detail: {
             text: data.text,
@@ -869,6 +901,7 @@ export function useVoiceCall({
         }));
       }
       onTranscript?.(data.text, data.isFinal, {
+        requestId: data.requestId,
         speakerLabel: data.speakerLabel,
         speakerConfidence: data.speakerConfidence,
         speakerSource: data.speakerSource,
@@ -888,7 +921,7 @@ export function useVoiceCall({
       if (!publicText) return;
       setTranscript(''); // Clear user transcript when AI starts responding
       setResponseText(publicText);
-      onResponse?.(publicText);
+      onResponse?.(publicText, { requestId: data.requestId });
     };
 
     const onAudioError = (data: { message: string; sessionId?: string }) => {
@@ -985,7 +1018,7 @@ export function useVoiceCall({
       if (!publicText) return;
       setTranscript('');
       setResponseText(publicText);
-      onResponse?.(publicText);
+      onResponse?.(publicText, { requestId: data.requestId });
     };
 
     const onAudioWorkProgress = (data: { text?: string; requestId?: string; active?: boolean }) => {
@@ -1151,7 +1184,7 @@ export function useVoiceCall({
 
   // Push audio emotion perception events when call state changes
   useEffect(() => {
-    if (disabled || !socket?.connected || callState === 'idle' || callState === 'connecting') return;
+    if (privateCapture || disabled || !socket?.connected || callState === 'idle' || callState === 'connecting') return;
     const emotionMap: Record<string, { emotion: string; intensity: number }> = {
       listening: { emotion: 'attentive', intensity: 0.4 },
       thinking: { emotion: 'focused', intensity: 0.6 },
@@ -1161,11 +1194,12 @@ export function useVoiceCall({
     if (entry) {
       socket.emit('perception:audio_emotion', entry);
     }
-  }, [callState, disabled, socket]);
+  }, [callState, disabled, privateCapture, socket]);
 
   const startCall = useCallback(async (voiceId?: string, personalityId: string = 'lumi', agentId?: string, options: StartCallOptions = {}) => {
     if (disabled) return;
     if (isCallActive.current || startInFlightRef.current) return;
+    claimVoiceCapture(captureLeaseToken.current, endCall);
     const requestedVoiceId = normalizeSelectedVoiceId(voiceId);
     if (voiceId !== undefined) preferredVoiceIdRef.current = requestedVoiceId;
     const generation = ++callGenerationRef.current;
@@ -1225,12 +1259,13 @@ export function useVoiceCall({
       isCallActive.current = false;
       transcriptionOnlyRef.current = false;
       disposePlaybackContexts();
+      releaseVoiceCapture(captureLeaseToken.current);
       setError(err.message || 'Failed to start voice call');
       setCallState('idle');
     } finally {
       startInFlightRef.current = false;
     }
-  }, [cleanupCapture, disabled, disposePlaybackContexts, ensureTtsContext, installMicrophoneCapture]);
+  }, [cleanupCapture, disabled, disposePlaybackContexts, endCall, ensureTtsContext, installMicrophoneCapture]);
 
   const switchVoice = useCallback((voiceId?: string): boolean => {
     const normalizedVoiceId = normalizeSelectedVoiceId(voiceId);
@@ -1309,6 +1344,7 @@ export function useVoiceCall({
   }, []);
 
   useEffect(() => () => {
+    releaseVoiceCapture(captureLeaseToken.current);
     callGenerationRef.current++;
     if (isCallActive.current && activeStartPayload.current) {
       socketRef.current?.emit('audio:stop', {
@@ -1362,6 +1398,7 @@ export function useVoiceCall({
   useEffect(() => {
     if (!socket || callState === 'idle') return;
     const interval = setInterval(() => {
+      if (privateCaptureRef.current) return;
       socket.emit('ambient:noise_level', {
         rms: rawAudioLevelRef.current,
         isSpeaking: isTtsPlaying.current,
@@ -1386,6 +1423,8 @@ export function useVoiceCall({
       ? Math.floor((Date.now() - callStartTime.current) / 1000)
       : 0,
     connectionQuality,
+    inputLevelRef: rawAudioLevelRef,
+    outputLevelRef,
     startCall,
     startCallRef,
     switchVoice,

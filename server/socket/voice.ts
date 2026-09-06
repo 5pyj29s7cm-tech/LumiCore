@@ -9,6 +9,8 @@ import path from "path";
 import { randomUUID } from "node:crypto";
 import { flushDBOrThrow, readDB, writeDB } from "../../db_layer";
 import { logger } from "../../logger";
+import { createVoiceCallAdmission } from './voice_call_admission';
+import { registerMemoryAvatarVoiceHandlers } from './memory_avatar_voice';
 import { captureChatAuthorization } from './chat_authorization';
 import { getMember } from '../org/db';
 import { beginMeetingCapture, appendMeetingAudio, takeMeetingRecording, findPausedMeetingRecording, releasePausedMeetingRecording, readMeetingPcm, removeMeetingRecordingFiles, normalizeMeetingId, type MeetingCapture, type MeetingRecording } from './meeting_recordings';
@@ -5486,6 +5488,10 @@ export function registerVoiceHandlers(
     }
   };
 
+  const callAdmission = createVoiceCallAdmission();
+  let pendingStandardStart: { sessionId: string; cancelled: boolean } | undefined;
+  registerMemoryAvatarVoiceHandlers(socket, llmGetters, getUserId, callAdmission);
+
   socket.on("audio:start", async (data: {
     voiceId?: string;
     personalityId?: string;
@@ -5499,13 +5505,24 @@ export function registerVoiceHandlers(
     captureSessionId?: string;
   }) => {
     logger.info(`[Audio] Voice call started by ${socket.id}`);
+    const pendingOwner = { sessionId: normalizeVoiceSessionId(data.sessionId), cancelled: false };
+    pendingStandardStart = pendingOwner;
+    let admittedSession: AudioSession | undefined;
+    const candidate = callAdmission.claim(async () => {
+      pendingOwner.cancelled = true;
+      if (admittedSession) await stopVoiceCall(admittedSession, { source: 'voice_call_replaced', error: { code: 'CALL_REPLACED', message: 'Another voice call started.' } });
+    }, 'lumi');
+    const reservation = candidate instanceof Promise ? await candidate : candidate;
+    if (!reservation.isCurrent() || !socket.connected || pendingOwner.cancelled || pendingStandardStart !== pendingOwner) { reservation.release(); return; }
+    pendingStandardStart = undefined;
     const session = getAudioSession(socket);
+    admittedSession = session;
     const startControlGeneration = ++session.callControlGeneration;
     session.stopAuthorizationWatch?.();
     session.stopAuthorizationWatch = undefined;
     // Reserve the incoming id before waiting, so a stop for this pending start
     // can cancel it and old STT callbacks cannot admit work into it.
-    session.sessionId = normalizeVoiceSessionId(data.sessionId);
+    session.sessionId = pendingOwner.sessionId;
     const voiceStartSessionId = session.sessionId;
     session.isActive = false;
     if (session.silenceTimer) { clearTimeout(session.silenceTimer); session.silenceTimer = null; }
@@ -6430,6 +6447,11 @@ export function registerVoiceHandlers(
 
   socket.on("audio:stop", async (data?: { refineTranscript?: boolean; preserveMeeting?: boolean; refinementId?: string; sessionId?: string }) => {
     logger.info(`[Audio] Voice call ended by ${socket.id}`);
+    if (pendingStandardStart && (!data?.sessionId || data.sessionId === pendingStandardStart.sessionId)) {
+      pendingStandardStart.cancelled = true;
+      pendingStandardStart = undefined;
+      return;
+    }
     const session = getAudioSession(socket);
     if (data?.sessionId && session.sessionId && data.sessionId !== session.sessionId) return;
     await stopVoiceCall(session, { source: 'voice_call_stopped', refineTranscript: data?.refineTranscript, preserveMeeting: data?.preserveMeeting, refinementId: data?.refinementId });
@@ -6741,6 +6763,8 @@ export function registerVoiceHandlers(
   });
 
   socket.on("disconnect", async () => {
+    if (pendingStandardStart) pendingStandardStart.cancelled = true;
+    pendingStandardStart = undefined;
     const pausedSession = getAudioSession(socket);
     if (pausedSession.userId && pausedSession.meetingId) {
       releasePausedMeetingRecording(getMeetingAudioDir({ userId: pausedSession.userId, domain: pausedSession.domain, orgId: pausedSession.orgId }), pausedSession.meetingId);
