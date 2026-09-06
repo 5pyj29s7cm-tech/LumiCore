@@ -80,6 +80,8 @@ export const MIGRATIONS: Migration[] = [
   { version: 42, description: 'Remove retired external AI session fan-out', sql: `DROP TABLE IF EXISTS external_ai_sessions` },
   { version: 43, description: 'Remove retired external AI dispatch fan-out', sql: `DROP TABLE IF EXISTS external_ai_dispatches` },
   { version: 44, description: 'Remove retired external AI answer fan-in', sql: `DROP TABLE IF EXISTS external_ai_answers` },
+  { version: 45, description: 'Bind command center plans to accepted organization membership', sql: `ALTER TABLE command_center_plans ADD COLUMN membershipAuthorization TEXT NOT NULL DEFAULT ''` },
+  { version: 46, description: 'Expose blocked command center plan authorization', sql: `ALTER TABLE command_center_plans ADD COLUMN authorizationBlockedReason TEXT NOT NULL DEFAULT ''` },
 ];
 
 // Indexes are safe to create repeatedly

@@ -1004,7 +1004,9 @@ function createTables(): Promise<void> {
         lastRunAt TEXT NOT NULL DEFAULT '',
         lastRuntimeTaskId TEXT NOT NULL DEFAULT '',
         createdAt TEXT NOT NULL,
-        updatedAt TEXT NOT NULL
+        updatedAt TEXT NOT NULL,
+        membershipAuthorization TEXT NOT NULL DEFAULT '',
+        authorizationBlockedReason TEXT NOT NULL DEFAULT ''
       );
 
       CREATE TABLE IF NOT EXISTS autonomous_tasks (
@@ -1638,7 +1640,11 @@ async function loadMemoryDB(): Promise<void> {
           : [];
       } catch { return []; }
     }),
-    commandCenterPlans: commandCenterPlansRaw || [],
+    commandCenterPlans: (commandCenterPlansRaw || []).map((row: any) => {
+      let membershipAuthorization;
+      try { membershipAuthorization = JSON.parse(row.membershipAuthorization || 'null') || undefined; } catch { /* Missing or invalid authority fails closed. */ }
+      return { ...row, membershipAuthorization };
+    }),
     autonomousTasks: (autonomousTasksRaw || []).flatMap((row: any) => {
       try {
         const task = JSON.parse(row.payload || '{}');
@@ -2306,8 +2312,8 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
     },
     {
       name: 'command_center_plans',
-      createSQL: `CREATE TABLE _temp_command_center_plans (id TEXT PRIMARY KEY, userId TEXT NOT NULL, domain TEXT NOT NULL DEFAULT 'personal', orgId TEXT NOT NULL DEFAULT '', conversationId TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL, title TEXT NOT NULL, instruction TEXT NOT NULL, cadence TEXT NOT NULL DEFAULT 'none', timeOfDay TEXT NOT NULL DEFAULT '09:00', dayOfWeek INTEGER NOT NULL DEFAULT 1, dayOfMonth INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'active', nextRunAt TEXT NOT NULL DEFAULT '', lastRunAt TEXT NOT NULL DEFAULT '', lastRuntimeTaskId TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_command_center_plans (id, userId, domain, orgId, conversationId, kind, title, instruction, cadence, timeOfDay, dayOfWeek, dayOfMonth, status, nextRunAt, lastRunAt, lastRuntimeTaskId, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      createSQL: `CREATE TABLE _temp_command_center_plans (id TEXT PRIMARY KEY, userId TEXT NOT NULL, domain TEXT NOT NULL DEFAULT 'personal', orgId TEXT NOT NULL DEFAULT '', conversationId TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL, title TEXT NOT NULL, instruction TEXT NOT NULL, cadence TEXT NOT NULL DEFAULT 'none', timeOfDay TEXT NOT NULL DEFAULT '09:00', dayOfWeek INTEGER NOT NULL DEFAULT 1, dayOfMonth INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'active', nextRunAt TEXT NOT NULL DEFAULT '', lastRunAt TEXT NOT NULL DEFAULT '', lastRuntimeTaskId TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, membershipAuthorization TEXT NOT NULL DEFAULT '', authorizationBlockedReason TEXT NOT NULL DEFAULT '')`,
+      insertSQL: `INSERT INTO _temp_command_center_plans (id, userId, domain, orgId, conversationId, kind, title, instruction, cadence, timeOfDay, dayOfWeek, dayOfMonth, status, nextRunAt, lastRunAt, lastRuntimeTaskId, createdAt, updatedAt, membershipAuthorization, authorizationBlockedReason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       rows: () => (memoryDB.commandCenterPlans || []).map((plan: any) => [
         plan.id,
         plan.userId,
@@ -2327,6 +2333,8 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
         plan.lastRuntimeTaskId || '',
         plan.createdAt,
         plan.updatedAt,
+        plan.membershipAuthorization ? JSON.stringify(plan.membershipAuthorization) : '',
+        plan.authorizationBlockedReason || '',
       ]),
     },
     {

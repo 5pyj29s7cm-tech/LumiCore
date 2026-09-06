@@ -697,11 +697,11 @@ export async function executeNextAutonomousTask(
 
   const task = dequeue(userId, options.taskId);
   if (!task) return { executed: false };
-  // The built-in autonomous cycle can consume the same durable manual request.
-  // Its authority must travel with that task, not only with a caller callback.
-  const manualWorkPlan = task.domain === 'work' && task.source === 'user_request'
+  // Both scheduled and manual plan runs carry the original membership identity.
+  // The built-in cycle must enforce it even without a caller authority callback.
+  const organizationPlanTask = task.domain === 'work'
     && Boolean(task.planId && task.idempotencyKey?.startsWith(`command-center-plan:${task.planId}:`));
-  if (manualWorkPlan) {
+  if (organizationPlanTask) {
     taskIsAuthorized = () => isOrganizationMembershipAuthorizationCurrent(task.membershipAuthorization, task.orgId || '', task.userId);
     if (!isAuthorized()) {
       cancelTask(task.id, task.userId);
@@ -733,7 +733,7 @@ export async function executeNextAutonomousTask(
     if (authorizationWasRevoked()) throw new Error('Task authorization was revoked');
   };
   if (!registerAutonomousTaskExecutor(task.id, running.leaseId, abortExecution)) return { executed: false };
-  const membershipAuthority = manualWorkPlan
+  const membershipAuthority = organizationPlanTask
     ? watchOrganizationMembershipAuthorization(task.membershipAuthorization, task.orgId || '', task.userId, () => {
         cancelTask(task.id, task.userId);
         abortExecution('Task organization membership was revoked');

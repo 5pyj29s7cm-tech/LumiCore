@@ -5,6 +5,7 @@ import { persistAutonomousTaskQueue } from '../autonomy/task_queue';
 import { dispatchManualCommandCenterPlanTasks } from '../command_center/runtime';
 import { requireAuth, resolveDomain } from '../middleware/auth';
 import {
+  CommandCenterPlanAuthorizationError,
   createCommandCenterPlan,
   deleteCommandCenterPlan,
   listCommandCenterPlans,
@@ -55,7 +56,10 @@ export function mountCommandCenterPlanRoutes(router: Router, runtime?: { io: Ser
           .catch(() => console.warn('[CommandCenter] Requested plan execution is waiting for a successful runtime/save retry.'));
       }
       res.status(result.reused ? 200 : 202).json(result);
-    } catch {
+    } catch (error) {
+      if (error instanceof CommandCenterPlanAuthorizationError) {
+        return res.status(403).json({ error: error.message, code: 'plan_authorization_required', reason: error.reason });
+      }
       res.status(503).json({ error: 'The plan request could not be saved. Retry the same plan to resume without creating a duplicate.' });
     }
   });
