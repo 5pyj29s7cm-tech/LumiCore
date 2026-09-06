@@ -18,7 +18,7 @@ import { perceptionEvents } from "../socket/shared";
 import { deviceRegistry, projectPublicDevice } from "../devices";
 import { personalityRegistry } from "../personality";
 import { initMemorySync, initMemoryAssociations } from "../memory";
-import { handleDesktopRelayResult } from "../socket/desktop_relay";
+import { handleDesktopRelayResult, registerDesktopRelayRecoveryHandlers } from "../socket/desktop_relay";
 import { getMember } from "../org/db";
 import { resolveSocketScope, runtimeScopeStorageKey } from "../socket/scope";
 import {
@@ -200,12 +200,15 @@ export function initSocketRuntime({ io, jwtSecret, llm }: SocketContext) {
     });
 
     const getUserId = (s: any) => getUserIdFromSocket(s, jwtSecret) || uid;
+    registerDesktopRelayRecoveryHandlers(socket, () => getUserId(socket));
 
     // Optional diagnostics. Event payloads may contain private user content.
     socket.onAny((event, ...args) => {
       if (event.startsWith('tool:desktop_result:')) {
         const correlationId = event.slice('tool:desktop_result:'.length);
-        handleDesktopRelayResult(correlationId, args[0] || {}, socket.id);
+        const accepted = handleDesktopRelayResult(correlationId, args[0] || {}, socket.id);
+        const acknowledge = args.at(-1);
+        if (typeof acknowledge === 'function') acknowledge({ accepted });
       }
       const noisyEvents = new Set([
         'audio:chunk',

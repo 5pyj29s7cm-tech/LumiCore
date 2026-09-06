@@ -8,6 +8,10 @@ import {
 } from '@/services/desktopAutomationActivity';
 import { desktopCommandRelayOutput } from '@/lib/desktopCommandReceipt';
 import { getNativeClientIdentity } from '@/services/nativeClientIdentity';
+import { toast } from 'sonner';
+import { appConfirm } from '@/lib/appConfirm';
+import { getLocale } from '@/i18n/runtime';
+import { desktopExecutionRecoveryCopy } from '@/i18n/locales/desktopExecutionRecovery';
 
 const isTauri = isTauriRuntime();
 let cursorGlowWatchdog: ReturnType<typeof setTimeout> | null = null;
@@ -22,6 +26,7 @@ type DesktopExecAcknowledgement = (result: {
   accepted: boolean;
   correlationId: string;
 }) => void;
+type DesktopTerminal = { output?: string; error?: string; stopped?: boolean };
 
 type SharedDesktopSocketRuntime = {
   socket: Socket | null;
@@ -31,6 +36,13 @@ type SharedDesktopSocketRuntime = {
   cancelHandler: ((data: { correlationId?: string; name?: string }) => void) | null;
   activeExecutions: Set<string>;
   cancelledExecutions: Set<string>;
+  terminals: Map<string, DesktopTerminal>;
+  completed: Map<string, number>;
+  recoveryTimer?: ReturnType<typeof setInterval>;
+  recoveryToasts?: Set<string>;
+  unknownExecutions?: Set<string>;
+  normalUnknown?: Set<string>;
+  drainUnknown?: Set<string>;
 };
 
 const SHARED_DESKTOP_SOCKET_RUNTIME_KEY = '__lumicoreSharedDesktopSocketRuntimeV1';
@@ -48,6 +60,8 @@ function getSharedDesktopSocketRuntime(): SharedDesktopSocketRuntime {
       cancelHandler: null,
       activeExecutions: new Set<string>(),
       cancelledExecutions: new Set<string>(),
+      terminals: new Map(),
+      completed: new Map(),
     };
   }
   return host[SHARED_DESKTOP_SOCKET_RUNTIME_KEY];
@@ -56,6 +70,138 @@ function getSharedDesktopSocketRuntime(): SharedDesktopSocketRuntime {
 const sharedDesktopSocketRuntime = getSharedDesktopSocketRuntime();
 const activeDesktopExecutions = sharedDesktopSocketRuntime.activeExecutions;
 const cancelledDesktopExecutions = sharedDesktopSocketRuntime.cancelledExecutions;
+sharedDesktopSocketRuntime.terminals ||= new Map();
+sharedDesktopSocketRuntime.completed ||= new Map();
+sharedDesktopSocketRuntime.recoveryToasts ||= new Set();
+sharedDesktopSocketRuntime.unknownExecutions ||= new Set();
+sharedDesktopSocketRuntime.normalUnknown ||= new Set();
+sharedDesktopSocketRuntime.drainUnknown ||= new Set();
+function updateRecoveryUnknowns(kind: 'normalUnknown' | 'drainUnknown', ids: Set<string>) {
+  sharedDesktopSocketRuntime[kind] = ids;
+  const union = new Set([...sharedDesktopSocketRuntime.normalUnknown!, ...sharedDesktopSocketRuntime.drainUnknown!]);
+  for (const id of sharedDesktopSocketRuntime.unknownExecutions!) if (!union.has(id)) clearRecoveryPrompt(id);
+  sharedDesktopSocketRuntime.unknownExecutions = union;
+}
+function clearRecoveryPrompt(id: string) {
+  toast.dismiss('desktop-recovery-' + id);
+  sharedDesktopSocketRuntime.recoveryToasts!.delete(id);
+  sharedDesktopSocketRuntime.unknownExecutions!.delete(id);
+}
+function clearRecoveryPrompts() {
+  for (const id of sharedDesktopSocketRuntime.recoveryToasts!) clearRecoveryPrompt(id);
+}
+function showRecoveryPrompt(socket: Socket, connectionId: string | undefined, id: string, drainOnly = false) {
+  const current = () => socket.connected && socket.id === connectionId && sharedDesktopSocketRuntime.socket === socket
+    && sharedDesktopSocketRuntime.unknownExecutions!.has(id);
+  if (!current() || sharedDesktopSocketRuntime.recoveryToasts!.has(id)) return;
+  sharedDesktopSocketRuntime.recoveryToasts!.add(id);
+  const copy = desktopExecutionRecoveryCopy[getLocale()];
+  toast.warning(copy.title, { id: 'desktop-recovery-' + id, description: copy.detail, duration: Infinity,
+    action: { label: copy.inspect, onClick: () => {
+      if (!current()) return;
+      void appConfirm({ title: copy.confirmTitle, message: copy.confirmMessage, confirmText: copy.confirm, cancelText: copy.cancel })
+        .then(confirmed => {
+          if (!confirmed || !current()) return;
+          socket.emit('tool:desktop_authorize_stop_ack', { correlationId: id, drainOnly }, async (authorization?: { ok?: boolean; nativeCommand?: boolean }) => {
+            if (!current() || authorization?.ok !== true) return;
+            if (authorization.nativeCommand) {
+              try {
+                const { invoke } = await import('@tauri-apps/api/core');
+                if (!current()) return;
+                const acknowledged = await invoke<boolean>('acknowledge_unknown_command_stop', { commandId: id });
+                if (!current()) return;
+                if (!acknowledged) { toast.warning(copy.waitNative); return; }
+              } catch { if (current()) toast.warning(copy.waitNative); return; }
+            }
+            if (!current()) return;
+            socket.emit(drainOnly ? 'tool:desktop_drain_confirm_stopped' : 'tool:desktop_confirm_stopped', { correlationId: id, confirmation: 'I_HAVE_VERIFIED_THE_COMMAND_HAS_STOPPED' }, (result?: { ok?: boolean }) => {
+              if (current() && result?.ok) acknowledgeDesktopTerminal(id);
+            });
+          });
+        }).finally(() => sharedDesktopSocketRuntime.recoveryToasts!.delete(id));
+    } },
+  });
+}
+function acknowledgeDesktopTerminal(id: string) {
+  clearRecoveryPrompt(id);
+  sharedDesktopSocketRuntime.normalUnknown!.delete(id);
+  sharedDesktopSocketRuntime.drainUnknown!.delete(id);
+  sharedDesktopSocketRuntime.terminals.delete(id);
+  sharedDesktopSocketRuntime.completed.set(id, Date.now());
+}
+function deliverDesktopTerminal(socket: Socket, id: string, terminal: DesktopTerminal) {
+  if (!socket.connected || sharedDesktopSocketRuntime.socket !== socket) return;
+  const connectionId = socket.id;
+  socket.emit(`tool:desktop_result:${id}`, terminal, (result?: { accepted?: boolean }) => {
+    if (socket.id === connectionId && sharedDesktopSocketRuntime.socket === socket && result?.accepted === true) acknowledgeDesktopTerminal(id);
+  });
+}
+function recoverDesktopDrains(socket: Socket) {
+  const connectionId = socket.id;
+  socket.emit('tool:desktop_drain_resume', {}, async (result?: any) => {
+    const current = () => socket.connected && socket.id === connectionId && sharedDesktopSocketRuntime.socket === socket;
+    if (!current() || result?.ok !== true || !Array.isArray(result.executions)) return;
+    updateRecoveryUnknowns('drainUnknown', new Set<string>(result.executions.filter((entry: any) => entry.unknown).map((entry: any) => String(entry.correlationId))));
+    for (const entry of result.executions.slice(0, 512)) {
+      if (!current()) return;
+      const id = String(entry?.correlationId || '');
+      if (!id) continue;
+      let stopped = sharedDesktopSocketRuntime.terminals.has(id) && sharedDesktopSocketRuntime.terminals.get(id)?.stopped !== false;
+      if (entry.nativeCommand) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          if (!current()) return;
+          await invoke('cancel_command', { commandId: id });
+          if (!current()) return;
+          const saved = await invoke<{ output: string } | null>('get_command_result', { commandId: id });
+          if (!current()) return;
+          stopped = Boolean(saved && !saved.output?.includes('[outcome_unknown]'));
+        } catch { /* Keep the physical hold; never start or disclose the command. */ }
+      }
+      if (stopped) socket.emit('tool:desktop_drain_result', { correlationId: id, stopped: true }, (reply?: { ok?: boolean }) => {
+        if (current() && reply?.ok) acknowledgeDesktopTerminal(id);
+      });
+      else if (entry.unknown && current()) {
+        sharedDesktopSocketRuntime.unknownExecutions!.add(id);
+        showRecoveryPrompt(socket, connectionId, id, true);
+      }
+    }
+  });
+}
+function recoverDesktopExecutions(socket: Socket) {
+  if (!isTauri || !socket.connected || sharedDesktopSocketRuntime.socket !== socket) return;
+  const connectionId = socket.id;
+  recoverDesktopDrains(socket);
+  socket.emit('tool:desktop_resume', {}, async (result?: any) => {
+    const current = () => socket.connected && socket.id === connectionId && sharedDesktopSocketRuntime.socket === socket;
+    if (!current() || result?.ok !== true || !Array.isArray(result.executions)) return;
+    const unknownIds = new Set<string>(result.executions.filter((entry: any) => entry.state === 'outcome_unknown').map((entry: any) => String(entry.correlationId)));
+    updateRecoveryUnknowns('normalUnknown', unknownIds);
+    for (const entry of result.executions.slice(0, 512)) {
+      if (!current()) return;
+      const id = String(entry?.correlationId || '');
+      if (!id) continue;
+      if (entry.state === 'acknowledged') { acknowledgeDesktopTerminal(id); continue; }
+      if (entry.cancel) desktopCancelHandler({ correlationId: id, name: entry.name });
+      let terminal = sharedDesktopSocketRuntime.terminals.get(id);
+      if ((!terminal || terminal.stopped === false) && entry.name === 'desktop_run_command') {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          if (!current()) return;
+          const saved = await invoke<{ success: boolean; output: string } | null>('get_command_result', { commandId: id });
+          if (!current()) return;
+          if (saved) terminal = saved.success ? { output: desktopCommandRelayOutput(saved, id) }
+            : { error: saved.output || 'Native command failed', stopped: !saved.output?.includes('[outcome_unknown]') };
+        } catch { /* Reconciliation failure is not permission to execute again. */ }
+      }
+      if (terminal && current()) {
+        sharedDesktopSocketRuntime.terminals.set(id, terminal);
+        deliverDesktopTerminal(socket, id, terminal);
+      }
+      if (entry.state === 'outcome_unknown' && current()) showRecoveryPrompt(socket, connectionId, id);
+    }
+  });
+}
 
 function normalizeCursorGlowPoint(args: Record<string, any>) {
   const rawX = Number(args.x) || 0;
@@ -121,9 +267,10 @@ function registerSharedSocketHandlers(socket: Socket) {
       osInfo: navigator.platform || '',
       ...(nativeClientIdentity ? { nativeClientIdentity } : {}),
     });
+    recoverDesktopExecutions(socket);
   };
 
-  const onConnect = () => { void registerDevice(); };
+  const onConnect = () => { clearRecoveryPrompts(); void registerDevice(); };
   const onDesktopOffer = (
     data: DesktopExecPayload,
     acknowledge?: DesktopExecAcknowledgement,
@@ -135,7 +282,9 @@ function registerSharedSocketHandlers(socket: Socket) {
       && sharedDesktopSocketRuntime.socket === socket
       && socket.connected
       && !activeDesktopExecutions.has(correlationId)
-      && !cancelledDesktopExecutions.has(correlationId),
+      && !cancelledDesktopExecutions.has(correlationId)
+      && !sharedDesktopSocketRuntime.completed.has(correlationId)
+      && !sharedDesktopSocketRuntime.terminals.has(correlationId),
     );
     acknowledge?.({ accepted, correlationId });
   };
@@ -147,6 +296,8 @@ function registerSharedSocketHandlers(socket: Socket) {
       || !socket.connected
       || activeDesktopExecutions.has(correlationId)
       || cancelledDesktopExecutions.has(correlationId)
+      || sharedDesktopSocketRuntime.completed.has(correlationId)
+      || sharedDesktopSocketRuntime.terminals.has(correlationId)
     ) return;
     void handleDesktopExec(socket, data);
   };
@@ -160,6 +311,12 @@ function registerSharedSocketHandlers(socket: Socket) {
   sharedDesktopSocketRuntime.offerHandler = onDesktopOffer;
   sharedDesktopSocketRuntime.execHandler = onDesktopExec;
   sharedDesktopSocketRuntime.cancelHandler = desktopCancelHandler;
+  if (sharedDesktopSocketRuntime.recoveryTimer) clearInterval(sharedDesktopSocketRuntime.recoveryTimer);
+  sharedDesktopSocketRuntime.recoveryTimer = setInterval(() => {
+    for (const [id, at] of sharedDesktopSocketRuntime.completed) if (Date.now() - at > 30 * 60_000) sharedDesktopSocketRuntime.completed.delete(id);
+    if (!socket.connected) clearRecoveryPrompts();
+    recoverDesktopExecutions(socket);
+  }, 5_000);
   if (socket.connected) void registerDevice();
 }
 
@@ -167,8 +324,8 @@ function desktopCancelHandler(data: { correlationId?: string; name?: string }) {
   const correlationId = String(data?.correlationId || '').trim();
   if (!correlationId) return;
   cancelledDesktopExecutions.add(correlationId);
-  window.setTimeout(() => cancelledDesktopExecutions.delete(correlationId), 5 * 60 * 1000);
-  if (data?.name === 'desktop_run_command' && activeDesktopExecutions.has(correlationId) && isTauri) {
+  window.setTimeout(() => { if (!activeDesktopExecutions.has(correlationId)) cancelledDesktopExecutions.delete(correlationId); }, 15 * 60 * 1000);
+  if (data?.name === 'desktop_run_command' && isTauri) {
     void import('@tauri-apps/api/core')
       .then(({ invoke }) => invoke('cancel_command', { commandId: correlationId }))
       .catch(() => {});
@@ -206,22 +363,34 @@ function dispatchWallpaperModeAction(detail: {
 
 async function handleDesktopExec(socket: Socket, data: DesktopExecPayload) {
   const { correlationId, name, arguments: args } = data;
+  const acceptedConnection = socket.id;
+  const mayDispatch = () => !cancelledDesktopExecutions.has(correlationId)
+    && sharedDesktopSocketRuntime.socket === socket && socket.connected && socket.id === acceptedConnection;
+  const publish = (terminal: DesktopTerminal) => {
+    sharedDesktopSocketRuntime.terminals.set(correlationId, terminal);
+    if (socket.id === acceptedConnection) deliverDesktopTerminal(socket, correlationId, terminal);
+    else recoverDesktopExecutions(sharedDesktopSocketRuntime.socket || socket);
+  };
 
   if (name === 'client_action') {
+    activeDesktopExecutions.add(correlationId);
     beginDesktopAutomationActivity();
     try {
+      if (!mayDispatch()) throw new Error('Desktop action cancelled before dispatch.');
       const output = await dispatchClientAction(args);
-      socket.emit(`tool:desktop_result:${correlationId}`, { output });
+      publish({ output });
     } catch (err: any) {
-      socket.emit(`tool:desktop_result:${correlationId}`, { error: err.message || String(err) });
+      publish({ error: err.message || String(err) });
     } finally {
       endDesktopAutomationActivity();
+      activeDesktopExecutions.delete(correlationId);
+      cancelledDesktopExecutions.delete(correlationId);
     }
     return;
   }
 
   if (!isTauri) {
-    socket.emit(`tool:desktop_result:${correlationId}`, {
+    publish({
       error: 'Desktop tools are only available in the Tauri desktop app',
     });
     return;
@@ -231,7 +400,14 @@ async function handleDesktopExec(socket: Socket, data: DesktopExecPayload) {
   beginDesktopAutomationActivity();
   try {
     // Dynamic import — @tauri-apps/api only exists in Tauri context
-    const { invoke } = await import('@tauri-apps/api/core');
+    const { invoke: nativeInvoke } = await import('@tauri-apps/api/core');
+    if (!mayDispatch()) throw new Error('Desktop action cancelled before native dispatch; no new native action was started.');
+    const invoke = <T>(command: string, arguments_?: Parameters<typeof nativeInvoke>[1], options?: Parameters<typeof nativeInvoke>[2]): Promise<T> => {
+      if (!mayDispatch()) return Promise.reject(new Error('Desktop action cancelled before native dispatch; no new native action was started.'));
+      return nativeInvoke<T>(command, arguments_, options).catch(error => {
+        throw new Error('[outcome_unknown] Native invocation did not return a terminal result: ' + String(error));
+      });
+    };
     let output: string;
 
     switch (name) {
@@ -279,7 +455,7 @@ async function handleDesktopExec(socket: Socket, data: DesktopExecPayload) {
       case 'desktop_path_info': {
         const target: string = args.target || args.path || '';
         if (!target.trim()) {
-          socket.emit(`tool:desktop_result:${correlationId}`, { error: 'No path provided' });
+          publish({ error: 'No path provided' });
           return;
         }
         const info = await invoke('path_info', { target: target.trim() });
@@ -292,7 +468,7 @@ async function handleDesktopExec(socket: Socket, data: DesktopExecPayload) {
         const encoding = String(args.encoding || 'utf-8').trim().toLowerCase();
         const overwritePolicy = String(args.overwritePolicy || 'fail_if_exists').trim().toLowerCase();
         if (!targetPath) {
-          socket.emit(`tool:desktop_result:${correlationId}`, { error: 'No text file path provided' });
+          publish({ error: 'No text file path provided' });
           return;
         }
         const result: {
@@ -320,7 +496,7 @@ async function handleDesktopExec(socket: Socket, data: DesktopExecPayload) {
       case 'desktop_read_text_file': {
         const targetPath = String(args.path || '').trim();
         if (!targetPath) {
-          socket.emit(`tool:desktop_result:${correlationId}`, { error: 'No text file path provided' });
+          publish({ error: 'No text file path provided' });
           return;
         }
         const result: {
@@ -341,7 +517,7 @@ async function handleDesktopExec(socket: Socket, data: DesktopExecPayload) {
         const target: string = args.target || '';
         const application: string = args.application || args.browser || '';
         if (!target.trim()) {
-          socket.emit(`tool:desktop_result:${correlationId}`, { error: 'No target provided to open' });
+          publish({ error: 'No target provided to open' });
           return;
         }
         const openResult: { success: boolean; output: string } = await invoke('open_item', {
@@ -364,7 +540,7 @@ async function handleDesktopExec(socket: Socket, data: DesktopExecPayload) {
         const cwd: string = args.cwd || '';
         const timeoutMs = Math.min(Math.max(Number(args.timeoutMs) || 120000, 1000), 600000);
         if (!cmd.trim()) {
-          socket.emit(`tool:desktop_result:${correlationId}`, { error: 'No command provided' });
+          publish({ error: 'No command provided' });
           return;
         }
         const result: { success: boolean; output: string } = await invoke('run_command', {
@@ -436,7 +612,7 @@ async function handleDesktopExec(socket: Socket, data: DesktopExecPayload) {
       }
       case 'desktop_clipboard_write': {
         const text: string = args.text || '';
-        if (!text) { socket.emit(`tool:desktop_result:${correlationId}`, { error: 'No text provided for clipboard' }); return; }
+        if (!text) { publish({ error: 'No text provided for clipboard' }); return; }
         const ok = await invoke('set_clipboard_text', { text });
         output = ok ? 'Clipboard updated' : 'Failed to set clipboard';
         break;
@@ -446,7 +622,7 @@ async function handleDesktopExec(socket: Socket, data: DesktopExecPayload) {
           .map((value: unknown) => String(value || '').trim())
           .filter(Boolean);
         if (paths.length === 0) {
-          socket.emit(`tool:desktop_result:${correlationId}`, { error: 'No file paths provided for clipboard' });
+          publish({ error: 'No file paths provided for clipboard' });
           return;
         }
         const ok = await invoke('set_clipboard_files', { paths });
@@ -558,19 +734,16 @@ async function handleDesktopExec(socket: Socket, data: DesktopExecPayload) {
         break;
       }
       default:
-        socket.emit(`tool:desktop_result:${correlationId}`, {
+        publish({
           error: `Unknown desktop tool: ${name}`,
         });
         return;
     }
 
-    if (!cancelledDesktopExecutions.has(correlationId)) {
-      socket.emit(`tool:desktop_result:${correlationId}`, { output });
-    }
+    publish({ output });
   } catch (err: any) {
-    if (!cancelledDesktopExecutions.has(correlationId)) {
-      socket.emit(`tool:desktop_result:${correlationId}`, { error: err.message || String(err) });
-    }
+    const error = err.message || String(err);
+    publish({ error, stopped: !error.includes('[outcome_unknown]') });
   } finally {
     endDesktopAutomationActivity();
     activeDesktopExecutions.delete(correlationId);

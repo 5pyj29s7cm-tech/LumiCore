@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "crypto";
 import type { Server, Socket } from "socket.io";
-import { deviceRegistry } from "../devices";
+import { deviceRegistry, nativeClientIdentitiesEqual } from "../devices";
+import { resolveSocketScope } from './scope';
+import { captureOrganizationMembershipAuthorization, isOrganizationMembershipAuthorizationCurrent, type OrganizationMembershipAuthorization } from '../org/membership_authorization';
 import { captureNativeUiSnapshot, runNativeUiAction } from "../external_control/native_ui";
 import {
   executeTaskRegressionDesktopRelay,
@@ -22,6 +24,8 @@ type DesktopRelayPayload = {
 type DesktopRelayResult = {
   output?: string;
   error?: string;
+  /** False means the native worker has not established that execution stopped. */
+  stopped?: boolean;
 };
 
 type PendingDesktopRelay = {
@@ -35,6 +39,13 @@ type PendingDesktopRelay = {
   signal?: AbortSignal;
   requestSocket?: Socket;
   targetSocketId?: string;
+  binding?: { userId: string; domain: 'personal' | 'work'; orgId: string; nativeIdentity: any; membership?: OrganizationMembershipAuthorization; io: Server };
+  name?: string;
+  cancelReason?: string;
+  cancelTimeout?: ReturnType<typeof setTimeout>;
+  abandoned?: boolean;
+  completed?: boolean;
+  stop?: (reason: string) => void;
 };
 
 export type DesktopRelayLifecycle = (event: {
@@ -56,6 +67,7 @@ export type DesktopRelayOptions = {
   formatResultForLifecycle?: (output: string) => string;
   timeoutMs?: number;
   deliveryAckTimeoutMs?: number;
+  cancellationGraceMs?: number;
   cancelOnRequestSocketDisconnect?: boolean;
   signal?: AbortSignal;
   taskId?: string;
@@ -77,6 +89,87 @@ export type DesktopRelay = ((toolName: string, args?: Record<string, any>) => Pr
 };
 
 const pendingDesktopRelays = new Map<string, PendingDesktopRelay>();
+const completedDesktopRelays = new Map<string, { binding: NonNullable<PendingDesktopRelay['binding']>; at: number }>();
+const RECEIPT_TTL_MS = 30 * 60_000;
+function pruneDesktopReceipts() {
+  for (const [id, receipt] of completedDesktopRelays) if (Date.now() - receipt.at > RECEIPT_TTL_MS) completedDesktopRelays.delete(id);
+}
+function matchesNativeOwner(binding: NonNullable<PendingDesktopRelay['binding']>, socket: Socket, userId: string): boolean {
+  if (!socket.connected || socket.data?.trustedLocalExecution !== true || userId !== binding.userId
+    || socket.data?.authenticatedUserId !== binding.userId || !binding.nativeIdentity
+    || !nativeClientIdentitiesEqual(binding.nativeIdentity, socket.data?.nativeClientIdentity)) return false;
+  return true;
+}
+function matchesRecoverySocket(binding: NonNullable<PendingDesktopRelay['binding']>, socket: Socket, userId: string): boolean {
+  if (!matchesNativeOwner(binding, socket, userId)) return false;
+  // An expired work token never becomes authority for personal recovery.
+  const tokenOrg = String(socket.data?.authenticatedOrgId || '').trim();
+  if (tokenOrg !== binding.orgId || Boolean(tokenOrg) !== (binding.domain === 'work')) return false;
+  const scope = resolveSocketScope(socket, userId);
+  return scope.domain === binding.domain && scope.orgId === binding.orgId
+    && (binding.domain !== 'work' || isOrganizationMembershipAuthorizationCurrent(binding.membership, binding.orgId, binding.userId));
+}
+
+/** Only authenticated same-process recovery can rebind an already dispatched action. */
+export function registerDesktopRelayRecoveryHandlers(socket: Socket, userId: () => string): void {
+  socket.on('tool:desktop_resume', (_data: unknown, acknowledge?: (result: any) => void) => {
+    pruneDesktopReceipts();
+    const uid = userId();
+    const executions: Array<{ correlationId: string; name?: string; state: string; cancel?: boolean }> = [];
+    for (const [id, pending] of pendingDesktopRelays) {
+      if (!pending.binding || !matchesRecoverySocket(pending.binding, socket, uid)) continue;
+      pending.targetSocketId = socket.id;
+      executions.push({ correlationId: id, name: pending.name, state: pending.abandoned ? 'outcome_unknown' : 'pending', cancel: Boolean(pending.cancelReason) });
+    }
+    for (const [id, receipt] of completedDesktopRelays) {
+      if (matchesRecoverySocket(receipt.binding, socket, uid)) executions.push({ correlationId: id, state: 'acknowledged' });
+    }
+    acknowledge?.({ ok: true, executions });
+  });
+  // Physical stop-only reconciliation deliberately exposes no old-scope
+  // result, arguments, tool name or task metadata. It cannot execute anything.
+  socket.on('tool:desktop_drain_resume', (_data: unknown, acknowledge?: (result: any) => void) => {
+    const executions: Array<{ correlationId: string; nativeCommand: boolean; unknown: boolean }> = [];
+    for (const [id, pending] of pendingDesktopRelays) {
+      if (!pending.executionDispatched || !pending.binding || !matchesNativeOwner(pending.binding, socket, userId())
+        || matchesRecoverySocket(pending.binding, socket, userId())) continue;
+      pending.stop?.('Original desktop scope is no longer authorized; stopping without delivering its result');
+      executions.push({ correlationId: id, nativeCommand: pending.name === 'desktop_run_command', unknown: Boolean(pending.abandoned) });
+    }
+    acknowledge?.({ ok: true, executions });
+  });
+  const drain = (data: { correlationId?: string; stopped?: boolean; confirmation?: string }, manual: boolean) => {
+    const id = String(data?.correlationId || '');
+    const pending = pendingDesktopRelays.get(id);
+    if (!pending?.executionDispatched || !pending.binding || !matchesNativeOwner(pending.binding, socket, userId())
+      || matchesRecoverySocket(pending.binding, socket, userId())
+      || (manual ? !pending.abandoned || data.confirmation !== 'I_HAVE_VERIFIED_THE_COMMAND_HAS_STOPPED' : data.stopped !== true)) return false;
+    pending.targetSocketId = socket.id;
+    return handleDesktopRelayResult(id, { error: manual
+      ? 'outcome_unknown: user confirmed original physical operation stopped; old scope result remains unavailable and unverified.'
+      : 'Original desktop scope is no longer authorized. Physical stop confirmed; no result was delivered.' }, socket.id);
+  };
+  socket.on('tool:desktop_drain_result', (data: any, acknowledge?: (result: any) => void) => acknowledge?.({ ok: drain(data, false) }));
+  socket.on('tool:desktop_drain_confirm_stopped', (data: any, acknowledge?: (result: any) => void) => acknowledge?.({ ok: drain(data, true) }));
+  socket.on('tool:desktop_authorize_stop_ack', (data: { correlationId?: string; drainOnly?: boolean } = {}, acknowledge?: (result: any) => void) => {
+    const pending = pendingDesktopRelays.get(String(data.correlationId || ''));
+    const allowed = Boolean(pending?.abandoned && pending.binding && (data.drainOnly
+      ? matchesNativeOwner(pending.binding, socket, userId()) && !matchesRecoverySocket(pending.binding, socket, userId())
+      : matchesRecoverySocket(pending.binding, socket, userId())));
+    acknowledge?.({ ok: allowed, ...(allowed ? { nativeCommand: pending!.name === 'desktop_run_command' } : {}) });
+  });
+  socket.on('tool:desktop_confirm_stopped', (data: { correlationId?: string; confirmation?: string } = {}, acknowledge?: (result: any) => void) => {
+    const id = String(data.correlationId || '');
+    const pending = pendingDesktopRelays.get(id);
+    if (data.confirmation !== 'I_HAVE_VERIFIED_THE_COMMAND_HAS_STOPPED' || !pending?.abandoned || !pending.binding
+      || !matchesRecoverySocket(pending.binding, socket, userId())) { acknowledge?.({ ok: false }); return; }
+    pending.targetSocketId = socket.id;
+    // This releases only the concurrency hold. The already published durable
+    // outcome remains unknown; a human statement is never a verified artifact.
+    const accepted = handleDesktopRelayResult(id, { error: 'outcome_unknown: user confirmed the original desktop action has stopped; no task result was verified.' }, socket.id);
+    acknowledge?.({ ok: accepted });
+  });
+}
 const LOCAL_DESKTOP_UI_TOOLS = new Set([
   'desktop_ui_snapshot',
   'desktop_ui_focus',
@@ -210,12 +303,34 @@ export function getPreferredDesktopSocketId(userId: string, domain?: 'personal' 
 
 export function handleDesktopRelayResult(correlationId: string, data: DesktopRelayResult = {}, senderSocketId?: string): boolean {
   const pending = pendingDesktopRelays.get(correlationId);
-  if (!pending) return false;
+  if (!pending) {
+    const receipt = completedDesktopRelays.get(correlationId);
+    const sender = senderSocketId && receipt?.binding.io.sockets.sockets.get(senderSocketId);
+    return Boolean(receipt && sender && matchesRecoverySocket(receipt.binding, sender, String(sender.data?.authenticatedUserId || '')));
+  }
   if (!senderSocketId || !pending.targetSocketId || senderSocketId !== pending.targetSocketId) return false;
   if (pending.executionDispatched !== true) return false;
+  if (pending.binding?.nativeIdentity) {
+    const sender = senderSocketId && pending.binding.io.sockets.sockets.get(senderSocketId);
+    if (!sender || !matchesNativeOwner(pending.binding, sender, pending.binding.userId)) return false;
+    if (!matchesRecoverySocket(pending.binding, sender, pending.binding.userId)) {
+      // Stop evidence can be collected after revocation; content cannot.
+      data = { error: 'Original desktop scope authorization ended; no result was delivered.', stopped: data.stopped };
+    }
+  }
+  if (data.stopped === false) {
+    pending.stop?.('Native executor reported outcome_unknown; waiting for the original command to stop');
+    return false;
+  }
 
   pendingDesktopRelays.delete(correlationId);
+  pending.completed = true;
+  if (pending.binding) {
+    pruneDesktopReceipts();
+    completedDesktopRelays.set(correlationId, { binding: pending.binding, at: Date.now() });
+  }
   clearTimeout(pending.timeout);
+  if (pending.cancelTimeout) clearTimeout(pending.cancelTimeout);
   if (pending.deliveryTimeout) clearTimeout(pending.deliveryTimeout);
   if (pending.requestSocket && pending.onDisconnect) {
     pending.requestSocket.off('disconnect', pending.onDisconnect);
@@ -302,6 +417,20 @@ export function createDesktopRelay(options: DesktopRelayOptions): DesktopRelay {
       throw new Error(`Desktop tool "${toolName}" cancelled before execution`);
     }
     const lease = await ensureControlLease();
+    const unresolved = [...pendingDesktopRelays.entries()].find(([, pending]) => pending.executionDispatched && pending.binding?.userId === options.userId);
+    if (unresolved) {
+      if (autoReleaseLease) lease.release('desktop_waiting_for_native_terminal');
+      throw new Error(`Desktop outcome_unknown: execution ${unresolved[0]} is still awaiting its original desktop result. Reconnect that desktop to reconcile or stop it before starting another desktop action.`);
+    }
+    if (pendingDesktopRelays.size >= 512) throw new Error('Desktop receipt capacity reached; reconcile existing executions before starting more actions.');
+    const nativeBusy = (identity: any, exceptId?: string) => Boolean(identity && [...pendingDesktopRelays.entries()].some(([id, pending]) => id !== exceptId && pending.executionDispatched && pending.binding?.nativeIdentity && nativeClientIdentitiesEqual(identity, pending.binding.nativeIdentity)));
+    const preferred = getPreferredDesktopSocketId(options.userId, scope.domain, scope.orgId);
+    const dispatchIdentity = options.requestSocket?.data?.nativeClientIdentity
+      || (preferred && options.io.sockets.sockets.get(preferred)?.data?.nativeClientIdentity);
+    if (nativeBusy(dispatchIdentity)) {
+      if (autoReleaseLease) lease.release('desktop_waiting_for_native_terminal');
+      throw new Error('Desktop outcome_unknown: this native device is awaiting a previous physical operation to stop. Return to its original owner to reconcile.');
+    }
     const combined = combineAbortSignals([options.signal, lease.signal]);
     const executionSignal = combined.signal;
     try {
@@ -417,24 +546,33 @@ export function createDesktopRelay(options: DesktopRelayOptions): DesktopRelay {
         reject(new Error(message));
       };
 
-      const timeout = setTimeout(() => {
-        finishWithError(`Desktop tool "${toolName}" timed out (${Math.round(timeoutMs / 1000)}s)`);
-      }, timeoutMs);
-
-      const onDisconnect = () => {
-        finishWithError(`Desktop tool "${toolName}" cancelled: requesting client disconnected before returning a result`);
-      };
-
-      const onAbort = () => {
-        const targetSocketId = pendingDesktopRelays.get(cid)?.targetSocketId;
+      const requestStop = (reason: string) => {
+        const pending = pendingDesktopRelays.get(cid);
+        if (!pending) return;
+        if (!pending.executionDispatched) { finishWithError(reason); return; }
+        if (pending.cancelReason) return;
+        pending.cancelReason = reason;
+        clearTimeout(pending.timeout);
+        const targetSocketId = pending.targetSocketId;
         if (targetSocketId) {
           options.io.sockets.sockets.get(targetSocketId)?.emit('tool:desktop_cancel', {
             correlationId: cid,
             name: toolName,
           });
         }
-        finishWithError(`Desktop tool "${toolName}" cancelled because the active task was stopped or superseded`);
+        pending.cancelTimeout = setTimeout(() => {
+          if (pending.completed) return;
+          pending.abandoned = true;
+          // The caller can stop waiting, but its action identity still blocks
+          // competing desktop work until a real terminal is reconciled.
+          const message = `${reason}; outcome_unknown: cancellation was requested but native termination is not confirmed. Reconnect the original desktop to reconcile ${cid}.`;
+          pending.reject(new Error(message));
+        }, Math.max(10, options.cancellationGraceMs ?? 5_000));
+        pending.cancelTimeout.unref?.();
       };
+      const timeout = setTimeout(() => requestStop(`Desktop tool "${toolName}" timed out (${Math.round(timeoutMs / 1000)}s)`), timeoutMs);
+      const onDisconnect = () => requestStop(`Desktop tool "${toolName}" cancellation requested: requesting client disconnected before returning a result`);
+      const onAbort = () => requestStop(`Desktop tool "${toolName}" cancellation requested because the active task was stopped or superseded`);
 
       pendingDesktopRelays.set(cid, {
         resolve: (output: string) => {
@@ -459,6 +597,9 @@ export function createDesktopRelay(options: DesktopRelayOptions): DesktopRelay {
         onAbort,
         signal: executionSignal,
         requestSocket: cancelOnDisconnect ? options.requestSocket : undefined,
+        binding: { userId: options.userId, domain: scope.domain, orgId: scope.orgId, nativeIdentity: null, io: options.io },
+        name: toolName,
+        stop: requestStop,
       });
 
       const emitToDesktopTarget = (socketId: string): boolean => {
@@ -467,6 +608,14 @@ export function createDesktopRelay(options: DesktopRelayOptions): DesktopRelay {
         const pending = pendingDesktopRelays.get(cid);
         if (!pending) return false;
         pending.targetSocketId = socketId;
+        if (pending.binding) pending.binding.nativeIdentity = targetSocket.data?.nativeClientIdentity || null;
+        if (pending.binding?.nativeIdentity) {
+          if (targetSocket.data.authenticatedUserId !== options.userId) { finishWithError('Desktop execution owner does not match the authenticated native connection.'); return true; }
+          if (scope.domain === 'work') {
+            try { pending.binding.membership = captureOrganizationMembershipAuthorization(scope.orgId, options.userId); }
+            catch { finishWithError('Desktop organization membership is no longer authorized.'); return true; }
+          }
+        }
         // Socket connectivity and device registration do not prove that the
         // WebView still owns a live relay consumer after HMR or auth rebinding.
         // This is deliberately a two-phase delivery: the client first accepts
@@ -506,6 +655,12 @@ export function createDesktopRelay(options: DesktopRelayOptions): DesktopRelay {
           ) {
             finishWithError(`Desktop client disconnected before "${toolName}" could start`);
             return;
+          }
+          if (current.binding?.nativeIdentity && !matchesRecoverySocket(current.binding, liveTargetSocket, options.userId)) {
+            finishWithError('Desktop execution authorization changed before dispatch.'); return;
+          }
+          if (nativeBusy(current.binding?.nativeIdentity, cid)) {
+            finishWithError('Desktop outcome_unknown: this native device is still awaiting a previous physical operation to stop.'); return;
           }
           current.executionDispatched = true;
           liveTargetSocket.emit('tool:desktop_exec', payload);

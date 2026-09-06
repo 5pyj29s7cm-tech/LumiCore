@@ -362,12 +362,14 @@ describe('desktop relay routing', () => {
     await vi.waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0].event).toBe('tool:desktop_exec');
     controller.abort();
+    expect(getPendingDesktopRelayCount()).toBe(1);
+    expect(handleDesktopRelayResult(sent[0].payload.correlationId, { error: 'cancelled; native exit confirmed' }, 'scope_abort_socket')).toBe(true);
     await expect(promise).rejects.toThrow(/cancelled/i);
     expect(sent.some(item => item.event === 'tool:desktop_cancel')).toBe(true);
     expect(getPendingDesktopRelayCount()).toBe(0);
   });
 
-  it('rejects and forgets a pending action when the requesting socket disconnects', async () => {
+  it('waits for the native terminal after cancellation on requesting socket disconnect', async () => {
     const userId = `relay_disconnect_${Date.now()}`;
     const sent: any[] = [];
     const disconnectHandlers = new Set<() => void>();
@@ -414,6 +416,9 @@ describe('desktop relay routing', () => {
 
     for (const handler of [...disconnectHandlers]) handler();
 
+    expect(getPendingDesktopRelayCount()).toBe(1);
+    expect(sent.some(item => item.event === 'tool:desktop_cancel')).toBe(true);
+    expect(handleDesktopRelayResult(correlationId, { error: 'requesting client disconnected; native exit confirmed' }, 'scope_disconnect_desktop')).toBe(true);
     await expect(promise).rejects.toThrow(/requesting client disconnected/i);
     expect(disconnectHandlers.size).toBe(0);
     expect(getPendingDesktopRelayCount()).toBe(0);

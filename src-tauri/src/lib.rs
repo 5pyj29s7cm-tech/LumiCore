@@ -21,6 +21,9 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 mod local_bootstrap;
 mod backend_shutdown;
+mod desktop_command_supervisor;
+mod desktop_command_ipc;
+use desktop_command_supervisor::{CommandExecution, CommandSupervisor};
 mod native_identity;
 mod window_activation;
 use local_bootstrap::bootstrap_local_identity;
@@ -84,11 +87,6 @@ pub struct WallpaperMode {
     pub enabled: bool,
     pub presentation: WallpaperPresentation,
     pub workspace: WallpaperWorkspace,
-}
-
-#[derive(Default)]
-struct ActiveDesktopCommands {
-    pids: HashMap<String, u32>,
 }
 
 struct ResidentState {
@@ -181,7 +179,7 @@ pub struct SystemInfo {
     pub uptime: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandResult {
     pub success: bool,
     pub output: String,
@@ -1259,18 +1257,20 @@ fn terminate_command_tree(child: &mut Child) {
             .stderr(Stdio::null())
             .status();
     }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // run_command creates a separate process group so descendants are
+        // included instead of leaving a shell's child running after cancel.
+        let _ = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())])
+            .stdout(Stdio::null()).stderr(Stdio::null()).status();
+    }
     let _ = child.kill();
     let _ = child.wait();
 }
 
-#[tauri::command]
-fn run_command(
-    command: String,
-    cwd: Option<String>,
-    timeout_ms: Option<u64>,
-    command_id: Option<String>,
-    active_commands: tauri::State<'_, Mutex<ActiveDesktopCommands>>,
-) -> CommandResult {
+
+fn run_command_blocking(command: String, cwd: Option<String>, timeout_ms: Option<u64>, execution: &CommandExecution) -> CommandResult {
+    if execution.is_cancelled() { return CommandResult { success: false, output: "Command cancelled before native dispatch.".into() }; }
     let now = SystemTime::now();
     let truncated: String = if command.chars().count() > 500 {
         let head: String = command.chars().take(500).collect();
@@ -1341,8 +1341,10 @@ fn run_command(
     };
     #[cfg(not(target_os = "windows"))]
     let mut cmd = {
+        use std::os::unix::process::CommandExt;
         let mut cmd = Command::new("sh");
         cmd.args(["-c", &command]);
+        cmd.process_group(0);
         cmd
     };
     if let Some(path) = cwd_path.as_ref() {
@@ -1352,18 +1354,19 @@ fn run_command(
         .stdout(Stdio::from(stdout_file))
         .stderr(Stdio::from(stderr_file));
 
-    let result = match cmd.spawn() {
-        Ok(mut child) => {
-            if let Some(id) = command_id.as_ref().filter(|value| !value.trim().is_empty()) {
-                if let Ok(mut active) = active_commands.lock() {
-                    active.pids.insert(id.clone(), child.id());
-                }
-            }
+    let result = match execution.dispatch(|| cmd.spawn()) {
+        Some(Ok(mut child)) => {
             let deadline = Instant::now() + timeout;
             let mut timed_out = false;
+            let mut cancelled = false;
             let status = loop {
                 match child.try_wait() {
                     Ok(Some(status)) => break Ok(status),
+                    Ok(None) if execution.is_cancelled() => {
+                        cancelled = true;
+                        terminate_command_tree(&mut child);
+                        break child.try_wait().and_then(|status| status.ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "[outcome_unknown] Cancellation could not confirm process exit")));
+                    }
                     Ok(None) if Instant::now() < deadline => {
                         std::thread::sleep(Duration::from_millis(50))
                     }
@@ -1374,12 +1377,15 @@ fn run_command(
                             status.ok_or_else(|| {
                                 std::io::Error::new(
                                     std::io::ErrorKind::TimedOut,
-                                    "command timed out",
+                                    "[outcome_unknown] Timed out but process exit was not confirmed",
                                 )
                             })
                         });
                     }
-                    Err(error) => break Err(error),
+                    Err(error) => {
+                        terminate_command_tree(&mut child);
+                        break Err(std::io::Error::new(std::io::ErrorKind::Other, format!("[outcome_unknown] Command exit could not be verified: {error}")));
+                    }
                 }
             };
             let (stdout, stdout_truncated) = read_command_output(&stdout_path);
@@ -1400,15 +1406,12 @@ fn run_command(
                     timeout.as_millis()
                 ));
             }
-            status.map(|status| (status.success() && !timed_out, combined))
+            if cancelled { combined.push_str("\n[Command cancelled; native process exit confirmed]"); }
+            status.map(|status| (status.success() && !timed_out && !cancelled, combined))
         }
-        Err(error) => Err(error),
+        Some(Err(error)) => Err(error),
+        None => Ok((false, "Command cancelled before native dispatch.".into())),
     };
-    if let Some(id) = command_id.as_ref() {
-        if let Ok(mut active) = active_commands.lock() {
-            active.pids.remove(id);
-        }
-    }
     let _ = std::fs::remove_file(&stdout_path);
     let _ = std::fs::remove_file(&stderr_path);
 
@@ -1499,40 +1502,7 @@ fn spawn_hidden(cmd: &mut Command) -> std::io::Result<Child> {
     cmd.spawn()
 }
 
-#[tauri::command]
-fn cancel_command(
-    command_id: String,
-    active_commands: tauri::State<'_, Mutex<ActiveDesktopCommands>>,
-) -> bool {
-    let pid = active_commands
-        .lock()
-        .ok()
-        .and_then(|mut active| active.pids.remove(command_id.trim()));
-    let Some(pid) = pid else {
-        return false;
-    };
 
-    #[cfg(target_os = "windows")]
-    {
-        let mut taskkill = Command::new("taskkill");
-        taskkill.args(["/PID", &pid.to_string(), "/T", "/F"]);
-        taskkill.creation_flags(0x08000000u32);
-        taskkill
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok()
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok()
-    }
-}
 
 #[cfg(target_os = "windows")]
 #[derive(Clone)]
@@ -4000,7 +3970,10 @@ fn show_main_window(app: tauri::AppHandle) -> Result<WindowActivationDiagnostic,
 }
 
 fn save_before_app_exit(app: &tauri::AppHandle) -> Result<(), String> {
-    app.state::<ShutdownBarrier>().run(|| {
+    let supervisor = app.state::<CommandSupervisor>();
+    let _exit_attempt = supervisor.lock_exit_attempt()?;
+    supervisor.cancel_all_and_wait(Duration::from_secs(30))?;
+    let saved = app.state::<ShutdownBarrier>().run(|| {
         let owned_pid = {
             let state = app.state::<Mutex<BackendProcesses>>();
             let mut processes = state.lock().map_err(|error| error.to_string())?;
@@ -4015,7 +3988,11 @@ fn save_before_app_exit(app: &tauri::AppHandle) -> Result<(), String> {
         };
         if let Some(pid) = owned_pid { request_backend_save(pid)?; }
         Ok(())
-    })?;
+    });
+    if let Err(error) = saved {
+        app.state::<CommandSupervisor>().resume_after_failed_exit();
+        return Err(error);
+    }
     if let Ok(mut resident) = app.state::<Mutex<ResidentState>>().lock() {
         resident.force_quit = true;
     }
@@ -6183,7 +6160,7 @@ pub fn run() {
             python_restarts: 0,
             node_config: None,
         }))
-        .manage(Mutex::new(ActiveDesktopCommands::default()))
+        .manage(CommandSupervisor::default())
         .manage(Mutex::new(WallpaperState::default()))
         .manage(Mutex::new(ResidentState {
             close_to_background: started_in_background,
@@ -6215,8 +6192,10 @@ pub fn run() {
             create_directory,
             rename_item,
             delete_item,
-            run_command,
-            cancel_command,
+            desktop_command_ipc::run_command,
+            desktop_command_ipc::cancel_command,
+            desktop_command_ipc::get_command_result,
+            desktop_command_ipc::acknowledge_unknown_command_stop,
             open_item,
             pick_directory,
             set_wallpaper_mode,
