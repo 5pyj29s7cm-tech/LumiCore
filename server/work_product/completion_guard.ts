@@ -12,6 +12,7 @@ import {
 import { formatCnToolFailureDetail } from '../regions/packs/cn/voice_fast_path_messages';
 import { CN_COMPLETION_GUARD_MESSAGES } from '../regions/packs/cn/completion_guard_messages';
 import { normalizeActionIntent } from '../cognition/normalized_action_intent';
+import { formatGroundedKnowledgeObservation, isKnowledgeInventoryRequest } from '../cognition/knowledge_result';
 
 export interface CompletionGuardResult {
   text: string;
@@ -184,6 +185,7 @@ const CLIENT_SURFACE_TASK_RE =
   /客户端|自己的客户端|中枢世界|中枢|世界视图|云端画布|技能大厅|知识库|运行日志|主屏幕|主页|桌面小组件|小组件|client_get_state|client_action|\b(?:client|nexus|nexus\s+view|cloud\s+canvas|world\s+view|desktop\s+widget|widget\s+mode)\b/iu;
 
 function isClientSurfaceTask(task: string): boolean {
+  if (isKnowledgeInventoryRequest(task)) return false;
   const intent = normalizeActionIntent(task || '');
   if (
     intent.kind === 'desktop_operation'
@@ -463,6 +465,8 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
   const claimText = stripNegatedClaimClauses(response);
 
   const toolCalls = input.toolCalls || [];
+  const knowledgeObservation = formatGroundedKnowledgeObservation({ taskText: task, toolRecords: toolCalls });
+  if (knowledgeObservation) return { text: knowledgeObservation, blocked: false };
   const toolOutcomes = toolCalls.map(call => ({ call, successful: isSuccessfulToolCall(call) }));
   const successful = toolOutcomes.filter(outcome => outcome.successful).map(outcome => outcome.call);
   const failed = toolOutcomes

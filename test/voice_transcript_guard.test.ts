@@ -4,6 +4,13 @@ import { describe, expect, it } from 'vitest';
 import { assessVoiceTranscriptForExecution } from '../server/cognition/voice_transcript_guard';
 
 describe('voice transcript execution guard', () => {
+  it.each(['知。', '你', '吧'])('clarifies an ambiguous one-character reply before resuming an operation: %s', text => {
+    expect(assessVoiceTranscriptForExecution(text, { pendingAction: true })).toMatchObject({ action: 'clarify', reason: 'ambiguous_action_reply' });
+    expect(assessVoiceTranscriptForExecution(text)).toEqual({ action: 'allow' });
+  });
+  it.each(['好', '对', '是', '不', '停', '继续', '允许'])('preserves meaningful short responses to an unfinished task: %s', text => {
+    expect(assessVoiceTranscriptForExecution(text, { pendingAction: true })).toEqual({ action: 'allow' });
+  });
   it('clarifies the repeated device-prompt contamination observed in the real voice log', () => {
     expect(assessVoiceTranscriptForExecution(
       'The terminal is set for recording on device. 请一组四组桌面操作。 The terminal.',

@@ -1,4 +1,5 @@
 import type { ToolExecutionRecord } from '../tools/types';
+import type { CompletionGuardResult } from '../work_product/completion_guard';
 import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../regions/packs/cn/execution_evidence_messages';
 import { formatCnToolFailureDetail } from '../regions/packs/cn/voice_fast_path_messages';
 import {
@@ -67,6 +68,7 @@ export interface ExecutionGuardRecoveryAttemptContext {
 export interface ExecutionGuardRecoveryAttemptResult {
   text?: string;
   toolRecords?: ToolExecutionRecord[];
+  completionGuard?: CompletionGuardResult;
 }
 
 export interface ExecutionGuardRecoveryRunInput<
@@ -87,6 +89,7 @@ export interface ExecutionGuardRecoveryRunInput<
   finalize: (
     responseText: string,
     toolRecords: ToolExecutionRecord[],
+    completionGuard?: CompletionGuardResult,
   ) => TFinalization;
   isAborted?: () => boolean;
   isPendingConfirmation?: () => boolean;
@@ -779,7 +782,7 @@ export async function recoverBlockedExecutionOnce<
     const candidateText = String(recovery.text || '').trim()
       ? String(recovery.text)
       : input.responseText;
-    let finalization = input.finalize(candidateText, toolRecords);
+    let finalization = input.finalize(candidateText, toolRecords, recovery.completionGuard);
     const pendingAfterRecovery = Boolean(
       input.pendingConfirmation || input.isPendingConfirmation?.(),
     );

@@ -7,6 +7,7 @@ import {
 import { hasVisionIntent } from './vision_routing';
 import { normalizeActionIntent } from './normalized_action_intent';
 import { isReadOnlyKnowledgeBaseInspectionRequest } from './knowledge_intent';
+import { isVideoPlaybackRequest } from './media_intent';
 
 interface IntentGrammarRule {
   name: string;
@@ -140,7 +141,7 @@ const WORK_PRODUCT_TERMS = /(?:\u6587\u4ef6|\u6587\u4ef6\u5939|\u76ee\u5f55|\u65
 const DESKTOP_MUSIC_CONTROL_RE = /(?:\u97f3\u4e50|\u6b4c\u66f2|\u6b4c\u5355|\u7f51\u6613\u4e91|QQ\u97f3\u4e50|\u9177\u72d7|Spotify).{0,32}(?:\u6253\u5f00|\u542f\u52a8|\u64ad\u653e|\u6682\u505c|\u7ee7\u7eed|\u5207\u6b4c|\u4e0a\u4e00\u9996|\u4e0b\u4e00\u9996|\u641c\u7d22|\u97f3\u91cf)|(?:\u6253\u5f00|\u542f\u52a8|\u64ad\u653e|\u653e|\u542c|\u6682\u505c|\u7ee7\u7eed\u64ad\u653e|\u5207\u6b4c|\u4e0a\u4e00\u9996|\u4e0b\u4e00\u9996|\u641c\u7d22).{0,32}(?:\u97f3\u4e50|\u6b4c\u66f2|\u6b4c\u5355|\u7f51\u6613\u4e91|QQ\u97f3\u4e50|\u9177\u72d7|Spotify)|\b(?:open|launch|play|pause|resume|skip|next|previous|search)\b.{0,40}\b(?:music|song|playlist|netease|spotify|music player)\b/iu;
 
 export function isDesktopMusicControlRequest(text: string): boolean {
-  return DESKTOP_MUSIC_CONTROL_RE.test(String(text || '').trim());
+  return DESKTOP_MUSIC_CONTROL_RE.test(String(text || '').trim()) || isVideoPlaybackRequest(text);
 }
 
 const STRUCTURED_TOOL_INTENT_RULES: IntentGrammarRule[] = [
@@ -442,6 +443,7 @@ export function hasExplicitToolIntent(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
   if (hasExplicitNoToolInstruction(normalized)) return false;
+  if (isVideoPlaybackRequest(normalized)) return true;
   if (isExternalAiHistoryActionRequest(normalized)) return true;
   const canonical = normalizeActionIntent(normalized);
   if (canonical.kind === 'external_ai_history') return !isInformationOnlyQuestion(normalized);
@@ -575,6 +577,9 @@ export function traceToolIntentDecision(text: string, source?: string, operation
       : canonical.kind === 'messaging_send'
         ? ['messaging-send']
         : matchedStructuredToolRules;
+  if (!informationOnlyQuestion && isVideoPlaybackRequest(normalized)) {
+    structuredToolRules.push('video-playback');
+  }
   const legacyToolRules = !informationOnlyQuestion && normalized
     ? matchPatternRuleNames(normalized, TOOL_INTENT_PATTERNS, 'tool-pattern')
     : [];

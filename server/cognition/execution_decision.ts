@@ -347,6 +347,10 @@ function enhanceToolRouteForFlow(
   visibilityContext?: Pick<ToolContext, 'userId' | 'domain' | 'orgId' | 'autonomous' | 'source'>,
 ): ToolRoute {
   if (route.hardAllowlist) return route;
+  // The media router already selected the generator and any explicitly
+  // requested follow-up operations. Generic artifact expansion must not
+  // replace that route with document/file writers or capability installation.
+  if (route.categories.some(category => ['image_generation', 'image_editing', 'video_generation'].includes(category))) return route;
 
   const available = new Set(declarations.map(declaration => declaration.function.name));
   const additions = new Set<string>();

@@ -121,6 +121,11 @@ export function requiresLocalComputerInventoryObservation(input: string): boolea
   return localComputer && inventoryAction;
 }
 
+function requiresStorageObservation(input: string): boolean {
+  // i18n-allow: Storage-metric recognition, never displayed.
+  return /(?:存储(?:量|空间|容量)|硬盘|磁盘|[A-Z]盘)|\b(?:disk|storage|drive)\b/iu.test(input);
+}
+
 function requiresSystemInfoObservation(input: string): boolean {
   const text = String(input || '');
   const localScope = /\b(?:this|my|local|current)\s+(?:computer|pc|machine|system|device)\b|(?:\u672c\u673a|\u8fd9\u53f0\u7535\u8111|\u6211\u7684\u7535\u8111|\u5f53\u524d\u8bbe\u5907)/iu.test(text);
@@ -128,7 +133,7 @@ function requiresSystemInfoObservation(input: string): boolean {
   const namedSnapshot = /\b(?:system|os)\s+(?:info(?:rmation)?|details?|specs?|status)\b|(?:\u7cfb\u7edf\u4fe1\u606f|\u7cfb\u7edf\u914d\u7f6e|\u7535\u8111\u914d\u7f6e)/iu.test(text);
   if (namedSnapshot) return !conceptual || localScope;
 
-  const mentionsMetric = /\b(?:cpu|memory|disk)\b|CPU|\u5185\u5b58|\u78c1\u76d8/iu.test(text);
+  const mentionsMetric = /\b(?:cpu|memory|disk)\b|CPU|\u5185\u5b58|\u78c1\u76d8/iu.test(text) || requiresStorageObservation(text);
   if (!mentionsMetric || (conceptual && !localScope)) return false;
 
   const observationVerb = /\b(?:check|inspect|show|report|get|read|view|display|measure|monitor)\b|(?:\u67e5\u770b|\u68c0\u67e5|\u663e\u793a|\u62a5\u544a|\u8bfb\u53d6|\u83b7\u53d6|\u76d1\u63a7|\u770b\u4e00\u4e0b|\u770b\u770b)/iu.test(text);
@@ -299,7 +304,9 @@ function evaluateDesktopObservationCoverage(
     plannedToolNames.push('desktop_list_files');
   }
   const usableRecords = records.filter(recordHasUsableResult);
-  const satisfiedToolNames = plannedToolNames.filter(probe => probeHasStructuredResult(usableRecords, probe));
+  const satisfiedToolNames = plannedToolNames.filter(probe => probeHasStructuredResult(usableRecords, probe)
+    && (probe !== 'desktop_system_info' || !requiresStorageObservation(taskText)
+      || usableRecords.some(record => recordMatchesProbe(record, probe) && validStorageDisks(parseResult(record)).length > 0)));
   const satisfied = new Set(satisfiedToolNames);
   const missingToolNames = plannedToolNames.filter(probe => !satisfied.has(probe));
   return {
@@ -310,6 +317,24 @@ function evaluateDesktopObservationCoverage(
     missingToolNames,
     usableRecords,
   };
+}
+
+function validStorageDisks(system: any): Array<{ mount_point: string; total_space: number; available_space: number }> {
+  if (!Array.isArray(system?.disks)) return [];
+  return system.disks.filter((disk: any) => typeof disk?.mount_point === 'string'
+    && Number.isFinite(disk.total_space) && disk.total_space > 0
+    && Number.isFinite(disk.available_space) && disk.available_space >= 0
+    && disk.available_space <= disk.total_space);
+}
+
+function storageSummary(system: any, chinese: boolean): string[] {
+  return validStorageDisks(system).map(disk => {
+    const total = (disk.total_space / 1024 ** 3).toFixed(1);
+    const free = (disk.available_space / 1024 ** 3).toFixed(1);
+    // i18n-allow: Reviewed measured disk-capacity output.
+    return chinese ? `${disk.mount_point}：总容量 ${total} GiB，可用 ${free} GiB。`
+      : `${disk.mount_point}: ${total} GiB total, ${free} GiB available.`;
+  });
 }
 
 export function formatDesktopObservationResult(
@@ -431,7 +456,10 @@ export function formatDesktopObservationResult(
         : `Launchable local apps: ${apps.length} entries were read${names.length ? `; leading entries: ${names.slice(0, 8).join(', ')}` : ''}.`);
     }
     if (idle && Number.isFinite(Number(idle.idle_seconds))) lines.push(`Desktop idle time: about ${Math.round(Number(idle.idle_seconds))} seconds.`);
-    if (system && typeof system === 'object') lines.push('System information was refreshed successfully.');
+    if (system && typeof system === 'object') {
+      if (requiresStorageObservation(taskText)) lines.push(...storageSummary(system, false));
+      else lines.push('System information was refreshed successfully.');
+    }
     if (failures.length || coverage.missingToolNames.length) {
       lines.push(`${Math.max(failures.length, coverage.missingToolNames.length)} requested check(s) did not return a usable result.`);
     }
@@ -474,7 +502,10 @@ export function formatDesktopObservationResult(
       : `\u53ef\u542f\u52a8\u7684\u672c\u673a\u5e94\u7528\uff1a\u5df2\u8bfb\u53d6 ${apps.length} \u6761${names.length ? `\uff0c\u524d\u51e0\u9879\u4e3a ${names.slice(0, 8).join('\u3001')}` : ''}\u3002`);
   }
   if (idle && Number.isFinite(Number(idle.idle_seconds))) lines.push(`\u684c\u9762\u7a7a\u95f2\u65f6\u95f4\uff1a\u7ea6 ${Math.round(Number(idle.idle_seconds))} \u79d2\u3002`);
-  if (system && typeof system === 'object') lines.push('\u7cfb\u7edf\u4fe1\u606f\u5df2\u5b8c\u6210\u5237\u65b0\u3002');
+  if (system && typeof system === 'object') {
+    if (requiresStorageObservation(taskText)) lines.push(...storageSummary(system, true));
+    else lines.push('\u7cfb\u7edf\u4fe1\u606f\u5df2\u5b8c\u6210\u5237\u65b0\u3002');
+  }
   if (failures.length || coverage.missingToolNames.length) {
     lines.push(CN_RESULT_GROUNDING_MESSAGES.desktopUnavailableReadCount(Math.max(failures.length, coverage.missingToolNames.length)));
   }

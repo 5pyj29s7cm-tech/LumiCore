@@ -514,10 +514,18 @@ function isMediaPlaybackContinuationForTask(
   if (
     !durableState?.unfinished
     || !requiresMediaPlaybackAction(durableState.goal)
-    || !requiresMediaPlaybackAction(text)
   ) return false;
+  // This reuses only an already bound playback goal. It does not change the
+  // operating mode or grant permissions, and an unrelated 'allow' has no task.
+  // i18n-allow: Short acknowledgements for the same unfinished media request.
+  if (/^(?:允许|可以|继续)[，,。.!！\s]*$/u.test(text)) return true;
   const previousTarget = normalizeMediaTarget(requestedMediaPlayerTarget(durableState.goal));
   const currentTarget = normalizeMediaTarget(requestedMediaPlayerTarget(text));
+  // i18n-allow: Restating the same named player after a failed attempt.
+  if (/^(?:用|使用|还是用|就用)\s*[^，,。.!！?？]{1,32}[，,。.!！\s]*$/u.test(text)) {
+    return Boolean(previousTarget && currentTarget && previousTarget === currentTarget);
+  }
+  if (!requiresMediaPlaybackAction(text)) return false;
   // An explicitly different player is new work; an omitted/deictic target
   // continues the exact unfinished playback goal.
   return !previousTarget || !currentTarget

@@ -251,7 +251,7 @@ export function registerDesktopTools(registry: ToolRegistry): void {
   registry.register({
     name: 'desktop_system_info',
     description:
-      'Get real host system info (OS, CPU, memory, home directory) from the desktop machine. Use this instead of get_system_info when you need actual hardware details, not just the server process view.',
+      'Get real host system info (OS, CPU, memory, home directory, mounted disk total and available storage in bytes) from the desktop machine. Use this instead of get_system_info when you need actual hardware details, not just the server process view.',
     parameters: {
       type: 'object',
       properties: {},

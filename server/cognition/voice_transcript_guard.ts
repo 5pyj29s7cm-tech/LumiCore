@@ -8,6 +8,7 @@ import {
 
 export type VoiceTranscriptGuardReason =
   | 'device_prompt_contamination'
+  | 'ambiguous_action_reply'
   | 'truncated_action';
 
 export type VoiceTranscriptGuardDecision =
@@ -80,9 +81,16 @@ function isClearlyTruncatedAction(text: string): boolean {
  * A clarification is returned only for a high-signal contamination pattern or
  * an unmistakably unfinished action request.
  */
-export function assessVoiceTranscriptForExecution(value: unknown): VoiceTranscriptGuardDecision {
+export function assessVoiceTranscriptForExecution(value: unknown, options: { pendingAction?: boolean } = {}): VoiceTranscriptGuardDecision {
   const text = normalizedTranscript(value);
   if (!text) return { action: 'allow' };
+  const reply = text.replace(/[\s，,。.!！？?～~]+/gu, '');
+  // A one-character STT fragment is not implied consent to an unfinished
+  // operation. Preserve meaningful short assent, refusal and stop commands.
+  // i18n-allow: Single-character response recognition.
+  if (options.pendingAction && /^[\u3400-\u9fff]$/u.test(reply) && !/^[好对是行嗯不停别否]$/u.test(reply)) {
+    return { action: 'clarify', reason: 'ambiguous_action_reply', responseText: CN_VOICE_TRANSCRIPT_GUARD_MESSAGES.ambiguousActionReply };
+  }
 
   if (containsRepeatedDevicePrompt(text)) {
     return {

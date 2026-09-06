@@ -2573,7 +2573,8 @@ describe('Lumi result finalizer', () => {
 
     expect(result.blocked).toBe(true);
     expect(result.text).toContain('\u5df2\u6253\u5f00\u7f51\u6613\u4e91');
-    expect(result.text).toContain('\u65e0\u6cd5\u533a\u5206\u662f\u64ad\u653e\u8fd8\u662f\u6682\u505c');
+    expect(result.text).toContain('没有确认你要的内容已经开始播放');
+    expect(result.text).not.toContain('刚才的按键');
     expect(result.text).not.toMatch(/ocr_screen|desktop_|mediaplaypause|target_mismatch|\u8bc1\u636e|\u56de\u6267|C:\\/iu);
   });
 

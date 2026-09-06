@@ -164,6 +164,13 @@ pub struct RuntimeResilienceStatus {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct StorageDiskInfo {
+    pub mount_point: String,
+    pub total_space: u64,
+    pub available_space: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SystemInfo {
     pub platform: String,
     pub release: String,
@@ -177,6 +184,7 @@ pub struct SystemInfo {
     pub cpu_model: String,
     pub memory_unit: String,
     pub uptime: u64,
+    pub disks: Vec<StorageDiskInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -415,7 +423,7 @@ fn read_native_files(dir: &Path, limit: Option<usize>) -> Vec<NativeFile> {
 
 #[tauri::command]
 fn get_system_info() -> SystemInfo {
-    use sysinfo::System;
+    use sysinfo::{Disks, System};
     let sys = System::new_all();
     let cpu_model = sys
         .cpus()
@@ -437,6 +445,15 @@ fn get_system_info() -> SystemInfo {
         cpu_model,
         memory_unit: "bytes".to_string(),
         uptime: System::uptime(),
+        disks: Disks::new_with_refreshed_list()
+            .list()
+            .iter()
+            .map(|disk| StorageDiskInfo {
+                mount_point: disk.mount_point().to_string_lossy().to_string(),
+                total_space: disk.total_space(),
+                available_space: disk.available_space(),
+            })
+            .collect(),
     }
 }
 

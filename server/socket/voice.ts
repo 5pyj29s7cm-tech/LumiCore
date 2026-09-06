@@ -1775,7 +1775,7 @@ async function processVoiceInput(
 
   const turnAuthorization = session.authorization || captureChatAuthorization(session.userId, session);
   if (!turnAuthorization.isCurrent()) return;
-  const transcriptExecutionGuard = assessVoiceTranscriptForExecution(userText);
+  let transcriptExecutionGuard = assessVoiceTranscriptForExecution(userText);
   if (transcriptExecutionGuard.action === 'clarify') {
     logger.warn(
       `[Audio] Guarded uncertain final transcript reason=${transcriptExecutionGuard.reason} chars=${userText.length}; no tool route will be admitted`,
@@ -1838,6 +1838,11 @@ async function processVoiceInput(
     session.orgId,
     { userText: actionIntentText },
   );
+  if (transcriptExecutionGuard.action === 'allow') {
+    transcriptExecutionGuard = assessVoiceTranscriptForExecution(userText, {
+      pendingAction: conversationTurn.conversation.actionContinuationState?.unfinished === true,
+    });
+  }
   try {
     await ensurePendingConfirmationPersistenceInitialized();
   } catch (error) {

@@ -1,4 +1,5 @@
 export const CN_VOICE_TRANSCRIPT_GUARD_MESSAGES = Object.freeze({
+  ambiguousActionReply: '刚才只听清一个字，没听清你的意思。请再说一遍。',
   devicePromptContamination:
     '刚才的语音像混入了设备提示音，我没有执行。请只说一遍你要我做的事。',
   truncatedAction:

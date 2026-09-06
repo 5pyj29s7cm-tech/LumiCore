@@ -1,5 +1,9 @@
 import fs from 'node:fs';
-import { guardCompletionClaims } from '../work_product/completion_guard';
+import { guardCompletionClaims, type CompletionGuardResult } from '../work_product/completion_guard';
+import { containsCompactToolEvidenceMarker } from '../conversation/summary_grounding';
+import { formatGroundedKnowledgeObservation } from './knowledge_result';
+import { buildMediaArtifactReceipt } from '../socket/media_artifact_receipt';
+import { isVideoPlaybackRequest } from './media_intent';
 import type { ToolExecutionRecord } from '../tools/types';
 import type { LumiTurnFlow } from './turn_flow';
 import {
@@ -41,6 +45,7 @@ import {
   extractDesktopLaunchTarget,
   extractExplicitArtifactTextRequirements,
   extractSimpleDesktopOpenTarget,
+  requestedMediaPlayerTarget,
   extractCurrentAppTarget,
   extractRequestedCurrentAppText,
   hasAuthenticatedWebResultEvidence,
@@ -102,6 +107,7 @@ export interface LumiResultFinalizerInput {
   /** Optional durable fences for status-bearing receipts. */
   taskId?: string;
   requestId?: string;
+  completionGuard?: CompletionGuardResult;
 }
 
 export interface LumiResultFinalizerResult {
@@ -175,6 +181,7 @@ type RealWorldClaimKind =
   | 'playback'
   | 'open'
   | 'file_mutation'
+  | 'media_artifact'
   | 'runtime_configuration';
 
 function realWorldClaimKind(value: string): RealWorldClaimKind | '' {
@@ -195,6 +202,9 @@ function realWorldClaimKind(value: string): RealWorldClaimKind | '' {
       && !/(?:你|他|她|它|用户|模型|系统|文档|消息).{0,10}(?:说|声称|表示|写着|显示|回复|提到).{0,24}(?:已|已经|成功)|\b(?:you|they|the\s+(?:model|system|message|document))\s+(?:said|claimed|reported|shows?)\b/iu.test(clause)) // i18n-allow: reviewed reported-speech input recognition.
     .join('\n');
   if (!positive) return '';
+  // i18n-allow: Concrete generated-media and delivered-image claim recognition.
+  if (/(?:已经|已|成功).{0,18}(?:生成|制作|创建).{0,36}(?:图片|图像|视频)|(?:请查看|展示给|这是|以下).{0,30}(?:图片|图像|视频)|\b(?:generated|created).{0,36}(?:image|picture|video)\b/iu.test(positive)
+    && /!\[[^\]]*\]\(|https?:\/\/|(?:已经|已|成功).{0,18}(?:生成|制作|创建)/iu.test(positive)) return 'media_artifact'; // i18n-allow: Concrete artifact-delivery recognition.
   // i18n-allow: Chinese real-world execution-claim recognition; not user-visible copy.
   if (/(?:已|已经|成功).{0,14}(?:发送|发出|上传|提交|发布|送达)|(?:发送|上传|提交|发布)成功|\b(?:sent|uploaded|submitted|published|delivered)\b/iu.test(positive)) return 'communication';
   // i18n-allow: Chinese reminder-creation claim recognition; not user-visible copy.
@@ -228,6 +238,11 @@ function isExecutionClaimGuardTurn(input: LumiResultFinalizerInput, contractAppl
 
 function isFirstPersonConcreteRealWorldClaim(value: string, kind: RealWorldClaimKind): boolean {
   const text = String(value || '').trim();
+  // Completed playback, generated output and a named application do not need
+  // an explicit 'I'. Chinese routinely omits that subject in task replies.
+  if (kind === 'media_artifact') return true;
+  if (kind === 'playback' && /(?:视频|第一集|第\d+集|音乐|歌曲|播放器)|\b(?:video|episode|music|song|player)\b/iu.test(text)) return true; // i18n-allow: Media subject recognition.
+  if (kind === 'open' && /(?:网页|网站|首页|浏览器|客户端|爱奇艺|优酷|网易云|WPS)|\b(?:browser|website|app|application)\b/iu.test(text)) return true; // i18n-allow: Concrete application subject recognition.
   if (!/(?:^|[\s，,。；;！!])(?:我|我们)(?=[^\s，,。；;！!])|\b(?:I|we|Lumi)\b/iu.test(text)) return false; // i18n-allow: reviewed first-person claim recognition.
   if (kind === 'communication') {
     return /(?:给|向|发到|上传到|提交到|发布到).{1,40}|(?:文件|文档|消息|邮件|帖子|链接).{0,16}(?:发送|上传|提交|发布)|\b(?:sent|uploaded|submitted|published)\b.{0,40}\b(?:file|document|message|email|post|link|to)\b/iu.test(text); // i18n-allow: reviewed communication-target recognition.
@@ -298,6 +313,14 @@ function hasVerifiedEvidenceForRealWorldClaim(
   ));
   if (records.length === 0) return false;
   const contract = taskActionContract(input);
+
+  if (kind === 'media_artifact') {
+    const urls = Array.from(input.responseText.matchAll(/https?:\/\/[^\s<>"')\]]+/gu), match => match[0]);
+    return records.some(record => {
+      const artifactReceipt = buildMediaArtifactReceipt(record.name, record.arguments, toolRecordTerminalPayload(record), record.error);
+      return artifactReceipt && urls.every(url => artifactReceipt.artifacts.some(artifact => artifact.url === url || artifact.path === url));
+    });
+  }
 
   if (kind === 'open') {
     const requestedTarget = extractDesktopLaunchTarget(taskText)
@@ -427,6 +450,15 @@ function groundedVerifiedDocumentObservation(
 
 function leakedLegacyToolProtocol(input: LumiResultFinalizerInput): LumiResultFinalizerResult | null {
   const raw = String(input.responseText || '').trim();
+  if (containsCompactToolEvidenceMarker(raw)) {
+    return {
+      text: isChineseText(resultTaskText(input)) || isChineseText(raw)
+        ? CN_RESULT_GROUNDING_MESSAGES.actionNotStarted
+        : 'No verified execution result supports this response.',
+      blocked: true,
+      reason: 'Model output contained a reserved server receipt marker.',
+    };
+  }
   const hasXmlProtocol = /<(?:function_calls|tool_calls|invoke)\b/i.test(raw);
   const hasFencedToolProtocol = /```\s*(?:tool|tools|tool_call|tool_calls|function_call|function_calls)\b/i.test(raw);
   // i18n-allow: Chinese internal tool-protocol recognition; not user-visible copy.
@@ -582,6 +614,13 @@ function unsupportedOngoingExecutionClaim(
   // i18n-allow: Chinese execution-claim recognition; not user-visible copy.
   const claimsInventedToolChain = /工具(?:链|链路)[^。！？!?\n]{0,20}(?:已经)?(?:恢复|可用)|\btool(?:ing)?\s+(?:chain|pipeline)[^.!?\n]{0,30}\b(?:restored|available|working)\b/iu.test(response);
   const claimsExecutionActivity = claimsPendingAction || claimsStandaloneOngoing;
+  // An unknown/short user utterance must not make a concrete immediate action
+  // promise exempt from checking simply because routing classified it as chat.
+  // i18n-allow: Immediate externally observable action promise, not quoted advice.
+  const concreteImmediatePromise = /^(?:好的?[，,\s]*)?(?:我)?(?:这就|马上|现在就)(?:帮你|为你|给你)?(?:打开|播放|启动|发送|生成|创建)[^？?\n]{1,80}[。.!！]?$/u.test(response);
+  if (concreteImmediatePromise && !(input.toolRecords || []).length) {
+    return isChineseText(response) ? CN_RESULT_GROUNDING_MESSAGES.actionNotStarted : 'No action started in this turn.';
+  }
   if (!claimsInventedToolChain && !(includeActionPlans && actionRequested && claimsExecutionActivity)) return null;
   if (claimsExecutionActivity && hasVerifiedOngoingExecutionReceipt(input)) return null;
   const attemptedButEnded = (input.toolRecords || []).length > 0;
@@ -1403,6 +1442,8 @@ function formatGroundedPartialActionResult(
 }
 
 function requestedMediaPlayerLabel(taskText: string, records: ToolExecutionRecord[]): string {
+  const requested = requestedMediaPlayerTarget(taskText);
+  if (requested) return requested;
   const named = String(taskText || '').match(/(?:\u7f51\u6613\u4e91(?:\u97f3\u4e50)?|QQ\s*\u97f3\u4e50|\u9177\u72d7(?:\u97f3\u4e50)?|Spotify|Apple\s+Music|NetEase(?:\s+Cloud\s+Music)?|CloudMusic)/iu)?.[0];
   if (named) return named;
   const invoked = records.find(record => /^(?:desktop_open|browser_open_task)$/i.test(String(record.name || '')));
@@ -1478,12 +1519,13 @@ function formatGoalSpecificDesktopResult(
 
   if (requiresMediaPlaybackAction(taskText)) {
     const label = requestedMediaPlayerLabel(taskText, records);
+    const video = isVideoPlaybackRequest(taskText);
     const opened = hasRequestedDesktopOpenEvidence(records, taskText, label);
     if (hasMediaPlaybackEvidence(records, taskText)) {
       return {
         text: zh
-          ? CN_EXECUTION_EVIDENCE_MESSAGES.mediaPlaybackActive(label)
-          : `Opened ${label}; music playback is active.`,
+          ? CN_EXECUTION_EVIDENCE_MESSAGES.mediaPlaybackActive(label, video)
+          : `Opened ${label}; playback is active.`,
         blocked: false,
         reason: zh ? CN_EXECUTION_EVIDENCE_MESSAGES.mediaPlaybackConfirmed : 'Playback state was confirmed.',
       };
@@ -1491,7 +1533,7 @@ function formatGoalSpecificDesktopResult(
     const text = opened
       ? zh
         ? CN_EXECUTION_EVIDENCE_MESSAGES.mediaOpenedPlaybackUnconfirmed(label)
-        : `Opened ${label}, but playback is not confirmed. The key press proves only that input was delivered; it cannot distinguish play from pause.`
+        : `Opened ${label}, but the requested content is not confirmed playing.`
       : zh
         ? CN_EXECUTION_EVIDENCE_MESSAGES.mediaOpenAndPlaybackUnconfirmed(label)
         : `${label} was not confirmed open, and playback was not confirmed.`;
@@ -2648,6 +2690,33 @@ function unsupportedLedgerOnlyWorkTaskCompletion(
   };
 }
 
+function groundedMediaGeneration(input: LumiResultFinalizerInput): LumiResultFinalizerResult | null {
+  const task = resultTaskText(input);
+  // A generator receipt proves generation only, not a requested publication,
+  // document, delivery or subsequent application action.
+  // i18n-allow: Media creation versus compound external-work input recognition.
+  if (!/(?:生成|创建|制作|绘制|画).{0,90}(?:图片|图像|插画|海报|视频)|\b(?:generate|create|draw|make).{0,80}(?:image|picture|video)\b/iu.test(task)
+    || /(?:发送|发给|上传|发布|打开|导出|写入|保存到|CAD|图纸|文档|PPT)|\b(?:send|upload|publish|open|export|document|save to|cad)\b/iu.test(task)) return null; // i18n-allow: Compound task boundaries.
+  const record = [...(input.toolRecords || [])].reverse().find(item => /^(?:generate_image|get_image_generation_status|ai_edit_image|generate_video)$/u.test(item.name));
+  if (!record || !isVerifiedCurrentTurnRecord(input, record)) return null;
+  const receipt = buildMediaArtifactReceipt(record.name, record.arguments, toolRecordTerminalPayload(record), record.error);
+  if (!receipt) return null;
+  // i18n-allow: Requested media kind and count, not output copy.
+  const videoRequested = /(?:视频(?![^。\n]*(?:封面|图片|图像|海报|缩略图))|\bvideo\b(?![^.\n]*\b(?:cover|image|thumbnail|poster)\b))/iu.test(task);
+  const requestedKind = videoRequested ? 'video' : 'image';
+  if (receipt.artifacts.some(artifact => artifact.kind !== requestedKind)) return null;
+  // i18n-allow: Multiple distinct media deliverables cannot share one receipt.
+  if (/(?:图片|图像).{0,12}(?:和|以及|再|并).{0,12}视频|\b(?:image|picture).{0,12}(?:and|then).{0,12}video\b/iu.test(task)) return null;
+  // i18n-allow: Explicit image counts are completion requirements.
+  const countText = task.match(/(?:生成|创建|制作|画|绘制)\s*([一二两三四五六七八九十\d]+)\s*张/u)?.[1];
+  const chineseCounts: Record<string, number> = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 }; // i18n-allow: Number recognition.
+  const requestedCount = countText ? chineseCounts[countText] || Number(countText) : 1;
+  if (!Number.isSafeInteger(requestedCount) || receipt.artifacts.length < requestedCount) return null;
+  const zh = isChineseText(task);
+  // i18n-allow: Verified media completion copy; the authenticated media card carries the artifact paths.
+  return { text: zh ? (receipt.artifacts[0].kind === 'video' ? '视频已生成。' : '图片已生成。') : 'The requested media was generated.', blocked: false, reason: 'Grounded verified generated-media artifact.' };
+}
+
 export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResultFinalizerResult {
   input = {
     ...input,
@@ -2675,6 +2744,15 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     };
   }
   const protocolLeak = leakedLegacyToolProtocol(input);
+  const knowledgeObservation = formatGroundedKnowledgeObservation({
+    taskText: actionText,
+    toolRecords: input.toolRecords || [],
+    taskId: input.taskId,
+    requestId: input.requestId,
+  });
+  if (knowledgeObservation) return { text: knowledgeObservation, blocked: false, reason: 'Grounded current-turn knowledge observation.' };
+  const mediaGeneration = groundedMediaGeneration(input);
+  if (mediaGeneration) return mediaGeneration;
   if (protocolLeak) return protocolLeak;
   const safeResponseText = sanitizeInternalExecutionText(
     input.responseText,
@@ -2782,7 +2860,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       && hasExplicitNoMutationInstruction(actionText)
     )
   );
-  const guard = ordinaryConversation
+  const guard = input.completionGuard?.blocked ? input.completionGuard : ordinaryConversation
     ? { text: input.responseText, blocked: false as const }
     : guardCompletionClaims({
         task: actionText,
@@ -2879,7 +2957,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   // the protocol/evidence sanity checks above instead of forcing it through a
   // work-product completion guard.
   if (
-    ordinaryConversation
+    (ordinaryConversation && !guard.blocked)
     || (
       !actionContract.applies
       && (input.toolRecords || []).length === 0

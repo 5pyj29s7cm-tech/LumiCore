@@ -141,7 +141,7 @@ describe('receipt-backed current application control', () => {
     });
     expect(result.blocked).toBe(true);
     expect(result.text).toContain('\u5df2\u6253\u5f00\u7f51\u6613\u4e91\u97f3\u4e50');
-    expect(result.text).toContain('\u8fd8\u4e0d\u80fd\u786e\u8ba4\u97f3\u4e50\u5df2\u7ecf\u5f00\u59cb\u64ad\u653e');
+    expect(result.text).toContain('没有确认你要的内容已经开始播放');
     expect(result.text).not.toMatch(/desktop_|target_mismatch|\u8bc1\u636e|\u56de\u6267/iu);
   });
 

@@ -1,4 +1,5 @@
 import { ToolPolicy } from '../personality/types';
+import { isVideoPlaybackRequest } from './media_intent';
 import {
   getRecoveredApplicationContinuationTarget,
   isRecoveredCurrentAppEditingContinuation,
@@ -56,6 +57,7 @@ export function isArtifactFirstTask(text: string): boolean {
 export function wantsDirectDesktopControl(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
+  if (isVideoPlaybackRequest(normalized)) return true;
   const direct = DIRECT_DESKTOP_PATTERNS.some(pattern => pattern.test(normalized));
   if (!direct) return false;
   const locationOnly = DESKTOP_LOCATION_ONLY_PATTERNS.some(pattern => pattern.test(normalized));

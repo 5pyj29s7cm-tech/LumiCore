@@ -14,7 +14,7 @@ import {
 import { recordTokenUsage } from './token_tracker';
 import { recordWorkflow, WorkflowStep } from '../skills/worklog';
 import { recordLatency } from '../monitor/latency_store';
-import { guardCompletionClaims, needsCompletionEvidence } from '../work_product/completion_guard';
+import { guardCompletionClaims, needsCompletionEvidence, type CompletionGuardResult } from '../work_product/completion_guard';
 import {
   buildActionContract,
   formatActionContractPrompt,
@@ -101,6 +101,8 @@ export interface LLMResult {
   text: string;
   toolCalls: ToolExecutionRecord[];
   usageRecords: LLMUsageRecord[];
+  /** Preserve a pre-finalization verdict; guarded prose is not fresh evidence of success. */
+  completionGuard?: CompletionGuardResult;
 }
 
 export interface LLMUsageRecord {
@@ -1639,9 +1641,9 @@ class ToolLoopModelBudget {
   }
 }
 
-function buildVerifiedToolCheckpoint(executionLog: ToolExecutionRecord[], task: string): string {
+function buildVerifiedToolCheckpoint(executionLog: ToolExecutionRecord[], task: string): CompletionGuardResult {
   const verified = executionLog.filter(isVerifiedToolSuccess).slice(-4);
-  if (verified.length === 0) return buildIterationLimitSummary(executionLog, task);
+  if (verified.length === 0) return { text: buildIterationLimitSummary(executionLog, task), blocked: false };
   const isZh = /[\u3400-\u9fff]/.test(task);
   const evidence = verified.map((record, index) => {
     const result = String(record.result || '').trim();
@@ -1665,7 +1667,7 @@ function buildVerifiedToolCheckpoint(executionLog: ToolExecutionRecord[], task: 
     task,
     response: checkpoint,
     toolCalls: executionLog,
-  }).text;
+  });
 }
 
 function isCallerCancellation(
@@ -1943,8 +1945,10 @@ export async function runWithTools(
     }
     if (checkpointRecords.length > 0) {
       recordWorkflowIfToolsUsed(checkpointRecords, messages, config);
+      const guarded = buildVerifiedToolCheckpoint(checkpointRecords, getPrimaryUserText(messages));
       return {
-        text: buildVerifiedToolCheckpoint(checkpointRecords, getPrimaryUserText(messages)),
+        text: guarded.text,
+        completionGuard: guarded,
         toolCalls: checkpointRecords,
         usageRecords: observedUsageRecords,
       };
@@ -2294,6 +2298,7 @@ async function runWithToolsInternal(
         });
         return {
           text: guarded.text,
+          completionGuard: guarded,
           toolCalls: executionLog,
           usageRecords,
         };
@@ -2353,6 +2358,7 @@ async function runWithToolsInternal(
       });
       return {
         text: guarded.text,
+        completionGuard: guarded,
         toolCalls: executionLog,
         usageRecords,
       };

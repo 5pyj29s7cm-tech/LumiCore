@@ -19,7 +19,7 @@ import {
 } from '../../shared/media_generation';
 import { toolRegistry } from "../tools/registry";
 import { executeToolCall } from "../tools/execution_engine";
-import { buildConfirmedStepContinuationMessages, runWithTools } from "../llm/adapter";
+import { buildConfirmedStepContinuationMessages, runWithTools, type LLMResult } from "../llm/adapter";
 import {
   normalizeOperationMode,
 } from "../cognition/operation_modes";
@@ -3830,6 +3830,7 @@ export function registerChatHandler(
         }
         let confirmationRecords: ToolExecutionRecord[] = [confirmedRecord];
         let confirmationLlmWasCalled = false;
+        let confirmationCompletionGuard: LLMResult['completionGuard'];
         let candidate = toolRecordSucceeded(confirmedRecord)
           ? CN_VOICE_FAST_PATH_MESSAGES.confirmationExecuted
           : CN_VOICE_FAST_PATH_MESSAGES.confirmationFailed(
@@ -3935,6 +3936,7 @@ export function registerChatHandler(
           confirmationRecords = continuation.toolCalls?.length
             ? continuation.toolCalls
             : [confirmedRecord];
+          confirmationCompletionGuard = continuation.completionGuard;
           candidate = pendingConfirmationCreatedThisTurn
             ? CN_TASK_EXECUTION_MESSAGES.waitingConfirmation(confirmedTask)
             : continuation.text || candidate;
@@ -3953,6 +3955,7 @@ export function registerChatHandler(
           : finalizeLumiResponse({
               taskText: confirmedTask,
               responseText: candidate,
+              completionGuard: confirmationCompletionGuard,
               toolRecords: taskAwareRecords(confirmationRecords),
               source: 'chat_confirmation',
               flow: { ...turnFlow, routeText: confirmedTask },
@@ -4126,6 +4129,7 @@ export function registerChatHandler(
       }
 
       let responseText = '';
+      let completionGuard: LLMResult['completionGuard'];
       let llmWasCalled = false;
       const allToolRecords: ToolExecutionRecord[] = [];
       // Keep the same token-budgeted conversation that drove the normal turn
@@ -4399,6 +4403,7 @@ export function registerChatHandler(
           );
 
           responseText = result.text || '';
+          completionGuard = result.completionGuard;
           llmWasCalled = result.usageRecords.length > 0;
           // Record provider/model analytics. Product billing is not part of the local execution path.
           for (const u of result.usageRecords) {
@@ -4457,6 +4462,7 @@ export function registerChatHandler(
         : finalizeLumiResponse({
             taskText: executionTaskText,
             responseText,
+            completionGuard,
             toolRecords: finalTaskRecords,
             source: 'chat',
             flow: turnFlow,
@@ -4595,13 +4601,14 @@ export function registerChatHandler(
           }
           return {
             text: recovery.text,
+            completionGuard: recovery.completionGuard,
             toolRecords: withDesktopExecutionReceipt(
               recovery.toolCalls || [],
               desktopExecutionTracker,
             ),
           };
         },
-        finalize: (candidateText, records) => {
+        finalize: (candidateText, records, recoveryCompletionGuard) => {
           const recoveredRecords = withDesktopExecutionReceipt(records, desktopExecutionTracker);
           const candidate = pendingConfirmationCreatedThisTurn
             ? {
@@ -4613,6 +4620,7 @@ export function registerChatHandler(
             : finalizeLumiResponse({
                 taskText: executionTaskText,
                 responseText: candidateText,
+                completionGuard: recoveryCompletionGuard,
                 toolRecords: recoveredRecords,
                 source: 'chat_guard_recovery',
                 flow: turnFlow,
