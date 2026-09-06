@@ -81,6 +81,47 @@ afterEach(() => {
 });
 
 describe('chat execution registry', () => {
+  it.each([false, true])('keeps revoked completion private while replacing its receipt (write failure=%s)', async failReplacement => {
+    const persistence = memoryPersistence();
+    let reached!: () => void;
+    const atWrite = new Promise<void>(resolve => { reached = resolve; });
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    await initializeChatExecutionRegistryPersistence({ ...persistence.adapter, async upsert(receipt) {
+      if (failReplacement && receipt.status === 'cancelled') throw new Error('EIO replacing revoked completion');
+      await persistence.adapter.upsert(receipt);
+      if (receipt.status === 'completed') { reached(); await held; }
+    } });
+    beginChatExecution(scope, 'revoked-terminal');
+    let revoked = false;
+    let replaced = false;
+    const pending = recordChatExecutionTerminalEventDurably(scope, 'revoked-terminal', 'agent:response', {
+      finalized: true, text: 'Unpublished original completion',
+    }, { text: 'Persistence is unknown.' }, { refreshTerminal: async () => {
+      if (!revoked || replaced) return null;
+      replaced = true;
+      return { event: 'agent:response', payload: { finalized: true, reason: 'cancelled', text: 'Cancelled.' } };
+    } });
+    // Attach the rejection handler before releasing the synthetic failing write.
+    const outcome = pending.then(value => ({ value }), error => ({ error }));
+    await atWrite;
+    expect(getChatExecution(scope, 'revoked-terminal')?.terminalEvent).toBeUndefined();
+    revoked = true;
+    release();
+    const result = await outcome;
+    if (failReplacement) {
+      expect(result).toHaveProperty('error');
+      expect(getChatExecution(scope, 'revoked-terminal')?.terminalEvent?.payload.reason).toBe('persistence_unknown');
+      await recordChatExecutionPersistenceUnknownDurably(scope, 'revoked-terminal', { text: 'Persistence is unknown.' });
+    } else expect(result).toEqual({ value: true });
+    const expectedReason = failReplacement ? 'persistence_unknown' : 'cancelled';
+    expect(getChatExecution(scope, 'revoked-terminal')?.terminalEvent?.payload.reason).toBe(expectedReason);
+    expect(persistence.rows[0].payload).not.toMatchObject({ text: 'Unpublished original completion' });
+    resetChatExecutionRegistryForTests();
+    await initializeChatExecutionRegistryPersistence(persistence.adapter);
+    expect(getChatExecution(scope, 'revoked-terminal')?.terminalEvent?.payload.reason).toBe(expectedReason);
+  });
+
   it('keeps an active execution queryable independently of a socket instance', () => {
     beginChatExecution(scope, 'request-1');
     recordChatExecutionEvent(scope, 'request-1', 'agent:status', {

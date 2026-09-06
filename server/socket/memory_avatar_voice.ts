@@ -47,7 +47,7 @@ interface PrivateCall {
   turn?: { requestId: string; controller: AbortController; pending: Promise<void> };
   frame?: CameraFrame;
   videoGeneration: number;
-  frameSequence: number; lastFrameAt: number; inputTail: Promise<void>;
+  frameSequence: number; lastFrameAt: number; inputTail: Promise<void>; inputGeneration: number;
   lastTranscript: string; lastTranscriptAt: number;
   lastReply: string; playbackUntil: number;
 }
@@ -235,7 +235,7 @@ export function registerMemoryAvatarVoiceHandlers(socket: Socket, getters: LLMGe
     const call: PrivateCall = {
       avatarId, userId, sessionId, active: true, portrait: data.portrait === true, authorization: captureMemoryAvatarAuthorization(userId, avatarId),
       controller: new AbortController(), unwatch: () => {}, stt: null,
-      frameSequence: 0, videoGeneration: 0, lastFrameAt: 0, inputTail: Promise.resolve(), lastTranscript: '', lastTranscriptAt: 0, lastReply: '', playbackUntil: 0,
+      frameSequence: 0, videoGeneration: 0, lastFrameAt: 0, inputTail: Promise.resolve(), inputGeneration: 0, lastTranscript: '', lastTranscriptAt: 0, lastReply: '', playbackUntil: 0,
     };
     call.unwatch = call.authorization.watch(call.controller);
     call.controller.signal.addEventListener('abort', () => {
@@ -281,7 +281,12 @@ export function registerMemoryAvatarVoiceHandlers(socket: Socket, getters: LLMGe
         if (oldTurn) {
           oldTurn.controller.abort();
         }
-        const pending = call.inputTail.then(async () => { if (live(call)) await runTurn(call, text, frame); });
+        const inputGeneration = call.inputGeneration;
+        const pending = call.inputTail.then(async () => {
+          // A manual interruption also withdraws utterances waiting for an older
+          // turn's durable cancellation. Only later input may start a new turn.
+          if (inputGeneration === call.inputGeneration && live(call)) await runTurn(call, text, frame);
+        });
         call.inputTail = pending.catch(() => {});
         await pending;
       });
@@ -321,6 +326,10 @@ export function registerMemoryAvatarVoiceHandlers(socket: Socket, getters: LLMGe
     if (!call || !matches(call, data) || !live(call)) return;
     const turn = call.turn;
     if (data.requestId && turn && data.requestId !== turn.requestId) return;
+    call.inputGeneration++;
+    // A freshly repeated question is new input after this cancellation, not a
+    // duplicate of the queued utterance which will never be accepted.
+    call.lastTranscript = ''; call.lastTranscriptAt = 0;
     turn?.controller.abort();
     if (call.portrait) void stopMemoryAvatarPortrait({ userId: call.userId, avatarId: call.avatarId, callSessionId: call.sessionId }).catch(() => {});
     call.playbackUntil = 0;

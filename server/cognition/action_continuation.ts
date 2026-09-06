@@ -414,7 +414,7 @@ const STATUS_FOLLOWUP_RE =
 
 // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
 const CN_SHORT_EXECUTION_CONTINUATION_RE =
-  /^(?:确认(?:了)?|确定(?:了)?|继续|继续执行|接着做|执行|开始|开始执行|重试|再试|再来一次|建立|创建|打开|保存|发送|提交|就这么做|按这个做|做吧|弄吧)[。！？.!?]*$/u; // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  /^(?:确认(?:了|执行)?|确定(?:了)?|继续|继续执行|接着做|执行|开始|开始执行|重试|再试|再来一次|建立|创建|打开|保存|发送|提交|就这么做|按这个做|做吧|弄吧)[。！？.!?]*$/u; // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
 
 const ENGLISH_STATUS_FOLLOWUP_RE =
   /^(?:are you (?:doing|running) it|did you do it|is it (?:done|running)|what(?:'s| is) the result|why (?:didn'?t|haven'?t) you|what was my task)[.!?]*$/i;

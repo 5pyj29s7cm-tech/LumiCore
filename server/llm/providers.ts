@@ -413,6 +413,9 @@ function autoDispatchPreference(config: LLMCallConfig) {
     ? getScopedPreferredLLM(config.userId, { domain: config.domain, orgId: config.orgId })
     : null;
   return {
+    // Routing changes candidates, not request-level safety/visibility contracts.
+    // Keep future tool, cancellation and output constraints on the same path.
+    ...config,
     provider: preferred?.autoFallbackProvider || 'deepseek',
     model: preferred?.autoFallbackModel || preferred?.models?.deepseek || 'deepseek-v4-flash',
     localModel: config.model || preferred?.model,
@@ -420,13 +423,6 @@ function autoDispatchPreference(config: LLMCallConfig) {
     requestedModel: config.model,
     selectionMode: 'auto' as const,
     fallbackCandidates: config.fallbackCandidates || preferred?.fallbackCandidates || [],
-    maxTokens: config.maxTokens,
-    userId: config.userId,
-    domain: config.domain,
-    orgId: config.orgId,
-    signal: config.signal,
-    attemptTimeouts: config.attemptTimeouts,
-    inputTokenBudget: config.inputTokenBudget,
     allowCloudFallback: config.allowCloudFallback !== false
       && preferred?.allowCloudFallback !== false
       && !isStrictPrivacy(),

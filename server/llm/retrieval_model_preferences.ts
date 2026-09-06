@@ -1,4 +1,5 @@
-import { readDB, writeDB } from '../../db_layer';
+import { readDB } from '../../db_layer';
+import { writeModelPreference } from './model_preference_revision';
 import { LUMI_OFFICIAL_DEFAULT_MODELS } from '../../shared/model_provider_capabilities';
 
 export interface EmbeddingModelSelection {
@@ -140,16 +141,17 @@ export function getUserRetrievalModelPreferences(userId: string): RetrievalModel
   }
 }
 
-export function upsertUserRetrievalModelPreferences(userId: string, value: unknown): RetrievalModelPreferences {
+export function upsertUserRetrievalModelPreferences(
+  userId: string,
+  value: unknown,
+  savedRoles: readonly (keyof RetrievalModelPreferences)[] = ['embedding', 'rerank'],
+): RetrievalModelPreferences {
+  const previous = getUserRetrievalModelPreferences(userId);
   const preferences = normalizeRetrievalModelPreferences(value);
-  const db = readDB();
-  if (!db.settings) (db as any).settings = [];
   const key = settingKey(userId);
-  const payload = JSON.stringify({ ...preferences, updatedAt: new Date().toISOString() });
-  const row = (db.settings || []).find((item: any) => item.key === key);
-  if (row) row.value = payload;
-  else db.settings.push({ key, value: payload });
-  db.settings = db.settings.filter((item: any) => item.key !== legacySettingKey(userId));
-  writeDB(db);
+  const changedRoles = (Object.keys(preferences) as (keyof RetrievalModelPreferences)[])
+    .filter(role => JSON.stringify(preferences[role]) !== JSON.stringify(previous[role]));
+  writeModelPreference(key, { ...preferences, updatedAt: new Date().toISOString() },
+    [...new Set([...savedRoles, ...changedRoles])], [legacySettingKey(userId)]);
   return preferences;
 }

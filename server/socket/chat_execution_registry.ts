@@ -1027,6 +1027,12 @@ export async function recordChatExecutionTerminalEventDurably(
   event: 'agent:response' | 'agent:error',
   payload: Record<string, any>,
   persistenceUnknownPayload: Record<string, any> = {},
+  options: {
+    /** A caller-owned authority may change while either durable barrier waits.
+     * Return only a safer replacement terminal; null keeps the current one.
+     */
+    refreshTerminal?: () => Promise<{ event: 'agent:response' | 'agent:error'; payload: Record<string, any> } | null>;
+  } = {},
 ): Promise<boolean> {
   if (!conversationReceiptAllowed(scope)) return false;
   const key = executionKey(scope, requestId);
@@ -1074,14 +1080,37 @@ export async function recordChatExecutionTerminalEventDurably(
     lastEvent: nextEvent,
     terminalEvent: nextEvent,
   };
-  const receipt = persistedReceipt(scope, candidate);
+  let receipt = persistedReceipt(scope, candidate);
   if (!receipt) throw new Error('Chat terminal event cannot produce a durable receipt');
 
   // Install the private pending marker synchronously, before the first await,
   // so another handler cannot append a late event or observe a success frame.
   record.terminalReceiptPending = pending;
   const barrier = enqueueStrictPersistence(async adapter => {
-    if (conversationReceiptAllowed(scope)) await adapter.upsert(receipt);
+    let replacements = 0;
+    const refresh = async () => {
+      const replacement = await options.refreshTerminal?.();
+      if (!replacement) return false;
+      // One-way revocation only. Repeatedly changing a terminal is an owner
+      // error and must follow the existing unknown/quarantine failure path.
+      if (++replacements > 1) throw new Error('Chat terminal authority did not converge');
+      const safePayload = { ...replacement.payload, source: replacement.payload.source || record.source, requestId };
+      const safeStatus = terminalStatusForEvent(replacement.event, safePayload);
+      if (!safeStatus || safeStatus === 'completed') throw new Error('Chat terminal authority cannot refresh to success');
+      pending.status = safeStatus;
+      pending.event = { event: replacement.event, payload: safePayload };
+      pending.updatedAt = new Date().toISOString();
+      receipt = persistedReceipt(scope, { ...candidate, status: safeStatus, updatedAt: pending.updatedAt,
+        lastEvent: pending.event, terminalEvent: pending.event });
+      if (!receipt) throw new Error('Chat refreshed terminal cannot produce a durable receipt');
+      return true;
+    };
+    await refresh();
+    if (conversationReceiptAllowed(scope)) await adapter.upsert(receipt!);
+    if (await refresh()) {
+      if (conversationReceiptAllowed(scope)) await adapter.upsert(receipt!);
+      await refresh();
+    }
   })
     .then(() => {
       if (record.terminalReceiptPending !== pending) {

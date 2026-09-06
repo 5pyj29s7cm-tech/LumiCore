@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({ db: { settings: [] as any[], memories: [] as any[] } }));
 const kbState = vi.hoisted(() => ({ articles: [] as any[], embeddings: [] as any[] }));
-vi.mock('../db_layer', () => ({ readDB: () => state.db, writeDB: () => {} }));
+vi.mock('../db_layer', () => ({ readDB: () => state.db, writeDB: (next: typeof state.db) => { state.db = next; } }));
 vi.mock('../server/org/db', () => ({ listKbArticles: () => kbState.articles, getAllKbEmbeddings: () => kbState.embeddings, logAudit: () => {} }));
 vi.mock('../server/org/resource_acl', () => ({ getOrganizationResourcePolicy: () => ({ policy: null }) }));
 vi.mock('../server/config/keys', () => ({ loadKeys: () => ({ OPENAI_API_KEY: 'synthetic', SILICONFLOW_API_KEY: 'synthetic' }) }));

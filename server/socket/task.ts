@@ -20,6 +20,7 @@ import {
   getMessages,
   getMessagesByTokenBudget,
   addMessageIdempotent,
+  updateAssistantMessageTerminalPresentation,
   extractTopics,
   trackTopic,
   getTopicContext,
@@ -96,9 +97,10 @@ import { createDesktopRelay } from "./desktop_relay";
 import { getScopedPreferredLLM } from "../llm/user_preferences";
 import {
   buildSocketToolSecurityContext,
-  resolveSocketScope,
   scopedEmotionalStateKey,
 } from "./scope";
+import { captureTaskAuthorization, taskSocketScope } from './task_authorization';
+import { captureOrganizationMembershipAuthorization } from '../org/membership_authorization';
 import {
   CN_TASK_EXECUTION_MESSAGES,
   CN_VOICE_WORK_MESSAGES,
@@ -218,7 +220,17 @@ export function registerTaskHandler(
     ack?: (payload: { ok: boolean; requestId?: string; status?: string; error?: string }) => void,
   ) => {
     const uid = userIdFn(socket);
-    const resolvedScope = resolveSocketScope(socket, uid, data);
+    if (!uid || socket.data?.authenticatedUserId !== uid || !String(data.requestId || '').trim()) {
+      ack?.({ ok: false, error: 'An authenticated exact task request is required.' });
+      return;
+    }
+    // A revoked organization credential can only stop its original exact
+    // request. Never resolve it to a personal task or replay private output.
+    const resolvedScope = taskSocketScope(socket);
+    let canRead = true;
+    if (resolvedScope.domain === 'work') {
+      try { captureOrganizationMembershipAuthorization(resolvedScope.orgId, uid); } catch { canRead = false; }
+    }
     const executionScope: ChatExecutionScope = {
       userId: uid,
       domain: resolvedScope.domain,
@@ -235,7 +247,7 @@ export function registerTaskHandler(
           error: snapshot ? undefined : 'Active task not found',
         });
       } catch {}
-      if (snapshot?.terminalEvent) {
+      if (canRead && snapshot?.terminalEvent) {
         socket.emit(snapshot.terminalEvent.event, {
           ...snapshot.terminalEvent.payload,
           replayed: true,
@@ -252,7 +264,7 @@ export function registerTaskHandler(
       return;
     }
     markChatExecutionCancelling(executionScope, snapshot.requestId);
-    io.to(taskExecutionRoom(executionScope)).emit('agent:status', {
+    if (canRead) io.to(taskExecutionRoom(executionScope)).emit('agent:status', {
       status: 'cancelling',
       source: 'task',
       requestId: snapshot.requestId,
@@ -269,11 +281,21 @@ export function registerTaskHandler(
     ack?: (payload: { ok: boolean; requestId?: string; receivedAt?: string; error?: string }) => void,
   ) => {
     const uid = userIdFn(socket);
-    const taskScope = resolveSocketScope(socket, uid, data);
-    const toolSecurityContext = buildSocketToolSecurityContext(socket, taskScope);
     const requestId = typeof data.requestId === 'string' && data.requestId.trim()
       ? data.requestId.trim().slice(0, 120)
       : `task_${crypto.randomUUID()}`;
+    let authority: ReturnType<typeof captureTaskAuthorization>;
+    try { authority = captureTaskAuthorization(socket, uid); }
+    catch {
+      const error = 'This work session is no longer authorized. Reconnect with an active session.';
+      try { ack?.({ ok: false, requestId, error }); } catch {}
+      socket.emit('agent:error', { code: 'TASK_AUTHORIZATION_REVOKED', message: error, source: 'task', requestId });
+      return;
+    }
+    try {
+    const taskScope = authority.scope;
+    const toolSecurityContext = buildSocketToolSecurityContext(socket, taskScope);
+    let taskConversationId = '';
     const executionScope: ChatExecutionScope = {
       userId: uid,
       domain: taskScope.domain,
@@ -299,10 +321,12 @@ export function registerTaskHandler(
       return { ...publicPayload, source: publicPayload.source || 'task', requestId };
     };
     const publishRecordedAgent = (event: string, normalizedPayload: Record<string, any>) => {
+      if (!authority.isAuthorized()) return;
       io.to(executionRoom).emit(event, normalizedPayload);
     };
     let actionLeaseHeartbeat: ReturnType<typeof startConversationActionExecutionHeartbeat> | null = null;
     const emitAgent = (event: string, payload: Record<string, any> = {}) => {
+      if (!authority.isAuthorized()) return false;
       const normalizedPayload = normalizeAgentPayload(event, payload);
       if (
         event === 'agent:error'
@@ -316,6 +340,7 @@ export function registerTaskHandler(
       return true;
     };
     const emitTask = (event: string, payload: Record<string, any> = {}) => {
+      if (!authority.isAuthorized()) return;
       const normalizedPayload = { ...payload, source: payload.source || 'task', requestId };
       if (!recordChatExecutionEvent(executionScope, requestId, event, normalizedPayload)) return;
       io.to(executionRoom).emit(event, normalizedPayload);
@@ -333,7 +358,8 @@ export function registerTaskHandler(
         return false;
       }
       const event = input.event || 'agent:response';
-      const terminalPayload = normalizeAgentPayload(event, input.payload);
+      let terminalPayload = normalizeAgentPayload(event, input.payload);
+      let revokedTerminal = false;
       const unknownPayload = normalizeAgentPayload('agent:response', {
         text: taskDurabilityUnknownText(),
         agentName: String(input.payload.agentName || 'Lumi'),
@@ -342,6 +368,21 @@ export function registerTaskHandler(
         blocked: true,
         reason: 'persistence_unknown',
       });
+      const refreshTerminal = async () => {
+        if (authority.isAuthorized() || revokedTerminal) return null;
+        revokedTerminal = true;
+        const text = CN_TASK_EXECUTION_MESSAGES.cancelled;
+        terminalPayload = normalizeAgentPayload('agent:response', {
+          text, agentName: 'Lumi', finalized: true, blocked: false, reason: 'cancelled',
+        });
+        if (taskConversationId) {
+          cancelConversationActionExecution(taskConversationId, uid, text, requestId);
+          updateAssistantMessageTerminalPresentation({ userId: uid, conversationId: taskConversationId, requestId,
+            content: text, completionFeedback: { status: 'cancelled', incomplete: [text], nextSteps: [] }, source: 'task', channel: 'task' });
+          await flushDBOrThrow();
+        }
+        return { event: 'agent:response' as const, payload: terminalPayload };
+      };
       const committed = await commitChatTerminalBoundary({
         persistTerminalState: input.persistTerminalState || (() => undefined),
         persistAssistantMessage: input.persistAssistantMessage || (() => undefined),
@@ -352,6 +393,7 @@ export function registerTaskHandler(
           event,
           terminalPayload,
           unknownPayload,
+          { refreshTerminal },
         ),
         persistUnknownReceipt: () => recordChatExecutionPersistenceUnknownDurably(
           executionScope,
@@ -359,6 +401,10 @@ export function registerTaskHandler(
           unknownPayload,
         ),
         publishCommitted: terminalState => {
+          if (!authority.isAuthorized()) {
+            socket.emit('agent:status', { status: 'cancelled', source: 'task', requestId, code: 'TASK_AUTHORIZATION_REVOKED' });
+            return;
+          }
           input.publishAfter?.(terminalState);
           publishRecordedAgent(event, terminalPayload);
         },
@@ -375,7 +421,7 @@ export function registerTaskHandler(
         },
       });
       if (committed) actionLeaseHeartbeat?.stop();
-      return committed;
+      return committed && authority.isAuthorized();
     };
     const persistEarlyTerminalTranscript = (
       assistantText: string,
@@ -387,6 +433,7 @@ export function registerTaskHandler(
         taskScope.domain,
         taskScope.orgId,
       );
+      taskConversationId = conversation.id;
       addMessageIdempotent({
         userId: uid,
         agentId: '',
@@ -693,6 +740,7 @@ export function registerTaskHandler(
       ? getConversationForScope(data.conversationId, uid, taskScope.domain, taskScope.orgId)
       : null;
     const convForHistory = selectedConversation || getOrCreateActiveConversation(uid, '', taskScope.domain, taskScope.orgId);
+    taskConversationId = convForHistory.id;
     try {
       await ensurePendingConfirmationPersistenceInitialized();
     } catch (error) {
@@ -704,6 +752,10 @@ export function registerTaskHandler(
         blocked: true,
         reason: 'persistence_unknown',
       }));
+      return;
+    }
+    if (!authority.isAuthorized()) {
+      try { ack?.({ ok: false, requestId, error: 'Task authorization was revoked before admission.' }); } catch {}
       return;
     }
     const pendingAssistantOfferContext = buildPendingAssistantOfferContextFromTranscript({
@@ -762,14 +814,14 @@ export function registerTaskHandler(
       return;
     }
     const taskUserMessageId = taskAdmission.persisted;
-    const confirmationResolution = await resolveAcceptedTurnConfirmation({
+    const confirmationResolution = authority.isAuthorized() ? await resolveAcceptedTurnConfirmation({
       admission: taskAdmission,
       userId: uid,
       userText: data.text,
       actionState: convForHistory.actionContinuationState,
       taskScope: confirmationScope,
       channelScope: confirmationChannelScope,
-    });
+    }) : { scope: confirmationScope, pending: null, prompt: '', correctionRequiresFreshConfirmation: false, revokedCorrectionBasis: null };
     confirmationScope = confirmationResolution.scope;
     const pendingConfirmation = confirmationResolution.pending;
     const pendingConfirmationPrompt = confirmationResolution.prompt;
@@ -783,6 +835,10 @@ export function registerTaskHandler(
       return taskExecutionQueue.reserve(executionKey, requestId);
     });
     const taskAbortController = taskLease.controller;
+    authority.bindController(taskAbortController, () => {
+      markChatExecutionCancelling(executionScope, requestId);
+      socket.emit('agent:status', { status: 'cancelling', source: 'task', requestId, code: 'TASK_AUTHORIZATION_REVOKED' });
+    });
     let releaseDesktopControlLease: (() => void) | null = null;
     let taskForegroundRequestIdentity: TaskForegroundRequestIdentity | null = null;
     const releaseTaskTransportResources = (): void => {
@@ -796,7 +852,7 @@ export function registerTaskHandler(
         if (!taskForegroundRequestIdentity) return true;
         const releaseResult = await convergeTaskForegroundRequestBeforeRelease({
           identity: taskForegroundRequestIdentity,
-          aborted: taskAbortController.signal.aborted,
+          aborted: authority.isCancelled(),
           reason,
         });
         if (!releaseResult.converged) {
@@ -876,6 +932,7 @@ export function registerTaskHandler(
       await releaseTask();
       return;
     }
+    authority.isAuthorized();
     const replacementUnknownPayload = {
       text: 'The task transition could not be durably recorded. Please verify before retrying.',
       agentName: 'Lumi',
@@ -921,7 +978,16 @@ export function registerTaskHandler(
       return;
     }
     if (superseded?.terminalEvent) {
-      io.to(executionRoom).emit(superseded.terminalEvent.event, superseded.terminalEvent.payload);
+      if (authority.isAuthorized()) io.to(executionRoom).emit(superseded.terminalEvent.event, superseded.terminalEvent.payload);
+    }
+    if (!authority.isAuthorized()) {
+      await commitTaskTerminal({
+        payload: { text: CN_TASK_EXECUTION_MESSAGES.cancelled, agentName: 'Lumi', finalized: true, blocked: false, reason: 'cancelled' },
+        persistAssistantMessage: () => { persistEarlyTerminalTranscript(CN_TASK_EXECUTION_MESSAGES.cancelled, 'task_cancelled'); },
+        errorContext: 'Revoked task admission terminal',
+      });
+      await releaseTask();
+      return;
     }
     if (!acknowledged) {
       try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
@@ -1119,6 +1185,7 @@ export function registerTaskHandler(
       expectedTaskId: actionTaskExecution.state?.taskId,
     });
     try {
+    authority.assertAuthorized();
     actionLeaseHeartbeat = startConversationActionExecutionHeartbeat({
       conversationId: convForHistory.id,
       userId: uid,
@@ -1322,6 +1389,7 @@ export function registerTaskHandler(
         logLabel?: string;
       } = {},
     ) => {
+      if (authority.isCancelled()) return;
       persistLumiPostTurnLearning(
         {
           userId: uid,
@@ -1376,6 +1444,7 @@ export function registerTaskHandler(
     };
     let pendingConfirmationCreatedThisTurn: Awaited<ReturnType<typeof recordPendingConfirmationDurably>> | null = null;
     const requestConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
+      authority.assertAuthorized();
       if (pendingConfirmationCreatedThisTurn) return false;
       if (
         pendingConfirmation
@@ -1387,6 +1456,7 @@ export function registerTaskHandler(
           confirmationScope,
         )
       ) {
+        authority.assertAuthorized();
         console.log(`[TaskHandler] Consumed one-time confirmation for "${toolName}".`);
         return true;
       }
@@ -1414,6 +1484,7 @@ export function registerTaskHandler(
         originRequestId: requestId,
         actionIntent: routedTaskText,
       });
+      authority.assertAuthorized();
       if (
         correctionRequiresFreshConfirmation
         && !pendingConfirmationMatchesExactProposal(
@@ -1462,6 +1533,7 @@ export function registerTaskHandler(
     }
 
     if (pendingConfirmation) {
+      authority.assertAuthorized();
       const confirmedTask = pendingConfirmation.actionIntent || data.text;
       const confirmedArgs = pendingConfirmation.exactArgs || {};
       const confirmationRecordId =
@@ -1473,6 +1545,7 @@ export function registerTaskHandler(
         confirmedArgs,
         confirmationScope,
       );
+      authority.assertAuthorized();
       const confirmationRecord = await executeToolCall({
         registry: toolRegistry,
         id: confirmationRecordId,
@@ -1493,7 +1566,7 @@ export function registerTaskHandler(
           source: 'task_confirmation',
           supervisedExternalCommits: true,
           executionSignal: taskAbortController.signal,
-          isCancelled: () => taskAbortController.signal.aborted,
+          isCancelled: () => authority.isCancelled(),
           userConfirmed: true,
           actionIntent: confirmedTask,
           routedTaskText: confirmedTask,
@@ -1525,7 +1598,7 @@ export function registerTaskHandler(
           confirmedTask,
           taskAwareRecords([confirmationRecord]),
         )
-        && !taskAbortController.signal.aborted
+        && !authority.isCancelled()
       ) {
         const continuation = await runWithTools(
           [
@@ -1575,7 +1648,7 @@ export function registerTaskHandler(
             priorToolRecords: [confirmationRecord],
             desktopExecutionTracker,
             executionSignal: taskAbortController.signal,
-            isCancelled: () => taskAbortController.signal.aborted,
+            isCancelled: () => authority.isCancelled(),
             llmGetters,
             source: 'task_confirmation_resume',
             supervisedExternalCommits: true,
@@ -1680,8 +1753,9 @@ export function registerTaskHandler(
         llmModel: activeModel,
         isLLMAvailable: true,
       };
+      authority.assertAuthorized();
       cognition = await processInput(routedTaskText, cognitiveCtx);
-      if (taskLease.signal.aborted) {
+      if (authority.isCancelled()) {
         const cancellationError = new Error('Task cancelled');
         cancellationError.name = 'AbortError';
         throw cancellationError;
@@ -1804,7 +1878,7 @@ export function registerTaskHandler(
         modelToolPolicy.maxIterations || 25,
         llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
         (chunk) => {
-          if (!taskLease.signal.aborted && !deferTaskModelOutput) {
+          if (!authority.isCancelled() && !deferTaskModelOutput) {
             const safeText = taskTextGate.push(chunk);
             if (safeText) {
               emitTask("task:chunk", { text: safeText, agentName: personality.name });
@@ -1812,7 +1886,7 @@ export function registerTaskHandler(
             }
           }
         },
-        { ...toolSecurityContext, ...pipelineToolContext, userId: uid, taskId: actionTaskExecution.state?.taskId, taskRevision: actionTaskExecution.state?.revision, conversationId: convForHistory.id, turnId: requestId, requestId, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: data.text, routedTaskText, ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}), toolPolicy: modelToolPolicy, modelToolProjection, desktopExecutionTracker, executionSignal: taskLease.signal, isCancelled: () => taskLease.signal.aborted, llmGetters, source: 'task', supervisedExternalCommits: true },
+        { ...toolSecurityContext, ...pipelineToolContext, userId: uid, taskId: actionTaskExecution.state?.taskId, taskRevision: actionTaskExecution.state?.revision, conversationId: convForHistory.id, turnId: requestId, requestId, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: data.text, routedTaskText, ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}), toolPolicy: modelToolPolicy, modelToolProjection, desktopExecutionTracker, executionSignal: taskLease.signal, isCancelled: () => authority.isCancelled(), llmGetters, source: 'task', supervisedExternalCommits: true },
         llmGetters.getOllama,
         llmGetters.getLmStudio,
         llmGetters.getArk,
@@ -1829,7 +1903,7 @@ export function registerTaskHandler(
       taskTextGate.finish();
       let finalTaskToolRecords = attachDesktopReceipt(result.toolCalls);
 
-      if (taskLease.signal.aborted) {
+      if (authority.isCancelled()) {
         const cancelledText = CN_TASK_EXECUTION_MESSAGES.cancelled;
         const cancelledResponse = finalizeLumiResponse({
           taskText: data.text,
@@ -1924,10 +1998,10 @@ export function registerTaskHandler(
         allowToolUse: toolSessionActive,
         pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
         requiresFreshConfirmation: correctionRequiresFreshConfirmation,
-        aborted: taskLease.signal.aborted || desktopPauseBlocksCurrentTask(),
+        aborted: authority.isCancelled() || desktopPauseBlocksCurrentTask(),
         // Desktop control may be paused by physical user input without the
         // task itself being cancelled. Keep those state transitions separate.
-        isAborted: () => taskLease.signal.aborted,
+        isAborted: () => authority.isCancelled(),
         isPendingConfirmation: () => Boolean(pendingConfirmationCreatedThisTurn),
         toolRecords: finalTaskToolRecords,
         attempt: async ({ instruction, priorToolRecords, recordTool }) => {
@@ -1984,7 +2058,7 @@ export function registerTaskHandler(
               priorToolRecords,
               desktopExecutionTracker,
               executionSignal: taskLease.signal,
-              isCancelled: () => taskLease.signal.aborted,
+              isCancelled: () => authority.isCancelled(),
               llmGetters,
               taskRevision: actionTaskExecution.state?.revision,
               source: 'task_guard_recovery',
@@ -2145,6 +2219,7 @@ export function registerTaskHandler(
         },
         llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
       ).then(extracted => {
+        if (!authority.isAuthorized()) return;
         for (const mem of extracted.memories) {
           addMemory({
             userId: uid,
@@ -2207,7 +2282,7 @@ export function registerTaskHandler(
       }
 
     } catch (err: any) {
-      if (taskLease.signal.aborted || err?.name === 'AbortError') {
+      if (authority.isCancelled() || err?.name === 'AbortError') {
         const cancelledText = CN_TASK_EXECUTION_MESSAGES.cancelled;
         const cancellationRecords = cognition?.toolRecords
           || (cognition?.toolRecord ? [cognition.toolRecord] : []);
@@ -2286,7 +2361,7 @@ export function registerTaskHandler(
       });
     }
     } catch (lifecycleError: any) {
-      const aborted = taskAbortController.signal.aborted || lifecycleError?.name === 'AbortError';
+      const aborted = authority.isCancelled() || lifecycleError?.name === 'AbortError';
       const terminalText = aborted
         ? CN_TASK_EXECUTION_MESSAGES.cancelled
         : CN_VOICE_WORK_MESSAGES.processingFailed;
@@ -2349,6 +2424,9 @@ export function registerTaskHandler(
       });
     } finally {
       await releaseTask();
+    }
+    } finally {
+      authority.dispose();
     }
   });
 }

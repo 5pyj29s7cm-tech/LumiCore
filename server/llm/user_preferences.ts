@@ -1,4 +1,5 @@
-import { readDB, writeDB } from '../../db_layer';
+import { readDB } from '../../db_layer';
+import { writeModelPreference } from './model_preference_revision';
 import {
   getRegisteredProviderDefaultModel,
   isExtensionProviderId,
@@ -213,7 +214,6 @@ function resolvePrefs(raw: any, userId?: string): UserLLMPrefs {
 }
 
 function persistResolvedPrefs(userId: string, prefs: UserLLMPrefs, updatedAt?: string): void {
-  const db = readDB();
   const key = `llm_prefs_${userId || 'anonymous'}`;
   const payload = {
     schemaVersion: 2,
@@ -227,11 +227,7 @@ function persistResolvedPrefs(userId: string, prefs: UserLLMPrefs, updatedAt?: s
     ...(prefs.legacyMigration ? { legacyMigration: prefs.legacyMigration } : {}),
     updatedAt: updatedAt || new Date().toISOString(),
   };
-  if (!db.settings) (db as any).settings = [];
-  const index = (db.settings || []).findIndex((setting: any) => setting.key === key);
-  if (index >= 0) db.settings[index].value = JSON.stringify(payload);
-  else db.settings.push({ key, value: JSON.stringify(payload) });
-  writeDB(db);
+  writeModelPreference(key, payload, ['reasoning']);
 }
 
 export function getUserPreferredLLM(userId: string, options: { persistMigration?: boolean } = {}): UserLLMPrefs {
@@ -240,7 +236,8 @@ export function getUserPreferredLLM(userId: string, options: { persistMigration?
   const resolved = resolvePrefs(raw, uid);
   // Legacy aliases are migrated exactly once. New schema writes preserve the
   // user's literal model id, including ids that happen to match old aliases.
-  if (options.persistMigration !== false && raw && (Number(raw.schemaVersion || 0) < 2 || resolved.legacyMigration?.entries.some(entry => entry.provider === 'relay'))) {
+  if (options.persistMigration !== false && raw && (Number(raw.schemaVersion || 0) < 2
+    || JSON.stringify(normalizeModels(raw.models)) !== JSON.stringify(resolved.models))) {
     persistResolvedPrefs(uid, resolved, raw.updatedAt);
   }
   return resolved;

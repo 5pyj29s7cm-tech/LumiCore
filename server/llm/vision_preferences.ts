@@ -1,4 +1,5 @@
-import { readDB, writeDB } from '../../db_layer';
+import { readDB } from '../../db_layer';
+import { writeModelPreference } from './model_preference_revision';
 import { LUMI_OFFICIAL_DEFAULT_MODELS } from '../../shared/model_provider_capabilities';
 
 export type VisionProvider = 'openai' | 'gemini' | 'ark' | 'qwen' | 'ollama' | 'lmstudio' | 'relay';
@@ -68,13 +69,8 @@ export function upsertUserPreferredVision(
   if (!model) throw new Error('A vision model name is required');
   models[provider] = model;
   const payload = { provider, model, models, updatedAt: new Date().toISOString() };
-  const db = readDB();
   const key = `vision_prefs_${userId || 'anonymous'}`;
-  if (!db.settings) (db as any).settings = [];
-  const index = (db.settings || []).findIndex((setting: any) => setting.key === key);
-  if (index >= 0) db.settings[index].value = JSON.stringify(payload);
-  else db.settings.push({ key, value: JSON.stringify(payload) });
-  writeDB(db);
+  writeModelPreference(key, payload, ['vision']);
   return { provider, model, models };
 }
 

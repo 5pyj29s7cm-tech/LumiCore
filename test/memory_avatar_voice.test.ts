@@ -204,6 +204,56 @@ describe('private Memory Territory voice handlers', () => {
     await socket.receive('avatar:audio:stop', data);
   });
 
+  it.each([false, true])('manual interruption cancels queued speech and permits a fresh repeat=%s', async repeatAfterInterrupt => {
+    const { socket, avatar, data, stt } = await setup();
+    const entered = deferred(); const release = deferred(); let saves = 0;
+    fixture.flush = async actual => { if (++saves === 2) { entered.resolve(); await release.promise; } await actual(); };
+    const first = stt.result({ text: 'First question waiting for storage', isFinal: true });
+    let second: Promise<void> | undefined; let repeated: Promise<void> | undefined; let interruption: Promise<void> | undefined;
+    try {
+      await entered.promise;
+      const requestId = socket.outputs.find(([event, value]) => event === 'avatar:audio:status' && value.status === 'thinking')![1].requestId;
+      second = stt.result({ text: 'Queued question', isFinal: true });
+      interruption = socket.receive('avatar:audio:interrupt', { ...data, requestId, source: 'user_control' });
+      expect(socket.outputs.at(-1)).toEqual(['avatar:audio:interrupt-ack', expect.objectContaining({ requestId, workContinues: false })]);
+      if (repeatAfterInterrupt) repeated = stt.result({ text: 'Queued question', isFinal: true });
+      release.resolve(); await Promise.all([first, second, interruption, repeated]); fixture.flush = null;
+      expect(fixture.model).toHaveBeenCalledTimes(repeatAfterInterrupt ? 2 : 1);
+      expect(fixture.synthesis).toHaveBeenCalledTimes(repeatAfterInterrupt ? 1 : 0);
+      const transcripts = socket.outputs.filter(([event]) => event === 'avatar:audio:transcript').map(([, value]) => value.text);
+      expect(transcripts).toEqual(repeatAfterInterrupt ? ['First question waiting for storage', 'Queued question'] : ['First question waiting for storage']);
+      const conversation = getOrCreateActiveConversation(socket.userId, avatar.id, 'personal', '');
+      const history = getMessages(conversation.id);
+      expect(history.filter(row => row.role === 'user' && row.message === 'Queued question')).toHaveLength(repeatAfterInterrupt ? 1 : 0);
+      expect(history.filter(row => row.role === 'assistant' && row.message === 'This voice reply was cancelled.')).toHaveLength(1);
+    } finally {
+      release.resolve(); await Promise.allSettled([first, second, interruption, repeated]); fixture.flush = null;
+      await socket.receive('avatar:audio:stop', data);
+    }
+  });
+
+  it('an interruption for an older request does not clear newer queued speech', async () => {
+    const { socket, data, stt } = await setup();
+    const entered = deferred(); const release = deferred(); let saves = 0;
+    fixture.flush = async actual => { if (++saves === 2) { entered.resolve(); await release.promise; } await actual(); };
+    const first = stt.result({ text: 'Current question', isFinal: true });
+    let second: Promise<void> | undefined;
+    try {
+      await entered.promise;
+      second = stt.result({ text: 'Newer queued question', isFinal: true });
+      const before = socket.outputs.length;
+      await socket.receive('avatar:audio:interrupt', { ...data, requestId: 'stale-request', source: 'user_control' });
+      expect(socket.outputs).toHaveLength(before);
+      release.resolve(); await Promise.all([first, second]); fixture.flush = null;
+      expect(fixture.model).toHaveBeenCalledTimes(2);
+      expect(fixture.model.mock.calls[1][0].at(-1).content).toBe('Newer queued question');
+      expect(fixture.synthesis).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve(); await Promise.allSettled([first, second]); fixture.flush = null;
+      await socket.receive('avatar:audio:stop', data);
+    }
+  });
+
   it('archive while the terminal flush is held rewrites the unpublished success before releasing', async () => {
     const { socket, avatar, data, stt } = await setup();
     const entered = deferred(); const release = deferred(); let count = 0;

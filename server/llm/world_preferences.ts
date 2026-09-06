@@ -1,4 +1,5 @@
-import { readDB, writeDB } from '../../db_layer';
+import { readDB } from '../../db_layer';
+import { writeModelPreference } from './model_preference_revision';
 import { LUMI_OFFICIAL_DEFAULT_MODELS } from '../../shared/model_provider_capabilities';
 import {
   DEFAULT_VISION_MODELS,
@@ -99,17 +100,9 @@ export function getUserPreferredWorldModel(userId: string): ResolvedWorldModel {
 
 export function upsertUserWorldModelPrefs(userId: string, input: unknown): WorldModelPrefs {
   const prefs = normalizeWorldModelPrefs(input);
-  const db = readDB();
   const key = `world_prefs_${userId || 'anonymous'}`;
   const payload = { ...prefs, updatedAt: new Date().toISOString() };
-  if (!db.settings) (db as any).settings = [];
-  const index = (db.settings || []).findIndex((item: any) => item.key === key);
-  if (index >= 0) {
-    (db.settings as any[])[index].value = JSON.stringify(payload);
-  } else {
-    db.settings.push({ key, value: JSON.stringify(payload) });
-  }
-  writeDB(db);
+  writeModelPreference(key, payload, ['world']);
   return prefs;
 }
 

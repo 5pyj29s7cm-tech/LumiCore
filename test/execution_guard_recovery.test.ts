@@ -1143,7 +1143,7 @@ describe('execution guard recovery', () => {
       cancellationCheck: 'isAborted: isChatCancelled',
     }, {
       source: readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8'),
-      cancellationCheck: 'isAborted: () => taskLease.signal.aborted',
+      cancellationCheck: 'isAborted: () => authority.isCancelled()',
     }, {
       source: readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8'),
       cancellationCheck: 'isAborted: () => !isCurrentTurn()',

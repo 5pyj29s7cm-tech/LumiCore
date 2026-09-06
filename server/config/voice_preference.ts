@@ -1,7 +1,8 @@
 // Voice provider preference — shared by STT + TTS adapters.
 // Persisted per-instance in db.settings. No user-id granularity needed
 // since this is a system-level config.
-import { readDB, writeDB } from '../../db_layer';
+import { readDB } from '../../db_layer';
+import { writeModelPreference } from '../llm/model_preference_revision';
 import {
   LUMI_OFFICIAL_DEFAULT_MODELS,
   LUMI_OFFICIAL_PROVIDER_ID,
@@ -68,16 +69,10 @@ export function getVoicePreference(): VoicePreference {
 export function setVoicePreference(pref: Partial<VoicePreference>): VoicePreference {
   const current = getVoicePreference();
   const merged = normalizePreference({ ...current, ...pref });
-  try {
-    const db = readDB();
-    if (!db.settings) db.settings = [];
-    const idx = db.settings.findIndex((s: any) => s.key === 'voice_preference');
-    if (idx >= 0) {
-      db.settings[idx].value = JSON.stringify(merged);
-    } else {
-      db.settings.push({ key: 'voice_preference', value: JSON.stringify(merged) });
-    }
-    writeDB(db);
-  } catch {}
+  const roles = (['stt', 'tts'] as const).filter(role => (
+    Object.hasOwn(pref, role) || Object.hasOwn(pref, `${role}Model`)
+    || current[role] !== merged[role] || current[`${role}Model`] !== merged[`${role}Model`]
+  ));
+  writeModelPreference('voice_preference', merged, roles);
   return merged;
 }

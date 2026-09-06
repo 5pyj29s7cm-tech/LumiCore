@@ -68,6 +68,7 @@ import {
   normalizeLumiOfficialModel,
 } from '../../shared/model_provider_capabilities';
 import { normalizeVoiceModelId } from '../config/voice_preference';
+import { getModelPreferenceRevision } from './model_preference_revision';
 
 // Keep the public role list in lockstep with the settings capability manifest.
 // A second hand-maintained list previously allowed the UI and runtime to drift.
@@ -405,6 +406,30 @@ function officialModelForRole(userId: string, role: LumiModelRole, hasUserSelect
   }
 }
 
+function rolePreferenceLocation(userId: string, role: LumiModelRole): [string, string] {
+  switch (role) {
+    case 'reasoning': return [`llm_prefs_${userId}`, 'reasoning'];
+    case 'vision': return [`vision_prefs_${userId}`, 'vision'];
+    case 'world': return [`world_prefs_${userId}`, 'world'];
+    case 'image_generation': return [`generation_prefs_${userId}`, 'image'];
+    case 'image_edit': return [`generation_prefs_${userId}`, 'imageEdit'];
+    case 'video_generation': return [`generation_prefs_${userId}`, 'video'];
+    case 'image_to_video': return [`generation_prefs_${userId}`, 'imageToVideo'];
+    case 'embedding': case 'rerank': return [`retrieval_model_prefs_${userId}`, role];
+    case 'speech_recognition': return ['voice_preference', 'stt'];
+    case 'speech_synthesis': return ['voice_preference', 'tts'];
+  }
+}
+
+function modelPreferenceRevisions(userId: string): Map<LumiModelRole, string | undefined> {
+  return new Map(LUMI_MODEL_ROLES.map(role => [role, getModelPreferenceRevision(...rolePreferenceLocation(userId, role))]));
+}
+
+function changedPreferenceRevisions(userId: string, before: Map<LumiModelRole, string | undefined>) {
+  return new Map([...modelPreferenceRevisions(userId)]
+    .filter(([role, revision]) => revision !== undefined && revision !== before.get(role)));
+}
+
 function restoreModelConfigurationSnapshot(
   userId: string,
   snapshot: {
@@ -415,40 +440,35 @@ function restoreModelConfigurationSnapshot(
     retrieval: ReturnType<typeof getUserRetrievalModelPreferences>;
     voice: ReturnType<typeof getVoicePreference>;
   },
+  ownedRevisions: Map<LumiModelRole, string | undefined>,
 ): void {
-  // Best effort rollback. Each preference writer is synchronous from the
-  // caller's perspective and writeDB coalesces the resulting snapshot flush.
-  try {
-    upsertUserPreferredLLM(userId, {
-      provider: snapshot.reasoning.provider,
-      model: snapshot.reasoning.model,
-      models: snapshot.reasoning.models,
-      selectionMode: snapshot.reasoning.selectionMode,
-      fallbackCandidates: snapshot.reasoning.fallbackCandidates,
-      allowCloudFallback: snapshot.reasoning.allowCloudFallback,
-      autoFallbackProvider: snapshot.reasoning.autoFallbackProvider,
-      autoFallbackModel: snapshot.reasoning.autoFallbackModel,
-    });
-  } catch {}
-  try {
-    upsertUserPreferredVision(userId, {
-      provider: snapshot.vision.provider,
-      model: snapshot.vision.model,
-      models: snapshot.vision.models,
-    });
-  } catch {}
-  try {
-    upsertUserWorldModelPrefs(userId, snapshot.world);
-  } catch {}
-  try {
-    upsertUserPreferredGenerationModels(userId, snapshot.generation);
-  } catch {}
-  try {
-    upsertUserRetrievalModelPreferences(userId, snapshot.retrieval);
-  } catch {}
-  try {
-    setVoicePreference(snapshot.voice);
-  } catch {}
+  // Compare and compensate synchronously. A later UI/tool save (including the
+  // same value) owns a new revision and must survive this older operation.
+  for (const [role, revision] of ownedRevisions) {
+    if (!revision || getModelPreferenceRevision(...rolePreferenceLocation(userId, role)) !== revision) continue;
+    try {
+      if (role === 'reasoning') {
+        upsertUserPreferredLLM(userId, snapshot.reasoning);
+      } else if (role === 'vision') {
+        upsertUserPreferredVision(userId, snapshot.vision);
+      } else if (role === 'world') {
+        upsertUserWorldModelPrefs(userId, snapshot.world);
+      } else if (role === 'image_generation' || role === 'image_edit' || role === 'video_generation' || role === 'image_to_video') {
+        const field = rolePreferenceLocation(userId, role)[1] as keyof typeof snapshot.generation;
+        upsertUserPreferredGenerationModels(userId, {
+          ...getUserPreferredGenerationModels(userId), [field]: snapshot.generation[field],
+        }, [field]);
+      } else if (role === 'embedding' || role === 'rerank') {
+        upsertUserRetrievalModelPreferences(userId, {
+          ...getUserRetrievalModelPreferences(userId), [role]: snapshot.retrieval[role],
+        }, [role]);
+      } else if (role === 'speech_recognition') {
+        setVoicePreference({ stt: snapshot.voice.stt, sttModel: snapshot.voice.sttModel });
+      } else {
+        setVoicePreference({ tts: snapshot.voice.tts, ttsModel: snapshot.voice.ttsModel });
+      }
+    } catch { /* The original operation remains failed; never announce a rollback as saved. */ }
+  }
 }
 
 // Only these model families changed namespace in the September 2026 official
@@ -545,7 +565,21 @@ function explicitlySelectedOfficialRoles(userId: string, includeEnvironment = tr
  * unexpected persistence/validation error so a click cannot leave a half-
  * adapted setup.
  */
-export async function applyLumiOfficialModelConfiguration(
+let officialConfigurationTail: Promise<void> = Promise.resolve();
+
+export function applyLumiOfficialModelConfiguration(
+  userId: string,
+  options: { catalog?: OfficialApiModelCatalog } = {},
+): Promise<OfficialModelConfigurationApplyResult> {
+  // Voice preferences are instance-wide, so serialize official batches across
+  // users as well. This avoids restoring another still-uncommitted batch as a
+  // rollback baseline. Single-role writers stay responsive and use revisions.
+  const operation = officialConfigurationTail.then(() => applyOfficialModelConfiguration(userId, options));
+  officialConfigurationTail = operation.then(() => undefined, () => undefined);
+  return operation;
+}
+
+async function applyOfficialModelConfiguration(
   userId: string,
   options: { catalog?: OfficialApiModelCatalog } = {},
 ): Promise<OfficialModelConfigurationApplyResult> {
@@ -600,6 +634,7 @@ export async function applyLumiOfficialModelConfiguration(
     planned.set(role, selection);
   }
 
+  const beforeRevisions = modelPreferenceRevisions(uid);
   for (const role of LUMI_MODEL_ROLES) {
     if (!LUMI_OFFICIAL_ROLE_CAPABILITIES[role]) {
       const existing = current[role];
@@ -630,20 +665,23 @@ export async function applyLumiOfficialModelConfiguration(
         selectionReason: selection!.selectionReason,
       });
     } catch (error: any) {
-      restoreModelConfigurationSnapshot(uid, snapshot);
+      restoreModelConfigurationSnapshot(uid, snapshot, changedPreferenceRevisions(uid, beforeRevisions));
       try { await flushDBOrThrow(); } catch {}
       const detail = String(error?.message || error || 'unknown configuration error').slice(0, 240);
       throw new Error(`Official API adaptation failed for ${role}: ${detail}`);
     }
   }
 
+  // No await occurred during the batch writes, so these identities belong to
+  // this operation. Capture before the persistence await admits other writers.
+  const ownedRevisions = changedPreferenceRevisions(uid, beforeRevisions);
   // Preference writers coalesce snapshots for performance. The one-click
   // operation is an explicit durability boundary, so do not report success
   // until every role is on disk.
   try {
     await flushDBOrThrow();
   } catch (error: any) {
-    restoreModelConfigurationSnapshot(uid, snapshot);
+    restoreModelConfigurationSnapshot(uid, snapshot, ownedRevisions);
     try { await flushDBOrThrow(); } catch {}
     throw new Error(`Official API adaptation could not be persisted: ${String(error?.message || error).slice(0, 240)}`);
   }
@@ -738,7 +776,8 @@ export function updateLumiModelConfiguration(userId: string, input: ModelConfigu
         models: { ...current.imageToVideo.models, [provider]: model },
       };
     }
-    upsertUserPreferredGenerationModels(uid, current);
+    const field = rolePreferenceLocation(uid, input.role)[1] as keyof typeof current;
+    upsertUserPreferredGenerationModels(uid, current, [field]);
   } else if (input.role === 'embedding' || input.role === 'rerank') {
     const current = getUserRetrievalModelPreferences(uid);
     if (input.role === 'embedding') {
@@ -771,7 +810,7 @@ export function updateLumiModelConfiguration(userId: string, input: ModelConfigu
         topN: input.topN === undefined ? current.rerank.topN : input.topN,
       };
     }
-    upsertUserRetrievalModelPreferences(uid, current);
+    upsertUserRetrievalModelPreferences(uid, current, [input.role]);
   } else {
     const current = getVoicePreference();
     const provider = input.provider || (input.role === 'speech_recognition' ? current.stt : current.tts);

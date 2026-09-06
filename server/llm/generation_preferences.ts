@@ -1,4 +1,5 @@
-import { readDB, writeDB } from '../../db_layer';
+import { readDB } from '../../db_layer';
+import { writeModelPreference } from './model_preference_revision';
 import { LUMI_OFFICIAL_DEFAULT_MODELS } from '../../shared/model_provider_capabilities';
 
 export type ImageGenerationProvider = 'auto' | 'openai' | 'qwen' | 'siliconflow' | 'relay';
@@ -143,19 +144,18 @@ export function getUserPreferredGenerationModels(userId: string): GenerationMode
   return normalizeGenerationModelPrefs(parseSetting(userId || 'anonymous'));
 }
 
-export function upsertUserPreferredGenerationModels(userId: string, input: unknown): GenerationModelPrefs {
+export function upsertUserPreferredGenerationModels(
+  userId: string,
+  input: unknown,
+  savedRoles: readonly (keyof GenerationModelPrefs)[] = ['image', 'imageEdit', 'video', 'imageToVideo'],
+): GenerationModelPrefs {
+  const previous = getUserPreferredGenerationModels(userId);
   const prefs = normalizeGenerationModelPrefs(input);
-  const db = readDB();
   const key = `generation_prefs_${userId || 'anonymous'}`;
   const payload = { ...prefs, updatedAt: new Date().toISOString() };
-  if (!db.settings) (db as any).settings = [];
-  const index = (db.settings || []).findIndex((item: any) => item.key === key);
-  if (index >= 0) {
-    (db.settings as any[])[index].value = JSON.stringify(payload);
-  } else {
-    db.settings.push({ key, value: JSON.stringify(payload) });
-  }
-  writeDB(db);
+  const changedRoles = (Object.keys(prefs) as (keyof GenerationModelPrefs)[])
+    .filter(role => JSON.stringify(prefs[role]) !== JSON.stringify(previous[role]));
+  writeModelPreference(key, payload, [...new Set([...savedRoles, ...changedRoles])]);
   return prefs;
 }
 

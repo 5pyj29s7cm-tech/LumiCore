@@ -3,7 +3,7 @@ import {
   makeLLMCallDirect,
   makeLLMCallStreamingDirect,
   StreamCallback,
-  type ModelAttemptTimeouts,
+  type LLMCallConfig,
 } from './providers';
 import { NormalizedLLMResponse } from '../tools/types';
 import {
@@ -15,7 +15,6 @@ import {
   type ModelRouteAttempt,
   type ModelRoutingTrace,
 } from './model_routing_receipts';
-import type { UserLLMFallbackCandidate, UserLLMSelectionMode } from './user_preferences';
 import {
   isRegisteredOpenAICompatibleProvider,
   isRegisteredProviderLocal,
@@ -27,33 +26,14 @@ import {
   type ProviderOutboundMessagesEvidence,
 } from './outbound_message_evidence';
 
-export interface DispatchConfig {
+export interface DispatchConfig extends LLMCallConfig {
   /** Explicit cloud fallback selected by the user. Never `auto`. */
   provider: string;
   model: string;
   /** Preferred local model for automatic local-first routing. */
   localModel?: string;
-  maxTokens?: number;
-  userId?: string;
-  domain?: string;
-  orgId?: string;
-  signal?: AbortSignal;
-  attemptTimeouts?: Partial<ModelAttemptTimeouts>;
-  inputTokenBudget?: number;
-  /** Server-selected schemas that every routed provider candidate must retain. */
-  protectedToolNames?: string[];
-  allowCloudFallback?: boolean;
-  selectionMode?: UserLLMSelectionMode;
-  fallbackCandidates?: UserLLMFallbackCandidate[];
   requestedProvider?: string;
   requestedModel?: string;
-  /** Explicit escape hatch for deployments whose relay SSE contract is verified. */
-  relayStreaming?: boolean;
-  /** Local-only declaration names that preflight must retain or fail closed. */
-  localRequiredToolNames?: string[];
-  /** Buffer one streaming candidate until terminal success so a failed
-   * action-planning candidate can be replaced without mixed visible output. */
-  bufferStreamUntilCandidateSuccess?: boolean;
 }
 
 export interface LLMGetters {
@@ -80,18 +60,9 @@ export interface DispatchedLLMResponse extends NormalizedLLMResponse {
 
 function callArguments(config: DispatchConfig, provider: string, model: string) {
   return {
+    ...config,
     provider: provider as any,
     model,
-    maxTokens: config.maxTokens,
-    userId: config.userId,
-    domain: config.domain,
-    orgId: config.orgId,
-    signal: config.signal,
-    attemptTimeouts: config.attemptTimeouts,
-    inputTokenBudget: config.inputTokenBudget,
-    protectedToolNames: config.protectedToolNames,
-    localRequiredToolNames: config.localRequiredToolNames,
-    relayStreaming: config.relayStreaming,
     selectionMode: 'pinned' as const,
     fallbackCandidates: [],
     allowCloudFallback: false,
