@@ -1561,9 +1561,10 @@ export function DesktopUI({
     accessories: `lumi_accessories_${petPreferenceScopeKey}`,
   }), [petPreferenceScopeKey]);
   const meetingPreferenceScopeKey = workDomain === 'work'
-    ? `org_${orgConnection?.orgId || 'pending'}`
+    ? `org_${orgConnection?.orgId || 'pending'}_user_${user?.uid || 'local'}`
     : `personal_${user?.uid || 'local'}`;
   const meetingStorageKeys = useMemo(() => ({
+    identity: `lumi_meeting_identity_${meetingPreferenceScopeKey}`,
     startedAt: `lumi_meeting_started_at_${meetingPreferenceScopeKey}`,
     notes: `lumi_meeting_notes_${meetingPreferenceScopeKey}`,
     report: `lumi_meeting_report_${meetingPreferenceScopeKey}`,
@@ -2227,6 +2228,27 @@ export function DesktopUI({
   const [meetingSpeakerCount, setMeetingSpeakerCount] = useState(0);
   const [meetingReport, setMeetingReport] = useState<string>(() => readMeetingItem(meetingStorageKeys.report, 'lumi_meeting_report') || '');
   const [meetingReportGenerating, setMeetingReportGenerating] = useState(false);
+  const meetingIdentityRef = useRef({ scope: meetingPreferenceScopeKey, meetingId: localStorage.getItem(meetingStorageKeys.identity) || crypto.randomUUID(), refinementId: '' });
+  const meetingRefinementCancelRef = useRef<(() => void) | null>(null);
+  const meetingCaptureResetRef = useRef<((previousMeetingId: string) => void) | null>(null);
+  const renewMeetingIdentity = useCallback(() => {
+    const previousMeetingId = meetingIdentityRef.current.meetingId;
+    meetingRefinementCancelRef.current?.();
+    meetingIdentityRef.current = { scope: meetingPreferenceScopeKey, meetingId: crypto.randomUUID(), refinementId: '' };
+    localStorage.setItem(meetingStorageKeys.identity, meetingIdentityRef.current.meetingId);
+    setMeetingReportGenerating(false);
+    meetingCaptureResetRef.current?.(previousMeetingId);
+  }, [meetingPreferenceScopeKey, meetingStorageKeys.identity]);
+  // Fence callbacks immediately on a scope render, before effect cleanup runs.
+  if (meetingIdentityRef.current.scope !== meetingPreferenceScopeKey) {
+    meetingIdentityRef.current = { scope: meetingPreferenceScopeKey, meetingId: localStorage.getItem(meetingStorageKeys.identity) || crypto.randomUUID(), refinementId: '' };
+  }
+  useEffect(() => { localStorage.setItem(meetingStorageKeys.identity, meetingIdentityRef.current.meetingId); }, [meetingStorageKeys.identity]);
+  useEffect(() => () => {
+    meetingIdentityRef.current = { ...meetingIdentityRef.current, refinementId: '' };
+    meetingRefinementCancelRef.current?.();
+  }, [meetingPreferenceScopeKey]);
+
   const [legalMeetingCaseTitle, setLegalMeetingCaseTitle] = useState(() => getLegalCaseLabel(getLegalConsultationCase()));
   const meetingModeRef = useRef(operationMode === 'meeting');
   const meetingPausedRef = useRef(meetingPaused);
@@ -2268,6 +2290,7 @@ export function DesktopUI({
   }, [meetingStorageKeys.notes]);
 
   const resetMeetingCapture = useCallback((startedAt = Date.now()) => {
+    renewMeetingIdentity();
     setMeetingPaused(false);
     setMeetingNotes([]);
     setMeetingSpeakerCount(0);
@@ -2277,7 +2300,7 @@ export function DesktopUI({
     localStorage.removeItem(meetingStorageKeys.report);
     localStorage.setItem(meetingStorageKeys.startedAt, String(startedAt));
     lastMeetingTranscriptRef.current = { text: '', at: 0, speakerKey: '' };
-  }, [meetingStorageKeys]);
+  }, [meetingStorageKeys, renewMeetingIdentity]);
 
   const meetingSpeakerLabel = useCallback((note: Pick<MeetingNote, 'speakerLabel' | 'speakerMatched'>) => {
     if (note.speakerLabel) return note.speakerLabel;
@@ -2333,7 +2356,9 @@ export function DesktopUI({
   }, [meetingStorageKeys.report, meetingStorageKeys.startedAt, persistMeetingNotes]);
 
   const socket = useSocket();
-  const applyRefinedMeetingTranscript = useCallback((data: { text?: string; provider?: string; model?: string; durationMs?: number; startedAt?: number; segments?: RefinedMeetingSegment[]; speakerCount?: number }) => {
+  const applyRefinedMeetingTranscript = useCallback((data: { meetingId?: string; refinementId?: string; text?: string; provider?: string; model?: string; durationMs?: number; startedAt?: number; segments?: RefinedMeetingSegment[]; speakerCount?: number }) => {
+    const identity = meetingIdentityRef.current;
+    if (identity.scope !== meetingPreferenceScopeKey || data.meetingId !== identity.meetingId || data.refinementId !== identity.refinementId) return null;
     const clean = String(data.text || '').trim();
     if (!clean) return null;
     const now = Date.now();
@@ -2372,20 +2397,22 @@ export function DesktopUI({
     localStorage.removeItem(meetingStorageKeys.report);
     toast.success(uiMessage('desktop-ui.meeting-transcript-refined-with-the.0e4e859506', (lang === 'zh') ? 'zh' : 'en'));
     return next;
-  }, [lang, meetingStartedAt, meetingStorageKeys.report, persistMeetingNotes]);
+  }, [lang, meetingStartedAt, meetingStorageKeys.report, meetingPreferenceScopeKey, persistMeetingNotes]);
 
-  const waitForMeetingRefinement = useCallback(() => new Promise<MeetingNote[] | null>((resolve) => {
-    if (!socket?.connected) {
-      resolve(null);
-      return;
-    }
+  const waitForMeetingRefinement = useCallback((identity: { scope: string; meetingId: string; refinementId: string }) => new Promise<MeetingNote[] | null>((resolve) => {
+    if (!socket?.connected) { resolve(null); return; }
+    meetingRefinementCancelRef.current?.();
     let settled = false;
+    const isCurrent = () => meetingIdentityRef.current === identity;
+    const matches = (data?: { meetingId?: string; refinementId?: string }) => data?.meetingId === identity.meetingId && data.refinementId === identity.refinementId;
     const cleanup = () => {
       socket.off('meeting:refined_transcript', onRefined);
       socket.off('meeting:refine_error', onError);
       socket.off('meeting:refine_status', onStatus);
+      socket.off('audio:error', onAudioError);
       window.removeEventListener('lumi:domain-changed', onDomainChanged);
       window.clearTimeout(timeout);
+      if (meetingRefinementCancelRef.current === cancel) meetingRefinementCancelRef.current = null;
     };
     const finish = (value: MeetingNote[] | null) => {
       if (settled) return;
@@ -2393,25 +2420,47 @@ export function DesktopUI({
       cleanup();
       resolve(value);
     };
-    const onStatus = (data?: { message?: string }) => {
-      toast.info(data?.message || (uiMessage('desktop-ui.refining-the-meeting-recording-with.1e8a392145', (lang === 'zh') ? 'zh' : 'en')));
+    const cancel = () => finish(null);
+    const onStatus = (data?: { meetingId?: string; refinementId?: string; message?: string }) => {
+      if (!matches(data) || !isCurrent()) return;
+      toast.info(data?.message || uiMessage('desktop-ui.refining-the-meeting-recording-with.1e8a392145', lang === 'zh' ? 'zh' : 'en'));
     };
-    const onRefined = (data: { text?: string; provider?: string; model?: string; durationMs?: number; startedAt?: number; segments?: RefinedMeetingSegment[]; speakerCount?: number }) => {
-      finish(applyRefinedMeetingTranscript(data));
+    const onRefined = (data: Parameters<typeof applyRefinedMeetingTranscript>[0]) => {
+      if (!matches(data)) return;
+      finish(isCurrent() ? applyRefinedMeetingTranscript(data) : null);
     };
-    const onError = (data: { message?: string }) => {
-      toast.error(data?.message || (uiMessage('desktop-ui.high-accuracy-meeting-transcription-failed.06ae217f12', (lang === 'zh') ? 'zh' : 'en')));
+    const onError = (data: { meetingId?: string; refinementId?: string; message?: string; reason?: string }) => {
+      if (!matches(data)) return;
+      if (data.reason === 'authorization_revoked' && isCurrent()) {
+        meetingIdentityRef.current = { ...identity, refinementId: '' };
+        setMeetingReportGenerating(false);
+      }
+      if (isCurrent()) toast.error(data.message || uiMessage('desktop-ui.high-accuracy-meeting-transcription-failed.06ae217f12', lang === 'zh' ? 'zh' : 'en'));
       finish(null);
     };
-    const onDomainChanged = () => finish(null);
+    const onAudioError = (data?: { code?: string }) => {
+      if (data?.code !== 'ORGANIZATION_ACCESS_CHANGED' || !isCurrent()) return;
+      meetingIdentityRef.current = { ...identity, refinementId: '' };
+      setMeetingReportGenerating(false);
+      cancel();
+    };
+    const onDomainChanged = () => {
+      if (isCurrent()) {
+        meetingIdentityRef.current = { ...identity, refinementId: '' };
+        setMeetingReportGenerating(false);
+      }
+      cancel();
+    };
     const timeout = window.setTimeout(() => {
-      toast.error(uiMessage('desktop-ui.high-accuracy-meeting-transcription-timed.4ade09a115', (lang === 'zh') ? 'zh' : 'en'));
+      if (isCurrent()) toast.error(uiMessage('desktop-ui.high-accuracy-meeting-transcription-timed.4ade09a115', lang === 'zh' ? 'zh' : 'en'));
       finish(null);
     }, 60 * 60 * 1000);
-    socket.once('meeting:refined_transcript', onRefined);
-    socket.once('meeting:refine_error', onError);
+    socket.on('meeting:refined_transcript', onRefined);
+    socket.on('meeting:refine_error', onError);
     socket.on('meeting:refine_status', onStatus);
+    socket.on('audio:error', onAudioError);
     window.addEventListener('lumi:domain-changed', onDomainChanged, { once: true });
+    meetingRefinementCancelRef.current = cancel;
   }), [applyRefinedMeetingTranscript, lang, socket]);
 
   useEffect(() => {
@@ -2479,6 +2528,12 @@ export function DesktopUI({
   ]);
   const meetingStartAttemptRef = useRef(0);
   const activeVoiceScopeRef = useRef(meetingPreferenceScopeKey);
+  meetingCaptureResetRef.current = previousMeetingId => {
+    socket?.emit('meeting:discard', { meetingId: previousMeetingId });
+    meetingStartAttemptRef.current = 0;
+    if (meetingVoiceActiveRef.current && callState !== 'idle') endCall();
+  };
+
 
   useEffect(() => {
     if (activeVoiceScopeRef.current === meetingPreferenceScopeKey) return;
@@ -2493,12 +2548,13 @@ export function DesktopUI({
     void startCall(selectedVoiceId, activePersonality, activePersonality, getVoiceScopeOptions());
   }, [activePersonality, getVoiceScopeOptions, selectedVoiceId, startCall]);
 
-  const stopMeetingAudio = useCallback((options: { refineTranscript?: boolean } = {}) => {
+  const stopMeetingAudio = useCallback((options: { refineTranscript?: boolean; refinementId?: string } = {}) => {
     setMeetingPaused(false);
     meetingVoiceActiveRef.current = false;
     if (operationMode === 'meeting') setOperationMode('assistant');
-    if (callState !== 'idle') endCall({ refineTranscript: options.refineTranscript === true });
-  }, [callState, endCall, operationMode, setOperationMode]);
+    if (callState !== 'idle') endCall({ refineTranscript: options.refineTranscript === true, refinementId: options.refinementId });
+    else if (options.refineTranscript) socket?.emit('meeting:refine', { meetingId: meetingIdentityRef.current.meetingId, refinementId: options.refinementId });
+  }, [callState, endCall, operationMode, setOperationMode, socket]);
 
   useEffect(() => {
     if (operationMode !== 'meeting') {
@@ -2513,7 +2569,7 @@ export function DesktopUI({
     if (meetingPaused) {
       if (meetingVoiceActiveRef.current && callState !== 'idle') {
         meetingVoiceActiveRef.current = false;
-        endCall();
+        endCall({ preserveMeeting: true });
       }
       return;
     }
@@ -2530,7 +2586,7 @@ export function DesktopUI({
       if (now - meetingStartAttemptRef.current < 3000) return;
       meetingStartAttemptRef.current = now;
       meetingVoiceActiveRef.current = true;
-      void startCall(selectedVoiceId, activePersonality, activePersonality, { ...getVoiceScopeOptions(), transcriptionOnly: true });
+      void startCall(selectedVoiceId, activePersonality, activePersonality, { ...getVoiceScopeOptions(), transcriptionOnly: true, meetingId: meetingIdentityRef.current.meetingId });
     }
   }, [activePersonality, callState, endCall, getVoiceScopeOptions, meetingPaused, meetingStorageKeys.startedAt, operationMode, selectedVoiceId, startCall]);
   // Spacebar push-to-talk: track whether this call was started by spacebar
@@ -2806,7 +2862,9 @@ export function DesktopUI({
     ].join('\n');
   }, [formatMeetingNoteForExport, formatMeetingTime, lang, legalMeetingCaseTitle, meetingNotes, meetingStartedAt]);
 
-  const analyzeMeetingNotes = useCallback(async (endedAt = Date.now(), notesOverride?: MeetingNote[]) => {
+  const analyzeMeetingNotes = useCallback(async (endedAt = Date.now(), notesOverride?: MeetingNote[], identity = meetingIdentityRef.current) => {
+    const isCurrent = () => meetingIdentityRef.current === identity;
+    if (!isCurrent()) return "";
     const notesForAnalysis = notesOverride || meetingNotes;
     if (notesForAnalysis.length === 0) {
       const fallback = buildFallbackMeetingReport(notesForAnalysis);
@@ -2853,6 +2911,7 @@ export function DesktopUI({
         }),
       });
       const data = await res.json().catch(() => ({}));
+      if (!isCurrent()) return '';
       if (!res.ok) throw new Error(data.error || 'Failed to analyze meeting');
       const report = String(data.report || '').trim() || buildFallbackMeetingReport(notesForAnalysis);
       setMeetingReport(report);
@@ -2868,13 +2927,14 @@ export function DesktopUI({
       toast.success(uiMessage('desktop-ui.lumi-generated-the-meeting-report.ebfd03daff', (lang === 'zh') ? 'zh' : 'en'));
       return report;
     } catch (err: any) {
+      if (!isCurrent()) return '';
       const fallback = buildFallbackMeetingReport(notesForAnalysis);
       setMeetingReport(fallback);
       localStorage.setItem(meetingStorageKeys.report, fallback);
       toast.error(err?.message || (uiMessage('desktop-ui.meeting-analysis-failed-generated-a.2106efcb98', (lang === 'zh') ? 'zh' : 'en')));
       return fallback;
     } finally {
-      setMeetingReportGenerating(false);
+      if (isCurrent()) setMeetingReportGenerating(false);
     }
   }, [aiConfig?.model, aiConfig?.provider, buildFallbackMeetingReport, lang, legalMeetingCaseTitle, meetingNotes, meetingStartedAt, meetingStorageKeys.report, orgConnection?.connected, orgConnection?.orgId, workDomain]);
 
@@ -2949,21 +3009,19 @@ export function DesktopUI({
   }, [formatMeetingNoteForExport, formatMeetingTime, lang, meetingNotes, meetingStartedAt, orgConnection?.connected, workDomain]);
 
   const endMeetingAndReport = useCallback(async () => {
-    const endingScope = meetingPreferenceScopeKey;
+    const identity = { ...meetingIdentityRef.current, refinementId: crypto.randomUUID() };
+    meetingIdentityRef.current = identity;
     const endedAt = Date.now();
     setMeetingReportGenerating(true);
-    const refinementPromise = callState !== 'idle' ? waitForMeetingRefinement() : Promise.resolve(null);
-    stopMeetingAudio({ refineTranscript: true });
+    const refinementPromise = waitForMeetingRefinement(identity);
+    stopMeetingAudio({ refineTranscript: true, refinementId: identity.refinementId });
     setMeetingNotesOpen(true);
     const refinedNotes = await refinementPromise;
-    if (activeVoiceScopeRef.current !== endingScope) {
-      setMeetingReportGenerating(false);
-      return;
-    }
-    const report = await analyzeMeetingNotes(endedAt, refinedNotes || undefined);
-    if (activeVoiceScopeRef.current !== endingScope) return;
+    if (meetingIdentityRef.current !== identity) return;
+    const report = await analyzeMeetingNotes(endedAt, refinedNotes || undefined, identity);
+    if (meetingIdentityRef.current !== identity) return;
     await archiveLegalMeetingReport(report, endedAt, refinedNotes || undefined);
-  }, [analyzeMeetingNotes, archiveLegalMeetingReport, callState, meetingPreferenceScopeKey, stopMeetingAudio, waitForMeetingRefinement]);
+  }, [analyzeMeetingNotes, archiveLegalMeetingReport, stopMeetingAudio, waitForMeetingRefinement]);
 
   const endVoiceCallFromUI = useCallback(() => {
     if (operationMode === 'meeting') {
@@ -2977,7 +3035,7 @@ export function DesktopUI({
     setMeetingPaused(true);
     meetingVoiceActiveRef.current = false;
     meetingStartAttemptRef.current = 0;
-    if (callState !== 'idle') endCall();
+    if (callState !== 'idle') endCall({ preserveMeeting: true });
     toast.success(uiMessage('desktop-ui.meeting-capture-paused.01ffd43760', (lang === 'zh') ? 'zh' : 'en'));
   }, [callState, endCall, lang]);
 
@@ -3029,6 +3087,7 @@ export function DesktopUI({
   }, [buildMeetingMarkdown, lang, meetingNotes.length, meetingStartedAt]);
 
   const clearMeetingNotes = useCallback(() => {
+    renewMeetingIdentity();
     const now = Date.now();
     setMeetingNotes([]);
     setMeetingSpeakerCount(0);
@@ -3040,7 +3099,7 @@ export function DesktopUI({
     lastMeetingTranscriptRef.current = { text: '', at: 0, speakerKey: '' };
     lastLegalMeetingArchiveRef.current = '';
     toast.success(uiMessage('desktop-ui.meeting-notes-cleared.935a6beea8', (lang === 'zh') ? 'zh' : 'en'));
-  }, [lang, meetingStorageKeys]);
+  }, [lang, meetingStorageKeys, renewMeetingIdentity]);
 
   const requestOperationModeChange = useCallback((nextMode: OperationMode) => {
     if (nextMode === operationMode) return;
@@ -3055,11 +3114,12 @@ export function DesktopUI({
     if (!pendingOperationMode) return;
     setOperationMode(pendingOperationMode);
     if (pendingOperationMode === 'meeting') {
+      if (meetingIdentityRef.current.refinementId) resetMeetingCapture();
       setMeetingPaused(false);
       setMeetingNotesOpen(true);
     }
     setPendingOperationMode(null);
-  }, [pendingOperationMode, setOperationMode]);
+  }, [pendingOperationMode, resetMeetingCapture, setOperationMode]);
 
   type MeetingModeRequestDetail = {
     confirmed?: boolean;
@@ -3072,7 +3132,7 @@ export function DesktopUI({
 
   const openMeetingMode = useCallback((detail: MeetingModeRequestDetail = {}) => {
     try {
-      if (detail.resetNotes) resetMeetingCapture();
+      if (detail.resetNotes || meetingIdentityRef.current.refinementId) resetMeetingCapture();
       if (detail.legalCaseId) setLegalConsultationCaseId(String(detail.legalCaseId));
       if (detail.legalCaseTitle) setLegalMeetingCaseTitle(String(detail.legalCaseTitle));
       else if (!getLegalConsultationCaseId()) setLegalMeetingCaseTitle('');

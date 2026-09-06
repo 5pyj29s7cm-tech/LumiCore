@@ -45,12 +45,15 @@ interface UseVoiceCallOptions {
 
 interface StartCallOptions {
   transcriptionOnly?: boolean;
+  meetingId?: string;
   domain?: 'personal' | 'work';
   orgId?: string;
 }
 
 interface EndCallOptions {
   refineTranscript?: boolean;
+  preserveMeeting?: boolean;
+  refinementId?: string;
 }
 
 export interface VoiceStartPayload {
@@ -58,6 +61,7 @@ export interface VoiceStartPayload {
   personalityId: string;
   agentId?: string;
   transcriptionOnly: boolean;
+  meetingId?: string;
   domain: 'personal' | 'work';
   orgId?: string;
   sessionId: string;
@@ -538,6 +542,8 @@ export function useVoiceCall({
     const activeSocket = socketRef.current;
     activeSocket?.emit('audio:stop', {
       refineTranscript: options.refineTranscript === true,
+      preserveMeeting: options.preserveMeeting === true,
+      refinementId: options.refinementId,
       sessionId: activeStartPayload.current?.sessionId,
     });
     activeStartPayload.current = null;
@@ -1201,6 +1207,7 @@ export function useVoiceCall({
         personalityId,
         agentId,
         transcriptionOnly: options.transcriptionOnly === true,
+        meetingId: options.transcriptionOnly ? options.meetingId : undefined,
         domain: options.domain || 'personal',
         orgId: options.domain === 'work' ? options.orgId : undefined,
         sessionId: captureSessionId,

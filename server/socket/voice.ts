@@ -9,6 +9,9 @@ import path from "path";
 import { randomUUID } from "node:crypto";
 import { flushDBOrThrow, readDB, writeDB } from "../../db_layer";
 import { logger } from "../../logger";
+import { captureChatAuthorization } from './chat_authorization';
+import { getMember } from '../org/db';
+import { beginMeetingCapture, appendMeetingAudio, takeMeetingRecording, findPausedMeetingRecording, releasePausedMeetingRecording, readMeetingPcm, removeMeetingRecordingFiles, normalizeMeetingId, type MeetingCapture, type MeetingRecording } from './meeting_recordings';
 import { NormalizedMessage, makeLLMCallStreaming, makeLLMCall } from "../llm/providers";
 import {
   buildConfirmedStepContinuationMessages,
@@ -279,6 +282,9 @@ interface AudioSession {
   agentId: string;
   domain: 'personal' | 'work';
   orgId: string;
+  authorization?: ReturnType<typeof captureChatAuthorization>;
+  stopAuthorizationWatch?: () => void;
+  cancelAuthorizationTurn?: (requestId: string) => Promise<void>;
   accumulatedText: string;
   /** TTS is actively playing audio — user can barge-in */
   isSpeaking: boolean;
@@ -363,6 +369,8 @@ interface AudioSession {
   transcriptionOnly: boolean;
   /** Meeting mode raw PCM recording for high-accuracy final transcription. */
   meetingPcmPath: string | null;
+  meetingId?: string;
+  meetingCapture?: MeetingCapture;
   meetingPcmBytes: number;
   meetingStartedAt: number;
   sessionId: string;
@@ -1186,62 +1194,74 @@ function normalizeVoiceSessionId(value: unknown): string {
   return normalized || `${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
 
-function startMeetingPcmRecording(session: AudioSession): void {
-  const stableId = normalizeVoiceSessionId(session.sessionId);
-  const rawPath = path.join(getMeetingAudioDir({
-    userId: session.userId,
-    domain: session.domain,
-    orgId: session.orgId,
-  }), `meeting_${stableId}.pcm`);
-  if (!fs.existsSync(rawPath)) fs.writeFileSync(rawPath, Buffer.alloc(0));
-  const stat = fs.statSync(rawPath);
-  session.meetingPcmPath = rawPath;
-  session.meetingPcmBytes = stat.size;
-  session.meetingStartedAt = stat.birthtimeMs || stat.ctimeMs || Date.now();
+function meetingAuthorizationKey(userId: string, scope: { domain: string; orgId: string }): string {
+  const member = scope.domain === 'work' ? getMember(scope.orgId, userId) : undefined;
+  return JSON.stringify([userId, scope.domain, scope.orgId, member?.id || '', member?.role || '']);
 }
 
-async function refineMeetingTranscript(io: Server, socket: Socket, session: AudioSession, rawPath: string, bytes: number): Promise<void> {
+function startMeetingPcmRecording(session: AudioSession): void {
+  const originalAuthorization = session.authorization;
+  const capture = beginMeetingCapture(getMeetingAudioDir({ userId: session.userId, domain: session.domain, orgId: session.orgId }),
+    session.meetingId || normalizeVoiceSessionId(session.sessionId), normalizeVoiceSessionId(session.sessionId), meetingAuthorizationKey(session.userId, session), () => originalAuthorization?.isCurrent() !== false);
+  session.meetingCapture = capture;
+  session.meetingPcmPath = capture.path;
+  session.meetingPcmBytes = 0;
+  session.meetingStartedAt = capture.recording.startedAt;
+}
+
+async function refineMeetingTranscript(io: Server, socket: Socket, session: AudioSession, recording: MeetingRecording, refinementId: string): Promise<void> {
+  const authorization = session.authorization || captureChatAuthorization(session.userId, session);
+  const controller = new AbortController();
+  const stopWatch = authorization.watch(controller);
+  const identity = { meetingId: recording.meetingId, refinementId, sessionId: session.sessionId };
   const emit = (event: string, payload: any) => {
-    if (socket.connected) socket.emit(event, payload);
+    if (!authorization.isCurrent()) return;
+    const result = { ...payload, ...identity };
+    if (socket.connected) socket.emit(event, result);
     else {
       const room = session.domain === 'work' && session.orgId
-        ? `user:${session.userId}:org:${session.orgId}`
-        : `user:${session.userId}:personal`;
-      io.to(room).emit(event, payload);
+        ? `user:${session.userId}:org:${session.orgId}` : `user:${session.userId}:personal`;
+      io.to(room).emit(event, result);
     }
   };
-  if (bytes < 16000 || !fs.existsSync(rawPath)) {
-    try { fs.rmSync(rawPath, { force: true }); } catch {}
-    emit('meeting:refine_error', { message: 'Meeting recording is too short for high-accuracy transcription.' });
-    return;
-  }
-  const wavPath = rawPath.replace(/\.pcm$/i, '.wav');
+  const bytes = recording.segments.reduce((sum, segment) => sum + segment.bytes, 0);
+  const rawPath = recording.segments[0]?.path;
   try {
+    authorization.assertCurrent();
+    if (!recording.isAuthorized()) throw new DOMException('Meeting authorization changed.', 'AbortError');
+    if (bytes < 16000 || !rawPath) {
+      emit('meeting:refine_error', { message: 'Meeting recording is too short for high-accuracy transcription.' });
+      return;
+    }
+    const wavPath = rawPath.replace(/\.pcm$/i, '.wav');
     emit('meeting:refine_status', { status: 'transcribing', bytes });
+    const pcm = readMeetingPcm(recording);
+    // Only this detached recording owns these files. A resumed capture uses a new path.
+    fs.writeFileSync(rawPath, pcm);
     writePcm16Wav(rawPath, wavPath);
-    try { fs.rmSync(rawPath, { force: true }); } catch {}
+    removeMeetingRecordingFiles(recording);
     const result = await transcribeAudioFile(fs.readFileSync(wavPath), {
-      fileName: path.basename(wavPath),
-      language: 'zh',
-      preferredProvider: 'qwen',
-      allowLocal: true,
-      allowQwenFileStt: true,
-      onProgress: (message) => emit('meeting:refine_status', { status: 'transcribing', bytes, message }),
+      fileName: path.basename(wavPath), language: 'zh', preferredProvider: 'qwen',
+      allowLocal: true, allowQwenFileStt: true, signal: controller.signal,
+      onProgress: message => emit('meeting:refine_status', { status: 'transcribing', bytes, message }),
     });
+    authorization.assertCurrent();
+    if (!recording.isAuthorized()) throw new DOMException('Meeting authorization changed.', 'AbortError');
     emit('meeting:refined_transcript', {
-      text: result.text,
-      provider: result.provider,
-      model: result.model,
-      segments: result.segments,
-      speakerCount: result.speakerCount,
-      taskId: result.taskId,
-      durationMs: result.durationMs,
-      audioPath: wavPath,
-      startedAt: session.meetingStartedAt || Date.now(),
+      text: result.text, provider: result.provider, model: result.model, segments: result.segments,
+      speakerCount: result.speakerCount, taskId: result.taskId, durationMs: result.durationMs,
+      audioPath: wavPath, startedAt: recording.startedAt,
     });
   } catch (err: any) {
-    logger.error('[Meeting Refine Error]:', err);
-    emit('meeting:refine_error', { message: err?.message || String(err) });
+    if (authorization.isCurrent()) {
+      logger.error('[Meeting Refine Error]:', err);
+      emit('meeting:refine_error', { message: err?.message || String(err) });
+    } else if (socket.connected) {
+      socket.emit('meeting:refine_error', { ...identity, reason: 'authorization_revoked', message: 'Organization access changed. Meeting refinement was cancelled.' });
+    }
+  } finally {
+    stopWatch();
+    removeMeetingRecordingFiles(recording);
   }
 }
 
@@ -1534,7 +1554,9 @@ async function respondAlongsideActiveVoiceWork(
           orgId: session.orgId,
         }),
         inputTokenBudget: VOICE_CHAT_INPUT_BUDGET_TOKENS,
+        signal: controller.signal,
       };
+      session.authorization?.assertCurrent();
       const response = await makeLLMCall(
         [
           { role: 'system', content: sidecarPrompt },
@@ -1575,7 +1597,8 @@ async function respondAlongsideActiveVoiceWork(
     }
 
     if (
-      !responseText
+      session.authorization?.isCurrent() === false
+      || !responseText
       || controller.signal.aborted
       || session.sidecarGeneration !== generation
       || session.activeTurnRequestId !== workRequestId
@@ -1746,6 +1769,8 @@ async function processVoiceInput(
     return;
   }
 
+  const turnAuthorization = session.authorization || captureChatAuthorization(session.userId, session);
+  if (!turnAuthorization.isCurrent()) return;
   const transcriptExecutionGuard = assessVoiceTranscriptForExecution(userText);
   if (transcriptExecutionGuard.action === 'clarify') {
     logger.warn(
@@ -1824,6 +1849,7 @@ async function processVoiceInput(
     });
     return;
   }
+  turnAuthorization.assertCurrent();
   const userObservedCompletion = isUserObservedTaskCompletion(
     actionIntentText,
     conversationTurn.conversation.actionContinuationState,
@@ -1846,7 +1872,7 @@ async function processVoiceInput(
   session.activeTurnProvenance = voiceTurnProvenance;
   const pipelineAbort = new AbortController();
   let actionLeaseHeartbeat: ReturnType<typeof startConversationActionExecutionHeartbeat> | null = null;
-  const isCurrentTurn = () => session.pipelineAbortController === pipelineAbort && !pipelineAbort.signal.aborted;
+  const isCurrentTurn = () => turnAuthorization.isCurrent() && session.pipelineAbortController === pipelineAbort && !pipelineAbort.signal.aborted;
   let finalAgentResponseDelivered = false;
   const voiceScope = {
     domain: session.domain,
@@ -1883,13 +1909,20 @@ async function processVoiceInput(
     };
   };
   const publishRecordedAgent = (event: string, payload: Record<string, any>) => {
+    if (!turnAuthorization.isCurrent()) {
+      if (!finalAgentResponseDelivered && (event === 'agent:error' || (event === 'agent:response' && payload.finalized))) {
+        finalAgentResponseDelivered = true;
+        socket.emit('agent:response', { text: CN_TASK_EXECUTION_MESSAGES.cancelled, source: 'voice', channel: 'voice', requestId, conversationId: conversationTurn.conversation.id, finalized: true, blocked: true, reason: 'cancelled' });
+      }
+      return;
+    }
     socket.emit(event, payload);
     if (event === 'agent:response' && payload.finalized === true) {
       finalAgentResponseDelivered = true;
     }
   };
   const emitAgent = (event: string, payload: any = {}) => {
-    if (session.activeTurnRequestId !== requestId) return;
+    if (!isCurrentTurn() || session.activeTurnRequestId !== requestId) return;
     const normalizedPayload = normalizeAgentPayload(event, payload);
     if (
       event === 'agent:error'
@@ -2074,6 +2107,7 @@ async function processVoiceInput(
   session.voiceTurnGeneration += 1;
   session.activeTurnRequestId = requestId;
   session.activeRoutingText = actionIntentText;
+  turnAuthorization.assertCurrent();
   emitAgent("agent:status", { status: "thinking", agentName: "Lumi" });
   socket.emit("audio:status", { status: "thinking", requestId });
   if (session.isBackgroundWork) {
@@ -2203,6 +2237,7 @@ async function processVoiceInput(
     logger.info('[Audio] Skipped memory/RAG retrieval for deterministic or corrective voice turn');
   }
 
+  turnAuthorization.assertCurrent();
   const sensoryAudio = sensoryFn(session.userId);
   const personalityConfig = personalityRegistry.getForUser(
     session.personalityId || 'lumi',
@@ -2717,7 +2752,9 @@ async function processVoiceInput(
     source: 'voice',
   };
   const scheduleVoiceSummary = (conversationId: string) => {
+    if (!turnAuthorization.isCurrent()) return;
     scheduleConversationSummary({
+      isAuthorized: turnAuthorization.isCurrent,
       userId: session.userId,
       provider,
       model: voiceModel,
@@ -2886,19 +2923,23 @@ async function processVoiceInput(
         return assistantMessageId;
       },
       flush: flushDBOrThrow,
-      persistTerminalReceipt: () => recordChatExecutionTerminalEventDurably(
-        executionScope,
-        requestId,
-        'agent:response',
-        terminalPayload,
-        executionUnknownPayload,
-      ),
+      persistTerminalReceipt: async () => {
+        if (!turnAuthorization.isCurrent()) {
+          Object.assign(terminalPayload, { text: CN_TASK_EXECUTION_MESSAGES.cancelled, blocked: true, reason: 'cancelled' });
+          updateAssistantMessageTerminalPresentation({ userId: session.userId, conversationId: conversationTurn.conversation.id,
+            requestId, content: terminalPayload.text, channel: 'voice', completionFeedback: { status: 'cancelled', incomplete: [terminalPayload.text], nextSteps: [] } });
+          cancelConversationActionExecution(conversationTurn.conversation.id, session.userId, 'Organization access changed during voice terminal persistence.', requestId);
+          await flushDBOrThrow();
+        }
+        return recordChatExecutionTerminalEventDurably(executionScope, requestId, 'agent:response', terminalPayload, executionUnknownPayload);
+      },
       persistUnknownReceipt: () => recordChatExecutionPersistenceUnknownDurably(
         executionScope,
         requestId,
         executionUnknownPayload,
       ),
       publishCommitted: terminalState => {
+        if (!turnAuthorization.isCurrent()) { publishRecordedAgent('agent:response', terminalPayload); return; }
         if (!isCurrentTurn()) return;
         if (input.notification) {
           publishRecordedAgent(
@@ -3133,7 +3174,7 @@ async function processVoiceInput(
     routedTaskText: turnFlow.routeText,
     ...(effectiveOperationMode === 'assistant' || effectiveOperationMode === 'autonomous' || clientActionOnlyTurn || selfRepairTurn ? { requestConfirmation } : {}),
     executionSignal: pipelineAbort?.signal,
-    isCancelled: () => pipelineAbort?.signal.aborted ?? false,
+    isCancelled: () => !isCurrentTurn(),
     onProgress: (step: string) => {
       if (session.isBackgroundWork && step.trim()) {
         session.activeWorkStatus = 'executing';
@@ -3162,6 +3203,7 @@ async function processVoiceInput(
       logLabel?: string;
     } = {},
   ) => {
+    if (!turnAuthorization.isCurrent()) return;
     persistLumiPostTurnLearning(
       {
         userId: session.userId,
@@ -3328,7 +3370,9 @@ async function processVoiceInput(
     text: string,
     route: LockedVoiceTurnTtsRoute,
     signal: AbortSignal,
-  ) => synthesizeSpeech(text, {
+  ) => {
+    turnAuthorization.assertCurrent();
+    return synthesizeSpeech(text, {
     provider: route.provider,
     voiceId: route.voiceId,
     model: route.model,
@@ -3337,7 +3381,8 @@ async function processVoiceInput(
     volume: route.volume,
     signal,
     allowFallback: false,
-  });
+    });
+  };
 
   let speculativeSpeech: {
     text: string;
@@ -3441,13 +3486,13 @@ async function processVoiceInput(
     if (!txt || txt.length <= 1 || turnTtsUnavailable || !session.isActive || session.suppressedSpeechRequestIds.has(requestId)) return Promise.resolve(0);
     if (!/[a-zA-Z一-鿿㐀-䶿\d]/.test(txt)) return Promise.resolve(0);
     const speech = ensureTurnSpeechController();
-    if (speech.controller.signal.aborted) return Promise.resolve(0);
+    if (!isCurrentTurn() || speech.controller.signal.aborted) return Promise.resolve(0);
     sentenceIdx++;
     let resolvePlayback: (value: number) => void = () => {};
     const playbackDone = new Promise<number>(resolve => { resolvePlayback = resolve; });
     // Serialize TTS to avoid 429 rate limits
     ttsQueue = ttsQueue.then(async () => {
-      if (speech.controller.signal.aborted) {
+      if (!isCurrentTurn() || speech.controller.signal.aborted) {
         resolvePlayback(0);
         return;
       }
@@ -3490,7 +3535,7 @@ async function processVoiceInput(
           }
           synthesized = await synthesizeWithLockedTurnRoute(txt, speech.controller.signal);
         }
-        if (!speech.controller.signal.aborted && session.bgGeneration === speech.generation) {
+        if (isCurrentTurn() && !speech.controller.signal.aborted && session.bgGeneration === speech.generation) {
           markVoiceLatencyMilestone(requestId, 'firstTtsReadyAt');
           socket.emit("audio:status", { status: "speaking", requestId });
           addEchoText(txt, voiceEchoScope(session));
@@ -3533,6 +3578,7 @@ async function processVoiceInput(
   };
 
   const queueFinalizedSpeech = (text: string) => {
+    if (!isCurrentTurn()) return;
     if (session.isBackgroundWork) {
       session.activeWorkStatus = pendingConfirmationCreatedThisTurn
         ? 'waiting_confirmation'
@@ -3619,7 +3665,12 @@ async function processVoiceInput(
   });
   const releaseVoiceTurnResources = (
     reason = 'Voice turn reached its release boundary.',
-  ): Promise<boolean> => voiceReleaseGate.release(reason);
+  ): Promise<boolean> => {
+    const cancel = !turnAuthorization.isCurrent() && !finalAgentResponseDelivered
+      ? session.cancelAuthorizationTurn?.(requestId)
+      : undefined;
+    return Promise.resolve(cancel).then(() => voiceReleaseGate.release(reason));
+  };
 
   if (transcriptExecutionGuard.action === 'clarify') {
     // Resolve uncertain STT before any deterministic confirmation, workflow,
@@ -3813,6 +3864,7 @@ async function processVoiceInput(
       // Confirmation is a boundary inside the same task, not the end of the
       // task. Continue the remaining plan immediately with the exact confirmed
       // receipt in context; a later hard boundary will stop once again.
+      turnAuthorization.assertCurrent();
       const continuation = await runWithTools(
         [
           { role: 'system', content: voiceSystemPrompt },
@@ -4578,6 +4630,7 @@ async function processVoiceInput(
         toolResults,
       );
 
+      turnAuthorization.assertCurrent();
       const streamResult = await makeLLMCallStreaming(
         messages as NormalizedMessage[],
         toolDeclarations,
@@ -4595,6 +4648,7 @@ async function processVoiceInput(
           ...reasoningRoutePolicy,
         },
         (chunk: string) => {
+          if (!isCurrentTurn()) return;
           if (chunk) markVoiceLatencyMilestone(requestId, 'firstModelTokenAt');
           responseText += chunk;
           maybeStartSpeculativeSpeech();
@@ -4814,7 +4868,8 @@ async function processVoiceInput(
       toolRecords: toolResults,
       attempt: async ({ instruction, priorToolRecords, recordTool }) => {
         logger.warn('[Audio] Recovering blocked execution internally.');
-          const recovery = await runWithTools(
+          turnAuthorization.assertCurrent();
+      const recovery = await runWithTools(
             [
               ...recoveryConversationMessages,
               { role: 'assistant', content: responseText },
@@ -5066,9 +5121,16 @@ async function runVoiceInputPipeline(
   voiceAuthorized = false,
   inputTiming: VoiceInputTiming = {},
 ): Promise<void> {
+  const originalAuthorization = session.authorization;
   try {
     await processVoiceInput(socket, session, userText, llmGetters, sensoryFn, io, userReceivedAt, voiceAuthorized, inputTiming);
   } catch (err: any) {
+    if (originalAuthorization && !originalAuthorization.isCurrent()) {
+      if (session.authorization === originalAuthorization && session.activeTurnRequestId) {
+        await session.cancelAuthorizationTurn?.(session.activeTurnRequestId);
+      }
+      return;
+    }
     logger.error('[Voice Error]:', err);
     const failedRequestId = session.activeTurnRequestId;
     const queuedWork = session.inputQueue.slice();
@@ -5382,12 +5444,18 @@ export function registerVoiceHandlers(
 
   const stopVoiceCall = async (
     session: AudioSession,
-    options: { source: string; refineTranscript?: boolean; publish?: boolean; error?: { code: string; message: string } },
+    options: { source: string; refineTranscript?: boolean; preserveMeeting?: boolean; refinementId?: string; publish?: boolean; error?: { code: string; message: string } },
   ): Promise<void> => {
     const generation = ++session.callControlGeneration;
-    const { sessionId, userId, meetingPcmPath, meetingPcmBytes } = session;
+    session.stopAuthorizationWatch?.();
+    session.stopAuthorizationWatch = undefined;
+    const { sessionId, userId, meetingCapture } = session;
     const meetingSession = { ...session };
     const shouldRefineMeeting = session.transcriptionOnly && options.refineTranscript === true;
+    if (meetingCapture) meetingCapture.closed = true;
+    const stoppedRecording = meetingCapture && (shouldRefineMeeting || !options.preserveMeeting)
+      ? takeMeetingRecording(meetingCapture.recording) : null;
+    session.meetingCapture = undefined;
     // Stop admission synchronously; durable cancellation may wait for storage.
     session.isActive = false;
     clearVoiceSessionTtsSelection(session);
@@ -5409,10 +5477,11 @@ export function registerVoiceHandlers(
           if (options.error) socket.emit('audio:error', { ...options.error, sessionId });
         }
       }
-      if (shouldRefineMeeting && meetingPcmPath) {
-        void refineMeetingTranscript(io, socket, meetingSession, meetingPcmPath, meetingPcmBytes);
-      } else if (meetingPcmPath) {
-        try { fs.unlinkSync(meetingPcmPath); } catch {}
+      if (stoppedRecording) {
+        if (shouldRefineMeeting) void refineMeetingTranscript(io, socket, meetingSession, stoppedRecording, normalizeMeetingId(options.refinementId) || randomUUID());
+        else removeMeetingRecordingFiles(stoppedRecording);
+      } else if (shouldRefineMeeting && socket.connected) {
+        socket.emit('meeting:refine_error', { meetingId: meetingSession.meetingId, refinementId: normalizeMeetingId(options.refinementId), sessionId, message: 'The meeting recording is unavailable; keeping the live transcript.' });
       }
     }
   };
@@ -5422,6 +5491,7 @@ export function registerVoiceHandlers(
     personalityId?: string;
     agentId?: string;
     transcriptionOnly?: boolean;
+    meetingId?: string;
     domain?: 'personal' | 'work';
     orgId?: string;
     sessionId?: string;
@@ -5431,6 +5501,8 @@ export function registerVoiceHandlers(
     logger.info(`[Audio] Voice call started by ${socket.id}`);
     const session = getAudioSession(socket);
     const startControlGeneration = ++session.callControlGeneration;
+    session.stopAuthorizationWatch?.();
+    session.stopAuthorizationWatch = undefined;
     // Reserve the incoming id before waiting, so a stop for this pending start
     // can cancel it and old STT callbacks cannot admit work into it.
     session.sessionId = normalizeVoiceSessionId(data.sessionId);
@@ -5505,7 +5577,40 @@ export function registerVoiceHandlers(
     const sessionScope = resolveSocketScope(socket, session.userId, data);
     session.domain = sessionScope.domain;
     session.orgId = sessionScope.orgId;
+    if (socket.data?.authenticatedOrgId && sessionScope.domain !== 'work') {
+      await stopVoiceCall(session, { source: 'voice_authorization_revoked', error: { code: 'ORGANIZATION_ACCESS_CHANGED', message: 'Organization access changed. Start a new authorized session.' } });
+      return;
+    }
+    const authorization = captureChatAuthorization(session.userId, sessionScope);
+    session.authorization = authorization;
+    const authorizationAbort = new AbortController();
+    let authorizationCancellation: Promise<void> | undefined;
+    session.cancelAuthorizationTurn = (requestId: string) => {
+      if (session.authorization !== authorization || session.activeTurnRequestId !== requestId) return Promise.resolve();
+      if (!authorizationCancellation) authorizationCancellation = commitActiveVoiceCancellation(session, {
+        source: 'voice_authorization_revoked',
+      }).then(() => undefined);
+      return authorizationCancellation;
+    };
+    authorizationAbort.signal.addEventListener('abort', () => {
+      if (session.authorization !== authorization) return;
+      session.isActive = false;
+      queueMicrotask(() => { if (session.authorization === authorization) session.stopAuthorizationWatch?.(); });
+      quiesceActiveVoiceTransport(session);
+      session.inputQueue = [];
+      if (session.silenceTimer) { clearTimeout(session.silenceTimer); session.silenceTimer = null; }
+      const revokedStt = session.sttSession;
+      session.sttSession = null;
+      try { revokedStt?.end(); } catch { /* The revoked call remains closed. */ }
+      setRealtimeVoiceSessionActive(session.userId, socket.id, false);
+      socket.emit('audio:error', { code: 'ORGANIZATION_ACCESS_CHANGED', message: 'Organization access changed. Start a new authorized session.', sessionId: voiceStartSessionId });
+    }, { once: true });
+    session.stopAuthorizationWatch = authorization.watch(authorizationAbort);
+
     session.transcriptionOnly = data.transcriptionOnly === true;
+    if (session.meetingCapture) session.meetingCapture.closed = true;
+    session.meetingCapture = undefined;
+    session.meetingId = normalizeMeetingId(data.meetingId) || session.sessionId;
     session.meetingPcmPath = null;
     session.meetingPcmBytes = 0;
     session.meetingStartedAt = 0;
@@ -5638,6 +5743,7 @@ export function registerVoiceHandlers(
         resetSilenceTimer(session, socket);
 
         session.sttSession.onResult(async (result) => {
+          if (!authorization.isCurrent()) return;
           if (!isCurrentVoiceInputSource({
             sessionActive: session.isActive,
             currentSessionId: session.sessionId,
@@ -6079,17 +6185,48 @@ export function registerVoiceHandlers(
     });
   });
 
+  const resolveMeetingRequest = (data: { meetingId?: string; refinementId?: string }) => {
+    const userId = getUserId(socket);
+    const scope = resolveSocketScope(socket, userId);
+    if (!userId || (socket.data?.authenticatedOrgId && scope.domain !== 'work')) throw new Error('Organization access changed.');
+    const meetingId = normalizeMeetingId(data?.meetingId);
+    if (!meetingId) throw new Error('A meeting identity is required.');
+    const authorization = captureChatAuthorization(userId, scope);
+    const directory = getMeetingAudioDir({ userId, domain: scope.domain, orgId: scope.orgId });
+    const recording = findPausedMeetingRecording(directory, meetingId, meetingAuthorizationKey(userId, scope), authorization.isCurrent);
+    return { recording, snapshot: { ...getAudioSession(socket), ...scope, userId, meetingId, authorization } };
+  };
+  socket.on('meeting:refine', (data: { meetingId?: string; refinementId?: string }) => {
+    const identity = { meetingId: normalizeMeetingId(data?.meetingId), refinementId: normalizeMeetingId(data?.refinementId) };
+    try {
+      const { recording, snapshot } = resolveMeetingRequest(data);
+      const detached = recording && takeMeetingRecording(recording);
+      if (!detached) throw new Error('No paused recording is available; keeping the live transcript.');
+      void refineMeetingTranscript(io, socket, snapshot, detached, identity.refinementId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Meeting recording is unavailable.';
+      socket.emit('meeting:refine_error', { ...identity, message, ...(/authorization|Organization access/i.test(message) ? { reason: 'authorization_revoked' } : {}) });
+    }
+  });
+  socket.on('meeting:discard', (data: { meetingId?: string }) => {
+    try {
+      const { recording } = resolveMeetingRequest(data);
+      const detached = recording && takeMeetingRecording(recording);
+      if (detached) removeMeetingRecordingFiles(detached);
+    } catch { /* A discard never grants access to a recording owned by another identity. */ }
+  });
+
   let chunkCount = 0;
   socket.on("audio:chunk", (data: Buffer) => {
     const session = getAudioSession(socket);
-    if (!session.isActive) return;
+    if (!session.isActive || session.authorization?.isCurrent() === false) return;
     session.lastChunkTime = Date.now();
     resetSilenceTimer(session, socket);
     if (session.transcriptionOnly && session.meetingPcmPath) {
       try {
         const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
-        fs.appendFileSync(session.meetingPcmPath, chunk);
-        session.meetingPcmBytes += chunk.length;
+        if (session.meetingCapture) appendMeetingAudio(session.meetingCapture, chunk);
+        session.meetingPcmBytes = session.meetingCapture?.bytes || 0;
       } catch (err: any) {
         logger.warn(`[Meeting] Failed to append PCM chunk: ${err?.message || err}`);
       }
@@ -6291,11 +6428,11 @@ export function registerVoiceHandlers(
     });
   });
 
-  socket.on("audio:stop", async (data?: { refineTranscript?: boolean; sessionId?: string }) => {
+  socket.on("audio:stop", async (data?: { refineTranscript?: boolean; preserveMeeting?: boolean; refinementId?: string; sessionId?: string }) => {
     logger.info(`[Audio] Voice call ended by ${socket.id}`);
     const session = getAudioSession(socket);
     if (data?.sessionId && session.sessionId && data.sessionId !== session.sessionId) return;
-    await stopVoiceCall(session, { source: 'voice_call_stopped', refineTranscript: data?.refineTranscript });
+    await stopVoiceCall(session, { source: 'voice_call_stopped', refineTranscript: data?.refineTranscript, preserveMeeting: data?.preserveMeeting, refinementId: data?.refinementId });
   });
 
   // Track ambient noise level for environment-gated proactive speech
@@ -6335,9 +6472,12 @@ export function registerVoiceHandlers(
   }
 
   socket.on("proactive:request_speak", async (data: { message: string }) => {
-    const session = getAudioSession(socket);
     const userId = getUserId(socket);
     if (!userId || !data.message) return;
+    const session = getAudioSession(socket);
+    if (socket.data?.authenticatedOrgId && session.domain !== 'work') return;
+    const authorization = session.authorization || captureChatAuthorization(userId, session);
+    if (!authorization.isCurrent()) return;
 
     session.isSpeaking = true;
     const resetSpeaking = () => { session.isSpeaking = false; };
@@ -6388,7 +6528,10 @@ export function registerVoiceHandlers(
     if (!proactiveRoute) { resetSpeaking(); return; }
 
     let proactiveTtsCounted = false;
+    const controller = new AbortController();
+    const stopWatch = authorization.watch(controller);
     try {
+      authorization.assertCurrent();
       ttsSpeakingCount++;
       proactiveTtsCounted = true;
       addEchoText(proactiveText, voiceEchoScope(session));
@@ -6399,8 +6542,10 @@ export function registerVoiceHandlers(
         speechRate: proactiveRoute.speechRate,
         pitch: proactiveRoute.pitch,
         volume: proactiveRoute.volume,
+        signal: controller.signal,
         allowFallback: false,
       });
+      authorization.assertCurrent();
       const proactiveGain = computeVolumeGain();
       socket.emit("audio:proactive_speak", {
         audioBuffer: result.audioBuffer,
@@ -6412,6 +6557,7 @@ export function registerVoiceHandlers(
     } catch (err: any) {
       logger.warn(`[ProactiveVoice] TTS failed: ${err.message}`);
     } finally {
+      stopWatch();
       if (proactiveTtsCounted) ttsSpeakingCount = Math.max(0, ttsSpeakingCount - 1);
       resetSpeaking();
     }
@@ -6423,6 +6569,9 @@ export function registerVoiceHandlers(
     if (!userId) return;
 
     const session = getAudioSession(socket);
+    if (socket.data?.authenticatedOrgId && session.domain !== 'work') return;
+    const authorization = session.authorization || captureChatAuthorization(userId, session);
+    if (!authorization.isCurrent()) return;
     let voiceId = session.currentVoiceId;
     if (!voiceId) {
       const personalityCfg = personalityRegistry.getForUser(
@@ -6492,7 +6641,10 @@ export function registerVoiceHandlers(
       : null;
     if (!greetingTtsRoute) return;
 
+    const controller = new AbortController();
+    const stopWatch = authorization.watch(controller);
     try {
+      authorization.assertCurrent();
       const greetingLLM = {
         ...getUserPreferredLLMConfig(session.userId, {
           maxTokens: 120,
@@ -6500,6 +6652,7 @@ export function registerVoiceHandlers(
           orgId: session.orgId,
         }),
         inputTokenBudget: VOICE_CHAT_INPUT_BUDGET_TOKENS,
+        signal: controller.signal,
       };
       const response = await makeLLMCall(
         [{ role: 'user', content: greetingPrompt }],
@@ -6519,6 +6672,7 @@ export function registerVoiceHandlers(
         llmGetters.getRelay,
       );
 
+      authorization.assertCurrent();
       recordTokenUsage(session.userId, greetingLLM.provider, greetingLLM.model, response.usage, `voice_greet_${Date.now()}`, 'voice');
 
       const greeting = response.text?.trim() || '';
@@ -6538,8 +6692,10 @@ export function registerVoiceHandlers(
         provider: greetingTtsRoute.provider,
         voiceId: greetingTtsRoute.voiceId,
         model: greetingTtsRoute.model,
+        signal: controller.signal,
         allowFallback: false,
       });
+      authorization.assertCurrent();
       socket.emit("audio:proactive_speak", {
         audioBuffer: result.audioBuffer,
         text: spokenGreeting,
@@ -6558,6 +6714,7 @@ export function registerVoiceHandlers(
       } as any, { tier: 'episodic', perspective: 'shared_memory', importance: 0.2, domain: session.domain, orgId: session.orgId, source: 'voice' });
       logger.info(`[Greeting] LLM-generated for ${userId} (${spokenGreeting.length} chars)`);
     } catch (err: any) {
+      if (!authorization.isCurrent()) return;
       logger.warn(`[Greeting] LLM generation failed, using fallback: ${err.message}`);
       const hour = new Date().getHours();
       const fallback = hour < 6 ? '夜深了，还在忙吗？' : hour < 12 ? '早上好，欢迎回来。' : hour < 18 ? '下午好，继续吧。' : '晚上好，欢迎回来。';
@@ -6566,11 +6723,13 @@ export function registerVoiceHandlers(
           provider: greetingTtsRoute.provider,
           voiceId: greetingTtsRoute.voiceId,
           model: greetingTtsRoute.model,
-          allowFallback: false,
+          signal: controller.signal,
+        allowFallback: false,
         });
+        authorization.assertCurrent();
         socket.emit("audio:proactive_speak", { audioBuffer: result.audioBuffer, text: fallback, timestamp: new Date().toISOString(), volumeGain: computeVolumeGain() });
       } catch {}
-    }
+    } finally { stopWatch(); }
   });
 
   socket.on("audio:switch-personality", (data: { personalityId: string }) => {
@@ -6582,6 +6741,11 @@ export function registerVoiceHandlers(
   });
 
   socket.on("disconnect", async () => {
+    const pausedSession = getAudioSession(socket);
+    if (pausedSession.userId && pausedSession.meetingId) {
+      releasePausedMeetingRecording(getMeetingAudioDir({ userId: pausedSession.userId, domain: pausedSession.domain, orgId: pausedSession.orgId }), pausedSession.meetingId);
+    }
+
     const session = socket.data.audioSession as AudioSession | undefined;
     if (session) {
       await stopVoiceCall(session, { source: 'voice_disconnected', publish: false });
